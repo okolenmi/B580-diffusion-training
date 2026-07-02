@@ -16,7 +16,7 @@ from .db import (
     get_active_tasks, update_task_status
 )
 from .storage import ShardLoader, ShardWriter
-from converter.model_io import raw_to_target
+from core.model_io import raw_to_target
 
 
 class ManagedDataset:

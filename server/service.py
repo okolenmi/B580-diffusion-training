@@ -58,7 +58,7 @@ class TrainingService:
 
         if cmd is None:
             cmd = [
-                self.settings.venv_python, "-m", "converter.cli",
+                self.settings.venv_python, "-m", "core.cli",
                 "--config", config_path,
             ]
 

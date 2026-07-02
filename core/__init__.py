@@ -1,4 +1,4 @@
-"""Distillation Converter package.
+"""Core training package.
 
 Supports distillation, cyclic, LoRA, and full fine-tune training.
 Uses ComfyUI's UNet directly — LDM key format throughout.

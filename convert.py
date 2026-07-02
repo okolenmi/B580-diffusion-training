@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Distillation Converter — entry point.
+"""Training entry point.
 
 Run from the ComfyUI root directory:
     cd /path/to/ComfyUI
-    python ../comfy-converter/convert.py --config my_run.toml
+    python ../<this-project>/convert.py --config my_run.toml
 """
 
 import sys
@@ -19,8 +19,8 @@ if str(_pkg_dir) not in sys.path:
 # from cwd) and previously did so unconditionally at import time, which
 # broke `--help`, `--reset-config`, and first-run config scaffolding even
 # though none of those touch ComfyUI. It's now resolved lazily inside
-# converter.cli.main(), right before Trainer actually needs it.
-from converter.cli import main
+# core.cli.main(), right before Trainer actually needs it.
+from core.cli import main
 
 if __name__ == "__main__":
     main()

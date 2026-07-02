@@ -8,8 +8,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from converter.vae_decode import VAEDecoder
-from converter.comfy_setup import xpu_empty_cache
+from core.vae_decode import VAEDecoder
+from core.comfy_setup import xpu_empty_cache
 
 
 class PreviewGenerator:

@@ -12,7 +12,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 def main():
     p = argparse.ArgumentParser(
-        description="Web UI for the distillation converter",
+        description="Web UI for the training pipeline",
     )
     p.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     p.add_argument("--port", type=int, default=8765, help="Port (default: 8765)")

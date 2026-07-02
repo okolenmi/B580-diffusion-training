@@ -9,8 +9,8 @@ from typing import Optional
 
 from . import db
 from .config import settings
-from converter.config_io import read_config
-from converter.config_model import TrainingConfig
+from core.config_io import read_config
+from core.config_model import TrainingConfig
 
 
 def scan_checkpoints(config: TrainingConfig) -> dict:
@@ -118,7 +118,7 @@ def build_training_command(
     control the launch mode (fresh/student/resume/lora).
     """
     cmd = [
-        settings.venv_python, "-m", "converter.cli",
+        settings.venv_python, "-m", "core.cli",
         "--config", config_path,
     ]
 

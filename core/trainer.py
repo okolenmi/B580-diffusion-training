@@ -75,8 +75,8 @@ class Trainer:
         paths = config.paths
         if paths.dataset_name:
             from manager.loader import ManagedDatasetLoader
-            from paths import get_comfy_dir
-            dataset_root = get_comfy_dir().parent / "comfy-converter" / "datasets" / paths.dataset_name
+            from paths import get_datasets_dir
+            dataset_root = get_datasets_dir() / paths.dataset_name
             self.dataset_loader = ManagedDatasetLoader(
                 dataset_root,
                 batch_size=config.common.batch_size,

@@ -3,8 +3,8 @@
 from typing import Any
 
 from .config_ui import OPTION_TREE, SYNTHETIC_OPTIONS
-from converter.config_io import read_config
-from converter.config_model import TrainingConfig
+from core.config_io import read_config
+from core.config_model import TrainingConfig
 
 
 def get_config_defaults() -> dict:

@@ -26,19 +26,45 @@ class Settings(BaseSettings):
         case_sensitive=False
     )
 
+    def _persisted_setting(self, key: str) -> str:
+        """Read a server-level setting persisted via POST /settings (stored
+        in the DB, same mechanism already used for "default_config").
+        Returns "" if unset, or if the DB isn't reachable for some reason
+        -- this must never be allowed to crash path resolution.
+        """
+        try:
+            from . import db
+            return db.get_setting(self.db_path, key, "")
+        except Exception:
+            return ""
+
     @property
     def comfy_dir(self) -> Path:
-        """ComfyUI directory - working directory for training."""
+        """ComfyUI directory - working directory for training.
+
+        Resolution order:
+        1. Persisted server setting ("comfy_dir"), set via POST /settings.
+           This is the actual way to configure it through the web UI --
+           paths.set_comfy_dir()'s override is per-process and never
+           reaches this long-running server process from anywhere else.
+        2. Everything paths.get_comfy_dir() itself checks (COMFY_DIR env
+           var, cwd heuristic, sibling-folder auto-detect).
+        """
+        override = self._persisted_setting("comfy_dir")
+        if override:
+            p = Path(override)
+            if p.exists():
+                return p
         return get_comfy_dir()
-    
+
     @property
     def project_root(self) -> Path:
-        """Comfy-converter project root."""
+        """This project's root directory."""
         return get_project_root()
     
     @property
     def workspace_root(self) -> Path:
-        """Parent of project root (where ComfyUI and comfy-converter are siblings)."""
+        """Parent of project root (where ComfyUI and this project are siblings)."""
         return self.project_root.parent
     
     @property
@@ -53,7 +79,25 @@ class Settings(BaseSettings):
     
     @property
     def venv_python(self) -> str:
-        """Python executable in the virtual environment."""
+        """Python executable used to launch the training subprocess.
+
+        Resolution order:
+        1. Persisted server setting ("venv_python"), set via POST /settings
+           -- the way to configure this through the web UI, for anyone who
+           doesn't want to (or can't) set environment variables.
+        2. VENV_PYTHON environment variable.
+        3. <workspace_root>/venv/bin/python, if it exists (project / ComfyUI
+           / venv all siblings -- kept as a convenience default).
+        4. Fallback to whatever "python" resolves to on PATH.
+        """
+        override = self._persisted_setting("venv_python")
+        if override and Path(override).exists():
+            return override
+
+        env_venv = os.environ.get("VENV_PYTHON")
+        if env_venv and Path(env_venv).exists():
+            return env_venv
+
         venv_path = self.workspace_root / "venv/bin/python"
         if venv_path.exists():
             return str(venv_path)

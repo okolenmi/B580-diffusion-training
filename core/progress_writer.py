@@ -28,7 +28,12 @@ class ProgressWriter:
     # training_start, done, ...) still force an immediate flush; step()
     # writes are throttled to at most once per _FLUSH_INTERVAL_SEC so the
     # UI still updates in near-real-time.
-    _FLUSH_INTERVAL_SEC = 1.0
+    #
+    # server/monitor.py's RunMonitor polls this file every 0.5s
+    # (time.sleep(0.5)). Flushing less often than that just adds pure
+    # latency with no corresponding drop in poll frequency, so this stays
+    # comfortably under 0.5s rather than at some rounder-looking 1.0s.
+    _FLUSH_INTERVAL_SEC = 0.4
 
     def __init__(self, run_id: int | None = None):
         if run_id is not None:

@@ -17,11 +17,11 @@ def launch_training_process(
     Parameters
     ----------
     cmd : list[str]
-        Command to execute (e.g., [python, "-m", "converter.cli", ...]).
+        Command to execute (e.g., [python, "-m", "core.cli", ...]).
     comfy_dir : Path
         ComfyUI directory (working directory for the subprocess).
     project_root : Path
-        Project root (parent of comfy-converter).
+        Project root (parent of this project's directory).
     log_path : Path
         Path to write stdout logs.
 

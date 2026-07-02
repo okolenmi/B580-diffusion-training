@@ -1,4 +1,4 @@
-"""FastAPI web server for the distillation converter."""
+"""FastAPI web server for the training UI."""
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -41,7 +41,7 @@ class EndpointFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 app = FastAPI(
-    title="Comfy Distillation Converter",
+    title="Training Control Center",
     lifespan=lifespan
 )
 

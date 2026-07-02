@@ -6,14 +6,14 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Request
 
 from .config import settings
-from converter.config_io import (
+from core.config_io import (
     read_config,
     write_config,
     config_to_toml_string,
     config_from_toml_string,
     FLAT_TO_SECTION_MAP,
 )
-from converter.config_model import TrainingConfig
+from core.config_model import TrainingConfig
 
 router = APIRouter(prefix="/config")
 

@@ -10,17 +10,17 @@ import os
 import sys
 
 
-# Module-level cache for comfy_dir
-_comfy_dir_cache = None
+# Explicit override, set via set_comfy_dir() (e.g. from config.paths.comfy_dir).
+_comfy_dir_override = None
 
 
 def set_comfy_dir(path: str | Path | None):
     """Set the ComfyUI directory explicitly (e.g., from config)."""
-    global _comfy_dir_cache
+    global _comfy_dir_override
     if path:
-        _comfy_dir_cache = Path(path).resolve()
+        _comfy_dir_override = Path(path).resolve()
     else:
-        _comfy_dir_cache = None
+        _comfy_dir_override = None
 
 
 def get_comfy_dir() -> Path:
@@ -30,14 +30,14 @@ def get_comfy_dir() -> Path:
     1. Explicitly set via set_comfy_dir()
     2. COMFY_DIR environment variable
     3. Current working directory if it contains 'comfy' subdirectory
-    4. Parent of this file's project root (assumes comfy-trainer is sibling to ComfyUI)
+    4. Parent of this file's project root (assumes the project (this repo's root) is a sibling of ComfyUI)
     """
-    global _comfy_dir_cache
+    global _comfy_dir_override
     
     # Check explicit setting first
-    if _comfy_dir_cache is not None:
-        if _comfy_dir_cache.exists():
-            return _comfy_dir_cache
+    if _comfy_dir_override is not None:
+        if _comfy_dir_override.exists():
+            return _comfy_dir_override
         # Invalid, fall through to other methods
     
     # Check environment variable
@@ -55,7 +55,7 @@ def get_comfy_dir() -> Path:
     # Fallback: assume project structure is:
     #   some_folder/
     #     ├── ComfyUI/
-    #     └── comfy-trainer/
+    #     └── <this project>/
     # We need to find ComfyUI relative to this file
     project_root = get_project_root()
     potential = project_root.parent / "ComfyUI"
@@ -70,7 +70,7 @@ def get_comfy_dir() -> Path:
 
 
 def get_project_root() -> Path:
-    """Get the comfy-trainer project root."""
+    """Get this project's root directory."""
     return Path(__file__).resolve().parent
 
 

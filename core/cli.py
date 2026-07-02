@@ -137,7 +137,13 @@ Examples:
     # import time -- means --help, --reset-config, and first-run config
     # scaffolding (all handled above) work even when ComfyUI isn't
     # auto-detectable yet.
-    from paths import get_comfy_dir
+    from paths import get_comfy_dir, set_comfy_dir
+    if config.paths.comfy_dir:
+        # paths.comfy_dir in the TOML config is the highest-priority override
+        # (higher than the COMFY_DIR env var) -- this previously did nothing
+        # at all, since nothing ever read this field and passed it to
+        # set_comfy_dir(). It was silently ignored no matter what you put here.
+        set_comfy_dir(config.paths.comfy_dir)
     comfy_dir = get_comfy_dir()
     if str(comfy_dir) not in sys.path:
         sys.path.append(str(comfy_dir))

@@ -8,11 +8,11 @@ from fastapi.responses import JSONResponse
 
 from . import db
 from .config import settings
-from converter.config_io import read_config, write_config, FLAT_TO_SECTION_MAP
+from core.config_io import read_config, write_config, FLAT_TO_SECTION_MAP
 from .control import build_training_command, get_control_options
 from .process_manager import kill_process_by_pid
 from .service import TrainingService, get_training_service
-from converter.config_model import TrainingConfig
+from core.config_model import TrainingConfig
 
 router = APIRouter()
 

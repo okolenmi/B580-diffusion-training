@@ -8,7 +8,7 @@ import torch
 
 from .db import get_training_set_trajectories, get_training_set_by_name
 from .storage import ShardLoader
-from converter.model_io import raw_to_target
+from core.model_io import raw_to_target
 
 
 class ManagedDatasetLoader:

@@ -5,7 +5,7 @@ reset_optimizer = false
 base_model = "models/checkpoints/divergence_3.safetensors"
 checkpoint_output = ""
 dataset_name = "test"
-comfy_dir = ""
+comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
 steps = 20000

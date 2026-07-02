@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Manager — Distillation Converter</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header p-1-5">
+            <div class="brand mb-1">
+                <span class="brand-icon">📦</span>
+                <span class="brand-name" style="font-weight:700; font-size:1.2rem;">Dataset Manager</span>
+            </div>
+            <a href="/" class="btn btn-secondary btn-block">
+                ← Back to Training
+            </a>
+        </div>
+
+        <div class="p-1-5">
+            <button id="btn-new-dataset" class="btn btn-start btn-block">
+                + New Dataset
+            </a>
+        </div>
+
+        <nav class="sidebar-nav scroll-v" id="dataset-list-sidebar" style="padding: 1.5rem;">
+            <!-- Populated via JS -->
+        </nav>
+    </aside>
+
+    <main class="content-area">
+        <header class="tabs-header">
+            <button class="tab-btn active" data-tab="library">Library</button>
+            <button class="tab-btn" data-tab="generator">Generator</button>
+            <button class="tab-btn" data-tab="inspection">Inspection Area</button>
+            <button class="tab-btn" data-tab="explorer">Explorer</button>
+        </header>
+
+        <!-- Library Tab -->
+        <section id="tab-library" class="tab-content active">
+            <div class="dataset-grid" id="dataset-grid">
+                <!-- Populated via JS -->
+            </div>
+        </section>
+
+        <!-- Generator Tab -->
+        <section id="tab-generator" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span>Task Configuration</span>
+                    <div style="width: 200px;">
+                        <select id="gen-source-type" class="cfg-input">
+                            <option value="teacher">Teacher (Synthetic)</option>
+                            <option value="real">Real (VAE Encoding)</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="p-1-5">
+                    <!-- Teacher Mode Grid -->
+                    <div id="gen-teacher-options" class="generator-grid">
+                        
+                        <!-- Left Column: Core Settings -->
+                        <div class="gen-col">
+                            <div class="option-row">
+                                <label class="option-label">Teacher Model</label>
+                                <select id="gen-teacher-model"></select>
+                            </div>
+                            
+                            <div class="option-row" style="display:flex; gap:1.5rem;">
+                                <div style="flex:1">
+                                    <label class="option-label">Min Steps</label>
+                                    <input type="number" id="gen-steps-min" class="cfg-input" value="20">
+                                </div>
+                                <div style="flex:1">
+                                    <label class="option-label">Max Steps</label>
+                                    <input type="number" id="gen-steps-max" class="cfg-input" value="30">
+                                </div>
+                            </div>
+
+                            <div class="option-row" style="display:flex; gap:1.5rem;">
+                                <div style="flex:1">
+                                    <label class="option-label">Min CFG</label>
+                                    <input type="number" id="gen-cfg-min" class="cfg-input" value="3.0" step="0.5">
+                                </div>
+                                <div style="flex:1">
+                                    <label class="option-label">Max CFG</label>
+                                    <input type="number" id="gen-cfg-max" class="cfg-input" value="9.0" step="0.5">
+                                </div>
+                            </div>
+
+                            <div class="option-row" style="display:flex; gap:1.5rem;">
+                                <div style="flex:1">
+                                    <label class="option-label">Unique Conditions</label>
+                                    <input type="number" id="gen-unique-conds" class="cfg-input" value="10">
+                                </div>
+                                <div style="flex:1">
+                                    <label class="option-label">Samples per Condition</label>
+                                    <input type="number" id="gen-samples-per-cond" class="cfg-input" value="2">
+                                </div>
+                            </div>
+
+                            <div class="option-row" style="display:flex; gap:1.5rem;">
+                                <div style="flex:1">
+                                    <label class="option-label">Batch Size</label>
+                                    <input type="number" id="gen-batch-size" class="cfg-input" value="1">
+                                </div>
+                                <div style="flex:1">
+                                    <label class="option-label">Base Seed</label>
+                                    <div style="display:flex; gap:0.25rem;">
+                                        <input type="number" id="gen-seed" class="cfg-input" value="42">
+                                        <button class="btn btn-secondary btn-small" onclick="document.getElementById('gen-seed').value = Math.floor(Math.random() * 1000000)">🎲</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="option-row">
+                                <label class="option-label">Timestep Sampling (t_mode / low / high)</label>
+                                <div style="display:flex; gap:0.5rem;">
+                                    <select id="gen-teacher-t-mode" class="cfg-input" style="flex:2">
+                                        <option value="uniform">Uniform (Full Trajectory)</option>
+                                        <option value="logit">Logit-Normal (Middle biased)</option>
+                                        <option value="low">Low Noise (Details)</option>
+                                        <option value="mid">Mid Noise (Balanced)</option>
+                                        <option value="high">High Noise (Structure)</option>
+                                    </select>
+                                    <input type="number" id="gen-teacher-t-low" class="cfg-input" value="20" title="t_low" style="flex:1">
+                                    <input type="number" id="gen-teacher-t-high" class="cfg-input" value="999" title="t_high" style="flex:1">
+                                </div>
+                            </div>
+
+                            <button class="btn btn-start btn-block mt-1" style="height: 3.5rem; font-size: 1rem;">
+                                START GENERATION TASK
+                            </button>
+                        </div>
+
+                        <!-- Right Column: Prompts -->
+                        <div class="gen-col">
+                            <!-- Positive Prompt -->
+                            <div class="card" style="background: var(--bg); border-style: dashed;">
+                                <div class="card-header" style="font-size: 0.8rem; padding: 0.5rem 1rem;">Positive Prompt</div>
+                                <div class="p-1">
+                                    <div class="option-row">
+                                        <select id="gen-pos-mode" class="cfg-input mb-1">
+                                            <option value="list">Static List</option>
+                                            <option value="dictionary">Keyword Dictionary</option>
+                                        </select>
+                                        
+                                        <div id="pos-list-area">
+                                            <textarea id="gen-prompts" style="height:80px" placeholder="One prompt per line..."></textarea>
+                                        </div>
+                                        
+                                        <div id="pos-dict-area" style="display:none;">
+                                            <textarea id="gen-keywords" style="height:80px" placeholder="Keywords..."></textarea>
+                                            <input type="text" id="gen-keywords-file" class="cfg-input mt-1" placeholder="Path to .txt or .csv">
+                                            <input type="text" id="gen-pos-template" class="cfg-input mt-1" placeholder="Template: A photo of {keywords}">
+                                            <div style="display:flex; gap:0.5rem;" class="mt-1">
+                                                <input type="number" id="gen-pos-min" class="cfg-input" value="3" title="Min Keywords">
+                                                <input type="number" id="gen-pos-max" class="cfg-input" value="10" title="Max Keywords">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Negative Prompt -->
+                            <div class="card" style="background: var(--bg); border-style: dashed;">
+                                <div class="card-header" style="font-size: 0.8rem; padding: 0.5rem 1rem;">Negative Prompt</div>
+                                <div class="p-1">
+                                    <div class="option-row">
+                                        <select id="gen-neg-mode" class="cfg-input mb-1">
+                                            <option value="list">Static List</option>
+                                            <option value="dictionary">Keyword Dictionary</option>
+                                        </select>
+
+                                        <div id="neg-list-area">
+                                            <textarea id="gen-negative-prompt" style="height:80px" placeholder="Negative prompt(s)..."></textarea>
+                                        </div>
+
+                                        <div id="neg-dict-area" style="display:none;">
+                                            <textarea id="gen-neg-keywords" style="height:80px" placeholder="Negative keywords..."></textarea>
+                                            <input type="text" id="gen-neg-keywords-file" class="cfg-input mt-1" placeholder="Path to .txt or .csv">
+                                            <input type="text" id="gen-neg-template" class="cfg-input mt-1" placeholder="Template: {keywords}, blurry">
+                                            <div style="display:flex; gap:0.5rem;" class="mt-1">
+                                                <input type="number" id="gen-neg-min" class="cfg-input" value="3" title="Min Keywords">
+                                                <input type="number" id="gen-neg-max" class="cfg-input" value="10" title="Max Keywords">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Real Mode -->
+                    <div id="gen-real-options" style="display:none;">
+                        <div class="generator-grid">
+                            <div class="gen-col">
+                                <div class="option-row">
+                                    <label class="option-label">VAE Source (Checkpoint)</label>
+                                    <select id="gen-vae-model"></select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Image Directory Path</label>
+                                    <input type="text" id="gen-image-dir" class="cfg-input" placeholder="/path/to/images">
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Target Resolution</label>
+                                    <select id="gen-ingest-latent-size">
+                                        <option value="32">256px (32 latent)</option>
+                                        <option value="64" selected>512px (64 latent)</option>
+                                        <option value="96">768px (96 latent)</option>
+                                        <option value="128">1024px (128 latent)</option>
+                                    </select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Resize Mode</label>
+                                    <select id="gen-resize-mode">
+                                        <option value="center_crop" selected>Center Crop — fill square, no distortion</option>
+                                        <option value="fit">Fit — preserve full aspect ratio, non-square</option>
+                                        <option value="pad">Pad — preserve aspect ratio, fill with black</option>
+                                        <option value="resize">Stretch — distort to square</option>
+                                    </select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Timestep Sampling (mode / count / low / high)</label>
+                                    <div style="display:flex; gap:0.5rem;">
+                                        <select id="gen-real-t-mode" class="cfg-input" style="flex:2">
+                                            <option value="uniform">Uniform</option>
+                                            <option value="logit">Logit-Normal</option>
+                                            <option value="low">Low Noise</option>
+                                            <option value="mid">Mid Noise</option>
+                                            <option value="high">High Noise</option>
+                                        </select>
+                                        <input type="number" id="gen-real-n-timesteps" class="cfg-input" value="20" title="n_timesteps" style="flex:1">
+                                        <input type="number" id="gen-real-t-low" class="cfg-input" value="20" title="t_low" style="flex:1">
+                                        <input type="number" id="gen-real-t-high" class="cfg-input" value="999" title="t_high" style="flex:1">
+                                    </div>
+                                </div>
+                                <button class="btn btn-start btn-block mt-1">START INGESTION TASK</button>
+                            </div>
+                            <div class="gen-col p-1-5">
+                                <label><input type="checkbox" id="gen-recursive" checked> Recursive Scanning</label><br><br>
+                                <label><input type="checkbox" id="gen-auto-caption" checked> Use .txt files for captions</label>
+                                <p class="text-dim mt-1" style="font-size: 0.8rem;">
+                                    Center Crop: resize so smallest dim = target, crop center to square.<br>
+                                    Fit: resize so smallest dim = target, preserve full image (non-square).<br>
+                                    Pad: resize so largest dim = target, add black bars to reach square.<br>
+                                    Stretch: hard resize to target, distorts non-square images.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Inspection Tab -->
+        <section id="tab-inspection" class="tab-content">
+            <div class="card p-1 mb-1" style="display:flex; flex-direction:row; justify-content:space-between; align-items:center;">
+                <div style="display:flex; gap:1.5rem; align-items:center; padding: 0 1rem;">
+                    <span id="inspection-count" style="font-weight:600; color:var(--accent);">0 items pending</span>
+                    <button class="btn btn-secondary btn-small" id="btn-select-all">Select All</button>
+                </div>
+                <div style="display:flex; gap:1rem; padding: 0 1rem;">
+                    <button class="btn btn-kill btn-small" onclick="window.rejectSelected()">Discard Selected</button>
+                    <button class="btn btn-start btn-small" onclick="window.commitSelected()">Commit to Cache</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:1rem; height: calc(100vh - 300px);">
+                <div class="card gallery-grid scroll-v" id="inspection-gallery" style="flex:1;">
+                    <!-- Previews -->
+                </div>
+                <div class="card p-1-5" id="inspection-detail" style="width: 450px; flex-shrink: 0; overflow-y: auto;">
+                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--text-dim); font-size:0.85rem;">
+                        Click a trajectory to inspect details
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Explorer Tab -->
+        <section id="tab-explorer" class="tab-content">
+            <div class="card p-1 mb-1">
+                <span id="explorer-count" style="font-weight:600; color:var(--green); margin-left: 1rem;">0 items archived</span>
+            </div>
+            <div style="display:flex; gap:1rem; height: calc(100vh - 250px);">
+                <div class="card gallery-grid scroll-v" id="explorer-gallery" style="flex:1;">
+                    <!-- Previews -->
+                </div>
+                <div class="card p-1-5" id="explorer-detail" style="width: 450px; flex-shrink: 0; overflow-y: auto;">
+                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--text-dim); font-size:0.85rem;">
+                        Click a trajectory to inspect or edit details
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/dataset_manager.js?v=2"></script>
+</body>
+</html>

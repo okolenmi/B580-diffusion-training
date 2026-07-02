@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distillation Converter</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="/static/ui-state-manager.js"></script>
+    <script src="/static/option-tree.js"></script>
+    <script src="/static/chart.js"></script>
+    <script src="/static/sse-client.js"></script>
+    <script src="/static/training-control.js"></script>
+    <script src="/static/history.js"></script>
+    <script src="/static/config-editor.js"></script>
+    <script src="/static/block-helper.js"></script>
+    <script src="/static/app.js"></script>
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-name">Distillation</span>
+            </div>
+            <div id="status-badge" class="status-badge status-idle">Idle</div>
+        </div>
+
+        <div class="sidebar-controls">
+            <button id="btn-start" class="btn btn-start btn-block" onclick="window.TrainingControl.start()">
+                ▶ START RUN
+            </button>
+            <button id="btn-stop" class="btn btn-stop btn-block" style="display:none" onclick="window.TrainingControl.stop()">
+                ⏸ STOP & SAVE
+            </button>
+            <button id="btn-kill" class="btn btn-kill btn-block" style="display:none" onclick="window.TrainingControl.kill()">
+                ⏹ FORCE KILL
+            </button>
+            <button id="btn-reset" class="btn btn-secondary btn-block" onclick="window.TrainingControl.reset()">
+                ↺ RESET WORKER
+            </button>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-tab="dashboard">Dashboard</button>
+            <button class="nav-item" data-tab="config">Config Editor</button>
+            <button class="nav-item" data-tab="history">Run History</button>
+            <button class="nav-item" data-tab="log">Full Logs</button>
+            <a href="/datasets" class="nav-item" style="text-decoration:none; display:block;">Dataset Manager</a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="system-console" id="system-console">
+                <div class="console-header">System Console</div>
+                <div class="console-lines" id="console-output">
+                    <div class="console-line info">Ready.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="content-area">
+        <!-- Dashboard Tab -->
+        <section id="tab-dashboard" class="tab-content active">
+            <div class="dashboard-header">
+                <div class="progress-section">
+                    <div class="progress-container">
+                        <div id="progress-main-wrap" class="progress-main">
+                            <div class="progress-bar">
+                                <div id="progress-fill" class="progress-fill"></div>
+                            </div>
+                            <div id="progress-text" class="progress-labels">0 / 0 steps</div>
+                        </div>
+                        <div id="cache-progress-bar" class="progress-sub">
+                            <div class="progress-bar progress-bar-secondary">
+                                <div id="cache-progress-fill" class="progress-fill progress-fill-cache"></div>
+                            </div>
+                            <span id="cache-progress-text" class="progress-labels-sub">0/0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="metrics" class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Current Loss</div>
+                        <div id="metric-loss" class="metric-value">—</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Avg Loss</div>
+                        <div id="metric-avg" class="metric-value">—</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Learning Rate</div>
+                        <div id="metric-lr" class="metric-value">—</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">ETA</div>
+                        <div id="metric-eta" class="metric-value">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="chart-container card">
+                    <canvas id="loss-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Config Tab -->
+        <section id="tab-config" class="tab-content">
+            <div class="options-container card" style="max-width: 1000px; margin: 0 auto; height: calc(100vh - 120px);">
+                <div class="card-header">
+                    <span>Training Configuration</span>
+                    <div style="display:flex; gap:0.75rem;">
+                        <input type="text" id="cfg-file-path" class="cfg-input btn-small" style="width:200px; padding:0.4rem 0.75rem;" value="convert-cfg.toml" title="Config file path">
+                        <button id="btn-save-global" class="btn btn-start btn-small" onclick="window.OptionTree.saveToServer()">
+                            💾 SAVE SETTINGS
+                        </button>
+                    </div>
+                </div>
+                <div id="options-body">
+                    <div id="option-tree" class="scroll-v"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- History Tab -->
+        <section id="tab-history" class="tab-content">
+            <div class="card">
+                <div class="card-header">Recent Runs</div>
+                <div id="history-list" class="history-list scroll-v">
+                    <p class="placeholder">No runs yet.</p>
+                </div>
+                <div class="card-footer" style="display:flex; gap:0.5rem;">
+                    <button id="btn-refresh-history" class="btn btn-secondary btn-small">Refresh List</button>
+                    <button id="btn-clear-logs" class="btn btn-kill btn-small" onclick="window.HistoryManager.clearLogs()">Clear All Logs</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Log Tab -->
+        <section id="tab-log" class="tab-content">
+            <div class="log-panel card">
+                <div class="card-header">Process Output</div>
+                <div id="log-output" class="log-output scroll-v">No log output available.</div>
+                <div class="card-footer">
+                    <button id="btn-refresh-log" class="btn btn-secondary btn-small">Refresh Log</button>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <!-- Hidden result containers for backward compatibility -->
+    <div style="display:none">
+        <div id="start-result"></div>
+        <div id="stop-result"></div>
+    </div>
+</body>
+</html>

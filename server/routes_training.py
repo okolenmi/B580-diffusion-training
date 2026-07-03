@@ -61,7 +61,12 @@ async def start_run(
 
     # Load existing config, deep-merge form overrides, save
     config = read_config(cfg_path)
-    overrides = form_to_nested_overrides(form_data, ignore_keys={"config"})
+    # start_from / reset_optimizer are per-launch choices (handled below via
+    # build_training_command's CLI flags), not config overrides -- must be
+    # excluded here or a raw "lora_checkpoint" launch choice would fail
+    # TrainingConfig.start_from's Literal["teacher","student","resume"]
+    # validation instead of ever reaching the subprocess launch.
+    overrides = form_to_nested_overrides(form_data, ignore_keys={"config", "start_from", "reset_optimizer"})
     if overrides:
         merged = deep_merge(config.model_dump(mode="json"), overrides)
         config = TrainingConfig.model_validate(merged)

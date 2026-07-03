@@ -17,7 +17,16 @@ from core.config_model import TrainingConfig
 
 router = APIRouter(prefix="/config")
 
-SYNTHETIC_KEYS = {"config"}
+# start_from / reset_optimizer are per-launch choices, not config file
+# contents -- core/cli.py already has its own correct mechanism for
+# applying (and persisting, when appropriate) them via --fresh /
+# --reset-optimizer CLI flags. Merging the raw launch-form value directly
+# into the saved TOML here would be redundant with that, and dangerous:
+# TrainingConfig.start_from is a validated Literal["teacher","student",
+# "resume"], but the launch form can also send "lora_checkpoint" (a valid
+# launch choice, not a valid persisted value) -- letting that reach
+# model_validate() would raise instead of launching the run.
+SYNTHETIC_KEYS = {"config", "start_from", "reset_optimizer"}
 
 
 def _resolve_config_path(path: str) -> Path:

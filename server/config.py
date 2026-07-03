@@ -43,19 +43,22 @@ class Settings(BaseSettings):
         """ComfyUI directory - working directory for training.
 
         Resolution order:
-        1. Persisted server setting ("comfy_dir"), set via POST /settings.
-           This is the actual way to configure it through the web UI --
-           paths.set_comfy_dir()'s override is per-process and never
-           reaches this long-running server process from anywhere else.
-        2. Everything paths.get_comfy_dir() itself checks (COMFY_DIR env
-           var, cwd heuristic, sibling-folder auto-detect).
+        1. Everything paths.get_comfy_dir() checks: COMFY_DIR (set directly,
+           or via a .env file at the project root -- see paths.py's
+           _load_dotenv() for the simple no-server-required way to set
+           this), cwd heuristic, sibling-folder auto-detect.
+        2. Persisted server setting ("comfy_dir"), set via POST /settings.
+           Last resort, not first -- so a stale UI-set value from a
+           previous experiment can never silently shadow a freshly-edited
+           .env file or env var.
         """
-        override = self._persisted_setting("comfy_dir")
-        if override:
-            p = Path(override)
-            if p.exists():
-                return p
-        return get_comfy_dir()
+        try:
+            return get_comfy_dir()
+        except RuntimeError:
+            override = self._persisted_setting("comfy_dir")
+            if override and Path(override).is_dir():
+                return Path(override)
+            raise
 
     @property
     def project_root(self) -> Path:
@@ -82,18 +85,15 @@ class Settings(BaseSettings):
         """Python executable used to launch the training subprocess.
 
         Resolution order:
-        1. Persisted server setting ("venv_python"), set via POST /settings
-           -- the way to configure this through the web UI, for anyone who
-           doesn't want to (or can't) set environment variables.
-        2. VENV_PYTHON environment variable.
-        3. <workspace_root>/venv/bin/python, if it exists (project / ComfyUI
+        1. VENV_PYTHON environment variable (set directly, or via a .env
+           file at the project root -- see paths.py's _load_dotenv()).
+        2. <workspace_root>/venv/bin/python, if it exists (project / ComfyUI
            / venv all siblings -- kept as a convenience default).
+        3. Persisted server setting ("venv_python"), set via POST /settings.
+           Last resort, so a stale UI-set value can't silently shadow a
+           freshly-edited .env file or env var.
         4. Fallback to whatever "python" resolves to on PATH.
         """
-        override = self._persisted_setting("venv_python")
-        if override and Path(override).exists():
-            return override
-
         env_venv = os.environ.get("VENV_PYTHON")
         if env_venv and Path(env_venv).exists():
             return env_venv
@@ -101,6 +101,11 @@ class Settings(BaseSettings):
         venv_path = self.workspace_root / "venv/bin/python"
         if venv_path.exists():
             return str(venv_path)
+
+        override = self._persisted_setting("venv_python")
+        if override and Path(override).exists():
+            return override
+
         # Fallback to system python if venv doesn't exist
         return "python"
     

@@ -8,7 +8,7 @@ dataset_name = "test"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
-steps = 20000
+steps = 5000
 batch_size = 1
 grad_accum = 7
 lr = 1.5e-05
@@ -54,7 +54,7 @@ method = "lora"
 rank = 128
 alpha = 64.0
 dropout = 0.0
-lora_output = "models/loras/test_lora10f.safetensors"
+lora_output = "models/loras/test_lora10g.safetensors"
 target_all = false
 lora_continue_from = "models/loras/test_lora10e.safetensors"
 block_weighting = "input_blocks.0:0.3, input_blocks.1:0.7, input_blocks.2:0.5, input_blocks.3:0.6, input_blocks.4:0.9, input_blocks.5:0.9, input_blocks.6:0.9, input_blocks.7:0.9, input_blocks.8:0.5, middle_block:0.3, output_blocks.0:0.3, output_blocks.1:0.4, output_blocks.2:0.9, output_blocks.3:0.9, output_blocks.4:0.8, output_blocks.5:0.7, output_blocks.6:0.6, output_blocks.7:0.5, output_blocks.8:0.5, time_embed:0.0, label_emb:0.5, out:0.2"

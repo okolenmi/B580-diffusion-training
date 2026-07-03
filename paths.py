@@ -10,6 +10,42 @@ import os
 import sys
 
 
+def _load_dotenv():
+    """Load KEY=VALUE lines from a .env file at the project root into
+    os.environ, if the file exists.
+
+    This is the actual answer to "where do I put COMFY_DIR / VENV_PYTHON
+    without exporting shell variables every session": create a file called
+    `.env` right next to this one, containing e.g.:
+
+        COMFY_DIR=/path/to/ComfyUI
+        VENV_PYTHON=/path/to/venv/bin/python
+
+    Real environment variables always win over the .env file (standard
+    dotenv convention: this only fills in a variable that isn't already
+    set) -- so `COMFY_DIR=/other/path ./run_server.sh` still overrides
+    whatever's in .env for that one invocation.
+
+    Deliberately not pulling in python-dotenv as a dependency for what's
+    two lines of parsing.
+    """
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
+
 # Explicit override, set via set_comfy_dir() (e.g. from config.paths.comfy_dir).
 _comfy_dir_override = None
 

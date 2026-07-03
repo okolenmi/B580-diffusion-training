@@ -1,522 +1,329 @@
-"""UI option metadata — separate from config models.
+"""UI-specific metadata that cannot be derived from the config schema.
 
-Each option is keyed by its dotted config path.
-Visibility rules use the same dotted paths so the frontend can evaluate them.
-Fields are grouped into four logical sections:
-  1. MODE       — structural choices (training method, cache) + their params
-  2. DATA       — what to train from (models, dataset, architecture)
-  3. TRAINING   — universal training parameters (steps, lr, loss, system)
-  4. LAUNCH     — per-launch options (continue from, reset optimizer)
+This used to be a 558-line file that hand-duplicated every field's type,
+default, min/max, and choices alongside core/config_model.py -- the two were
+never enforced to agree, and in fact had already drifted (common.snr_weighting
+was missing the "min_snr_5" choice that core/config_model.py has always had).
 
-Groups are numbered so the frontend sorts them alphabetically.
+All of that -- path, type, default, min/max, raw choice values, and a base
+visible_when for fields that only exist on one variant of a discriminated
+union -- is now derived directly from the Pydantic model by config_schema.py.
+It cannot drift, because it IS the schema.
+
+What's left here is only what a schema genuinely cannot know:
+  - label: display name (falls back to the raw field name if omitted)
+  - help: falls back to the Pydantic field's own `description=...` if omitted
+  - group: which UI section this field belongs to
+  - placeholder / step: pure form cosmetics
+  - choice_labels: friendly display names for enum values (e.g.
+    "fused-adafactor" -> "Fused Adafactor"); falls back to a naive
+    title-cased version of the raw value if omitted
+  - extra_visible_when: additional visibility conditions *beyond* "which
+    union variant is this field on" -- e.g. cache fields also depend on
+    common.data_source == "teacher", which is cross-cutting business logic
+    no schema can infer on its own
+
+See options.py for how this gets merged with config_schema.py's output.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# Each option entry mirrors what the frontend expects:
-#   id (optional, defaults to key), label, type, default, choices,
-#   min, max, step, placeholder, help, group, visible_when
-OptionDef = dict[str, Any]
+ExtraDef = dict[str, Any]
 
-# Convenience: tuning.method condition used by many fields
-_MODE_DISTILL = ("distillation", "cyclic", "lora")
-_MODE_ALL = ("distillation", "cyclic", "lora", "full")
-_MODE_TRAJ = {"tuning.method": ["distillation", "cyclic", "lora"], "cache.mode": "trajectory", "common.data_source": "teacher"}
-_MODE_RANDOM = {"tuning.method": ["distillation", "cyclic", "lora"], "cache.mode": "random", "common.data_source": "teacher"}
-
-OPTION_TREE: dict[str, OptionDef] = {
-    # ─── 1. MODE — the structural choice that determines everything ───
-    "tuning.method": {
-        "label": "Training Method", "type": "select",
-        "choices": [
-            {"value": "distillation", "label": "Distillation (single pass)"},
-            {"value": "cyclic",       "label": "Cyclic (recommended)"},
-            {"value": "lora",         "label": "LoRA (Low-Rank Adaptation)"},
-            {"value": "full",         "label": "Full Fine-Tune"},
-        ],
-        "group": "1. MODE",
-        "help": "Which training algorithm to use — this determines which other options are relevant.",
-    },
-
-    # LoRA-specific
-    "tuning.rank": {
-        "label": "LoRA Rank", "type": "number",
-        "min": 1, "max": 256, "step": 1,
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "Inner dimension of the low-rank decomposition (default 64, range 1-256). Higher = more trainable params, stronger adaptation, larger output file. Filesize scales roughly linearly with rank.",
-    },
-    "tuning.alpha": {
-        "label": "LoRA Alpha", "type": "number",
-        "min": 0.01, "max": 128.0, "step": 0.01,
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "Scales the LoRA update before adding: W_new = W + (alpha/rank) * BA (default 1.0). Higher alpha = stronger influence from the LoRA weights.",
-    },
-    "tuning.dropout": {
-        "label": "LoRA Dropout", "type": "number",
-        "min": 0.0, "max": 0.9, "step": 0.05,
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "Drop chance for LoRA parameters during training (default 0.0 = off). Each LoRA weight has this probability of being zeroed per step. 0.1 = 10% chance. Helps prevent overfitting on small datasets.",
-    },
-    "tuning.lora_output": {
-        "label": "LoRA Output Path", "type": "text",
-        "placeholder": "models/loras/my_lora.safetensors",
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "Where to save the trained LoRA weights.",
-    },
-    "tuning.target_all": {
-        "label": "Full LoRA (All Layers)", "type": "checkbox",
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "If enabled, inject LoRA into every Linear and Conv2d layer in the weighted blocks. Warning: This is much slower and requires more VRAM.",
-    },
-    "tuning.lora_continue_from": {
-        "label": "LoRA Continue From", "type": "text",
-        "placeholder": "path/to/existing_lora.safetensors",
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora", "start_from": "lora_checkpoint"},
-        "help": "Optional: Path to an existing LoRA adapter file to resume training from. If empty or invalid, training starts from scratch.",
-    },
-    "tuning.block_weighting": {
-        "label": "Block Weighting", "type": "text",
-        "placeholder": "input_blocks.7:1.0, middle_block:0.5, output_blocks.0:0.0",
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "lora"},
-        "help": "Optional comma-separated list of block multipliers (0.0 to 1.0). Format: 'block_id:weight'. Names: input_blocks.N, middle_block, output_blocks.N. Weight 0.0 disables a block entirely.",
-    },
-
-    # Cyclic-specific
-    "tuning.cycle_steps": {
-        "label": "Steps Per Cycle", "type": "number",
-        "min": 50, "max": 5000, "step": 50,
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "cyclic"},
-        "help": "Steps between cache rebuilds in cyclic mode.",
-    },
-    "tuning.cycle_state_decay": {
-        "label": "Cycle State Decay", "type": "number",
-        "min": 0.0, "max": 1.0, "step": 0.1,
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": "cyclic"},
-        "help": "Decay optimizer states between cycles. 1.0 = keep states, 0.0 = full reset.",
-    },
-
-    # Cache mode — only relevant for distillation/cyclic with teacher data
-    "cache.mode": {
-        "label": "Cache Mode", "type": "select",
-        "choices": [
-            {"value": "trajectory", "label": "Trajectory"},
-            {"value": "random",     "label": "Random"},
-        ],
-        "group": "1. MODE",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "lora"], "common.data_source": "teacher"},
-    },
-
-    # Trajectory cache
-    "cache.batch_size": {
-        "label": "Traj Cache Batch", "type": "number",
-        "min": 0, "max": 16,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-        "help": "0 or empty = use training batch size.",
-    },
-    "cache.traj_steps_min": {
-        "label": "Traj Min Steps", "type": "number",
-        "min": 5, "max": 100,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-    },
-    "cache.traj_steps_max": {
-        "label": "Traj Max Steps", "type": "number",
-        "min": 5, "max": 100,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-    },
-    "cache.traj_skip_steps": {
-        "label": "Traj Skip Steps", "type": "number",
-        "min": 0, "max": 20,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-        "help": "Skip first N steps of each trajectory.",
-    },
-    "cache.sequence_size": {
-        "label": "Traj Seq Size", "type": "number",
-        "min": 0, "max": 50,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-        "help": "Samples per trajectory. 0 = all.",
-    },
-    "cache.sequence_mode": {
-        "label": "Seq Selection", "type": "select",
-        "choices": [
-            {"value": "random",     "label": "Random"},
-            {"value": "span",       "label": "Span"},
-            {"value": "span_high",  "label": "Span High-t"},
-            {"value": "span_mid",   "label": "Span Mid-t"},
-            {"value": "span_low",   "label": "Span Low-t"},
-        ],
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-    },
-    "cache.cfg": {
-        "label": "Cache CFG", "type": "number",
-        "min": 1.0, "max": 20.0, "step": 0.1,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-        "help": "CFG scale during trajectory generation.",
-    },
-    "cache.cond_mode": {
-        "label": "Cond Mode", "type": "select",
-        "choices": [
-            {"value": "random", "label": "Random"},
-            {"value": "zero",   "label": "Zero (uncond)"},
-            {"value": "prompt", "label": "Prompt-based"},
-        ],
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-    },
-    "cache.positive_prompt": {
-        "label": "Pos Prompt", "type": "text",
-        "group": "1. MODE",
-        "visible_when": {"cache.mode": "trajectory", "cache.cond_mode": "prompt"},
-    },
-    "cache.negative_prompt": {
-        "label": "Neg Prompt", "type": "text",
-        "group": "1. MODE",
-        "visible_when": {"cache.mode": "trajectory", "cache.cond_mode": "prompt"},
-    },
-    "cache.student_mix": {
-        "label": "Student Mix (DAgger)", "type": "number",
-        "min": 0.0, "max": 1.0, "step": 0.05,
-        "group": "1. MODE",
-        "visible_when": _MODE_TRAJ,
-        "help": "Fraction of student latents in cache.",
-    },
-    "cache.student_anchor_steps": {
-        "label": "Anchor Steps", "type": "number",
-        "min": 1, "max": 20,
-        "group": "1. MODE",
-        "visible_when": {"cache.mode": "trajectory", "cache.student_mix": "__truthy__"},
-    },
-    "cache.student_chain_len": {
-        "label": "Chain Length", "type": "number",
-        "min": 1, "max": 20,
-        "group": "1. MODE",
-        "visible_when": {"cache.mode": "trajectory", "cache.student_mix": "__truthy__"},
-    },
-    "cache.student_chain_noise": {
-        "label": "Chain Noise", "type": "number",
-        "min": 0.0, "max": 0.2, "step": 0.01,
-        "group": "1. MODE",
-        "visible_when": {"cache.mode": "trajectory", "cache.student_mix": "__truthy__"},
-    },
-
-    # Random cache
-    "cache.batch": {
-        "label": "Random Cache Batch", "type": "number",
-        "min": 1, "max": 64,
-        "group": "1. MODE",
-        "visible_when": _MODE_RANDOM,
-    },
-
-    # ─── 2. DATA — what source to train from ───
-    "common.data_source": {
-        "label": "Data Source", "type": "select",
-        "choices": [
-            {"value": "teacher", "label": "Teacher Model (generate on-the-fly)"},
-            {"value": "dataset", "label": "Managed Dataset (pre-existing)"},
-        ],
-        "group": "2. DATA",
-        "help": "Where training data comes from. Teacher generates trajectories via cache; dataset uses pre-curated samples.",
-    },
-    "paths.base_model": {
-        "label": "Base Model", "type": "text",
-        "placeholder": "models/checkpoints/...",
-        "group": "2. DATA",
-        "help": "Source model. Used as teacher (distillation/cyclic) or base (LoRA/full). Required unless starting from a full student checkpoint.",
-    },
-    "paths.checkpoint_output": {
-        "label": "Output Checkpoint", "type": "text",
-        "placeholder": "models/checkpoints/...",
-        "group": "2. DATA",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "full"]},
-        "help": "Where to save the full trained model checkpoint.",
-    },
-    "paths.student": {
-        "label": "Student Init", "type": "text",
-        "placeholder": "Optional starting weights",
-        "group": "2. DATA",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "lora"], "common.data_source": "teacher"},
-        "help": "Start student from this checkpoint instead of copying teacher.",
-    },
-    "paths.dataset_name": {
-        "label": "Dataset Name", "type": "text",
-        "group": "2. DATA",
-        "visible_when": {"common.data_source": "dataset"},
-        "help": "Name of the managed dataset to use for training.",
-    },
-    "paths.resume_checkpoint": {
-        "label": "Resume Checkpoint", "type": "text",
-        "group": "2. DATA",
-        "visible_when": {"start_from": "resume"},
-        "help": "Internal path for mid-run weight checkpoints. Auto-derived if empty.",
-    },
-    "paths.resume_optimizer": {
-        "label": "Resume Optimizer", "type": "text",
-        "group": "2. DATA",
-        "visible_when": {"start_from": "resume"},
-        "help": "Internal path for mid-run optimizer states. Auto-derived if empty.",
-    },
-    "paths.comfy_dir": {
-        "label": "ComfyUI Directory", "type": "text",
-        "group": "2. DATA",
-        "help": "Path to ComfyUI (default: auto-detect from current dir or COMFY_DIR env).",
-    },
-    "common.teacher_type": {
-        "label": "Teacher Type", "type": "select",
-        "choices": [
-            {"value": "vpred", "label": "v-prediction"},
-            {"value": "eps",   "label": "epsilon"},
-        ],
-        "group": "2. DATA",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "lora"], "common.data_source": "teacher"},
-    },
-    "common.student_type": {
-        "label": "Student Type", "type": "select",
-        "choices": [
-            {"value": "vpred", "label": "v-prediction"},
-            {"value": "eps",   "label": "epsilon"},
-        ],
-        "group": "2. DATA",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "lora", "full"]},
-    },
-    "common.latent_size": {
-        "label": "Latent Size (8x = PX)", "type": "number",
-        "min": 0, "max": 256, "step": 8,
-        "group": "2. DATA",
-        "help": "Spatial size (e.g. 64). 0 = auto (64).",
-    },
-    "common.cfg_aware": {
-        "label": "CFG-Aware Tuning", "type": "checkbox",
-        "group": "2. DATA",
-        "visible_when": {"tuning.method": ["distillation", "cyclic", "lora"]},
-        "help": "Train student to internalize CFG via explicit scale input (adm_in 2816→3072).",
-    },
-    "common.training_cfg_min": {
-        "label": "Training CFG Min", "type": "number",
-        "min": 1.0, "max": 20.0, "step": 0.1,
-        "group": "2. DATA",
-        "visible_when": {"common.cfg_aware": True},
-    },
-    "common.training_cfg_max": {
-        "label": "Training CFG Max", "type": "number",
-        "min": 1.0, "max": 20.0, "step": 0.1,
-        "group": "2. DATA",
-        "visible_when": {"common.cfg_aware": True},
-    },
-    "common.training_positive_prompt": {
-        "label": "Training Pos Prompt", "type": "text",
-        "group": "2. DATA",
-        "visible_when": {"cache.mode": "trajectory", "cache.cond_mode": "prompt"},
-        "help": "Positive prompt for student forward passes. Overrides cache conditioning.",
-    },
-    "common.training_negative_prompt": {
-        "label": "Training Neg Prompt", "type": "text",
-        "group": "2. DATA",
-        "visible_when": {"cache.mode": "trajectory", "cache.cond_mode": "prompt"},
-        "help": "Negative prompt for student forward passes.",
-    },
-
-    # ─── 3. TRAINING — universal parameters that apply regardless of mode ───
-    "common.steps": {
-        "label": "Total Steps", "type": "number",
-        "min": 100, "max": 200000, "step": 100,
-        "group": "3. TRAINING",
-        "help": "Total training steps for this session.",
-    },
-    "common.batch_size": {
-        "label": "Training Batch Size", "type": "number",
-        "min": 1, "max": 16,
-        "group": "3. TRAINING",
-    },
-    "common.grad_accum": {
-        "label": "Grad Accumulation", "type": "number",
-        "min": 1, "max": 32,
-        "group": "3. TRAINING",
-    },
-    "common.seed": {
-        "label": "Global Seed", "type": "number",
-        "group": "3. TRAINING",
-    },
-    "common.save_every": {
-        "label": "Save Every N Steps", "type": "number",
-        "min": 0, "max": 10000, "step": 50,
-        "group": "3. TRAINING",
-        "help": "Save checkpoint every N steps. 0 = only at end.",
-    },
-    "common.lr": {
-        "label": "Learning Rate", "type": "number",
-        "min": 1e-7, "max": 1e-2, "step": 1e-7,
-        "placeholder": "1e-5",
-        "group": "3. TRAINING",
-    },
-    "common.optimizer": {
-        "label": "Optimizer", "type": "select",
-        "choices": [
-            {"value": "fused-adafactor", "label": "Fused Adafactor"},
-            {"value": "xpu-adafactor",   "label": "XPU Adafactor"},
-            {"value": "adamw",           "label": "AdamW"},
-        ],
-        "group": "3. TRAINING",
-    },
-    "common.adafactor_scale_param": {
-        "label": "Adafactor Scale Param", "type": "checkbox",
-        "group": "3. TRAINING",
-        "visible_when": {"common.optimizer": ["fused-adafactor", "xpu-adafactor"]},
-    },
-    "common.lr_schedule": {
-        "label": "LR Schedule", "type": "select",
-        "choices": [
-            {"value": "cosine", "label": "Cosine"},
-            {"value": "poly",   "label": "Polynomial"},
-        ],
-        "group": "3. TRAINING",
-    },
-    "common.lr_end": {
-        "label": "LR End", "type": "number",
-        "min": 0.0, "step": 1e-7,
-        "group": "3. TRAINING",
-        "visible_when": {"common.lr_schedule": "poly"},
-    },
-    "common.lr_power": {
-        "label": "LR Power", "type": "number",
-        "min": 0.1, "max": 5.0, "step": 0.1,
-        "group": "3. TRAINING",
-        "visible_when": {"common.lr_schedule": "poly"},
-    },
-    "common.lr_warmup_steps": {
-        "label": "Warmup Steps", "type": "number",
-        "min": 0,
-        "group": "3. TRAINING",
-    },
-    "common.lr_warmup_start": {
-        "label": "Warmup Start LR", "type": "number",
-        "min": 0.0,
-        "group": "3. TRAINING",
-    },
-    "common.lr_strategy": {
-        "label": "Param LR Strategy", "type": "select",
-        "choices": [
-            {"value": "uniform", "label": "Uniform"},
-            {"value": "radial",  "label": "Radial"},
-        ],
-        "group": "3. TRAINING",
-    },
-    "common.center_mult": {
-        "label": "Center Mult", "type": "number",
-        "group": "3. TRAINING",
-        "visible_when": {"common.lr_strategy": "radial"},
-    },
-    "common.side_mult": {
-        "label": "Side Mult", "type": "number",
-        "group": "3. TRAINING",
-        "visible_when": {"common.lr_strategy": "radial"},
-    },
-    "common.time_mult": {
-        "label": "Time Mult", "type": "number",
-        "group": "3. TRAINING",
-        "visible_when": {"common.lr_strategy": "radial"},
-    },
-    "common.snr_weighting": {
-        "label": "SNR Weighting", "type": "select",
-        "choices": [
-            {"value": "uniform",     "label": "Uniform"},
-            {"value": "snr",         "label": "Min-SNR"},
-            {"value": "inverse_snr", "label": "Inverse SNR"},
-            {"value": "decay_snr",   "label": "Decay SNR (Hybrid)"},
-        ],
-        "group": "3. TRAINING",
-    },
-    "common.t_mode": {
-        "label": "T-Sampling Mode", "type": "select",
-        "choices": [
-            {"value": "uniform", "label": "Uniform"},
-            {"value": "low",     "label": "Low-t (Details)"},
-            {"value": "mid",     "label": "Mid-t (Balance)"},
-            {"value": "high",    "label": "High-t (Structure)"},
-            {"value": "logit",   "label": "Logit-normal"},
-        ],
-        "group": "3. TRAINING",
-    },
-    "common.t_low": {
-        "label": "T-Low", "type": "number",
-        "min": 0, "max": 999,
-        "group": "3. TRAINING",
-    },
-    "common.t_high": {
-        "label": "T-High", "type": "number",
-        "min": 0, "max": 999,
-        "group": "3. TRAINING",
-    },
-    "common.device": {
-        "label": "Device", "type": "text",
-        "group": "3. TRAINING",
-    },
-    "common.no_compile": {
-        "label": "No Compile", "type": "checkbox",
-        "group": "3. TRAINING",
-    },
-    "common.no_checkpoint": {
-        "label": "No Checkpoint", "type": "checkbox",
-        "group": "3. TRAINING",
-    },
-    "common.dump_cache_samples": {
-        "label": "Dump Cache Samples", "type": "checkbox",
-        "group": "3. TRAINING",
-    },
-    "common.save_on_crash": {
-        "label": "Save on Crash", "type": "checkbox",
-        "group": "3. TRAINING",
-        "help": "Save checkpoint when pressing Ctrl+\\ (stop button).",
-    },
-    "common.pre_cond_enable": {
-        "label": "Adversarial Pre-cond", "type": "checkbox",
-        "group": "3. TRAINING",
-        "help": "Enable adversarial pre-conditioning (drafts from opponent). Requires cond AND uncond targets.",
-    },
-    "common.pre_cond_power_min": {
-        "label": "Pre-cond Power Min", "type": "number",
-        "min": 0.0, "max": 1.0, "step": 0.05,
-        "group": "3. TRAINING",
-        "visible_when": {"common.pre_cond_enable": True},
-    },
-    "common.pre_cond_power_max": {
-        "label": "Pre-cond Power Max", "type": "number",
-        "min": 0.0, "max": 1.0, "step": 0.05,
-        "group": "3. TRAINING",
-        "visible_when": {"common.pre_cond_enable": True},
-    },
-    "common.pre_cond_clean_ratio": {
-        "label": "Pre-cond Clean Ratio", "type": "number",
-        "min": 0.0, "max": 1.0, "step": 0.05,
-        "group": "3. TRAINING",
-        "visible_when": {"common.pre_cond_enable": True},
-        "help": "Fraction of steps to run without pre-conditioning.",
-    },
-    "common.resume_step": {
-        "label": "Resume Step Override", "type": "number",
-        "group": "3. TRAINING",
-        "help": "Override starting step counter (0 = auto).",
-    },
+# Keyed by the same dotted config path as config_schema.py's output.
+# Groups: "1. MODE", "2. DATA", "3. TRAINING" (numbered so the frontend
+# sorts them in this order; "4. LAUNCH" is reserved for SYNTHETIC_OPTIONS
+# below, which aren't real config fields).
+EXTRAS: dict[str, ExtraDef] = {
+    'tuning.method': {'label': 'Training Method',
+ 'help': 'Which training algorithm to use — this determines which other options are '
+         'relevant.',
+ 'group': '1. MODE',
+ 'choice_order': ['distillation', 'cyclic', 'lora', 'full'],
+ 'choice_labels': {'distillation': 'Distillation (single pass)',
+                   'cyclic': 'Cyclic (recommended)',
+                   'lora': 'LoRA (Low-Rank Adaptation)',
+                   'full': 'Full Fine-Tune'}},
+    'tuning.rank': {'label': 'LoRA Rank',
+ 'help': 'Inner dimension of the low-rank decomposition (default 64, range 1-256). '
+         'Higher = more trainable params, stronger adaptation, larger output file. '
+         'Filesize scales roughly linearly with rank.',
+ 'group': '1. MODE',
+ 'step': 1},
+    'tuning.alpha': {'label': 'LoRA Alpha',
+ 'help': 'Scales the LoRA update before adding: W_new = W + (alpha/rank) * BA (default '
+         '1.0). Higher alpha = stronger influence from the LoRA weights.',
+ 'group': '1. MODE',
+ 'step': 0.01},
+    'tuning.dropout': {'label': 'LoRA Dropout',
+ 'help': 'Drop chance for LoRA parameters during training (default 0.0 = off). Each '
+         'LoRA weight has this probability of being zeroed per step. 0.1 = 10% chance. '
+         'Helps prevent overfitting on small datasets.',
+ 'group': '1. MODE',
+ 'step': 0.05},
+    'tuning.lora_output': {'label': 'LoRA Output Path',
+ 'help': 'Where to save the trained LoRA weights.',
+ 'placeholder': 'models/loras/my_lora.safetensors',
+ 'group': '1. MODE'},
+    'tuning.target_all': {'label': 'Full LoRA (All Layers)',
+ 'help': 'If enabled, inject LoRA into every Linear and Conv2d layer in the weighted '
+         'blocks. Warning: This is much slower and requires more VRAM.',
+ 'group': '1. MODE'},
+    'tuning.lora_continue_from': {'label': 'LoRA Continue From',
+ 'help': 'Optional: Path to an existing LoRA adapter file to resume training from. If '
+         'empty or invalid, training starts from scratch.',
+ 'placeholder': 'path/to/existing_lora.safetensors',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'start_from': 'lora_checkpoint'}},
+    'tuning.block_weighting': {'label': 'Block Weighting',
+ 'help': 'Optional comma-separated list of block multipliers (0.0 to 1.0). Format: '
+         "'block_id:weight'. Names: input_blocks.N, middle_block, output_blocks.N. "
+         'Weight 0.0 disables a block entirely.',
+ 'placeholder': 'input_blocks.7:1.0, middle_block:0.5, output_blocks.0:0.0',
+ 'group': '1. MODE'},
+    'tuning.cycle_steps': {'label': 'Steps Per Cycle',
+ 'help': 'Steps between cache rebuilds in cyclic mode.',
+ 'group': '1. MODE',
+ 'step': 50},
+    'tuning.cycle_state_decay': {'label': 'Cycle State Decay',
+ 'help': 'Decay optimizer states between cycles. 1.0 = keep states, 0.0 = full reset.',
+ 'group': '1. MODE',
+ 'step': 0.1},
+    'cache.mode': {'label': 'Cache Mode',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.batch_size': {'label': 'Traj Cache Batch',
+ 'help': '0 or empty = use training batch size.',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.traj_steps_min': {'label': 'Traj Min Steps',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.traj_steps_max': {'label': 'Traj Max Steps',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.traj_skip_steps': {'label': 'Traj Skip Steps',
+ 'help': 'Skip first N steps of each trajectory.',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.sequence_size': {'label': 'Traj Seq Size',
+ 'help': 'Samples per trajectory. 0 = all.',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.sequence_mode': {'label': 'Seq Selection',
+ 'group': '1. MODE',
+ 'choice_labels': {'span_high': 'Span High-t',
+                   'span_mid': 'Span Mid-t',
+                   'span_low': 'Span Low-t'},
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.cfg': {'label': 'Cache CFG',
+ 'help': 'CFG scale during trajectory generation.',
+ 'group': '1. MODE',
+ 'step': 0.1,
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.cond_mode': {'label': 'Cond Mode',
+ 'group': '1. MODE',
+ 'choice_labels': {'zero': 'Zero (uncond)', 'prompt': 'Prompt-based'},
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.positive_prompt': {'label': 'Pos Prompt',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'cache.cond_mode': 'prompt'}},
+    'cache.negative_prompt': {'label': 'Neg Prompt',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'cache.cond_mode': 'prompt'}},
+    'cache.student_mix': {'label': 'Student Mix (DAgger)',
+ 'help': 'Fraction of student latents in cache.',
+ 'group': '1. MODE',
+ 'step': 0.05,
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'cache.student_anchor_steps': {'label': 'Anchor Steps',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'cache.student_mix': '__truthy__'}},
+    'cache.student_chain_len': {'label': 'Chain Length',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'cache.student_mix': '__truthy__'}},
+    'cache.student_chain_noise': {'label': 'Chain Noise',
+ 'group': '1. MODE',
+ 'step': 0.01,
+ 'extra_visible_when': {'cache.student_mix': '__truthy__'}},
+    'cache.batch': {'label': 'Random Cache Batch',
+ 'group': '1. MODE',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'common.data_source': {'label': 'Data Source',
+ 'help': 'Where training data comes from. Teacher generates trajectories via cache; '
+         'dataset uses pre-curated samples.',
+ 'group': '2. DATA',
+ 'choice_labels': {'teacher': 'Teacher Model (generate on-the-fly)',
+                   'dataset': 'Managed Dataset (pre-existing)'}},
+    'paths.base_model': {'label': 'Base Model',
+ 'help': 'Source model. Used as teacher (distillation/cyclic) or base (LoRA/full). '
+         'Required unless starting from a full student checkpoint.',
+ 'placeholder': 'models/checkpoints/...',
+ 'group': '2. DATA'},
+    'paths.checkpoint_output': {'label': 'Output Checkpoint',
+ 'help': 'Where to save the full trained model checkpoint.',
+ 'placeholder': 'models/checkpoints/...',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'full']}},
+    'paths.student': {'label': 'Student Init',
+ 'help': 'Start student from this checkpoint instead of copying teacher.',
+ 'placeholder': 'Optional starting weights',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'paths.dataset_name': {'label': 'Dataset Name',
+ 'help': 'Name of the managed dataset to use for training.',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'common.data_source': 'dataset'}},
+    'paths.resume_checkpoint': {'label': 'Resume Checkpoint',
+ 'help': 'Internal path for mid-run weight checkpoints. Auto-derived if empty.',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'start_from': 'resume'}},
+    'paths.resume_optimizer': {'label': 'Resume Optimizer',
+ 'help': 'Internal path for mid-run optimizer states. Auto-derived if empty.',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'start_from': 'resume'}},
+    'paths.comfy_dir': {'label': 'ComfyUI Directory',
+ 'help': 'Path to ComfyUI (default: auto-detect from current dir or COMFY_DIR env).',
+ 'group': '2. DATA'},
+    'common.teacher_type': {'label': 'Teacher Type',
+ 'group': '2. DATA',
+ 'choice_labels': {'vpred': 'v-prediction', 'eps': 'epsilon'},
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
+                        'common.data_source': 'teacher'}},
+    'common.student_type': {'label': 'Student Type',
+ 'group': '2. DATA',
+ 'choice_labels': {'vpred': 'v-prediction', 'eps': 'epsilon'},
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora', 'full']}},
+    'common.latent_size': {'label': 'Latent Size (8x = PX)',
+ 'help': 'Spatial size (e.g. 64). 0 = auto (64).',
+ 'group': '2. DATA',
+ 'step': 8},
+    'common.cfg_aware': {'label': 'CFG-Aware Tuning',
+ 'help': 'Train student to internalize CFG via explicit scale input (adm_in '
+         '2816→3072).',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora']}},
+    'common.training_cfg_min': {'label': 'Training CFG Min',
+ 'group': '2. DATA',
+ 'step': 0.1,
+ 'extra_visible_when': {'common.cfg_aware': True}},
+    'common.training_cfg_max': {'label': 'Training CFG Max',
+ 'group': '2. DATA',
+ 'step': 0.1,
+ 'extra_visible_when': {'common.cfg_aware': True}},
+    'common.training_positive_prompt': {'label': 'Training Pos Prompt',
+ 'help': 'Positive prompt for student forward passes. Overrides cache conditioning.',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'cache.mode': 'trajectory', 'cache.cond_mode': 'prompt'}},
+    'common.training_negative_prompt': {'label': 'Training Neg Prompt',
+ 'help': 'Negative prompt for student forward passes.',
+ 'group': '2. DATA',
+ 'extra_visible_when': {'cache.mode': 'trajectory', 'cache.cond_mode': 'prompt'}},
+    'common.steps': {'label': 'Total Steps',
+ 'help': 'Total training steps for this session.',
+ 'group': '3. TRAINING',
+ 'step': 100},
+    'common.batch_size': {'label': 'Training Batch Size', 'group': '3. TRAINING'},
+    'common.grad_accum': {'label': 'Grad Accumulation', 'group': '3. TRAINING'},
+    'common.seed': {'label': 'Global Seed', 'group': '3. TRAINING'},
+    'common.save_every': {'label': 'Save Every N Steps',
+ 'help': 'Save checkpoint every N steps. 0 = only at end.',
+ 'group': '3. TRAINING',
+ 'step': 50},
+    'common.lr': {'label': 'Learning Rate', 'placeholder': '1e-5', 'group': '3. TRAINING', 'step': 1e-07},
+    'common.optimizer': {'label': 'Optimizer',
+ 'group': '3. TRAINING',
+ 'choice_labels': {'xpu-adafactor': 'XPU Adafactor', 'adamw': 'AdamW'}},
+    'common.adafactor_scale_param': {'label': 'Adafactor Scale Param',
+ 'group': '3. TRAINING',
+ 'extra_visible_when': {'common.optimizer': ['fused-adafactor', 'xpu-adafactor']}},
+    'common.lr_schedule': {'label': 'LR Schedule',
+ 'group': '3. TRAINING',
+ 'choice_labels': {'poly': 'Polynomial'}},
+    'common.lr_end': {'label': 'LR End',
+ 'group': '3. TRAINING',
+ 'step': 1e-07,
+ 'extra_visible_when': {'common.lr_schedule': 'poly'}},
+    'common.lr_power': {'label': 'LR Power',
+ 'group': '3. TRAINING',
+ 'step': 0.1,
+ 'extra_visible_when': {'common.lr_schedule': 'poly'}},
+    'common.lr_warmup_steps': {'label': 'Warmup Steps', 'group': '3. TRAINING'},
+    'common.lr_warmup_start': {'label': 'Warmup Start LR', 'group': '3. TRAINING'},
+    'common.lr_strategy': {'label': 'Param LR Strategy', 'group': '3. TRAINING'},
+    'common.center_mult': {'label': 'Center Mult',
+ 'group': '3. TRAINING',
+ 'extra_visible_when': {'common.lr_strategy': 'radial'}},
+    'common.side_mult': {'label': 'Side Mult',
+ 'group': '3. TRAINING',
+ 'extra_visible_when': {'common.lr_strategy': 'radial'}},
+    'common.time_mult': {'label': 'Time Mult',
+ 'group': '3. TRAINING',
+ 'extra_visible_when': {'common.lr_strategy': 'radial'}},
+    'common.snr_weighting': {'label': 'SNR Weighting',
+ 'group': '3. TRAINING',
+ 'choice_labels': {'snr': 'Min-SNR',
+                   'inverse_snr': 'Inverse SNR',
+                   'decay_snr': 'Decay SNR (Hybrid)'}},
+    'common.t_mode': {'label': 'T-Sampling Mode',
+ 'group': '3. TRAINING',
+ 'choice_labels': {'low': 'Low-t (Details)',
+                   'mid': 'Mid-t (Balance)',
+                   'high': 'High-t (Structure)',
+                   'logit': 'Logit-normal'}},
+    'common.t_low': {'label': 'T-Low', 'group': '3. TRAINING'},
+    'common.t_high': {'label': 'T-High', 'group': '3. TRAINING'},
+    'common.device': {'label': 'Device', 'group': '3. TRAINING'},
+    'common.no_compile': {'label': 'No Compile', 'group': '3. TRAINING'},
+    'common.no_checkpoint': {'label': 'No Checkpoint', 'group': '3. TRAINING'},
+    'common.dump_cache_samples': {'label': 'Dump Cache Samples', 'group': '3. TRAINING'},
+    'common.save_on_crash': {'label': 'Save on Crash',
+ 'help': 'Save checkpoint when pressing Ctrl+\\ (stop button).',
+ 'group': '3. TRAINING'},
+    'common.pre_cond_enable': {'label': 'Adversarial Pre-cond',
+ 'help': 'Enable adversarial pre-conditioning (drafts from opponent). Requires cond '
+         'AND uncond targets.',
+ 'group': '3. TRAINING'},
+    'common.pre_cond_power_min': {'label': 'Pre-cond Power Min',
+ 'group': '3. TRAINING',
+ 'step': 0.05,
+ 'extra_visible_when': {'common.pre_cond_enable': True}},
+    'common.pre_cond_power_max': {'label': 'Pre-cond Power Max',
+ 'group': '3. TRAINING',
+ 'step': 0.05,
+ 'extra_visible_when': {'common.pre_cond_enable': True}},
+    'common.pre_cond_clean_ratio': {'label': 'Pre-cond Clean Ratio',
+ 'help': 'Fraction of steps to run without pre-conditioning.',
+ 'group': '3. TRAINING',
+ 'step': 0.05,
+ 'extra_visible_when': {'common.pre_cond_enable': True}},
+    'common.resume_step': {'label': 'Resume Step Override',
+ 'help': 'Override starting step counter (0 = auto).',
+ 'group': '3. TRAINING'},
 }
 
-# Per-launch options — not part of the config model, shown at the bottom.
-SYNTHETIC_OPTIONS: list[OptionDef] = [
+
+# Per-launch options -- NOT real TrainingConfig fields (well, start_from and
+# reset_optimizer technically exist as persisted fields too, but that's a
+# *different*, launch-transient concept -- see server/routes_training.py's
+# docstring and PROGRESS.md for the full story). Deliberately excluded from
+# config_schema.py's auto-generated output in options.py so only this
+# per-launch version is ever shown.
+SYNTHETIC_OPTIONS: list[ExtraDef] = [
     {
         "id": "start_from",
         "label": "Continue From",

@@ -38,7 +38,7 @@ class CommonSettings(BaseModel):
     lr_schedule: Literal["cosine", "poly"] = "cosine"
     lr_end: float = Field(default=1e-5, ge=0.0)
     lr_power: float = Field(default=2.0, ge=0.1, le=5.0)
-    lr_warmup_steps: int = 0
+    lr_warmup_steps: int = Field(default=0, ge=0)
     lr_warmup_start: float = Field(default=0.0, ge=0.0)
 
     lr_strategy: Literal["uniform", "radial"] = "uniform"

@@ -1,10 +1,28 @@
-"""Option tree builder — generates frontend schema from UI metadata + config values."""
+"""Option tree builder — merges auto-derived schema (config_schema.py) with
+hand-authored UI extras (config_ui.py) + actual config values into the flat
+option list the frontend expects."""
 
 from typing import Any
 
-from .config_ui import OPTION_TREE, SYNTHETIC_OPTIONS
+from . import config_schema
+from .config_ui import EXTRAS, SYNTHETIC_OPTIONS
 from core.config_io import read_config
 from core.config_model import TrainingConfig
+
+# start_from / reset_optimizer are real TrainingConfig fields (so
+# config_schema.py picks them up automatically), but the UI should only
+# ever show the per-launch SYNTHETIC_OPTIONS version of them -- see
+# config_ui.py's docstring. Excluded here so they don't show up twice.
+_EXCLUDE_FROM_SCHEMA = {"start_from", "reset_optimizer"}
+
+
+def _humanize(dotted_key: str) -> str:
+    name = dotted_key.rsplit(".", 1)[-1]
+    return name.replace("_", " ").title()
+
+
+def _naive_choice_label(value: str) -> str:
+    return str(value).replace("_", " ").replace("-", " ").title()
 
 
 def get_config_defaults() -> dict:
@@ -48,15 +66,19 @@ def _read_config_values(config_path: str | None) -> dict[str, Any]:
 
 
 def build_option_tree(config_path: str | None = None) -> list[dict]:
-    """Generate the frontend option tree from UI metadata + config values.
+    """Generate the frontend option tree from the auto-derived schema +
+    hand-authored extras + actual config values.
 
-    Returns a flat list of option dicts. The frontend groups them by
-    the 'group' field.
+    Returns a flat list of option dicts (same shape as before this was
+    split into config_schema.py/config_ui.py -- the frontend doesn't need
+    to change).
     """
     config_values = _read_config_values(config_path)
+    schema_opts = config_schema.build_schema_options()
 
-    # Start with synthetic options (start_from, reset_optimizer)
     options: list[dict] = []
+
+    # Synthetic (per-launch) options first, same as before.
     for opt in SYNTHETIC_OPTIONS:
         opt = dict(opt)
         saved = config_values.get(opt["id"])
@@ -64,26 +86,50 @@ def build_option_tree(config_path: str | None = None) -> list[dict]:
             opt["default"] = saved
         options.append(opt)
 
-    # Build options from UI metadata
-    for dotted_key, meta in OPTION_TREE.items():
+    for dotted_key, base in schema_opts.items():
+        if dotted_key in _EXCLUDE_FROM_SCHEMA:
+            continue
+
+        extra = EXTRAS.get(dotted_key, {})
         default_from_config = config_values.get(dotted_key)
 
         opt = {
             "id": dotted_key,
-            "label": meta.get("label", dotted_key),
-            "type": meta.get("type", "text"),
-            "default": default_from_config if default_from_config is not None else meta.get("default"),
-            "group": meta.get("group", "General"),
+            "label": extra.get("label", _humanize(dotted_key)),
+            "type": base["type"],
+            "default": default_from_config if default_from_config is not None else base.get("default"),
+            "group": extra.get("group", "General"),
         }
 
-        for extra_key in ("choices", "min", "max", "step", "placeholder", "help"):
-            if extra_key in meta:
-                opt[extra_key] = meta[extra_key]
+        if "choices" in base:
+            choice_labels = extra.get("choice_labels", {})
+            choice_order = extra.get("choice_order")
+            raw_choices = base["choices"]
+            if choice_order:
+                # Preserve a curated display order; anything in raw_choices
+                # not explicitly ordered is appended at the end (so a new
+                # Union variant added later still shows up automatically
+                # instead of silently disappearing).
+                ordered = [v for v in choice_order if v in raw_choices]
+                ordered += [v for v in raw_choices if v not in choice_order]
+                raw_choices = ordered
+            opt["choices"] = [
+                {"value": v, "label": choice_labels.get(v, _naive_choice_label(v))}
+                for v in raw_choices
+            ]
 
-        if "visible_when" in meta:
-            opt["visible_when"] = meta["visible_when"]
+        for key in ("min", "max"):
+            if key in base:
+                opt[key] = base[key]
+        for key in ("step", "placeholder", "help"):
+            if key in extra:
+                opt[key] = extra[key]
 
-        # Clean None values (except default which can be 0 or False)
+        visible_when = dict(base.get("visible_when") or {})
+        visible_when.update(extra.get("extra_visible_when") or {})
+        if visible_when:
+            opt["visible_when"] = visible_when
+
         opt = {k: v for k, v in opt.items()
                if v is not None or k == "default"}
 

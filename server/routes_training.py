@@ -8,8 +8,9 @@ from fastapi.responses import JSONResponse
 
 from . import db
 from .config import settings
-from core.config_io import read_config, write_config, FLAT_TO_SECTION_MAP
+from core.config_io import read_config, write_config
 from .control import build_training_command, get_control_options
+from .form_utils import deep_merge, form_to_nested_overrides
 from .process_manager import kill_process_by_pid
 from .service import TrainingService, get_training_service
 from core.config_model import TrainingConfig
@@ -22,60 +23,6 @@ def _resolve_config_path(config_path: str) -> Path:
     if not p.is_absolute():
         p = settings.project_root / config_path
     return p
-
-
-def _migrate_form_data(form_data) -> dict:
-    """Convert form data to typed nested dict, migrating flat keys."""
-    raw: dict[str, str] = {}
-    for key, value in form_data.items():
-        if key in ("config",):
-            continue
-        raw[key] = str(value)
-
-    # Migrate flat keys to dotted keys
-    for old_key, section_key in FLAT_TO_SECTION_MAP.items():
-        if old_key in raw:
-            raw[section_key] = raw.pop(old_key)
-
-    # Build nested dict from dotted keys
-    nested: dict = {}
-    for key, value in raw.items():
-        if "." in key:
-            parts = key.split(".")
-            current = nested
-            for part in parts[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            current[parts[-1]] = _coerce_value(value)
-        else:
-            nested[key] = _coerce_value(value)
-
-    return nested
-
-
-def _deep_merge(base: dict, overrides: dict) -> dict:
-    """Recursively merge overrides dict into base dict."""
-    result = base.copy()
-    for key, value in overrides.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
-
-
-def _coerce_value(value: str):
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    try:
-        if "." in value:
-            return float(value)
-        return int(value)
-    except (ValueError, TypeError):
-        return value
 
 
 @router.get("/control/options")
@@ -114,9 +61,9 @@ async def start_run(
 
     # Load existing config, deep-merge form overrides, save
     config = read_config(cfg_path)
-    overrides = _migrate_form_data(form_data)
+    overrides = form_to_nested_overrides(form_data, ignore_keys={"config"})
     if overrides:
-        merged = _deep_merge(config.model_dump(mode="json"), overrides)
+        merged = deep_merge(config.model_dump(mode="json"), overrides)
         config = TrainingConfig.model_validate(merged)
         write_config(cfg_path, config)
 

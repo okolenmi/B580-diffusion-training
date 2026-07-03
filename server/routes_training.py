@@ -76,6 +76,13 @@ async def start_run(
     reset_optimizer = str(form_data.get("reset_optimizer", "false")).lower() == "true"
     total_steps = config.common.steps
 
+    # Check before creating a DB row, not after -- previously this row got
+    # created unconditionally and then corrected back to "failed" in the
+    # except block below if a run was already in progress, leaving a brief
+    # orphan "running" row for a launch that was never actually attempted.
+    if service.is_running:
+        return JSONResponse(status_code=409, content={"error": "A run is already in progress"})
+
     run_id = db.create_run(settings.db_path, config_path, config.tuning.method, total_steps)
 
     cmd = build_training_command(

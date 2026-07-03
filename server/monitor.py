@@ -72,6 +72,6 @@ class RunMonitor:
 
         try:
             with open(log_path, "a") as f:
-                f.write(f"\n--- RUN ENDED: status={status}, exit_code={exit_code} ---\\n")
+                f.write(f"\n--- RUN ENDED: status={status}, exit_code={exit_code} ---\n")
         except Exception:
             pass

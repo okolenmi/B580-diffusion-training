@@ -83,6 +83,33 @@ def send_signal(proc: subprocess.Popen, force: bool = False) -> bool:
             return False
 
 
+def _looks_like_our_training_process(pid: int) -> bool:
+    """Best-effort check that `pid` is still actually one of our own
+    training subprocesses, not an unrelated process the OS happened to
+    reuse that PID for after the original one exited.
+
+    PIDs get reused once a process exits -- killing "by stored PID" some
+    time after the fact (e.g. orphan cleanup on server restart, or
+    /run/stop racing with a process that already died) risks killing
+    whatever unrelated process now holds that PID if we don't check first.
+
+    Linux-only (reads /proc), consistent with the rest of this module
+    already assuming Linux (os.killpg, process groups). Fails open (True)
+    if /proc isn't available or the check itself errors -- this is a
+    mitigation for the common case, not a hard guarantee, and shouldn't
+    make legitimate cleanup silently stop working on a system where the
+    check can't run.
+    """
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    if not cmdline_path.exists():
+        return True
+    try:
+        cmdline = cmdline_path.read_bytes().decode(errors="replace")
+        return "core.cli" in cmdline
+    except OSError:
+        return True
+
+
 def kill_process_by_pid(pid: int) -> bool:
     """Kill a process by PID, including its process group.
 
@@ -94,8 +121,13 @@ def kill_process_by_pid(pid: int) -> bool:
     Returns
     -------
     bool
-        True if process was killed, False if not found.
+        True if process was killed, False if not found (or if it no
+        longer looks like one of our own training processes -- see
+        _looks_like_our_training_process).
     """
+    if not _looks_like_our_training_process(pid):
+        return False
+
     try:
         pgid = os.getpgid(pid)
         os.killpg(pgid, signal.SIGKILL)

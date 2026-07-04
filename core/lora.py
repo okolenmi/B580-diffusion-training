@@ -12,22 +12,24 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 # Timestep-conditional gating.
 #
-# Motivation: if training data is concentrated in some region of the noise
-# schedule, timesteps outside that region never get supervised, and there's
+# Motivation: if training data only covers some sub-range of the noise
+# schedule, timesteps outside that range never get supervised, and there's
 # nothing structurally stopping the LoRA delta from drifting there anyway
 # (shared weights, optimizer momentum, etc. don't respect "this timestep
-# wasn't sampled"). Gating scales the LoRA contribution toward zero for
-# timesteps inside a user-specified *protected interval* [protect_low,
-# protect_high], so in that range the effective forward pass is
-# (approximately) just the frozen base weights, by construction -- not by
-# hoping nothing touches it. Outside that interval, the gate approaches 1
-# and LoRA trains normally.
+# wasn't sampled"). Gating scales the LoRA contribution toward ~1 for
+# timesteps inside [gate_train_low, gate_train_high] -- your dataset's actual
+# t range -- and toward ~0 outside it, so timesteps you aren't training on
+# stay close to the frozen base model instead of drifting, by construction,
+# not by hoping nothing touches them.
 #
-# Deliberately an explicit interval rather than a single directional
-# threshold: a threshold requires correctly reasoning about which side of
-# it should be protected, which is an easy way to end up gating the wrong
-# region entirely (ask me how I know). Naming the literal range to protect
-# removes that failure mode -- there's no direction to get backwards.
+# Naming matches this codebase's existing t_low/t_high convention (see
+# CommonSettings.t_low/t_high, manager/builder.py's t_low/t_high) rather than
+# a "protect" framing: "the range I'm training on" is the number you already
+# know (it's your dataset's t bounds), whereas "the range to protect" needs
+# an extra mental inversion step every time -- which is exactly the mistake
+# that happened twice in a row building this feature. Matching the
+# already-established convention removes that failure mode instead of
+# documenting around it.
 #
 # Set via set_lora_gate() once per training step (all LoRALinear instances
 # in the same forward pass share the same gate, since they're processing the
@@ -46,25 +48,32 @@ def set_lora_gate(gate: Optional[torch.Tensor]):
     _current_gate = gate
 
 
-def compute_lora_gate(t: torch.Tensor, protect_low: float, protect_high: float,
+def compute_lora_gate(t: torch.Tensor, train_low: float, train_high: float,
                        width: float) -> torch.Tensor:
-    """Smooth gate: ~0 (protect the frozen base weights) for t inside
-    [protect_low, protect_high], rising smoothly to ~1 (train normally) the
-    further t is outside that interval on either side. `width` controls how
-    sharp the transition is at both edges (smaller = sharper cutoff right at
-    the boundary, larger = more gradual handoff).
+    """Smooth gate: ~1 (train normally) for t inside [train_low, train_high]
+    -- your dataset's actual t range -- fading to ~0 (protect the frozen
+    base weights) the further t is outside that range on either side.
+    `width` controls how sharp the transition is at both edges (smaller =
+    sharper cutoff right at the boundary, larger = more gradual handoff).
+
+    Worked example matching a real case: dataset covers t=120-450.
+    compute_lora_gate(t, train_low=120, train_high=450, width=40) gives
+    gate≈1 for t=120-450 (full LoRA training, this IS your data),
+    gate≈0.5 exactly at t=120 and t=450 (the edges of your data),
+    gate≈0 for t well below 120 or well above 450 (protected -- your
+    dataset has nothing to say about those timesteps).
 
     t: (B,) tensor of per-sample timesteps (whatever scale/convention the
     rest of the pipeline already uses for t).
     """
     t = t.float()
-    below = protect_low - t   # positive when t is below the protected interval
-    above = t - protect_high  # positive when t is above the protected interval
-    inside_depth = torch.minimum(t - protect_low, protect_high - t)  # positive when inside
-    # Signed distance from the protected interval: negative (how deep) when
-    # inside, positive (how far away) when outside, ~0 right at an edge.
-    dist = torch.where(t < protect_low, below,
-                        torch.where(t > protect_high, above, -inside_depth))
+    below = train_low - t   # positive when t is below the training range
+    above = t - train_high  # positive when t is above the training range
+    inside_depth = torch.minimum(t - train_low, train_high - t)  # positive when inside
+    # Signed distance from the training interval: negative (how far outside)
+    # when t is outside, positive (how deep) when t is inside, ~0 at an edge.
+    dist = torch.where(t < train_low, -below,
+                        torch.where(t > train_high, -above, inside_depth))
     return torch.sigmoid(dist / max(width, 1e-6))
 
 

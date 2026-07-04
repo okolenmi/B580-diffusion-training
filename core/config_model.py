@@ -128,35 +128,35 @@ class LoRATuning(BaseModel):
         default="",
         description="Optional comma-separated list of block multipliers (e.g. 'input_7:1.0,middle:0.5,output_0:0.2')"
     )
-    gate_protect_low: Optional[float] = Field(
+    gate_train_low: Optional[float] = Field(
         default=None, ge=0.0, le=1000.0,
-        description="If set (together with gate_protect_high), scales the LoRA delta toward "
-                    "zero for timesteps inside [gate_protect_low, gate_protect_high] -- so that "
-                    "range stays close to the frozen base model instead of being pushed around "
-                    "by training data outside it. Both must be set together, or gating is fully "
-                    "disabled (LoRA applies uniformly across all timesteps, default behavior)."
+        description="If set (together with gate_train_high), scales the LoRA delta toward "
+                    "~1 (train normally) for timesteps inside [gate_train_low, gate_train_high] "
+                    "-- your dataset's actual t range -- and toward ~0 (protect the frozen base "
+                    "model) outside it. Both must be set together, or gating is fully disabled "
+                    "(LoRA applies uniformly across all timesteps, default behavior)."
     )
-    gate_protect_high: Optional[float] = Field(
+    gate_train_high: Optional[float] = Field(
         default=None, ge=0.0, le=1000.0,
-        description="See gate_protect_low."
+        description="See gate_train_low."
     )
     gate_width: float = Field(
         default=100.0, gt=0.0, le=1000.0,
-        description="Width of the gate's smooth transition at each edge of the protected "
-                     "interval. Smaller = sharper cutoff right at the boundary, larger = more "
-                     "gradual handoff. If this is comparable to or larger than the protected "
-                     "interval's own width, suppression in the middle of the interval won't "
-                     "reach fully ~0 -- use a smaller width for full suppression of a narrow "
-                     "protected range. Only relevant if gate_protect_low/high are set."
+        description="Width of the gate's smooth transition at each edge of [gate_train_low, "
+                     "gate_train_high]. Smaller = sharper cutoff right at the boundary, larger "
+                     "= more gradual handoff. If this is comparable to or larger than the "
+                     "training interval's own width, the middle of that interval won't reach "
+                     "full (~1) training strength -- use a smaller width for a narrow range. "
+                     "Only relevant if gate_train_low/high are set."
     )
 
     @model_validator(mode="after")
     def _validate_gate_range(self):
-        low, high = self.gate_protect_low, self.gate_protect_high
+        low, high = self.gate_train_low, self.gate_train_high
         if (low is None) != (high is None):
-            raise ValueError("gate_protect_low and gate_protect_high must be set together, or both left unset")
+            raise ValueError("gate_train_low and gate_train_high must be set together, or both left unset")
         if low is not None and low >= high:
-            raise ValueError(f"gate_protect_low ({low}) must be less than gate_protect_high ({high})")
+            raise ValueError(f"gate_train_low ({low}) must be less than gate_train_high ({high})")
         return self
 
 

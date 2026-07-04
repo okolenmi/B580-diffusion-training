@@ -34,7 +34,9 @@ ExtraDef = dict[str, Any]
 
 # Keyed by the same dotted config path as config_schema.py's output.
 # Groups: "1. MODE", "2. DATA", "3. TRAINING" (numbered so the frontend
-# sorts them in this order; "4. LAUNCH" is reserved for SYNTHETIC_OPTIONS
+# sorts them in this order; "0. LAUNCH" is reserved for SYNTHETIC_OPTIONS -- sorted
+# first since deciding what to continue from is naturally the first choice,
+# not the last
 # below, which aren't real config fields).
 EXTRAS: dict[str, ExtraDef] = {
     'tuning.method': {'label': 'Training Method',
@@ -334,7 +336,7 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
             {"value": "student",        "label": "Student Checkpoint"},
             {"value": "resume",         "label": "Resume (Auto-pick)"},
         ],
-        "group": "4. LAUNCH",
+        "group": "0. LAUNCH",
         "visible_when": {"tuning.method": ["distillation", "cyclic", "full"]},
         "help": "Starting point for this training run.",
     },
@@ -348,7 +350,7 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
             {"value": "resume",         "label": "Resume (Auto-pick)"},
             {"value": "lora_checkpoint","label": "LoRA Checkpoint (Manual)"},
         ],
-        "group": "4. LAUNCH",
+        "group": "0. LAUNCH",
         "visible_when": {"tuning.method": "lora"},
         "help": "Starting point for this LoRA training run.",
     },
@@ -358,7 +360,7 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
         "type": "checkbox",
         "default": False,
         "visible_when": {"tuning.method": ["distillation", "cyclic", "lora", "full"], "start_from": "resume"},
-        "group": "4. LAUNCH",
+        "group": "0. LAUNCH",
         "help": "Discard saved optimizer states, start fresh.",
     },
 ]

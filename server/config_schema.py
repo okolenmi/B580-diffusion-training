@@ -139,14 +139,44 @@ def _walk(model: type[BaseModel], prefix: str, base_visible_when: dict | None,
             # its own select control; the *other* fields on each variant
             # get folded into the flat dotted-path space, auto-tagged with
             # visible_when={that path: that variant's discriminator value}.
-            disc_values = []
+            # The discriminator control itself (e.g. "tuning.method") goes
+            # in FIRST, before any of the mode-specific fields below it --
+            # both because that's the sensible reading order (pick the mode
+            # before configuring it) and because insertion order here
+            # becomes render order in the frontend (option-tree.js renders
+            # each group's options in the order they appear in the flat
+            # list). Default comes from the *actual* field default
+            # (default_factory), not "whichever variant happens to be
+            # listed first in the Union" -- those aren't the same thing
+            # (e.g. TrainingConfig.tuning defaults to DistillationTuning
+            # even though LoRATuning is listed first).
+            disc_values = [
+                get_args(member.model_fields[_discriminator_field_name(member)].annotation)[0]
+                for member in union_members
+                if _discriminator_field_name(member) is not None
+            ]
+            if disc_values:
+                first_member = union_members[0]
+                disc_name = _discriminator_field_name(first_member)
+                disc_path = f"{path}.{disc_name}"
+                actual_default_instance = _default_value(field_info)
+                actual_default = (
+                    getattr(actual_default_instance, disc_name, disc_values[0])
+                    if actual_default_instance is not None else disc_values[0]
+                )
+                out[disc_path] = {
+                    "type": "select",
+                    "choices": list(disc_values),
+                    "default": actual_default,
+                    **({"visible_when": base_visible_when} if base_visible_when else {}),
+                }
+
             for member in union_members:
                 disc_name = _discriminator_field_name(member)
                 if disc_name is None:
                     continue
                 disc_info = member.model_fields[disc_name]
                 disc_value = get_args(disc_info.annotation)[0]
-                disc_values.append(disc_value)
                 disc_path = f"{path}.{disc_name}"
 
                 member_visible = {disc_path: disc_value}
@@ -170,29 +200,6 @@ def _walk(model: type[BaseModel], prefix: str, base_visible_when: dict | None,
                         continue
                     leaf["visible_when"] = member_visible
                     out[sub_path] = leaf
-
-            # The discriminator control itself (e.g. "tuning.method"): all
-            # variants share the same field name, so just record the union
-            # of possible values once. Default comes from the *actual*
-            # field default (default_factory), not "whichever variant
-            # happens to be listed first in the Union" -- those aren't the
-            # same thing (e.g. TrainingConfig.tuning defaults to
-            # DistillationTuning even though LoRATuning is listed first).
-            if disc_values:
-                first_member = union_members[0]
-                disc_name = _discriminator_field_name(first_member)
-                disc_path = f"{path}.{disc_name}"
-                actual_default_instance = _default_value(field_info)
-                actual_default = (
-                    getattr(actual_default_instance, disc_name, disc_values[0])
-                    if actual_default_instance is not None else disc_values[0]
-                )
-                out.setdefault(disc_path, {
-                    "type": "select",
-                    "choices": list(disc_values),
-                    "default": actual_default,
-                    **({"visible_when": base_visible_when} if base_visible_when else {}),
-                })
             continue
 
         if _is_basemodel(tp):

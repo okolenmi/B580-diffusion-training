@@ -69,3 +69,32 @@ not a flat set of pasted files. For handing changes back, a `git diff`
 patch (plain text, applies with `git apply patch.diff`) is cleaner than
 re-pasting whole files or fighting with zip uploads — see the patch
 attached alongside this file for the two changes above.
+
+## Backlog (not started)
+
+- **Training-progress preview generation.** Periodically (e.g. every N
+  steps) generate a small grid of samples from a fixed seed + fixed test
+  prompt, so training progress is visually inspectable over time without
+  waiting for the run to finish. `manager/preview.py`'s VAE-decode code is
+  most of the plumbing already; would need a hook into the training loop
+  on a step interval (similar to `save_every`) rather than only firing
+  during dataset curation. Not started -- flagged during the LoRA
+  timestep-gating discussion, explicitly not urgent.
+
+- **Inference-side companion for timestep-gated LoRA** (see
+  `core/lora.py`'s `compute_lora_gate`/`set_lora_gate`, added for the
+  low-noise-degradation problem). Gating is currently training-only: it
+  structurally prevents low-t gradient signal from shaping `lora_A`/
+  `lora_B` during training (verified with real torch tensors, forward *and*
+  backward), but once training finishes those are just fixed weights --
+  loading the exported LoRA into standard ComfyUI applies it at full
+  strength across every timestep, including the ones gating was meant to
+  protect. A true end-to-end guarantee would need a custom ComfyUI node
+  (or a patch applied at LoRA-load time) reapplying the same gate function
+  during actual sampling, keyed to whatever timestep the sampler is
+  currently on. Deliberately not built yet -- pending empirical results
+  from training-only gating first (in progress as of this note), and
+  because it's the one piece of this whole effort that can't be verified
+  in the sandbox at all (no ComfyUI runtime available here), unlike
+  everything else this session, which was actually tested with real
+  tensors before being handed over.

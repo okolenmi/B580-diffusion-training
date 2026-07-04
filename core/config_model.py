@@ -128,6 +128,20 @@ class LoRATuning(BaseModel):
         default="",
         description="Optional comma-separated list of block multipliers (e.g. 'input_7:1.0,middle:0.5,output_0:0.2')"
     )
+    gate_threshold: Optional[float] = Field(
+        default=None, ge=0.0, le=1000.0,
+        description="If set, scales the LoRA delta toward zero for timesteps below this "
+                    "value (smoothly, via a sigmoid centered here) -- so low-noise behavior "
+                    "stays close to the frozen base model instead of drifting from training "
+                    "data that's concentrated at higher noise. None disables gating entirely "
+                    "(LoRA applies uniformly across all timesteps, current/default behavior)."
+    )
+    gate_width: float = Field(
+        default=100.0, gt=0.0, le=1000.0,
+        description="Width of the gate's transition region around gate_threshold. Smaller "
+                     "= sharper cutoff, larger = more gradual handoff. Only relevant if "
+                     "gate_threshold is set."
+    )
 
 
 class CyclicTuning(BaseModel):

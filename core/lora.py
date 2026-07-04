@@ -9,6 +9,48 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# ---------------------------------------------------------------------------
+# Timestep-conditional gating.
+#
+# Motivation: if training data is dominated by high-noise (large-t) examples,
+# the low-noise (small-t) region never gets supervised, and there's nothing
+# structurally stopping the LoRA delta from drifting there anyway (shared
+# weights, optimizer momentum, etc. don't respect "this timestep wasn't
+# sampled"). Gating scales the LoRA contribution toward zero as t decreases
+# below `gate_threshold`, so at low noise the effective forward pass is
+# (approximately) just the frozen base weights, by construction -- not by
+# hoping nothing touches it.
+#
+# Set via set_lora_gate() once per training step (all LoRALinear instances
+# in the same forward pass share the same gate, since they're processing the
+# same batch of samples) -- not per-layer, since there's no reason for it to
+# differ across layers.
+# ---------------------------------------------------------------------------
+
+_current_gate: Optional[torch.Tensor] = None
+
+
+def set_lora_gate(gate: Optional[torch.Tensor]):
+    """Set the current per-sample gate (shape (B,), or None to disable
+    gating entirely -- every LoRALinear.forward() call will multiply its
+    delta by this until it's changed again."""
+    global _current_gate
+    _current_gate = gate
+
+
+def compute_lora_gate(t: torch.Tensor, threshold: float, width: float) -> torch.Tensor:
+    """Smooth gate: ~1 for t >> threshold (high noise -- the region being
+    actively distilled), fading to ~0 for t << threshold (low noise -- the
+    region to leave alone). `width` controls how sharp the transition is
+    (smaller = sharper cutoff around threshold, larger = more gradual).
+
+    t: (B,) tensor of per-sample timesteps (whatever scale/convention the
+    rest of the pipeline already uses for t -- this only cares about
+    relative position against `threshold`, not absolute units).
+    """
+    return torch.sigmoid((t.float() - threshold) / max(width, 1e-6))
+
+
 @dataclass
 class LoRAConfig:
     rank: int = 64
@@ -98,6 +140,16 @@ class LoRALinear(nn.Module):
         # multiplication. This saves one full-size tensor multiplication kernel
         # launch and millions of ops on large images.
         lora_out = (self.dropout(x) @ self.lora_A.T) @ (self.lora_B.T * self.scaling)
+
+        gate = _current_gate
+        if gate is not None:
+            # Reshape (B,) -> (B, 1, ..., 1) to match lora_out's actual rank,
+            # so this works whether x is (B, C) or (B, N, C) without needing
+            # to know which kind of layer this is.
+            g = gate.to(device=lora_out.device, dtype=lora_out.dtype)
+            g = g.view(-1, *([1] * (lora_out.dim() - 1)))
+            lora_out = lora_out * g
+
         return result + lora_out
 
     def merge(self):

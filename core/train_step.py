@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from .comfy_setup import xpu_empty_cache
 from .config_model import CommonSettings
+from .lora import compute_lora_gate, set_lora_gate
 from .model_io import comfy_input_transform, raw_to_denoised, raw_to_target
 from .noise_schedule import get_alpha_sigma
 from .optimizer_builder import build_optimizer, update_lr
@@ -306,6 +307,8 @@ def _run_one_step(
         progress_writer: Any = None,
         student_encoder: Any = None,
         prompt_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] | None = None,
+        gate_threshold: float | None = None,
+        gate_width: float = 100.0,
 ) -> bool:
     """Run a single optimization step."""
     _entry = prefetcher.get_next()
@@ -408,6 +411,11 @@ def _run_one_step(
     else:
         t_tensor = torch.tensor([t_val] * x_t.shape[0], dtype=torch.long, device=device)
     timer.stop("1_transform")
+
+    if gate_threshold is not None:
+        set_lora_gate(compute_lora_gate(t_tensor, gate_threshold, gate_width))
+    else:
+        set_lora_gate(None)
 
     # Zero gradients once per step for non-fused optimizers.
     # FusedXPUAdafactor frees grads inside its backward hooks — zero_grad is a no-op.
@@ -624,6 +632,11 @@ def run_training_loop(
     _snr_w = config.common.snr_weighting
     _is_fused = isinstance(optimizer, FusedXPUAdafactor)
     _save_on_crash = config.common.save_on_crash
+    # Timestep-gated LoRA: only meaningful for LoRA tuning, and only if the
+    # user actually configured a threshold (None keeps current behavior --
+    # LoRA applies uniformly across all timesteps, no gating at all).
+    _gate_threshold = getattr(config.tuning, "gate_threshold", None)
+    _gate_width = getattr(config.tuning, "gate_width", 100.0)
     # loss_win is a deque(maxlen=100) created by _make_weight_track().
     # If weight_track was passed in from a previous cycle it already has the deque.
     if "loss_win" not in weight_track or not isinstance(weight_track["loss_win"], deque):
@@ -663,6 +676,8 @@ def run_training_loop(
                 progress_writer=progress_writer,
                 student_encoder=student_encoder,
                 prompt_cache=prompt_cache,
+                gate_threshold=_gate_threshold,
+                gate_width=_gate_width,
             )
 
             if pbar is not None: pbar.update(1)

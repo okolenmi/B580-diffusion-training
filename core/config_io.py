@@ -236,10 +236,19 @@ def read_config(path: str | Path) -> TrainingConfig:
     """Read and validate a TOML config file.
     
     Auto-migrates from old format to new section-based format.
+
+    Raises FileNotFoundError if the path doesn't exist -- this used to
+    silently return a blank default TrainingConfig() instead, which meant
+    a typo'd or stale path could silently proceed with every field empty
+    rather than failing clearly. Every current caller either already
+    checks existence first (core/cli.py, server/options.py,
+    server/routes_config.py) or wraps this call in a try/except that
+    handles the error case sensibly (server/routes_training.py) -- none
+    of them actually relied on the old silent-default behavior.
     """
     p = Path(path).resolve()
     if not p.exists():
-        return TrainingConfig()
+        raise FileNotFoundError(f"Config file not found: {p}")
 
     with open(p, "rb") as f:
         data = tomllib.load(f)

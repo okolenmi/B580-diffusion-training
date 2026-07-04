@@ -60,7 +60,10 @@ async def start_run(
     cfg_path = _resolve_config_path(config_path)
 
     # Load existing config, deep-merge form overrides, save
-    config = read_config(cfg_path)
+    try:
+        config = read_config(cfg_path)
+    except FileNotFoundError:
+        return JSONResponse(status_code=400, content={"error": f"Config file not found: {cfg_path}"})
     # start_from / reset_optimizer are per-launch choices (handled below via
     # build_training_command's CLI flags), not config overrides -- must be
     # excluded here or a raw "lora_checkpoint" launch choice would fail

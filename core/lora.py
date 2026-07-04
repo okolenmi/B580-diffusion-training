@@ -12,14 +12,22 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 # Timestep-conditional gating.
 #
-# Motivation: if training data is dominated by high-noise (large-t) examples,
-# the low-noise (small-t) region never gets supervised, and there's nothing
-# structurally stopping the LoRA delta from drifting there anyway (shared
-# weights, optimizer momentum, etc. don't respect "this timestep wasn't
-# sampled"). Gating scales the LoRA contribution toward zero as t decreases
-# below `gate_threshold`, so at low noise the effective forward pass is
+# Motivation: if training data is concentrated in some region of the noise
+# schedule, timesteps outside that region never get supervised, and there's
+# nothing structurally stopping the LoRA delta from drifting there anyway
+# (shared weights, optimizer momentum, etc. don't respect "this timestep
+# wasn't sampled"). Gating scales the LoRA contribution toward zero for
+# timesteps inside a user-specified *protected interval* [protect_low,
+# protect_high], so in that range the effective forward pass is
 # (approximately) just the frozen base weights, by construction -- not by
-# hoping nothing touches it.
+# hoping nothing touches it. Outside that interval, the gate approaches 1
+# and LoRA trains normally.
+#
+# Deliberately an explicit interval rather than a single directional
+# threshold: a threshold requires correctly reasoning about which side of
+# it should be protected, which is an easy way to end up gating the wrong
+# region entirely (ask me how I know). Naming the literal range to protect
+# removes that failure mode -- there's no direction to get backwards.
 #
 # Set via set_lora_gate() once per training step (all LoRALinear instances
 # in the same forward pass share the same gate, since they're processing the
@@ -38,17 +46,26 @@ def set_lora_gate(gate: Optional[torch.Tensor]):
     _current_gate = gate
 
 
-def compute_lora_gate(t: torch.Tensor, threshold: float, width: float) -> torch.Tensor:
-    """Smooth gate: ~1 for t >> threshold (high noise -- the region being
-    actively distilled), fading to ~0 for t << threshold (low noise -- the
-    region to leave alone). `width` controls how sharp the transition is
-    (smaller = sharper cutoff around threshold, larger = more gradual).
+def compute_lora_gate(t: torch.Tensor, protect_low: float, protect_high: float,
+                       width: float) -> torch.Tensor:
+    """Smooth gate: ~0 (protect the frozen base weights) for t inside
+    [protect_low, protect_high], rising smoothly to ~1 (train normally) the
+    further t is outside that interval on either side. `width` controls how
+    sharp the transition is at both edges (smaller = sharper cutoff right at
+    the boundary, larger = more gradual handoff).
 
     t: (B,) tensor of per-sample timesteps (whatever scale/convention the
-    rest of the pipeline already uses for t -- this only cares about
-    relative position against `threshold`, not absolute units).
+    rest of the pipeline already uses for t).
     """
-    return torch.sigmoid((t.float() - threshold) / max(width, 1e-6))
+    t = t.float()
+    below = protect_low - t   # positive when t is below the protected interval
+    above = t - protect_high  # positive when t is above the protected interval
+    inside_depth = torch.minimum(t - protect_low, protect_high - t)  # positive when inside
+    # Signed distance from the protected interval: negative (how deep) when
+    # inside, positive (how far away) when outside, ~0 right at an edge.
+    dist = torch.where(t < protect_low, below,
+                        torch.where(t > protect_high, above, -inside_depth))
+    return torch.sigmoid(dist / max(width, 1e-6))
 
 
 @dataclass

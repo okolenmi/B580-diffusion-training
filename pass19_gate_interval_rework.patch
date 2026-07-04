@@ -1,0 +1,169 @@
+diff --git a/core/config_model.py b/core/config_model.py
+index d88b96c..ce7da7d 100644
+--- a/core/config_model.py
++++ b/core/config_model.py
+@@ -128,21 +128,37 @@ class LoRATuning(BaseModel):
+         default="",
+         description="Optional comma-separated list of block multipliers (e.g. 'input_7:1.0,middle:0.5,output_0:0.2')"
+     )
+-    gate_threshold: Optional[float] = Field(
++    gate_protect_low: Optional[float] = Field(
+         default=None, ge=0.0, le=1000.0,
+-        description="If set, scales the LoRA delta toward zero for timesteps below this "
+-                    "value (smoothly, via a sigmoid centered here) -- so low-noise behavior "
+-                    "stays close to the frozen base model instead of drifting from training "
+-                    "data that's concentrated at higher noise. None disables gating entirely "
+-                    "(LoRA applies uniformly across all timesteps, current/default behavior)."
++        description="If set (together with gate_protect_high), scales the LoRA delta toward "
++                    "zero for timesteps inside [gate_protect_low, gate_protect_high] -- so that "
++                    "range stays close to the frozen base model instead of being pushed around "
++                    "by training data outside it. Both must be set together, or gating is fully "
++                    "disabled (LoRA applies uniformly across all timesteps, default behavior)."
++    )
++    gate_protect_high: Optional[float] = Field(
++        default=None, ge=0.0, le=1000.0,
++        description="See gate_protect_low."
+     )
+     gate_width: float = Field(
+         default=100.0, gt=0.0, le=1000.0,
+-        description="Width of the gate's transition region around gate_threshold. Smaller "
+-                     "= sharper cutoff, larger = more gradual handoff. Only relevant if "
+-                     "gate_threshold is set."
++        description="Width of the gate's smooth transition at each edge of the protected "
++                     "interval. Smaller = sharper cutoff right at the boundary, larger = more "
++                     "gradual handoff. If this is comparable to or larger than the protected "
++                     "interval's own width, suppression in the middle of the interval won't "
++                     "reach fully ~0 -- use a smaller width for full suppression of a narrow "
++                     "protected range. Only relevant if gate_protect_low/high are set."
+     )
+ 
++    @model_validator(mode="after")
++    def _validate_gate_range(self):
++        low, high = self.gate_protect_low, self.gate_protect_high
++        if (low is None) != (high is None):
++            raise ValueError("gate_protect_low and gate_protect_high must be set together, or both left unset")
++        if low is not None and low >= high:
++            raise ValueError(f"gate_protect_low ({low}) must be less than gate_protect_high ({high})")
++        return self
++
+ 
+ class CyclicTuning(BaseModel):
+     """Settings specific to Cyclic distillation."""
+diff --git a/core/lora.py b/core/lora.py
+index 6b3cb08..231f0a4 100644
+--- a/core/lora.py
++++ b/core/lora.py
+@@ -12,14 +12,22 @@ import torch.nn.functional as F
+ # ---------------------------------------------------------------------------
+ # Timestep-conditional gating.
+ #
+-# Motivation: if training data is dominated by high-noise (large-t) examples,
+-# the low-noise (small-t) region never gets supervised, and there's nothing
+-# structurally stopping the LoRA delta from drifting there anyway (shared
+-# weights, optimizer momentum, etc. don't respect "this timestep wasn't
+-# sampled"). Gating scales the LoRA contribution toward zero as t decreases
+-# below `gate_threshold`, so at low noise the effective forward pass is
++# Motivation: if training data is concentrated in some region of the noise
++# schedule, timesteps outside that region never get supervised, and there's
++# nothing structurally stopping the LoRA delta from drifting there anyway
++# (shared weights, optimizer momentum, etc. don't respect "this timestep
++# wasn't sampled"). Gating scales the LoRA contribution toward zero for
++# timesteps inside a user-specified *protected interval* [protect_low,
++# protect_high], so in that range the effective forward pass is
+ # (approximately) just the frozen base weights, by construction -- not by
+-# hoping nothing touches it.
++# hoping nothing touches it. Outside that interval, the gate approaches 1
++# and LoRA trains normally.
++#
++# Deliberately an explicit interval rather than a single directional
++# threshold: a threshold requires correctly reasoning about which side of
++# it should be protected, which is an easy way to end up gating the wrong
++# region entirely (ask me how I know). Naming the literal range to protect
++# removes that failure mode -- there's no direction to get backwards.
+ #
+ # Set via set_lora_gate() once per training step (all LoRALinear instances
+ # in the same forward pass share the same gate, since they're processing the
+@@ -38,17 +46,26 @@ def set_lora_gate(gate: Optional[torch.Tensor]):
+     _current_gate = gate
+ 
+ 
+-def compute_lora_gate(t: torch.Tensor, threshold: float, width: float) -> torch.Tensor:
+-    """Smooth gate: ~1 for t >> threshold (high noise -- the region being
+-    actively distilled), fading to ~0 for t << threshold (low noise -- the
+-    region to leave alone). `width` controls how sharp the transition is
+-    (smaller = sharper cutoff around threshold, larger = more gradual).
++def compute_lora_gate(t: torch.Tensor, protect_low: float, protect_high: float,
++                       width: float) -> torch.Tensor:
++    """Smooth gate: ~0 (protect the frozen base weights) for t inside
++    [protect_low, protect_high], rising smoothly to ~1 (train normally) the
++    further t is outside that interval on either side. `width` controls how
++    sharp the transition is at both edges (smaller = sharper cutoff right at
++    the boundary, larger = more gradual handoff).
+ 
+     t: (B,) tensor of per-sample timesteps (whatever scale/convention the
+-    rest of the pipeline already uses for t -- this only cares about
+-    relative position against `threshold`, not absolute units).
++    rest of the pipeline already uses for t).
+     """
+-    return torch.sigmoid((t.float() - threshold) / max(width, 1e-6))
++    t = t.float()
++    below = protect_low - t   # positive when t is below the protected interval
++    above = t - protect_high  # positive when t is above the protected interval
++    inside_depth = torch.minimum(t - protect_low, protect_high - t)  # positive when inside
++    # Signed distance from the protected interval: negative (how deep) when
++    # inside, positive (how far away) when outside, ~0 right at an edge.
++    dist = torch.where(t < protect_low, below,
++                        torch.where(t > protect_high, above, -inside_depth))
++    return torch.sigmoid(dist / max(width, 1e-6))
+ 
+ 
+ @dataclass
+diff --git a/core/train_step.py b/core/train_step.py
+index 6381768..d63a106 100644
+--- a/core/train_step.py
++++ b/core/train_step.py
+@@ -307,7 +307,8 @@ def _run_one_step(
+         progress_writer: Any = None,
+         student_encoder: Any = None,
+         prompt_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] | None = None,
+-        gate_threshold: float | None = None,
++        gate_protect_low: float | None = None,
++        gate_protect_high: float | None = None,
+         gate_width: float = 100.0,
+ ) -> bool:
+     """Run a single optimization step."""
+@@ -412,8 +413,8 @@ def _run_one_step(
+         t_tensor = torch.tensor([t_val] * x_t.shape[0], dtype=torch.long, device=device)
+     timer.stop("1_transform")
+ 
+-    if gate_threshold is not None:
+-        set_lora_gate(compute_lora_gate(t_tensor, gate_threshold, gate_width))
++    if gate_protect_low is not None:
++        set_lora_gate(compute_lora_gate(t_tensor, gate_protect_low, gate_protect_high, gate_width))
+     else:
+         set_lora_gate(None)
+ 
+@@ -633,9 +634,10 @@ def run_training_loop(
+     _is_fused = isinstance(optimizer, FusedXPUAdafactor)
+     _save_on_crash = config.common.save_on_crash
+     # Timestep-gated LoRA: only meaningful for LoRA tuning, and only if the
+-    # user actually configured a threshold (None keeps current behavior --
+-    # LoRA applies uniformly across all timesteps, no gating at all).
+-    _gate_threshold = getattr(config.tuning, "gate_threshold", None)
++    # user actually configured a protected interval (None/None keeps current
++    # behavior -- LoRA applies uniformly across all timesteps, no gating at all).
++    _gate_protect_low = getattr(config.tuning, "gate_protect_low", None)
++    _gate_protect_high = getattr(config.tuning, "gate_protect_high", None)
+     _gate_width = getattr(config.tuning, "gate_width", 100.0)
+     # loss_win is a deque(maxlen=100) created by _make_weight_track().
+     # If weight_track was passed in from a previous cycle it already has the deque.
+@@ -676,7 +678,8 @@ def run_training_loop(
+                 progress_writer=progress_writer,
+                 student_encoder=student_encoder,
+                 prompt_cache=prompt_cache,
+-                gate_threshold=_gate_threshold,
++                gate_protect_low=_gate_protect_low,
++                gate_protect_high=_gate_protect_high,
+                 gate_width=_gate_width,
+             )
+ 

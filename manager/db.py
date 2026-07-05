@@ -140,7 +140,7 @@ def get_trajectories(db_path: Path, source_id: int = None, is_temp: bool = None)
     conditions = []
     params = []
 
-    if source_id:
+    if source_id is not None:
         conditions.append("t.source_id = ?")
         params.append(source_id)
     if is_temp is not None:

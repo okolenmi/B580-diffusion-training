@@ -130,27 +130,6 @@ class ManagedDatasetLoader:
                 loader.close()
         return all_samples
 
-    def _iter_samples(self) -> Iterator[Dict]:
-        """Yield individual unbatched samples, shuffled across all trajectories and timesteps.
-
-        The dataset is loaded from disk exactly once and kept in RAM.  Subsequent
-        epochs shuffle the in-memory list in-place — no disk access after the
-        first load.  This eliminates the per-epoch stall that previously caused
-        the prefetcher queue to drain and the GPU to idle every epoch boundary.
-
-        Tensors are NOT pinned here — pinning is deferred to __iter__ so it
-        happens one batch at a time rather than all samples upfront.
-        """
-        if self._samples is None:
-            print("  [DataLoader] Loading dataset into RAM...")
-            self._samples = self._load_all_samples()
-            print(f"  [DataLoader] {len(self._samples)} samples loaded.")
-
-        if self.shuffle:
-            random.shuffle(self._samples)
-
-        yield from self._samples
-
     @staticmethod
     def _merge_samples(samples: list) -> Dict:
         """Merge individual samples into a single batched dict."""
@@ -253,4 +232,16 @@ class ManagedDatasetLoader:
         self._samples = None
 
     def __len__(self):
-        return sum(t["sample_count"] for t in self.trajectories)
+        """Return the actual number of samples that iteration will yield.
+
+        Note: this is NOT simply sum(sample_count) over trajectories —
+        _load_all_samples() drops every sample where t == 0 (see comment
+        there), so the raw DB sample_count overcounts whenever any
+        trajectory contains a t=0 sample. To stay accurate we materialize
+        (and cache) the sample list here if it isn't already loaded; this
+        is the same cache __iter__/_load_all_samples populate, so calling
+        __len__ before iterating does not cause a second disk read.
+        """
+        if self._samples is None:
+            self._samples = self._load_all_samples()
+        return len(self._samples)

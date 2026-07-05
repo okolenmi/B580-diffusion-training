@@ -45,6 +45,21 @@
         return v.toExponential(2);
     }
 
+    /* Compact rounding for axis labels only -- tooltips keep full precision
+       via formatNum above. Rounds to 2 significant figures and lets JS's
+       default number->string conversion drop trailing zeros, so e.g.
+       0.0347154 -> "0.035" instead of a long fixed-decimal tail. */
+    function formatAxisLabel(v) {
+        if (!isFinite(v) || v === 0) return "0";
+        var neg = v < 0;
+        var av = Math.abs(v);
+        var rounded = Number(av.toPrecision(2));
+        var s = (rounded >= 1000 || rounded < 0.0001)
+            ? rounded.toExponential(1)
+            : String(rounded);
+        return neg ? "-" + s : s;
+    }
+
     /* ───────────────────────────────────────────────────────────────────
        Symmetric-Log scale
        ─────────────────────────────────────────────────────────────────── */
@@ -85,65 +100,18 @@
        ─────────────────────────────────────────────────────────────────── */
 
     function buildTicks() {
+        var raw = [fullMax, linMax, linMin, fullMin];
         var ticks = [];
-        var maxTicks = 12;
-
-        /* Linear band ticks — max ~6 */
-        if (linMax > linMin) {
-            var range = linMax - linMin;
-            var step = niceNum(range / 4, true);
-            if (step <= 0) step = range / 4;
-            var start = Math.ceil(linMin / step) * step;
-            for (var v = start; v <= linMax + step * 0.01; v += step) {
-                if (v >= linMin - step * 0.01 && v <= linMax + step * 0.01) {
-                    ticks.push(v);
-                }
+        for (var i = 0; i < raw.length; i++) {
+            var v = raw[i];
+            if (!isFinite(v)) continue;
+            var dup = false;
+            for (var j = 0; j < ticks.length; j++) {
+                if (Math.abs(ticks[j] - v) <= Math.abs(v) * 1e-6 + 1e-12) { dup = true; break; }
             }
+            if (!dup) ticks.push(v);
         }
-
-        /* Log ticks — one per decade per edge (2-4 total) */
-        if (fullMin < linMin && linMin > 0 && fullMin > 0) {
-            var loMin = Math.log10(fullMin);
-            var loLMin = Math.log10(linMin);
-            /* Only 1-2 tick values per decade band */
-            for (var p = Math.floor(loMin); p <= Math.ceil(loLMin); p++) {
-                var base = Math.pow(10, p);
-                /* Only 2 and 5 for compactness */
-                [2, 5].forEach(function (m) {
-                    var val = m * base;
-                    if (val >= fullMin * 0.99 && val < linMin * 0.99) {
-                        ticks.push(val);
-                    }
-                });
-            }
-        }
-
-        if (fullMax > linMax && linMax > 0) {
-            var loLMax = Math.log10(linMax);
-            var loMax = Math.log10(fullMax);
-            for (var pp = Math.floor(loLMax); pp <= Math.ceil(loMax); pp++) {
-                var b = Math.pow(10, pp);
-                [2, 5].forEach(function (mm) {
-                    var va = mm * b;
-                    if (va > linMax * 1.01 && va <= fullMax * 1.01) {
-                        ticks.push(va);
-                    }
-                });
-            }
-        }
-
-        ticks.sort(function (a, b) { return a - b; });
-
-        /* Deduplicate very close values */
-        var unique = [];
-        for (var i = 0; i < ticks.length; i++) {
-            if (i === 0 || ticks[i] > unique[unique.length - 1] * 1.2) {
-                unique.push(ticks[i]);
-            }
-        }
-
-        /* Cap total */
-        return unique.slice(0, maxTicks);
+        return ticks;
     }
 
     /* ───────────────────────────────────────────────────────────────────
@@ -242,28 +210,14 @@
 
         for (var t = 0; t < ticks.length; t++) {
             var py = symMap(ticks[t]);
-            if (py >= plotT + 5 && py <= plotB - 5) {
+            if (py >= plotT - 0.5 && py <= plotB + 0.5) {
                 ctx.beginPath();
                 ctx.moveTo(plotL, py);
                 ctx.lineTo(plotR, py);
                 ctx.stroke();
-                ctx.fillText(formatNum(ticks[t]), plotL - 6, py);
+                ctx.fillText(formatAxisLabel(ticks[t]), plotL - 6, py);
             }
         }
-
-        /* Linear band separator lines */
-        ctx.strokeStyle = "#3a3d4a";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        var yLinTop = symMap(linMax);
-        var yLinBot = symMap(linMin);
-        if (yLinTop > plotT && yLinTop < plotB) {
-            ctx.beginPath(); ctx.moveTo(plotL, yLinTop); ctx.lineTo(plotR, yLinTop); ctx.stroke();
-        }
-        if (yLinBot > plotT && yLinBot < plotB) {
-            ctx.beginPath(); ctx.moveTo(plotL, yLinBot); ctx.lineTo(plotR, yLinBot); ctx.stroke();
-        }
-        ctx.setLineDash([]);
 
         /* ── X axis ── */
         ctx.strokeStyle = "#2a2d3a";

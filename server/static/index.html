@@ -14,6 +14,7 @@
     <script src="/static/history.js"></script>
     <script src="/static/config-editor.js"></script>
     <script src="/static/block-helper.js"></script>
+    <script src="/static/preview-panel.js"></script>
     <script src="/static/app.js"></script>
 </head>
 <body class="layout-fixed">
@@ -100,9 +101,56 @@
                 </div>
             </div>
 
-            <div class="dashboard-grid">
-                <div class="chart-container card">
-                    <canvas id="loss-chart"></canvas>
+            <div class="dashboard-scroll-snap" id="dashboard-scroll-snap">
+                <div class="dashboard-grid dashboard-panel">
+                    <div class="chart-container card">
+                        <canvas id="loss-chart"></canvas>
+                    </div>
+                </div>
+
+                <div class="dashboard-panel preview-panel card">
+                    <div class="card-header">
+                        <span>🖼 Training Previews</span>
+                        <span class="text-dim" style="font-size:0.75rem; font-weight:400;">scroll up for graph ↑</span>
+                    </div>
+                    <div class="preview-settings">
+                        <label class="preview-field preview-field-checkbox">
+                            <input type="checkbox" id="prev-enabled">
+                            <span>Enabled</span>
+                        </label>
+                        <label class="preview-field">
+                            <span>Every N steps</span>
+                            <input type="number" id="prev-every-n" min="10" step="10" value="250">
+                        </label>
+                        <label class="preview-field">
+                            <span>Sampling steps</span>
+                            <input type="number" id="prev-steps" min="4" max="50" value="16">
+                        </label>
+                        <label class="preview-field">
+                            <span>CFG</span>
+                            <input type="number" id="prev-cfg" min="1" max="20" step="0.5" value="4.0">
+                        </label>
+                        <label class="preview-field">
+                            <span>Resolution</span>
+                            <input type="number" id="prev-resolution" min="256" max="1024" step="64" value="512">
+                        </label>
+                        <label class="preview-field">
+                            <span>Seed</span>
+                            <input type="number" id="prev-seed" value="12345">
+                        </label>
+                        <label class="preview-field preview-field-wide">
+                            <span>Prompts (one per line — one image each)</span>
+                            <textarea id="prev-prompts" rows="3"></textarea>
+                        </label>
+                        <label class="preview-field preview-field-wide">
+                            <span>Negative prompt (optional)</span>
+                            <input type="text" id="prev-negative">
+                        </label>
+                        <button id="btn-save-preview" class="btn btn-start btn-small">💾 SAVE PREVIEW SETTINGS</button>
+                    </div>
+                    <div id="preview-gallery" class="preview-gallery scroll-v">
+                        <p class="text-dim" style="padding:2rem; text-align:center;">Loading…</p>
+                    </div>
                 </div>
             </div>
         </section>

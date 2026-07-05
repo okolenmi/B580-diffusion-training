@@ -112,6 +112,30 @@ class ModelPaths(BaseModel):
     comfy_dir: Optional[str] = Field(default=None, description="ComfyUI directory override")
 
 
+class PreviewSettings(BaseModel):
+    """Periodic mid-training preview image generation.
+
+    Runs a short sampling pass with the current (in-progress) student
+    weights at a fixed interval, so training quality can be watched
+    visually without waiting for the run to finish. Uses a fixed seed so
+    successive previews are directly comparable -- only the weights change
+    between them, not the starting noise.
+    """
+
+    enabled: bool = False
+    every_n_steps: int = Field(default=250, ge=10, le=100000)
+    prompts: str = Field(
+        default="a photo of a cat sitting on a windowsill\n"
+                "a fantasy landscape with mountains and a river\n"
+                "portrait of a woman, studio lighting",
+        description="One prompt per line. One preview image is generated per line.")
+    negative_prompt: str = Field(default="", description="Shared negative prompt for all preview images")
+    steps: int = Field(default=16, ge=4, le=50, description="Sampling steps per preview image (fewer = faster)")
+    cfg: float = Field(default=4.0, ge=1.0, le=20.0)
+    resolution: int = Field(default=512, ge=256, le=1024, description="Preview image size in pixels (square)")
+    seed: int = Field(default=12345, description="Fixed starting-noise seed so previews are comparable across steps")
+
+
 # ─── Training Method Configs (discriminated by `method`) ───
 
 class LoRATuning(BaseModel):
@@ -231,6 +255,7 @@ class TrainingConfig(BaseModel):
     common: CommonSettings = Field(default_factory=CommonSettings)
     tuning: TuningMethod = Field(default_factory=DistillationTuning)
     cache: CacheConfig = Field(default_factory=TrajectoryCache)
+    preview: PreviewSettings = Field(default_factory=PreviewSettings)
     # Only "resume" is actually branched on anywhere in Trainer -- any other
     # value behaves identically (fresh run using paths.student / teacher
     # weights / tuning.lora_continue_from as normal init sources). "teacher"

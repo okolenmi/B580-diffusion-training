@@ -297,6 +297,100 @@ body {
     display: block;
 }
 
+/* Dashboard scroll-snap: scroll down from the graph into the preview
+   screen, scroll back up to return -- each panel occupies one full
+   "page" of this container. */
+.dashboard-scroll-snap {
+    height: 60vh;
+    min-height: 500px;
+    overflow-y: auto;
+    scroll-snap-type: y mandatory;
+    scroll-behavior: smooth;
+}
+.dashboard-panel {
+    height: 100%;
+    min-height: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+}
+.dashboard-panel.dashboard-grid { margin-bottom: 0; }
+
+.preview-panel {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
+    overflow: hidden;
+}
+
+.preview-settings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    align-items: flex-end;
+}
+.preview-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+}
+.preview-field input[type="number"],
+.preview-field input[type="text"],
+.preview-field textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    color: var(--text);
+    padding: 0.45rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-transform: none;
+    width: 110px;
+}
+.preview-field-wide { width: 100%; flex-basis: 100%; }
+.preview-field-wide textarea,
+.preview-field-wide input[type="text"] { width: 100%; }
+.preview-field-checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+.preview-field-checkbox input { width: 18px; height: 18px; }
+
+.preview-gallery {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.25rem 1.5rem;
+}
+.preview-step-group { margin-bottom: 1.5rem; }
+.preview-step-label {
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+.preview-step-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+.preview-thumb {
+    height: 160px;
+    width: auto;
+    border-radius: var(--radius-sm, 6px);
+    border: 1px solid var(--border);
+    object-fit: cover;
+    background: var(--bg);
+}
+
 /* Block Weighting Helper */
 .block-helper {
     background: #161b22;

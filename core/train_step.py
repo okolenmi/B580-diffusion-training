@@ -624,6 +624,7 @@ def run_training_loop(
         student_encoder=None,
         prompt_cache=None,
         save_callback=None,
+        preview_callback=None,
 ):
     if timer is None: timer = StepTimer(report_every=100)
     if t0 is None: t0 = time.time()
@@ -695,6 +696,11 @@ def run_training_loop(
             if config.common.save_every > 0 and (global_step + 1) % config.common.save_every == 0:
                 if save_callback and (global_step + 1) > 0:
                     save_callback(global_step + 1)
+
+            if (config.preview.enabled and config.preview.every_n_steps > 0
+                    and (global_step + 1) % config.preview.every_n_steps == 0):
+                if preview_callback:
+                    preview_callback(global_step + 1)
 
             if stopped: break
     except Exception:

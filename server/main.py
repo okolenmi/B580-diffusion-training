@@ -53,6 +53,11 @@ datasets_dir = settings.project_root / "datasets"
 datasets_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/datasets", StaticFiles(directory=str(datasets_dir)), name="datasets")
 
+# Serve run-scoped output files (mid-training preview images, etc.) directly.
+runs_dir = settings.runs_dir
+runs_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/runs", StaticFiles(directory=str(runs_dir)), name="runs")
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

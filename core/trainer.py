@@ -47,7 +47,9 @@ class Trainer:
 
         # Extract run_id from CLI if set (stored on model copy)
         cli_run_id = getattr(config.common, "_cli_run_id", None)
+        self.run_id = cli_run_id
         self.progress_writer = ProgressWriter(cli_run_id) if cli_run_id else None
+        self.preview_gen = None
 
         self.tuning = config.tuning
         self._is_lora = isinstance(self.tuning, LoRATuning)
@@ -153,6 +155,9 @@ class Trainer:
                 _enc.unload()
                 del _enc
 
+        if not teacher_only:
+            self._setup_preview()
+
         if teacher_sd:
             del teacher_sd
             
@@ -185,6 +190,85 @@ class Trainer:
 
     def setup(self):
         return self
+
+    def _setup_preview(self):
+        """One-time setup for mid-training preview generation.
+
+        No-op unless config.preview.enabled and a checkpoint with non-UNet
+        weights (needed for both CLIP encoding here and VAE decoding later)
+        is actually available. Encodes all configured prompts up front with
+        a temporary CLIP encoder that's unloaded immediately after -- CLIP
+        does not stay resident in VRAM during training, matching the same
+        pattern already used for training_ctx/training_ctx_u above.
+        """
+        prev = self.config.preview
+        if not prev.enabled:
+            return
+        if not self.run_id:
+            print("  [WARN] preview.enabled is set but no run_id available (not launched via the "
+                  "server); skipping preview generation.")
+            return
+        if not self.non_unet:
+            print("  [WARN] preview.enabled is set but no base model checkpoint was loaded "
+                  "(paths.base_model); skipping preview generation (VAE/CLIP weights unavailable).")
+            return
+
+        prompts = [p.strip() for p in prev.prompts.splitlines() if p.strip()]
+        if not prompts:
+            print("  [WARN] preview.enabled is set but preview.prompts is empty; skipping preview generation.")
+            return
+
+        from .clip_encode import SDXLClipEncoder
+        from .preview_sampler import PreviewGenerator
+        from paths import get_run_dir
+
+        print(f"  Encoding {len(prompts)} preview prompt(s)...")
+        _enc = SDXLClipEncoder(self.non_unet, self.device)
+        _px = prev.resolution
+        conds = []
+        for p in prompts:
+            ctx, y = _enc.encode_for_unet(p, 1, height=_px, width=_px)
+            conds.append((ctx.cpu().pin_memory(), y.cpu().pin_memory()))
+
+        neg_cond = None
+        if prev.negative_prompt.strip():
+            ctx_u, y_u = _enc.encode_for_unet(prev.negative_prompt.strip(), 1, height=_px, width=_px)
+            neg_cond = (ctx_u.cpu().pin_memory(), y_u.cpu().pin_memory())
+        elif prev.cfg > 1.0:
+            # CFG requested but no negative prompt given -- use an empty
+            # string, matching standard SDXL classifier-free guidance usage.
+            ctx_u, y_u = _enc.encode_for_unet("", 1, height=_px, width=_px)
+            neg_cond = (ctx_u.cpu().pin_memory(), y_u.cpu().pin_memory())
+
+        _enc.unload()
+        del _enc
+
+        out_dir = get_run_dir(self.run_id) / "previews"
+        self.preview_gen = PreviewGenerator(
+            conds=conds, neg_cond=neg_cond, non_unet_sd=self.non_unet,
+            device=self.device, out_dir=out_dir,
+            steps=prev.steps, cfg=prev.cfg, resolution=prev.resolution,
+            seed=prev.seed, student_type=self.config.common.student_type,
+        )
+        print(f"  Preview generation enabled: every {prev.every_n_steps} steps -> {out_dir}")
+
+    def _generate_preview(self, step):
+        """Training-loop callback: sample and save a preview grid at `step`.
+
+        Never raises -- a preview failure (OOM, a transient decode issue,
+        etc.) must not abort or corrupt the training run it's just meant to
+        be observing.
+        """
+        if not self.preview_gen or not self.student:
+            return
+        try:
+            self.student.eval()
+            self.preview_gen.generate(self.student, step)
+        except Exception as e:
+            print(f"  [WARN] Preview generation failed at step {step}: {e}")
+        finally:
+            self.student.train()
+            xpu_empty_cache()
 
     def _is_unet(self, key: str) -> bool:
         return "model.diffusion_model." in key or "lora_unet_" in key
@@ -415,6 +499,7 @@ class Trainer:
                     student_encoder=self.student_encoder,
                     prompt_cache=self.prompt_cache,
                     save_callback=save_callback,
+                    preview_callback=self._generate_preview,
                 )
 
                 global_step += steps_done

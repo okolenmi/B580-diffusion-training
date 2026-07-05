@@ -79,6 +79,7 @@ async def put_config(request: Request):
     if "application/json" in content_type:
         body = await request.json()
         config_path = body.pop("config", "convert-cfg.toml")
+        start_from = body.pop("start_from", None)
         for key in SYNTHETIC_KEYS:
             body.pop(key, None)
         # Convert dotted keys to nested dict (same as form-data path)
@@ -89,6 +90,7 @@ async def put_config(request: Request):
     else:
         form_data = await request.form()
         config_path = form_data.get("config", "convert-cfg.toml")
+        start_from = form_data.get("start_from")
         overrides = form_to_nested_overrides(form_data, ignore_keys=SYNTHETIC_KEYS)
 
     cfg_path = _resolve_config_path(str(config_path))
@@ -102,6 +104,17 @@ async def put_config(request: Request):
             config = TrainingConfig.model_validate(merged)
         else:
             config = TrainingConfig.model_validate(overrides)
+
+        # tuning.lora_continue_from is only visible (and thus only ever
+        # submitted) in the UI when start_from == "lora_checkpoint" -- see
+        # the equivalent, more detailed comment in routes_training.py. If
+        # this save was made with any other start_from selected (or none
+        # at all, e.g. a caller that never sends it), a stale value from a
+        # previous "LoRA Checkpoint (Manual)" save must not survive here.
+        if (config.tuning.method == "lora" and start_from != "lora_checkpoint"
+                and getattr(config.tuning, "lora_continue_from", None)):
+            config.tuning.lora_continue_from = None
+
         write_config(cfg_path, config)
         return config.model_dump(mode="json")
     except Exception as e:

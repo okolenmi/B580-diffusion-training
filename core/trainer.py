@@ -258,16 +258,33 @@ class Trainer:
         Never raises -- a preview failure (OOM, a transient decode issue,
         etc.) must not abort or corrupt the training run it's just meant to
         be observing.
+
+        Temporarily offloads optimizer state to CPU for the duration of the
+        preview pass (mirroring the same offload_states_to_cpu/
+        reload_states_to_device mechanism already used elsewhere in this
+        codebase for cyclic training's cache-rebuild phase), so the VAE's
+        temporary VRAM usage during decode doesn't stack on top of whatever
+        training already has resident. The teacher model is not touched
+        here since it's already moved to CPU before the training loop ever
+        starts (see load_models/train() above) -- it isn't competing for
+        VRAM at this point regardless.
         """
         if not self.preview_gen or not self.student:
             return
+        offloaded = False
         try:
+            if self.optimizer is not None and hasattr(self.optimizer, "offload_states_to_cpu"):
+                self.optimizer.offload_states_to_cpu()
+                offloaded = True
+            xpu_empty_cache()
             self.student.eval()
             self.preview_gen.generate(self.student, step)
         except Exception as e:
             print(f"  [WARN] Preview generation failed at step {step}: {e}")
         finally:
             self.student.train()
+            if offloaded and hasattr(self.optimizer, "reload_states_to_device"):
+                self.optimizer.reload_states_to_device(self.device)
             xpu_empty_cache()
 
     def _is_unet(self, key: str) -> bool:

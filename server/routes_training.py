@@ -72,7 +72,13 @@ async def start_run(
     # excluded here or a raw "lora_checkpoint" launch choice would fail
     # TrainingConfig.start_from's Literal["teacher","student","resume"]
     # validation instead of ever reaching the subprocess launch.
-    overrides = form_to_nested_overrides(form_data, ignore_keys={"config", "start_from", "reset_optimizer"})
+    # preview.* is intentionally excluded here (see config_schema.py) since
+    # it's a completely separate, out-of-band concern from launching a run --
+    # it's edited via the dedicated Dashboard preview panel, not this form.
+    # Filtered by prefix (not via ignore_keys, which only does exact-key
+    # matches) since preview.* covers many individual dotted keys.
+    filtered_form = {k: v for k, v in form_data.items() if not k.startswith("preview.")}
+    overrides = form_to_nested_overrides(filtered_form, ignore_keys={"config", "start_from", "reset_optimizer"})
     needs_write = False
     if overrides:
         merged = deep_merge(config.model_dump(mode="json"), overrides)

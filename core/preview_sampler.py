@@ -141,6 +141,8 @@ class PreviewGenerator:
             saved.append(fname)
         vae.free()
         del vae
+        from .comfy_setup import xpu_empty_cache
+        xpu_empty_cache()
 
         self._update_manifest(global_step, saved)
         return step_dir

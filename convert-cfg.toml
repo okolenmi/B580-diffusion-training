@@ -5,8 +5,6 @@ reset_optimizer = false
 base_model = "models/checkpoints/divergence_3.safetensors"
 checkpoint_output = ""
 dataset_name = "test"
-resume_checkpoint = "models/loras/test_lora10h.resume.safetensors"
-resume_optimizer = "models/loras/test_lora10h.resume.optstate"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
@@ -58,10 +56,9 @@ alpha = 64.0
 dropout = 0.0
 lora_output = "models/loras/test_lora10h.safetensors"
 target_all = false
-lora_continue_from = "models/loras/test_lora10e.safetensors"
 block_weighting = "input_blocks.0:0.3, input_blocks.1:0.7, input_blocks.2:0.5, input_blocks.3:0.6, input_blocks.4:0.9, input_blocks.5:0.9, input_blocks.6:0.9, input_blocks.7:0.9, input_blocks.8:0.5, middle_block:0.3, output_blocks.0:0.3, output_blocks.1:0.4, output_blocks.2:0.9, output_blocks.3:0.9, output_blocks.4:0.8, output_blocks.5:0.7, output_blocks.6:0.6, output_blocks.7:0.5, output_blocks.8:0.5, time_embed:0.0, label_emb:0.5, out:0.2"
-gate_protect_low = 400.0
-gate_protect_high = 999.0
+gate_train_low = 120.0
+gate_train_high = 450.0
 gate_width = 50.0
 
 [cache]
@@ -80,3 +77,13 @@ student_mix = 0.0
 student_anchor_steps = 5
 student_chain_len = 3
 student_chain_noise = 0.02
+
+[preview]
+enabled = false
+every_n_steps = 250
+prompts = "a photo of a cat sitting on a windowsilla fantasy landscape with mountains and a riverportrait of a woman, studio lighting"
+negative_prompt = ""
+steps = 16
+cfg = 4.0
+resolution = 512
+seed = 12345

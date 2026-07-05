@@ -129,6 +129,11 @@ def _discriminator_field_name(member: type[BaseModel]) -> str | None:
 def _walk(model: type[BaseModel], prefix: str, base_visible_when: dict | None,
           out: dict[str, SchemaOption]):
     for name, field_info in model.model_fields.items():
+        if prefix == "" and name == "preview":
+            # Edited exclusively via the dedicated Dashboard preview panel --
+            # see the docstring note above this function's call site in
+            # build_schema_options() for why this must not also appear here.
+            continue
         path = f"{prefix}.{name}" if prefix else name
         tp, _ = _unwrap_optional(field_info.annotation)
 

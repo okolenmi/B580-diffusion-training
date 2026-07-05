@@ -139,11 +139,11 @@ def build_training_command(
     elif start_from == "resume":
         cmd.extend(["--start-from", "resume"])
         resume_checkpoint = config.paths.resume_checkpoint or ""
-        if resume_checkpoint:
+        if resume_checkpoint and Path(resume_checkpoint).exists():
             cmd.extend(["--student", resume_checkpoint])
         if not reset_optimizer:
             resume_optimizer = config.paths.resume_optimizer or ""
-            if resume_optimizer:
+            if resume_optimizer and Path(resume_optimizer).exists():
                 cmd.extend(["--resume-optimizer", resume_optimizer])
 
     if reset_optimizer:

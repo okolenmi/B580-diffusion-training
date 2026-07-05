@@ -250,7 +250,7 @@ async def api_kill_task(name: str, task_id: int, lib: ManagedDatasetLibrary = De
         ds = lib.get_dataset(name)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Dataset '{name}' not found")
-        _task_manager.kill_task(ds.db_path, task_id)
+    _task_manager.kill_task(ds.db_path, task_id)
     return {"ok": True}
 
 

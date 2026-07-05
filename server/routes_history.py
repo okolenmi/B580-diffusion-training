@@ -56,8 +56,9 @@ async def clear_logs():
     count = 0
     
     if runs_dir.exists():
+        active_dir_name = f"run_{active_run_id}" if active_run_id is not None else None
         for d in runs_dir.glob("run_*"):
-            if d.is_dir():
+            if d.is_dir() and d.name != active_dir_name:
                 try:
                     shutil.rmtree(d)
                     count += 1

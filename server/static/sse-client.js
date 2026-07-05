@@ -29,6 +29,7 @@
 
         sseSource.onerror = function () {
             console.warn("SSE connection lost, retrying...");
+            sseSource.close();
             setTimeout(connectSSE, 3000);
         };
     }

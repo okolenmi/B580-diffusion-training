@@ -156,7 +156,7 @@
     }
 
     function loadDatasets() {
-        fetch("/api/datasets")
+        return fetch("/api/datasets")
             .then(r => r.json())
             .then(data => {
                 state.datasets = data;
@@ -181,7 +181,7 @@
             const btn = document.createElement("button");
             btn.className = `btn btn-secondary ${state.activeDataset === ds.name ? "active" : ""}`;
             btn.style = "flex:1; justify-content:flex-start; padding:0.6rem 0.85rem; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
-            btn.innerHTML = `<span>📁</span> ${ds.name}`;
+            btn.innerHTML = `<span>📁</span> ${escHtml(ds.name)}`;
             btn.onclick = () => {
                 state.activeDataset = ds.name;
                 localStorage.setItem("comfy_active_dataset", ds.name);
@@ -218,17 +218,20 @@
             card.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <div style="font-size: 2rem;">📦</div>
-                    <button class="btn btn-kill btn-small" style="padding: 0.3rem 0.6rem; margin-top: -0.5rem; margin-right: -0.5rem;" 
-                            onclick="event.stopPropagation(); window.deleteDataset('${ds.name}')">
+                    <button class="btn btn-kill btn-small btn-delete-dataset" style="padding: 0.3rem 0.6rem; margin-top: -0.5rem; margin-right: -0.5rem;">
                         ×
                     </button>
                 </div>
-                <h3 style="margin:0">${ds.name}</h3>
-                <p class="text-dim" style="font-size:0.9rem; flex:1;">${ds.description || "No description provided."}</p>
+                <h3 style="margin:0">${escHtml(ds.name)}</h3>
+                <p class="text-dim" style="font-size:0.9rem; flex:1;">${escHtml(ds.description) || "No description provided."}</p>
                 <div style="margin-top:auto; font-size:0.75rem; color:var(--accent); font-weight:600;">
                     CREATED: ${new Date(ds.created_at * 1000).toLocaleDateString()}
                 </div>
             `;
+            card.querySelector(".btn-delete-dataset").onclick = e => {
+                e.stopPropagation();
+                window.deleteDataset(ds.name);
+            };
             card.onclick = () => {
                 state.activeDataset = ds.name;
                 localStorage.setItem("comfy_active_dataset", ds.name);
@@ -773,14 +776,14 @@
     function init() {
         initTabs();
         initGeneratorUI();
-        loadDatasets();
+        loadDatasets().then(() => {
+            if (state.activeDataset) {
+                loadPending();
+                loadArchived();
+                startPolling();
+            }
+        });
         loadCheckpoints();
-
-        if (state.activeDataset) {
-            loadPending();
-            loadArchived();
-            startPolling();
-        }
 
         const btnKill = document.querySelector(".btn-kill");
         if (btnKill) btnKill.onclick = window.rejectSelected;

@@ -14,13 +14,13 @@ var state = {
 
 function fetchRecentEvents(runId) {
     if (state.loadedEventsFor === runId) return;
-    state.loadedEventsFor = runId;
 
     fetch("/api/runs/" + runId + "/events?limit=500")
         .then(function (r) { return r.json(); })
         .then(function (events) {
             if (!events || !events.length) return;
 
+            state.loadedEventsFor = runId;
             window.ChartManager.reset();
             events.forEach(function (ev) {
                 if (ev.event_type === "step") {

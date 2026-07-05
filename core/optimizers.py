@@ -716,9 +716,9 @@ class FusedXPUAdafactor:
             else:
                 tv = self._tiny_vs_map[i]
                 if tv.device != g.device:
-                    self._tiny_vs_map[i] = g2.add(self.eps1)
-                else:
-                    tv.mul_(rho_t).add_(g2.add_(self.eps1), alpha=1.0 - rho_t)
+                    tv = tv.to(g.device)
+                    self._tiny_vs_map[i] = tv
+                tv.mul_(rho_t).add_(g2.add_(self.eps1), alpha=1.0 - rho_t)
             g.div_(self._tiny_vs_map[i].sqrt().add_(self.eps1))
         else:
             factored = g.dim() >= 2

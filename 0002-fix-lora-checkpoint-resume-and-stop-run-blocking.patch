@@ -1,0 +1,46 @@
+diff --git a/server/control.py b/server/control.py
+index 6f5c1fc..492b25e 100644
+--- a/server/control.py
++++ b/server/control.py
+@@ -135,6 +135,9 @@ def build_training_command(
+         if student_path:
+             cmd.extend(["--student", student_path])
+     elif start_from == "lora_checkpoint":
++        lora_path = config.tuning.lora_output if config.tuning.method == "lora" else ""
++        if lora_path:
++            cmd.extend(["--student", lora_path])
+         cmd.append("--fresh")
+     elif start_from == "resume":
+         resume_checkpoint = config.paths.resume_checkpoint or ""
+diff --git a/server/service.py b/server/service.py
+index caefbf9..a639d3c 100644
+--- a/server/service.py
++++ b/server/service.py
+@@ -94,18 +94,23 @@ class TrainingService:
+         """Stop the current run."""
+         if not self.is_running:
+             return
+-        
++
+         self._stop_requested = True
+-        import time
+ 
+         if force:
+             send_signal(self._proc, force=True)
+-        else:
+-            send_signal(self._proc, force=False)
++            return
++
++        send_signal(self._proc, force=False)
++
++        def _escalate_if_still_running():
++            import time
+             time.sleep(3)  # Give process time to flush output
+             if self.is_running:
+                 send_signal(self._proc, force=True)
+ 
++        Thread(target=_escalate_if_still_running, daemon=True).start()
++
+     def reset(self):
+         """Force-clear internal state."""
+         self._proc = None

@@ -94,17 +94,22 @@ class TrainingService:
         """Stop the current run."""
         if not self.is_running:
             return
-        
+
         self._stop_requested = True
-        import time
 
         if force:
             send_signal(self._proc, force=True)
-        else:
-            send_signal(self._proc, force=False)
+            return
+
+        send_signal(self._proc, force=False)
+
+        def _escalate_if_still_running():
+            import time
             time.sleep(3)  # Give process time to flush output
             if self.is_running:
                 send_signal(self._proc, force=True)
+
+        Thread(target=_escalate_if_still_running, daemon=True).start()
 
     def reset(self):
         """Force-clear internal state."""

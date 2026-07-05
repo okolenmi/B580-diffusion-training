@@ -135,6 +135,9 @@ def build_training_command(
         if student_path:
             cmd.extend(["--student", student_path])
     elif start_from == "lora_checkpoint":
+        lora_path = config.tuning.lora_output if config.tuning.method == "lora" else ""
+        if lora_path:
+            cmd.extend(["--student", lora_path])
         cmd.append("--fresh")
     elif start_from == "resume":
         resume_checkpoint = config.paths.resume_checkpoint or ""

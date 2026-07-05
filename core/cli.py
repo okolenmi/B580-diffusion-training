@@ -50,6 +50,10 @@ Examples:
                    help="Override student checkpoint path.")
     p.add_argument("--run-id", type=int, default=None,
                    help="Run ID for progress tracking.")
+    p.add_argument("--start-from", type=str, default=None,
+                   choices=["teacher", "student", "resume"],
+                   help="Set start_from for this run (controls resume behavior "
+                        "in Trainer -- see config_model.py's start_from docstring).")
     p.add_argument("--resume-optimizer", type=str, default=None,
                    help="Override resume optimizer path.")
     p.add_argument("--reset-optimizer", action="store_true", default=False,
@@ -111,6 +115,9 @@ Examples:
         config.paths.resume_optimizer = None
         config.common.resume_step = 0
         config.start_from = "teacher"
+        changed = True
+    if cli.start_from:
+        config.start_from = cli.start_from
         changed = True
 
     if cli.run_id is not None:

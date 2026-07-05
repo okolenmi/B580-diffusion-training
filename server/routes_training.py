@@ -59,6 +59,9 @@ async def start_run(
 
     cfg_path = _resolve_config_path(config_path)
 
+    start_from = str(form_data.get("start_from", "teacher"))
+    reset_optimizer = str(form_data.get("reset_optimizer", "false")).lower() == "true"
+
     # Load existing config, deep-merge form overrides, save
     try:
         config = read_config(cfg_path)
@@ -70,13 +73,20 @@ async def start_run(
     # TrainingConfig.start_from's Literal["teacher","student","resume"]
     # validation instead of ever reaching the subprocess launch.
     overrides = form_to_nested_overrides(form_data, ignore_keys={"config", "start_from", "reset_optimizer"})
+    needs_write = False
     if overrides:
         merged = deep_merge(config.model_dump(mode="json"), overrides)
         config = TrainingConfig.model_validate(merged)
+        needs_write = True
+
+    if (config.tuning.method == "lora" and start_from != "lora_checkpoint"
+            and getattr(config.tuning, "lora_continue_from", None)):
+        config.tuning.lora_continue_from = None
+        needs_write = True
+
+    if needs_write:
         write_config(cfg_path, config)
 
-    start_from = str(form_data.get("start_from", "teacher"))
-    reset_optimizer = str(form_data.get("reset_optimizer", "false")).lower() == "true"
     total_steps = config.common.steps
 
     # Check before creating a DB row, not after -- previously this row got

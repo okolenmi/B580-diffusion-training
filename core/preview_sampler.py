@@ -23,6 +23,7 @@ from PIL import Image
 from .model_io import comfy_input_transform, raw_to_denoised, make_init_noise
 from .noise_schedule import get_alpha_sigma
 from .vae_decode import VAEDecoder
+from .lora import set_lora_gate
 
 
 class PreviewGenerator:
@@ -74,6 +75,8 @@ class PreviewGenerator:
         """
         step_dir = self.out_dir / f"step_{global_step:07d}"
         step_dir.mkdir(parents=True, exist_ok=True)
+
+        set_lora_gate(None)
 
         n_steps = self.steps
         t_high = 999

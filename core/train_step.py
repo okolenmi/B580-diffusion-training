@@ -24,7 +24,7 @@ from .optimizer_builder import build_optimizer, update_lr
 from .optimizers import FusedXPUAdafactor
 from .timer import StepTimer
 from .save import save_midrun
-from .unet_wrapper import ComfyUNetWrapper, make_cfg_emb, clear_embedder_cache
+from .unet_wrapper import ComfyUNetWrapper, clear_embedder_cache
 
 
 import gc as _gc
@@ -328,24 +328,6 @@ def _run_one_step(
         batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
         res_emb = _get_resolution_embeddings(batch_w, batch_h, device, torch.bfloat16)
 
-        # Handle CFG-aware training via native SDXL guidance embedding (adm_in 2816 -> 3072)
-        # This allows the model to learn the 'strength' of the prompt influence.
-        cfg_emb = None
-        if config.cfg_aware:
-            # metadata is stored as JSON string in the DB, so we must parse it if present.
-            meta = _entry.get("metadata", "{}")
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    meta = {}
-            if not isinstance(meta, dict):
-                meta = {}
-            
-            # Use trajectory-specific CFG if available, fallback to config min
-            target_cfg = meta.get("cfg", config.training_cfg_min)
-            cfg_emb = make_cfg_emb(x_t.shape[0], target_cfg, device, torch.bfloat16)
-
         if _entry.get("target_p") is not None and _entry.get("target_n") is not None:
             target_c = _entry["target_p"]
             target_u = _entry["target_n"]
@@ -361,39 +343,28 @@ def _run_one_step(
                 ctx_base, pooled_base = prompt_cache[prompt]
                 ctx = ctx_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1, 1)
                 pooled = pooled_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1)
-                
-                # Assemble 'y' vector: [pooled (1280), resolution (1536), optional cfg (256)]
-                # Total: 2816 (standard) or 3072 (CFG-aware)
+
+                # Assemble 'y' vector: [pooled (1280), resolution (1536)] = 2816
                 y = torch.cat([pooled, res_emb.repeat(x_t.shape[0], 1)], dim=-1)
-                if cfg_emb is not None:
-                    y = torch.cat([y, cfg_emb], dim=-1)
             else:
                 ctx, y = student_encoder.encode_for_unet(prompt, batch_size=x_t.shape[0],
                                                           height=batch_h, width=batch_w)
-                if cfg_emb is not None:
-                    y = torch.cat([y, cfg_emb], dim=-1)
 
             if neg_prompt in prompt_cache:
                 ctx_u_base, pooled_u_base = prompt_cache[neg_prompt]
                 ctx_u = ctx_u_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1, 1)
                 pooled_u = pooled_u_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1)
                 y_u = torch.cat([pooled_u, res_emb.repeat(x_t.shape[0], 1)], dim=-1)
-                if cfg_emb is not None:
-                    y_u = torch.cat([y_u, cfg_emb], dim=-1)
             else:
                 ctx_u, y_u = student_encoder.encode_for_unet(neg_prompt, batch_size=x_t.shape[0],
                                                               height=batch_h, width=batch_w)
-                if cfg_emb is not None:
-                    y_u = torch.cat([y_u, cfg_emb], dim=-1)
         elif student_encoder is not None:
             prompt = _entry.get("prompt", "")
             neg_prompt = _entry.get("neg_prompt", "")
             ctx, y = student_encoder.encode_for_unet(prompt, batch_size=x_t.shape[0],
                                                       height=batch_h, width=batch_w)
-            if cfg_emb is not None: y = torch.cat([y, cfg_emb], dim=-1)
             ctx_u, y_u = student_encoder.encode_for_unet(neg_prompt, batch_size=x_t.shape[0],
                                                           height=batch_h, width=batch_w)
-            if cfg_emb is not None: y_u = torch.cat([y_u, cfg_emb], dim=-1)
         else:
             ctx = _entry.get("ctx")
             y = _entry.get("y")

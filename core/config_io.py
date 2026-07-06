@@ -88,9 +88,6 @@ FLAT_TO_SECTION_MAP: dict[str, str] = {
     "student_type": "common.student_type",
     "resume_step": "common.resume_step",
     "cache_latent_size": "common.latent_size",
-    "cfg_aware": "common.cfg_aware",
-    "training_cfg_min": "common.training_cfg_min",
-    "training_cfg_max": "common.training_cfg_max",
     "training_positive_prompt": "common.training_positive_prompt",
     "training_negative_prompt": "common.training_negative_prompt",
 }

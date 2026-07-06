@@ -56,20 +56,6 @@ class ComfyUNetWrapper:
         cfg["adm_in_channels"] = adm_in_channels
         self.model = om.UNetModel(**cfg)
 
-        # SDXL base weights are for 2816. If we are in 3072 mode (CFG-aware),
-        # we must pad the addition embedding weights with zeros so they can be 
-        # loaded into the wider linear layer.
-        if adm_in_channels == 3072:
-            # Handle both common SDXL key patterns: label_emb.0.weight and label_emb.0.0.weight
-            for k in ["label_emb.0.weight", "label_emb.0.0.weight"]:
-                if k in sd:
-                    w = sd[k]
-                    if w.shape[1] == 2816:
-                        # Pad with zeros: (out_features, 2816) -> (out_features, 3072)
-                        padding = torch.zeros((w.shape[0], 256), device=w.device, dtype=w.dtype)
-                        sd[k] = torch.cat([w, padding], dim=1)
-                        print(f"    Padded {k} for 3072 adm_in mode.")
-
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
         if missing:
             print(f"    Warning: {len(missing)} missing keys (first: {missing[0]})")
@@ -199,18 +185,6 @@ def make_rand_cond(batch: int, device: str, dtype: torch.dtype,
 
     y = torch.cat([pooled, time_emb_flat], dim=-1)
     return ctx, y
-
-def make_cfg_emb(batch: int, cfg_val: float, device: str, dtype: torch.dtype):
-    """Generate the 256-dim CFG scale embedding for adm_in (3072 mode)."""
-    cache_key = (device, dtype)
-    if cache_key not in _EMBEDDER_CACHE:
-        from comfy.model_base import Timestep
-        _EMBEDDER_CACHE[cache_key] = Timestep(256).to(device=device, dtype=dtype)
-    
-    embedder = _EMBEDDER_CACHE[cache_key]
-    # Scale CFG value by 1000 for the embedder (standard practice)
-    vals = torch.tensor([cfg_val * 1000.0], device=device, dtype=dtype).repeat(batch)
-    return embedder(vals) # (batch, 256)
 
 def clear_embedder_cache():
     """Move all cached Timestep embedders to CPU and clear the cache.

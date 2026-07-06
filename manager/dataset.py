@@ -8,15 +8,12 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-import torch
-
 from .db import (
     _connect, init_local_db, set_dataset_info,
     get_trajectories, delete_trajectory, delete_shard, get_training_sets,
     get_active_tasks, update_task_status
 )
 from .storage import ShardLoader, ShardWriter
-from core.model_io import raw_to_target
 
 
 class ManagedDataset:
@@ -215,15 +212,9 @@ class ManagedDataset:
 
                 if is_compressed:
                     raw_samples = loaders[path].get_compressed_trajectory(t["shard_index"])
-                    cfg_val = m_data.get("cfg", 7.5)
                     samples = []
                     for s in raw_samples:
-                        p = s["target_p"]
-                        n = s["target_n"]
-                        raw = n + (p - n) * cfg_val
-                        at = torch.tensor([s["at"]]).view(1, 1, 1, 1)
-                        st = torch.tensor([s["st"]]).view(1, 1, 1, 1)
-                        s["target"] = raw_to_target(raw, s["x_t"], at, st, "eps", "eps")
+                        s["target"] = s["target_p"]
                         samples.append(s)
                 else:
                     samples = loaders[path].get_trajectory_samples(t["shard_index"], t["sample_count"])

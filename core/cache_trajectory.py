@@ -59,7 +59,7 @@ def build_teacher_cache_trajectory(
         student_chain_noise=0.02,
         no_compile=False,
         progress_writer: ProgressWriter | None = None,
-        cfg_aware: bool = False,
+        cfg_random: bool = False,
         cfg_min: float = 1.0,
         cfg_max: float = 1.0,
         student_positive_prompt: str = "",
@@ -223,7 +223,7 @@ def build_teacher_cache_trajectory(
         print(f"    Note: t_low raised from {t_low} to {_SAFE_T_LOW} to avoid near-clean timesteps.")
     t_low = _SAFE_T_LOW
 
-    if cfg_aware:
+    if cfg_random:
         use_cfg = cfg_max > 1.0 + 1e-6
         _cfg_min = max(1.0, cfg_min)
         _cfg_max = max(_cfg_min, cfg_max)
@@ -233,8 +233,8 @@ def build_teacher_cache_trajectory(
 
     avg_steps = (traj_steps_min + traj_steps_max) / 2
     seq_eff = sequence_size if (0 < sequence_size < avg_steps) else avg_steps
-    if cfg_aware and use_cfg:
-        cfg_str = f"CFG-aware={_cfg_min:.1f}–{_cfg_max:.1f}"
+    if cfg_random and use_cfg:
+        cfg_str = f"CFG-random={_cfg_min:.1f}\u2013{_cfg_max:.1f}"
     elif use_cfg:
         cfg_str = f"CFG={cfg_scale:.1f}"
     else:
@@ -350,10 +350,10 @@ def build_teacher_cache_trajectory(
                     y_unc = torch.zeros(gen_batch_size, 2816, device=device, dtype=torch.bfloat16)
 
             # Sample CFG scale for this trajectory.
-            # cfg_aware: w is drawn from [cfg_min, cfg_max] and stays fixed for the
+            # cfg_random: w is drawn from [cfg_min, cfg_max] and stays fixed for the
             # entire trajectory — denoising, target pass, and stored w are all the same.
             # Standard: traj_w = cfg_scale (fixed or 1.0).
-            traj_w = rng.uniform(_cfg_min, _cfg_max) if (cfg_aware and use_cfg) else cfg_scale
+            traj_w = rng.uniform(_cfg_min, _cfg_max) if (cfg_random and use_cfg) else cfg_scale
 
             collected = []
             in_student_chain = False

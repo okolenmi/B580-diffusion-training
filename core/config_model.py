@@ -68,9 +68,11 @@ class CommonSettings(BaseModel):
 
     latent_size: int = Field(default=0, ge=0, le=256, description="Spatial size (e.g. 64). 0 = auto (64).")
 
-    cfg_aware: bool = False
-    training_cfg_min: float = Field(default=1.0, ge=1.0, le=20.0)
-    training_cfg_max: float = Field(default=1.0, ge=1.0, le=20.0)
+    use_dataset_cfg: bool = Field(default=True, description="When training from a managed dataset, mix each "
+                                                              "sample's target using its own stored per-trajectory "
+                                                              "CFG metadata. When off, the stored CFG is ignored "
+                                                              "entirely and the plain conditional target is used "
+                                                              "(equivalent to CFG=1).")
 
     training_positive_prompt: str = ""
     training_negative_prompt: str = ""
@@ -222,7 +224,15 @@ class TrajectoryCache(BaseModel):
     traj_skip_steps: int = Field(default=4, ge=0, le=20, description="Skip first N steps of each trajectory")
     sequence_size: int = Field(default=0, ge=0, le=50, description="Samples per trajectory. 0 = all.")
     sequence_mode: Literal["random", "span", "span_high", "span_mid", "span_low"] = "random"
-    cfg: float = Field(default=1.0, ge=1.0, le=20.0, description="CFG scale during generation")
+    cfg: float = Field(default=1.0, ge=1.0, le=20.0, description="CFG scale during generation (used when cfg_random is off)")
+    cfg_random: bool = Field(default=False, description="Draw a random CFG scale per trajectory from [cfg_min, cfg_max] "
+                                                          "instead of the fixed cfg above -- diversifies training targets "
+                                                          "across guidance strengths. More expensive (still one teacher "
+                                                          "pass per step, but the extra negative-conditioning pass runs "
+                                                          "whenever cfg_max > 1.0). Purely a data/target concern -- the "
+                                                          "model itself is not told which value was used for any sample.")
+    cfg_min: float = Field(default=1.0, ge=1.0, le=20.0, description="Only used when cfg_random is enabled")
+    cfg_max: float = Field(default=1.0, ge=1.0, le=20.0, description="Only used when cfg_random is enabled")
     cond_mode: Literal["random", "zero", "prompt"] = "random"
     positive_prompt: str = ""
     negative_prompt: str = ""

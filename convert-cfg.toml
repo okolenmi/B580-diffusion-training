@@ -79,11 +79,11 @@ student_chain_len = 3
 student_chain_noise = 0.02
 
 [preview]
-enabled = false
-every_n_steps = 250
-prompts = "a photo of a cat sitting on a windowsilla fantasy landscape with mountains and a riverportrait of a woman, studio lighting"
+enabled = true
+every_n_steps = 50
+prompts = "a photo of a cat sitting on a windowsill\r\na fantasy landscape with mountains and a river\r\nportrait of a woman, studio lighting"
 negative_prompt = ""
-steps = 16
-cfg = 4.0
+steps = 24
+cfg = 6.0
 resolution = 512
 seed = 12345

@@ -82,6 +82,7 @@ class Trainer:
             self.dataset_loader = ManagedDatasetLoader(
                 dataset_root,
                 batch_size=config.common.batch_size,
+                use_dataset_cfg=config.common.use_dataset_cfg,
             )
             print(f"  Training from managed dataset: {paths.dataset_name} (all trajectories)")
             print(f"  Total samples: {len(self.dataset_loader)}")
@@ -323,7 +324,6 @@ class Trainer:
                 sd, self.device, torch.bfloat16,
                 use_checkpoint=not comm.no_checkpoint,
                 lora_config=lora_cfg,
-                adm_in_channels=3072 if comm.cfg_aware else 2816,
             )
 
             # 1. Check for manual LoRA adapter weights (e.g. from --student CLI)
@@ -589,9 +589,9 @@ class Trainer:
                 student_chain_noise=cache_cfg.student_chain_noise,
                 no_compile=no_compile,
                 progress_writer=self.progress_writer,
-                cfg_aware=comm.cfg_aware,
-                cfg_min=comm.training_cfg_min,
-                cfg_max=comm.training_cfg_max,
+                cfg_random=cache_cfg.cfg_random,
+                cfg_min=cache_cfg.cfg_min,
+                cfg_max=cache_cfg.cfg_max,
                 student_positive_prompt=comm.training_positive_prompt,
                 student_negative_prompt=comm.training_negative_prompt,
             )

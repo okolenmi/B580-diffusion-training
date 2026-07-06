@@ -383,13 +383,60 @@ body {
     gap: 0.75rem;
 }
 .preview-thumb {
-    height: 160px;
+    height: 320px;
     width: auto;
     border-radius: var(--radius-sm, 6px);
     border: 1px solid var(--border);
     object-fit: cover;
     background: var(--bg);
+    cursor: zoom-in;
+    transition: opacity 0.15s, transform 0.15s;
 }
+.preview-thumb:hover {
+    opacity: 0.85;
+    transform: scale(1.01);
+}
+
+.preview-lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(10, 12, 18, 0.92);
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+}
+.preview-lightbox.open { display: flex; }
+.preview-lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: var(--radius-sm, 6px);
+    border: 1px solid var(--border);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.preview-lightbox-caption {
+    position: absolute;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+}
+.preview-lightbox-close {
+    position: absolute;
+    top: 1.5rem;
+    right: 1.5rem;
+    font-size: 1.5rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.5rem;
+}
+.preview-lightbox-close:hover { color: var(--text); }
 
 /* Block Weighting Helper */
 .block-helper {

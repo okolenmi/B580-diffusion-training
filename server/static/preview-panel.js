@@ -60,6 +60,21 @@
             });
     }
 
+    function openLightbox(url, caption) {
+        var box = document.getElementById("preview-lightbox");
+        var img = document.getElementById("preview-lightbox-img");
+        var cap = document.getElementById("preview-lightbox-caption");
+        if (!box || !img) return;
+        img.src = url;
+        if (cap) cap.textContent = caption || "";
+        box.classList.add("open");
+    }
+
+    function closeLightbox() {
+        var box = document.getElementById("preview-lightbox");
+        if (box) box.classList.remove("open");
+    }
+
     function renderGallery(steps) {
         var gallery = document.getElementById("preview-gallery");
         if (!gallery) return;
@@ -73,8 +88,9 @@
 
         var sorted = steps.slice().sort(function (a, b) { return b.step - a.step; });
         gallery.innerHTML = sorted.map(function (entry) {
-            var imgs = entry.urls.map(function (url) {
-                return '<img src="' + url + '" class="preview-thumb" loading="lazy" alt="preview">';
+            var imgs = entry.urls.map(function (url, i) {
+                return '<img src="' + url + '" class="preview-thumb" loading="lazy" alt="preview" ' +
+                    'data-url="' + url + '" data-caption="Step ' + entry.step + ' \u2014 #' + (i + 1) + '">';
             }).join("");
             return '<div class="preview-step-group">' +
                 '<div class="preview-step-label">STEP ' + entry.step + "</div>" +
@@ -107,6 +123,30 @@
     function init() {
         var saveBtn = document.getElementById("btn-save-preview");
         if (saveBtn) saveBtn.onclick = saveSettings;
+
+        var gallery = document.getElementById("preview-gallery");
+        if (gallery) {
+            // Event delegation -- the gallery's innerHTML is replaced on every
+            // poll, so binding to individual <img> elements would silently
+            // stop working after the first refresh.
+            gallery.addEventListener("click", function (e) {
+                if (e.target && e.target.classList.contains("preview-thumb")) {
+                    openLightbox(e.target.dataset.url, e.target.dataset.caption);
+                }
+            });
+        }
+
+        var lightbox = document.getElementById("preview-lightbox");
+        if (lightbox) {
+            lightbox.addEventListener("click", function (e) {
+                if (e.target === lightbox || e.target.id === "preview-lightbox-close") {
+                    closeLightbox();
+                }
+            });
+        }
+        document.addEventListener("keydown", function (e) {
+            if (e.key === "Escape") closeLightbox();
+        });
 
         loadSettings();
         pollGallery();

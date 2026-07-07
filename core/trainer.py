@@ -699,7 +699,10 @@ class Trainer:
 
         from .vae_decode import VAEDecoder
         from PIL import Image
-        vae = VAEDecoder.from_vae_sd(self.non_unet, self.device)
+        vae = VAEDecoder.from_checkpoint(self.non_unet, self.device)
+        if vae is None:
+            print("    [WARN] dump_cache_samples: no VAE weights found in checkpoint, skipping.")
+            return
 
         for i, s in enumerate(to_decode):
             # vae.decode() returns a (B, 3, H, W) uint8 tensor, not a PIL image.

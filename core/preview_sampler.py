@@ -134,7 +134,10 @@ class PreviewGenerator:
             final_latents.append(x_t.float().cpu())
 
         # Load the VAE once for the whole batch, decode, then free immediately.
-        vae = VAEDecoder.from_vae_sd(self.non_unet_sd, self.device)
+        vae = VAEDecoder.from_checkpoint(self.non_unet_sd, self.device)
+        if vae is None:
+            raise RuntimeError("No VAE weights found in the loaded checkpoint (paths.base_model) "
+                               "-- cannot decode preview images.")
         saved = []
         for i, latent in enumerate(final_latents):
             img_tensor = vae.decode(latent.to(self.device, dtype=torch.bfloat16))

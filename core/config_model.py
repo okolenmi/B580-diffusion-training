@@ -136,6 +136,11 @@ class PreviewSettings(BaseModel):
     cfg: float = Field(default=4.0, ge=1.0, le=20.0)
     resolution: int = Field(default=512, ge=256, le=1024, description="Preview image size in pixels (square)")
     seed: int = Field(default=12345, description="Fixed starting-noise seed so previews are comparable across steps")
+    max_batch_size: int = Field(default=8, ge=1, le=64,
+                                 description="Max prompts processed in a single batched forward pass "
+                                             "(doubled internally when CFG is active). Prompts beyond "
+                                             "this run in additional sequential chunks instead, capping "
+                                             "worst-case VRAM usage when many prompts are configured.")
 
 
 # ─── Training Method Configs (discriminated by `method`) ───

@@ -7,6 +7,8 @@
 
     var pollTimer = null;
 
+    var SETTINGS_EXPANDED_KEY = "comfy_preview_settings_expanded";
+
     function configPath() {
         var el = document.getElementById("cfg-file-path");
         return el ? el.value.trim() : "convert-cfg.toml";
@@ -26,6 +28,7 @@
                 document.getElementById("prev-cfg").value = p.cfg;
                 document.getElementById("prev-resolution").value = p.resolution;
                 document.getElementById("prev-seed").value = p.seed;
+                document.getElementById("prev-max-batch").value = p.max_batch_size;
             })
             .catch(function (err) { console.error("Failed to load preview settings:", err); });
     }
@@ -41,6 +44,7 @@
         fd.append("preview.cfg", document.getElementById("prev-cfg").value);
         fd.append("preview.resolution", document.getElementById("prev-resolution").value);
         fd.append("preview.seed", document.getElementById("prev-seed").value);
+        fd.append("preview.max_batch_size", document.getElementById("prev-max-batch").value);
 
         var btn = document.getElementById("btn-save-preview");
         var orig = btn.textContent;
@@ -120,9 +124,26 @@
         });
     }
 
+    function initSettingsToggle() {
+        var panel = document.getElementById("preview-settings-panel");
+        var toggle = document.getElementById("preview-settings-toggle");
+        if (!panel || !toggle) return;
+
+        var expanded = localStorage.getItem(SETTINGS_EXPANDED_KEY) === "true";
+        panel.classList.toggle("expanded", expanded);
+
+        toggle.addEventListener("click", function () {
+            var next = !panel.classList.contains("expanded");
+            panel.classList.toggle("expanded", next);
+            localStorage.setItem(SETTINGS_EXPANDED_KEY, next ? "true" : "false");
+        });
+    }
+
     function init() {
         var saveBtn = document.getElementById("btn-save-preview");
         if (saveBtn) saveBtn.onclick = saveSettings;
+
+        initSettingsToggle();
 
         var gallery = document.getElementById("preview-gallery");
         if (gallery) {

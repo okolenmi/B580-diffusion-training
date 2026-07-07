@@ -250,6 +250,7 @@ class Trainer:
             device=self.device, out_dir=out_dir,
             steps=prev.steps, cfg=prev.cfg, resolution=prev.resolution,
             seed=prev.seed, student_type=self.config.common.student_type,
+            max_batch_size=prev.max_batch_size,
         )
         print(f"  Preview generation enabled: every {prev.every_n_steps} steps -> {out_dir}")
 

@@ -68,6 +68,11 @@ class PreviewGenerator:
         """Sample one image per configured prompt using the current student
         weights, decode, and save under out_dir/step_{global_step}/.
 
+        All prompts are batched into a single forward call per denoising
+        step (2x that with CFG, for the cond/uncond halves) rather than
+        looping through prompts sequentially -- they all share the same
+        timestep schedule, so there's no reason not to.
+
         Caller is responsible for the model's train()/eval() mode around
         this call -- generate() itself doesn't mutate it, so this stays
         usable for both the training-time hook and any future standalone
@@ -79,69 +84,73 @@ class PreviewGenerator:
         set_lora_gate(None)
 
         n_steps = self.steps
+        n_prompts = len(self.conds)
         t_high = 999
         # Same construction as builder.py's uniform t_grid: n_steps+1 points
         # from t_high down to (and including) 0.
         t_grid = [round(t_high - j * t_high / n_steps) for j in range(n_steps + 1)]
 
         use_cfg = self.cfg > 1.0 and self.neg_cond is not None
+
+        # Stack all prompts' conditioning into one batch up front.
+        ctx_batch = torch.cat([c.to(self.device) for c, _ in self.conds], dim=0)
+        y_batch = torch.cat([y.to(self.device) for _, y in self.conds], dim=0)
         if use_cfg:
             ctx_u, y_u = self.neg_cond
-            ctx_u = ctx_u.to(self.device)
-            y_u = y_u.to(self.device)
+            ctx_u_batch = ctx_u.to(self.device).repeat(n_prompts, 1, 1)
+            y_u_batch = y_u.to(self.device).repeat(n_prompts, 1)
 
-        final_latents = []
-        for ctx, y in self.conds:
-            ctx = ctx.to(self.device)
-            y = y.to(self.device)
+        # Same starting noise for every prompt in the batch (matches the
+        # prior per-prompt behavior: the seed was reset before each prompt,
+        # so every prompt already started from the identical noise tensor --
+        # only the execution strategy changed here, not what gets generated).
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(self.seed)
+        st0 = get_alpha_sigma(t_grid[0])[1]
+        single_noise = make_init_noise((1, 4, self.latent_size, self.latent_size),
+                                        self.device, torch.float32, st0, generator=gen)
+        x_t = single_noise.repeat(n_prompts, 1, 1, 1)
 
-            gen = torch.Generator(device="cpu")
-            gen.manual_seed(self.seed)  # fixed across calls -> previews are comparable
+        for step_i in range(n_steps):
+            t_val = t_grid[step_i]
+            at_cur, st_cur = get_alpha_sigma(t_val)
+            xc = comfy_input_transform(x_t, st_cur)
 
-            st0 = get_alpha_sigma(t_grid[0])[1]
-            x_t = make_init_noise((1, 4, self.latent_size, self.latent_size),
-                                   self.device, torch.float32, st0, generator=gen)
+            if use_cfg:
+                t_tensor = torch.tensor([t_val] * (n_prompts * 2), dtype=torch.long, device=self.device)
+                batched_x = torch.cat([xc, xc], dim=0)
+                batched_ctx = torch.cat([ctx_batch, ctx_u_batch], dim=0)
+                batched_y = torch.cat([y_batch, y_u_batch], dim=0)
+                out = student.forward(batched_x, t_tensor, batched_ctx, batched_y)
+                out_pos, out_neg = out.chunk(2)
+                raw = out_neg + (out_pos - out_neg) * self.cfg
+            else:
+                t_tensor = torch.tensor([t_val] * n_prompts, dtype=torch.long, device=self.device)
+                raw = student.forward(xc, t_tensor, ctx_batch, y_batch)
 
-            for step_i in range(n_steps):
-                t_val = t_grid[step_i]
-                at_cur, st_cur = get_alpha_sigma(t_val)
-                t_tensor = torch.tensor([t_val], dtype=torch.long, device=self.device)
-                xc = comfy_input_transform(x_t, st_cur)
+            at_t = torch.tensor([at_cur.item()], device=self.device, dtype=torch.bfloat16).view(-1, 1, 1, 1)
+            st_t = torch.tensor([st_cur.item()], device=self.device, dtype=torch.bfloat16).view(-1, 1, 1, 1)
+            denoised = raw_to_denoised(raw, x_t, at_t, st_t, self.student_type)
 
-                if use_cfg:
-                    batched_x = torch.cat([xc, xc], dim=0)
-                    batched_t = torch.cat([t_tensor, t_tensor], dim=0)
-                    batched_ctx = torch.cat([ctx, ctx_u], dim=0)
-                    batched_y = torch.cat([y, y_u], dim=0)
-                    out = student.forward(batched_x, batched_t, batched_ctx, batched_y)
-                    out_pos, out_neg = out.chunk(2)
-                    raw = out_neg + (out_pos - out_neg) * self.cfg
-                else:
-                    raw = student.forward(xc, t_tensor, ctx, y)
+            if step_i < n_steps - 1:
+                st_next = get_alpha_sigma(t_grid[step_i + 1])[1]
+                x_t = x_t + ((x_t - denoised) / st_cur) * (st_next - st_cur)
+            else:
+                # Final step: use the model's own x0 prediction directly
+                # rather than stepping to t=0's (near-zero) sigma.
+                x_t = denoised
 
-                at_t = torch.tensor([at_cur.item()], device=self.device, dtype=torch.bfloat16).view(-1, 1, 1, 1)
-                st_t = torch.tensor([st_cur.item()], device=self.device, dtype=torch.bfloat16).view(-1, 1, 1, 1)
-                denoised = raw_to_denoised(raw, x_t, at_t, st_t, self.student_type)
+        final_latents = x_t.float().cpu()
 
-                if step_i < n_steps - 1:
-                    st_next = get_alpha_sigma(t_grid[step_i + 1])[1]
-                    x_t = x_t + ((x_t - denoised) / st_cur) * (st_next - st_cur)
-                else:
-                    # Final step: use the model's own x0 prediction directly
-                    # rather than stepping to t=0's (near-zero) sigma.
-                    x_t = denoised
-
-            final_latents.append(x_t.float().cpu())
-
-        # Load the VAE once for the whole batch, decode, then free immediately.
+        # Load the VAE once, decode the whole batch in one call, then free immediately.
         vae = VAEDecoder.from_checkpoint(self.non_unet_sd, self.device)
         if vae is None:
             raise RuntimeError("No VAE weights found in the loaded checkpoint (paths.base_model) "
                                "-- cannot decode preview images.")
+        img_tensor = vae.decode(final_latents.to(self.device, dtype=torch.bfloat16))
         saved = []
-        for i, latent in enumerate(final_latents):
-            img_tensor = vae.decode(latent.to(self.device, dtype=torch.bfloat16))
-            img_np = img_tensor[0].permute(1, 2, 0).numpy()
+        for i in range(n_prompts):
+            img_np = img_tensor[i].permute(1, 2, 0).numpy()
             fname = f"prompt_{i}.png"
             Image.fromarray(img_np).save(step_dir / fname)
             saved.append(fname)

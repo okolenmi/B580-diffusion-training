@@ -672,6 +672,8 @@ def run_training_loop(
                     and (global_step + 1) % config.preview.every_n_steps == 0):
                 if preview_callback:
                     preview_callback(global_step + 1)
+                    print(f"  [preview] step {global_step + 1}: callback returned, "
+                          f"loop continuing to next step", flush=True)
 
             if stopped: break
     except Exception:

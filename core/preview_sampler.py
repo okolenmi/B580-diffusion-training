@@ -154,10 +154,14 @@ class PreviewGenerator:
         t_grid = [round(t_high - j * t_high / n_steps) for j in range(n_steps + 1)]
 
         chunk_latents = []
-        for start in range(0, len(self.conds), self.max_batch_size):
+        n_chunks = (len(self.conds) + self.max_batch_size - 1) // self.max_batch_size
+        for ci, start in enumerate(range(0, len(self.conds), self.max_batch_size)):
             chunk = self.conds[start:start + self.max_batch_size]
+            print(f"  [preview] step {global_step}: denoising chunk {ci + 1}/{n_chunks} "
+                  f"({len(chunk)} prompts, {n_steps} steps)", flush=True)
             chunk_latents.append(self._denoise_chunk(student, chunk, t_grid))
         final_latents = torch.cat(chunk_latents, dim=0)
+        print(f"  [preview] step {global_step}: denoising done, loading VAE", flush=True)
 
         # Load the VAE once, decode everything in one call, then free immediately.
         vae = VAEDecoder.from_checkpoint(self.non_unet_sd, self.device)
@@ -165,6 +169,7 @@ class PreviewGenerator:
             raise RuntimeError("No VAE weights found in the loaded checkpoint (paths.base_model) "
                                "-- cannot decode preview images.")
         img_tensor = vae.decode(final_latents.to(self.device, dtype=torch.bfloat16))
+        print(f"  [preview] step {global_step}: VAE decode done, saving {len(self.conds)} image(s)", flush=True)
         saved = []
         for i in range(len(self.conds)):
             img_np = img_tensor[i].permute(1, 2, 0).numpy()
@@ -175,8 +180,10 @@ class PreviewGenerator:
         del vae
         from .comfy_setup import xpu_empty_cache
         xpu_empty_cache()
+        print(f"  [preview] step {global_step}: images saved, updating manifest", flush=True)
 
         self._update_manifest(global_step, saved)
+        print(f"  [preview] step {global_step}: manifest updated", flush=True)
         return step_dir
 
     def _update_manifest(self, global_step, filenames):

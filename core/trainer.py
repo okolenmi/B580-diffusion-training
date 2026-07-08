@@ -19,7 +19,7 @@ from safetensors.torch import load_file
 
 from .cache_random import build_teacher_cache as build_random_cache
 from .cache_trajectory import build_teacher_cache_trajectory as build_trajectory_cache
-from .comfy_setup import xpu_empty_cache
+from .comfy_setup import xpu_empty_cache, xpu_synchronize
 from .config_model import TrainingConfig, LoRATuning, CyclicTuning
 from .lora import LoRAConfig
 from .noise_schedule import get_alpha_sigma
@@ -275,19 +275,32 @@ class Trainer:
             return
         offloaded = False
         try:
+            print(f"  [preview] step {step}: starting", flush=True)
             if self.optimizer is not None and hasattr(self.optimizer, "offload_states_to_cpu"):
                 self.optimizer.offload_states_to_cpu()
+                xpu_synchronize()
                 offloaded = True
+                print(f"  [preview] step {step}: optimizer state offloaded to CPU", flush=True)
             xpu_empty_cache()
+            print(f"  [preview] step {step}: cache emptied, switching to eval()", flush=True)
             self.student.eval()
             self.preview_gen.generate(self.student, step)
+            print(f"  [preview] step {step}: generate() returned", flush=True)
         except Exception as e:
             print(f"  [WARN] Preview generation failed at step {step}: {e}")
         finally:
+            print(f"  [preview] step {step}: restoring train() mode", flush=True)
             self.student.train()
             if offloaded and hasattr(self.optimizer, "reload_states_to_device"):
                 self.optimizer.reload_states_to_device(self.device)
+                # Force the reload's H2D transfers to fully complete before the
+                # training loop resumes and starts using these same tensors --
+                # relying on implicit stream-ordering alone is the leading
+                # suspect for the post-preview hang this is meant to fix.
+                xpu_synchronize()
+                print(f"  [preview] step {step}: optimizer state reloaded to {self.device}", flush=True)
             xpu_empty_cache()
+            print(f"  [preview] step {step}: done, resuming training", flush=True)
 
     def _is_unet(self, key: str) -> bool:
         return "model.diffusion_model." in key or "lora_unet_" in key

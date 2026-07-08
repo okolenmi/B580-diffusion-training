@@ -51,3 +51,9 @@ def xpu_empty_cache():
     """Clear XPU cache if available."""
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         torch.xpu.empty_cache()
+
+
+def xpu_synchronize():
+    """Block until all pending XPU work (including async transfers) completes."""
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.synchronize()

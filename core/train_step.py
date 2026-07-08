@@ -126,6 +126,14 @@ class ThreadedPrefetcher:
             try: self.queue.get_nowait()
             except queue.Empty: break
 
+    def sync(self):
+        """No-op for ThreadedPrefetcher -- it has no separate GPU stream.
+
+        Present for API uniformity with CachePrefetcher so callers don't
+        need to check the prefetcher type before calling sync().
+        """
+        pass
+
 
 class CachePrefetcher:
     """Handles async transfer of cache batches to device."""
@@ -188,6 +196,23 @@ class CachePrefetcher:
         self.cache = None
         self.stream = None
         _gc.collect()
+
+    def sync(self):
+        """Synchronize the prefetch stream with the default stream.
+
+        Call this before operations (like preview generation) that will
+        perform heavy GPU work and memory management outside the normal
+        training loop. This ensures no async H2D transfers are in flight,
+        preventing xpu_empty_cache() calls from corrupting prefetch state
+        and causing subsequent xpu_synchronize() calls to deadlock.
+        """
+        if self.stream is not None:
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                torch.xpu.current_stream().wait_stream(self.stream)
+                self.stream.synchronize()
+            elif torch.cuda.is_available():
+                torch.cuda.current_stream().wait_stream(self.stream)
+                self.stream.synchronize()
 
 
 def _make_weight_track() -> Dict[str, Any]:
@@ -671,6 +696,13 @@ def run_training_loop(
             if (config.preview.enabled and config.preview.every_n_steps > 0
                     and (global_step + 1) % config.preview.every_n_steps == 0):
                 if preview_callback:
+                    # CRITICAL: Sync the prefetch stream before preview generation.
+                    # The CachePrefetcher has a separate GPU stream for async H2D
+                    # transfers. If preview's heavy GPU work and xpu_empty_cache()
+                    # calls run while a prefetch transfer is in flight, the XPU
+                    # driver can corrupt stream state. After 2-4 previews this
+                    # causes xpu_synchronize() to deadlock with 0 GPU usage.
+                    prefetcher.sync()
                     preview_callback(global_step + 1)
                     print(f"  [preview] step {global_step + 1}: callback returned, "
                           f"loop continuing to next step", flush=True)

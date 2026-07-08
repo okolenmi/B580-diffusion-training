@@ -178,12 +178,17 @@ class PreviewGenerator:
             saved.append(fname)
         vae.free()
         del vae
-        from .comfy_setup import xpu_empty_cache
-        xpu_empty_cache()
         print(f"  [preview] step {global_step}: images saved, updating manifest", flush=True)
 
         self._update_manifest(global_step, saved)
         print(f"  [preview] step {global_step}: manifest updated", flush=True)
+
+        # Explicitly synchronize the default stream before returning control to
+        # the training loop. This ensures all VAE GPU kernels are fully complete,
+        # preventing any pending preview work from interfering with the training
+        # loop's stream synchronization that happens immediately after callback.
+        from .comfy_setup import xpu_synchronize
+        xpu_synchronize()
         return step_dir
 
     def _update_manifest(self, global_step, filenames):

@@ -276,11 +276,21 @@ class Trainer:
         offloaded = False
         try:
             print(f"  [preview] step {step}: starting", flush=True)
+            # CRITICAL: Ensure ALL pending GPU work across ALL streams is fully
+            # complete before we start modifying GPU state for preview. This
+            # prevents race conditions between async prefetch transfers, prior
+            # training kernels, and the preview generation work. The
+            # prefetcher.sync() in run_training_loop() handles the prefetch
+            # stream; this sync catches anything else on the default stream.
+            xpu_synchronize()
             if self.optimizer is not None and hasattr(self.optimizer, "offload_states_to_cpu"):
                 self.optimizer.offload_states_to_cpu()
-                xpu_synchronize()
                 offloaded = True
                 print(f"  [preview] step {step}: optimizer state offloaded to CPU", flush=True)
+            # Sync again after offload to ensure D2H transfers complete before
+            # cache clear. On XPU, offload_states_to_cpu() uses non_blocking=False
+            # which should be synchronous, but an explicit sync is defensive.
+            xpu_synchronize()
             xpu_empty_cache()
             print(f"  [preview] step {step}: cache emptied, switching to eval()", flush=True)
             self.student.eval()

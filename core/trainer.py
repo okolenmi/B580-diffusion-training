@@ -291,8 +291,7 @@ class Trainer:
             # cache clear. On XPU, offload_states_to_cpu() uses non_blocking=False
             # which should be synchronous, but an explicit sync is defensive.
             xpu_synchronize()
-            xpu_empty_cache()
-            print(f"  [preview] step {step}: cache emptied, switching to eval()", flush=True)
+            print(f"  [preview] step {step}: switching to eval()", flush=True)
             self.student.eval()
             self.preview_gen.generate(self.student, step)
             print(f"  [preview] step {step}: generate() returned", flush=True)
@@ -309,7 +308,6 @@ class Trainer:
                 # suspect for the post-preview hang this is meant to fix.
                 xpu_synchronize()
                 print(f"  [preview] step {step}: optimizer state reloaded to {self.device}", flush=True)
-            xpu_empty_cache()
             print(f"  [preview] step {step}: done, resuming training", flush=True)
 
     def _is_unet(self, key: str) -> bool:

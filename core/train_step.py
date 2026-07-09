@@ -127,12 +127,21 @@ class ThreadedPrefetcher:
             except queue.Empty: break
 
     def sync(self):
-        """No-op for ThreadedPrefetcher -- it has no separate GPU stream.
+        """Synchronize the prefetch stream with the default stream.
 
-        Present for API uniformity with CachePrefetcher so callers don't
-        need to check the prefetcher type before calling sync().
+        Call this before operations (like preview generation) that will
+        perform heavy GPU work and memory management outside the normal
+        training loop. This ensures no async H2D transfers are in flight,
+        preventing xpu_empty_cache() calls from corrupting prefetch state
+        and causing subsequent xpu_synchronize() calls to deadlock.
         """
-        pass
+        if self.stream is not None:
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                torch.xpu.current_stream().wait_stream(self.stream)
+                self.stream.synchronize()
+            elif torch.cuda.is_available():
+                torch.cuda.current_stream().wait_stream(self.stream)
+                self.stream.synchronize()
 
 
 class CachePrefetcher:
@@ -335,9 +344,14 @@ def _run_one_step(
         gate_train_low: float | None = None,
         gate_train_high: float | None = None,
         gate_width: float = 100.0,
+        trace: bool = False,
 ) -> bool:
     """Run a single optimization step."""
+    if trace:
+        print(f"  [trace] step {global_step}: calling prefetcher.get_next()", flush=True)
     _entry = prefetcher.get_next()
+    if trace:
+        print(f"  [trace] step {global_step}: get_next() returned", flush=True)
     if _entry is None:
         return True
 
@@ -502,8 +516,12 @@ def _run_one_step(
             snr_w = 1.0 / (snr + 1.0)
 
     def _run_pass(xc_in, t_in, c_in, y_in_v, target_in, timer_label):
+        if trace:
+            print(f"  [trace] step {global_step}: {timer_label} forward starting", flush=True)
         timer.start(timer_label)
         student_out = student.forward(xc_in, t_in, c_in, y_in_v)
+        if trace:
+            print(f"  [trace] step {global_step}: {timer_label} forward done, computing loss/backward", flush=True)
         # Keep per-sample loss for SNR weighting; reduce to scalar afterward.
         per_sample = (student_out.float() - target_in.to(device).float()).pow(2)
         # per_sample shape: (B, C, H, W) — mean over all dims except batch
@@ -516,6 +534,8 @@ def _run_one_step(
 
         loss = loss / loss_scale
         loss.backward()
+        if trace:
+            print(f"  [trace] step {global_step}: {timer_label} backward done", flush=True)
 
         del student_out
         timer.stop(timer_label)
@@ -538,9 +558,13 @@ def _run_one_step(
         loss_display_tensor = loss_c * loss_scale
 
     if not is_fused and (global_step + 1) % effective_accum == 0:
+        if trace:
+            print(f"  [trace] step {global_step}: optimizer.step() starting", flush=True)
         timer.start("5_opt_step")
         optimizer.step(n_steps=effective_accum)
         timer.stop("5_opt_step")
+        if trace:
+            print(f"  [trace] step {global_step}: optimizer.step() done", flush=True)
 
     del xc, t_tensor
     if _using_pre_cond:
@@ -660,8 +684,13 @@ def run_training_loop(
         prefetcher = ThreadedPrefetcher(cache, device)
 
     try:
+        trace_remaining = 0
         for i in range(run_steps):
             global_step = start_step + i
+            trace_this_step = trace_remaining > 0
+            if trace_this_step:
+                trace_remaining -= 1
+                print(f"  [trace] step {global_step}: begin (post-preview tracing active)", flush=True)
 
             stopped = _run_one_step(
                 student=student, optimizer=optimizer, prefetcher=prefetcher,
@@ -678,6 +707,7 @@ def run_training_loop(
                 gate_train_low=_gate_train_low,
                 gate_train_high=_gate_train_high,
                 gate_width=_gate_width,
+                trace=trace_this_step,
             )
 
             if pbar is not None: pbar.update(1)
@@ -706,6 +736,7 @@ def run_training_loop(
                     preview_callback(global_step + 1)
                     print(f"  [preview] step {global_step + 1}: callback returned, "
                           f"loop continuing to next step", flush=True)
+                    trace_remaining = 3
 
             if stopped: break
     except Exception:

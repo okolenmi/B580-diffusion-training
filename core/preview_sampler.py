@@ -161,6 +161,9 @@ class PreviewGenerator:
                   f"({len(chunk)} prompts, {n_steps} steps)", flush=True)
             chunk_latents.append(self._denoise_chunk(student, chunk, t_grid))
         final_latents = torch.cat(chunk_latents, dim=0)
+        from .comfy_setup import xpu_synchronize, xpu_empty_cache
+        xpu_synchronize()
+        xpu_empty_cache()
         print(f"  [preview] step {global_step}: denoising done, loading VAE", flush=True)
 
         # Load the VAE once, decode everything in one call, then free immediately.
@@ -187,8 +190,11 @@ class PreviewGenerator:
         # the training loop. This ensures all VAE GPU kernels are fully complete,
         # preventing any pending preview work from interfering with the training
         # loop's stream synchronization that happens immediately after callback.
-        from .comfy_setup import xpu_synchronize
+        # Also empty the cache -- training runs close to the VRAM ceiling here,
+        # so returning the VAE's just-freed memory to the driver before the
+        # training loop's own reload/reallocation matters.
         xpu_synchronize()
+        xpu_empty_cache()
         return step_dir
 
     def _update_manifest(self, global_step, filenames):

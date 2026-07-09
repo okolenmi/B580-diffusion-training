@@ -306,6 +306,16 @@ class Trainer:
         finally:
             print(f"  [preview] step {step}: restoring train() mode", flush=True)
             self.student.train()
+            # Clear the cache and synchronize BEFORE reloading -- not after.
+            # The VRAM graph showed the spike happening right at this
+            # transition: reload_states_to_device()'s fresh allocations were
+            # stacking on top of preview's just-finished memory (VAE,
+            # sampling activations) that the allocator hadn't yet returned
+            # to the driver, instead of that memory being freed first to
+            # make room for the reload.
+            xpu_synchronize()
+            xpu_empty_cache()
+            print(f"  [preview] step {step}: cache cleared before reload", flush=True)
             if offloaded and hasattr(self.optimizer, "reload_states_to_device"):
                 self.optimizer.reload_states_to_device(self.device)
                 # Force the reload's H2D transfers to fully complete before the
@@ -314,7 +324,6 @@ class Trainer:
                 # suspect for the post-preview hang this is meant to fix.
                 xpu_synchronize()
                 print(f"  [preview] step {step}: optimizer state reloaded to {self.device}", flush=True)
-            xpu_empty_cache()
             print(f"  [preview] step {step}: done, resuming training", flush=True)
 
     def _is_unet(self, key: str) -> bool:

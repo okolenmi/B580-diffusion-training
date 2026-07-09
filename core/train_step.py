@@ -573,7 +573,11 @@ def _run_one_step(
     # Retrieve the loss value. We do this every step for real-time feedback.
     # On XPU, this causes a host-device synchronization, but at ~1 step/sec
     # the impact is negligible.
+    if trace:
+        print(f"  [trace] step {global_step}: calling loss_display_tensor.item() (XPU sync point)", flush=True)
     lv = loss_display_tensor.item()
+    if trace:
+        print(f"  [trace] step {global_step}: loss_display_tensor.item() returned ({lv:.5f})", flush=True)
     weight_track["_last_lv"] = lv
     del loss_display_tensor
 
@@ -589,6 +593,8 @@ def _run_one_step(
     # Weight tracking — only every 100 steps, uses a cached param reference
     # so we never scan the entire parameter list at runtime.
     if (global_step + 1) % 100 == 0:
+        if trace:
+            print(f"  [trace] step {global_step}: weight-tracking block (XPU sync point)", flush=True)
         tracked_p = weight_track.get("_tracked_param")
         if tracked_p is None:
             tracked_p = _find_tracked_param(student)
@@ -602,6 +608,8 @@ def _run_one_step(
                 weight_track["delta_total"] += delta
                 weight_track["delta_count"] += 1
             weight_track["last_W"] = curr_W
+        if trace:
+            print(f"  [trace] step {global_step}: weight-tracking block done", flush=True)
 
     _wd = (weight_track["delta_total"] / weight_track["delta_count"]
            if weight_track["delta_count"] > 0 and (global_step + 1) >= 100 else 0.0)
@@ -620,11 +628,17 @@ def _run_one_step(
         print(f"Step {global_step+1:5d}/{total_steps}: loss={lv:.5f} avg={avg:.5f} lr={optimizer.lr:.2e}")
 
     if progress_writer is not None:
+        if trace:
+            print(f"  [trace] step {global_step}: progress_writer.step() starting (file I/O)", flush=True)
         progress_writer.step(global_step=global_step, total_steps=total_steps,
                              loss=lv, avg=avg, std=std, lr=optimizer.lr,
                              eta_sec=eta if eta > 0 else None)
+        if trace:
+            print(f"  [trace] step {global_step}: progress_writer.step() done", flush=True)
 
     timer.tick()
+    if trace:
+        print(f"  [trace] step {global_step}: end of _run_one_step", flush=True)
     if stop_flag and stop_flag():
         print(f"\n  Stopping at step {global_step + 1}.")
         return True

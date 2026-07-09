@@ -166,22 +166,31 @@ class PreviewGenerator:
         xpu_empty_cache()
         print(f"  [preview] step {global_step}: denoising done, loading VAE", flush=True)
 
-        # Load the VAE once, decode everything in one call, then free immediately.
+        # Load the VAE once, decode one image at a time, then free immediately.
+        # Decoding is disproportionately memory-hungry per-image compared to
+        # the UNet forward passes above (full-resolution upsampling vs
+        # latent-space compute), so this is deliberately NOT batched the way
+        # denoising is -- even one combined decode call across all prompts
+        # can spike well above what denoising ever needed.
         vae = VAEDecoder.from_checkpoint(self.non_unet_sd, self.device)
         if vae is None:
             raise RuntimeError("No VAE weights found in the loaded checkpoint (paths.base_model) "
                                "-- cannot decode preview images.")
-        img_tensor = vae.decode(final_latents.to(self.device, dtype=torch.bfloat16))
-        print(f"  [preview] step {global_step}: VAE decode done, saving {len(self.conds)} image(s)", flush=True)
         saved = []
-        for i in range(len(self.conds)):
-            img_np = img_tensor[i].permute(1, 2, 0).numpy()
+        for i in range(final_latents.shape[0]):
+            single_latent = final_latents[i:i + 1].to(self.device, dtype=torch.bfloat16)
+            img_tensor = vae.decode(single_latent)
+            img_np = img_tensor[0].permute(1, 2, 0).numpy()
             fname = f"prompt_{i}.png"
             Image.fromarray(img_np).save(step_dir / fname)
             saved.append(fname)
+            del single_latent, img_tensor
+            xpu_empty_cache()
+            print(f"  [preview] step {global_step}: decoded and saved image {i + 1}/{final_latents.shape[0]}",
+                  flush=True)
         vae.free()
         del vae
-        print(f"  [preview] step {global_step}: images saved, updating manifest", flush=True)
+        print(f"  [preview] step {global_step}: all images saved, updating manifest", flush=True)
 
         self._update_manifest(global_step, saved)
         print(f"  [preview] step {global_step}: manifest updated", flush=True)

@@ -145,11 +145,35 @@ class LoRALinear(nn.Module):
         else:
             self.register_buffer("base_bias", None)
 
-        dtype  = self.base_weight.dtype
         device = self.base_weight.device
 
-        self.lora_A = nn.Parameter(torch.empty(rank, self.in_features,  device=device, dtype=dtype))
-        self.lora_B = nn.Parameter(torch.zeros(self.out_features, rank, device=device, dtype=dtype))
+        # CRITICAL: lora_A/lora_B are always fp32, regardless of the frozen base
+        # model's dtype (bf16). This is not cosmetic.
+        #
+        # Adafactor's normalized update is ~O(lr) per step, essentially
+        # independent of the raw gradient's magnitude (it divides by the
+        # running RMS of the gradient itself). lr here is typically 1e-5-1e-4.
+        # bf16 only has ~7-8 bits of mantissa (~0.4-0.8% relative precision), so
+        # at a parameter's natural magnitude (e.g. ~0.02-0.1 for a
+        # kaiming-initialized lora_A), an update smaller than that ~0.4-0.8%
+        # threshold rounds straight back to the unchanged value -- every single
+        # step, forever. Verified numerically: a bf16 parameter at realistic
+        # init magnitude receiving 2000 consecutive lr=1e-5 updates ends up
+        # *bit-for-bit unchanged*; at lr=1e-4, ~73% of steps are silently
+        # dropped. Only once lr is cranked far past the parameter's own scale
+        # (e.g. 1e-2) do updates clear the rounding floor -- but by then each
+        # step is comparable in size to the whole weight, so instead of
+        # gradient descent you get near-random overwriting, i.e. exactly the
+        # "no effect, then destructive" behavior this was chasing.
+        #
+        # This is why every mainstream LoRA implementation (HF PEFT, diffusers)
+        # keeps trainable adapter weights in fp32 even when the frozen base
+        # model is fp16/bf16, casting down only for the forward matmul. A/B are
+        # tiny (rank x dim), so the extra memory here is negligible.
+        param_dtype = torch.float32
+
+        self.lora_A = nn.Parameter(torch.empty(rank, self.in_features,  device=device, dtype=param_dtype))
+        self.lora_B = nn.Parameter(torch.zeros(self.out_features, rank, device=device, dtype=param_dtype))
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
@@ -161,11 +185,16 @@ class LoRALinear(nn.Module):
         # path through x back to earlier layers, leaving only the rank-limited
         # LoRA branch to propagate gradients upstream.
         result = F.linear(x, self.base_weight, self.base_bias)
-        
+
+        # LoRA branch computed in fp32 (lora_A/lora_B's own dtype -- see
+        # __init__) regardless of x's dtype (bf16), then cast back down to
+        # match `result` before adding, so this layer's output dtype is
+        # unchanged from the caller's point of view.
+        #
         # Optimization: Multiply the small lora_B by scaling BEFORE the matrix
         # multiplication. This saves one full-size tensor multiplication kernel
         # launch and millions of ops on large images.
-        lora_out = (self.dropout(x) @ self.lora_A.T) @ (self.lora_B.T * self.scaling)
+        lora_out = (self.dropout(x).to(self.lora_A.dtype) @ self.lora_A.T) @ (self.lora_B.T * self.scaling)
 
         gate = _current_gate
         if gate is not None:
@@ -176,7 +205,7 @@ class LoRALinear(nn.Module):
             g = g.view(-1, *([1] * (lora_out.dim() - 1)))
             lora_out = lora_out * g
 
-        return result + lora_out
+        return result + lora_out.to(result.dtype)
 
     def merge(self):
         """Merge adapter weights into base weight in-place (for inference)."""
@@ -262,17 +291,21 @@ class LoRAConv2d(nn.Module):
         else:
             self.register_buffer("base_bias", None)
 
-        dtype  = self.base_weight.dtype
         device = self.base_weight.device
+
+        # fp32, not base_weight.dtype (bf16) -- see the matching comment in
+        # LoRALinear.__init__. Same rounding-to-a-standstill failure mode
+        # applies here.
+        param_dtype = torch.float32
 
         # A: (rank, in_channels * k * k), B: (out_channels, rank * 1 * 1)
         # For 1x1 conv, it's just like Linear. For 3x3, it's more complex but
         # Kohya/ComfyUI convention for LoRA-Conv2d is often to use
         # (rank, in_channels, k, k) and (out_channels, rank, 1, 1).
         self.lora_A = nn.Parameter(torch.empty(rank, self.in_channels // self.groups, 
-                                               *self.kernel_size, device=device, dtype=dtype))
+                                               *self.kernel_size, device=device, dtype=param_dtype))
         self.lora_B = nn.Parameter(torch.zeros(self.out_channels, rank, 1, 1, 
-                                               device=device, dtype=dtype))
+                                               device=device, dtype=param_dtype))
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
@@ -281,16 +314,17 @@ class LoRAConv2d(nn.Module):
         result = F.conv2d(x, self.base_weight, self.base_bias, self.stride,
                           self.padding, self.dilation, self.groups)
         
-        # LoRA branch: (x * lora_A) * lora_B
-        # lora_A uses the same groups as original to match input channel structure
-        adapter = F.conv2d(self.dropout(x), self.lora_A, None, self.stride,
+        # LoRA branch: (x * lora_A) * lora_B, computed in fp32 (lora_A/B's own
+        # dtype) then cast back down before adding -- see LoRALinear.forward.
+        x_in = self.dropout(x).to(self.lora_A.dtype)
+        adapter = F.conv2d(x_in, self.lora_A, None, self.stride,
                            self.padding, self.dilation, self.groups)
         
         # Optimization: Multiply the small lora_B by scaling BEFORE the conv2d.
         # This saves one full-size tensor multiplication kernel launch.
         adapter = F.conv2d(adapter, self.lora_B * self.scaling)
         
-        return result + adapter
+        return result + adapter.to(result.dtype)
 
     def merge(self):
         """Merge adapter weights into base weight in-place."""

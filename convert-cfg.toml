@@ -9,11 +9,11 @@ comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
 steps = 5000
-batch_size = 3
+batch_size = 2
 grad_accum = 32
-lr = 0.0002
+lr = 0.0006
 optimizer = "xpu-adafactor"
-adafactor_scale_param = false
+adafactor_scale_param = true
 seed = 48
 save_every = 0
 lr_schedule = "cosine"
@@ -25,7 +25,7 @@ lr_strategy = "uniform"
 center_mult = 0.67
 side_mult = 1.5
 time_mult = 1.8
-snr_weighting = "decay_snr"
+snr_weighting = "uniform"
 t_mode = "uniform"
 t_low = 0
 t_high = 999
@@ -52,12 +52,13 @@ method = "lora"
 rank = 128
 alpha = 64.0
 dropout = 0.0
-lora_output = "models/loras/test_lora10h.safetensors"
+lora_output = "models/loras/test_lora10k.safetensors"
 target_all = false
+lora_continue_from = "models/loras/test_lora10j.safetensors"
 block_weighting = ""
 gate_train_low = 0.0
 gate_train_high = 999.0
-gate_width = 50.0
+gate_width = 10.0
 
 [cache]
 mode = "trajectory"
@@ -82,10 +83,10 @@ student_chain_noise = 0.02
 [preview]
 enabled = true
 every_n_steps = 100
-prompts = "a photo of a cat sitting on a windowsill\r\na fantasy landscape with mountains and a river\r\nportrait of a woman, studio lighting"
+prompts = "landscape\r\ncozy room\r\n2 girls eating"
 negative_prompt = ""
 steps = 24
 cfg = 6.0
-resolution = 512
+resolution = 768
 seed = 1
 max_batch_size = 8

@@ -279,6 +279,12 @@ class Trainer:
             # Squeeze out any cached-but-unused memory from normal training
             # before touching anything -- training runs close to the VRAM
             # ceiling here, so this matters even before offload begins.
+            # gc.collect() first: empty_cache() can only return memory that's
+            # already been freed by Python, and any circularly-referenced
+            # tensors (autograd/PyTorch internals -- the same reason normal
+            # training already schedules periodic gc.collect() every 250
+            # steps) need an explicit collection to actually become freeable.
+            gc.collect()
             xpu_synchronize()
             xpu_empty_cache()
             # CRITICAL: Ensure ALL pending GPU work across ALL streams is fully
@@ -312,7 +318,11 @@ class Trainer:
             # stacking on top of preview's just-finished memory (VAE,
             # sampling activations) that the allocator hadn't yet returned
             # to the driver, instead of that memory being freed first to
-            # make room for the reload.
+            # make room for the reload. gc.collect() first for the same
+            # reason as above -- preview's own work (denoising, decoding)
+            # may have created circular references that need explicit
+            # collection before their memory is actually reclaimable.
+            gc.collect()
             xpu_synchronize()
             xpu_empty_cache()
             print(f"  [preview] step {step}: cache cleared before reload", flush=True)

@@ -428,9 +428,21 @@ def _run_one_step(
     else:
         set_lora_gate(None)
 
-    # Zero gradients once per step for non-fused optimizers.
-    # FusedXPUAdafactor frees grads inside its backward hooks — zero_grad is a no-op.
-    optimizer.zero_grad()
+    # grad_accum is meaningful only for ChunkedXPUAdafactor / CPUAdamW.
+    # FusedXPUAdafactor applies updates inside backward hooks immediately,
+    # so accumulation across multiple backward() calls is not supported.
+    effective_accum = 1 if is_fused else config.grad_accum
+
+    # Zero gradients only at the start of each accumulation cycle -- not
+    # every step. Zeroing every step would wipe out gradients accumulated
+    # from prior steps in the same cycle before optimizer.step() (gated on
+    # the cycle boundary below) ever sees them, silently defeating grad
+    # accumulation entirely regardless of what grad_accum is set to.
+    # FusedXPUAdafactor frees grads inside its backward hooks — zero_grad
+    # is a no-op there regardless of this gating (effective_accum is
+    # always 1 for it, so the condition is always true anyway).
+    if global_step % effective_accum == 0:
+        optimizer.zero_grad()
 
     # Update LR only when the schedule value actually changed (saves a linear scan
     # over param_lr on every step for uniform LR with ChunkedXPUAdafactor).
@@ -445,10 +457,6 @@ def _run_one_step(
     # magnitude equivalent to a single-pass step regardless of whether we have
     # separate cond/uncond targets.
     n_passes = 2 if target_u is not None else 1
-    # grad_accum is meaningful only for ChunkedXPUAdafactor / CPUAdamW.
-    # FusedXPUAdafactor applies updates inside backward hooks immediately,
-    # so accumulation across multiple backward() calls is not supported.
-    effective_accum = 1 if is_fused else config.grad_accum
     loss_scale = effective_accum * n_passes
 
     # For FusedXPUAdafactor: reset the per-backward flag so self.t increments

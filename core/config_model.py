@@ -159,17 +159,25 @@ class LoRATuning(BaseModel):
         default="",
         description="Optional comma-separated list of block multipliers (e.g. 'input_7:1.0,middle:0.5,output_0:0.2')"
     )
-    gate_train_low: Optional[float] = Field(
-        default=None, ge=0.0, le=1000.0,
-        description="If set (together with gate_train_high), scales the LoRA delta toward "
-                    "~1 (train normally) for timesteps inside [gate_train_low, gate_train_high] "
-                    "-- your dataset's actual t range -- and toward ~0 (protect the frozen base "
-                    "model) outside it. Both must be set together, or gating is fully disabled "
-                    "(LoRA applies uniformly across all timesteps, default behavior)."
+    gate_enabled: bool = Field(
+        default=False,
+        description="Enable timestep-conditional gating of the LoRA delta (see gate_train_low/"
+                    "gate_train_high/gate_width). Off by default: LoRA applies uniformly across "
+                    "all timesteps. This is a separate on/off switch rather than 'leave the range "
+                    "fields blank' specifically so disabling it doesn't depend on a UI number "
+                    "input faithfully round-tripping 'no value' -- turn this off and the range "
+                    "fields are ignored entirely, regardless of what's in them."
     )
-    gate_train_high: Optional[float] = Field(
-        default=None, ge=0.0, le=1000.0,
-        description="See gate_train_low."
+    gate_train_low: float = Field(
+        default=0.0, ge=0.0, le=1000.0,
+        description="Only used when gate_enabled is True. Scales the LoRA delta toward ~1 (train "
+                    "normally) for timesteps inside [gate_train_low, gate_train_high] -- your "
+                    "dataset's actual t range -- and toward ~0 (protect the frozen base model) "
+                    "outside it."
+    )
+    gate_train_high: float = Field(
+        default=999.0, ge=0.0, le=1000.0,
+        description="See gate_train_low. Only used when gate_enabled is True."
     )
     gate_width: float = Field(
         default=100.0, gt=0.0, le=1000.0,
@@ -178,17 +186,16 @@ class LoRATuning(BaseModel):
                      "= more gradual handoff. If this is comparable to or larger than the "
                      "training interval's own width, the middle of that interval won't reach "
                      "full (~1) training strength -- use a smaller width for a narrow range. "
-                     "Only relevant if gate_train_low/high are set."
+                     "Only used when gate_enabled is True."
     )
 
     @model_validator(mode="after")
     def _validate_gate_range(self):
-        low, high = self.gate_train_low, self.gate_train_high
-        if (low is None) != (high is None):
-            raise ValueError("gate_train_low and gate_train_high must be set together, or both left unset")
-        if low is not None and low >= high:
-            raise ValueError(f"gate_train_low ({low}) must be less than gate_train_high ({high})")
+        if self.gate_enabled and self.gate_train_low >= self.gate_train_high:
+            raise ValueError(f"gate_train_low ({self.gate_train_low}) must be less than "
+                              f"gate_train_high ({self.gate_train_high})")
         return self
+
 
 
 class CyclicTuning(BaseModel):

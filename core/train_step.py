@@ -679,8 +679,9 @@ def run_training_loop(
     # Timestep-gated LoRA: only meaningful for LoRA tuning, and only if the
     # user actually configured a protected interval (None/None keeps current
     # behavior -- LoRA applies uniformly across all timesteps, no gating at all).
-    _gate_train_low = getattr(config.tuning, "gate_train_low", None)
-    _gate_train_high = getattr(config.tuning, "gate_train_high", None)
+    _gate_enabled = getattr(config.tuning, "gate_enabled", False)
+    _gate_train_low = getattr(config.tuning, "gate_train_low", None) if _gate_enabled else None
+    _gate_train_high = getattr(config.tuning, "gate_train_high", None) if _gate_enabled else None
     _gate_width = getattr(config.tuning, "gate_width", 100.0)
     # loss_win is a deque(maxlen=100) created by _make_weight_track().
     # If weight_track was passed in from a previous cycle it already has the deque.

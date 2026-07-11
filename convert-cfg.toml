@@ -11,9 +11,9 @@ comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 steps = 5000
 batch_size = 2
 grad_accum = 32
-lr = 0.0006
+lr = 0.0001
 optimizer = "xpu-adafactor"
-adafactor_scale_param = true
+adafactor_scale_param = false
 seed = 48
 save_every = 0
 lr_schedule = "cosine"
@@ -49,12 +49,11 @@ pre_cond_clean_ratio = 0.3
 
 [tuning]
 method = "lora"
-rank = 128
+rank = 108
 alpha = 64.0
 dropout = 0.0
 lora_output = "models/loras/test_lora10k.safetensors"
 target_all = false
-lora_continue_from = "models/loras/test_lora10j.safetensors"
 block_weighting = ""
 gate_train_low = 0.0
 gate_train_high = 999.0

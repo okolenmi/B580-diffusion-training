@@ -20,7 +20,7 @@ from safetensors.torch import load_file
 from core.clip_encode import SDXLClipEncoder
 from core.comfy_setup import xpu_empty_cache
 from core.model_io import comfy_input_transform, make_init_noise, raw_to_denoised, raw_to_target
-from core.noise_schedule import get_alpha_sigma, sample_timestep
+from core.noise_schedule import get_alpha_sigma, sample_timestep, eps_to_vpred
 from core.seed import derive_seed
 from core.unet_wrapper import ComfyUNetWrapper
 from core.vae_decode import VAEDecoder
@@ -520,11 +520,17 @@ class DataTaskRunner:
 
                         # Reconstruction target: the true noise we added.
                         # For eps model: target = eps.
-                        # For vpred model: target = alpha * eps - sigma * x0.
-                        # This is what an oracle model would output to perfectly
-                        # reconstruct this image from this noised latent.
+                        # For vpred model: target = eps_to_vpred(eps, x_t, alpha, sigma),
+                        # i.e. (eps - sigma*x0) / sqrt(sigma^2+1) -- see the derivation
+                        # in noise_schedule.py. This matches ComfyUI's V_PREDICTION
+                        # class under this codebase's x_t = x0 + sigma*eps forward
+                        # process. NOTE: this is *not* the textbook DDPM v-formula
+                        # (v = alpha*eps - sigma*x0), which assumes a different
+                        # forward process (x_t = alpha*x0 + sigma*eps) and gives a
+                        # wrong target here, especially at high-noise timesteps
+                        # where alpha is small.
                         if model_type == "vpred":
-                            target = at_f * eps - st_f * x0.cpu()
+                            target = eps_to_vpred(eps, x_t, at_cur, st_cur)
                         else:
                             target = eps
 

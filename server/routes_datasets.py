@@ -307,6 +307,29 @@ async def api_edit_trajectory(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{name}/trajectories/bulk-edit")
+async def api_bulk_edit_trajectories(
+    name: str,
+    traj_ids: List[int] = Body(...),
+    prompt: str = Body(None),
+    prompt_mode: str = Body("set"),
+    neg_prompt: str = Body(None),
+    cfg: float = Body(None),
+    lib: ManagedDatasetLibrary = Depends(get_library)
+):
+    """Bulk-update positive/negative prompts and/or CFG across many trajectories at once --
+    e.g. apply a universal trigger word (prompt_mode='prepend' to keep any existing
+    per-image captions, 'set' to replace them) or a common CFG value to a whole dataset,
+    or just a selected subset, in a single action."""
+    try:
+        ds = lib.get_dataset(name)
+        n = ds.update_trajectories_bulk(traj_ids, prompt=prompt, prompt_mode=prompt_mode,
+                                         neg_prompt=neg_prompt, cfg=cfg)
+        return {"ok": True, "updated": n}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{name}/trajectories/{traj_id}/reject")
 async def api_reject_trajectory(name: str, traj_id: int, lib: ManagedDatasetLibrary = Depends(get_library)):
     """Physically delete a single trajectory."""

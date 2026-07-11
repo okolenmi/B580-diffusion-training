@@ -461,6 +461,101 @@
         });
     };
 
+    // Bulk edit: apply a universal trigger word (prepended, so any existing per-image
+    // captions are kept) and/or a common negative prompt / CFG value across every
+    // currently-selected trajectory (use "Select All" first for the whole dataset) in a
+    // single request, instead of editing trajectories one at a time.
+    window.showBulkEditPanel = function() {
+        const ids = Array.from(state.selectedTrajs);
+        if (ids.length === 0) {
+            alert("Nothing selected. Click trajectories to select them, or use \"Select All\", then try again.");
+            return;
+        }
+        const panel = document.getElementById("inspection-detail");
+        if (!panel) return;
+        state.activeInspectionTrajId = null;
+
+        panel.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                <span style="font-weight:700; font-size:1.1rem;">Bulk Edit (${ids.length} selected)</span>
+            </div>
+
+            <div class="option-row mb-1">
+                <label class="option-label">Trigger Word / Prompt</label>
+                <textarea id="bulk-prompt" class="cfg-input" style="height:80px; width:100%; resize:vertical;" placeholder="e.g. sks_character"></textarea>
+                <div style="display:flex; gap:1rem; margin-top:0.5rem; font-size:0.8rem;">
+                    <label><input type="radio" name="bulk-prompt-mode" value="prepend" checked> Prepend to existing prompt</label>
+                    <label><input type="radio" name="bulk-prompt-mode" value="set"> Replace prompt entirely</label>
+                </div>
+                <div class="text-dim" style="font-size:0.75rem; margin-top:0.25rem;">
+                    Leave blank to leave prompts untouched. Prepend skips a trajectory if its
+                    prompt already starts with this text, so it's safe to re-apply.
+                </div>
+            </div>
+
+            <div class="option-row mb-1">
+                <label class="option-label">Negative Prompt</label>
+                <textarea id="bulk-neg-prompt" class="cfg-input" style="height:60px; width:100%; resize:vertical;" placeholder="Leave blank to leave unchanged"></textarea>
+            </div>
+
+            <div class="option-row mb-1-5">
+                <label class="option-label">Guidance Scale (CFG)</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input type="number" id="bulk-cfg" class="cfg-input" step="0.1" style="width:100px;" placeholder="unset">
+                    <span class="text-dim" style="font-size:0.75rem;">Leave blank to leave unchanged. Only affects CFG-aware training.</span>
+                </div>
+            </div>
+
+            <div style="margin-top:auto; padding-top:1rem; border-top:1px solid var(--surface-alt);">
+                <button class="btn btn-start btn-block" onclick="window.applyBulkEdit()">
+                    APPLY TO ${ids.length} SELECTED
+                </button>
+            </div>
+        `;
+    };
+
+    window.applyBulkEdit = function() {
+        const ids = Array.from(state.selectedTrajs);
+        if (ids.length === 0 || !state.activeDataset) return;
+
+        const promptVal = document.getElementById("bulk-prompt").value;
+        const negVal = document.getElementById("bulk-neg-prompt").value;
+        const cfgRaw = document.getElementById("bulk-cfg").value;
+        const modeEl = document.querySelector('input[name="bulk-prompt-mode"]:checked');
+        const promptMode = modeEl ? modeEl.value : "prepend";
+
+        const body = { traj_ids: ids, prompt_mode: promptMode };
+        if (promptVal.trim() !== "") body.prompt = promptVal;
+        if (negVal.trim() !== "") body.neg_prompt = negVal;
+        if (cfgRaw.trim() !== "") {
+            const cfgNum = parseFloat(cfgRaw);
+            if (isNaN(cfgNum)) { alert("CFG must be a number"); return; }
+            body.cfg = cfgNum;
+        }
+
+        const btn = document.querySelector("#inspection-detail .btn-start");
+        const originalText = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "APPLYING..."; }
+
+        fetch(`/api/datasets/${state.activeDataset}/trajectories/bulk-edit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        }).then(r => r.json()).then(data => {
+            if (data.ok) {
+                loadPending();
+                loadArchived();
+                alert(`Updated ${data.updated} trajectories.`);
+            } else {
+                alert(`Bulk edit failed: ${data.detail}`);
+                if (btn) { btn.disabled = false; btn.textContent = originalText; }
+            }
+        }).catch(err => {
+            alert(`Bulk edit failed: ${err}`);
+            if (btn) { btn.disabled = false; btn.textContent = originalText; }
+        });
+    };
+
     function renderInspection() {
         const gallery = document.getElementById("inspection-gallery");
         const countEl = document.getElementById("inspection-count");

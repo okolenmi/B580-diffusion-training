@@ -93,6 +93,56 @@ class ManagedDataset:
                          (new_prompt, json.dumps(meta), traj_id))
             conn.commit()
 
+    def update_trajectories_bulk(self, traj_ids: List[int], prompt: str = None, prompt_mode: str = "set",
+                                  neg_prompt: str = None, cfg: float = None) -> int:
+        """Bulk-update prompt/neg_prompt/cfg across many trajectories in one transaction --
+        e.g. apply a universal trigger word or a common CFG value across an entire dataset
+        (or a selected subset) in a single action, instead of editing trajectories one by one.
+
+        prompt_mode:
+          'set'     -- overwrite each selected trajectory's prompt entirely with `prompt`.
+          'prepend' -- add `prompt` in front of each trajectory's existing prompt (skips a
+                       trajectory if its prompt already starts with it, so re-applying the
+                       same trigger word twice is a safe no-op instead of duplicating it).
+                       Useful when some trajectories already have per-image captions you
+                       don't want to lose, and you just want to add a shared trigger word.
+
+        `neg_prompt`/`cfg` are always a plain overwrite (there's no equivalent "prepend"
+        concept for those). Any of prompt/neg_prompt/cfg left as None (or prompt="") is left
+        untouched on every selected trajectory.
+
+        Returns the number of trajectories actually updated.
+        """
+        if not traj_ids:
+            return 0
+        updated = 0
+        with _connect(self.db_path) as conn:
+            placeholders = ",".join("?" * len(traj_ids))
+            rows = conn.execute(
+                f"SELECT id, prompt, metadata FROM trajectories WHERE id IN ({placeholders})",
+                traj_ids
+            ).fetchall()
+            for row in rows:
+                new_prompt = row["prompt"] or ""
+                if prompt:
+                    if prompt_mode == "prepend":
+                        if not new_prompt.startswith(prompt):
+                            new_prompt = f"{prompt} {new_prompt}".strip()
+                    else:  # "set"
+                        new_prompt = prompt
+
+                meta = json.loads(row["metadata"]) if row["metadata"] else {}
+                if neg_prompt:
+                    meta["neg"] = neg_prompt
+                if cfg is not None:
+                    meta["cfg"] = cfg
+
+                conn.execute("UPDATE trajectories SET prompt = ?, metadata = ? WHERE id = ?",
+                             (new_prompt, json.dumps(meta), row["id"]))
+                updated += 1
+            conn.commit()
+        return updated
+
     def discard_trajectories(self, traj_ids: List[int]):
         """Permanently delete trajectories and their preview files."""
         for tid in traj_ids:

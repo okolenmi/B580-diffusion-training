@@ -248,7 +248,7 @@
     // Form state management
     function getInputValue(el, opt) {
         if (opt.type === "checkbox") return el.checked;
-        if (opt.type === "number") return el.value !== "" ? parseFloat(el.value) : (opt.default || 0);
+        if (opt.type === "number") return el.value !== "" ? parseFloat(el.value) : (opt.default != null ? opt.default : null);
         return el.value;
     }
 
@@ -393,6 +393,13 @@
             if (isHidden && opt.type !== "checkbox") return;
 
             var val = getInputValue(input, opt);
+
+            // Skip fields with no real value (nullable fields left empty, e.g. an
+            // unset tuning.gate_train_low). Submitting a coerced placeholder (the
+            // old behavior: empty -> 0) would silently turn "gating disabled" into
+            // "gating enabled with a bogus 0..0 range" on every single save, and
+            // there'd be no way to get back to actually disabled via this form.
+            if (val === null) return;
 
             // For checkboxes, always submit value (even hidden ones)
             // If checkbox is hidden and unchecked, submit "false"

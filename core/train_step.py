@@ -633,7 +633,7 @@ def _run_one_step(
                          ETA=f"{eta/60:.0f}m")
 
     if not sys.stdout.isatty() and (global_step + 1) % 100 == 0:
-        print(f"Step {global_step+1:5d}/{total_steps}: loss={lv:.5f} avg={avg:.5f} lr={optimizer.lr:.2e}")
+        print(f"Step {global_step+1:5d}/{total_steps}: loss={lv:.5f} avg={avg:.5f} lr={optimizer.lr:.2e} dW={_wd:.5f}")
 
     if progress_writer is not None:
         if trace:

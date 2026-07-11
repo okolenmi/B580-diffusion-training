@@ -85,6 +85,26 @@ EXTRAS: dict[str, ExtraDef] = {
          'Weight 0.0 disables a block entirely.',
  'placeholder': 'input_blocks.7:1.0, middle_block:0.5, output_blocks.0:0.0',
  'group': '1. MODE'},
+    'tuning.gate_train_low': {'label': 'Gate: Train Range Low (t)',
+ 'help': 'Optional. Leave BOTH this and Gate: Train Range High blank to disable '
+         'gating entirely (default -- LoRA applies uniformly across all timesteps). '
+         'If set, must be paired with Gate: Train Range High: the LoRA delta scales '
+         'toward ~1 for timesteps inside [low, high] (your dataset\'s actual t range) '
+         'and toward ~0 outside it.',
+ 'placeholder': 'e.g. 120 (blank = disabled)',
+ 'group': '1. MODE'},
+    'tuning.gate_train_high': {'label': 'Gate: Train Range High (t)',
+ 'help': 'Optional. See Gate: Train Range Low -- must be left blank together with it '
+         'to disable gating, or set together with it to enable.',
+ 'placeholder': 'e.g. 450 (blank = disabled)',
+ 'group': '1. MODE'},
+    'tuning.gate_width': {'label': 'Gate: Transition Width',
+ 'help': 'Only used if the gate range above is set. Controls how sharp the fade is at '
+         'each edge of the training range -- smaller = sharper cutoff, larger = more '
+         'gradual. If comparable to or larger than the training range itself, the '
+         'middle of that range won\'t reach full LoRA strength; use a smaller width for '
+         'a narrow range.',
+ 'group': '1. MODE'},
     'tuning.cycle_steps': {'label': 'Steps Per Cycle',
  'help': 'Steps between cache rebuilds in cyclic mode.',
  'group': '1. MODE',

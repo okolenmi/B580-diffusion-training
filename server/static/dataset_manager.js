@@ -312,6 +312,20 @@
         return tabType === "explorer" ? state.archivedTrajectories : state.pendingTrajectories;
     }
 
+    // Sync the 'selected' class on the currently-rendered gallery items to match
+    // state.selectedTrajs, WITHOUT rebuilding the gallery DOM. A full
+    // renderInspection()/renderExplorer() call tears down and recreates every
+    // item -- including every <img> -- which is the right thing to do when the
+    // underlying list changes, but visibly flickers if done on every click when
+    // only the selection changed and the list itself didn't.
+    function syncSelectionClasses(tabType) {
+        const galleryId = tabType === "explorer" ? "explorer-gallery" : "inspection-gallery";
+        document.querySelectorAll(`#${galleryId} .preview-item`).forEach(el => {
+            const id = parseInt(el.dataset.trajId, 10);
+            el.classList.toggle("selected", state.selectedTrajs.has(id));
+        });
+    }
+
     // Call whenever the underlying list could have changed (reload, tab switch,
     // dataset switch) so a leftover index can't end up pointing at a different
     // item than the one the user actually clicked/arrowed to.
@@ -360,8 +374,8 @@
                 state.selectedTrajs.add(list[cursor].id);
             }
 
-            if (tabType === "explorer") renderExplorer();
-            else renderInspection();
+            if (tabType === "explorer") syncSelectionClasses("explorer");
+            else syncSelectionClasses("inspection");
             showDetail(list[cursor].id, tabType);
 
             requestAnimationFrame(() => {
@@ -401,8 +415,8 @@
             state.selectionCursor = index;
         }
 
-        if (tabType === "explorer") renderExplorer();
-        else renderInspection();
+        if (tabType === "explorer") syncSelectionClasses("explorer");
+        else syncSelectionClasses("inspection");
         showDetail(traj.id, tabType);
     }
 
@@ -462,12 +476,6 @@
         const panel = document.getElementById(panelId);
         if (!panel) return;
 
-        // Update selection highlight for current gallery
-        const galleryId = tabType === "explorer" ? "explorer-gallery" : "inspection-gallery";
-        document.querySelectorAll(`#${galleryId} .preview-item`).forEach(el => {
-            el.classList.toggle("selected", el.dataset.trajId == trajId);
-        });
-        
         if (tabType === "explorer") state.activeDetailTrajId = trajId;
         else state.activeInspectionTrajId = trajId;
 
@@ -1006,7 +1014,7 @@
         if (btnSelectAll) {
             btnSelectAll.onclick = () => {
                 state.pendingTrajectories.forEach(t => state.selectedTrajs.add(t.id));
-                renderInspection();
+                syncSelectionClasses("inspection");
             };
         }
 
@@ -1014,7 +1022,7 @@
         if (btnSelectAllExplorer) {
             btnSelectAllExplorer.onclick = () => {
                 state.archivedTrajectories.forEach(t => state.selectedTrajs.add(t.id));
-                renderExplorer();
+                syncSelectionClasses("explorer");
             };
         }
     }

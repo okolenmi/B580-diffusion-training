@@ -37,6 +37,33 @@
         } catch (e) {}
     }
 
+    // A handful of fields (e.g. "Continue From") are deliberately never written
+    // to the saved config -- they're a fresh per-launch choice, not something
+    // that should silently carry over to future runs. That also means they have
+    // no server-side value to fall back on in a new browser session, so once
+    // sessionStorage's in-session snapshot is gone, they'd always reset to their
+    // hardcoded default. localStorage fills that specific gap: purely a UI
+    // convenience for "what did I last pick", kept separate from --  and never
+    // written into -- the actual persisted config.
+    var LOCAL_PERSIST_PREFIX = "converter_persist:";
+
+    function getLocalPersisted(optId) {
+        try {
+            var raw = localStorage.getItem(LOCAL_PERSIST_PREFIX + optId);
+            return raw !== null ? JSON.parse(raw) : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    function setLocalPersisted(optId, value) {
+        try {
+            localStorage.setItem(LOCAL_PERSIST_PREFIX + optId, JSON.stringify(value));
+        } catch (e) {
+            // Storage full or disabled — silently ignore, same as sessionStorage above
+        }
+    }
+
     /**
      * Load the option schema from the server and render the form.
      */
@@ -147,6 +174,11 @@
         var saved = restoreState();
         if (saved.hasOwnProperty(opt.id)) {
             applyValue(inputEl, opt, saved[opt.id]);
+        } else if (opt.persist_locally) {
+            var persisted = getLocalPersisted(opt.id);
+            if (persisted !== undefined) {
+                applyValue(inputEl, opt, persisted);
+            }
         }
 
         inputContainer.appendChild(inputEl);
@@ -181,6 +213,9 @@
             updateFormState();
             applyVisibility();
             saveState();
+            if (opt.persist_locally) {
+                setLocalPersisted(opt.id, getInputValue(inputEl, opt));
+            }
         });
 
         // Initialize form state

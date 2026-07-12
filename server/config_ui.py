@@ -366,6 +366,14 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
         "group": "0. LAUNCH",
         "visible_when": {"tuning.method": ["distillation", "cyclic", "full"]},
         "help": "Starting point for this training run.",
+        # This field is deliberately never written to the saved config file (see
+        # module docstring above) -- it's meant to be picked fresh each launch,
+        # not silently inherited by future runs. But that also means it has no
+        # server-side "current value" to restore on a new session, so the
+        # frontend remembers your last choice in localStorage instead, purely
+        # as a UI convenience -- distinct from, and never written into, the
+        # actual persisted config.
+        "persist_locally": True,
     },
     {
         "id": "start_from",
@@ -380,6 +388,7 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
         "group": "0. LAUNCH",
         "visible_when": {"tuning.method": "lora"},
         "help": "Starting point for this LoRA training run.",
+        "persist_locally": True,
     },
     {
         "id": "reset_optimizer",
@@ -389,5 +398,6 @@ SYNTHETIC_OPTIONS: list[ExtraDef] = [
         "visible_when": {"tuning.method": ["distillation", "cyclic", "lora", "full"], "start_from": "resume"},
         "group": "0. LAUNCH",
         "help": "Discard saved optimizer states, start fresh.",
+        "persist_locally": True,
     },
 ]

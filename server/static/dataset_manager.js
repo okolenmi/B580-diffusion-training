@@ -46,6 +46,7 @@
                 const tab = btn.dataset.tab;
                 state.activeTab = tab;
                 localStorage.setItem("comfy_active_tab", tab);
+                state.selectedTrajs.clear();
                 
                 tabBtns.forEach(b => b.classList.remove("active"));
                 btn.classList.add("active");
@@ -317,7 +318,7 @@
         const fragment = document.createDocumentFragment();
         state.archivedTrajectories.forEach(traj => {
             const item = document.createElement("div");
-            item.className = "preview-item";
+            item.className = `preview-item ${state.selectedTrajs.has(traj.id) ? "selected" : ""}`;
             const previewSrc = traj.preview_path ? `/datasets/${state.activeDataset}/${traj.preview_path}` : "";
             const meta = traj.metadata ? JSON.parse(traj.metadata) : {};
             const cfgLabel = meta.cfg ? ` | CFG: ${meta.cfg.toFixed(1)}` : "";
@@ -333,7 +334,16 @@
                     ${isBad ? 'BAD' : 'good'}
                 </button>
             `;
-            item.onclick = () => showDetail(traj.id, "explorer");
+            item.onclick = () => {
+                if (state.selectedTrajs.has(traj.id)) {
+                    state.selectedTrajs.delete(traj.id);
+                    item.classList.remove("selected");
+                } else {
+                    state.selectedTrajs.add(traj.id);
+                    item.classList.add("selected");
+                }
+                showDetail(traj.id, "explorer");
+            };
             fragment.appendChild(item);
         });
 
@@ -464,16 +474,18 @@
     // Bulk edit: apply a universal trigger word (prepended, so any existing per-image
     // captions are kept) and/or a common negative prompt / CFG value across every
     // currently-selected trajectory (use "Select All" first for the whole dataset) in a
-    // single request, instead of editing trajectories one at a time.
-    window.showBulkEditPanel = function() {
+    // single request, instead of editing trajectories one at a time. Works from either
+    // the Inspection or Explorer tab -- targets whichever tab's detail panel/state.
+    window.showBulkEditPanel = function(tabType) {
         const ids = Array.from(state.selectedTrajs);
         if (ids.length === 0) {
             alert("Nothing selected. Click trajectories to select them, or use \"Select All\", then try again.");
             return;
         }
-        const panel = document.getElementById("inspection-detail");
+        const panel = document.getElementById(`${tabType}-detail`);
         if (!panel) return;
-        state.activeInspectionTrajId = null;
+        if (tabType === "explorer") state.activeDetailTrajId = null;
+        else state.activeInspectionTrajId = null;
 
         panel.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -507,14 +519,14 @@
             </div>
 
             <div style="margin-top:auto; padding-top:1rem; border-top:1px solid var(--surface-alt);">
-                <button class="btn btn-start btn-block" onclick="window.applyBulkEdit()">
+                <button class="btn btn-start btn-block" onclick="window.applyBulkEdit('${tabType}')">
                     APPLY TO ${ids.length} SELECTED
                 </button>
             </div>
         `;
     };
 
-    window.applyBulkEdit = function() {
+    window.applyBulkEdit = function(tabType) {
         const ids = Array.from(state.selectedTrajs);
         if (ids.length === 0 || !state.activeDataset) return;
 
@@ -533,7 +545,7 @@
             body.cfg = cfgNum;
         }
 
-        const btn = document.querySelector("#inspection-detail .btn-start");
+        const btn = document.querySelector(`#${tabType}-detail .btn-start`);
         const originalText = btn ? btn.textContent : "";
         if (btn) { btn.disabled = true; btn.textContent = "APPLYING..."; }
 
@@ -900,6 +912,14 @@
             btnSelectAll.onclick = () => {
                 state.pendingTrajectories.forEach(t => state.selectedTrajs.add(t.id));
                 renderInspection();
+            };
+        }
+
+        const btnSelectAllExplorer = document.getElementById("btn-select-all-explorer");
+        if (btnSelectAllExplorer) {
+            btnSelectAllExplorer.onclick = () => {
+                state.archivedTrajectories.forEach(t => state.selectedTrajs.add(t.id));
+                renderExplorer();
             };
         }
     }

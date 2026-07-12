@@ -264,7 +264,6 @@
                     <button class="btn btn-secondary btn-small" id="btn-select-all">Select All</button>
                 </div>
                 <div style="display:flex; gap:1rem; padding: 0 1rem;">
-                    <button class="btn btn-secondary btn-small" onclick="window.showBulkEditPanel()">Bulk Edit Selected</button>
                     <button class="btn btn-kill btn-small" onclick="window.rejectSelected()">Discard Selected</button>
                     <button class="btn btn-start btn-small" onclick="window.commitSelected()">Commit to Cache</button>
                 </div>
@@ -285,6 +284,10 @@
         <section id="tab-explorer" class="tab-content">
             <div class="card p-1 mb-1">
                 <span id="explorer-count" style="font-weight:600; color:var(--green); margin-left: 1rem;">0 items archived</span>
+                <div style="display:flex; gap:1rem; padding: 0 1rem; margin-top: 0.5rem;">
+                    <button class="btn btn-secondary btn-small" id="btn-select-all-explorer">Select All</button>
+                    <button class="btn btn-secondary btn-small" onclick="window.showBulkEditPanel('explorer')">Bulk Edit Selected</button>
+                </div>
             </div>
             <div style="display:flex; gap:1rem; height: calc(100vh - 250px);">
                 <div class="card gallery-grid scroll-v" id="explorer-gallery" style="flex:1;">

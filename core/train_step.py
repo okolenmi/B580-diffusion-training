@@ -374,10 +374,34 @@ def _run_one_step(
             target_c = _entry["target"]
             target_u = None
 
-        if prompt_cache is not None:
-            prompt = _entry.get("prompt", "")
-            neg_prompt = _entry.get("neg_prompt", "")
+        prompt = _entry.get("prompt", "")
+        neg_prompt = _entry.get("neg_prompt", "")
 
+        # If the negative prompt is literally the same string as the positive one
+        # (always true for plain, uncaptioned real-image training, since both
+        # default to "" -- see manager/builder.py's run_ingestion_task and the
+        # loader's per-batch bucketing on (prompt, neg_prompt, size), which
+        # guarantees prompt/neg_prompt are constant across an entire batch), the
+        # uncond conditioning is guaranteed identical to the cond conditioning:
+        # same encoder, same input string. If target_c/target_u are also
+        # tensor-equal (guaranteed for real-image samples, where
+        # run_ingestion_task writes both from the same `target` value), the
+        # uncond pass would then be an exact repeat of the cond pass --
+        # identical input, identical target, identical loss and gradient -- so
+        # running it provides zero additional information for a full extra
+        # forward+backward's cost (confirmed: roughly half of every training
+        # step's wall-clock time, and also wastes a redundant text-encode call).
+        # Detect and skip it rather than requiring a config flag or a cache
+        # rebuild; this only ever fires when the two passes are provably
+        # redundant, never as a quality/behavior tradeoff.
+        _redundant_uncond = (
+            neg_prompt == prompt and target_u is not None
+            and target_c.shape == target_u.shape and torch.equal(target_c, target_u)
+        )
+        if _redundant_uncond:
+            target_u = None
+
+        if prompt_cache is not None:
             if prompt in prompt_cache:
                 ctx_base, pooled_base = prompt_cache[prompt]
                 ctx = ctx_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1, 1)
@@ -389,7 +413,9 @@ def _run_one_step(
                 ctx, y = student_encoder.encode_for_unet(prompt, batch_size=x_t.shape[0],
                                                           height=batch_h, width=batch_w)
 
-            if neg_prompt in prompt_cache:
+            if _redundant_uncond:
+                ctx_u, y_u = ctx, y
+            elif neg_prompt in prompt_cache:
                 ctx_u_base, pooled_u_base = prompt_cache[neg_prompt]
                 ctx_u = ctx_u_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1, 1)
                 pooled_u = pooled_u_base.to(device, dtype=torch.bfloat16).repeat(x_t.shape[0], 1)
@@ -398,12 +424,13 @@ def _run_one_step(
                 ctx_u, y_u = student_encoder.encode_for_unet(neg_prompt, batch_size=x_t.shape[0],
                                                               height=batch_h, width=batch_w)
         elif student_encoder is not None:
-            prompt = _entry.get("prompt", "")
-            neg_prompt = _entry.get("neg_prompt", "")
             ctx, y = student_encoder.encode_for_unet(prompt, batch_size=x_t.shape[0],
                                                       height=batch_h, width=batch_w)
-            ctx_u, y_u = student_encoder.encode_for_unet(neg_prompt, batch_size=x_t.shape[0],
-                                                          height=batch_h, width=batch_w)
+            if _redundant_uncond:
+                ctx_u, y_u = ctx, y
+            else:
+                ctx_u, y_u = student_encoder.encode_for_unet(neg_prompt, batch_size=x_t.shape[0],
+                                                              height=batch_h, width=batch_w)
         else:
             ctx = _entry.get("ctx")
             y = _entry.get("y")

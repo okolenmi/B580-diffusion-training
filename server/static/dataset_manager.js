@@ -12,6 +12,16 @@
         pendingTrajectories: [],
         archivedTrajectories: [],
         selectedTrajs: new Set(),
+        // Index (into whichever list is currently shown) of the last plain/ctrl
+        // click or arrow-key move -- the fixed endpoint a shift+click/shift+arrow
+        // range is measured from. selectionCursor is the "other" endpoint, moved
+        // by arrow keys. Both are indices into state.pendingTrajectories /
+        // state.archivedTrajectories depending on the active tab, so they're
+        // reset (see resetSelectionAnchors()) any time that list's contents or
+        // order could have changed, to avoid a stale index pointing at the wrong
+        // item.
+        selectionAnchor: null,
+        selectionCursor: null,
         activeTasks: [],
         pollInterval: null,
         activeDetailTrajId: null,
@@ -47,6 +57,7 @@
                 state.activeTab = tab;
                 localStorage.setItem("comfy_active_tab", tab);
                 state.selectedTrajs.clear();
+                resetSelectionAnchors();
                 
                 tabBtns.forEach(b => b.classList.remove("active"));
                 btn.classList.add("active");
@@ -267,6 +278,7 @@
     };
 
     function loadPending() {
+        resetSelectionAnchors();
         if (!state.activeDataset) {
             state.pendingTrajectories = [];
             renderInspection();
@@ -281,6 +293,7 @@
     }
 
     function loadArchived() {
+        resetSelectionAnchors();
         if (!state.activeDataset) {
             state.archivedTrajectories = [];
             renderExplorer();
@@ -292,6 +305,105 @@
                 state.archivedTrajectories = data;
                 renderExplorer();
             });
+    }
+
+    // The list a given tab's selection indices refer to.
+    function selectionList(tabType) {
+        return tabType === "explorer" ? state.archivedTrajectories : state.pendingTrajectories;
+    }
+
+    // Call whenever the underlying list could have changed (reload, tab switch,
+    // dataset switch) so a leftover index can't end up pointing at a different
+    // item than the one the user actually clicked/arrowed to.
+    function resetSelectionAnchors() {
+        state.selectionAnchor = null;
+        state.selectionCursor = null;
+    }
+
+    // Keyboard companion to shift+click range selection: arrow keys move a
+    // cursor through whichever tab's gallery is active, shift+arrow extends the
+    // range from the anchor the same way shift+click does. Lets you range-select
+    // (or fine-tune a range's edges) without reaching for the mouse.
+    function initSelectionKeyboard() {
+        document.addEventListener("keydown", (e) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
+            // Never hijack arrow keys while the user is typing somewhere (bulk-edit
+            // textareas, prompt/cfg fields, etc.)
+            const tag = document.activeElement && document.activeElement.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+            const tabType = state.activeTab;
+            if (tabType !== "inspection" && tabType !== "explorer") return;
+
+            const list = selectionList(tabType);
+            if (!list || list.length === 0) return;
+
+            e.preventDefault();
+
+            const delta = e.key === "ArrowRight" ? 1 : -1;
+            let cursor = state.selectionCursor;
+            cursor = cursor === null
+                ? (delta > 0 ? 0 : list.length - 1)
+                : Math.max(0, Math.min(list.length - 1, cursor + delta));
+            state.selectionCursor = cursor;
+
+            if (e.shiftKey) {
+                if (state.selectionAnchor === null) state.selectionAnchor = cursor;
+                const lo = Math.min(state.selectionAnchor, cursor);
+                const hi = Math.max(state.selectionAnchor, cursor);
+                state.selectedTrajs.clear();
+                for (let i = lo; i <= hi; i++) state.selectedTrajs.add(list[i].id);
+            } else {
+                state.selectionAnchor = cursor;
+                state.selectedTrajs.clear();
+                state.selectedTrajs.add(list[cursor].id);
+            }
+
+            if (tabType === "explorer") renderExplorer();
+            else renderInspection();
+            showDetail(list[cursor].id, tabType);
+
+            requestAnimationFrame(() => {
+                const el = document.querySelector(`#${tabType}-gallery [data-traj-id="${list[cursor].id}"]`);
+                if (el) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+            });
+        });
+    }
+
+
+    // Plain click: exclusive select (this item only). Ctrl/Cmd+click: toggle
+    // just this item, leaving the rest of the selection alone. Shift+click:
+    // select the contiguous range from the anchor (the last plain/ctrl click)
+    // to this item, replacing the current selection -- standard file-manager
+    // multi-select semantics, so range-editing similar entries is a couple of
+    // clicks instead of one-by-one.
+    function handleItemClick(e, index, tabType) {
+        const list = selectionList(tabType);
+        const traj = list[index];
+        if (!traj) return;
+
+        if (e.shiftKey && state.selectionAnchor !== null) {
+            const lo = Math.min(state.selectionAnchor, index);
+            const hi = Math.max(state.selectionAnchor, index);
+            state.selectedTrajs.clear();
+            for (let i = lo; i <= hi; i++) state.selectedTrajs.add(list[i].id);
+            state.selectionCursor = index;
+        } else if (e.ctrlKey || e.metaKey) {
+            if (state.selectedTrajs.has(traj.id)) state.selectedTrajs.delete(traj.id);
+            else state.selectedTrajs.add(traj.id);
+            state.selectionAnchor = index;
+            state.selectionCursor = index;
+        } else {
+            state.selectedTrajs.clear();
+            state.selectedTrajs.add(traj.id);
+            state.selectionAnchor = index;
+            state.selectionCursor = index;
+        }
+
+        if (tabType === "explorer") renderExplorer();
+        else renderInspection();
+        showDetail(traj.id, tabType);
     }
 
     function renderExplorer() {
@@ -316,7 +428,7 @@
         }
 
         const fragment = document.createDocumentFragment();
-        state.archivedTrajectories.forEach(traj => {
+        state.archivedTrajectories.forEach((traj, index) => {
             const item = document.createElement("div");
             item.className = `preview-item ${state.selectedTrajs.has(traj.id) ? "selected" : ""}`;
             const previewSrc = traj.preview_path ? `/datasets/${state.activeDataset}/${traj.preview_path}` : "";
@@ -334,16 +446,7 @@
                     ${isBad ? 'BAD' : 'good'}
                 </button>
             `;
-            item.onclick = () => {
-                if (state.selectedTrajs.has(traj.id)) {
-                    state.selectedTrajs.delete(traj.id);
-                    item.classList.remove("selected");
-                } else {
-                    state.selectedTrajs.add(traj.id);
-                    item.classList.add("selected");
-                }
-                showDetail(traj.id, "explorer");
-            };
+            item.onclick = (e) => handleItemClick(e, index, "explorer");
             fragment.appendChild(item);
         });
 
@@ -591,7 +694,7 @@
 
         const fragment = document.createDocumentFragment();
         
-        state.pendingTrajectories.forEach(traj => {
+        state.pendingTrajectories.forEach((traj, index) => {
             const item = document.createElement("div");
             item.className = `preview-item ${state.selectedTrajs.has(traj.id) ? "selected" : ""}`;
             
@@ -612,16 +715,7 @@
                 </button>
             `;
 
-            item.onclick = () => {
-                if (state.selectedTrajs.has(traj.id)) {
-                    state.selectedTrajs.delete(traj.id);
-                    item.classList.remove("selected");
-                } else {
-                    state.selectedTrajs.add(traj.id);
-                    item.classList.add("selected");
-                }
-                showDetail(traj.id, "inspection");
-            };
+            item.onclick = (e) => handleItemClick(e, index, "inspection");
             fragment.appendChild(item);
         });
 
@@ -883,6 +977,7 @@
     function init() {
         initTabs();
         initGeneratorUI();
+        initSelectionKeyboard();
         loadDatasets().then(() => {
             if (state.activeDataset) {
                 loadPending();

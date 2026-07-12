@@ -131,6 +131,7 @@ def build_training_command(
     if start_from == "teacher":
         cmd.append("--fresh")
     elif start_from == "student":
+        cmd.append("--fresh")
         student_path = config.paths.student or ""
         if student_path:
             cmd.extend(["--student", student_path])

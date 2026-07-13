@@ -610,10 +610,29 @@ class Trainer:
                     save_lora_checkpoint(self.student, self.tuning.lora_output,
                                          optimizer=self.optimizer)
                 elif self._is_lora and not self.tuning.lora_output:
-                    print("    [WARN] LoRA mode but no output path set — skipped save.")
-                else:
+                    # Trained weights must never just evaporate because the
+                    # output path config was missing/empty for whatever
+                    # reason. Fall back to a guaranteed, always-resolvable
+                    # location: the same resume/ subfolder periodic mid-run
+                    # saves already use (see paths.get_resume_dir), which
+                    # doesn't depend on lora_output at all.
+                    from paths import get_resume_dir
+                    import time
+                    fallback = get_resume_dir("lora") / f"emergency_save_step{global_step}_{int(time.time())}.safetensors"
+                    print(f"    [WARN] LoRA mode but no output path was set. Saving {global_step} "
+                          f"steps of training to a fallback location instead of discarding it: {fallback}")
+                    save_lora_checkpoint(self.student, str(fallback), optimizer=self.optimizer)
+                elif not self._is_lora and paths.checkpoint_output:
                     _non_unet = self.student_non_unet or self.non_unet
                     save_checkpoint(self.student, _non_unet, paths.checkpoint_output, torch.float16)
+                elif not self._is_lora and not paths.checkpoint_output:
+                    from paths import get_resume_dir
+                    import time
+                    fallback = get_resume_dir("checkpoint") / f"emergency_save_step{global_step}_{int(time.time())}.safetensors"
+                    print(f"    [WARN] No output path was set. Saving {global_step} steps of "
+                          f"training to a fallback location instead of discarding it: {fallback}")
+                    _non_unet = self.student_non_unet or self.non_unet
+                    save_checkpoint(self.student, _non_unet, str(fallback), torch.float16)
 
             if self.progress_writer:
                 self.progress_writer.done()

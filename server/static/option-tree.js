@@ -373,7 +373,7 @@
             if (row.style.display === "none") return;
 
             var id = row.dataset.optionId;
-            var input = row.querySelector("select, input");
+            var input = row.querySelector("select:not(.file-picker-select), input");
             if (!input) return;
             var opt = findOption(optionSchema, id);
             if (opt) {
@@ -495,7 +495,7 @@
         var rows = container.querySelectorAll(".option-row");
         rows.forEach(function (row) {
             var id = row.dataset.optionId;
-            var input = row.querySelector("select, input");
+            var input = row.querySelector("select:not(.file-picker-select), input");
             if (!input) return;
             var opt = findOption(optionSchema, id);
             if (!opt) return;

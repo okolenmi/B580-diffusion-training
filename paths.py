@@ -162,3 +162,110 @@ def get_run_dir(run_id: int) -> Path:
     run_dir = get_runs_dir() / f"run_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+# Explicit overrides, set via set_checkpoints_dir()/set_loras_dir() (e.g. from a
+# persisted server setting -- see server/config.py's Settings.checkpoints_dir).
+_checkpoints_dir_override = None
+_loras_dir_override = None
+
+
+def set_checkpoints_dir(path: str | Path | None):
+    global _checkpoints_dir_override
+    _checkpoints_dir_override = Path(path).resolve() if path else None
+
+
+def set_loras_dir(path: str | Path | None):
+    global _loras_dir_override
+    _loras_dir_override = Path(path).resolve() if path else None
+
+
+def get_checkpoints_dir() -> Path:
+    """Directory where full checkpoints (teacher/student/full-finetune
+    .safetensors files) live. Used both to resolve relative checkpoint paths
+    in config, and to list available checkpoints for the picker UI.
+
+    Resolution order:
+    1. Explicit override via set_checkpoints_dir()
+    2. CHECKPOINTS_DIR environment variable (or .env)
+    3. <comfy_dir>/models/checkpoints -- ComfyUI's own standard layout, so
+       checkpoints you already have there are found with zero extra setup
+    4. <project_root>/checkpoints -- last-resort fallback that doesn't
+       depend on comfy_dir being resolvable at all
+    """
+    if _checkpoints_dir_override is not None:
+        return _checkpoints_dir_override
+    env = os.environ.get("CHECKPOINTS_DIR")
+    if env:
+        return Path(env).resolve()
+    try:
+        return get_comfy_dir() / "models" / "checkpoints"
+    except RuntimeError:
+        return get_project_root() / "checkpoints"
+
+
+def get_loras_dir() -> Path:
+    """Directory where LoRA adapter .safetensors files live. Same resolution
+    order as get_checkpoints_dir(), using LORAS_DIR / <comfy_dir>/models/loras."""
+    if _loras_dir_override is not None:
+        return _loras_dir_override
+    env = os.environ.get("LORAS_DIR")
+    if env:
+        return Path(env).resolve()
+    try:
+        return get_comfy_dir() / "models" / "loras"
+    except RuntimeError:
+        return get_project_root() / "loras"
+
+
+def _model_base_dir(kind: str) -> Path:
+    if kind == "checkpoint":
+        return get_checkpoints_dir()
+    if kind == "lora":
+        return get_loras_dir()
+    raise ValueError(f"kind must be 'checkpoint' or 'lora', got {kind!r}")
+
+
+def resolve_model_path(path_str: str | Path, kind: str) -> Path:
+    """Resolve a checkpoint or LoRA path that may be given as either an
+    absolute path or a path relative to checkpoints_dir/loras_dir (kind).
+    This is what lets config fields like paths.student or
+    tuning.lora_continue_from just be a filename ("my_lora.safetensors")
+    instead of a full path, while still allowing an absolute path for
+    anything stored elsewhere.
+    """
+    return resolve_path(path_str, base=_model_base_dir(kind))
+
+
+def get_resume_dir(kind: str) -> Path:
+    """Dedicated subfolder for auto-managed resume files (the periodic
+    mid-training checkpoint/optimizer-state saves) -- kept separate from
+    checkpoints_dir/loras_dir's top level so they don't clutter the file
+    picker or get confused with checkpoints/LoRAs a user actually chose to
+    keep. Created on first use.
+    """
+    d = _model_base_dir(kind) / "resume"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def list_model_files(kind: str) -> list[str]:
+    """List available .safetensors files under checkpoints_dir/loras_dir
+    (kind), as paths relative to that directory, for the file-picker
+    dropdown. Excludes the resume/ subfolder -- those are auto-managed
+    working files, not something you'd manually pick from a list.
+    Returns an empty list (not an error) if the directory doesn't exist yet.
+    """
+    base = _model_base_dir(kind)
+    if not base.is_dir():
+        return []
+    results = []
+    for p in sorted(base.rglob("*.safetensors")):
+        try:
+            rel = p.relative_to(base)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] == "resume":
+            continue
+        results.append(str(rel))
+    return results

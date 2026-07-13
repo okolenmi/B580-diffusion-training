@@ -15,6 +15,7 @@ from core.config_model import TrainingConfig
 
 def scan_checkpoints(config: TrainingConfig) -> dict:
     """Inspect config and filesystem to determine available starting points."""
+    from paths import resolve_model_path
 
     base_path = config.paths.base_model or ""
     student_path = config.paths.student or ""
@@ -38,34 +39,28 @@ def scan_checkpoints(config: TrainingConfig) -> dict:
         },
     }
 
-    # Scan for resume checkpoint
-    output_path = config.paths.checkpoint_output or ""
-    if config.tuning.method == "lora" and getattr(config.tuning, "lora_output", None):
-        output_path = config.tuning.lora_output
-
-    if output_path:
-        p_out = Path(output_path)
-        out_dir = p_out.parent
-        if not out_dir.is_absolute():
-            out_dir = settings.comfy_dir / out_dir
-        candidate = out_dir / (p_out.stem + ".resume.safetensors")
-        if candidate.exists():
-            result["resume"] = {
-                "available": True,
-                "path": str(candidate),
-                "label": "Resume",
-            }
-
-    # Fallback: check config directory for .resume.safetensors
-    if not result["resume"]["available"]:
-        # We don't have the config path here, so skip directory scan
-        pass
+    # Resume checkpoint: config.paths.resume_checkpoint is already correctly
+    # derived by TrainingConfig's model validator (same stem as
+    # checkpoint_output/lora_output, placed in the dedicated resume/
+    # subfolder under checkpoints_dir/loras_dir -- see
+    # core/config_model.py's _fill_resume_paths/_derive_path). Just check
+    # whether that file actually exists yet.
+    resume_path = config.paths.resume_checkpoint or ""
+    if resume_path and Path(resume_path).exists():
+        result["resume"] = {
+            "available": True,
+            "path": resume_path,
+            "label": "Resume",
+        }
+    # If checkpoint_output/lora_output isn't set at all, there's no derived
+    # resume_checkpoint to check -- and no way to guess which file in the
+    # resume/ subfolder (if any) was meant for this run, since that
+    # directory can hold resume files for many different runs at once. Left
+    # as unavailable rather than guessing.
 
     # LoRA checkpoint
     if config.tuning.method == "lora" and lora_path:
-        p_lora = Path(lora_path)
-        if not p_lora.is_absolute():
-            p_lora = settings.comfy_dir / p_lora
+        p_lora = resolve_model_path(lora_path, "lora")
         result["lora_checkpoint"] = {
             "available": p_lora.exists(),
             "path": lora_path if p_lora.exists() else "",

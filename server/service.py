@@ -68,6 +68,8 @@ class TrainingService:
             comfy_dir=self.settings.comfy_dir,
             project_root=self.settings.project_root,
             log_path=log_path,
+            checkpoints_dir=self.settings.checkpoints_dir,
+            loras_dir=self.settings.loras_dir,
         )
 
         # Update DB and notify

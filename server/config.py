@@ -9,7 +9,7 @@ _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from paths import get_comfy_dir, get_project_root, get_runs_dir, get_log_path, get_progress_path, get_dataset_db_path
+from paths import get_comfy_dir, get_project_root, get_runs_dir, get_log_path, get_progress_path, get_dataset_db_path, get_checkpoints_dir, get_loras_dir
 
 
 class Settings(BaseSettings):
@@ -109,6 +109,33 @@ class Settings(BaseSettings):
         # Fallback to system python if venv doesn't exist
         return "python"
     
+    @property
+    def checkpoints_dir(self) -> Path:
+        """Directory where full checkpoints (teacher/student/full-finetune
+        .safetensors) live -- used to resolve relative checkpoint paths in
+        config, and to list available checkpoints for the picker UI.
+
+        Resolution order:
+        1. Persisted server setting ("checkpoints_dir"), set via POST /settings.
+        2. paths.get_checkpoints_dir(): CHECKPOINTS_DIR env var/.env, then
+           <comfy_dir>/models/checkpoints (ComfyUI's own layout, so existing
+           checkpoints are found with zero extra setup), then a last-resort
+           <project_root>/checkpoints fallback.
+        """
+        override = self._persisted_setting("checkpoints_dir")
+        if override and Path(override).is_dir():
+            return Path(override)
+        return get_checkpoints_dir()
+
+    @property
+    def loras_dir(self) -> Path:
+        """Directory where LoRA adapter .safetensors files live. Same
+        resolution order as checkpoints_dir, via paths.get_loras_dir()."""
+        override = self._persisted_setting("loras_dir")
+        if override and Path(override).is_dir():
+            return Path(override)
+        return get_loras_dir()
+
     @property
     def runs_dir(self) -> Path:
         """Runs directory - where run logs and outputs are stored."""

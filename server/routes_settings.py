@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from . import db
 from .config import settings
 from .options import build_option_tree
+import paths
 
 router = APIRouter()
 
@@ -38,6 +39,10 @@ async def get_settings_endpoint():
         "comfy_dir_override": db.get_setting(settings.db_path, "comfy_dir", ""),
         "venv_python": settings.venv_python,
         "venv_python_override": db.get_setting(settings.db_path, "venv_python", ""),
+        "checkpoints_dir": str(settings.checkpoints_dir),
+        "checkpoints_dir_override": db.get_setting(settings.db_path, "checkpoints_dir", ""),
+        "loras_dir": str(settings.loras_dir),
+        "loras_dir_override": db.get_setting(settings.db_path, "loras_dir", ""),
     }
 
 
@@ -46,6 +51,8 @@ async def update_settings_endpoint(
     default_config: Annotated[str, Form()] = "",
     comfy_dir: Annotated[str, Form()] = "",
     venv_python: Annotated[str, Form()] = "",
+    checkpoints_dir: Annotated[str, Form()] = "",
+    loras_dir: Annotated[str, Form()] = "",
 ):
     """Update server settings.
 
@@ -55,6 +62,13 @@ async def update_settings_endpoint(
     silently break every subsequent run; an empty value clears the override
     and falls back to auto-detection (COMFY_DIR/VENV_PYTHON env vars, then
     sibling-folder heuristics).
+
+    checkpoints_dir / loras_dir follow the same pattern -- validated if
+    non-empty (created if they don't exist yet, since unlike comfy_dir/
+    venv_python these are meant to be *managed by this tool*, not an
+    existing external directory that must already be there), empty clears
+    the override and falls back to CHECKPOINTS_DIR/LORAS_DIR env vars, then
+    <comfy_dir>/models/checkpoints /models/loras.
     """
     errors = {}
 
@@ -68,8 +82,52 @@ async def update_settings_endpoint(
     else:
         db.set_setting(settings.db_path, "venv_python", venv_python)
 
+    if checkpoints_dir:
+        try:
+            Path(checkpoints_dir).mkdir(parents=True, exist_ok=True)
+            db.set_setting(settings.db_path, "checkpoints_dir", checkpoints_dir)
+        except OSError as e:
+            errors["checkpoints_dir"] = f"Could not create '{checkpoints_dir}': {e}"
+    else:
+        db.set_setting(settings.db_path, "checkpoints_dir", checkpoints_dir)
+
+    if loras_dir:
+        try:
+            Path(loras_dir).mkdir(parents=True, exist_ok=True)
+            db.set_setting(settings.db_path, "loras_dir", loras_dir)
+        except OSError as e:
+            errors["loras_dir"] = f"Could not create '{loras_dir}': {e}"
+    else:
+        db.set_setting(settings.db_path, "loras_dir", loras_dir)
+
+    if "checkpoints_dir" not in errors:
+        paths.set_checkpoints_dir(settings.checkpoints_dir)
+    if "loras_dir" not in errors:
+        paths.set_loras_dir(settings.loras_dir)
+
     db.set_setting(settings.db_path, "default_config", default_config)
 
     if errors:
         return JSONResponse(status_code=400, content={"ok": False, "errors": errors})
     return {"ok": True}
+
+
+@router.get("/files/{kind}")
+async def list_model_files_endpoint(kind: str):
+    """List available checkpoint/LoRA files for the file-picker UI.
+
+    kind: 'checkpoint' or 'lora'. Returns paths relative to the resolved
+    checkpoints_dir/loras_dir (excluding the resume/ subfolder, which holds
+    auto-managed working files, not things you'd manually pick), plus the
+    resolved base directory itself so the frontend can show *where* it's
+    looking -- useful the first time someone points this at an unexpected
+    ComfyUI install and gets an empty list.
+    """
+    if kind not in ("checkpoint", "lora"):
+        return JSONResponse(status_code=400, content={"error": "kind must be 'checkpoint' or 'lora'"})
+    base_dir = settings.checkpoints_dir if kind == "checkpoint" else settings.loras_dir
+    try:
+        files = paths.list_model_files(kind)
+    except OSError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"kind": kind, "base_dir": str(base_dir), "files": files}

@@ -125,6 +125,14 @@ def build_option_tree(config_path: str | None = None) -> list[dict]:
             if key in extra:
                 opt[key] = extra[key]
 
+        # Optional: for a path field that refers to a checkpoint or LoRA file,
+        # the frontend adds a dropdown (populated from GET /api/files/{kind})
+        # alongside the normal text input -- pick from what's actually on
+        # disk, or type a path manually, your choice. See
+        # option-tree.js's attachFilePicker().
+        if "file_kind" in extra:
+            opt["file_kind"] = extra["file_kind"]
+
         visible_when = dict(base.get("visible_when") or {})
         visible_when.update(extra.get("extra_visible_when") or {})
         if visible_when:

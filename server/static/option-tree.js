@@ -183,6 +183,14 @@
 
         inputContainer.appendChild(inputEl);
 
+        // Optional file picker: for a path field referencing a checkpoint or
+        // LoRA (opt.file_kind), add a dropdown of what's actually on disk
+        // alongside the manual text input -- pick one, or keep typing a
+        // path by hand, your choice.
+        if (opt.file_kind) {
+            attachFilePicker(inputEl, opt, inputContainer);
+        }
+
         // Inject BlockHelper for LoRA weighting
         if (opt.id === "tuning.block_weighting" && window.BlockHelper) {
             window.BlockHelper.inject(inputEl);
@@ -222,6 +230,76 @@
         formState[opt.id] = getInputValue(inputEl, opt);
 
         return wrapper;
+    }
+
+    // Cache file listings per kind (checkpoint/lora) for the page's lifetime,
+    // so multiple fields of the same kind (e.g. both "Base Model" and
+    // "Student Init") don't each trigger their own fetch.
+    var fileListCache = {};
+
+    function attachFilePicker(inputEl, opt, container) {
+        var sel = document.createElement("select");
+        sel.className = "file-picker-select";
+        sel.style.marginBottom = "0.35rem";
+        sel.style.width = "100%";
+
+        var placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "\u2014 Select existing " + opt.file_kind + " \u2014";
+        sel.appendChild(placeholder);
+
+        // Dropdown goes BEFORE the text input -- "pick from the list" reads
+        // as the primary action, manual entry as the fallback right under it.
+        container.insertBefore(sel, inputEl);
+
+        function populate(files) {
+            files.forEach(function (f) {
+                var o = document.createElement("option");
+                o.value = f;
+                o.textContent = f;
+                sel.appendChild(o);
+            });
+            // If the field already has a value matching one of the listed
+            // files (e.g. loaded from an existing config), reflect that in
+            // the dropdown too instead of leaving it on the placeholder.
+            if (files.indexOf(inputEl.value) !== -1) {
+                sel.value = inputEl.value;
+            }
+        }
+
+        if (fileListCache[opt.file_kind]) {
+            populate(fileListCache[opt.file_kind]);
+        } else {
+            fetch("/api/files/" + opt.file_kind)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var files = data.files || [];
+                    fileListCache[opt.file_kind] = files;
+                    populate(files);
+                })
+                .catch(function () {
+                    // Listing failed (e.g. directory not configured/reachable
+                    // yet) -- the manual text input still works fine on its
+                    // own, so just leave the dropdown showing the placeholder.
+                });
+        }
+
+        sel.addEventListener("change", function () {
+            if (!sel.value) return;
+            inputEl.value = sel.value;
+            // Fire the same change handling the text input itself would
+            // trigger, so formState/sessionStorage/localStorage all update.
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+
+        // If the text input is edited by hand to something not in the list,
+        // reset the dropdown to the placeholder rather than show a stale,
+        // now-incorrect selection.
+        inputEl.addEventListener("input", function () {
+            if (sel.value && sel.value !== inputEl.value) {
+                sel.value = "";
+            }
+        });
     }
 
     // Type renderers

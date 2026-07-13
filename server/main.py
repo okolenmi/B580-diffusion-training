@@ -15,13 +15,22 @@ from .routes_sse import router as sse_router
 from .routes_training import router as training_router
 from .routes_datasets import router as datasets_router
 
+import paths as _paths
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events."""
     # Initialize Main Server DB
     db.init_db(settings.db_path)
-    
+
+    # Sync paths.py's module-level overrides with the resolved settings (DB
+    # override if set, else env var / ComfyUI default) so this process's own
+    # path resolution -- e.g. the checkpoint/LoRA file-listing endpoint --
+    # matches what gets injected into training subprocesses at launch.
+    _paths.set_checkpoints_dir(settings.checkpoints_dir)
+    _paths.set_loras_dir(settings.loras_dir)
+
     # Clean up orphaned runs
     killed = cleanup_orphaned_runs(settings.db_path)
     if killed:

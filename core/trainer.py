@@ -55,6 +55,25 @@ class Trainer:
         self._is_lora = isinstance(self.tuning, LoRATuning)
         self._is_cyclic = isinstance(self.tuning, CyclicTuning)
 
+        # Resolve checkpoint/LoRA paths that may have been given relative to
+        # checkpoints_dir/loras_dir (see paths.py's resolve_model_path) to
+        # absolute paths, for the rest of this run only. This mutates the
+        # in-memory config object and is never written back to the TOML file
+        # -- core/cli.py's own write_config() call, if any, already happened
+        # before this constructor runs.
+        from paths import resolve_model_path
+        if config.paths.base_model:
+            config.paths.base_model = str(resolve_model_path(config.paths.base_model, "checkpoint"))
+        if config.paths.student:
+            config.paths.student = str(resolve_model_path(config.paths.student, "checkpoint"))
+        if config.paths.checkpoint_output:
+            config.paths.checkpoint_output = str(resolve_model_path(config.paths.checkpoint_output, "checkpoint"))
+        if self._is_lora:
+            if getattr(self.tuning, "lora_continue_from", None):
+                self.tuning.lora_continue_from = str(resolve_model_path(self.tuning.lora_continue_from, "lora"))
+            if getattr(self.tuning, "lora_output", None):
+                self.tuning.lora_output = str(resolve_model_path(self.tuning.lora_output, "lora"))
+
         # State
         self.teacher_unet_sd = None
         self.student_unet_sd = None

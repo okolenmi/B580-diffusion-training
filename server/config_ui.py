@@ -66,18 +66,22 @@ EXTRAS: dict[str, ExtraDef] = {
  'group': '1. MODE',
  'step': 0.05},
     'tuning.lora_output': {'label': 'LoRA Output Path',
- 'help': 'Where to save the trained LoRA weights.',
- 'placeholder': 'models/loras/my_lora.safetensors',
- 'group': '1. MODE'},
+ 'help': 'Where to save the trained LoRA weights. A filename is saved relative to '
+         'the LoRAs directory; a full path is used as-is.',
+ 'placeholder': 'my_character_v1.safetensors',
+ 'group': '1. MODE',
+ 'file_kind': 'lora'},
     'tuning.target_all': {'label': 'Full LoRA (All Layers)',
  'help': 'If enabled, inject LoRA into every Linear and Conv2d layer in the weighted '
          'blocks. Warning: This is much slower and requires more VRAM.',
  'group': '1. MODE'},
     'tuning.lora_continue_from': {'label': 'LoRA Continue From',
  'help': 'Optional: Path to an existing LoRA adapter file to resume training from. If '
-         'empty or invalid, training starts from scratch.',
- 'placeholder': 'path/to/existing_lora.safetensors',
+         'empty or invalid, training starts from scratch. Pick from the dropdown, or '
+         'type a filename (relative to the LoRAs directory) or a full absolute path.',
+ 'placeholder': 'existing_lora.safetensors',
  'group': '1. MODE',
+ 'file_kind': 'lora',
  'extra_visible_when': {'start_from': 'lora_checkpoint'}},
     'tuning.block_weighting': {'label': 'Block Weighting',
  'help': 'Optional comma-separated list of block multipliers (0.0 to 1.0). Format: '
@@ -207,18 +211,26 @@ EXTRAS: dict[str, ExtraDef] = {
                    'dataset': 'Managed Dataset (pre-existing)'}},
     'paths.base_model': {'label': 'Base Model',
  'help': 'Source model. Used as teacher (distillation/cyclic) or base (LoRA/full). '
-         'Required unless starting from a full student checkpoint.',
- 'placeholder': 'models/checkpoints/...',
- 'group': '2. DATA'},
-    'paths.checkpoint_output': {'label': 'Output Checkpoint',
- 'help': 'Where to save the full trained model checkpoint.',
- 'placeholder': 'models/checkpoints/...',
+         'Required unless starting from a full student checkpoint. Pick from the '
+         'dropdown, or type a filename (relative to the checkpoints directory) or a '
+         'full absolute path.',
+ 'placeholder': 'sdxl_base.safetensors',
  'group': '2. DATA',
+ 'file_kind': 'checkpoint'},
+    'paths.checkpoint_output': {'label': 'Output Checkpoint',
+ 'help': 'Where to save the full trained model checkpoint. A filename is saved '
+         'relative to the checkpoints directory; a full path is used as-is.',
+ 'placeholder': 'my_run/checkpoint.safetensors',
+ 'group': '2. DATA',
+ 'file_kind': 'checkpoint',
  'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'full']}},
     'paths.student': {'label': 'Student Init',
- 'help': 'Start student from this checkpoint instead of copying teacher.',
+ 'help': 'Start student from this checkpoint instead of copying teacher. Pick from '
+         'the dropdown, or type a filename (relative to the checkpoints directory) '
+         'or a full absolute path.',
  'placeholder': 'Optional starting weights',
  'group': '2. DATA',
+ 'file_kind': 'checkpoint',
  'extra_visible_when': {'tuning.method': ['distillation', 'cyclic', 'lora'],
                         'common.data_source': 'teacher'}},
     'paths.dataset_name': {'label': 'Dataset Name',

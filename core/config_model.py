@@ -13,10 +13,15 @@ from pathlib import Path
 from pydantic import BaseModel, Field, model_validator
 
 
-def _derive_path(base: str, suffix: str) -> str:
-    """Derive a sibling path from the output path by replacing the suffix."""
+def _derive_path(base: str, suffix: str, kind: str) -> str:
+    """Derive the resume-file path for a given output path (checkpoint_output
+    or lora_output): same stem, given suffix, but placed in the dedicated
+    resume/ subfolder under checkpoints_dir or loras_dir (kind) rather than
+    sitting next to the main output file.
+    """
+    from paths import get_resume_dir
     p = Path(base)
-    return str(p.parent / (p.stem + suffix))
+    return str(get_resume_dir(kind) / (p.stem + suffix))
 
 
 # ─── Common Settings (shared across all training methods) ───
@@ -295,14 +300,14 @@ class TrainingConfig(BaseModel):
     @model_validator(mode="after")
     def _fill_resume_paths(self) -> "TrainingConfig":
         if self.paths.checkpoint_output and not self.paths.resume_checkpoint:
-            self.paths.resume_checkpoint = _derive_path(self.paths.checkpoint_output, ".resume.safetensors")
+            self.paths.resume_checkpoint = _derive_path(self.paths.checkpoint_output, ".resume.safetensors", "checkpoint")
         if self.paths.checkpoint_output and not self.paths.resume_optimizer:
-            self.paths.resume_optimizer = _derive_path(self.paths.checkpoint_output, ".resume.optstate")
+            self.paths.resume_optimizer = _derive_path(self.paths.checkpoint_output, ".resume.optstate", "checkpoint")
 
         # For LoRA, we derive from lora_output
         if self.tuning.method == "lora" and getattr(self.tuning, "lora_output", None):
             if not self.paths.resume_checkpoint:
-                self.paths.resume_checkpoint = _derive_path(self.tuning.lora_output, ".resume.safetensors")
+                self.paths.resume_checkpoint = _derive_path(self.tuning.lora_output, ".resume.safetensors", "lora")
             if not self.paths.resume_optimizer:
-                self.paths.resume_optimizer = _derive_path(self.tuning.lora_output, ".resume.optstate")
+                self.paths.resume_optimizer = _derive_path(self.tuning.lora_output, ".resume.optstate", "lora")
         return self

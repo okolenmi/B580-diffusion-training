@@ -11,6 +11,8 @@ def launch_training_process(
     comfy_dir: Path,
     project_root: Path,
     log_path: Path,
+    checkpoints_dir: Path = None,
+    loras_dir: Path = None,
 ) -> subprocess.Popen:
     """Launch a training subprocess with proper environment setup.
 
@@ -24,6 +26,14 @@ def launch_training_process(
         Project root (parent of this project's directory).
     log_path : Path
         Path to write stdout logs.
+    checkpoints_dir, loras_dir : Path, optional
+        Resolved checkpoints/LoRA directories (see server/config.py's
+        Settings.checkpoints_dir/loras_dir). Explicitly injected as
+        CHECKPOINTS_DIR/LORAS_DIR env vars so the subprocess's own
+        paths.get_checkpoints_dir()/get_loras_dir() resolve to the exact
+        same directory the server UI is showing -- a plain os.environ.copy()
+        would only pick up a raw env var if one happened to already be set,
+        not a value that came from the persisted-setting override tier.
 
     Returns
     -------
@@ -33,6 +43,10 @@ def launch_training_process(
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = str(project_root) + os.pathsep + env.get("PYTHONPATH", "")
+    if checkpoints_dir is not None:
+        env["CHECKPOINTS_DIR"] = str(checkpoints_dir)
+    if loras_dir is not None:
+        env["LORAS_DIR"] = str(loras_dir)
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "w", buffering=1)

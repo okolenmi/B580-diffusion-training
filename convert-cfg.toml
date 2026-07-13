@@ -2,7 +2,7 @@ start_from = "teacher"
 reset_optimizer = false
 
 [paths]
-base_model = "models/checkpoints/divergence_3.safetensors"
+base_model = "div_4.safetensors"
 checkpoint_output = ""
 dataset_name = "test"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
@@ -15,7 +15,7 @@ lr = 0.0001
 optimizer = "xpu-adafactor"
 adafactor_scale_param = false
 seed = 48
-save_every = 1300
+save_every = 0
 lr_schedule = "cosine"
 lr_end = 1e-05
 lr_power = 2.0
@@ -39,7 +39,7 @@ teacher_type = "eps"
 student_type = "eps"
 resume_step = 0
 latent_size = 0
-use_dataset_cfg = false
+use_dataset_cfg = true
 training_positive_prompt = ""
 training_negative_prompt = ""
 pre_cond_enable = false
@@ -49,10 +49,10 @@ pre_cond_clean_ratio = 0.3
 
 [tuning]
 method = "lora"
-rank = 108
+rank = 96
 alpha = 64.0
 dropout = 0.0
-lora_output = "models/loras/test_lora10l.safetensors"
+lora_output = ""
 target_all = false
 block_weighting = ""
 gate_enabled = false

@@ -617,7 +617,6 @@ class Trainer:
                     # saves already use (see paths.get_resume_dir), which
                     # doesn't depend on lora_output at all.
                     from paths import get_resume_dir
-                    import time
                     fallback = get_resume_dir("lora") / f"emergency_save_step{global_step}_{int(time.time())}.safetensors"
                     print(f"    [WARN] LoRA mode but no output path was set. Saving {global_step} "
                           f"steps of training to a fallback location instead of discarding it: {fallback}")
@@ -627,7 +626,6 @@ class Trainer:
                     save_checkpoint(self.student, _non_unet, paths.checkpoint_output, torch.float16)
                 elif not self._is_lora and not paths.checkpoint_output:
                     from paths import get_resume_dir
-                    import time
                     fallback = get_resume_dir("checkpoint") / f"emergency_save_step{global_step}_{int(time.time())}.safetensors"
                     print(f"    [WARN] No output path was set. Saving {global_step} steps of "
                           f"training to a fallback location instead of discarding it: {fallback}")

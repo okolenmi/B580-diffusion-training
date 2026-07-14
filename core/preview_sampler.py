@@ -157,14 +157,11 @@ class PreviewGenerator:
         n_chunks = (len(self.conds) + self.max_batch_size - 1) // self.max_batch_size
         for ci, start in enumerate(range(0, len(self.conds), self.max_batch_size)):
             chunk = self.conds[start:start + self.max_batch_size]
-            print(f"  [preview] step {global_step}: denoising chunk {ci + 1}/{n_chunks} "
-                  f"({len(chunk)} prompts, {n_steps} steps)", flush=True)
             chunk_latents.append(self._denoise_chunk(student, chunk, t_grid))
         final_latents = torch.cat(chunk_latents, dim=0)
         from .comfy_setup import xpu_synchronize, xpu_empty_cache
         xpu_synchronize()
         xpu_empty_cache()
-        print(f"  [preview] step {global_step}: denoising done, loading VAE", flush=True)
 
         # Load the VAE once, decode one image at a time, then free immediately.
         # Decoding is disproportionately memory-hungry per-image compared to
@@ -186,14 +183,11 @@ class PreviewGenerator:
             saved.append(fname)
             del single_latent, img_tensor
             xpu_empty_cache()
-            print(f"  [preview] step {global_step}: decoded and saved image {i + 1}/{final_latents.shape[0]}",
-                  flush=True)
         vae.free()
         del vae
-        print(f"  [preview] step {global_step}: all images saved, updating manifest", flush=True)
 
         self._update_manifest(global_step, saved)
-        print(f"  [preview] step {global_step}: manifest updated", flush=True)
+        print(f"  [preview] step {global_step}: generated {len(saved)} preview image(s)", flush=True)
 
         # Explicitly synchronize the default stream before returning control to
         # the training loop. This ensures all VAE GPU kernels are fully complete,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc as _gc
+import os
 import queue
 import sys
 import threading
@@ -747,6 +748,13 @@ def run_training_loop(
         prefetcher = ThreadedPrefetcher(cache, device)
 
     try:
+        # Post-preview step tracing: was built to debug a real XPU deadlock
+        # (see prefetcher.sync() below); off by default so normal runs don't
+        # get ~12 lines/step of tracing after every single preview. Set
+        # TRAIN_TRACE_AFTER_PREVIEW=<n> to re-enable tracing the next n
+        # steps after each preview, with no code changes, if something
+        # similar needs debugging again.
+        _trace_after_preview = int(os.environ.get("TRAIN_TRACE_AFTER_PREVIEW", "0"))
         trace_remaining = 0
         for i in range(run_steps):
             global_step = start_step + i
@@ -797,9 +805,7 @@ def run_training_loop(
                     # causes xpu_synchronize() to deadlock with 0 GPU usage.
                     prefetcher.sync()
                     preview_callback(global_step + 1)
-                    print(f"  [preview] step {global_step + 1}: callback returned, "
-                          f"loop continuing to next step", flush=True)
-                    trace_remaining = 3
+                    trace_remaining = _trace_after_preview
 
             if stopped: break
     except Exception:

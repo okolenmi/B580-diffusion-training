@@ -294,7 +294,6 @@ class Trainer:
             return
         offloaded = False
         try:
-            print(f"  [preview] step {step}: starting", flush=True)
             # Squeeze out any cached-but-unused memory from normal training
             # before touching anything -- training runs close to the VRAM
             # ceiling here, so this matters even before offload begins.
@@ -316,20 +315,16 @@ class Trainer:
             if self.optimizer is not None and hasattr(self.optimizer, "offload_states_to_cpu"):
                 self.optimizer.offload_states_to_cpu()
                 offloaded = True
-                print(f"  [preview] step {step}: optimizer state offloaded to CPU", flush=True)
             # Sync again after offload to ensure D2H transfers complete before
             # cache clear. On XPU, offload_states_to_cpu() uses non_blocking=False
             # which should be synchronous, but an explicit sync is defensive.
             xpu_synchronize()
             xpu_empty_cache()
-            print(f"  [preview] step {step}: cache emptied, switching to eval()", flush=True)
             self.student.eval()
             self.preview_gen.generate(self.student, step)
-            print(f"  [preview] step {step}: generate() returned", flush=True)
         except Exception as e:
             print(f"  [WARN] Preview generation failed at step {step}: {e}")
         finally:
-            print(f"  [preview] step {step}: restoring train() mode", flush=True)
             self.student.train()
             # Clear the cache and synchronize BEFORE reloading -- not after.
             # The VRAM graph showed the spike happening right at this
@@ -344,7 +339,6 @@ class Trainer:
             gc.collect()
             xpu_synchronize()
             xpu_empty_cache()
-            print(f"  [preview] step {step}: cache cleared before reload", flush=True)
             if offloaded and hasattr(self.optimizer, "reload_states_to_device"):
                 self.optimizer.reload_states_to_device(self.device)
                 # Force the reload's H2D transfers to fully complete before the
@@ -352,8 +346,6 @@ class Trainer:
                 # relying on implicit stream-ordering alone is the leading
                 # suspect for the post-preview hang this is meant to fix.
                 xpu_synchronize()
-                print(f"  [preview] step {step}: optimizer state reloaded to {self.device}", flush=True)
-            print(f"  [preview] step {step}: done, resuming training", flush=True)
 
     def _is_unet(self, key: str) -> bool:
         return "model.diffusion_model." in key or "lora_unet_" in key

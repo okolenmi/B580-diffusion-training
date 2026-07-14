@@ -8,7 +8,7 @@ dataset_name = "test"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
-steps = 5000
+steps = 200
 batch_size = 2
 grad_accum = 32
 lr = 0.0001
@@ -39,7 +39,7 @@ teacher_type = "eps"
 student_type = "eps"
 resume_step = 0
 latent_size = 0
-use_dataset_cfg = true
+use_dataset_cfg = false
 training_positive_prompt = ""
 training_negative_prompt = ""
 pre_cond_enable = false

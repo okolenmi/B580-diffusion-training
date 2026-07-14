@@ -492,13 +492,22 @@ class Trainer:
         # Pre-calculate prompt cache for managed datasets
         if self.dataset_loader is not None:
             print("  Pre-calculating unique CLIP embeddings for dataset...")
-            unique_prompts = set()
+            # Always cache "" -- it's the loader's own default whenever no
+            # negative prompt is set at all (the common case for real-image
+            # datasets), so it needs to be in the cache regardless of
+            # whether any trajectory's metadata explicitly mentions it.
+            unique_prompts = {""}
             for t in self.dataset_loader.trajectories:
                 unique_prompts.add(t["prompt"])
                 if t.get("metadata"):
                     try:
                         meta = json.loads(t["metadata"])
-                        if isinstance(meta, dict) and meta.get("neg"):
+                        # is not None, not a truthy check: an explicitly-set
+                        # empty negative prompt ("") is a real, common value
+                        # -- a truthy check would silently exclude it from
+                        # the cache, forcing an uncached (slow) CLIP encode
+                        # of "" on every single step that uses it.
+                        if isinstance(meta, dict) and meta.get("neg") is not None:
                             unique_prompts.add(meta["neg"])
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         print(f"    [WARN] Skipping malformed metadata for prompt "

@@ -104,20 +104,35 @@ class ManagedDatasetLoader:
 
                     traj_type = meta.get("type", "good") if isinstance(meta, dict) else "good"
                     cfg_val = meta.get("cfg", 7.5) if isinstance(meta, dict) else 7.5
+                    # Whether this sample actually needs a distinct cond/uncond
+                    # training pass at all. This is the single place that
+                    # decision gets made -- train_step.py just does whatever
+                    # target_p/target_n being present-or-not tells it,
+                    # instead of also needing its own logic to guess whether
+                    # a dual pass was really intended. cfg_val == 1.0 means
+                    # no negative-conditioning influence by definition (see
+                    # the blend formula below), so there's nothing a second
+                    # pass would teach beyond what the cond pass already
+                    # does, independent of use_dataset_cfg's own on/off
+                    # state -- both conditions are checked so either one
+                    # alone is enough to fall back to a single pass.
+                    want_dual_pass = self.use_dataset_cfg and abs(cfg_val - 1.0) > 1e-6
                     for s in trajectory_samples:
                         if s["t"] == 0:
                             continue
                         target_p = s.get("target_p")
                         target_n = s.get("target_n")
-                        if self.use_dataset_cfg and target_p is not None and target_n is not None:
+                        if want_dual_pass and target_p is not None and target_n is not None:
                             # Real-image samples have target_p == target_n by
                             # construction, so this is a safe no-op for them
                             # regardless of cfg_val.
                             target = target_n + (target_p - target_n) * cfg_val
                         elif target_p is not None:
-                            # use_dataset_cfg is off: ignore the stored cfg
-                            # entirely (equivalent to cfg=1 -- no negative-
-                            # conditioning influence on the target).
+                            # No real dual-pass signal: either use_dataset_cfg
+                            # is off, or cfg_val == 1.0 makes it a no-op
+                            # anyway. Ignore the stored cfg entirely --
+                            # equivalent to CFG=1, no negative-conditioning
+                            # influence on the target.
                             target = target_p
                         else:
                             # Older/legacy sample with no separate p/n stored
@@ -126,8 +141,15 @@ class ManagedDatasetLoader:
                         all_samples.append({
                             "x_t":      s["x_t"],
                             "target":   target,
-                            "target_p": target_p,
-                            "target_n": target_n,
+                            # Only expose target_p/target_n as a distinct
+                            # pair when a dual pass is actually wanted --
+                            # otherwise train_step.py would always run the
+                            # (redundant, 2x cost) cond+uncond dual pass
+                            # regardless of use_dataset_cfg/cfg_val, since it
+                            # only checks whether these two keys are present,
+                            # not whether they were meant to be used.
+                            "target_p": target_p if want_dual_pass else None,
+                            "target_n": target_n if want_dual_pass else None,
                             "t":        s["t"],
                             "prompt":      t["prompt"],
                             "neg_prompt":  neg_prompt,

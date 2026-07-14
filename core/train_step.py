@@ -349,7 +349,9 @@ def _run_one_step(
     """Run a single optimization step."""
     if trace:
         print(f"  [trace] step {global_step}: calling prefetcher.get_next()", flush=True)
+    timer.start("0a_prefetch_wait")
     _entry = prefetcher.get_next()
+    timer.stop("0a_prefetch_wait")
     if trace:
         print(f"  [trace] step {global_step}: get_next() returned", flush=True)
     if _entry is None:
@@ -358,6 +360,7 @@ def _run_one_step(
     repulsive_alpha = 0.0  # experimental, not exposed in config model
     traj_type = _entry.get("traj_type", "good") if isinstance(_entry, dict) else "good"
 
+    timer.start("0b_conditioning")
     if isinstance(_entry, dict):
         x_t = _entry["x_t"]
         t_val = _entry["t"]
@@ -439,6 +442,7 @@ def _run_one_step(
     else:
         x_t, target_c, ctx, y, ctx_u, y_u, at_t, st_t, t_val = _entry[:9]
         target_u = _entry[9] if len(_entry) >= 10 else None
+    timer.stop("0b_conditioning")
 
     timer.start("1_transform")
     xc = comfy_input_transform(x_t, st_t)

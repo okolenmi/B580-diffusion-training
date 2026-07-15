@@ -899,6 +899,20 @@ input[type="checkbox"]:checked::after {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
 }
 
+.config-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+}
+
+.config-tab-bar .tab-btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+}
+
 .generator-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -91,6 +91,8 @@
     /**
      * Render a list of option descriptors into a container.
      */
+    var activeConfigTab = null;
+
     function renderOptionTree(options, container) {
         if (!container) return;
         container.innerHTML = "";
@@ -103,17 +105,27 @@
             groups[g].push(opt);
         });
 
-        // Sort group names
+        // Sort group names (groups are prefixed "0. LAUNCH", "1. TRAINING", etc.
+        // specifically so this alphabetical sort also gives the intended tab order)
         var groupNames = Object.keys(groups).sort();
+        if (!activeConfigTab || groupNames.indexOf(activeConfigTab) === -1) {
+            activeConfigTab = groupNames[0];
+        }
 
+        var sections = {};
         groupNames.forEach(function(gName) {
             var groupSection = document.createElement("div");
             groupSection.className = "option-group-section";
-            
-            var header = document.createElement("div");
-            header.className = "option-group-header";
-            header.textContent = gName;
-            groupSection.appendChild(header);
+            groupSection.dataset.tabGroup = gName;
+            // Deliberately NOT using applyVisibility's row-level style.display
+            // mechanism here -- this only ever hides/shows the whole SECTION,
+            // never an individual row, so collectFormData (which only checks
+            // each row's own style.display for visible_when purposes) can
+            // never mistake "its tab isn't active right now" for "this field
+            // doesn't apply, don't submit it". Every field stays in the DOM
+            // and gets submitted regardless of which tab you're looking at
+            // when you hit Save.
+            groupSection.style.display = (gName === activeConfigTab) ? "" : "none";
 
             groups[gName].forEach(function (opt) {
                 var el = buildOptionElement(opt);
@@ -121,6 +133,32 @@
             });
 
             container.appendChild(groupSection);
+            sections[gName] = groupSection;
+        });
+
+        renderConfigTabBar(groupNames, sections);
+    }
+
+    function renderConfigTabBar(groupNames, sections) {
+        var bar = document.getElementById("config-tab-bar");
+        if (!bar) return;
+        bar.innerHTML = "";
+        groupNames.forEach(function (gName) {
+            var btn = document.createElement("button");
+            btn.className = "tab-btn" + (gName === activeConfigTab ? " active" : "");
+            // Strip the "N. " sort prefix for display -- it only exists to
+            // control tab order via the alphabetical group sort above.
+            btn.textContent = gName.replace(/^\d+\.\s*/, "");
+            btn.onclick = function () {
+                activeConfigTab = gName;
+                Object.keys(sections).forEach(function (g) {
+                    sections[g].style.display = (g === gName) ? "" : "none";
+                });
+                bar.querySelectorAll(".tab-btn").forEach(function (b) {
+                    b.classList.toggle("active", b === btn);
+                });
+            };
+            bar.appendChild(btn);
         });
     }
 
@@ -422,9 +460,17 @@
             }
         });
 
-        // Second pass: hide group sections if all rows within them are hidden
+        // Second pass: a section is visible only if it's the active tab AND
+        // has at least one visible row within it (inactive-tab sections stay
+        // hidden regardless of their rows' own visibility -- otherwise this
+        // would re-show every tab with any visible field on every single
+        // field change, fighting with and undoing the tab switch above).
         var groupSections = container.querySelectorAll(".option-group-section");
         groupSections.forEach(function(section) {
+            if (section.dataset.tabGroup !== activeConfigTab) {
+                section.style.display = "none";
+                return;
+            }
             var visibleRows = section.querySelectorAll('.option-row:not([style*="display: none"])');
             section.style.display = (visibleRows.length > 0) ? "" : "none";
         });

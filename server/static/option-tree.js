@@ -105,6 +105,16 @@
             groups[g].push(opt);
         });
 
+        // Sort each group by explicit order hint (stable -- fields without
+        // one keep their natural relative position from the schema).
+        Object.keys(groups).forEach(function (g) {
+            groups[g].sort(function (a, b) {
+                var oa = (a.order === undefined || a.order === null) ? Infinity : a.order;
+                var ob = (b.order === undefined || b.order === null) ? Infinity : b.order;
+                return oa - ob;
+            });
+        });
+
         // Sort group names (groups are prefixed "0. LAUNCH", "1. TRAINING", etc.
         // specifically so this alphabetical sort also gives the intended tab order)
         var groupNames = Object.keys(groups).sort();

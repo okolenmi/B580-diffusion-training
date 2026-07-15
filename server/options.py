@@ -133,6 +133,15 @@ def build_option_tree(config_path: str | None = None) -> list[dict]:
         if "file_kind" in extra:
             opt["file_kind"] = extra["file_kind"]
 
+        # Optional: explicit within-group render order (lower = earlier).
+        # Fields without this stay in their natural pydantic-declaration
+        # order relative to each other -- only the handful that actually
+        # need to come first/follow something specific (e.g. Data Source
+        # before Dataset Name, since the latter only makes sense once you
+        # know the former) need to set this.
+        if "order" in extra:
+            opt["order"] = extra["order"]
+
         visible_when = dict(base.get("visible_when") or {})
         visible_when.update(extra.get("extra_visible_when") or {})
         if visible_when:

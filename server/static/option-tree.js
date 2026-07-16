@@ -107,8 +107,13 @@
 
         // Sort each group by explicit order hint (stable -- fields without
         // one keep their natural relative position from the schema).
+        // Fields with a subgroup always sort after plain fields, so a
+        // subgroup's fields cluster together at the end regardless of their
+        // own order value relative to the rest of the group.
         Object.keys(groups).forEach(function (g) {
             groups[g].sort(function (a, b) {
+                var sa = a.subgroup ? 1 : 0, sb = b.subgroup ? 1 : 0;
+                if (sa !== sb) return sa - sb;
                 var oa = (a.order === undefined || a.order === null) ? Infinity : a.order;
                 var ob = (b.order === undefined || b.order === null) ? Infinity : b.order;
                 return oa - ob;
@@ -137,7 +142,15 @@
             // when you hit Save.
             groupSection.style.display = (gName === activeConfigTab) ? "" : "none";
 
+            var currentSubgroup = null;
             groups[gName].forEach(function (opt) {
+                if (opt.subgroup && opt.subgroup !== currentSubgroup) {
+                    currentSubgroup = opt.subgroup;
+                    var header = document.createElement("div");
+                    header.className = "option-subgroup-header";
+                    header.textContent = currentSubgroup;
+                    groupSection.appendChild(header);
+                }
                 var el = buildOptionElement(opt);
                 groupSection.appendChild(el);
             });

@@ -913,6 +913,17 @@ input[type="checkbox"]:checked::after {
     font-size: 0.85rem;
 }
 
+.option-subgroup-header {
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin: 1.25rem 0 0.5rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+
 .generator-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

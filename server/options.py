@@ -142,6 +142,14 @@ def build_option_tree(config_path: str | None = None) -> list[dict]:
         if "order" in extra:
             opt["order"] = extra["order"]
 
+        # Optional: visually cluster related fields under a header within
+        # their tab (e.g. "Method-Specific Settings" under the Launch tab's
+        # Training Method selector), instead of scattering them across
+        # separate tabs where switching a field like Training Method would
+        # silently change fields on a tab you're not even looking at.
+        if "subgroup" in extra:
+            opt["subgroup"] = extra["subgroup"]
+
         visible_when = dict(base.get("visible_when") or {})
         visible_when.update(extra.get("extra_visible_when") or {})
         if visible_when:

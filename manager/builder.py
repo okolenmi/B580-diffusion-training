@@ -36,6 +36,7 @@ class DataTaskRunner:
 
     def __init__(self, device: str):
         self.device = device
+        self._ctx_len_mismatch_warned = False
 
     def _prepare_keywords(self, cfg: dict) -> list[str]:
         keywords = []
@@ -245,6 +246,12 @@ class DataTaskRunner:
                                 xc = comfy_input_transform(x_t, st_cur)
 
                                 if p_ctx.shape[1] != n_ctx.shape[1]:
+                                    if not self._ctx_len_mismatch_warned:
+                                        print(f"[WARNING] Positive/negative prompt token lengths differ "
+                                              f"({p_ctx.shape[1]} vs {n_ctx.shape[1]}); the shorter one is "
+                                              f"zero-padded, which can weaken unconditional guidance. "
+                                              f"(logged once per run)")
+                                        self._ctx_len_mismatch_warned = True
                                     max_len = max(p_ctx.shape[1], n_ctx.shape[1])
                                     for target_ctx in [p_ctx, n_ctx]:
                                         if target_ctx.shape[1] < max_len:

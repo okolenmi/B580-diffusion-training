@@ -222,6 +222,9 @@ class LoRALinear(nn.Module):
         if lora_A.shape != self.lora_A.shape:
             # Handle standard LoRA (2816) being loaded into CFG-aware model (3072)
             if lora_A.shape[1] == 2816 and self.lora_A.shape[1] == 3072:
+                print(f"[WARNING] Loading legacy 2816-dim LoRA into 3072-dim model; "
+                      f"zero-padding the extra 256 dims. Verify this checkpoint is meant "
+                      f"for this model config.")
                 padding = torch.zeros((lora_A.shape[0], 256), device=lora_A.device, dtype=lora_A.dtype)
                 lora_A = torch.cat([lora_A, padding], dim=1)
             else:

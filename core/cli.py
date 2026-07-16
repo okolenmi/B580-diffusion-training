@@ -123,7 +123,7 @@ Examples:
     if cli.run_id is not None:
         # Store run_id in a private attribute that won't be saved to TOML
         # but can be accessed by the trainer.
-        object.__setattr__(config.common, "_cli_run_id", cli.run_id)
+        config.common._cli_run_id = cli.run_id
 
     if cli.resume_optimizer:
         config.paths.resume_optimizer = cli.resume_optimizer

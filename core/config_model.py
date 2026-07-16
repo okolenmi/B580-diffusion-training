@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, Optional, Union
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 def _derive_path(base: str, suffix: str, kind: str) -> str:
@@ -28,6 +28,12 @@ def _derive_path(base: str, suffix: str, kind: str) -> str:
 
 class CommonSettings(BaseModel):
     """Settings that apply regardless of training mode."""
+
+    # Set by cli.py when launched with --run-id; not a config field (never
+    # read from or written to TOML). Declared as a real PrivateAttr so normal
+    # attribute assignment works, instead of bypassing Pydantic's setattr
+    # guard with object.__setattr__ on an undeclared name.
+    _cli_run_id: Optional[int] = PrivateAttr(default=None)
 
     steps: int = Field(default=1000, ge=100, le=200000)
     batch_size: int = Field(default=1, ge=1, le=16)

@@ -28,7 +28,6 @@ from .save import save_midrun
 from .unet_wrapper import ComfyUNetWrapper, clear_embedder_cache
 
 
-import gc as _gc
 _gc.disable()
 
 # ---------------------------------------------------------------------------
@@ -166,7 +165,7 @@ class CachePrefetcher:
             return
 
         if self.idx >= len(self.cache):
-            print("\n[WARNING] Cache have less elements than cycle needs. Cache will be re-used to finish cycle.")
+            print("\n[WARNING] Cache has fewer elements than cycle needs. Cache will be re-used to finish cycle.")
             self.idx = 0
 
         entry = self.cache[self.idx]

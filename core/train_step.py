@@ -558,20 +558,44 @@ def _run_one_step(
         st_f = _to_scalar(st_t)
         # SNR = (1/sigma)^2 for the x_t = x0 + sigma*eps formulation
         snr = 1.0 / (st_f**2 + 1e-8)
-        
+        # Min-SNR-gamma weighting is genuinely different per parameterization
+        # (see e.g. diffusers/kohya's SNR weighting implementations):
+        #   epsilon-prediction:   weight = min(snr, gamma) / snr
+        #   v-prediction:         weight = min(snr, gamma) / (snr + 1)
+        # Applying the v-prediction form to an eps-parameterized student (or
+        # vice versa) is not just "a different weighting choice" -- it's the
+        # wrong formula for the loss actually being computed. With the
+        # eps-prediction form, low-noise/easy steps get near-zero weight and
+        # high-noise/structural steps get full weight; the v-prediction form
+        # is close to the opposite shape. Getting this backwards for the
+        # (default) eps student means training almost exclusively on
+        # low-noise steps, which barely affects visible output.
+        _is_vpred = (config.student_type == "vpred")
+
         if snr_weighting == "snr":
-            snr_w = snr / (snr + 1.0)
+            # Uncapped Min-SNR (gamma -> infinity). For v-prediction this is
+            # min(snr,gamma)/(snr+1) -> snr/(snr+1). For epsilon-prediction
+            # the same limit is min(snr,gamma)/snr -> snr/snr = 1.0, i.e.
+            # uncapped SNR weighting on an eps loss is just uniform weighting
+            # (the whole point of a *capped* min-SNR is to avoid this
+            # trivial no-op, hence "min_snr_5" below).
+            snr_w = (snr / (snr + 1.0)) if _is_vpred else 1.0
         elif snr_weighting == "min_snr_5":
-            snr_w = min(snr, 5.0) / snr
+            capped = min(snr, 5.0)
+            snr_w = (capped / (snr + 1.0)) if _is_vpred else (capped / snr)
         elif snr_weighting == "decay_snr":
             # Hybrid: Uniform (1.0) at high noise, SNR at low noise.
             # Smoothly transition based on sigma.
-            snr_val = snr / (snr + 1.0)
+            snr_val = (snr / (snr + 1.0)) if _is_vpred else 1.0
             # sigma > 1.0 is high noise; sigma < 0.1 is low noise.
             # We use a sigmoid-like blend.
             weight_mix = torch.sigmoid(torch.tensor(st_f * 2.0 - 1.0)).item()
             snr_w = weight_mix + (1.0 - weight_mix) * snr_val
         else:  # inverse_snr
+            # Not derived from the min-SNR identity above -- a simpler
+            # heuristic (full weight at high noise, decaying at low noise)
+            # that happens to have a reasonable shape for either
+            # parameterization, so it isn't branched.
             snr_w = 1.0 / (snr + 1.0)
 
     def _run_pass(xc_in, t_in, c_in, y_in_v, target_in, timer_label):
@@ -716,7 +740,7 @@ def _run_one_step(
     if progress_writer is not None:
         if trace:
             print(f"  [trace] opt-step {global_step}: progress_writer.step() starting (file I/O)", flush=True)
-        progress_writer.step(global_step=global_step, total_steps=total_steps,
+        progress_writer.step(global_step=global_step + 1, total_steps=total_steps,
                              loss=lv, avg=avg, std=std, lr=optimizer.lr,
                              eta_sec=eta if eta > 0 else None)
         if trace:

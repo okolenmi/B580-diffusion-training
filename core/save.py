@@ -99,6 +99,12 @@ def save_midrun(student, optimizer,
                 opt_out[f"vs_{i}"] = optimizer.vs[i].cpu().float().flatten().contiguous()
             if optimizer.exp_avg[i] is not None:
                 opt_out[f"ea_{i}"] = optimizer.exp_avg[i].cpu().float().contiguous()
+            # CAME's confidence-term state -- absent (hasattr False) for
+            # Adafactor family, so this is a pure addition for those.
+            if hasattr(optimizer, "res_r") and optimizer.res_r[i] is not None:
+                opt_out[f"resr_{i}"] = optimizer.res_r[i].cpu().float().contiguous()
+            if hasattr(optimizer, "res_c") and optimizer.res_c[i] is not None:
+                opt_out[f"resc_{i}"] = optimizer.res_c[i].cpu().float().contiguous()
         # Chunked uses a shared _tiny_vs flat tensor; Fused uses per-param _tiny_vs_map.
         if isinstance(optimizer, FusedXPUAdafactor):
             for idx, v in getattr(optimizer, "_tiny_vs_map", {}).items():
@@ -239,6 +245,15 @@ def load_optstate(optimizer, opt_path):
                     if skipped <= 5:
                         tqdm.write(f"    [WARN] exp_avg param {i}: shape mismatch "
                                    f"saved={sd[f'ea_{i}'].shape} vs expected={tuple(p.shape)}")
+            # CAME's confidence-term state -- absent from Adafactor-family
+            # checkpoints, so these keys simply won't be present there.
+            if hasattr(optimizer, "res_r"):
+                if f"resr_{i}" in sd and sd[f"resr_{i}"].shape == (p_rows,):
+                    optimizer.res_r[i] = sd[f"resr_{i}"].to(device="cpu", dtype=torch.float32)
+                    restored += 1
+                if f"resc_{i}" in sd and sd[f"resc_{i}"].shape == (p_cols,):
+                    optimizer.res_c[i] = sd[f"resc_{i}"].to(device="cpu", dtype=torch.float32)
+                    restored += 1
         # Restore tiny-param second moments.
         # FusedXPUAdafactor uses per-index _tiny_vs_map; ChunkedXPUAdafactor uses flat _tiny_vs.
         opt_device = getattr(optimizer, "device", "cpu")

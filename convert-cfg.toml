@@ -8,7 +8,7 @@ dataset_name = "test"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
-steps = 100
+steps = 2500
 batch_size = 2
 grad_accum = 4
 lr = 6e-05
@@ -25,7 +25,7 @@ lr_strategy = "uniform"
 center_mult = 0.67
 side_mult = 1.5
 time_mult = 1.8
-snr_weighting = "snr"
+snr_weighting = "min_snr_5"
 t_mode = "uniform"
 t_low = 0
 t_high = 999

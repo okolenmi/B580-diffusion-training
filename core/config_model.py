@@ -40,7 +40,7 @@ class CommonSettings(BaseModel):
     grad_accum: int = Field(default=1, ge=1, le=32)
 
     lr: float = Field(default=1e-5, ge=1e-7, le=1e-2)
-    optimizer: Literal["fused-adafactor", "xpu-adafactor", "adamw"] = "fused-adafactor"
+    optimizer: Literal["fused-adafactor", "xpu-adafactor", "came", "adamw"] = "fused-adafactor"
     adafactor_scale_param: bool = False
 
     seed: int = 42

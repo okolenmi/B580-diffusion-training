@@ -390,6 +390,271 @@ class ChunkedXPUAdafactor:
 
 
 # ---------------------------------------------------------------------------
+# ChunkedXPUCAME — CAME optimizer (Luo et al., ACL 2023), ported to this
+# codebase's XPU-resident, per-parameter-streaming style.
+# ---------------------------------------------------------------------------
+
+class ChunkedXPUCAME:
+    """CAME (Confidence-guided Adaptive Memory Efficient Optimization).
+
+    Algorithm faithfully follows the official reference implementation
+    (github.com/yangluo7/CAME, came_pytorch/CAME.py) -- Luo et al., "CAME:
+    Confidence-guided Adaptive Memory Efficient Optimization", ACL 2023.
+    Verified against that source directly rather than reconstructed from the
+    paper alone.
+
+    Same interface as ChunkedXPUAdafactor (params/param_lr lists, step(n_steps=),
+    zero_grad(), offload/reload/decay/reset hooks for cyclic training) so it
+    drops into the same call sites. Unlike Adafactor, CAME keeps:
+      - the same factorized row/col second-moment of grad^2 (vr/vc/vs -- same
+        names as ChunkedXPUAdafactor so the existing checkpoint save/load code,
+        which is generic on these attribute names, works unmodified)
+      - a full-size momentum buffer per parameter (exp_avg) -- CAME's one
+        genuinely bigger buffer vs Adafactor. For LoRA training this is
+        proportional to adapter size only (not the base model), so the added
+        VRAM is small in absolute terms.
+      - a second factorized row/col pair (res_r/res_c) tracking how much
+        each step's update disagrees with its own momentum -- the
+        "confidence-guided" term that gives CAME faster, more stable
+        convergence than plain Adafactor at nearly the same memory cost.
+
+    beta1/beta2/beta3 are fixed EMA decay rates as published (0.9, 0.999,
+    0.9999 by default) -- not reinterpreted to use Adafactor's time-varying
+    rho_t schedule. No adaptive per-parameter LR scaling (Adafactor's
+    scale_parameter) -- the reference algorithm doesn't have one; lr is used
+    directly, same as AdamW.
+    """
+
+    def __init__(self, params, lr=1e-4, eps=(1e-30, 1e-16),
+                 clip_threshold=1.0, betas=(0.9, 0.999, 0.9999),
+                 weight_decay=0.0, device="xpu"):
+        if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
+            self.params = []
+            self.param_lr = []
+            for group in params:
+                p_list = group['params'] if isinstance(group['params'], (list, tuple)) else [group['params']]
+                group_lr = group.get('lr', lr)
+                for p in p_list:
+                    self.params.append(p)
+                    self.param_lr.append(group_lr)
+        else:
+            self.params = list(params)
+            self.param_lr = [lr] * len(self.params)
+
+        self.lr = lr
+        self.eps1, self.eps2 = eps
+        self.clip_threshold = clip_threshold
+        self.beta1, self.beta2, self.beta3 = betas
+        self.wd = weight_decay
+        self.device = device
+        self.t = 0
+
+        n = len(self.params)
+        self.vr = [None] * n
+        self.vc = [None] * n
+        self.vs = [None] * n
+        self.exp_avg = [None] * n
+        self.res_r = [None] * n
+        self.res_c = [None] * n
+
+        self._scratch = None
+        self._use_pool = False
+        self._pool = None
+        self._initialized = False
+
+    def _init_scratch(self):
+        if self._initialized:
+            return
+        dev = self.device
+        max_numel = max((p.numel() for p in self.params), default=0)
+        if max_numel == 0:
+            self._initialized = True
+            return
+        try:
+            self._pool = torch.xpu.MemPool()
+            self._use_pool = True
+        except Exception:
+            self._use_pool = False
+        try:
+            if self._use_pool:
+                with torch.xpu.use_mem_pool(self._pool):
+                    self._scratch = torch.empty(max_numel, dtype=torch.float32, device=dev)
+            else:
+                self._scratch = torch.empty(max_numel, dtype=torch.float32, device=dev)
+        except Exception:
+            self._scratch = None
+        self._initialized = True
+
+    def zero_grad(self):
+        for p in self.params:
+            if p.grad is not None:
+                p.grad.zero_()
+
+    def _factored_normalize(self, sq, row_buf, col_buf, beta, dev):
+        """EMA-update row_buf/col_buf (in place) from sq=x^2+eps, return
+        (row_buf, col_buf, row_sqrt, col_sqrt, row_mean_sqrt) such that
+        dividing some tensor by row_sqrt[:,None] and col_sqrt[None,:], then
+        multiplying by row_mean_sqrt, approximates dividing by sqrt of the
+        factored EMA of sq. Same formula as ChunkedXPUAdafactor's vr/vc
+        normalization -- reused here for both the grad^2 term and CAME's
+        confidence term (only the beta and which buffers get passed differ).
+
+        Zero-initializes on first call and always applies the beta blend
+        (matching the reference implementation's torch.zeros_like init +
+        unconditional mul_(beta).add_(new, alpha=1-beta) exactly) rather than
+        initializing directly to the first observed value the way
+        ChunkedXPUAdafactor's rho_t-scheduled vr/vc does. CAME uses fixed
+        betas with no bias correction, so this zero-init is a deliberate,
+        published "cold start" -- skipping it changes early-step behavior
+        (verified this by numerically diffing against the reference: skipping
+        it under-normalizes the first update by ~30x at beta2=0.999).
+        """
+        row_new = sq.mean(dim=1)
+        col_new = sq.mean(dim=0)
+        if row_buf is None:
+            row_buf = torch.zeros_like(row_new)
+            col_buf = torch.zeros_like(col_new)
+        elif row_buf.device != dev:
+            row_buf, col_buf = row_buf.to(dev), col_buf.to(dev)
+        row_buf.mul_(beta).add_(row_new, alpha=1.0 - beta)
+        col_buf.mul_(beta).add_(col_new, alpha=1.0 - beta)
+        row_mean_sqrt = float(row_buf.mean().add(self.eps1).sqrt())
+        row_sqrt = row_buf.sqrt().add(self.eps1)
+        col_sqrt = col_buf.sqrt().add(self.eps1)
+        return row_buf, col_buf, row_sqrt, col_sqrt, row_mean_sqrt
+
+    def step(self, n_steps: int = 1):
+        self.t += n_steps
+        self._init_scratch()
+        dev = self.device
+
+        ctx = torch.xpu.use_mem_pool(self._pool) if self._use_pool else None
+        if ctx:
+            ctx.__enter__()
+
+        try:
+            for i, p in enumerate(self.params):
+                if p.grad is None:
+                    continue
+
+                lr = self.param_lr[i]
+                n = p.numel()
+                orig_shape = p.shape
+
+                if self._scratch is not None and n <= self._scratch.numel():
+                    g = self._scratch[:n].reshape(orig_shape)
+                    g.copy_(p.grad.detach())
+                else:
+                    g = p.grad.detach().float()
+                p.grad = None
+
+                factored = g.dim() >= 2
+                if factored:
+                    g_view = g.reshape(g.shape[0], -1)
+                    g2 = g_view.pow(2).add(self.eps1)
+
+                    self.vr[i], self.vc[i], vr_sqrt, vc_sqrt, vr_mean_sqrt = \
+                        self._factored_normalize(g2, self.vr[i], self.vc[i], self.beta2, dev)
+
+                    # Normalized gradient: grad * approx_sq_grad(row, col)
+                    g_view.div_(vr_sqrt.unsqueeze(1))
+                    g_view.div_(vc_sqrt.unsqueeze(0))
+                    g_view.mul_(vr_mean_sqrt)
+                else:
+                    g2 = g.pow(2).add(self.eps1)
+                    if self.vs[i] is None:
+                        self.vs[i] = torch.zeros_like(g2)
+                    elif self.vs[i].device != dev:
+                        self.vs[i] = self.vs[i].to(dev)
+                    self.vs[i].mul_(self.beta2).add_(g2, alpha=1.0 - self.beta2)
+                    g.div_(self.vs[i].sqrt().add(self.eps1))
+
+                # Clip the normalized update by its own RMS -- CAME's own
+                # clipping (distinct from Adafactor's raw-gradient clipping),
+                # applied to `g` after normalization, matching the reference.
+                rms_g = g.norm() / (n ** 0.5 + 1e-8)
+                clip_div = float(torch.clamp(rms_g / self.clip_threshold, min=1.0))
+                if clip_div != 1.0:
+                    g.div_(clip_div)
+
+                # Momentum of the (clipped, normalized) update.
+                ea = self.exp_avg[i]
+                if ea is None:
+                    ea = torch.zeros_like(g)
+                elif ea.device != dev:
+                    ea = ea.to(dev)
+                ea.mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
+                self.exp_avg[i] = ea
+
+                if factored:
+                    # Confidence-guided term: squared disagreement between
+                    # this step's normalized update and its own momentum.
+                    # High disagreement -> lower confidence -> smaller
+                    # effective step. Reference implementation only computes
+                    # this for factored (2D+) params -- skipped entirely for
+                    # 1D params below, so no point computing it here either.
+                    res = (g - ea).pow_(2).add_(self.eps2)
+                    res_view = res.reshape(res.shape[0], -1)
+                    self.res_r[i], self.res_c[i], rr_sqrt, rc_sqrt, rr_mean_sqrt = \
+                        self._factored_normalize(res_view, self.res_r[i], self.res_c[i],
+                                                 self.beta3, dev)
+                    update = ea.reshape(res.shape[0], -1).clone()
+                    update.div_(rr_sqrt.unsqueeze(1))
+                    update.div_(rc_sqrt.unsqueeze(0))
+                    update.mul_(rr_mean_sqrt)
+                    update = update.reshape(orig_shape)
+                else:
+                    # Reference implementation does not apply the confidence
+                    # term for non-factored (1D) params at all -- it uses the
+                    # momentum directly. Not something LoRA hits (A/B are
+                    # always 2D) but kept faithful for the dense-finetune case.
+                    update = ea.clone()
+
+                if self.wd != 0:
+                    p.data.add_(p.data, alpha=-self.wd * lr)
+
+                p.data.add_(update.to(dtype=p.dtype), alpha=-lr)
+
+        finally:
+            if ctx:
+                ctx.__exit__(None, None, None)
+
+    def reset_states(self):
+        for i in range(len(self.params)):
+            self.vr[i] = None; self.vc[i] = None; self.vs[i] = None
+            self.exp_avg[i] = None
+            self.res_r[i] = None; self.res_c[i] = None
+        print("    [CAME] Optimizer states reset.")
+
+    def decay_states(self, factor: float):
+        if factor <= 0:
+            return self.reset_states()
+        for i in range(len(self.params)):
+            for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                        self.res_r, self.res_c):
+                if lst[i] is not None:
+                    lst[i].mul_(factor)
+        print(f"    [CAME] Optimizer states decayed by factor {factor:.2f}.")
+
+    def free_states(self):
+        del self.vr, self.vc, self.vs, self.exp_avg, self.res_r, self.res_c
+        self._scratch = None
+        self._pool = None
+        gc.collect()
+
+    def offload_states_to_cpu(self):
+        for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                    self.res_r, self.res_c):
+            _move_optional_list(lst, "cpu")
+
+    def reload_states_to_device(self, device=None):
+        dev = device if device is not None else self.device
+        for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                    self.res_r, self.res_c):
+            _move_optional_list(lst, dev)
+
+
+# ---------------------------------------------------------------------------
 # ForeachXPUAdafactor — vectorized update using torch._foreach ops
 # ---------------------------------------------------------------------------
 

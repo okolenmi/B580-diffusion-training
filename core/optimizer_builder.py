@@ -4,7 +4,7 @@ Accepts typed CommonSettings instead of argparse.Namespace.
 """
 
 from .config_model import CommonSettings
-from .optimizers import CPUAdamW, ChunkedXPUAdafactor, FusedXPUAdafactor, ForeachXPUAdafactor
+from .optimizers import CPUAdamW, ChunkedXPUAdafactor, FusedXPUAdafactor, ForeachXPUAdafactor, ChunkedXPUCAME
 
 
 def build_optimizer(student, config: CommonSettings, device, params=None):
@@ -42,6 +42,13 @@ def build_optimizer(student, config: CommonSettings, device, params=None):
             print(f"    WARNING: fused-adafactor ignores grad_accum={config.grad_accum}. "
                   f"Effective grad_accum=1. Switch to xpu-adafactor if accumulation is needed.")
         print(f"    Optimizer : FusedXPUAdafactor (fused backward, low VRAM){scale_note}")
+    elif config.optimizer == "came":
+        p = param_groups if param_groups else list(_source)
+        opt = ChunkedXPUCAME(p, lr=base_lr, weight_decay=1e-2, device=device)
+        print(f"    Optimizer : ChunkedXPUCAME (GPU)")
+        if config.grad_accum > 1:
+            print(f"    Note: grad_accum={config.grad_accum} is fully supported "
+                  f"(CAME uses the same n_steps step-counting as xpu-adafactor).")
     else:  # xpu-adafactor
         p = param_groups if param_groups else list(_source)
         

@@ -450,7 +450,17 @@ class Trainer:
         t0 = time.time()
         global_step = self.start_step
         weight_track = _make_weight_track()
-        timer = StepTimer(report_every=100)
+        # FusedXPUAdafactor applies updates inside backward hooks (no real
+        # accumulation window); every other optimizer batches grad_accum
+        # micro-steps into one real update. Checked against config rather
+        # than self.optimizer since the optimizer may not be built yet the
+        # first time this is needed (cache is built before build_optimizer()
+        # on cycle 0) -- see optimizer_builder.py for the same check.
+        effective_accum = 1 if comm.optimizer == "fused-adafactor" else comm.grad_accum
+        # report_every counts micro-batches (run_training_loop ticks the
+        # timer every micro-batch); scale it so the printed phase-timing
+        # report still appears roughly every 100 real optimizer steps.
+        timer = StepTimer(report_every=100 * effective_accum)
 
         print("[3/4] Initializing models and encoder...")
         full_teacher_sd = {}
@@ -537,7 +547,10 @@ class Trainer:
                 if self.dataset_loader:
                     cache = self.dataset_loader
                 elif self.teacher:
-                    cache = self._get_cache(run_steps=this_cycle_steps, start_step=global_step)
+                    # this_cycle_steps is an opt-step count; the training loop
+                    # consumes effective_accum micro-batches per real update,
+                    # so the cache needs that many samples, not this_cycle_steps.
+                    cache = self._get_cache(run_steps=this_cycle_steps * effective_accum, start_step=global_step)
                 else:
                     raise RuntimeError("No data source available: neither dataset_loader nor teacher model is present.")
 

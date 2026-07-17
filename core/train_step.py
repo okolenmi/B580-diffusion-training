@@ -236,6 +236,8 @@ def _make_weight_track() -> Dict[str, Any]:
         "delta_count": 0,
         "_tracked_param": None,
         "_last_lr": None,   # cache to skip redundant update_lr calls
+        "_accum_loss_sum": 0.0,  # running loss sum within current accumulation window
+        "_accum_loss_n": 0,      # micro-batches summed so far in that window
     }
 
 
@@ -326,6 +328,7 @@ def _run_one_step(
         config: CommonSettings,
         device: torch.device,
         global_step: int,
+        micro_step: int,
         start_step: int,
         total_steps: int,
         expected_seed: int,
@@ -345,8 +348,17 @@ def _run_one_step(
         gate_train_high: float | None = None,
         gate_width: float = 100.0,
         trace: bool = False,
-) -> bool:
-    """Run a single optimization step."""
+) -> Tuple[bool, bool]:
+    """Run a single optimization step.
+
+    global_step is the opt-step index (real optimizer update count) this
+    micro-batch contributes toward -- used for LR schedule, reporting,
+    save/preview cadence. micro_step is the raw micro-batch loop index --
+    used only to gate accumulation-window boundaries (zero_grad /
+    optimizer.step). Returns (stopped, is_boundary): is_boundary is True
+    only on the micro-step that completes a real optimizer update (every
+    micro-step, for FusedXPUAdafactor).
+    """
     if trace:
         print(f"  [trace] step {global_step}: calling prefetcher.get_next()", flush=True)
     timer.start("0a_prefetch_wait")
@@ -355,7 +367,7 @@ def _run_one_step(
     if trace:
         print(f"  [trace] step {global_step}: get_next() returned", flush=True)
     if _entry is None:
-        return True
+        return True, False
 
     repulsive_alpha = 0.0  # experimental, not exposed in config model
     traj_type = _entry.get("traj_type", "good") if isinstance(_entry, dict) else "good"
@@ -464,6 +476,14 @@ def _run_one_step(
     # so accumulation across multiple backward() calls is not supported.
     effective_accum = 1 if is_fused else config.grad_accum
 
+    # is_boundary marks the micro-step that completes a real optimizer
+    # update (every micro-step for FusedXPUAdafactor, every effective_accum
+    # micro-steps otherwise). global_step (an opt-step index) is constant
+    # across all micro-steps within one accumulation window, so schedule
+    # lookups and reporting below only need to actually fire once per
+    # window -- gated on is_boundary further down.
+    is_boundary = is_fused or (micro_step + 1) % effective_accum == 0
+
     # Zero gradients only at the start of each accumulation cycle -- not
     # every step. Zeroing every step would wipe out gradients accumulated
     # from prior steps in the same cycle before optimizer.step() (gated on
@@ -472,7 +492,7 @@ def _run_one_step(
     # FusedXPUAdafactor frees grads inside its backward hooks — zero_grad
     # is a no-op there regardless of this gating (effective_accum is
     # always 1 for it, so the condition is always true anyway).
-    if global_step % effective_accum == 0:
+    if micro_step % effective_accum == 0:
         optimizer.zero_grad()
 
     # Update LR only when the schedule value actually changed (saves a linear scan
@@ -596,31 +616,49 @@ def _run_one_step(
         if yu_bf is not None: del yu_bf
         loss_display_tensor = loss_c * loss_scale
 
-    if not is_fused and (global_step + 1) % effective_accum == 0:
+    if not is_fused and is_boundary:
         if trace:
-            print(f"  [trace] step {global_step}: optimizer.step() starting", flush=True)
+            print(f"  [trace] micro-step {micro_step} (opt-step {global_step}): optimizer.step() starting", flush=True)
         timer.start("5_opt_step")
         optimizer.step(n_steps=effective_accum)
         timer.stop("5_opt_step")
         if trace:
-            print(f"  [trace] step {global_step}: optimizer.step() done", flush=True)
+            print(f"  [trace] micro-step {micro_step} (opt-step {global_step}): optimizer.step() done", flush=True)
 
     del xc, t_tensor
     if _using_pre_cond:
         del xc_cond, xc_uncond
 
-    # Retrieve the loss value. We do this every step for real-time feedback.
-    # On XPU, this causes a host-device synchronization, but at ~1 step/sec
-    # the impact is negligible.
+    # Retrieve the loss value every micro-step (needed for the accumulation
+    # window's running average below). On XPU this causes a host-device
+    # sync, but at training speeds the impact is negligible.
     if trace:
-        print(f"  [trace] step {global_step}: calling loss_display_tensor.item() (XPU sync point)", flush=True)
+        print(f"  [trace] micro-step {micro_step}: calling loss_display_tensor.item() (XPU sync point)", flush=True)
     lv = loss_display_tensor.item()
     if trace:
-        print(f"  [trace] step {global_step}: loss_display_tensor.item() returned ({lv:.5f})", flush=True)
-    weight_track["_last_lv"] = lv
+        print(f"  [trace] micro-step {micro_step}: loss_display_tensor.item() returned ({lv:.5f})", flush=True)
     del loss_display_tensor
 
-    # Welford-style window stats using deque(maxlen=100).
+    # Accumulate loss across the whole accumulation window so the value
+    # reported at the boundary reflects the gradient that actually got
+    # applied, not just its last micro-batch.
+    weight_track["_accum_loss_sum"] = weight_track.get("_accum_loss_sum", 0.0) + lv
+    weight_track["_accum_loss_n"] = weight_track.get("_accum_loss_n", 0) + 1
+
+    timer.tick()
+
+    if not is_boundary:
+        if trace:
+            print(f"  [trace] micro-step {micro_step}: end (mid-accumulation, no report)", flush=True)
+        return bool(stop_flag and stop_flag()), False
+
+    lv = weight_track["_accum_loss_sum"] / weight_track["_accum_loss_n"]
+    weight_track["_accum_loss_sum"] = 0.0
+    weight_track["_accum_loss_n"] = 0
+    weight_track["_last_lv"] = lv
+
+    # Welford-style window stats using deque(maxlen=100), one entry per
+    # opt-step (real update) rather than per micro-batch.
     # deque handles eviction automatically; we recompute avg/std over the window.
     # For maxlen=100 this is 100 additions — cheap and numerically stable.
     loss_win = weight_track["loss_win"]
@@ -629,11 +667,11 @@ def _run_one_step(
     avg = sum(loss_win) / n
     std = (sum((x - avg) ** 2 for x in loss_win) / n) ** 0.5
 
-    # Weight tracking — only every 100 steps, uses a cached param reference
-    # so we never scan the entire parameter list at runtime.
+    # Weight tracking — only every 100 opt-steps, uses a cached param
+    # reference so we never scan the entire parameter list at runtime.
     if (global_step + 1) % 100 == 0:
         if trace:
-            print(f"  [trace] step {global_step}: weight-tracking block (XPU sync point)", flush=True)
+            print(f"  [trace] opt-step {global_step}: weight-tracking block (XPU sync point)", flush=True)
         tracked_p = weight_track.get("_tracked_param")
         if tracked_p is None:
             tracked_p = _find_tracked_param(student)
@@ -657,7 +695,7 @@ def _run_one_step(
                 weight_track["delta_count"] += 1
             weight_track["last_W"] = curr_W
         if trace:
-            print(f"  [trace] step {global_step}: weight-tracking block done", flush=True)
+            print(f"  [trace] opt-step {global_step}: weight-tracking block done", flush=True)
 
     _wd = (weight_track["delta_total"] / weight_track["delta_count"]
            if weight_track["delta_count"] > 0 and (global_step + 1) >= 100 else 0.0)
@@ -677,20 +715,20 @@ def _run_one_step(
 
     if progress_writer is not None:
         if trace:
-            print(f"  [trace] step {global_step}: progress_writer.step() starting (file I/O)", flush=True)
+            print(f"  [trace] opt-step {global_step}: progress_writer.step() starting (file I/O)", flush=True)
         progress_writer.step(global_step=global_step, total_steps=total_steps,
                              loss=lv, avg=avg, std=std, lr=optimizer.lr,
                              eta_sec=eta if eta > 0 else None)
         if trace:
-            print(f"  [trace] step {global_step}: progress_writer.step() done", flush=True)
+            print(f"  [trace] opt-step {global_step}: progress_writer.step() done", flush=True)
 
-    timer.tick()
     if trace:
-        print(f"  [trace] step {global_step}: end of _run_one_step", flush=True)
+        print(f"  [trace] opt-step {global_step}: end of _run_one_step", flush=True)
     if stop_flag and stop_flag():
         print(f"\n  Stopping at step {global_step + 1}.")
-        return True
-    return False
+        return True, True
+    return False, True
+
 
 
 def run_training_loop(
@@ -731,13 +769,15 @@ def run_training_loop(
     is_tty = sys.stdout.isatty()
     pbar = None
     if is_tty:
+        # run_steps is an opt-step count (real optimizer updates), so the
+        # progress bar advances once per real update regardless of grad_accum.
         pbar = tqdm(range(run_steps), desc="Training", unit="step", ncols=0, mininterval=5.0)
 
     if progress_writer is not None:
         _cycles = (run_steps // max(getattr(config.tuning, "cycle_steps", run_steps), 1)) or 1
         progress_writer.training_start(run_steps=run_steps, total_steps=total_steps, cycles=_cycles)
 
-    steps_done = 0
+    steps_done = 0  # counts real optimizer updates (opt-steps) completed this call
     stopped = False
     crashed = False
 
@@ -745,6 +785,16 @@ def run_training_loop(
         prefetcher = CachePrefetcher(cache, device)
     else:
         prefetcher = ThreadedPrefetcher(cache, device)
+
+    # run_steps is an opt-step count (real optimizer updates). With
+    # grad_accum > 1 (non-fused optimizers only), each opt-step needs
+    # effective_accum micro-batches of forward/backward before the update
+    # fires, so the raw loop below runs run_steps * effective_accum
+    # micro-batches while everything user-facing -- LR schedule, save/
+    # preview cadence, progress reporting -- only advances on the
+    # micro-batch that actually completes a real update.
+    effective_accum = 1 if _is_fused else config.common.grad_accum
+    micro_steps_total = run_steps * effective_accum
 
     try:
         # Post-preview step tracing: was built to debug a real XPU deadlock
@@ -755,16 +805,20 @@ def run_training_loop(
         # similar needs debugging again.
         _trace_after_preview = int(os.environ.get("TRAIN_TRACE_AFTER_PREVIEW", "0"))
         trace_remaining = 0
-        for i in range(run_steps):
-            global_step = start_step + i
+        for i in range(micro_steps_total):
+            micro_step = start_step * effective_accum + i
+            global_step = start_step + i // effective_accum  # opt-step index
+            is_boundary = _is_fused or (i + 1) % effective_accum == 0
+
             trace_this_step = trace_remaining > 0
             if trace_this_step:
                 trace_remaining -= 1
-                print(f"  [trace] step {global_step}: begin (post-preview tracing active)", flush=True)
+                print(f"  [trace] micro-step {micro_step} (opt-step {global_step}): begin (post-preview tracing active)", flush=True)
 
-            stopped = _run_one_step(
+            stopped, boundary_hit = _run_one_step(
                 student=student, optimizer=optimizer, prefetcher=prefetcher,
                 config=config.common, device=device, global_step=global_step,
+                micro_step=micro_step,
                 start_step=start_step, total_steps=total_steps,
                 expected_seed=expected_seed, lr_fn=lr_fn,
                 snr_weighting=_snr_w, is_fused=_is_fused,
@@ -780,31 +834,35 @@ def run_training_loop(
                 trace=trace_this_step,
             )
 
-            if pbar is not None: pbar.update(1)
-            steps_done += 1
+            if boundary_hit:
+                if pbar is not None: pbar.update(1)
+                steps_done += 1
 
-            # Maintenance: clear XPU cache and trigger background GC.
-            # Increased interval (250 steps) to minimize periodic stalls.
-            if (global_step + 1) % 250 == 0:
+                if config.common.save_every > 0 and (global_step + 1) % config.common.save_every == 0:
+                    if save_callback and (global_step + 1) > 0:
+                        save_callback(global_step + 1)
+
+                if (config.preview.enabled and config.preview.every_n_steps > 0
+                        and (global_step + 1) % config.preview.every_n_steps == 0):
+                    if preview_callback:
+                        # CRITICAL: Sync the prefetch stream before preview generation.
+                        # The CachePrefetcher has a separate GPU stream for async H2D
+                        # transfers. If preview's heavy GPU work and xpu_empty_cache()
+                        # calls run while a prefetch transfer is in flight, the XPU
+                        # driver can corrupt stream state. After 2-4 previews this
+                        # causes xpu_synchronize() to deadlock with 0 GPU usage.
+                        prefetcher.sync()
+                        preview_callback(global_step + 1)
+                        trace_remaining = _trace_after_preview
+
+            # Maintenance: clear XPU cache and trigger background GC. Tied to
+            # raw micro-batch count, not opt-steps -- GPU memory/garbage
+            # pressure comes from forward/backward passes, which happen every
+            # micro-step regardless of accumulation. Increased interval (250
+            # steps) to minimize periodic stalls.
+            if (i + 1) % 250 == 0:
                 xpu_empty_cache()
                 _request_gc()
-
-            if config.common.save_every > 0 and (global_step + 1) % config.common.save_every == 0:
-                if save_callback and (global_step + 1) > 0:
-                    save_callback(global_step + 1)
-
-            if (config.preview.enabled and config.preview.every_n_steps > 0
-                    and (global_step + 1) % config.preview.every_n_steps == 0):
-                if preview_callback:
-                    # CRITICAL: Sync the prefetch stream before preview generation.
-                    # The CachePrefetcher has a separate GPU stream for async H2D
-                    # transfers. If preview's heavy GPU work and xpu_empty_cache()
-                    # calls run while a prefetch transfer is in flight, the XPU
-                    # driver can corrupt stream state. After 2-4 previews this
-                    # causes xpu_synchronize() to deadlock with 0 GPU usage.
-                    prefetcher.sync()
-                    preview_callback(global_step + 1)
-                    trace_remaining = _trace_after_preview
 
             if stopped: break
     except Exception:

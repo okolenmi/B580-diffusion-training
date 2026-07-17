@@ -593,22 +593,33 @@ class ChunkedXPUCAME:
                     # effective step. Reference implementation only computes
                     # this for factored (2D+) params -- skipped entirely for
                     # 1D params below, so no point computing it here either.
-                    res = (g - ea).pow_(2).add_(self.eps2)
-                    res_view = res.reshape(res.shape[0], -1)
+                    #
+                    # g's value is no longer needed after the momentum update
+                    # above, so compute res into g in place instead of
+                    # allocating a fresh (g - ea) tensor -- and reuse it again
+                    # below for `update` instead of a second fresh
+                    # ea.clone(). Two full-parameter-sized allocations per
+                    # step (on top of Adafactor's baseline) were enough to
+                    # slowly fragment VRAM near the ceiling and hang after a
+                    # couple dozen steps rather than failing immediately.
+                    g.sub_(ea).pow_(2).add_(self.eps2)
+                    res_view = g.reshape(g.shape[0], -1)
                     self.res_r[i], self.res_c[i], rr_sqrt, rc_sqrt, rr_mean_sqrt = \
                         self._factored_normalize(res_view, self.res_r[i], self.res_c[i],
                                                  self.beta3, dev)
-                    update = ea.reshape(res.shape[0], -1).clone()
-                    update.div_(rr_sqrt.unsqueeze(1))
-                    update.div_(rc_sqrt.unsqueeze(0))
-                    update.mul_(rr_mean_sqrt)
-                    update = update.reshape(orig_shape)
+                    update_view = g.reshape(g.shape[0], -1)
+                    update_view.copy_(ea.reshape(g.shape[0], -1))
+                    update_view.div_(rr_sqrt.unsqueeze(1))
+                    update_view.div_(rc_sqrt.unsqueeze(0))
+                    update_view.mul_(rr_mean_sqrt)
+                    update = g.reshape(orig_shape)
                 else:
                     # Reference implementation does not apply the confidence
                     # term for non-factored (1D) params at all -- it uses the
                     # momentum directly. Not something LoRA hits (A/B are
                     # always 2D) but kept faithful for the dense-finetune case.
-                    update = ea.clone()
+                    g.copy_(ea)
+                    update = g
 
                 if self.wd != 0:
                     p.data.add_(p.data, alpha=-self.wd * lr)

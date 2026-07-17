@@ -8,25 +8,25 @@ dataset_name = "test"
 comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
-steps = 2500
+steps = 1000
 batch_size = 2
-grad_accum = 4
-lr = 6e-05
-optimizer = "xpu-adafactor"
+grad_accum = 6
+lr = 1e-06
+optimizer = "came"
 adafactor_scale_param = false
-seed = 50
+seed = 52
 save_every = 0
 lr_schedule = "cosine"
 lr_end = 1e-05
 lr_power = 2.0
-lr_warmup_steps = 0
-lr_warmup_start = 0.0
+lr_warmup_steps = 200
+lr_warmup_start = 1e-08
 lr_strategy = "uniform"
 center_mult = 0.67
 side_mult = 1.5
 time_mult = 1.8
-snr_weighting = "min_snr_5"
-t_mode = "uniform"
+snr_weighting = "snr"
+t_mode = "logit"
 t_low = 0
 t_high = 999
 device = "xpu"
@@ -39,7 +39,7 @@ teacher_type = "eps"
 student_type = "eps"
 resume_step = 0
 latent_size = 0
-use_dataset_cfg = true
+use_dataset_cfg = false
 training_positive_prompt = ""
 training_negative_prompt = ""
 pre_cond_enable = false
@@ -49,17 +49,16 @@ pre_cond_clean_ratio = 0.3
 
 [tuning]
 method = "lora"
-rank = 96
-alpha = 64.0
+rank = 64
+alpha = 32.0
 dropout = 0.0
-lora_output = "test_lora10r.safetensors"
+lora_output = "test_lora11a.safetensors"
 target_all = false
-lora_continue_from = "test_lora10q.safetensors"
 block_weighting = ""
 gate_enabled = false
-gate_train_low = 0.0
+gate_train_low = 300.0
 gate_train_high = 999.0
-gate_width = 10.0
+gate_width = 50.0
 
 [cache]
 mode = "trajectory"
@@ -83,7 +82,7 @@ student_chain_noise = 0.02
 
 [preview]
 enabled = true
-every_n_steps = 250
+every_n_steps = 100
 prompts = "ttw001, \r\nttw001, landscape\r\nttw001, 2 girls"
 negative_prompt = ""
 steps = 24

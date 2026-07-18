@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Node Graph Playground (dev)</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* Performance note, read before changing this file:
+     Every node below is a real <div>, laid out by the browser's normal
+     layout/compositing engine -- NOT a <canvas> being manually redrawn.
+     There is no requestAnimationFrame loop anywhere on this page: content
+     renders once from a fetched JSON payload and then the page is
+     completely idle until something (like a manual refresh) changes it.
+     This is a deliberate choice, not an oversight -- a persistent
+     per-frame canvas redraw loop (common in node-editor UIs, ComfyUI
+     included) burns CPU/GPU cycles continuously whether or not anything on
+     screen is actually changing, competing with real training/generation
+     work for the same hardware. Keep it this way: if interactive
+     dragging/wiring is added later, redraw only the specific elements that
+     moved, on the actual input event, not on a timer or animation frame. */
+
+  .ng-canvas {
+    position: relative;
+    min-height: 70vh;
+    padding: 32px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 24px;
+    background:
+      linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
+      linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px;
+    background-color: var(--bg);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+  }
+
+  .ng-node {
+    width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+
+  .ng-node-header {
+    background: var(--surface-alt);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ng-node-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .ng-node-module {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 2px;
+  }
+
+  .ng-node-doc {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    font-style: italic;
+  }
+
+  .ng-ports {
+    padding: 6px 0;
+  }
+
+  .ng-port {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+
+  .ng-port-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .ng-port-dot.required { background: var(--red); }
+
+  .ng-port-name { color: var(--text); }
+  .ng-port-type { color: var(--text-dim); margin-left: auto; }
+  .ng-port-default { color: var(--green); font-size: 11px; }
+
+  .ng-status {
+    padding: 12px 32px;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .ng-status.error { color: var(--red); }
+
+  .ng-legend {
+    display: flex;
+    gap: 24px;
+    padding: 0 32px 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    align-items: center;
+  }
+
+  .ng-legend-item { display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+  <div style="padding: 24px 32px 0;">
+    <h1 style="font-size: 20px; color: var(--text);">Node Graph Playground</h1>
+    <p style="color: var(--text-dim); font-size: 13px; margin-top: 4px;">
+      Development/testing tab -- isolated from the production config path.
+      See docs/node_architecture_refactor_plan.md.
+    </p>
+  </div>
+
+  <div class="ng-legend">
+    <div class="ng-legend-item"><span class="ng-port-dot"></span> optional input</div>
+    <div class="ng-legend-item"><span class="ng-port-dot required"></span> required input</div>
+  </div>
+
+  <div id="ng-status" class="ng-status">Loading node definitions...</div>
+  <div id="ng-canvas" class="ng-canvas" style="display:none;"></div>
+
+  <script>
+    // No polling, no setInterval, no requestAnimationFrame. One fetch, one
+    // render, then idle. See the CSS comment above for why this matters.
+    async function loadNodes() {
+      const statusEl = document.getElementById('ng-status');
+      const canvasEl = document.getElementById('ng-canvas');
+      try {
+        const res = await fetch('/api/nodegraph/optimizers');
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderNodes(data.nodes);
+        statusEl.style.display = 'none';
+        canvasEl.style.display = 'flex';
+      } catch (err) {
+        statusEl.textContent = 'Failed to load node definitions: ' + err.message;
+        statusEl.classList.add('error');
+      }
+    }
+
+    function renderNodes(nodes) {
+      const canvas = document.getElementById('ng-canvas');
+      canvas.innerHTML = '';
+      for (const node of nodes) {
+        canvas.appendChild(buildNodeElement(node));
+      }
+    }
+
+    function buildNodeElement(node) {
+      const el = document.createElement('div');
+      el.className = 'ng-node';
+
+      const header = document.createElement('div');
+      header.className = 'ng-node-header';
+      header.innerHTML = `
+        <div class="ng-node-title">${escapeHtml(node.class_name)}</div>
+        <div class="ng-node-module">${escapeHtml(node.module)}</div>
+      `;
+      el.appendChild(header);
+
+      if (node.doc) {
+        const doc = document.createElement('div');
+        doc.className = 'ng-node-doc';
+        doc.textContent = node.doc;
+        el.appendChild(doc);
+      }
+
+      const ports = document.createElement('div');
+      ports.className = 'ng-ports';
+      for (const port of node.inputs) {
+        const row = document.createElement('div');
+        row.className = 'ng-port';
+        row.innerHTML = `
+          <span class="ng-port-dot ${port.required ? 'required' : ''}"></span>
+          <span class="ng-port-name">${escapeHtml(port.name)}</span>
+          <span class="ng-port-type">${escapeHtml(port.type)}</span>
+        `;
+        ports.appendChild(row);
+        if (port.default !== null) {
+          const defRow = document.createElement('div');
+          defRow.className = 'ng-port';
+          defRow.style.paddingTop = '0';
+          defRow.innerHTML = `
+            <span style="width:8px;flex-shrink:0;"></span>
+            <span class="ng-port-default">default: ${escapeHtml(port.default)}</span>
+          `;
+          ports.appendChild(defRow);
+        }
+      }
+      el.appendChild(ports);
+
+      return el;
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = String(s);
+      return div.innerHTML;
+    }
+
+    loadNodes();
+  </script>
+</body>
+</html>

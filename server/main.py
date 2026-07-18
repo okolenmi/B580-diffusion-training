@@ -14,6 +14,7 @@ from .routes_settings import router as settings_router
 from .routes_sse import router as sse_router
 from .routes_training import router as training_router
 from .routes_datasets import router as datasets_router
+from .routes_nodegraph import router as nodegraph_router
 
 import paths as _paths
 
@@ -84,6 +85,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(sse_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
+app.include_router(nodegraph_router, prefix="/api")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -96,6 +98,16 @@ async def index():
 @app.get("/datasets", response_class=HTMLResponse)
 async def dataset_manager():
     path = settings.project_root / "server/static/dataset_manager.html"
+    with open(path) as f:
+        return f.read()
+
+
+@app.get("/nodegraph", response_class=HTMLResponse)
+async def nodegraph_playground():
+    """Dev/testing tab for the node-graph architecture refactor -- see
+    docs/node_architecture_refactor_plan.md. Fully isolated from the
+    production config/training path; safe to iterate on independently."""
+    path = settings.project_root / "server/static/nodegraph.html"
     with open(path) as f:
         return f.read()
 

@@ -213,17 +213,97 @@ before moving to the next phase -- a phase that breaks something already
 fixed is a regression, not progress, regardless of how much closer it gets
 to the end architecture.
 
+## Refined design decisions (after follow-up discussion)
+
+- **Custom lightweight canvas, not ComfyUI's.** Explicit reason: ComfyUI's
+  canvas has a real, measured performance cost (~30% generation slowdown
+  just from having the tab visible/watched) -- almost certainly a
+  persistent per-frame redraw loop (`requestAnimationFrame` or equivalent)
+  that burns CPU/GPU cycles continuously regardless of whether anything on
+  screen actually changed, competing with real generation/training work for
+  the same hardware. Design rule for this project's version, stated
+  explicitly so it doesn't drift: **DOM-based node rendering (real
+  `<div>` elements, browser-native layout/compositing), not a `<canvas>`
+  being manually redrawn every frame. No polling loop, no RAF loop.
+  Render on actual state change (a fetch resolving, a user click), then go
+  fully idle.** This is cheap to build correctly and expensive to fix later
+  if built wrong, so it's worth being strict about from the first line of
+  code, not just an aspiration.
+- **Node UI is derived from the real class, not hand-duplicated.** Same
+  principle as `config_schema.py`'s Pydantic introspection, applied to
+  nodes: a node's displayed ports come from introspecting the actual Python
+  class (`inspect.signature()`), not a separately-maintained metadata file.
+  This is a structural guarantee against recreating the exact bug category
+  that started this whole discussion (`config_ui.py`'s hand-authored
+  conditions drifting out of sync with the real schema) -- there's no
+  second file for the node graph's rendering to drift out of sync with.
+- **Separate dev/testing tab, isolated from the production config path
+  until deliberately switched over.** A new route (`/nodegraph`) and a new
+  API router (`/api/nodegraph/*`), touching the existing config/training
+  code paths not at all beyond one router-registration line in `main.py`.
+  Old system keeps working unchanged for as long as needed; nothing is
+  switched over until the new system is actually ready.
+- **The canvas is also a development aid for the refactor itself, not just
+  an end-user feature.** Being able to see a node's real, auto-derived
+  ports and (once execution is wired up) run it in isolation is valuable
+  *during* Phase 1-4 of the migration -- it catches interface mistakes by
+  direct inspection/testing of one node, rather than only via full
+  end-to-end training runs. This is why it's being built early/alongside
+  the backend work rather than deferred to the very end.
+
+## First slice: shipped
+
+A minimal, real, working proof-of-concept of the "auto-derived, no-drift"
+principle above -- deliberately small, touches nothing in the production
+path:
+
+- `server/nodegraph_introspect.py` -- pure introspection (`inspect.
+  signature()`-based), zero side effects, zero coupling. Given any class,
+  derives its ports from the real `__init__` signature. Functionally
+  verified (not just syntax-checked) against a dummy class mirroring
+  `ChunkedXPUCAME`'s actual signature -- correct first-line-only docstring
+  extraction, correct required-vs-default detection, correct type display
+  for both annotated and unannotated parameters.
+- `server/routes_nodegraph.py` -- new, isolated `APIRouter`
+  (`/api/nodegraph/optimizers`), returning the introspected
+  `optimizers.py` classes (`CPUAdamW`, `ChunkedXPUAdafactor`,
+  `ChunkedXPUCAME`, `ForeachXPUAdafactor`, `FusedXPUAdafactor`) as JSON.
+  Chosen as the very first target because it's already the closest thing
+  in the codebase to real node-shaped code (see Phase 1 above).
+- `server/static/nodegraph.html` -- the actual playground page at
+  `/nodegraph`. Fetches the JSON once, renders each class as a DOM node
+  box with its ports (name, type, default, required/optional) laid out
+  inside -- no canvas, no redraw loop, matching the design rule above.
+  HTML structure and embedded JS both verified (tag-balance check via
+  Python's `html.parser`, syntax check via `node --check`) before shipping.
+- `main.py` -- three additive lines (import, router registration, page
+  route), following the exact existing pattern used for `/datasets`. No
+  existing route touched or modified.
+
+This slice deliberately does *not* yet include: interactive dragging,
+wire/connection rendering, or actual graph execution -- those come with
+Phase 2+ once there's a second node type (e.g. `TeacherSourceNode`) to
+meaningfully connect to something. The goal of this slice was narrowly to
+prove the core "ports auto-derived from real code, rendered without a
+ComfyUI-style performance cost" idea end-to-end before building anything
+more elaborate on top of it.
+
 ## Open questions for the user
 
-1. **Sequencing buy-in**: does the (A)-then-maybe-(B) split above match what
-   you actually want, or is the visual canvas itself the priority (e.g.
-   because you specifically want to compose training runs by hand in a
-   browser, not just get a safer backend)? This changes the plan
-   significantly, worth confirming before phase 1 starts.
+1. ~~Sequencing buy-in~~ -- **Resolved**: custom lightweight canvas (not
+   ComfyUI's), built early as a dev-testing scaffold alongside the backend
+   refactor rather than deferred to the end, on an isolated `/nodegraph`
+   tab that doesn't affect the production config path until deliberately
+   switched over. See "Refined design decisions" above.
 2. Any existing config files / running training setups that need to keep
    working *unchanged* throughout the migration (i.e. is backward TOML
    compatibility a hard requirement, or is a config format change acceptable
-   as part of this)?
-3. Comfortable starting Phase 1 (optimizer nodes) next session, or want to
-   see/revise the `Node`/`Port` interface sketch above first, before any
-   code gets written against it?
+   as part of this)? **Still open.**
+3. ~~Comfortable starting Phase 1~~ -- **Resolved**: first slice shipped
+   (optimizer classes introspected and rendered on the new `/nodegraph`
+   tab). Next: decide whether to continue deepening Phase 1 (e.g. add
+   `step()`'s runtime signature too, not just `__init__`; add a way to
+   actually instantiate + smoke-test a node from the playground) or move to
+   defining the formal `Node`/`Port` base classes and wrapping the first
+   real node (`OptimizerNode`) behind them, per the Phase 1 description
+   above. Needs the user's steer on which feels more valuable to see next.

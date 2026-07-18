@@ -4,6 +4,8 @@ import gc
 import math
 import random
 import sys
+import contextlib
+from typing import Optional
 
 import torch
 from tqdm import tqdm
@@ -15,6 +17,7 @@ from .noise_schedule import get_alpha_sigma
 from .progress_writer import ProgressWriter
 from .seed import derive_seed
 from .unet_wrapper import ComfyUNetWrapper, make_rand_cond
+from .lora import lora_gate_override
 
 
 def _euler_step(x_t, denoised, sigma_t, sigma_next):
@@ -65,6 +68,7 @@ def build_teacher_cache_trajectory(
         student_positive_prompt: str = "",
         student_negative_prompt: str = "",
         student_unet_sd_for_clip=None,
+        teacher_lora_gate: Optional[float] = None,
 ):
     """
     Build cache using real teacher trajectories (Euler sampler).
@@ -78,7 +82,20 @@ def build_teacher_cache_trajectory(
     student_unet_sd_for_clip: full state dict containing conditioner keys
     for the student checkpoint.  If None, falls back to teacher_unet_sd
     (correct when both checkpoints share CLIP weights, which is typical).
+
+    teacher_lora_gate: if set (e.g. 0.0), every teacher.forward() call in
+    this function is wrapped to force the LoRA gate to this value for its
+    duration, then restore whatever was active before. Intended for LoRA
+    training with no separate teacher checkpoint: teacher_model is passed
+    as the *same live student object* (base weights + LoRA adapter), and
+    gate=0.0 makes every LoRALinear in it produce exactly base-model output
+    (result + 0*delta) for the teacher rollout, so the base model never
+    needs a second copy in VRAM. No-op (and harmless) if teacher_model has
+    no LoRALinear layers at all, as in ordinary distillation.
     """
+    _gate_zero = (torch.tensor(teacher_lora_gate) if teacher_lora_gate is not None else None)
+    def _teacher_ctx():
+        return lora_gate_override(_gate_zero) if _gate_zero is not None else contextlib.nullcontext()
 
     # Resolve spatial size — 0 means "use default 64" (512px with 8x VAE downscale)
     latent_dim = latent_size if (latent_size and latent_size > 0) else 64
@@ -386,9 +403,13 @@ def build_teacher_cache_trajectory(
                     xc = comfy_input_transform(x_t, stc)
                     t_tensor = torch.tensor([t_val] * gen_batch_size, dtype=torch.long, device=device)
 
-                    raw = teacher.forward(xc, t_tensor, ctx, y)
+                    raw = None
+                    raw_unc = None
+                    with _teacher_ctx():
+                        raw = teacher.forward(xc, t_tensor, ctx, y)
+                        if use_cfg:
+                            raw_unc = teacher.forward(xc, t_tensor, ctx_unc, y_unc)
                     if use_cfg:
-                        raw_unc = teacher.forward(xc, t_tensor, ctx_unc, y_unc)
                         # We used to combine them here, but now we keep them separate 
                         # for the teacher Euler step. For the Euler step itself, 
                         # we still need a combined result to move x_t forward.
@@ -502,7 +523,8 @@ def build_teacher_cache_trajectory(
                                         dtype=torch.long, device=device)
                 xc = comfy_input_transform(x_t_gpu, st)
 
-                raw_cond = teacher.forward(xc, t_tensor, ctx_t, y_t)
+                with _teacher_ctx():
+                    raw_cond = teacher.forward(xc, t_tensor, ctx_t, y_t)
                 del ctx_t, y_t
 
                 if use_cfg:
@@ -515,7 +537,8 @@ def build_teacher_cache_trajectory(
 
                     ctx_u_t = traj_ctx_unc_cpu.to(device=device, dtype=torch.bfloat16)
                     y_u_t   = traj_y_unc_cpu.to(device=device, dtype=torch.bfloat16)
-                    raw_uncond = teacher.forward(xc, t_tensor, ctx_u_t, y_u_t)
+                    with _teacher_ctx():
+                        raw_uncond = teacher.forward(xc, t_tensor, ctx_u_t, y_u_t)
                     del ctx_u_t, y_u_t
                     
                     tgt_uncond = raw_to_target(raw_uncond.float(), x_t_gpu.float(),

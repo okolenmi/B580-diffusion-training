@@ -54,6 +54,16 @@ class Trainer:
         self.tuning = config.tuning
         self._is_lora = isinstance(self.tuning, LoRATuning)
         self._is_cyclic = isinstance(self.tuning, CyclicTuning)
+        # LoRA training has exactly one base-model concept (paths.base_model)
+        # -- no separate teacher checkpoint exists in this mode (paths.student
+        # is for resuming an adapter, not a different base). That means the
+        # teacher trajectory and the student are always the same underlying
+        # weights, so the teacher rollout can run through the live student
+        # object with its LoRA gate forced to 0 (see lora_gate_override in
+        # lora.py) instead of loading a second full copy of the base model.
+        # Saves a full base-UNet's worth of VRAM and guarantees the "teacher"
+        # is always exactly the model being adapted, never a stale copy.
+        self._lora_unified_teacher = self._is_lora
 
         # Resolve checkpoint/LoRA paths that may have been given relative to
         # checkpoints_dir/loras_dir (see paths.py's resolve_model_path) to
@@ -454,8 +464,12 @@ class Trainer:
         # accumulation window); every other optimizer batches grad_accum
         # micro-steps into one real update. Checked against config rather
         # than self.optimizer since the optimizer may not be built yet the
-        # first time this is needed (cache is built before build_optimizer()
-        # on cycle 0) -- see optimizer_builder.py for the same check.
+        # first time this is needed: cache is built before build_optimizer()
+        # on cycle 0 in ordinary (non-unified-teacher) mode -- see
+        # optimizer_builder.py for the same check. (In unified-teacher LoRA
+        # mode the order is reversed -- see _lora_unified_teacher below --
+        # but effective_accum only depends on config, not on which model
+        # objects exist yet, so this line is correct either way.)
         effective_accum = 1 if comm.optimizer == "fused-adafactor" else comm.grad_accum
         # report_every counts micro-batches (run_training_loop ticks the
         # timer every micro-batch); scale it so the printed phase-timing
@@ -468,8 +482,16 @@ class Trainer:
             full_teacher_sd.update(self.teacher_unet_sd)
         if self.non_unet:
             full_teacher_sd.update(self.non_unet)
-        
-        if full_teacher_sd:
+
+        if self._lora_unified_teacher:
+            # No separate teacher model: the live student (base weights +
+            # LoRA) serves as the teacher too, via lora_gate_override(0.0)
+            # in cache_trajectory.py. self.teacher stays None -- every
+            # `if self.teacher:` check elsewhere in this method already
+            # guards on that and naturally no-ops.
+            if not full_teacher_sd:
+                print("  Teacher model not loaded (using dataset for training data).")
+        elif full_teacher_sd:
             self.teacher = ComfyUNetWrapper(full_teacher_sd, device=self.device, dtype=torch.bfloat16)
             self.teacher.eval()
             for p in self.teacher.parameters():
@@ -533,6 +555,20 @@ class Trainer:
         xpu_empty_cache()
         gc.collect()
 
+        if self._lora_unified_teacher and self.optimizer is None:
+            # Defensive fallback: the only real entry point (cli.py) already
+            # calls build_optimizer() before train(), so self.student
+            # normally exists by this point. This only fires for a caller
+            # that skips that step -- mirrors the same `if self.optimizer is
+            # None:` guard the cache loop below already has, just needed one
+            # step earlier here since the student must exist *before* the
+            # first _get_cache() call in unified-teacher mode (it's passed
+            # as the teacher), not after.
+            print("  [WARN] optimizer not yet built entering train() in unified-teacher "
+                  "LoRA mode -- building now (expected to already be done via "
+                  "cli.py's build_optimizer() call).")
+            self.build_optimizer()
+
         print(f"[4/4] Training {self.run_steps} steps in {total_cycles} cycles...")
         cycle_idx = 0
         try:
@@ -546,7 +582,7 @@ class Trainer:
 
                 if self.dataset_loader:
                     cache = self.dataset_loader
-                elif self.teacher:
+                elif self.teacher or self._lora_unified_teacher:
                     # this_cycle_steps is an opt-step count; the training loop
                     # consumes effective_accum micro-batches per real update,
                     # so the cache needs that many samples, not this_cycle_steps.
@@ -678,7 +714,8 @@ class Trainer:
                 traj_skip_steps=cache_cfg.traj_skip_steps,
                 cache_batch_size=cache_cfg.batch_size,
                 latent_size=comm.latent_size,
-                teacher_model=self.teacher,
+                teacher_model=(self.student if self._lora_unified_teacher else self.teacher),
+                teacher_lora_gate=(0.0 if self._lora_unified_teacher else None),
                 student_model=None,
                 student_unet_sd=self.student_unet_sd,
                 student_mix_frac=cache_cfg.student_mix,
@@ -704,7 +741,8 @@ class Trainer:
                 cache_batch_size=None,
                 latent_size=comm.latent_size,
                 t_mode=comm.t_mode, t_low=comm.t_low, t_high=comm.t_high,
-                teacher_model=self.teacher,
+                teacher_model=(self.student if self._lora_unified_teacher else self.teacher),
+                teacher_lora_gate=(0.0 if self._lora_unified_teacher else None),
             )
 
     def _archive_optimizer(self):

@@ -1,6 +1,7 @@
 """LoRA (Low-Rank Adaptation) module for injecting trainable adapters into UNet."""
 
 import math
+import contextlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -46,6 +47,31 @@ def set_lora_gate(gate: Optional[torch.Tensor]):
     delta by this until it's changed again."""
     global _current_gate
     _current_gate = gate
+
+
+@contextlib.contextmanager
+def lora_gate_override(gate: Optional[torch.Tensor]):
+    """Temporarily force the LoRA gate to `gate` for the duration of the
+    `with` block, restoring whatever gate was active before on exit (even if
+    the block raises). Safe to call on any model, including one with zero
+    LoRALinear layers -- the gate is simply unused in that case.
+
+    Primary use: forcing gate=0 during teacher-trajectory generation when
+    the "teacher" is the same live model object as the student (LoRA mode
+    with no separate base checkpoint) -- gate=0 makes LoRALinear.forward()
+    produce exactly base-model output (result + 0), so the same weights
+    serve as both teacher and student without a second model in VRAM.
+    Nests correctly, so student-forward (real gate) and teacher-forward
+    (gate=0) calls can be interleaved within the same rollout (e.g. DAgger
+    chain-mixing) without one leaking into the other.
+    """
+    global _current_gate
+    prev = _current_gate
+    _current_gate = gate
+    try:
+        yield
+    finally:
+        _current_gate = prev
 
 
 def compute_lora_gate(t: torch.Tensor, train_low: float, train_high: float,

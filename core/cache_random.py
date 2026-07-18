@@ -3,6 +3,8 @@
 import gc
 import random
 import sys
+import contextlib
+from typing import Optional
 
 import torch
 from tqdm import tqdm
@@ -15,6 +17,7 @@ from .model_io import comfy_input_transform, raw_to_target
 from .noise_schedule import get_alpha_sigma, sample_timestep
 from .seed import derive_seed
 from .unet_wrapper import ComfyUNetWrapper, make_rand_cond
+from .lora import lora_gate_override
 
 
 def build_teacher_cache(teacher_unet_sd: dict, teacher_type: str,
@@ -26,14 +29,23 @@ def build_teacher_cache(teacher_unet_sd: dict, teacher_type: str,
                         latent_size: int = 0,
                         t_mode: str = "uniform",
                         t_low: int = 0, t_high: int = 999,
-                        teacher_model=None) -> list:
+                        teacher_model=None,
+                        teacher_lora_gate: Optional[float] = None) -> list:
     """
     Pre-compute n_samples teacher outputs on GPU (bf16), then discard teacher.
     Returns list of (x_t, target_epsilon, alpha, sigma, t_val) stored on CPU.
     
     cache_batch_size controls the batch size for teacher forward passes during
     cache generation. If None or 0, falls back to batch_size.
+
+    teacher_lora_gate: see build_teacher_cache_trajectory's docstring in
+    cache_trajectory.py -- same mechanism, forces the LoRA gate to this value
+    around teacher.forward() when teacher_model is the live student object.
     """
+    _gate_zero = (torch.tensor(teacher_lora_gate) if teacher_lora_gate is not None else None)
+    def _teacher_ctx():
+        return lora_gate_override(_gate_zero) if _gate_zero is not None else contextlib.nullcontext()
+
     gen_batch_size = resolve_gen_batch_size(cache_batch_size, batch_size)
     warn_batch_mismatch(gen_batch_size, batch_size)
 
@@ -125,7 +137,8 @@ def build_teacher_cache(teacher_unet_sd: dict, teacher_type: str,
             y_big = torch.cat(y_list)
             del ctx_list, y_list
 
-            raw_big = teacher.forward(x_t_transformed, t_big, ctx_big, y_big)
+            with _teacher_ctx():
+                raw_big = teacher.forward(x_t_transformed, t_big, ctx_big, y_big)
 
             # Convert teacher output to student's prediction target type
             target_big = raw_to_target(raw_big, x_t_big, alpha_vec, sigma_vec,

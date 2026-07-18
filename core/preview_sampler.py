@@ -144,6 +144,8 @@ class PreviewGenerator:
         """
         step_dir = self.out_dir / f"step_{global_step:07d}"
         step_dir.mkdir(parents=True, exist_ok=True)
+        from .comfy_setup import vram_snapshot
+        vram_snapshot("preview:generate() entry")
 
         set_lora_gate(None)
 
@@ -162,6 +164,7 @@ class PreviewGenerator:
         from .comfy_setup import xpu_synchronize, xpu_empty_cache
         xpu_synchronize()
         xpu_empty_cache()
+        vram_snapshot("after denoising loop, before VAE load")
 
         # Load the VAE once, decode one image at a time, then free immediately.
         # Decoding is disproportionately memory-hungry per-image compared to
@@ -173,6 +176,7 @@ class PreviewGenerator:
         if vae is None:
             raise RuntimeError("No VAE weights found in the loaded checkpoint (paths.base_model) "
                                "-- cannot decode preview images.")
+        vram_snapshot("after VAE load")
         saved = []
         for i in range(final_latents.shape[0]):
             single_latent = final_latents[i:i + 1].to(self.device, dtype=torch.bfloat16)
@@ -183,8 +187,10 @@ class PreviewGenerator:
             saved.append(fname)
             del single_latent, img_tensor
             xpu_empty_cache()
+        vram_snapshot("after decode loop, before vae.free()")
         vae.free()
         del vae
+        vram_snapshot("after vae.free()")
 
         self._update_manifest(global_step, saved)
         print(f"  [preview] step {global_step}: generated {len(saved)} preview image(s)", flush=True)
@@ -198,6 +204,7 @@ class PreviewGenerator:
         # training loop's own reload/reallocation matters.
         xpu_synchronize()
         xpu_empty_cache()
+        vram_snapshot("preview:generate() exit")
         return step_dir
 
     def _update_manifest(self, global_step, filenames):

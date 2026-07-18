@@ -19,7 +19,7 @@ from safetensors.torch import load_file
 
 from .cache_random import build_teacher_cache as build_random_cache
 from .cache_trajectory import build_teacher_cache_trajectory as build_trajectory_cache
-from .comfy_setup import xpu_empty_cache, xpu_synchronize
+from .comfy_setup import xpu_empty_cache, xpu_synchronize, vram_snapshot
 from .config_model import TrainingConfig, LoRATuning, CyclicTuning
 from .lora import LoRAConfig
 from .noise_schedule import get_alpha_sigma
@@ -303,6 +303,7 @@ class Trainer:
         if not self.preview_gen or not self.student:
             return
         offloaded = False
+        vram_snapshot("trainer:_generate_preview entry (before offload)")
         try:
             # Squeeze out any cached-but-unused memory from normal training
             # before touching anything -- training runs close to the VRAM
@@ -330,8 +331,10 @@ class Trainer:
             # which should be synchronous, but an explicit sync is defensive.
             xpu_synchronize()
             xpu_empty_cache()
+            vram_snapshot("trainer: after optimizer offload")
             self.student.eval()
             self.preview_gen.generate(self.student, step)
+            vram_snapshot("trainer: after preview_gen.generate() returns")
         except Exception as e:
             print(f"  [WARN] Preview generation failed at step {step}: {e}")
         finally:
@@ -356,6 +359,7 @@ class Trainer:
                 # relying on implicit stream-ordering alone is the leading
                 # suspect for the post-preview hang this is meant to fix.
                 xpu_synchronize()
+            vram_snapshot("trainer:_generate_preview exit (after reload, resuming training)")
 
     def _is_unet(self, key: str) -> bool:
         return "model.diffusion_model." in key or "lora_unet_" in key

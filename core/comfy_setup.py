@@ -1,5 +1,6 @@
 """ComfyUI setup and device utilities."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -57,3 +58,31 @@ def xpu_synchronize():
     """Block until all pending XPU work (including async transfers) completes."""
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         torch.xpu.synchronize()
+
+
+_VRAM_DEBUG = os.environ.get("TRAIN_VRAM_DEBUG", "0") == "1"
+
+
+def vram_snapshot(label: str):
+    """Print allocated vs reserved XPU memory (MB) if TRAIN_VRAM_DEBUG=1.
+
+    'allocated' = memory actively backing live tensors right now.
+    'reserved'  = memory the caching allocator holds from the driver (>=
+    allocated; the gap is the allocator's own free-block pool, kept around
+    to avoid re-requesting from the driver on every alloc -- this is
+    normal and doesn't by itself mean anything is leaked).
+
+    A completed op's allocated-vs-reserved *gap* growing steadily across
+    repeated calls to the same code path (not just staying elevated once)
+    is the actual leak signature to look for; a one-time step up that then
+    stays flat across further calls is ordinary allocator high-water-mark
+    behavior, not a leak. No-op (zero overhead) unless the env var is set.
+    """
+    if not _VRAM_DEBUG or not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        return
+    try:
+        alloc = torch.xpu.memory_allocated() / (1024 ** 2)
+        reserved = torch.xpu.memory_reserved() / (1024 ** 2)
+        print(f"    [vram] {label}: allocated={alloc:.1f}MB reserved={reserved:.1f}MB", flush=True)
+    except Exception as e:
+        print(f"    [vram] {label}: snapshot failed ({e})", flush=True)

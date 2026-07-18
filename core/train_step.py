@@ -16,7 +16,7 @@ import torch
 from torch import nn
 from tqdm import tqdm
 
-from .comfy_setup import xpu_empty_cache
+from .comfy_setup import xpu_empty_cache, vram_snapshot
 from .config_model import CommonSettings
 from .lora import compute_lora_gate, set_lora_gate
 from .model_io import comfy_input_transform, raw_to_denoised, raw_to_target
@@ -887,6 +887,7 @@ def run_training_loop(
             if (i + 1) % 250 == 0:
                 xpu_empty_cache()
                 _request_gc()
+                vram_snapshot(f"training loop, micro-step {i + 1}")
 
             if stopped: break
     except Exception:

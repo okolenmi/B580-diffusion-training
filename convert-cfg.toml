@@ -54,7 +54,6 @@ alpha = 32.0
 dropout = 0.0
 lora_output = "test_lora11b.safetensors"
 target_all = false
-lora_continue_from = "test_lora11a.safetensors"
 block_weighting = ""
 gate_enabled = false
 gate_train_low = 300.0

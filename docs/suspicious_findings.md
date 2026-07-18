@@ -5,72 +5,94 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Open
 
-- **[2026-07] Composition destruction on LoRA training -- infrastructure for
-  testing the leading hypothesis now shipped, hypothesis itself still
-  unconfirmed.** Long-standing issue: LoRA training reliably produces a
-  "mess of badly-formed objects" rather than a clean quality/style shift,
-  regardless of dataset/settings (sooner at high LR, later at low LR). Loss
-  looks fine throughout -- the failure doesn't show up there.
+- **[2026-07] Composition destruction on LoRA training -- DAgger chain-mixing
+  now wired for LoRA end-to-end; the actual experiment is still unrun.**
+  Long-standing issue and leading hypothesis unchanged from before (exposure
+  bias / compounding distribution shift from teacher-trajectory-only
+  training -- see prior entry text preserved below).
 
-  Leading theory: exposure bias / compounding distribution shift. Training
-  samples come from the *teacher's own* deterministic denoising trajectory;
-  the student is only ever supervised on states exactly on that trajectory.
-  During real generation the student denoises from its *own* prior output,
-  so the moment its prediction deviates even slightly from the teacher, every
-  later step operates on a latent state never seen in training -- and the
-  deviation compounds. Early (high-noise) steps stay close to trajectories
-  the student trained on; by mid/low-noise steps it's improvising in
-  unfamiliar territory, and "don't discard, keep pasting in plausible
-  objects" is a plausible improvisation failure mode. This also explains why
-  loss (measured only on in-distribution teacher states) doesn't catch it.
+  This session's remaining piece is done: chain-mixing's "student" steps
+  (`student_mix_frac`/`student_anchor_steps`/`student_chain_len`/
+  `student_chain_noise`) now use the *live, currently-training*
+  `self.student` in unified-LoRA mode (`trainer.py`'s `_get_cache()` passes
+  `student_model=self.student`), not a separate stale checkpoint. Verified
+  before shipping, not just assumed:
+    - `_current_gate` defaults to `None` (full, ungated LoRA) at module load
+      and nothing sets it before cache-build in LoRA mode (single-cycle,
+      cache always built before any training step runs) -- so student-chain
+      steps get correct full-strength LoRA behavior with no extra plumbing.
+    - The target-computation pass (the actual supervised label for every
+      collected state) unconditionally uses `teacher.forward()` inside
+      `_teacher_ctx()` regardless of whether that state was reached via a
+      teacher-only or student-chain step during rollout -- confirmed this
+      matches the real DAgger recipe (aggregate states visited under the
+      current policy, but always label with the expert's true output), not
+      just "sometimes mix in different data."
+    - `self.student` staying in `.train()` mode (vs. `.eval()`, which the
+      existing code path never explicitly sets when `student_model` is
+      passed) has no behavioral effect here: SDXL_CONFIG has no dropout key
+      (ComfyUI defaults to 0), this architecture uses GroupNorm which is
+      train/eval-mode-independent (unlike BatchNorm), and the entire rollout
+      already runs under `torch.no_grad()` regardless.
 
-  This is a named, well-studied problem in imitation learning, and the
-  standard fix -- DAgger (let the learner generate part of its own training
-  trajectory so training data includes the drift states it actually hits) --
-  already existed in this codebase (`student_mix` config), but only for full
-  distillation, and only across *cyclic* boundaries (needed a second full
-  model in VRAM, so was limited to loading a stale checkpoint from a
-  previous cycle rather than the live model).
+  **Still unrun**: the actual experiment -- does DAgger-mixed training
+  measurably reduce composition destruction vs. pure teacher-trajectory
+  training for LoRA. Suggested test: short run, `student_mix` around
+  0.3-0.5, compare previews against a `student_mix=0` baseline on the same
+  seed/dataset.
 
-  Realized during this session: for LoRA (student = base weights + LoRA,
-  same object as any "teacher" would be), DAgger doesn't need a second model
-  at all -- the LoRA gate can be forced to 0 for a forward pass to get exact
-  base-model behavior from the *same* live model object, with no separate
-  VRAM cost and no staleness (always the actual current student, not a
-  checkpoint from N steps ago). Implemented and verified this session:
-  `lora_gate_override()` context manager (lora.py, nestable, restores prior
-  state even on exception -- verified the scalar-gate broadcast zeroes the
-  LoRA delta correctly for both 2D and 3D layer output shapes numerically),
-  wired through every teacher.forward() call site in both cache_trajectory.py
-  and cache_random.py (purely additive -- a no-op via contextlib.nullcontext()
-  when the new `teacher_lora_gate` param isn't passed, so zero risk to
-  existing distillation training), and trainer.py now skips building a
-  separate teacher model entirely in LoRA mode, passing the live
-  `self.student` (gate forced to 0) as the teacher instead. Fixed one real
-  bug caught during this work: the cache-loop's `elif self.teacher:` gate
-  became unreachable once self.teacher was deliberately left None in unified
-  mode, which would have raised a RuntimeError on every LoRA run --
-  corrected to `elif self.teacher or self._lora_unified_teacher:`.
+  Distillation's own DAgger (student_mix + cyclic) is untouched by any of
+  this, exactly as requested.
 
-  **NOT done yet**: this only removes the VRAM barrier and gives correct
-  gate-based teacher substitution for the plain trajectory-rollout and
-  target-computation passes. The actual DAgger *chain-mixing* logic
-  (student_mix_frac, student_anchor_steps, student_chain_len,
-  student_chain_noise) in cache_trajectory.py still expects a separate
-  `student_model`/`student_unet_sd` (a *stale, previously saved* checkpoint)
-  and is still wired for the cyclic-distillation case only -- it does not
-  yet use the live `self.student` (gate=1) to mix in fresh, up-to-the-second
-  student steps within a single-cycle LoRA run. That's the next piece:
-  wire chain-mixing to use `self.student` directly (gate=1) instead of a
-  loaded `student_cache`, and enable `student_mix_frac > 0` for LoRA's
-  (always single-cycle) training loop. Once that's in, the actual
-  experiment -- does DAgger-mixed training reduce composition destruction
-  compared to pure teacher-trajectory training -- is still unrun.
+- **[2026-07] Distillation's existing DAgger chain-mixing always rolls out
+  from the *initial* pre-training weights, never anything reflecting actual
+  training progress -- across any cycle, not just "one cycle behind."**
+  Discovered while wiring the LoRA version above; confirmed by tracing every
+  assignment to `self.student_unet_sd` in trainer.py -- it's set exactly
+  once, inside `load_models()`, and never touched again. Since distillation's
+  chain-mixing always goes through `student_unet_sd=self.student_unet_sd`
+  (a fixed dict reference) rather than a live model object
+  (`student_model=None` is hardcoded at that call site), every cycle's
+  chain-mixing constructs a fresh `ComfyUNetWrapper` from those same
+  never-updated original weights. This matches the user's own independent
+  assessment of distillation's DAgger as "just an imitation." Real, but
+  explicitly out of scope this session -- the user asked to keep
+  distillation's path untouched while LoRA gets a real (live-model) version.
+  If distillation's DAgger is revisited later, the fix is straightforward
+  given the LoRA work already done: refresh `self.student_unet_sd` (or
+  better, pass `student_model=self.student` directly, mirroring the LoRA
+  change) from the actual trained weights between cycles.
 
-  Distillation's own DAgger (student_mix + cyclic, loading a stale
-  checkpoint) is untouched by any of this and continues to work exactly as
-  before -- this was kept as a genuinely separate code path per explicit
-  request, not merged/risked.
+## Pending user testing
+
+- **[2026-07] Persistent ~500MB VRAM growth after preview generation.**
+  Reported as compounding slowly (not just a one-time jump), first appeared
+  sometime after an earlier preview-VRAM fix (exact point unknown). Ruled
+  out two candidates by reading the code: CAME's own memory pool (only
+  entered during `optimizer.step()`, which preview never calls) and
+  `PreviewGenerator`'s cached conditioning (set once at construction, never
+  mutated). Couldn't reproduce or narrow further without XPU hardware, so
+  shipped `TRAIN_VRAM_DEBUG=1` env-var-gated diagnostics instead of guessing
+  further: 8 checkpoints (`vram_snapshot()` in `comfy_setup.py`) across
+  `preview_sampler.py`'s `generate()` (entry, after denoising, after VAE
+  load, after decode loop, after `vae.free()`) and `trainer.py`'s
+  `_generate_preview()` (entry/before offload, after offload, after
+  `generate()` returns, exit/after reload) plus a baseline every 250
+  micro-steps during ordinary training. Zero overhead when the env var is
+  unset. Waiting on the user to run this and report which checkpoint's
+  reading doesn't drop back down across 2-3 consecutive previews.
+
+- **[2026-07] Corrected an overstated claim about unified-teacher LoRA's VRAM
+  benefit.** Originally claimed removing the separate teacher model would
+  meaningfully reduce steady-state training VRAM. Wrong -- traced the
+  existing code and found `self.teacher` was already being moved to CPU
+  (`self.teacher.to("cpu")`) right after cache generation, before the main
+  training loop starts, in the *original* code too. So the old code's
+  resident-during-training VRAM was already just one model, not two; the
+  unified-teacher change's real benefit is reducing peak VRAM during the
+  (shorter) cache-generation phase specifically, not steady-state training.
+  Matches user's report of no measurable change in their monitored training
+  VRAM after applying that patch.
 
 ## Resolved
 

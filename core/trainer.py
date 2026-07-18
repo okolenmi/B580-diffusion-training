@@ -720,8 +720,17 @@ class Trainer:
                 latent_size=comm.latent_size,
                 teacher_model=(self.student if self._lora_unified_teacher else self.teacher),
                 teacher_lora_gate=(0.0 if self._lora_unified_teacher else None),
-                student_model=None,
-                student_unet_sd=self.student_unet_sd,
+                # In unified-LoRA mode, chain-mixing's "student" steps should
+                # use the live, currently-training self.student (full LoRA
+                # active -- _current_gate defaults to None/ungated, and
+                # nothing sets it before this point since LoRA mode's single
+                # cache-build always happens before any training step runs),
+                # not a separate stale checkpoint. student_unet_sd is left
+                # unset here since student_model already takes priority over
+                # it below regardless -- explicit None avoids implying the
+                # state-dict path is what's actually used.
+                student_model=(self.student if self._lora_unified_teacher else None),
+                student_unet_sd=(None if self._lora_unified_teacher else self.student_unet_sd),
                 student_mix_frac=cache_cfg.student_mix,
                 student_anchor_steps=cache_cfg.student_anchor_steps,
                 student_chain_len=cache_cfg.student_chain_len,

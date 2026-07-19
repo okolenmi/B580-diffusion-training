@@ -1,0 +1,245 @@
+# The `nodes/` package: design
+
+Companion to `docs/node_architecture_refactor_plan.md` -- that document
+covers the *why* and the multi-session migration strategy; this one covers
+the concrete class design for the new `nodes/` package, written before
+implementation.
+
+## Course correction that produced this document
+
+An earlier attempt this session tried to retrofit a shared base class
+directly into `core/optimizers.py` (extracting genuinely duplicated
+lifecycle code -- `offload_states_to_cpu`/`reload_states_to_device`/
+`decay_states`/`reset_states`/`free_states` -- into one base class the 5
+existing optimizer classes would inherit from). That work was reverted,
+confirmed byte-identical to the known-good remote state, before this
+document was written. Two reasons, both worth stating plainly so they don't
+get relitigated later:
+
+1. **`core/optimizers.py` is live, already-verified production code.**
+   `ChunkedXPUCAME`'s math was numerically checked against the official
+   reference implementation earlier this session; the opt-step counting
+   and SNR-weighting fixes elsewhere in the codebase were similarly
+   hard-won. Restructuring inheritance in that file, however carefully,
+   means every one of those verified properties needs re-verifying against
+   the new shape -- real risk for a benefit (cleaner internal duplication)
+   that doesn't require touching that file at all to achieve.
+2. **The old code was never designed with a node-graph interface in mind.**
+   Retrofitting one onto it means fighting its existing shape at every
+   step (as the reset-vs-free asymmetry discovered mid-refactor
+   demonstrated -- `_scratch`/`_pool` cleared in `free_states()` but not
+   `reset_states()` in some classes, `remove_hooks()` similarly asymmetric
+   in `FusedXPUAdafactor`; each one a real, easy-to-miss trap when forcing
+   old, organically-grown code into a new shared shape it wasn't written
+   for). A clean-room design in a new location doesn't have to fight any
+   of that.
+
+**Resulting rule for this package: `nodes/` never edits anything under
+`core/`, `manager/`, or `server/` (except read-only imports). It wraps
+existing, verified code via composition (the Adapter pattern), and is
+free to define its own clean interfaces without being constrained by
+what the old code happens to already look like.**
+
+## The abstraction hierarchy
+
+Four distinct concepts, deliberately kept separate rather than collapsed
+into one "Node does everything" class -- collapsing them is exactly the
+kind of shortcut that produces code average training data leans toward and
+that this design is explicitly working against.
+
+### 1. `Port` -- declarative port metadata
+
+```python
+@dataclass(frozen=True)
+class Port:
+    name: str
+    type: type
+    required: bool = True
+    default: Any = None
+    doc: str = ""
+```
+
+Pure data. No behavior. Describes one named input or output slot.
+
+### 2. `Node` (ABC) -- the universal node contract
+
+```python
+class Node(ABC):
+    INPUTS:  ClassVar[dict[str, Port]] = {}
+    OUTPUTS: ClassVar[dict[str, Port]] = {}
+
+    @abstractmethod
+    def build(self, **inputs) -> dict[str, Any]:
+        """Given values for INPUTS, produce a dict covering OUTPUTS."""
+```
+
+This is the only thing every node in the system has in common: a declared,
+inspectable set of typed input/output ports, and a way to turn input values
+into output values. Deliberately *not* specified here: whether building is
+cheap/pure or expensive/stateful, what "running" a node beyond `build()`
+means for something long-lived like a training loop -- those are concerns
+for domain-specific layers below, added only when a concrete domain
+actually needs them, not speculatively baked into the universal base.
+
+`INPUTS`/`OUTPUTS` are **declared, not derived**. This is a deliberate
+departure from the earlier read-only playground (which used
+`inspect.signature()` to *guess* a class's ports from its constructor).
+Guessing is fine for displaying already-existing, non-node-aware code
+read-only, which is what that playground was for. It is not fine as the
+actual interface contract for newly-designed node code -- a declared
+contract can be validated (a node's `build()` can check its own inputs and
+outputs against what it declared, and `__init_subclass__` can refuse to
+define a concrete node that forgot to declare `INPUTS`/`OUTPUTS` at all),
+where a guessed one can only ever be descriptive, never enforced.
+
+### 3. Domain-family ABCs -- the "intermediate node" layer
+
+This is the layer that directly answers "these classes have a big similar
+part that can be intermediate node." One example, worked through fully
+below: `OptimizerNode`. The general shape, for any future domain
+(`TeacherSourceNode`, `DataSourceNode`, ...): a domain ABC extends `Node`,
+fixes the `OUTPUTS` shape shared by the whole family (every optimizer node
+produces exactly one `optimizer` port, typed as the family's own runtime
+contract -- see `OptimizerHandle` below), and may declare a `COMMON_INPUTS`
+dict that concrete members merge into their own `INPUTS` rather than
+re-declaring shared ports by hand in every subclass.
+
+### 4. Runtime "Handle" ABCs -- separate from the Node that builds them
+
+A `Node` represents a *construction* step (config in, object out) in the
+graph. The object it constructs is a different concern with its own
+interface, used at a different time (during actual training, not graph
+setup) -- keeping these separate is a real, load-bearing distinction, not
+just a stylistic split. Concretely: `OptimizerNode.build()` returns an
+`OptimizerHandle` -- a formal ABC declaring exactly the methods this
+codebase's optimizers are actually called through elsewhere
+(`step`, `zero_grad`, `offload_states_to_cpu`, `reload_states_to_device`,
+`decay_states`, `reset_states`, `free_states`, `.lr`). This mirrors the
+Builder/Product (or Factory/Product) pattern: the Node is the builder, the
+Handle is the product, and neither needs to know the other's internal
+shape beyond this contract.
+
+## Worked example: the optimizer domain
+
+Chosen first because it's the domain this session already has the deepest,
+most rigorously-verified understanding of.
+
+```
+nodes/
+  __init__.py
+  core.py                 # Port, Node (ABC) -- domain-independent
+  optimizer/
+    __init__.py
+    handle.py              # OptimizerHandle (ABC) -- the runtime contract
+    node.py                 # OptimizerNode (ABC) -- the intermediate layer
+    adafactor.py            # AdafactorOptimizerNode + its Handle adapter
+    came.py                  # CAMEOptimizerNode + its Handle adapter
+    foreach_adafactor.py      # ForeachAdafactorOptimizerNode + its Handle adapter
+    fused_adafactor.py         # FusedAdafactorOptimizerNode + its Handle adapter
+    adamw.py                    # AdamWOptimizerNode + its Handle adapter
+```
+
+Each concrete `*OptimizerNode.build()` constructs a small `*Handle` adapter
+class that **wraps** (holds a reference to, delegates every call to) the
+corresponding already-verified `core.optimizers.*` instance -- e.g.
+`CAMEOptimizerHandle` wraps a real `core.optimizers.ChunkedXPUCAME`. No
+optimizer math is reimplemented anywhere in `nodes/`; every adapter is a
+thin pass-through. This is the concrete mechanism that satisfies "no risk
+of exploding the working solution": the verified numerical behavior lives
+in exactly one place (`core/optimizers.py`, untouched), and the new code's
+only job is presenting it through a clean, declared, checkable interface.
+
+**A genuine, honest bonus, not the point of the exercise but worth noting
+since it fell directly out of doing this properly:** `CPUAdamW` (the legacy
+class backing `AdamWOptimizerNode`) doesn't actually implement
+`decay_states`/`reset_states` at all -- confirmed earlier this session,
+and a real latent bug (`trainer.py` calls `optimizer.decay_states(...)`
+unconditionally in cyclic-tuning mode; combining `optimizer="adamw"` with
+cyclic tuning would crash with `AttributeError`, apparently never
+exercised together so far). Since `OptimizerHandle` declares
+`decay_states`/`reset_states` as required abstract methods, Python's `abc`
+machinery *refuses to let `AdamWOptimizerHandle` be instantiated at all*
+unless it implements them -- so the adapter is forced to provide a real,
+new, correct implementation. That implementation is new code, written and
+verified fresh (not inherited from or copy-pasted out of the old class),
+living entirely in the adapter -- `core/optimizers.py`'s `CPUAdamW` itself
+is never touched and remains exactly as it was for any other current
+caller. This is what "clean base, no risk to the old solution" concretely
+buys: a real bug gets a real fix, without the fix's correctness depending
+on successfully modifying code that's already relied upon elsewhere.
+
+## Implemented this round: 4 of 5 optimizers, and why not the 5th
+
+`AdafactorOptimizerNode`, `CAMEOptimizerNode`, `ForeachAdafactorOptimizerNode`,
+`AdamWOptimizerNode` are implemented and verified (see below).
+`FusedXPUAdafactor` is deliberately **not** wrapped this round.
+
+Reason, found while writing the adapters rather than assumed going in:
+`core/train_step.py` drives `FusedXPUAdafactor` through a genuinely
+different execution protocol from the other four -- `optimizer.
+begin_step(sub_steps=n_passes)` and `optimizer.prepare_next_pass()` get
+called at specific points in the per-micro-step loop, detected via a literal
+`isinstance(optimizer, FusedXPUAdafactor)` check, because its actual
+parameter updates happen inside backward hooks rather than in a single
+explicit `step()` call the way the other four work. Wrapping it under the
+same plain `OptimizerHandle` used by the other four and quietly dropping
+`begin_step`/`prepare_next_pass` would produce a Handle that *looks*
+interchangeable but silently doesn't function -- exactly the kind of
+false-equivalence a real interface is supposed to prevent, not produce.
+The honest options are (a) extend the contract -- a
+`FusedOptimizerHandle(OptimizerHandle)` adding `begin_step`/
+`prepare_next_pass` as further required methods, with the training loop
+(once it's actually wired to use `nodes/`, a later phase) checking
+`isinstance(handle, FusedOptimizerHandle)` instead of the current
+concrete-class check -- or (b) treat fused/backward-hook-based optimizers
+as a genuinely different node family entirely. Left as an open design
+question rather than resolved by force-fitting it into today's contract.
+
+## Verification performed (no torch available in this environment)
+
+Every adapter's `build()` and its Handle's delegation were tested against
+hand-written mock legacy classes replicating the real ones' exact
+structural behavior (constructor signature, which attributes exist,
+whether `reset_states`/`decay_states` exist as real methods) -- not just
+compiled, actually exercised:
+
+- `CAMEOptimizerHandle`: constructed via `build()` with only the required
+  `params` input, confirmed every optional input correctly falls back to
+  its declared default (including the CAME-specific `lr=1e-4` override on
+  top of `OptimizerNode.COMMON_INPUTS`'s generic `lr=1e-5` default,
+  confirming the merge-and-override pattern works) and confirmed
+  `step`/`zero_grad`/`decay_states`/`update_lr` correctly delegate to the
+  wrapped instance.
+- `AdafactorOptimizerHandle`: same delegation check across all seven
+  `OptimizerHandle` methods in one pass.
+- `ForeachAdafactorOptimizerHandle`: specifically verified `reset_states()`
+  -- which doesn't exist as a method on the real legacy class -- correctly
+  routes through `decay_states(0.0)` instead (confirmed by reading the real
+  `ForeachXPUAdafactor.decay_states`'s body: its `factor<=0` branch already
+  does the identical null-out-all-state operation inline).
+- `AdamWOptimizerHandle` -- the one adapter containing genuinely new logic,
+  not just delegation, so given the most scrutiny: the mock's `step()`
+  method replicates the real `CPUAdamW.step()`'s important property
+  exactly -- it calls `self.m[i].mul_(...)` with **no None-guard**, unlike
+  the GPU optimizers' lazily-populated state. Confirmed the critical
+  correctness property this adapter depends on: after `reset_states()`,
+  `step()` still runs without crashing, because the adapter zeroes the
+  tensors in place (`m[i].zero_()`) rather than nulling them
+  (`m[i] = None`) -- the latter would raise `AttributeError` on the very
+  next `step()` call, exactly reproducing the real bug this adapter exists
+  to fix, if gotten wrong. Also verified `decay_states(0.0)` correctly
+  routes to the same zero-in-place reset path.
+
+All of the above ran directly, with real assertions checked and printed --
+not reasoned about in the abstract.
+
+## What changes for the playground UI
+
+The `/nodegraph` page's introspection moves from *guessing* ports via
+`inspect.signature()` on old classes to *reading* the real, declared
+`INPUTS`/`OUTPUTS` off the new `Node` subclasses directly -- strictly
+better, since there's now an actual contract to read rather than a
+constructor signature to reverse-engineer. The visual "extends" hierarchy
+(concrete node -> `OptimizerNode` -> `Node`) can now be shown accurately,
+because it's now a real Python inheritance chain, not something inferred
+after the fact.

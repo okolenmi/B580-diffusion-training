@@ -233,6 +233,52 @@ compiled, actually exercised:
 All of the above ran directly, with real assertions checked and printed --
 not reasoned about in the abstract.
 
+## The fused optimizer family, and the honest answer about "Fused CAME"
+
+`FusedXPUAdafactor` genuinely doesn't fit the plain `OptimizerHandle`
+contract -- confirmed by reading its real implementation, not assumed:
+`step()` and `zero_grad()` are literal no-ops (`pass` bodies); every actual
+parameter update happens inside `_update_param`, a per-parameter method
+triggered by a `register_post_accumulate_grad_hook` registered once (via
+`register_hooks()`, called exactly once in the old code, from
+`core/trainer.py`, right after construction) for every trainable
+parameter. The real per-micro-step lifecycle a caller drives is
+`begin_step(sub_steps=)` before the backward pass(es) that make up one
+logical update, and `prepare_next_pass()` between accumulated backward()
+calls when `sub_steps > 1`.
+
+**`FusedOptimizerHandle(OptimizerHandle)`** formalizes this: a real
+subtype (verified: `isinstance(fused_handle, OptimizerHandle)` is `True`,
+so anything written against the generic contract still works) adding
+`begin_step`/`prepare_next_pass` as required methods. `
+FusedAdafactorOptimizerNode.build()` calls `register_hooks()` as its last
+step automatically -- in the old code this is a required, easy-to-forget
+manual call site gated behind an `isinstance` check in `trainer.py`; here
+the produced Handle is simply always ready to use the moment `build()`
+returns, matching every other adapter in this package.
+
+**Does this mean "Fused CAME" (or any other future fused algorithm) is now
+possible?** Honest answer, since overselling this would defeat the purpose
+of writing it down: **the interface doesn't rule it out, but this work
+doesn't unlock it by itself.** `_update_param` is not a generic
+"hook-dispatch + pluggable per-algorithm math" architecture -- it's a
+single monolithic method with Adafactor's entire algorithm (row/col
+second moments, the small-parameter path, gradient clipping, all of it)
+hard-coded inline, using instance state (`self.vr`, `self.vc`,
+`self._tiny_vs_map`, ...) specific to that algorithm. A "Fused CAME" would
+mean writing a genuinely new `core/optimizers.py` class -- CAME's math
+(already verified in `ChunkedXPUCAME`) restructured to run per-single-
+-parameter inside a backward hook, with its own accumulation/sub-step
+bookkeeping mirroring `_in_backward`/`_current_sub_step`/
+`sub_steps_required` -- a real, substantial algorithm-engineering task, not
+adapter/plumbing work. What *is* true, and worth having done this for:
+once such a class existed, it could plug into the exact same
+`FusedOptimizerHandle` contract cleanly (the contract only describes the
+fused *execution protocol*, nothing Adafactor-specific about its method
+signatures), and a `FusedCAMEOptimizerNode` adapter wrapping it would be a
+close copy of `fused_adafactor.py` -- the interface groundwork for that
+future is real, even though the algorithm itself isn't written.
+
 ## What changes for the playground UI
 
 The `/nodegraph` page's introspection moves from *guessing* ports via

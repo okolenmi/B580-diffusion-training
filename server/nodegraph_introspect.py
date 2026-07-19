@@ -38,6 +38,7 @@ class NodeInfo:
     doc: str                # first line of the class docstring, or ""
     inputs: list[PortInfo]  # derived from __init__'s parameters (minus self)
     outputs: list[PortInfo] # see introspect_class()'s docstring for how these are derived
+    bases: list[str] | None = None  # real inheritance chain (Node subclasses only) -- None for legacy-class introspection, where there's no such formal chain to report
 
 
 def _type_str(annotation: Any) -> str:
@@ -48,16 +49,21 @@ def _type_str(annotation: Any) -> str:
     return str(annotation)
 
 
-def introspect_class(cls: type, category: str | None = None) -> NodeInfo:
-    """Derive a NodeInfo from cls.__init__'s real signature (inputs) and,
-    if `category` is given, a single standardized output port (outputs).
+def introspect_legacy_class(cls: type, category: str | None = None) -> NodeInfo:
+    """Derive a NodeInfo by GUESSING from cls.__init__'s real signature --
+    for classes that were never designed with a node interface in mind
+    (i.e. anything still living under core/, manager/, server/ that hasn't
+    been wrapped in nodes/ yet). See introspect_node_class() below for the
+    strictly-better alternative used for anything that HAS been migrated:
+    reading real, declared Port metadata instead of guessing from a
+    constructor signature. Kept under this more explicit name (renamed from
+    introspect_class()) specifically so it's obvious at the call site which
+    kind of introspection -- guessed vs. declared -- a given endpoint is
+    doing; conflating the two under one name was a real risk of someone
+    reasonably assuming a class's presence here meant it had a real,
+    declared contract when it might only have a guessed one.
 
     No modification to cls, no instantiation -- read-only introspection.
-    Any class works here, not just ones deliberately designed as "nodes" --
-    that's intentional for this playground phase: it lets us point this at
-    already-existing code (e.g. optimizers.py's classes) and see how close
-    the *existing* interface already is to node-shaped, before committing to
-    a formal Node/Port base class design.
 
     Deliberate boundary between what's structurally derived vs. supplied:
     INPUTS are 100% derived from the real signature -- that's a structural
@@ -65,16 +71,11 @@ def introspect_class(cls: type, category: str | None = None) -> NodeInfo:
     are different in kind: the standardized rule this codebase is adopting
     is "a node that wraps a constructor has exactly one output: an instance
     of that class" -- but the class itself can't self-report its own
-    semantic ROLE in a pipeline (e.g. that ChunkedXPUCAME specifically *is*
-    "an Optimizer", as opposed to just being a class with a step() method
-    that happens to look like one). That role has to come from the calling
-    context that already knows the domain (introspect_optimizers() knows
-    it's introspecting optimizers; the class doesn't). So: pass `category`
-    explicitly when the caller knows it, and get a real, typed output port
-    back. Don't pass it, and outputs comes back empty -- explicitly, rather
-    than fabricating a guessed label. A class with no supplied category
-    genuinely has no output *yet* in this system; that's honest, not a bug
-    to paper over.
+    semantic ROLE in a pipeline. That role has to come from the calling
+    context that already knows the domain. So: pass `category` explicitly
+    when the caller knows it, and get a real, typed output port back.
+    Don't pass it, and outputs comes back empty -- explicitly, rather than
+    fabricating a guessed label.
     """
     doc = (inspect.getdoc(cls) or "").strip().split("\n")[0]
     sig = inspect.signature(cls.__init__)
@@ -97,7 +98,7 @@ def introspect_class(cls: type, category: str | None = None) -> NodeInfo:
             name=category,
             type_str=cls.__name__,
             default=None,
-            required=True,  # "required" isn't really meaningful for an output; kept for a uniform PortInfo shape
+            required=True,
         ))
     return NodeInfo(
         class_name=cls.__name__,
@@ -105,25 +106,85 @@ def introspect_class(cls: type, category: str | None = None) -> NodeInfo:
         doc=doc,
         inputs=ports,
         outputs=outputs,
+        bases=None,  # no formal Node inheritance chain to report for a guessed class
     )
 
 
-def introspect_optimizers() -> list[NodeInfo]:
-    """First proof-of-concept target: optimizers.py's classes already share
-    a real common interface (step(n_steps=), zero_grad(), offload/reload
-    hooks) -- see docs/node_architecture_refactor_plan.md Phase 1. Introspect
-    them as-is, with zero changes to optimizers.py itself. category="optimizer"
-    is supplied here because *this function* knows these classes' pipeline
-    role -- see introspect_class()'s docstring for why that can't be derived
-    from the classes themselves.
+def _port_type_str(t: Any) -> str:
+    """Like _type_str, but for a nodes.core.Port's .type field, which is a
+    real Python type/class (or typing.Any) rather than an inspect.Parameter
+    annotation -- close enough in shape to share most of the logic, but
+    kept separate since the two are conceptually different inputs (a
+    declared contract vs. a guessed one) and might need to diverge later."""
+    if t is Any:
+        return "any"
+    if hasattr(t, "__name__"):
+        return t.__name__
+    return str(t)
+
+
+def introspect_node_class(cls: type) -> NodeInfo:
+    """Read DECLARED metadata directly off a real nodes.core.Node subclass
+    -- INPUTS/OUTPUTS are real Port objects the class author wrote down,
+    not guessed from a constructor signature. This is what
+    docs/nodes_package_design.md means by "strictly better, since there's
+    now an actual contract to read rather than a signature to
+    reverse-engineer" -- use this for anything under nodes/, and
+    introspect_legacy_class() above for anything not yet migrated there.
+
+    bases is the real Python inheritance chain (excluding object/ABC/the
+    dataclass-y ABC noise), so e.g. CAMEOptimizerNode correctly reports
+    extending OptimizerNode extending Node -- an actual fact about the
+    class, not something inferred or guessed after the fact.
     """
-    from core.optimizers import (
-        CPUAdamW, ChunkedXPUAdafactor, ChunkedXPUCAME,
-        ForeachXPUAdafactor, FusedXPUAdafactor,
+    doc = (inspect.getdoc(cls) or "").strip().split("\n")[0]
+    bases = [b.__name__ for b in cls.__mro__[1:] if b.__name__ not in ("object", "ABC")]
+    inputs = [
+        PortInfo(
+            name=p.name,
+            type_str=_port_type_str(p.type),
+            default=repr(p.default) if not p.required else None,
+            required=p.required,
+        )
+        for p in cls.INPUTS.values()
+    ]
+    outputs = [
+        PortInfo(
+            name=p.name,
+            type_str=_port_type_str(p.type),
+            default=None,
+            required=p.required,
+        )
+        for p in cls.OUTPUTS.values()
+    ]
+    return NodeInfo(
+        class_name=cls.__name__,
+        module=cls.__module__,
+        doc=doc,
+        inputs=inputs,
+        outputs=outputs,
+        bases=bases,
     )
-    return [introspect_class(c, category="optimizer") for c in (
-        CPUAdamW, ChunkedXPUAdafactor, ChunkedXPUCAME,
-        ForeachXPUAdafactor, FusedXPUAdafactor,
+
+
+def introspect_optimizer_nodes() -> list[NodeInfo]:
+    """The real thing, superseding introspect_optimizers()'s old
+    guess-from-core.optimizers approach: reads declared contracts directly
+    off the nodes/optimizer/ package's classes. All five optimizers are
+    represented now, including FusedAdafactorOptimizerNode -- which
+    correctly shows a FusedOptimizerHandle output type, not just a generic
+    OptimizerHandle, because that's what it actually declares (see
+    nodes/optimizer/fused_adafactor.py and
+    docs/nodes_package_design.md's "fused optimizer family" section).
+    """
+    from nodes.optimizer.adafactor import AdafactorOptimizerNode
+    from nodes.optimizer.came import CAMEOptimizerNode
+    from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerNode
+    from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
+    from nodes.optimizer.adamw import AdamWOptimizerNode
+    return [introspect_node_class(c) for c in (
+        AdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
+        ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
     )]
 
 
@@ -137,6 +198,7 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         "class_name": info.class_name,
         "module": info.module,
         "doc": info.doc,
+        "bases": info.bases,
         "inputs": _ports(info.inputs),
         "outputs": _ports(info.outputs),
     }

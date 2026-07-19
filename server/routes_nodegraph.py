@@ -10,29 +10,25 @@ training runs.
 
 from fastapi import APIRouter, HTTPException
 
-from .nodegraph_introspect import introspect_optimizers, node_info_to_dict
+from .nodegraph_introspect import introspect_optimizer_nodes, node_info_to_dict
 
 router = APIRouter(prefix="/nodegraph")
 
 
 @router.get("/optimizers")
 async def list_optimizer_nodes():
-    """First proof-of-concept endpoint: introspected optimizers.py classes,
-    rendered as node info. See nodegraph_introspect.py for why this
-    introspects the real classes rather than a hand-maintained list.
+    """Reads declared contracts directly off nodes/optimizer/'s real Node
+    classes -- see nodegraph_introspect.py's introspect_optimizer_nodes()
+    and docs/nodes_package_design.md. This replaced an earlier version that
+    guessed ports from core.optimizers.py's constructor signatures; that
+    approach is still available (introspect_legacy_class(), same module)
+    for any future domain not yet migrated into nodes/.
     """
     try:
-        infos = introspect_optimizers()
+        infos = introspect_optimizer_nodes()
     except Exception as e:
-        # Most likely cause: torch not importable in this environment.
-        # Surface it plainly rather than a bare 500 -- this endpoint is a
-        # dev tool, the person looking at it wants to know why, not just
-        # that something failed.
         raise HTTPException(
             status_code=500,
-            detail=f"Could not introspect optimizers.py ({type(e).__name__}: {e}). "
-                   f"This usually means torch isn't importable in the current "
-                   f"environment -- the training subprocess environment is "
-                   f"expected to have it; the server process may not.",
+            detail=f"Could not introspect nodes/optimizer/ ({type(e).__name__}: {e}).",
         )
     return {"nodes": [node_info_to_dict(i) for i in infos]}

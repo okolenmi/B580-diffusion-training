@@ -64,6 +64,13 @@
     margin-top: 2px;
   }
 
+  .ng-node-bases {
+    font-size: 11px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 4px;
+  }
+
   .ng-node-doc {
     font-size: 12px;
     color: var(--text-dim);
@@ -99,6 +106,12 @@
   .ng-port-name { color: var(--text); }
   .ng-port-type { color: var(--text-dim); margin-left: auto; }
   .ng-port-default { color: var(--green); font-size: 11px; }
+
+  .ng-port.output {
+    flex-direction: row-reverse;
+    text-align: right;
+  }
+  .ng-port.output .ng-port-type { margin-left: 0; margin-right: auto; }
 
   .ng-ports-divider {
     border-top: 1px solid var(--border);
@@ -184,7 +197,7 @@
 
     function buildPortRow(port, isOutput) {
       const row = document.createElement('div');
-      row.className = 'ng-port';
+      row.className = 'ng-port' + (isOutput ? ' output' : '');
       const dotClass = isOutput ? 'output' : (port.required ? 'required' : '');
       row.innerHTML = `
         <span class="ng-port-dot ${dotClass}"></span>
@@ -200,9 +213,13 @@
 
       const header = document.createElement('div');
       header.className = 'ng-node-header';
+      const basesLine = (node.bases && node.bases.length)
+        ? `<div class="ng-node-bases">extends: ${node.bases.map(escapeHtml).join(' \u2192 ')}</div>`
+        : '';
       header.innerHTML = `
         <div class="ng-node-title">${escapeHtml(node.class_name)}</div>
         <div class="ng-node-module">${escapeHtml(node.module)}</div>
+        ${basesLine}
       `;
       el.appendChild(header);
 

@@ -281,11 +281,27 @@ future is real, even though the algorithm itself isn't written.
 
 ## What changes for the playground UI
 
-The `/nodegraph` page's introspection moves from *guessing* ports via
-`inspect.signature()` on old classes to *reading* the real, declared
-`INPUTS`/`OUTPUTS` off the new `Node` subclasses directly -- strictly
-better, since there's now an actual contract to read rather than a
-constructor signature to reverse-engineer. The visual "extends" hierarchy
-(concrete node -> `OptimizerNode` -> `Node`) can now be shown accurately,
-because it's now a real Python inheritance chain, not something inferred
-after the fact.
+**Done.** The `/nodegraph` page's introspection moved from *guessing* ports
+via `inspect.signature()` on old `core.optimizers` classes to *reading* the
+real, declared `INPUTS`/`OUTPUTS` off the new `nodes/optimizer/` classes
+directly (`nodegraph_introspect.py`'s new `introspect_node_class()` /
+`introspect_optimizer_nodes()`, replacing the old `introspect_optimizers()`
+-- the guess-based `introspect_legacy_class()`, renamed from
+`introspect_class()`, stays available for any future domain not yet
+migrated into `nodes/`). Concrete, verified improvements this produced,
+not just a refactor for its own sake:
+
+- Every node's card now shows its real inheritance chain (`extends:
+  OptimizerNode → Node`), read from `cls.__mro__` -- an actual fact about
+  the class, not inferred or hand-labeled.
+- `FusedAdafactorOptimizerNode` correctly displays a `FusedOptimizerHandle`
+  output type, distinct from the other four's plain `OptimizerHandle` --
+  the graph now visibly reflects a real subtype relationship in the type
+  system, which the old guess-based introspection had no way to represent
+  at all (it could only ever report "produces an instance of this same
+  class").
+- The endpoint no longer needs torch importable at all (a genuine, if
+  incidental, improvement): `nodes/optimizer/*.py` defer their
+  `core.optimizers` imports to inside `build()`, and introspection only
+  ever reads class-level `INPUTS`/`OUTPUTS`, never calls `build()`.
+.

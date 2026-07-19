@@ -37,6 +37,7 @@ class NodeInfo:
     module: str
     doc: str                # first line of the class docstring, or ""
     inputs: list[PortInfo]  # derived from __init__'s parameters (minus self)
+    outputs: list[PortInfo] # see introspect_class()'s docstring for how these are derived
 
 
 def _type_str(annotation: Any) -> str:
@@ -47,8 +48,9 @@ def _type_str(annotation: Any) -> str:
     return str(annotation)
 
 
-def introspect_class(cls: type) -> NodeInfo:
-    """Derive a NodeInfo purely from cls.__init__'s real signature.
+def introspect_class(cls: type, category: str | None = None) -> NodeInfo:
+    """Derive a NodeInfo from cls.__init__'s real signature (inputs) and,
+    if `category` is given, a single standardized output port (outputs).
 
     No modification to cls, no instantiation -- read-only introspection.
     Any class works here, not just ones deliberately designed as "nodes" --
@@ -56,6 +58,23 @@ def introspect_class(cls: type) -> NodeInfo:
     already-existing code (e.g. optimizers.py's classes) and see how close
     the *existing* interface already is to node-shaped, before committing to
     a formal Node/Port base class design.
+
+    Deliberate boundary between what's structurally derived vs. supplied:
+    INPUTS are 100% derived from the real signature -- that's a structural
+    fact about the class, cannot drift, no second file involved. OUTPUTS
+    are different in kind: the standardized rule this codebase is adopting
+    is "a node that wraps a constructor has exactly one output: an instance
+    of that class" -- but the class itself can't self-report its own
+    semantic ROLE in a pipeline (e.g. that ChunkedXPUCAME specifically *is*
+    "an Optimizer", as opposed to just being a class with a step() method
+    that happens to look like one). That role has to come from the calling
+    context that already knows the domain (introspect_optimizers() knows
+    it's introspecting optimizers; the class doesn't). So: pass `category`
+    explicitly when the caller knows it, and get a real, typed output port
+    back. Don't pass it, and outputs comes back empty -- explicitly, rather
+    than fabricating a guessed label. A class with no supplied category
+    genuinely has no output *yet* in this system; that's honest, not a bug
+    to paper over.
     """
     doc = (inspect.getdoc(cls) or "").strip().split("\n")[0]
     sig = inspect.signature(cls.__init__)
@@ -72,11 +91,20 @@ def introspect_class(cls: type) -> NodeInfo:
             default=repr(param.default) if has_default else None,
             required=not has_default,
         ))
+    outputs = []
+    if category is not None:
+        outputs.append(PortInfo(
+            name=category,
+            type_str=cls.__name__,
+            default=None,
+            required=True,  # "required" isn't really meaningful for an output; kept for a uniform PortInfo shape
+        ))
     return NodeInfo(
         class_name=cls.__name__,
         module=cls.__module__,
         doc=doc,
         inputs=ports,
+        outputs=outputs,
     )
 
 
@@ -84,25 +112,31 @@ def introspect_optimizers() -> list[NodeInfo]:
     """First proof-of-concept target: optimizers.py's classes already share
     a real common interface (step(n_steps=), zero_grad(), offload/reload
     hooks) -- see docs/node_architecture_refactor_plan.md Phase 1. Introspect
-    them as-is, with zero changes to optimizers.py itself.
+    them as-is, with zero changes to optimizers.py itself. category="optimizer"
+    is supplied here because *this function* knows these classes' pipeline
+    role -- see introspect_class()'s docstring for why that can't be derived
+    from the classes themselves.
     """
     from core.optimizers import (
         CPUAdamW, ChunkedXPUAdafactor, ChunkedXPUCAME,
         ForeachXPUAdafactor, FusedXPUAdafactor,
     )
-    return [introspect_class(c) for c in (
+    return [introspect_class(c, category="optimizer") for c in (
         CPUAdamW, ChunkedXPUAdafactor, ChunkedXPUCAME,
         ForeachXPUAdafactor, FusedXPUAdafactor,
     )]
 
 
 def node_info_to_dict(info: NodeInfo) -> dict:
+    def _ports(ports):
+        return [
+            {"name": p.name, "type": p.type_str, "default": p.default, "required": p.required}
+            for p in ports
+        ]
     return {
         "class_name": info.class_name,
         "module": info.module,
         "doc": info.doc,
-        "inputs": [
-            {"name": p.name, "type": p.type_str, "default": p.default, "required": p.required}
-            for p in info.inputs
-        ],
+        "inputs": _ports(info.inputs),
+        "outputs": _ports(info.outputs),
     }

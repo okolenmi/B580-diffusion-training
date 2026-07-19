@@ -288,6 +288,19 @@ prove the core "ports auto-derived from real code, rendered without a
 ComfyUI-style performance cost" idea end-to-end before building anything
 more elaborate on top of it.
 
+**Follow-up, same session**: outputs added. Standardized rule adopted:
+a node wrapping a constructor has exactly one output, an instance of that
+class -- but *inputs* are 100% derivable from the real signature alone
+(structural fact), while an output's semantic *category* (e.g. that
+`ChunkedXPUCAME` specifically is "an Optimizer") is domain knowledge the
+class can't self-report, so it's supplied explicitly by whichever
+introspection call already knows the domain (`introspect_optimizers()`
+passes `category="optimizer"`). A class introspected without a supplied
+category correctly shows zero outputs -- rendered honestly in the UI as
+"not yet standardized" rather than a fabricated guess. Sidebar link added
+(`/nodegraph`, one click from the main dashboard, mirroring the existing
+`/datasets` link).
+
 ## Open questions for the user
 
 1. ~~Sequencing buy-in~~ -- **Resolved**: custom lightweight canvas (not

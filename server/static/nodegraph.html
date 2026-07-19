@@ -94,10 +94,25 @@
   }
 
   .ng-port-dot.required { background: var(--red); }
+  .ng-port-dot.output { background: var(--green); }
 
   .ng-port-name { color: var(--text); }
   .ng-port-type { color: var(--text-dim); margin-left: auto; }
   .ng-port-default { color: var(--green); font-size: 11px; }
+
+  .ng-ports-divider {
+    border-top: 1px solid var(--border);
+    margin: 2px 0;
+    padding-top: 4px;
+  }
+
+  .ng-ports-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    padding: 2px 14px;
+  }
 
   .ng-status {
     padding: 12px 32px;
@@ -131,6 +146,7 @@
   <div class="ng-legend">
     <div class="ng-legend-item"><span class="ng-port-dot"></span> optional input</div>
     <div class="ng-legend-item"><span class="ng-port-dot required"></span> required input</div>
+    <div class="ng-legend-item"><span class="ng-port-dot output"></span> output</div>
   </div>
 
   <div id="ng-status" class="ng-status">Loading node definitions...</div>
@@ -166,6 +182,18 @@
       }
     }
 
+    function buildPortRow(port, isOutput) {
+      const row = document.createElement('div');
+      row.className = 'ng-port';
+      const dotClass = isOutput ? 'output' : (port.required ? 'required' : '');
+      row.innerHTML = `
+        <span class="ng-port-dot ${dotClass}"></span>
+        <span class="ng-port-name">${escapeHtml(port.name)}</span>
+        <span class="ng-port-type">${escapeHtml(port.type)}</span>
+      `;
+      return row;
+    }
+
     function buildNodeElement(node) {
       const el = document.createElement('div');
       el.className = 'ng-node';
@@ -187,15 +215,14 @@
 
       const ports = document.createElement('div');
       ports.className = 'ng-ports';
+
+      const inLabel = document.createElement('div');
+      inLabel.className = 'ng-ports-label';
+      inLabel.textContent = 'Inputs';
+      ports.appendChild(inLabel);
+
       for (const port of node.inputs) {
-        const row = document.createElement('div');
-        row.className = 'ng-port';
-        row.innerHTML = `
-          <span class="ng-port-dot ${port.required ? 'required' : ''}"></span>
-          <span class="ng-port-name">${escapeHtml(port.name)}</span>
-          <span class="ng-port-type">${escapeHtml(port.type)}</span>
-        `;
-        ports.appendChild(row);
+        ports.appendChild(buildPortRow(port, false));
         if (port.default !== null) {
           const defRow = document.createElement('div');
           defRow.className = 'ng-port';
@@ -207,8 +234,24 @@
           ports.appendChild(defRow);
         }
       }
-      el.appendChild(ports);
 
+      const outDivider = document.createElement('div');
+      outDivider.className = 'ng-ports-divider ng-ports-label';
+      outDivider.textContent = 'Outputs';
+      ports.appendChild(outDivider);
+
+      if (node.outputs.length === 0) {
+        const none = document.createElement('div');
+        none.className = 'ng-port';
+        none.innerHTML = `<span style="color: var(--text-dim); font-style: italic;">not yet standardized</span>`;
+        ports.appendChild(none);
+      } else {
+        for (const port of node.outputs) {
+          ports.appendChild(buildPortRow(port, true));
+        }
+      }
+
+      el.appendChild(ports);
       return el;
     }
 

@@ -279,6 +279,98 @@ signatures), and a `FusedCAMEOptimizerNode` adapter wrapping it would be a
 close copy of `fused_adafactor.py` -- the interface groundwork for that
 future is real, even though the algorithm itself isn't written.
 
+## Algorithm/ExecutionStrategy: a genuinely reconsidered design, not a wrapper
+
+Raised directly after the `nodes/optimizer/` wrapper work above: wrapping
+`core/optimizers.py`'s 5 legacy classes was the right *first* move (zero
+risk to already-verified code, fast, and it found real bugs -- see above),
+but the `OptimizerHandle`/`OptimizerNode` contracts it produced were shaped
+by *reverse-engineering what the 5 existing classes happen to expose*, not
+by first-principles design. Left as the permanent architecture, that would
+mean the actual duplication and inconsistency living inside
+`core/optimizers.py` never gets fixed, just hidden behind a clean facade --
+worth naming plainly rather than treating the wrapper as a finished state.
+
+**The reconsidered design, arrived at by asking what these 5 classes are
+actually doing, not how they're currently organized:** they're 2 algorithms
+(Adafactor, CAME) crossed by hand with up to 3 execution/memory strategies
+(chunked-scratch-buffer, foreach-vectorized, fused-backward-hook) -- 4
+classes exist because CAME only got 1 of the 3 possible strategies, each
+combination being expensive to hand-write. Splitting **Algorithm** (pure
+per-parameter math: grad + state -> update; zero knowledge of GPU memory,
+batching, or hooks) from **ExecutionStrategy** (how/when that math actually
+runs, how memory is managed; zero knowledge of *which* algorithm's math
+it's running) turns an M-times-N hand-written grid into M-plus-N composable
+pieces. Checked this holds up, not just asserted:
+
+- **Is the "tiny parameter batching" trick (`_tiny_vs`/`_tiny_vs_map` in
+  the legacy classes) actually an execution-strategy concern, not an
+  algorithm one?** Yes -- confirmed by reading it: it changes how many
+  actual tensors get allocated to track many small parameters' state
+  efficiently, never what update formula gets computed. Fits cleanly as
+  strategy-layer machinery (not yet built in this slice's
+  `SimpleLoopStrategy`, but doesn't conflict with the split).
+- **Does this actually make "Fused CAME" cheap, or just theoretically
+  possible?** Once a `FusedBackwardHookStrategy` exists (driving *any*
+  Algorithm's `compute_update()` from within a per-parameter backward
+  hook, exactly mirroring `FusedXPUAdafactor`'s real hook-registration
+  mechanism but generically), `Optimizer(CAMEAlgorithm(), 
+  FusedBackwardHookStrategy())` is a composition of two independently-
+  already-existing, independently-testable pieces -- not a new monolithic
+  class. Not built yet in this slice (a real, separate, buildable next
+  step), but the path there is now concrete instead of hopeful.
+
+### First vertical slice: built and verified end-to-end
+
+`nodes/optimizer/algorithms/base.py` (`Algorithm` ABC) +
+`algorithms/came.py` (`CAMEAlgorithm`, a **fresh, from-scratch
+reimplementation** -- not a wrapper around `ChunkedXPUCAME`) +
+`strategies/base.py` (`ExecutionStrategy` ABC) + `strategies/simple.py`
+(`SimpleLoopStrategy` -- deliberately the least sophisticated strategy
+possible: a plain Python loop, no scratch-buffer/MemPool/vectorization/
+hook-fusion yet, chosen specifically to prove composition works before
+adding memory-optimization complexity) + `composed.py`
+(`ComposedOptimizerHandle` -- the actual payoff: `offload_states_to_cpu`/
+`reload_states_to_device`/`decay_states`/`reset_states`/`free_states`
+written **exactly once**, generically over any Algorithm+Strategy pair,
+instead of hand-duplicated 5 times with real, found-by-testing
+inconsistencies) + `composed_came.py` (`ComposedCAMEOptimizerNode`, kept as
+a separate class alongside the already-shipped `CAMEOptimizerNode` rather
+than replacing it -- see below for why).
+
+**Verification, in increasing order of rigor:**
+1. `CAMEAlgorithm`'s formulas re-verified numerically against the official
+   reference (github.com/yangluo7/CAME) in their new pure-function shape --
+   found and precisely characterized a real, bounded, harmless discrepancy
+   (~1e-8 absolute / ~4e-10 relative, from an intentional eps-after-sqrt
+   denominator-safety term the bare reference formula doesn't have; jumps
+   once then stays flat across further steps, not compounding -- both
+   orders of magnitude below fp32 precision, which is what this actually
+   runs at). Documented precisely in `algorithms/came.py` rather than
+   claimed as a perfect match it isn't.
+2. **End-to-end, through the real unmocked code**: built a minimal
+   numpy-backed fake tensor supporting exactly the operations this code
+   calls, and ran a genuine gradient-descent toy linear-regression fit
+   through `CAMEAlgorithm` + `SimpleLoopStrategy` + `ComposedOptimizerHandle`
+   exactly as shipped. Loss dropped 99.8% over 200 steps (2.495 -> 0.0039)
+   -- this is the strongest verification possible without real hardware:
+   not "the formulas match in isolation" but "the composed optimizer
+   actually trains something." All lifecycle methods (`decay_states`,
+   `reset_states`, `offload_states_to_cpu`, `reload_states_to_device`,
+   `update_lr`, `free_states`) also verified to run correctly against the
+   real composed object in the same test.
+
+**Honest status, not oversold:** this proves the Algorithm/ExecutionStrategy
+split is sound and genuinely composable -- it does not yet match
+`core/optimizers.py`'s real classes on VRAM efficiency (`SimpleLoopStrategy`
+has none of the memory optimizations those classes need to actually fit
+this project's hardware budget) or run on real Intel Arc hardware (only
+verified via the numpy-backed fake tensor above). `ComposedCAMEOptimizerNode`
+is deliberately a separate class from the shipped `CAMEOptimizerNode`, not
+a replacement -- switching over needs a memory-optimized strategy built
+first, plus real-hardware validation, both genuine next steps rather than
+this session's claim.
+
 ## What changes for the playground UI
 
 **Done.** The `/nodegraph` page's introspection moved from *guessing* ports
@@ -304,4 +396,4 @@ not just a refactor for its own sake:
   incidental, improvement): `nodes/optimizer/*.py` defer their
   `core.optimizers` imports to inside `build()`, and introspection only
   ever reads class-level `INPUTS`/`OUTPUTS`, never calls `build()`.
-.
+

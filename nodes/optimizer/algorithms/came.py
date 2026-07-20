@@ -48,6 +48,15 @@ class CAMEAlgorithm(Algorithm):
         self.beta1, self.beta2, self.beta3 = betas
 
     def init_state(self, param_shape, dtype, device) -> dict[str, Any]:
+        """dtype is accepted (part of the Algorithm contract -- a future
+        algorithm might legitimately want it) but intentionally unused
+        here: state is always kept in float32 for numerical stability,
+        regardless of the parameter's own dtype (which may be bf16). This
+        matches the original ChunkedXPUCAME's verified behavior -- its
+        scratch buffer was always float32 too, with the final update cast
+        to the parameter's own dtype only at the point it's actually
+        applied (see strategies/simple.py's step(), which does exactly
+        that: `update.to(dtype=p.dtype)`)."""
         if len(param_shape) >= 2:
             rows = param_shape[0]
             cols = 1

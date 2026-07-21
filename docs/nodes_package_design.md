@@ -1,9 +1,97 @@
 # The `nodes/` package: design
 
-Companion to `docs/node_architecture_refactor_plan.md` -- that document
-covers the *why* and the multi-session migration strategy; this one covers
-the concrete class design for the new `nodes/` package, written before
-implementation.
+**Read this section first if you're a fresh session picking this up with
+no memory of how it got here.** Everything below it is the design
+reasoning and decision history, kept because it explains *why* things are
+shaped this way -- worth reading if you need that context for a specific
+decision, but not required just to keep going.
+
+## Start here: current state
+
+**What this is:** a from-scratch, node-graph-shaped rewrite of the
+optimizer subsystem, developed *alongside* the existing, working
+`core/optimizers.py` -- not a replacement yet. `core/optimizers.py` has
+not been modified by any of this and remains exactly as it was
+(confirmed byte-identical to the pre-`nodes/` state at every step of this
+work -- see "Course correction" below for why that rule exists).
+
+**Real file list** (regenerate with `find nodes -name "*.py" -not -path
+"*__pycache__*" | sort` rather than trusting a hand-maintained list here,
+which will drift):
+```
+nodes/core.py                              Port, Node (ABC) -- domain-independent
+nodes/optimizer/handle.py                  OptimizerHandle, FusedOptimizerHandle (ABCs)
+nodes/optimizer/node.py                    OptimizerNode (ABC) -- intermediate layer
+nodes/optimizer/{adafactor,came,foreach_adafactor,fused_adafactor,adamw}.py
+                                            5 Nodes wrapping core.optimizers.* (Adapter
+                                            pattern -- no math reimplemented)
+nodes/optimizer/algorithms/base.py         Algorithm (ABC) -- pure per-parameter math
+nodes/optimizer/algorithms/came.py         CAMEAlgorithm -- FRESH reimplementation,
+                                            re-verified against the reference (not a
+                                            wrapper)
+nodes/optimizer/strategies/base.py         ExecutionStrategy (ABC)
+nodes/optimizer/strategies/simple.py       SimpleLoopStrategy -- real-hardware validated
+nodes/optimizer/strategies/chunked.py      ChunkedScratchBufferStrategy -- real-hardware
+                                            validated, partial memory optimization (see
+                                            "two-axis distinction" below)
+nodes/optimizer/composed.py                ComposedOptimizerHandle -- generic glue for
+                                            any Algorithm + any ExecutionStrategy
+nodes/optimizer/composed_came.py           ComposedCAMEOptimizerNode -- CAME algorithm,
+                                            selectable strategy ("simple" or "chunked")
+nodes/smoke_tests/smoke_test_composed_came.py   Real-hardware test, run with:
+                                            `python nodes/smoke_tests/smoke_test_composed_came.py`
+```
+Also: `server/nodegraph_introspect.py` + `server/routes_nodegraph.py` +
+`server/static/nodegraph.html` (the `/nodegraph` dev tab, reads real
+declared contracts off these classes -- outside `nodes/` itself but part
+of the same effort).
+
+**Verification status, precisely (don't take "it's built" to mean "it's
+proven" -- check which level a given piece has actually reached):**
+| Piece | Numpy-mock verified | Real XPU hardware verified |
+|---|---|---|
+| 5 legacy-wrapping wrapper Nodes (adafactor/came/foreach/fused/adamw) | via mock legacy classes | not yet |
+| `CAMEAlgorithm` formulas | yes (bounded ~1e-8, see below) | via the composed test, yes |
+| `SimpleLoopStrategy` | yes | **yes** -- user-run, passed (97.7% loss reduction, all lifecycle methods, offload/reload round trip) |
+| `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes** -- user-run, passed, identical loss trajectory to `simple` |
+
+**The one open architectural question, not yet answered:** does the
+Algorithm/ExecutionStrategy split (see below) generalize cleanly to a
+second algorithm (Adafactor) and a third strategy (fused-backward-hook)?
+Only ever built/tested with one algorithm (CAME) and two of the
+simpler strategies so far -- the design is reasoned to generalize (see
+"Fused optimizer family" section) but that's not the same as having
+built the second data point yet.
+
+**Concrete next step, in order of what unblocks the most:**
+1. Build `AdafactorAlgorithm` (a second `Algorithm` -- tests whether the
+   split genuinely generalizes, or whether something CAME-specific
+   leaked into the abstractions).
+2. *Then* decide whether `ComposedCAMEOptimizerNode` should start
+   replacing the legacy-wrapping `CAMEOptimizerNode` for real use, or
+   whether to keep building breadth (more algorithms/strategies) first --
+   this is a judgment call worth surfacing to the user rather than
+   assuming, since it trades "prove the design generalizes" against
+   "get something production-usable sooner."
+3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
+   integration, cross-`step()` buffer caching, `Algorithm.compute_update`
+   actually using its `scratch` hint (axis 2 of the two-axis distinction
+   below), a `FusedBackwardHookStrategy`, and eventually wiring `nodes/`
+   into the actual training pipeline (`core/trainer.py` currently knows
+   nothing about any of this).
+
+**Other docs, and how they relate:**
+- `docs/node_architecture_refactor_plan.md` -- the original, higher-level
+  plan (why a node-graph architecture at all, the `/nodegraph` playground's
+  UI-performance design constraints). Read if the *why build this at all*
+  question comes up; this document (`nodes_package_design.md`) is the
+  detailed follow-through on its "Phase 1: optimizer nodes" section.
+- `docs/suspicious_findings.md` -- unrelated to `nodes/` entirely; tracks
+  real bugs/investigations elsewhere in the training pipeline (composition
+  destruction in LoRA training, a VRAM leak around preview generation).
+  Worth knowing it exists, not required reading for `nodes/` work.
+
+---
 
 ## Course correction that produced this document
 
@@ -123,6 +211,12 @@ shape beyond this contract.
 
 Chosen first because it's the domain this session already has the deepest,
 most rigorously-verified understanding of.
+
+This was the *original* file layout, from when only the legacy-wrapping
+layer existed -- kept here as-is since it matches the prose right below it
+(which is specifically about that layer). `algorithms/`, `strategies/`,
+`composed.py`, `composed_came.py`, and `smoke_tests/` came later -- see
+"Start here" at the top of this document for the complete, current list.
 
 ```
 nodes/

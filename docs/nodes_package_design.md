@@ -371,6 +371,57 @@ a replacement -- switching over needs a memory-optimized strategy built
 first, plus real-hardware validation, both genuine next steps rather than
 this session's claim.
 
+### Second strategy: ChunkedScratchBufferStrategy, and the two-axis distinction
+
+Before building "the memory-optimized strategy," worth naming a real
+design tension found while actually designing it rather than assumed
+going in: buffer reuse has two genuinely separate axes.
+
+1. **Across parameters** -- one shared buffer instead of N per-parameter
+   allocations. Purely a strategy-layer concern; doesn't need the
+   Algorithm's cooperation.
+2. **Within one parameter's computation** -- this session's earlier,
+   carefully-verified `core/optimizers.py` fix (`res` and `update` reusing
+   the same buffer instead of allocating fresh tensors) requires the
+   *algorithm's own* internal math to be restructured with in-place ops.
+   Necessarily algorithm-specific engineering, not something a generic
+   strategy wrapper can bolt on from outside.
+
+Built axis 1 (`ChunkedScratchBufferStrategy`) this round; extended
+`Algorithm.compute_update()` with an optional, backward-compatible
+`scratch` parameter as the seam for axis 2 later, but `CAMEAlgorithm`
+explicitly does not use it yet -- documented plainly in the code rather
+than silently ignored, since getting in-place buffer reuse subtly wrong
+(aliasing a value still needed) was a real bug this session already had
+to catch and fix once.
+
+**Verified**: bit-exact match (`0.000e+00` max diff) between
+`SimpleLoopStrategy` and `ChunkedScratchBufferStrategy` across 60 real
+training steps on two differently-shaped parameters (exercising the
+scratch buffer's per-parameter reshape/slice logic) -- confirms this is
+purely a memory optimization, zero behavior change. `ComposedCAMEOptimizerNode`
+now takes a `strategy` input (`"simple"` or `"chunked"`) making the
+Algorithm/Strategy swap real, usable value rather than a design claim --
+switching it changes nothing about `CAMEAlgorithm` at all.
+
+**What this strategy does NOT do yet** (see `strategies/chunked.py`'s
+module docstring for the precise list): no `torch.xpu.MemPool`
+integration, buffer allocated fresh per `step()` call rather than cached
+across calls, and since `CAMEAlgorithm` doesn't use the `scratch` hint
+yet, the *only* real memory saving right now is the gradient-cast reuse --
+real, but partial, stated precisely rather than implied to be the full
+legacy-equivalent optimization.
+
+**Smoke test extended** (`nodes/smoke_tests/smoke_test_composed_came.py`)
+to run all real-hardware checks against every registered strategy, not
+just `"simple"` -- `--strategy chunked` to check just one, `--strategy all`
+(default) to check both in one run. `"simple"` already confirmed passing
+on real XPU hardware by the user (toy regression converged 97.7%,
+offload/reload round trip and all lifecycle methods correct);
+`"chunked"` verified equivalent via the numpy-backed check above but not
+yet run on real hardware -- next concrete step is getting that
+confirmation.
+
 ## What changes for the playground UI
 
 **Done.** The `/nodegraph` page's introspection moved from *guessing* ports

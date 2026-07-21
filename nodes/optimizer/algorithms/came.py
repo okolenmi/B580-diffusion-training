@@ -78,7 +78,16 @@ class CAMEAlgorithm(Algorithm):
             "ea": torch.zeros(param_shape, dtype=torch.float32, device=device),
         }
 
-    def compute_update(self, grad, state: dict[str, Any]):
+    def compute_update(self, grad, state: dict[str, Any], scratch=None):
+        # scratch accepted for interface compatibility (see base.py's
+        # docstring) but not yet used -- this method still allocates
+        # fresh intermediate tensors (g2, normalized, res, ...) rather
+        # than reusing a provided buffer via in-place ops. Restructuring
+        # this to actually use scratch is real, separate follow-up work --
+        # see docs/nodes_package_design.md. Deliberately not rushed here:
+        # getting in-place buffer reuse subtly wrong (aliasing a value
+        # that's still needed) was a real bug this session already had to
+        # catch and fix once, in core/optimizers.py's ChunkedXPUCAME.
         factored = grad.dim() >= 2
         g = grad.reshape(grad.shape[0], -1) if factored else grad
 

@@ -41,10 +41,29 @@ class Algorithm(ABC):
         algorithm-specific about what's inside."""
 
     @abstractmethod
-    def compute_update(self, grad, state: dict[str, Any]):
+    def compute_update(self, grad, state: dict[str, Any], scratch=None):
         """Given the current gradient and this parameter's state (mutated
         in place as needed), return the update to subtract from the
-        parameter. Not lr-scaled -- see module docstring."""
+        parameter. Not lr-scaled -- see module docstring.
+
+        scratch: optional tensor, same shape as grad, that an
+        ExecutionStrategy may provide as reusable workspace (e.g. a single
+        buffer shared across all parameters in a step, avoiding N separate
+        temporary allocations). Purely an optional hint -- an Algorithm is
+        free to ignore it and allocate normally (correct, just not
+        maximally memory-efficient), or to use it for its own internal
+        intermediates via in-place ops. This is deliberately NOT the same
+        thing as "avoid allocating N per-parameter scratch buffers instead
+        of one shared one" (an ExecutionStrategy concern, doesn't need
+        Algorithm cooperation at all) -- it's specifically for an Algorithm
+        that wants to restructure its *own* internal computation (e.g.
+        writing successive intermediates into the same buffer rather than
+        allocating a fresh tensor per intermediate step) to reduce peak
+        memory further. See docs/nodes_package_design.md's follow-up notes
+        on this distinction, and this session's earlier, carefully-verified
+        buffer-reuse fix in core/optimizers.py's ChunkedXPUCAME for what
+        real in-place restructuring looks like when done correctly.
+        """
 
     @abstractmethod
     def decay_state(self, state: dict[str, Any], factor: float) -> None:

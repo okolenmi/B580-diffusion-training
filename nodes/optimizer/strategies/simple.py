@@ -23,6 +23,7 @@ from .base import ExecutionStrategy
 class SimpleLoopStrategy(ExecutionStrategy):
 
     def step(self, algorithm, params, states, param_lr, n_steps: int = 1) -> None:
+        algorithm.begin_step(n_steps)
         for i, p in enumerate(params):
             if p.grad is None:
                 continue

@@ -70,6 +70,7 @@ class ChunkedScratchBufferStrategy(ExecutionStrategy):
         self.memory = memory if memory is not None else MemoryManager()
 
     def step(self, algorithm, params, states, param_lr, n_steps: int = 1) -> None:
+        algorithm.begin_step(n_steps)
         grad_params = [(i, p) for i, p in enumerate(params) if p.grad is not None]
         if not grad_params:
             return

@@ -21,6 +21,24 @@ lr is deliberately NOT known to Algorithm at all -- an ExecutionStrategy
 applies `param -= lr * update` (or with per-parameter-group lr, or however
 else it wants), so an Algorithm never needs to know or care about learning
 rate, only about turning (grad, state) into an update.
+
+**Real limitation found while building AdafactorAlgorithm, stated
+precisely rather than papered over:** the claim above holds for CAME, but
+not unconditionally for every algorithm. Adafactor's reference
+implementation (core/optimizers.py's ChunkedXPUAdafactor) has a
+`scale_parameter` mode where the effective step size is
+`clamp(param_rms**2, min) * lr` -- genuinely dependent on both `lr` and
+the *live parameter's own current magnitude*, neither of which
+`compute_update(grad, state, scratch)` has access to. That mode, and
+Adafactor's coupled weight-decay (`p *= 1 - wd*alpha_t`, itself
+`alpha_t`-dependent), are real, out of scope for AdafactorAlgorithm's
+first slice -- see `algorithms/adafactor.py`'s module docstring for
+exactly what's deferred and why, and
+`docs/nodes_package_design.md`'s "AdafactorAlgorithm" section for the
+fuller reasoning. The `scale_parameter=False` case, however, reduces to
+`alpha_t = max(eps1, 1.0) * lr`, which for any realistic `eps1 < 1` is
+just `lr` -- so it fits this contract exactly as written, no change
+needed for that case.
 """
 
 from __future__ import annotations
@@ -30,6 +48,21 @@ from typing import Any
 
 
 class Algorithm(ABC):
+
+    def begin_step(self, n_steps: int = 1) -> None:
+        """Called once per real optimizer step, *before* compute_update()
+        runs for any parameter -- not once per parameter. Default no-op:
+        most algorithms (CAME, with its fixed EMA betas) have no
+        once-per-step-not-once-per-parameter bookkeeping to do. Exists
+        because Adafactor's `rho_t` schedule is a genuine counterexample:
+        it depends on a single, monotonically increasing step counter
+        shared across every parameter in a step, which compute_update()
+        (called once per parameter) has no way to update exactly once per
+        step on its own -- see algorithms/adafactor.py's begin_step() for
+        the concrete case this exists for. Every ExecutionStrategy calls
+        this exactly once at the top of step(), before its per-parameter
+        loop -- see strategies/simple.py or strategies/chunked.py.
+        """
 
     @abstractmethod
     def init_state(self, param_shape, dtype, device) -> dict[str, Any]:

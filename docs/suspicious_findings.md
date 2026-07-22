@@ -125,6 +125,29 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Deferred (not urgent, revisit later)
 
+- **[2026-07] New finding, informational only:
+  `ChunkedXPUAdafactor`'s momentum handling corrupts `exp_avg` in place
+  when a parameter's dtype is float32.** Found while building and
+  verifying `nodes/optimizer/algorithms/adafactor.py`'s `AdafactorAlgorithm`
+  against this class directly (see `docs/nodes_package_design.md`'s
+  "Third data point: AdafactorAlgorithm" section for the full writeup).
+  In `step()`: `p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))`, where
+  `g` is `self.exp_avg[i]` a few lines above (aliased, not copied). When
+  `p.dtype == torch.float32` (same as the internal state dtype),
+  `.to(dtype=p.dtype)` is a documented no-op returning the *same tensor
+  object* -- confirmed directly (`t.to(dtype=t.dtype) is t` -> `True`) --
+  so the following `.mul_(alpha_t)` permanently shrinks the momentum
+  buffer itself by `alpha_t` (~`lr`) every step, rather than only scaling
+  a throwaway copy for the parameter update. **Does not affect real
+  training**: this codebase trains in bf16, and `.to(dtype=bf16)` from a
+  float32 buffer always allocates a fresh tensor, so the aliasing (and
+  therefore the corruption) never happens in practice -- confirmed by
+  re-running the same comparison under bf16 and seeing the divergence
+  collapse to ordinary quantization noise, no larger than the
+  no-momentum case's own bf16 noise. Left here as a record, not fixed --
+  `nodes/` doesn't touch `core/optimizers.py`, and there's no evidence
+  this has ever caused a real-training problem to chase.
+
 - **[2026-07] Note for future sessions: `nodes/memory/manager.py`'s new
   `MemoryManager` structurally prevents the reset-vs-free asymmetry bug
   class behind the "CAME optimizer VRAM near-ceiling hang" entry above,

@@ -125,6 +125,19 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Deferred (not urgent, revisit later)
 
+- **[2026-07] Note for future sessions: `nodes/memory/manager.py`'s new
+  `MemoryManager` structurally prevents the reset-vs-free asymmetry bug
+  class behind the "CAME optimizer VRAM near-ceiling hang" entry above,
+  for anything built through `nodes/` going forward** (see
+  `docs/nodes_package_design.md`'s "Centralized memory management"
+  section for the design). This does **not** fix or touch
+  `core/optimizers.py`'s legacy classes -- per `nodes/`'s existing rule,
+  that file hasn't been modified. Left here as a pointer, not a claim of
+  resolution: once the node-graph optimizer path replaces the legacy one
+  (see `nodes_package_design.md`'s "Concrete next step" list), this whole
+  class of VRAM-lifecycle bug should stop being something to watch for by
+  construction, rather than something to keep re-auditing by hand.
+
 - **CAME's tiny-param batching fast path.** `ChunkedXPUAdafactor` has a
   vectorized/batched fast path for many small parameters (relevant for LoRA's
   many small A/B matrices) that `ChunkedXPUCAME` doesn't replicate --

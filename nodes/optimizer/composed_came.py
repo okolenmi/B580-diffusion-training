@@ -18,12 +18,15 @@ Status of each combination, stated precisely:
     (a genuine toy-regression training run, plus every lifecycle method
     including a real offload/reload device round trip -- all passed).
   - "chunked": verified to produce bit-identical training results to
-    "simple" via a numpy-backed equivalence test, but NOT yet run on real
-    hardware. Real memory savings are partial and precisely scoped --
-    see strategies/chunked.py's module docstring for exactly what it does
-    and doesn't optimize yet (no MemPool integration, no cross-step buffer
-    caching, and CAMEAlgorithm doesn't yet use the scratch hint for its
-    own internal intermediates).
+    "simple" via a numpy-backed equivalence test, and its MemoryManager-
+    backed scratch buffer's cross-step caching + offload cleanup are now
+    verified end-to-end (real torch, CPU) by
+    smoke_test_composed_came.py's check [4] -- but the whole thing is
+    still NOT yet run on real XPU hardware. Real memory savings are
+    partial and precisely scoped -- see strategies/chunked.py's module
+    docstring for exactly what it does and doesn't optimize yet (no
+    MemPool integration, and CAMEAlgorithm doesn't yet use the scratch
+    hint for its own internal intermediates).
 
 Once "chunked" (or a further-optimized successor) is real-hardware
 validated and matches core/optimizers.py's ChunkedXPUCAME on actual VRAM

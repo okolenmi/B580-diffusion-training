@@ -20,6 +20,9 @@ work -- see "Course correction" below for why that rule exists).
 which will drift):
 ```
 nodes/core.py                              Port, Node (ABC) -- domain-independent
+nodes/memory/manager.py                    MemoryManager -- domain-independent, centralized
+                                            device-buffer acquire/release/free (see "Centralized
+                                            memory management" section below)
 nodes/optimizer/handle.py                  OptimizerHandle, FusedOptimizerHandle (ABCs)
 nodes/optimizer/node.py                    OptimizerNode (ABC) -- intermediate layer
 nodes/optimizer/{adafactor,came,foreach_adafactor,fused_adafactor,adamw}.py
@@ -32,14 +35,17 @@ nodes/optimizer/algorithms/came.py         CAMEAlgorithm -- FRESH reimplementati
 nodes/optimizer/strategies/base.py         ExecutionStrategy (ABC)
 nodes/optimizer/strategies/simple.py       SimpleLoopStrategy -- real-hardware validated
 nodes/optimizer/strategies/chunked.py      ChunkedScratchBufferStrategy -- real-hardware
-                                            validated, partial memory optimization (see
-                                            "two-axis distinction" below)
+                                            validated, now MemoryManager-backed for real
+                                            cross-step buffer caching (see "two-axis
+                                            distinction" below)
 nodes/optimizer/composed.py                ComposedOptimizerHandle -- generic glue for
                                             any Algorithm + any ExecutionStrategy
 nodes/optimizer/composed_came.py           ComposedCAMEOptimizerNode -- CAME algorithm,
                                             selectable strategy ("simple" or "chunked")
 nodes/smoke_tests/smoke_test_composed_came.py   Real-hardware test, run with:
                                             `python nodes/smoke_tests/smoke_test_composed_came.py`
+nodes/smoke_tests/smoke_test_memory_manager.py  Real-torch (CPU) test for MemoryManager, run with:
+                                            `python nodes/smoke_tests/smoke_test_memory_manager.py`
 ```
 Also: `server/nodegraph_introspect.py` + `server/routes_nodegraph.py` +
 `server/static/nodegraph.html` (the `/nodegraph` dev tab, reads real
@@ -53,7 +59,8 @@ proven" -- check which level a given piece has actually reached):**
 | 5 legacy-wrapping wrapper Nodes (adafactor/came/foreach/fused/adamw) | via mock legacy classes | not yet |
 | `CAMEAlgorithm` formulas | yes (bounded ~1e-8, see below) | via the composed test, yes |
 | `SimpleLoopStrategy` | yes | **yes** -- user-run, passed (97.7% loss reduction, all lifecycle methods, offload/reload round trip) |
-| `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes** -- user-run, passed, identical loss trajectory to `simple` |
+| `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes, but predates the MemoryManager refactor below** -- the user's real-XPU run validated the earlier fresh-`torch.empty()`-per-step version; the MemoryManager-backed version has only been run on CPU so far (behaviorally identical `step()` math, same bit-exact-vs-`simple` guarantee, but the caching/offload logic itself needs its own real-hardware confirmation, not just an inherited pass) |
+| `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | real torch (CPU) -- `smoke_test_memory_manager.py`, all checks pass; real XPU run not yet done, but nothing in the class is XPU-specific |
 
 **The one open architectural question, not yet answered:** does the
 Algorithm/ExecutionStrategy split (see below) generalize cleanly to a
@@ -67,14 +74,21 @@ built the second data point yet.
 1. Build `AdafactorAlgorithm` (a second `Algorithm` -- tests whether the
    split genuinely generalizes, or whether something CAME-specific
    leaked into the abstractions).
-2. *Then* decide whether `ComposedCAMEOptimizerNode` should start
+2. Re-run `smoke_test_composed_came.py --strategy chunked` on real XPU
+   hardware to confirm the `MemoryManager`-backed version of
+   `ChunkedScratchBufferStrategy` (see "Centralized memory management"
+   below) behaves the same as the pre-refactor version that was
+   originally validated there -- the CPU run already confirms the logic
+   is correct, but not the actual VRAM behavior on real hardware.
+3. *Then* decide whether `ComposedCAMEOptimizerNode` should start
    replacing the legacy-wrapping `CAMEOptimizerNode` for real use, or
    whether to keep building breadth (more algorithms/strategies) first --
    this is a judgment call worth surfacing to the user rather than
    assuming, since it trades "prove the design generalizes" against
    "get something production-usable sooner."
-3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
-   integration, cross-`step()` buffer caching, `Algorithm.compute_update`
+4. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
+   integration (now a single, well-defined seam inside
+   `MemoryManager.get_buffer()` -- see below), `Algorithm.compute_update`
    actually using its `scratch` hint (axis 2 of the two-axis distinction
    below), a `FusedBackwardHookStrategy`, and eventually wiring `nodes/`
    into the actual training pipeline (`core/trainer.py` currently knows
@@ -500,11 +514,12 @@ switching it changes nothing about `CAMEAlgorithm` at all.
 
 **What this strategy does NOT do yet** (see `strategies/chunked.py`'s
 module docstring for the precise list): no `torch.xpu.MemPool`
-integration, buffer allocated fresh per `step()` call rather than cached
-across calls, and since `CAMEAlgorithm` doesn't use the `scratch` hint
+integration yet, and since `CAMEAlgorithm` doesn't use the `scratch` hint
 yet, the *only* real memory saving right now is the gradient-cast reuse --
 real, but partial, stated precisely rather than implied to be the full
-legacy-equivalent optimization.
+legacy-equivalent optimization. The buffer *is* now cached across
+`step()` calls rather than allocated fresh each time -- see "Centralized
+memory management" below for how and why.
 
 **Smoke test extended** (`nodes/smoke_tests/smoke_test_composed_came.py`)
 to run all real-hardware checks against every registered strategy, not
@@ -515,6 +530,97 @@ offload/reload round trip and all lifecycle methods correct);
 `"chunked"` verified equivalent via the numpy-backed check above but not
 yet run on real hardware -- next concrete step is getting that
 confirmation.
+
+### Centralized memory management: MemoryManager
+
+`ChunkedScratchBufferStrategy`'s own module docstring already named two
+real gaps in its first version: no cross-`step()` buffer caching (fresh
+`torch.empty()` every call), and no `torch.xpu.MemPool` integration. The
+straightforward fix for the first gap -- give the strategy its own
+`self._scratch` attribute, cache the tensor there, remember to clear it
+in `offload_extra()`/`free_extra()` -- is exactly the shape of the bug
+this package's design already had to correct once: the "Course
+correction" section above documents a real reset-vs-free asymmetry
+(`_scratch`/`_pool` cleared in `free_states()` but not `reset_states()`
+in some of `core/optimizers.py`'s legacy classes) that came from several
+classes each hand-managing their own scratch-buffer attributes across
+multiple lifecycle hooks. That bug class isn't about the old code's
+specific shape -- it's what happens whenever a cached buffer's cleanup
+is spread across N call sites instead of living in one place.
+
+So instead of a strategy-local attribute, this round adds
+`nodes/memory/manager.py`'s `MemoryManager`: a small, domain-independent
+class (lives next to `nodes/core.py`, not under `nodes/optimizer/` --
+nothing about it is optimizer-specific) that owns named ("tagged")
+device buffers and exposes exactly three operations, kept deliberately
+separate rather than collapsed into one:
+
+- `get_buffer(tag, numel, dtype, device)` -- acquire-or-reuse, growing
+  (never shrinking) if the tag's existing buffer is too small. Raises
+  `RuntimeError` if the tag is already marked in-use, rather than
+  silently handing out aliased storage -- this is a real, if narrow,
+  version of the exact aliasing-bug class that `algorithms/came.py`'s
+  and `algorithms/base.py`'s docstrings already flag as a caught-and-
+  fixed real bug from `core/optimizers.py`'s `ChunkedXPUCAME` work; the
+  guard turns a future instance of that mistake into a loud error at the
+  call site instead of silently-wrong numbers downstream.
+- `release(tag)` -- mark a buffer no longer needed *this call*, but keep
+  the allocation alive for next time. The common, cheap path, called
+  from `ChunkedScratchBufferStrategy.step()`'s `finally` block.
+- `free(tag)` / `free_all()` -- actually drop the reference so device
+  memory can be reclaimed. `ChunkedScratchBufferStrategy.offload_extra()`
+  and `free_extra()` both call `free_all()` -- explicitly, in one place,
+  rather than each lifecycle hook needing its own reminder to clean up.
+
+Deliberately **not** a global singleton or module-level registry --
+each `ChunkedScratchBufferStrategy` constructs and owns its own
+`MemoryManager` instance by default (matching `ComposedOptimizerHandle`'s
+existing pattern of each handle owning its own strategy instance), but
+the constructor accepts an injected instance too, for a future caller
+that legitimately wants several strategies or handles sharing one memory
+budget. No implicit global state either way -- consistent with this
+package's broader avoidance of implicit, sniff-the-object patterns (see
+`handle.py`'s `update_lr()` docstring for the canonical example of the
+pattern this avoids).
+
+This is also, deliberately, a general-purpose piece rather than an
+optimizer-only one. `docs/suspicious_findings.md` separately tracks a
+still-unresolved ~500MB VRAM growth after preview generation, in
+completely unrelated code (`preview_sampler.py`/`trainer.py`, nothing to
+do with `nodes/` or optimizers) -- not touched by this work, and not
+claimed to be fixed by it. But it's the kind of problem a shared,
+reusable buffer-lifecycle class is aimed at in general: if `nodes/` ever
+grows a non-optimizer domain that needs scratch device buffers, it has
+somewhere real to plug into instead of reinventing ad hoc caching again.
+
+**What this does NOT do** (real, separate, honestly-scoped follow-up):
+no `torch.xpu.MemPool` integration yet -- `get_buffer()`'s single
+`torch.empty()` call is exactly the seam that would wrap later, without
+any caller needing to change. No automatic eviction under memory
+pressure -- a manager holds whatever it's told to hold until explicitly
+released/freed, so behavior stays predictable rather than depending on
+runtime memory conditions. Doesn't touch axis 2 of the two-axis
+distinction above (`Algorithm`-internal scratch reuse) -- `CAMEAlgorithm`
+still doesn't use its `scratch` parameter, unchanged by this work.
+
+**Verified**: `nodes/smoke_tests/smoke_test_memory_manager.py` (real
+torch tensors, CPU -- see the file for why CPU is sufficient: no
+device-specific code path exists in `manager.py` at all, so this isn't a
+"hasn't been hardware-tested" gap the way `ChunkedScratchBufferStrategy`
+itself has) checks reuse/growth via real `.data_ptr()` identity,
+double-acquire raising, `free()`/`free_all()` actually dropping entries,
+and `stats()`'s byte accounting -- all pass. `smoke_test_composed_came.py`
+gained a new check `[4]` (chunked strategy only) confirming, through the
+real composed handle rather than the manager in isolation: the scratch
+buffer's `.data_ptr()` is identical across two separate `step()` calls
+(genuine caching, not just "no crash"), and `stats()['total_bytes']`
+drops to exactly `0` after `offload_states_to_cpu()` (the asymmetry this
+was built to prevent, checked directly rather than assumed fixed) --
+also passes, on CPU. Note this is real torch, not the numpy-backed fake
+tensor earlier pieces of this package were verified with -- torch became
+installable in this session's environment, which is itself a small,
+genuine upgrade in verification strength over the mock-based approach
+used for the algorithm/strategy work above.
 
 ## What changes for the playground UI
 

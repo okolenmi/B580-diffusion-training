@@ -25,6 +25,13 @@ What it checks per strategy, in order:
      untested path -- state tensors get their identity replaced during
      offload/reload, so a bug here would show up as a crash or
      silently-wrong training after resuming, not at the call sites.
+  4. For "chunked" specifically: does its MemoryManager (nodes/memory/
+     manager.py) actually cache its scratch buffer across step() calls
+     instead of reallocating every time, and does offload_states_to_cpu()
+     correctly free that cached buffer? See strategies/chunked.py's
+     module docstring for why this matters -- a cached buffer that isn't
+     freed on offload is exactly the reset-vs-free asymmetry bug class
+     documented in docs/nodes_package_design.md.
 
 Prints a clear PASS/FAIL summary per strategy, plus an overall summary.
 Does not touch core/, manager/, server/, or the training pipeline in any
@@ -135,7 +142,49 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
         print(f"    PASS: training continues correctly after round trip "
               f"(loss {loss_before_resume:.6f} -> {resumed_losses[-1]:.6f})")
 
-    print("\n[4] reset_states / free_states:")
+    if strategy_name == "chunked":
+        print("\n[4] MemoryManager caching and cleanup (chunked strategy only):")
+        mem = handle.strategy.memory
+        stats = mem.stats()
+        if stats["total_bytes"] <= 0:
+            failures.append(f"[{strategy_name}] MemoryManager holds no cached buffer "
+                             f"after training -- cross-step caching not exercised")
+            print("    FAIL: no cached scratch buffer found after training")
+        else:
+            print(f"    Cached scratch buffer present after training: "
+                  f"{stats['total_bytes']} bytes")
+
+        ptr_before = mem.get_buffer("grad_cast", W.numel(), torch.float32, device).data_ptr()
+        mem.release("grad_cast")
+        x = torch.randn(6, 10, device=device)
+        loss = ((W @ x - true_W @ x) ** 2).mean()
+        loss.backward()
+        handle.step()
+        handle.zero_grad()
+        ptr_after = mem.get_buffer("grad_cast", W.numel(), torch.float32, device).data_ptr()
+        mem.release("grad_cast")
+        if ptr_before != ptr_after:
+            failures.append(f"[{strategy_name}] scratch buffer reallocated across steps "
+                             f"instead of reused (cross-step caching broken)")
+            print(f"    FAIL: buffer identity changed across steps "
+                  f"({ptr_before} -> {ptr_after})")
+        else:
+            print(f"    PASS: same underlying buffer reused across steps "
+                  f"(data_ptr={ptr_before})")
+
+        handle.offload_states_to_cpu()
+        stats_after_offload = mem.stats()
+        if stats_after_offload["total_bytes"] != 0:
+            failures.append(f"[{strategy_name}] MemoryManager still holds "
+                             f"{stats_after_offload['total_bytes']} bytes after "
+                             f"offload_states_to_cpu (offload/free asymmetry)")
+            print(f"    FAIL: {stats_after_offload['total_bytes']} bytes still held "
+                  f"after offload")
+        else:
+            print("    PASS: offload_states_to_cpu freed the cached scratch buffer")
+        handle.reload_states_to_device(device)
+
+    print("\n[5] reset_states / free_states:")
     handle.reset_states()
     all_zero = all(torch.count_nonzero(t) == 0 for t in handle.states[0].values())
     if not all_zero:

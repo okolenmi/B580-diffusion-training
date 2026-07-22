@@ -59,8 +59,8 @@ proven" -- check which level a given piece has actually reached):**
 | 5 legacy-wrapping wrapper Nodes (adafactor/came/foreach/fused/adamw) | via mock legacy classes | not yet |
 | `CAMEAlgorithm` formulas | yes (bounded ~1e-8, see below) | via the composed test, yes |
 | `SimpleLoopStrategy` | yes | **yes** -- user-run, passed (97.7% loss reduction, all lifecycle methods, offload/reload round trip) |
-| `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes, but predates the MemoryManager refactor below** -- the user's real-XPU run validated the earlier fresh-`torch.empty()`-per-step version; the MemoryManager-backed version has only been run on CPU so far (behaviorally identical `step()` math, same bit-exact-vs-`simple` guarantee, but the caching/offload logic itself needs its own real-hardware confirmation, not just an inherited pass) |
-| `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | real torch (CPU) -- `smoke_test_memory_manager.py`, all checks pass; real XPU run not yet done, but nothing in the class is XPU-specific |
+| `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes** -- user-run on real XPU hardware, including the `MemoryManager`-backed version (97.7% loss reduction, all lifecycle methods, offload/reload round trip, and the new caching/cleanup check all passed -- see "Centralized memory management" below) |
+| `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | **yes** -- real torch (CPU) via `smoke_test_memory_manager.py`, all checks pass; also exercised indirectly on real XPU through `ChunkedScratchBufferStrategy`'s check `[4]` above |
 
 **The one open architectural question, not yet answered:** does the
 Algorithm/ExecutionStrategy split (see below) generalize cleanly to a
@@ -74,19 +74,13 @@ built the second data point yet.
 1. Build `AdafactorAlgorithm` (a second `Algorithm` -- tests whether the
    split genuinely generalizes, or whether something CAME-specific
    leaked into the abstractions).
-2. Re-run `smoke_test_composed_came.py --strategy chunked` on real XPU
-   hardware to confirm the `MemoryManager`-backed version of
-   `ChunkedScratchBufferStrategy` (see "Centralized memory management"
-   below) behaves the same as the pre-refactor version that was
-   originally validated there -- the CPU run already confirms the logic
-   is correct, but not the actual VRAM behavior on real hardware.
-3. *Then* decide whether `ComposedCAMEOptimizerNode` should start
+2. *Then* decide whether `ComposedCAMEOptimizerNode` should start
    replacing the legacy-wrapping `CAMEOptimizerNode` for real use, or
    whether to keep building breadth (more algorithms/strategies) first --
    this is a judgment call worth surfacing to the user rather than
    assuming, since it trades "prove the design generalizes" against
    "get something production-usable sooner."
-4. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
+3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
    integration (now a single, well-defined seam inside
    `MemoryManager.get_buffer()` -- see below), `Algorithm.compute_update`
    actually using its `scratch` hint (axis 2 of the two-axis distinction
@@ -524,12 +518,12 @@ memory management" below for how and why.
 **Smoke test extended** (`nodes/smoke_tests/smoke_test_composed_came.py`)
 to run all real-hardware checks against every registered strategy, not
 just `"simple"` -- `--strategy chunked` to check just one, `--strategy all`
-(default) to check both in one run. `"simple"` already confirmed passing
-on real XPU hardware by the user (toy regression converged 97.7%,
-offload/reload round trip and all lifecycle methods correct);
-`"chunked"` verified equivalent via the numpy-backed check above but not
-yet run on real hardware -- next concrete step is getting that
-confirmation.
+(default) to check both in one run. Both strategies now confirmed
+passing on real XPU hardware by the user (toy regression converged
+97.7% for both -- same seeded toy regression, so identical convergence
+is expected -- offload/reload round trip and all lifecycle methods
+correct for both; `"chunked"`'s run also included the `MemoryManager`
+caching/cleanup check added below).
 
 ### Centralized memory management: MemoryManager
 
@@ -616,11 +610,13 @@ buffer's `.data_ptr()` is identical across two separate `step()` calls
 (genuine caching, not just "no crash"), and `stats()['total_bytes']`
 drops to exactly `0` after `offload_states_to_cpu()` (the asymmetry this
 was built to prevent, checked directly rather than assumed fixed) --
-also passes, on CPU. Note this is real torch, not the numpy-backed fake
-tensor earlier pieces of this package were verified with -- torch became
-installable in this session's environment, which is itself a small,
-genuine upgrade in verification strength over the mock-based approach
-used for the algorithm/strategy work above.
+passes on CPU, and **user-confirmed passing on real XPU hardware too**
+(same two checks, same result, actual device). Note this is real torch
+throughout, not the numpy-backed fake tensor earlier pieces of this
+package were verified with -- torch became installable in this session's
+environment, which is itself a small, genuine upgrade in verification
+strength over the mock-based approach used for the algorithm/strategy
+work above.
 
 ## What changes for the playground UI
 

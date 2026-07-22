@@ -19,10 +19,12 @@ Status of each combination, stated precisely:
     including a real offload/reload device round trip -- all passed).
   - "chunked": verified to produce bit-identical training results to
     "simple" via a numpy-backed equivalence test, and its MemoryManager-
-    backed scratch buffer's cross-step caching + offload cleanup are now
-    verified end-to-end (real torch, CPU) by
-    smoke_test_composed_came.py's check [4] -- but the whole thing is
-    still NOT yet run on real XPU hardware. Real memory savings are
+    backed scratch buffer's cross-step caching + offload cleanup are
+    verified end-to-end -- both via real torch on CPU and, since,
+    confirmed passing on real XPU hardware by the user (97.7% loss
+    reduction, all lifecycle methods, offload/reload round trip, and the
+    caching/cleanup check all passed -- see
+    smoke_test_composed_came.py's check [4]). Real memory savings are
     partial and precisely scoped -- see strategies/chunked.py's module
     docstring for exactly what it does and doesn't optimize yet (no
     MemPool integration, and CAMEAlgorithm doesn't yet use the scratch

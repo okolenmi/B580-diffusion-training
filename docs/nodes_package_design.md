@@ -654,15 +654,30 @@ Confirmed against PyTorch's actual source
 (`torch/xpu/memory.py`, `v2.11.0`) rather than assumed --
 `torch.xpu.MemPool(allocator=None, use_on_oom=False)` and
 `torch.xpu.use_mem_pool(pool, device=None)` are the real, current
-signatures, not guessed at. Two real tradeoffs found while researching
-this (from PyTorch's own issue tracker) and documented rather than
-glossed over: allocations inside a MemPool skip the default caching
-allocator's OOM-retry-with-defragmentation behavior
-(`pytorch/pytorch#159674`), and nesting two `use_mem_pool` contexts has
-an open bug where the second pool silently gets no allocations
-(`pytorch/pytorch#161193` -- not this class's usage pattern, each
-`get_buffer()` call enters/exits its own context around one
-`torch.empty()`, never nested, but worth knowing).
+signatures, not guessed at.
+
+**Correction, made after the fact -- the user caught a real
+mischaracterization here, re-checked directly, and fixed rather than
+left standing.** This section originally cited two "documented
+tradeoffs" from PyTorch's issue tracker: `pytorch/pytorch#161193`
+(nesting `use_mem_pool` contexts) as a currently-open bug, and
+`pytorch/pytorch#159674` (OOM-retry skipped inside `use_mem_pool`) as a
+general MemPool tradeoff. Re-checked both directly after the correction:
+`#161193` is actually **closed**, fixed in `CUDACachingAllocator.cpp` --
+CUDA-specific code, not shared with XPU's own allocator implementation.
+`#159674` is genuinely still open, but is tagged `module: cuda` and its
+reproduction is `cudaMalloc`-specific -- real for CUDA, not confirmed
+one way or the other for XPU (checked Intel's own `torch-xpu-ops` issue
+tracker too; found nothing there either way). Both are now stated in
+`nodes/memory/manager.py`'s docstring precisely: one closed and
+CUDA-specific, the other open but CUDA-specific and unconfirmed for XPU
+-- not asserted as XPU risks the way the first version of this section
+implied. Worth naming plainly: two `web_fetch` calls to
+docs.pytorch.org failed to return usable content earlier in the same
+research pass that found these issues via `web_search` -- plausibly why
+less scrutiny went into confirming these two citations than into the
+API signatures above (checked against actual source). The fix is to
+check harder next time, not to stop citing external sources.
 
 Default `use_mempool=False` -- confirmed this changes nothing about
 already-verified behavior (the full suite, including both composed
@@ -682,27 +697,50 @@ actually-correct gate -- verified this now raises a clear error in
 exactly the scenario the wrong check would have let through silently
 until first real use.
 
-**Verified, precisely:** `nodes/smoke_tests/smoke_test_memory_manager.py`'s
-check `[5]` confirms the default-off path works normally and that
-`use_mempool=True` raises cleanly on this session's non-XPU build. What
-it can NOT confirm, and doesn't claim to: whether MemPool actually
-reduces fragmentation in practice, or whether either documented tradeoff
-above manifests on real hardware over real extended training -- both
-need the user's real XPU environment, not attempted here.
-`nodes/smoke_tests/xpu_mempool_hardware_check.py` is a separate,
-heavier, real-XPU-only file (deliberately excluded from `run_all.py`'s
-`smoke_test_*.py` glob -- needs real hardware, and one of its checks is
-diagnostic-only rather than pass/fail) covering exactly that gap:
-correctness (bit-exact values with vs. without MemPool), whether
-`free_all()` actually returns real device memory (via
-`torch.xpu.memory_allocated()`, not just this manager's own
-bookkeeping), and a fragmentation comparison under churny allocation
-patterns. Written but not run by Claude -- every API call in it was
-confirmed against PyTorch's real source and against how this sandbox's
-torch build behaves for the no-device case, and every check function was
-dry-run with a monkeypatched `torch.xpu` to catch Python-level bugs
-before asking for real hardware time on it, but the actual numbers it
-prints still need the user's real device to mean anything.
+**Verified on real XPU hardware by the user (Intel Arc B580) -- all
+three pass/fail checks passed, and the two diagnostic ones are worth
+reading precisely:**
+- `[1]`/`[2]`/`[3]` (construction, bit-exact correctness vs.
+  `use_mempool=False`, `free_all()` actually returning real device
+  memory via `torch.xpu.memory_allocated()`): all PASS.
+- `[4]` (fragmentation comparison, diagnostic): `reserved`/
+  `peak_reserved` came back **identical** with and without MemPool for
+  this workload (`allocated=172210176, reserved=314572800,
+  peak_reserved=314572800` both ways). Doesn't confirm the
+  fragmentation-reduction claim for this particular allocation pattern --
+  stated precisely rather than claimed as a win, since the numbers
+  simply don't show a difference here, not because MemPool failed at
+  anything.
+- `[5]` (`--stress`, OOM-retry closer look): both configurations
+  succeeded allocating the same ~6.8GB target with no difference --
+  inconclusive for the `#159674`-style tradeoff at this budget fraction
+  on this hardware, not evidence either way.
+
+A real, separate, more practically important issue the user reported
+from actual ComfyUI use (not this file, not this session's work) while
+testing this: intermittent "Device lost" errors and silent hangs after
+VRAM-pressure events (specifically: after a VAE decode spike during
+preview generation, or after model-merge-then-generate workflows) --
+described as looking like something gets offloaded under memory pressure
+but isn't correctly loaded back despite free VRAM being available
+afterward. Not investigated or fixed here -- out of scope for this
+session's `nodes/`-only work, and this is core/trainer.py territory, not
+this package's. Worth a pointer for whoever picks this up: a
+`kohya-ss/musubi-tuner` discussion about Wan2.2 training on the same B580
+hardware describes a matching hang-after-offload symptom, traced there
+to a `synchronize_device()` call missing its `device` argument on the
+non-CUDA path -- a plausible root-cause *shape* (an async/non-blocking
+transfer without a matching explicit synchronize on the XPU path) worth
+checking `core/trainer.py`'s own offload code for, not a confirmed
+diagnosis of this project's issue.
+
+`nodes/smoke_tests/xpu_mempool_hardware_check.py` needed one fix after
+being written blind: `torch.xpu.memory_allocated()`-style calls reject a
+bare `"xpu"` device string (`ValueError: Expected a torch.device with a
+specified index or an integer, but got: xpu`) -- the user fixed this by
+setting `DEVICE = 0`, confirmed working. Not something CPU-only
+development could have caught -- this sandbox's dummy XPU backend never
+reaches the code path that validates this.
 
 **Verified** (buffer bookkeeping itself, unrelated to MemPool):
 `nodes/smoke_tests/smoke_test_memory_manager.py` (real

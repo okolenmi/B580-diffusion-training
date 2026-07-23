@@ -1,15 +1,15 @@
 """Real-XPU-hardware-only tests for MemoryManager's torch.xpu.MemPool
 integration (use_mempool=True).
 
-NOT run or verified by Claude -- this needs real XPU hardware, which
-wasn't available in the sandbox that wrote this. Every API call here was
-confirmed against PyTorch's actual source and against what this
-sandbox's (CUDA-only) torch build returns for the no-device case
-(all-zero/empty results, no exceptions) -- but the numbers this file
-actually prints, and whether the MemPool integration behaves correctly
-under real allocation pressure, needs a human reading real output on
-real hardware. Please read each check's printed output yourself rather
-than trusting only the final PASS/FAIL line, especially check [4].
+Written blind (no XPU hardware in the sandbox that wrote this), then
+run for real by the user on an Intel Arc B580 -- all pass/fail checks
+passed; see docs/nodes_package_design.md's "Centralized memory
+management" section for the full recorded results, including what the
+two diagnostic checks' numbers actually showed (not just that they ran).
+One real bug needed a hardware-only fix: torch.xpu.memory_allocated()
+and friends reject a bare "xpu" device string without an index -- see
+the DEVICE constant below for the fix and why CPU-only development
+couldn't have caught it.
 
 Run this directly on your XPU machine:
 
@@ -82,6 +82,12 @@ from nodes.optimizer.algorithms.came import CAMEAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategies.chunked import ChunkedScratchBufferStrategy
 
+# A bare "xpu" string (no index) works fine for ordinary tensor creation
+# but is rejected by torch.xpu.memory_allocated()/memory_stats()/etc. --
+# confirmed on real hardware: "ValueError: Expected a torch.device with a
+# specified index or an integer, but got: xpu". This sandbox's dummy XPU
+# backend never reaches that validation, so it couldn't have been caught
+# without real hardware -- the user hit it, fixed it, confirmed working.
 DEVICE = 0
 
 

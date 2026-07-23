@@ -56,31 +56,47 @@ every allocation for XPU-device tags through a per-device
 PyTorch's actual source (`torch/xpu/memory.py`) rather than assumed --
 `torch.xpu.MemPool(allocator=None, use_on_oom=False)` and
 `torch.xpu.use_mem_pool(pool, device=None)` are the real, current
-signatures. Two real, documented tradeoffs found while researching this
-(from PyTorch's own issue tracker) and worth knowing before turning it
-on, not glossed over:
+signatures.
 
-- Allocations inside `use_mem_pool` don't get the default caching
-  allocator's normal OOM-retry-with-defragmentation behavior --
-  `pytorch/pytorch#159674` reports a real OOM under `use_mem_pool` at a
-  point where the default allocator would have succeeded by retrying
-  after a cache flush. A MemPool trades some of that resilience for
-  reduced fragmentation.
-- Nesting two `use_mem_pool` context managers has a real, currently-open
-  bug (`pytorch/pytorch#161193`) where the second pool silently gets no
-  allocations at all. Not this class's usage pattern (each `get_buffer()`
-  call enters and exits its own context around a single `torch.empty()`,
-  never nested), but worth knowing if this class is ever extended.
+**Correction, made after the fact -- both of the tradeoffs originally
+cited here were mischaracterized, caught by the user, re-checked, and
+fixed rather than left wrong:**
+
+- `pytorch/pytorch#161193` (nesting two `use_mem_pool` contexts) was
+  cited as "currently open." Wrong -- it's closed, and its fix landed in
+  `CUDACachingAllocator.cpp`, CUDA-specific code. Re-checked directly:
+  the issue page shows "Closed" and is tagged `module: cuda`. No
+  evidence found (in PyTorch's or Intel's own `torch-xpu-ops` issue
+  tracker) that XPU's separate allocator implementation ever had or has
+  the same bug. Still not this class's usage pattern either way (each
+  `get_buffer()` call enters and exits its own context around one
+  `torch.empty()`, never nested).
+- `pytorch/pytorch#159674` (OOM-retry skipped inside `use_mem_pool`) is
+  genuinely still open, but was presented here as a general MemPool
+  tradeoff without being clear it's specifically about CUDA's
+  `cudaMalloc`-based caching allocator (tagged `module: cuda`,
+  reproduction is CUDA-only) -- not confirmed, one way or the other, to
+  apply to XPU's own, separately-implemented allocator. Kept here as a
+  "known on CUDA, unconfirmed on XPU" data point worth being aware of --
+  not as an established XPU risk.
+
+Real lesson, not just a correction: two `web_fetch` calls to
+docs.pytorch.org failed to return usable content earlier in this same
+research pass, before the `web_search` that found these issues. That's
+plausibly why less scrutiny went into confirming these two citations
+specifically than into the API signatures above (which were checked
+against actual source) -- worth naming plainly rather than glossing
+over, since the fix here is to have checked harder the first time, not
+to avoid citing external sources going forward.
 
 Default `use_mempool=False` -- explicit opt-in only, so nothing about
 this class's already-verified behavior changes for existing callers.
-**Not yet verified on real XPU hardware by anyone** -- CPU can confirm
-the plumbing (default-off path unaffected; `use_mempool=True` on a
-non-XPU device raises a clear error rather than failing confusingly deep
-inside `get_buffer()`) but not the actual fragmentation-reduction claim
-or either risk above in practice. See
-`nodes/smoke_tests/smoke_test_memory_manager.py` for what is and isn't
-covered.
+**Verified on real XPU hardware by the user** (an Intel Arc B580) --
+see `nodes/smoke_tests/xpu_mempool_hardware_check.py`'s own results,
+recorded in `docs/nodes_package_design.md`: correctness (bit-exact
+values with vs. without MemPool), `free_all()` actually releasing real
+device memory, and a fragmentation comparison, confirmed real rather
+than just plumbing-tested.
 """
 
 from __future__ import annotations

@@ -82,7 +82,7 @@ from nodes.optimizer.algorithms.came import CAMEAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategies.chunked import ChunkedScratchBufferStrategy
 
-DEVICE = "xpu"
+DEVICE = 0
 
 
 def require_real_xpu() -> None:

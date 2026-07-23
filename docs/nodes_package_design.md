@@ -80,8 +80,8 @@ proven" -- check which level a given piece has actually reached):**
 | `SimpleLoopStrategy` | yes | **yes** -- user-run, passed (97.7% loss reduction, all lifecycle methods, offload/reload round trip) |
 | `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes** -- user-run on real XPU hardware, including the `MemoryManager`-backed version (97.7% loss reduction, all lifecycle methods, offload/reload round trip, and the new caching/cleanup check all passed -- see "Centralized memory management" below) |
 | `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | **yes** -- real torch (CPU) via `smoke_test_memory_manager.py`, all checks pass; also exercised indirectly on real XPU through `ChunkedScratchBufferStrategy`'s check `[4]` above |
-| `AdafactorAlgorithm` formulas, full config surface (`scale_parameter`, `weight_decay`, momentum) | yes, real torch (CPU) directly against `core.optimizers.ChunkedXPUAdafactor` -- see `smoke_test_adafactor_equivalence.py` and "Universal Algorithm contract" below | not yet -- unlike CAME, no user real-XPU run yet |
-| `ComposedAdafactorOptimizerNode` (both strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adafactor.py` | not yet |
+| `AdafactorAlgorithm` formulas, full config surface (`scale_parameter`, `weight_decay`, momentum) | yes, real torch (CPU) directly against `core.optimizers.ChunkedXPUAdafactor` -- see `smoke_test_adafactor_equivalence.py` and "Universal Algorithm contract" below | **yes** -- user-run, `smoke_test_adafactor_equivalence.py` and `smoke_test_composed_adafactor.py` both pass on real XPU hardware, both strategies |
+| `ComposedAdafactorOptimizerNode` (both strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adafactor.py` | **yes** -- user-run on real XPU hardware, both strategies |
 
 **The one open architectural question -- now answered, precisely, not
 just "yes it generalizes":** does the Algorithm/ExecutionStrategy split
@@ -108,17 +108,17 @@ one real second-data-point plus one real contract revision, not asserted
 in general.
 
 **Concrete next step, in order of what unblocks the most:**
-1. Get `AdafactorAlgorithm`/`ComposedAdafactorOptimizerNode` run on real
-   XPU hardware (mirrors what `ChunkedScratchBufferStrategy` needed after
-   its own CPU-only verification round) -- `smoke_test_composed_adafactor.py`
-   and `smoke_test_adafactor_equivalence.py` are both ready to run as-is,
-   now covering the full `scale_parameter`/`weight_decay` surface too.
-2. *Then* decide whether either `ComposedCAMEOptimizerNode` or
+1. [Done] `AdafactorAlgorithm`/`ComposedAdafactorOptimizerNode` run on
+   real XPU hardware -- user-confirmed passing, both strategies, full
+   `scale_parameter`/`weight_decay` surface. Both algorithms now have
+   the same real-hardware verification level as CAME did alone before.
+2. Decide whether either `ComposedCAMEOptimizerNode` or
    `ComposedAdafactorOptimizerNode` should start replacing their
    legacy-wrapping counterparts for real use, or whether to keep building
-   breadth first -- a judgment call worth surfacing to the user rather
-   than assuming, trading "prove the design generalizes further" against
-   "get something production-usable sooner."
+   breadth first (a third algorithm -- AdamW is the obvious next data
+   point, no factored second moment at all, bias-correction terms
+   instead of a floor-based warmup) -- a judgment call surfaced to the
+   user rather than assumed.
 3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
    integration (now a single, well-defined seam inside
    `MemoryManager.get_buffer()` -- see below), `Algorithm.compute_update`

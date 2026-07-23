@@ -20,11 +20,30 @@ What it checks per strategy, in order:
   2. Every OptimizerHandle lifecycle method against real device tensors:
      decay_states, reset_states, offload_states_to_cpu,
      reload_states_to_device, update_lr, free_states.
-  3. Specifically: does training continue correctly (no crash, loss still
-     sane) after a full offload -> reload round trip? Highest-risk
-     untested path -- state tensors get their identity replaced during
-     offload/reload, so a bug here would show up as a crash or
-     silently-wrong training after resuming, not at the call sites.
+  3. Specifically: does the offload -> reload round trip preserve state
+     values exactly (direct tensor equality against a pre-offload
+     snapshot -- the strongest, most direct check: no dependency on
+     downstream training dynamics at all), and does training continue
+     sensibly afterward? The second half deliberately compares resumed
+     loss against the *original* starting loss, not the loss immediately
+     before offload -- an adaptive, gradient-normalized optimizer that
+     converges very tightly (confirmed happening for real with
+     AdafactorAlgorithm on this same toy problem, down to ~1e-6 or
+     lower) keeps taking full-sized normalized steps even after reaching
+     the optimum and visibly oscillates around it (confirmed by direct
+     investigation: the same oscillation happens with zero offload/
+     reload involved at all, just continued training) -- so comparing
+     against a near-machine-zero reference point is comparing noise to
+     noise, and produced a real false failure in
+     smoke_test_composed_adafactor.py during real-XPU testing before
+     being caught and fixed here. Comparing against the original
+     starting loss keeps the check meaningful (still genuinely catches
+     state corruption -- confirmed by simulating a real corruption bug
+     and checking both the old and new comparisons against it) without
+     being fooled by an optimizer's own healthy dynamics near
+     convergence. CAME's own numbers here never approached that regime,
+     so this fix doesn't change what CAME's check reports -- it's a
+     robustness fix for a case CAME's test just hadn't hit yet.
   4. For "chunked" specifically: does its MemoryManager (nodes/memory/
      manager.py) actually cache its scratch buffer across step() calls
      instead of reallocating every time, and does offload_states_to_cpu()
@@ -101,6 +120,7 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
         print(f"    update_lr(0.02): handle.lr correctly = {handle.lr}")
 
     print("\n[3] Offload -> reload round trip, then continue training:")
+    pre_offload_snapshot = {name: t.clone() for name, t in handle.states[0].items()}
     handle.offload_states_to_cpu()
     post_offload_devices = {name: t.device.type for name, t in handle.states[0].items()}
     if not all(d == "cpu" for d in post_offload_devices.values()):
@@ -118,7 +138,18 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
     else:
         print(f"    reload_states_to_device: all state correctly back on {expected_type}")
 
-    loss_before_resume = losses[-1]
+    # Strongest, most direct check: does the round trip preserve values
+    # exactly, independent of any downstream training-dynamics noise? See
+    # module docstring for why this was added.
+    values_match = all(torch.equal(pre_offload_snapshot[name], t)
+                        for name, t in handle.states[0].items())
+    if not values_match:
+        failures.append(f"[{strategy_name}] offload/reload round trip did not "
+                         f"preserve state values exactly")
+        print("    FAIL: state values changed across the offload/reload round trip")
+    else:
+        print("    PASS: state values preserved exactly across the round trip")
+
     resumed_losses = []
     for step in range(50):
         x = torch.randn(6, 10, device=device)
@@ -130,17 +161,22 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
         handle.step()
         handle.zero_grad()
 
+    # Compared against the ORIGINAL starting loss, not the loss immediately
+    # before offload -- see module docstring for why that's the robust
+    # comparison, not the fragile one, once an optimizer has converged very
+    # tightly.
     if any(torch.isnan(torch.tensor(l)) or torch.isinf(torch.tensor(l)) for l in resumed_losses):
         failures.append(f"[{strategy_name}] NaN/Inf loss after offload/reload round trip")
         print(f"    FAIL: NaN/Inf appeared in post-reload training")
-    elif resumed_losses[-1] > loss_before_resume * 2:
-        failures.append(f"[{strategy_name}] Loss got substantially worse after offload/reload round trip: "
-                         f"{loss_before_resume:.6f} -> {resumed_losses[-1]:.6f}")
-        print(f"    FAIL: loss degraded after round trip: "
-              f"{loss_before_resume:.6f} -> {resumed_losses[-1]:.6f}")
+    elif resumed_losses[-1] > losses[0] * 0.5:
+        failures.append(f"[{strategy_name}] Loss did not stay well below its original "
+                         f"starting point after offload/reload round trip: "
+                         f"{losses[0]:.6f} -> {resumed_losses[-1]:.6f}")
+        print(f"    FAIL: loss no longer well below its starting point: "
+              f"{losses[0]:.6f} -> {resumed_losses[-1]:.6f}")
     else:
         print(f"    PASS: training continues correctly after round trip "
-              f"(loss {loss_before_resume:.6f} -> {resumed_losses[-1]:.6f})")
+              f"(started at {losses[0]:.6f}, now at {resumed_losses[-1]:.6f})")
 
     if strategy_name == "chunked":
         print("\n[4] MemoryManager caching and cleanup (chunked strategy only):")

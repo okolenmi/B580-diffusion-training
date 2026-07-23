@@ -3,7 +3,11 @@ core.optimizers.ChunkedXPUAdafactor it's a fresh reimplementation of.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adafactor_equivalence.py`
 
-See algorithms/adafactor.py's module docstring for the full verification
+Covers the full configuration surface: scale_parameter on and off,
+weight_decay on and off (including the legacy default combination,
+scale_parameter=True + weight_decay=1.0), momentum on and off, both
+strategies, factored and non-factored parameters, float32 and bf16. See
+algorithms/adafactor.py's module docstring for the full verification
 writeup and the real findings this check is built around -- most
 importantly:
 
@@ -13,8 +17,11 @@ importantly:
     implements (a strategy/batching concern, not algorithm math -- see
     algorithms/base.py's module docstring). A smaller toy size would
     silently compare against the wrong reference code path.
-  - scale_parameter=False, weight_decay=0 on the reference side --
-    AdafactorAlgorithm's documented scope (see algorithms/adafactor.py).
+  - Also deliberately NOT near-zero-initialized -- scale_parameter=True
+    has a real, documented pathology for parameters starting at/near
+    zero (see algorithms/adafactor.py and composed_adafactor.py's module
+    docstrings) that would make this a test of that pathology's floor
+    value, not of whether the formula is correctly ported.
   - The beta1 (momentum) case is checked with bf16 parameters, matching
     real training usage, not float32 -- float32 params trigger a real,
     separate, previously-undocumented aliasing quirk in the legacy
@@ -44,11 +51,20 @@ _STRATEGIES = {"simple": SimpleLoopStrategy, "chunked": ChunkedScratchBufferStra
 # -- see this file's module docstring and algorithms/adafactor.py for why a
 # non-trivial bf16 tolerance is the honest, expected bound here, not a
 # loosened check to force a pass.
-_TOLERANCES = {(None, torch.float32): 1e-4, (0.9, torch.bfloat16): 1e-2,
-               (None, torch.bfloat16): 1e-2}
+# Each key: (beta1, dtype, scale_parameter, weight_decay).
+_TOLERANCES = {
+    (None, torch.float32, False, 0.0): 1e-4,
+    (0.9, torch.bfloat16, False, 0.0): 1e-2,
+    (None, torch.bfloat16, False, 0.0): 1e-2,
+    (None, torch.float32, True, 0.0): 1e-4,
+    (None, torch.bfloat16, True, 0.0): 1e-2,
+    (None, torch.float32, False, 0.01): 1e-4,
+    (None, torch.float32, True, 1.0): 1e-4,   # legacy's own default combination
+}
 
 
-def run_case(strategy_name: str, beta1, dtype, n_steps: int = 40) -> float:
+def run_case(strategy_name: str, beta1, dtype, scale_parameter: bool,
+             weight_decay: float, n_steps: int = 40) -> float:
     torch.manual_seed(42)
     W1_init = (torch.randn(120, 100) * 0.1).to(dtype)   # factored, 12000 elem
     W2_init = (torch.randn(11000) * 0.1).to(dtype)      # non-factored, 11000 elem
@@ -57,13 +73,14 @@ def run_case(strategy_name: str, beta1, dtype, n_steps: int = 40) -> float:
     W2_ref = W2_init.clone().requires_grad_(True)
     legacy = ChunkedXPUAdafactor(
         params=[W1_ref, W2_ref], lr=0.01, eps=(1e-8, 1e-3),
-        clip_threshold=1.0, beta1=beta1, weight_decay=0.0,
-        scale_parameter=False, device=DEVICE,
+        clip_threshold=1.0, beta1=beta1, weight_decay=weight_decay,
+        scale_parameter=scale_parameter, device=DEVICE,
     )
 
     W1_new = W1_init.clone().requires_grad_(True)
     W2_new = W2_init.clone().requires_grad_(True)
-    algorithm = AdafactorAlgorithm(eps=(1e-8, 1e-3), clip_threshold=1.0, beta1=beta1)
+    algorithm = AdafactorAlgorithm(eps=(1e-8, 1e-3), clip_threshold=1.0, beta1=beta1,
+                                    scale_parameter=scale_parameter, weight_decay=weight_decay)
     strategy = _STRATEGIES[strategy_name]()
     handle = ComposedOptimizerHandle(algorithm=algorithm, strategy=strategy,
                                       params=[W1_new, W2_new], lr=0.01, device=DEVICE)
@@ -97,14 +114,16 @@ def main():
     failures = []
     for strategy_name in _STRATEGIES:
         print(f"\n=== strategy = {strategy_name!r} ===")
-        for (beta1, dtype), tol in _TOLERANCES.items():
-            diff = run_case(strategy_name, beta1, dtype)
+        for (beta1, dtype, scale_parameter, weight_decay), tol in _TOLERANCES.items():
+            diff = run_case(strategy_name, beta1, dtype, scale_parameter, weight_decay)
             ok = diff <= tol
             status = "PASS" if ok else "FAIL"
-            print(f"  {status}: beta1={beta1}, dtype={dtype}: "
+            print(f"  {status}: beta1={beta1}, dtype={dtype}, "
+                  f"scale_parameter={scale_parameter}, weight_decay={weight_decay}: "
                   f"max abs diff over 40 steps = {diff:.3e} (tolerance {tol:.0e})")
             if not ok:
-                failures.append(f"[{strategy_name}] beta1={beta1}, dtype={dtype}: "
+                failures.append(f"[{strategy_name}] beta1={beta1}, dtype={dtype}, "
+                                 f"scale_parameter={scale_parameter}, weight_decay={weight_decay}: "
                                  f"diff {diff:.3e} exceeds tolerance {tol:.0e}")
 
     print("\n" + "=" * 60)

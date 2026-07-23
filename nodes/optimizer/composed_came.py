@@ -66,6 +66,13 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
         "eps": Port(name="eps", type=tuple, required=False, default=(1e-30, 1e-16)),
         "clip_threshold": Port(name="clip_threshold", type=float, required=False, default=1.0),
         "betas": Port(name="betas", type=tuple, required=False, default=(0.9, 0.999, 0.9999)),
+        "weight_decay": Port(name="weight_decay", type=float, required=False, default=0.0,
+                              doc="Decoupled weight decay -- p *= 1 - wd*lr, matching the "
+                                  "legacy CAMEOptimizerNode's own default and formula "
+                                  "exactly. Added along with algorithms/base.py's lr/param "
+                                  "contract extension (built for AdafactorAlgorithm's "
+                                  "scale_parameter -- CAME's own weight decay came from the "
+                                  "same generic mechanism, not a CAME-specific addition)."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
                           doc="'simple' (real-hardware validated) or 'chunked' "
@@ -78,6 +85,7 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
             eps=inputs.get("eps", self.INPUTS["eps"].default),
             clip_threshold=inputs.get("clip_threshold", self.INPUTS["clip_threshold"].default),
             betas=inputs.get("betas", self.INPUTS["betas"].default),
+            weight_decay=inputs.get("weight_decay", self.INPUTS["weight_decay"].default),
         )
         strategy_name = inputs.get("strategy", self.INPUTS["strategy"].default)
         if strategy_name not in _STRATEGIES:

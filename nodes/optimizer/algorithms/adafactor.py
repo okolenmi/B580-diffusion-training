@@ -4,8 +4,9 @@ This is the second `Algorithm` built in this package, and the answer to
 `docs/nodes_package_design.md`'s "one open architectural question": does
 the Algorithm/ExecutionStrategy split, only ever proven with CAME so far,
 actually generalize to a second, differently-shaped algorithm? Short
-answer: mostly yes, with one real, precisely-scoped exception -- see
-below.
+answer: yes, once `compute_update()`'s contract was extended to receive
+`lr` and the live parameter (see `algorithms/base.py`'s module docstring
+for that extension and why it was needed) -- see below.
 
 Reference is core/optimizers.py's ChunkedXPUAdafactor (this codebase's
 own already-verified, production implementation of Shazeer & Stern's
@@ -18,34 +19,13 @@ from-scratch reimplementation (not a wrapper), same discipline as
 **What this covers**: the factored/non-factored second-moment estimation
 with Adafactor's time-varying `rho_t` decay schedule (distinct from
 CAME's fixed EMA betas -- see `begin_step()` below for why that needed a
-new hook), raw-gradient RMS clipping, and optional momentum (`beta1`).
-Verified numerically against `ChunkedXPUAdafactor` directly (real torch,
-not a hand-transcribed reference) -- see verification note at the bottom
-of this docstring.
+new hook), raw-gradient RMS clipping, optional momentum (`beta1`),
+`scale_parameter` (both on and off), and `weight_decay` -- the full
+configuration surface of the legacy reference, all verified numerically
+against it directly (real torch, not a hand-transcribed reference) --
+see verification note at the bottom of this docstring.
 
-**What this deliberately does NOT cover, precisely stated rather than
-silently dropped** (see `algorithms/base.py`'s module docstring for the
-fuller architectural reasoning):
-
-- `scale_parameter=True` (the legacy default). The reference's effective
-  step size in that mode is `clamp(param_rms**2, min=...) * lr` --
-  dependent on both `lr` and the *live parameter's own current
-  magnitude*, neither of which `compute_update(grad, state, scratch)`
-  has access to. This class only implements the `scale_parameter=False`
-  case, where the effective step size reduces to
-  `max(eps1, 1.0) * lr`, which for any realistic `eps1 < 1` (the default
-  is `1e-8`) is exactly `lr` -- fitting the existing "Algorithm returns
-  an unlabeled update, ExecutionStrategy applies `-lr *`" contract
-  precisely, no interface change needed. Supporting `scale_parameter=True`
-  faithfully would need `compute_update()` to receive `lr` and the live
-  parameter tensor -- a real, separate extension, not attempted here.
-- Weight decay. The reference applies it as `p *= 1 - wd*alpha_t` --
-  a *multiplicative* rescale of the live parameter, directly coupled to
-  `alpha_t` (itself `lr`/`scale_parameter`-dependent) -- not an additive
-  delta `compute_update()` could express even with `lr` added to its
-  signature. Needs its own decision (e.g. a separate
-  `Algorithm.weight_decay_scale(lr) -> float | None` hook an
-  ExecutionStrategy could apply generically) -- not guessed at here.
+**What this deliberately does NOT cover:**
 - The tiny-parameter batching fast path -- a strategy/batching concern
   by this package's own established reasoning (see `algorithms/base.py`
   and `algorithms/came.py`'s module docstrings), not an algorithm one.
@@ -56,31 +36,60 @@ fuller architectural reasoning):
   caught bug in `core/optimizers.py`'s `ChunkedXPUCAME`, and this class
   makes the same conservative choice for the same reason.
 
+**A real, precisely-characterized pathology, found while investigating a
+real report of `scale_parameter=True` training appearing to make almost
+no progress:** its effective step size is `clamp(param_rms**2, min=
+max(eps1,eps2**2)) * lr` -- for a parameter initialized at or near zero
+(LoRA's B matrix, by convention, is initialized to exactly zero), `p_rms`
+starts at (or very near) zero, so the clamp floor dominates: `alpha_t`
+collapses to roughly `1e-6 * lr` (confirmed directly: for
+`eps=(1e-8, 1e-3), lr=1e-4`, `alpha_t ≈ 9.9999994e-11`, about a millionth
+of plain `lr`). Since updates then stay tiny, the parameter stays near
+zero, so `alpha_t` stays near the floor -- a self-reinforcing
+near-standstill, not a bug: both this implementation and the legacy
+reference reproduce it identically (verified directly, same formula,
+same floor). `scale_parameter=False` has no such dependency on the
+parameter's own magnitude at all -- effective step size is just `lr`.
+
 **Verification, stated precisely:** compared step-by-step against
-`core.optimizers.ChunkedXPUAdafactor` directly (real torch, CPU --
-possible now that torch installs in this session's environment, unlike
-the numpy-backed mock `CAMEAlgorithm` was originally checked with), with
-`scale_parameter=False, weight_decay=0` to match this class's scope.
-Parameters sized >= 10,000 elements -- below that, the reference routes
-through its tiny-parameter batching fast path (a completely different,
-deliberately-unported code path, not what this class implements; an
-early version of this check used small toy parameters and appeared to
-show large discrepancies for exactly this reason, before being caught
-and corrected).
+`core.optimizers.ChunkedXPUAdafactor` directly (real torch, CPU),
+covering the full configuration surface -- both `scale_parameter`
+settings, `weight_decay` on and off, momentum on and off, factored and
+non-factored parameters, float32 and bf16, both `SimpleLoopStrategy` and
+`ChunkedScratchBufferStrategy`. Parameters sized >= 10,000 elements --
+below that, the reference routes through its tiny-parameter batching
+fast path (a completely different, deliberately-unported code path, not
+what this class implements; an early version of this check used small
+toy parameters and appeared to show large discrepancies for exactly this
+reason, before being caught and corrected).
 
-1. **Core formula (no momentum): matches to float32 precision.**
-   Factored and non-factored branches, the `rho_t` schedule, and RMS
-   clipping -- both `SimpleLoopStrategy` and `ChunkedScratchBufferStrategy`
-   -- max abs diff ~2e-6 (relative ~5e-6) over 40 steps against the
-   reference. A real, small, bounded first-step cold-start difference
-   exists (state here is always pre-allocated to zero by `init_state()`
-   -- see `algorithms/base.py`'s docstring for why that's a fixed
-   package-wide invariant -- vs. the reference's hard-set-on-first-use;
-   at `t=1`, `rho_t=1e-4`, so the blend is `1e-4 * 0 + 0.9999 * new`, a
-   ~0.01% difference from the reference's exact value on step 1 only)
-   but it's dominated by ordinary float32 rounding noise in this check.
+1. **Core formula (no momentum, scale_parameter=False): matches to
+   float32 precision.** Factored and non-factored branches, the `rho_t`
+   schedule, and RMS clipping -- max abs diff ~2e-6 (relative ~5e-6) over
+   40 steps against the reference, both strategies. A real, small,
+   bounded first-step cold-start difference exists (state here is always
+   pre-allocated to zero by `init_state()` -- see `algorithms/base.py`'s
+   docstring for why that's a fixed package-wide invariant -- vs. the
+   reference's hard-set-on-first-use; at `t=1`, `rho_t=1e-4`, so the
+   blend is `1e-4 * 0 + 0.9999 * new`, a ~0.01% difference from the
+   reference's exact value on step 1 only) but it's dominated by
+   ordinary float32 rounding noise in this check.
 
-2. **Momentum (`beta1` set): a real, separate, non-algorithmic
+2. **`scale_parameter=True` (non-zero-initialized parameters, the
+   well-behaved regime): matches to float32 precision.** ~6e-8 max abs
+   diff (float32) over 40 steps, both strategies -- confirms the
+   `p_rms`-based `alpha_t` formula itself is faithfully ported, not just
+   the case that reduces to plain `lr`. bf16: ~5e-4, consistent with
+   ordinary bf16 rounding noise (see point 4).
+
+3. **`weight_decay != 0`: matches to float32 precision.** ~2e-6 max abs
+   diff (`scale_parameter=False`) and ~7e-8 (legacy's own default
+   combination, `scale_parameter=True, weight_decay=1.0`) over 40 steps.
+   The multiplicative decay applied via the generic `decay` return value
+   (see `algorithms/base.py`) matches the reference's own
+   `p *= 1 - wd*alpha_t` exactly.
+
+4. **Momentum (`beta1` set): a real, separate, non-algorithmic
    discrepancy was found and fully explained, not shrugged off.** An
    initial comparison using float32 parameters showed a large (~40%
    relative) divergence whenever `beta1` was set. Traced to
@@ -104,13 +113,13 @@ and corrected).
    artifact is removed; both are just ordinary bf16 quantization noise
    (checked it grows mildly and sub-linearly over 40 steps, not
    exploding, consistent with rounding noise rather than a hidden bug).
-   `AdafactorAlgorithm.compute_update()` returns `state["exp_avg"].clone()`
-   deliberately, never the aliased tensor itself -- so this class never
-   had the corruption to begin with; noted here as a finding about the
-   reference, not a defect this port needed to work around. Recorded in
-   `docs/suspicious_findings.md` as a new, informational, low-priority
-   entry (not fixed -- `nodes/` never edits `core/`, and it doesn't
-   affect real bf16 training).
+   `AdafactorAlgorithm.compute_update()` returns a fresh tensor built
+   from `state["exp_avg"].clone()`, never the aliased tensor itself --
+   so this class never had the corruption to begin with; noted here as a
+   finding about the reference, not a defect this port needed to work
+   around. Recorded in `docs/suspicious_findings.md` as a new,
+   informational, low-priority entry (not fixed -- `nodes/` never edits
+   `core/`, and it doesn't affect real bf16 training).
 
 See `nodes/smoke_tests/smoke_test_adafactor_equivalence.py` for the
 executable form of this comparison, and
@@ -131,10 +140,13 @@ from .base import Algorithm
 class AdafactorAlgorithm(Algorithm):
 
     def __init__(self, eps=(1e-8, 1e-3), clip_threshold: float = 1.0,
-                 beta1: float | None = None):
+                 beta1: float | None = None, scale_parameter: bool = False,
+                 weight_decay: float = 0.0):
         self.eps1, self.eps2 = eps
         self.clip_threshold = clip_threshold
         self.beta1 = beta1
+        self.scale_parameter = scale_parameter
+        self.wd = weight_decay
         self.t = 0
         self._rho_t: float | None = None
 
@@ -172,13 +184,14 @@ class AdafactorAlgorithm(Algorithm):
             state["exp_avg"] = torch.zeros(param_shape, dtype=torch.float32, device=device)
         return state
 
-    def compute_update(self, grad, state: dict[str, Any], scratch=None):
+    def compute_update(self, grad, param, state: dict[str, Any], lr: float, scratch=None):
         """scratch accepted for interface compatibility but not used for
         in-place restructuring -- see module docstring's "what this does
         NOT cover" section for why. grad is treated as read-only: every
         op below produces a new tensor rather than mutating `grad` (or a
         `scratch` view of it) in place, deliberately matching
-        CAMEAlgorithm's own conservative choice."""
+        CAMEAlgorithm's own conservative choice. param is read-only,
+        used only for scale_parameter's p_rms."""
         if self._rho_t is None:
             raise RuntimeError(
                 "AdafactorAlgorithm.compute_update() called before begin_step() -- "
@@ -196,6 +209,17 @@ class AdafactorAlgorithm(Algorithm):
         rms_g = grad.norm() / (n ** 0.5 + 1e-8)
         clip_mul = min(1.0, self.clip_threshold / float(rms_g))
         g = grad if clip_mul == 1.0 else grad * clip_mul
+
+        # Effective step size. scale_parameter=True ties this to the live
+        # parameter's own current magnitude -- see module docstring for why
+        # this needed `param` and `lr` added to the contract, and for a real,
+        # documented pathology this mode has with zero-initialized
+        # parameters (e.g. LoRA's B matrix).
+        if self.scale_parameter:
+            p_rms = param.data.norm(dtype=torch.float32) / (n ** 0.5 + 1e-8)
+            alpha_t = float(torch.clamp(p_rms.pow(2), min=max(self.eps1, self.eps2 ** 2)) * lr)
+        else:
+            alpha_t = max(self.eps1, 1.0) * lr
 
         factored = g.dim() >= 2
         if factored:
@@ -216,8 +240,10 @@ class AdafactorAlgorithm(Algorithm):
 
         if self.beta1 is not None:
             state["exp_avg"].mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
-            return state["exp_avg"].clone()
-        return normalized
+            normalized = state["exp_avg"].clone()
+
+        decay = (1.0 - self.wd * alpha_t) if self.wd != 0 else None
+        return normalized * alpha_t, decay
 
     def decay_state(self, state: dict[str, Any], factor: float) -> None:
         if factor <= 0:

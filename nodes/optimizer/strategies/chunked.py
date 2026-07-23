@@ -82,8 +82,11 @@ class ChunkedScratchBufferStrategy(ExecutionStrategy):
                 n = p.numel()
                 grad_view = scratch[:n].reshape(p.shape)
                 grad_view.copy_(p.grad.detach())
-                update = algorithm.compute_update(grad_view, states[i], scratch=grad_view)
-                p.data.add_(update.to(dtype=p.dtype), alpha=-param_lr[i])
+                delta, decay = algorithm.compute_update(grad_view, p, states[i], param_lr[i],
+                                                          scratch=grad_view)
+                if decay is not None:
+                    p.data.mul_(decay)
+                p.data.sub_(delta.to(dtype=p.dtype))
         finally:
             self.memory.release(_SCRATCH_TAG)
 

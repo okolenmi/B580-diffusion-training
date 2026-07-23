@@ -28,6 +28,27 @@ code paths.
 Deliberately contains NO GPU memory management, scratch buffers, or
 batching logic of any kind -- see algorithms/base.py's module docstring
 for why. Any ExecutionStrategy drives this class one parameter at a time.
+
+**Weight decay added along with the base.py contract extension** (see
+that module's docstring for the full reasoning -- this was built for
+Adafactor's `scale_parameter`, and CAME's own weight decay came along for
+free once `lr`/`param`/the `decay` return value existed). Matches the
+reference's own decoupled decay exactly: `p *= 1 - wd*lr`, applied via
+the generic `decay` mechanism rather than anything CAME-specific -- no
+strategy code needed to know CAME has weight decay at all. Verified
+directly against `core.optimizers.ChunkedXPUCAME` (real torch, not the
+external-reference numpy comparison this class's core formulas were
+originally checked against): float32 matches to ~4e-6 max abs diff over
+40 steps (with or without weight decay -- confirmed identical, so decay
+adds no extra error). bf16 shows a larger, but bounded and
+mildly-growing (not exploding) divergence -- ~3.9e-3 at step 0 growing
+to ~4.7e-2 by step 40 -- present identically with weight_decay=0, so
+unrelated to this addition; likely from CAME's own longer chain of
+sqrt/divide operations (r/c *and* rr/rc, vs. Adafactor's single
+vr/vc) compounding bf16 rounding more per step. Not chased further this
+session -- real, but this is the first time this class was compared
+against the legacy reference with actual bf16 tensors rather than a
+numpy mock, so it's a new data point rather than a regression.
 """
 
 from __future__ import annotations
@@ -42,10 +63,11 @@ from .base import Algorithm
 class CAMEAlgorithm(Algorithm):
 
     def __init__(self, eps=(1e-30, 1e-16), clip_threshold: float = 1.0,
-                 betas=(0.9, 0.999, 0.9999)):
+                 betas=(0.9, 0.999, 0.9999), weight_decay: float = 0.0):
         self.eps1, self.eps2 = eps
         self.clip_threshold = clip_threshold
         self.beta1, self.beta2, self.beta3 = betas
+        self.wd = weight_decay
 
     def init_state(self, param_shape, dtype, device) -> dict[str, Any]:
         """dtype is accepted (part of the Algorithm contract -- a future
@@ -78,7 +100,7 @@ class CAMEAlgorithm(Algorithm):
             "ea": torch.zeros(param_shape, dtype=torch.float32, device=device),
         }
 
-    def compute_update(self, grad, state: dict[str, Any], scratch=None):
+    def compute_update(self, grad, param, state: dict[str, Any], lr: float, scratch=None):
         # scratch accepted for interface compatibility (see base.py's
         # docstring) but not yet used -- this method still allocates
         # fresh intermediate tensors (g2, normalized, res, ...) rather
@@ -88,6 +110,9 @@ class CAMEAlgorithm(Algorithm):
         # getting in-place buffer reuse subtly wrong (aliasing a value
         # that's still needed) was a real bug this session already had to
         # catch and fix once, in core/optimizers.py's ChunkedXPUCAME.
+        # param accepted per the base.py contract but unused -- CAME's own
+        # math never needed it, only Adafactor's scale_parameter does.
+        decay = (1.0 - self.wd * lr) if self.wd != 0 else None
         factored = grad.dim() >= 2
         g = grad.reshape(grad.shape[0], -1) if factored else grad
 
@@ -115,7 +140,7 @@ class CAMEAlgorithm(Algorithm):
             rr_sqrt = state["rr"].sqrt().add(self.eps1)
             rc_sqrt = state["rc"].sqrt().add(self.eps1)
             update = ea_flat / rr_sqrt.unsqueeze(1) / rc_sqrt.unsqueeze(0) * rr_mean_sqrt
-            return update.reshape(grad.shape)
+            return update.reshape(grad.shape) * lr, decay
         else:
             g2 = g.pow(2).add(self.eps1)
             state["s"].mul_(self.beta2).add_(g2, alpha=1.0 - self.beta2)
@@ -129,7 +154,7 @@ class CAMEAlgorithm(Algorithm):
             state["ea"].mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
             # Reference does not apply the confidence term for 1D params --
             # momentum is the update directly.
-            return state["ea"].clone()
+            return state["ea"].clone() * lr, decay
 
     def decay_state(self, state: dict[str, Any], factor: float) -> None:
         if factor <= 0:

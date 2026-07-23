@@ -17,28 +17,36 @@ trick some of the old classes use is a strategy concern, not an algorithm
 one -- it changes how state is *allocated/batched* for many small
 parameters, never what update *formula* gets computed.
 
-lr is deliberately NOT known to Algorithm at all -- an ExecutionStrategy
-applies `param -= lr * update` (or with per-parameter-group lr, or however
-else it wants), so an Algorithm never needs to know or care about learning
-rate, only about turning (grad, state) into an update.
-
-**Real limitation found while building AdafactorAlgorithm, stated
-precisely rather than papered over:** the claim above holds for CAME, but
-not unconditionally for every algorithm. Adafactor's reference
-implementation (core/optimizers.py's ChunkedXPUAdafactor) has a
-`scale_parameter` mode where the effective step size is
+**Revised design decision (this contract was extended once already --
+here's why, stated precisely):** an earlier version of this docstring
+said lr was deliberately unknown to Algorithm, with an ExecutionStrategy
+applying `param -= lr * update` uniformly. That held for CAME, but broke
+down for real when `AdafactorAlgorithm` was built: Adafactor's
+`scale_parameter` mode computes its effective step size from
 `clamp(param_rms**2, min) * lr` -- genuinely dependent on both `lr` and
-the *live parameter's own current magnitude*, neither of which
-`compute_update(grad, state, scratch)` has access to. That mode, and
-Adafactor's coupled weight-decay (`p *= 1 - wd*alpha_t`, itself
-`alpha_t`-dependent), are real, out of scope for AdafactorAlgorithm's
-first slice -- see `algorithms/adafactor.py`'s module docstring for
-exactly what's deferred and why, and
-`docs/nodes_package_design.md`'s "AdafactorAlgorithm" section for the
-fuller reasoning. The `scale_parameter=False` case, however, reduces to
-`alpha_t = max(eps1, 1.0) * lr`, which for any realistic `eps1 < 1` is
-just `lr` -- so it fits this contract exactly as written, no change
-needed for that case.
+the *live parameter's own current magnitude* -- and its weight decay
+(`p *= 1 - wd*alpha_t`) is a *multiplicative* rescale of the live
+parameter, coupled to that same `alpha_t`, which no additive delta could
+express regardless of what `compute_update()` receives as input.
+
+So `compute_update()` now receives `param` (read-only access to the
+parameter's current value) and `lr`, and returns `(delta, decay)`:
+`delta` is the final, already-lr-scaled amount to subtract, and `decay`
+is either `None` or a multiplicative factor an ExecutionStrategy applies
+to `param.data` *before* subtracting `delta` -- matching the order every
+legacy optimizer in `core/optimizers.py` actually uses (decay first,
+then the additive step). `Algorithm` itself never mutates `param` --
+`decay` is a description of what to do, not an action taken directly --
+keeping the "pure math, `state` is the only thing mutated in place"
+property intact even though `param` is now visible to it.
+
+This is a genuine, load-bearing generalization, not a speculative one:
+`CAMEAlgorithm` didn't strictly need `param`/`lr`/`decay` for its own
+update math, but folding `lr` into its own return value and adding
+`weight_decay` support through the exact same `decay` mechanism was
+close to free once the contract existed -- real, working feature parity
+CAME's port didn't have before (see `algorithms/came.py`). One universal
+contract, not a special case bolted on for Adafactor alone.
 """
 
 from __future__ import annotations
@@ -74,10 +82,29 @@ class Algorithm(ABC):
         algorithm-specific about what's inside."""
 
     @abstractmethod
-    def compute_update(self, grad, state: dict[str, Any], scratch=None):
-        """Given the current gradient and this parameter's state (mutated
-        in place as needed), return the update to subtract from the
-        parameter. Not lr-scaled -- see module docstring.
+    def compute_update(self, grad, param, state: dict[str, Any], lr: float, scratch=None):
+        """Given the current gradient, this parameter's live value, this
+        parameter's state (mutated in place as needed), and the current
+        learning rate, return `(delta, decay)`:
+
+        - `delta`: the final, already-lr-scaled amount to subtract from
+          `param.data`. Not a "unit" update needing external scaling --
+          see module docstring for why lr moved into this contract.
+        - `decay`: `None`, or a multiplicative factor to apply to
+          `param.data` *before* `delta` is subtracted (decoupled weight
+          decay, or anything else that's a rescale of the parameter's
+          current value rather than an additive step). An Algorithm
+          computes this value but never applies it -- an ExecutionStrategy
+          does `if decay is not None: param.data.mul_(decay)` before
+          `param.data.sub_(delta)`, matching every legacy optimizer's own
+          order of operations in core/optimizers.py.
+
+        `param`: read-only. An Algorithm may read `param.data` (e.g. for
+        Adafactor's `scale_parameter`, which needs the parameter's own
+        current RMS) but must never mutate it directly -- `decay` is how
+        an Algorithm expresses "rescale the parameter," not direct
+        mutation, so this class stays pure math with `state` (and,
+        optionally, `scratch`'s contents) as the only things it mutates.
 
         scratch: optional tensor, same shape as grad, that an
         ExecutionStrategy may provide as reusable workspace (e.g. a single

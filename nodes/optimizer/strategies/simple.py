@@ -28,8 +28,10 @@ class SimpleLoopStrategy(ExecutionStrategy):
             if p.grad is None:
                 continue
             grad = p.grad.detach().float()
-            update = algorithm.compute_update(grad, states[i])
-            p.data.add_(update.to(dtype=p.dtype), alpha=-param_lr[i])
+            delta, decay = algorithm.compute_update(grad, p, states[i], param_lr[i])
+            if decay is not None:
+                p.data.mul_(decay)
+            p.data.sub_(delta.to(dtype=p.dtype))
 
     def zero_grad(self, params) -> None:
         for p in params:

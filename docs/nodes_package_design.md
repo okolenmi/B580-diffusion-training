@@ -47,14 +47,22 @@ nodes/optimizer/composed.py                ComposedOptimizerHandle -- generic gl
 nodes/optimizer/composed_came.py           ComposedCAMEOptimizerNode -- CAME algorithm,
                                             selectable strategy ("simple" or "chunked")
 nodes/optimizer/composed_adafactor.py      ComposedAdafactorOptimizerNode -- Adafactor
-                                            algorithm, selectable strategy, scale_parameter/
-                                            weight_decay fixed off (not exposed as ports)
+                                            algorithm, selectable strategy, scale_parameter
+                                            and weight_decay both fully supported (see
+                                            "Universal Algorithm contract" section below),
+                                            default off for safety, not legacy parity
 nodes/smoke_tests/smoke_test_composed_came.py   Real-hardware test, run with:
                                             `python nodes/smoke_tests/smoke_test_composed_came.py`
 nodes/smoke_tests/smoke_test_memory_manager.py  Real-torch (CPU) test for MemoryManager, run with:
                                             `python nodes/smoke_tests/smoke_test_memory_manager.py`
 nodes/smoke_tests/smoke_test_adafactor_equivalence.py  Real-torch (CPU) numerical check
-                                            against core.optimizers.ChunkedXPUAdafactor
+                                            against core.optimizers.ChunkedXPUAdafactor,
+                                            full config surface (scale_parameter, weight_decay,
+                                            momentum, both strategies, float32 and bf16)
+nodes/smoke_tests/smoke_test_came_equivalence.py       Real-torch (CPU) numerical check
+                                            against core.optimizers.ChunkedXPUCAME directly
+                                            (first time -- the original CAME formula check
+                                            used an external-reference numpy mock, not this)
 nodes/smoke_tests/smoke_test_composed_adafactor.py     Real-hardware test, mirrors
                                             smoke_test_composed_came.py
 ```
@@ -68,55 +76,50 @@ proven" -- check which level a given piece has actually reached):**
 | Piece | Numerical verification | Real XPU hardware verified |
 |---|---|---|
 | 5 legacy-wrapping wrapper Nodes (adafactor/came/foreach/fused/adamw) | via mock legacy classes | not yet |
-| `CAMEAlgorithm` formulas | yes, numpy-mock (bounded ~1e-8, see below) | via the composed test, yes |
+| `CAMEAlgorithm` formulas | yes, numpy-mock vs. external reference (bounded ~1e-8, see below) **and** real torch vs. `core.optimizers.ChunkedXPUCAME` directly (`smoke_test_came_equivalence.py`, ~4e-6 float32) | via the composed test, yes |
 | `SimpleLoopStrategy` | yes | **yes** -- user-run, passed (97.7% loss reduction, all lifecycle methods, offload/reload round trip) |
 | `ChunkedScratchBufferStrategy` | yes, bit-exact vs. `SimpleLoopStrategy` | **yes** -- user-run on real XPU hardware, including the `MemoryManager`-backed version (97.7% loss reduction, all lifecycle methods, offload/reload round trip, and the new caching/cleanup check all passed -- see "Centralized memory management" below) |
 | `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | **yes** -- real torch (CPU) via `smoke_test_memory_manager.py`, all checks pass; also exercised indirectly on real XPU through `ChunkedScratchBufferStrategy`'s check `[4]` above |
-| `AdafactorAlgorithm` formulas | yes, real torch (CPU) directly against `core.optimizers.ChunkedXPUAdafactor` -- see `smoke_test_adafactor_equivalence.py` and "AdafactorAlgorithm" below | not yet -- unlike CAME, no user real-XPU run yet |
+| `AdafactorAlgorithm` formulas, full config surface (`scale_parameter`, `weight_decay`, momentum) | yes, real torch (CPU) directly against `core.optimizers.ChunkedXPUAdafactor` -- see `smoke_test_adafactor_equivalence.py` and "Universal Algorithm contract" below | not yet -- unlike CAME, no user real-XPU run yet |
 | `ComposedAdafactorOptimizerNode` (both strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adafactor.py` | not yet |
 
 **The one open architectural question -- now answered, precisely, not
 just "yes it generalizes":** does the Algorithm/ExecutionStrategy split
 generalize cleanly to a second, differently-shaped algorithm?
-**Mostly yes, with one real boundary found.** `AdafactorAlgorithm` (see
-below) reuses `SimpleLoopStrategy` and `ChunkedScratchBufferStrategy`
+**Yes, once the contract was extended for real.** `AdafactorAlgorithm`
+(see below) reuses `SimpleLoopStrategy` and `ChunkedScratchBufferStrategy`
 completely unmodified, and its core math -- factored/non-factored second
-moments, RMS clipping, momentum -- fits the existing
+moments, RMS clipping, momentum -- fit the original
 `compute_update(grad, state, scratch)` contract exactly, needing only one
 small, honest addition: `Algorithm.begin_step(n_steps)`, a default-no-op
 lifecycle hook for algorithms with once-per-real-step (not
 once-per-parameter) bookkeeping, which Adafactor's `rho_t` schedule
 genuinely needs and CAME's fixed EMA betas don't (see
-`algorithms/base.py`). But a real boundary was found, not papered over:
+`algorithms/base.py`). A real boundary was found, not papered over --
 Adafactor's `scale_parameter` mode and its weight-decay coupling both
-need `compute_update()` to know `lr` and/or the live parameter's own
-current magnitude -- neither of which the contract provides, and CAME
-never needed. `AdafactorAlgorithm`'s first slice deliberately excludes
-both rather than guessing at an interface extension -- see its module
-docstring and the "AdafactorAlgorithm" section below for exactly why,
-and what extending the contract to cover them would require. The
-third strategy (`FusedBackwardHookStrategy`) and a third algorithm are
-still unbuilt, so "generalizes cleanly" is proven for one real
-second-data-point, not asserted in general.
+needed `compute_update()` to know `lr` and the live parameter's own
+current magnitude, which the original contract didn't provide -- and
+resolved, not permanently deferred: `compute_update()` was extended to
+receive both, returning `(delta, decay)` instead of a bare update. See
+"Universal Algorithm contract" below for the extension and its
+verification. The third strategy (`FusedBackwardHookStrategy`) and a
+third algorithm are still unbuilt, so "generalizes cleanly" is proven for
+one real second-data-point plus one real contract revision, not asserted
+in general.
 
 **Concrete next step, in order of what unblocks the most:**
-1. Decide how to handle `scale_parameter=True`/weight-decay for Adafactor
-   -- extend `compute_update()`'s signature (adding `lr` and/or the live
-   parameter), or leave `AdafactorAlgorithm` permanently scoped to
-   `scale_parameter=False` and handle weight decay via a separate,
-   generic strategy-level hook. A real design decision, worth surfacing
-   to the user rather than guessing -- see "AdafactorAlgorithm" below.
-2. Get `AdafactorAlgorithm`/`ComposedAdafactorOptimizerNode` run on real
+1. Get `AdafactorAlgorithm`/`ComposedAdafactorOptimizerNode` run on real
    XPU hardware (mirrors what `ChunkedScratchBufferStrategy` needed after
    its own CPU-only verification round) -- `smoke_test_composed_adafactor.py`
-   and `smoke_test_adafactor_equivalence.py` are both ready to run as-is.
-3. *Then* decide whether either `ComposedCAMEOptimizerNode` or
+   and `smoke_test_adafactor_equivalence.py` are both ready to run as-is,
+   now covering the full `scale_parameter`/`weight_decay` surface too.
+2. *Then* decide whether either `ComposedCAMEOptimizerNode` or
    `ComposedAdafactorOptimizerNode` should start replacing their
    legacy-wrapping counterparts for real use, or whether to keep building
    breadth first -- a judgment call worth surfacing to the user rather
    than assuming, trading "prove the design generalizes further" against
    "get something production-usable sooner."
-4. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
+3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
    integration (now a single, well-defined seam inside
    `MemoryManager.get_buffer()` -- see below), `Algorithm.compute_update`
    actually using its `scratch` hint (axis 2 of the two-axis distinction
@@ -737,6 +740,110 @@ rather than exploding). `nodes/smoke_tests/smoke_test_composed_adafactor.py`
 mirrors `smoke_test_composed_came.py`'s toy-regression + full-lifecycle
 check (both strategies) -- passes on CPU. Neither yet run on real XPU
 hardware by the user -- see "Concrete next step" above.
+
+**Update, next session: the boundary above was resolved, not left as a
+permanent limitation** -- see "Universal Algorithm contract: lr, param,
+and decoupled decay" below. Left as-is above rather than rewritten, since
+it's an accurate record of the reasoning that led to the extension, not
+a stale claim.
+
+### Universal Algorithm contract: lr, param, and decoupled decay
+
+Prompted by a real user report: `scale_parameter=True` appeared to make
+almost no training progress. Investigated rather than assumed --
+`scale_parameter`'s effective step size is `clamp(param_rms**2, min=
+~1e-6) * lr`; for a parameter initialized at or near zero (LoRA's B
+matrix, by convention, starts at exactly zero), `param_rms` starts at the
+floor, so `alpha_t` collapses to roughly a millionth of plain `lr`
+(confirmed directly: for the default `eps`, `alpha_t ≈ 1e-6 * lr`). Since
+updates then stay tiny, the parameter stays near zero, so `alpha_t` stays
+near the floor -- a self-reinforcing near-standstill. Not a bug: verified
+both this port and the legacy reference reproduce the identical floor
+value. Very likely the actual explanation for what was observed.
+
+Given that, and an explicit ask to make the underlying design "more
+versatile/universal" rather than special-cased, `Algorithm.compute_update()`
+was extended for real (see `algorithms/base.py`'s module docstring for
+the full contract): it now receives `param` (read-only) and `lr`, and
+returns `(delta, decay)` instead of a bare "unit" update --
+`delta` is the final, already-`lr`-scaled amount to subtract; `decay` is
+`None` or a multiplicative factor an `ExecutionStrategy` applies to
+`param.data` *before* subtracting `delta`, matching every legacy
+optimizer's own decay-then-step order. `Algorithm` still never mutates
+`param` directly -- `decay` is a description, not an action -- keeping
+the "pure math, only `state` is mutated in place" property intact even
+though `param` is now visible to it.
+
+**What this unlocked, concretely:**
+- `AdafactorAlgorithm` now implements `scale_parameter` (both settings)
+  and `weight_decay` for real -- no longer a documented gap.
+  `ComposedAdafactorOptimizerNode` exposes both as ports, but
+  deliberately defaults them off (`False`/`0.0`) rather than matching
+  `AdafactorOptimizerNode`'s unusual legacy defaults
+  (`scale_parameter=True, weight_decay=1.0`, the latter of which shrinks
+  any parameter ~5%/step at typical lr) -- changing this Node's defaults
+  to match would have silently changed already-tested toy-regression
+  behavior. Pass both explicitly to get legacy parity; verified to do so
+  exactly (see below).
+- `CAMEAlgorithm` gained `weight_decay` support too, essentially for
+  free -- it never needed `lr`/`param` for its own math, but folding
+  `lr` into its own return value and adding decay through the same
+  generic mechanism cost almost nothing once the contract existed. Real,
+  working feature parity CAME's port didn't have before this session.
+  `ComposedCAMEOptimizerNode` now exposes `weight_decay` (default `0.0`,
+  matching the legacy wrapper's own default exactly -- no behavior
+  change for existing callers who don't pass it).
+- Both `SimpleLoopStrategy` and `ChunkedScratchBufferStrategy` updated
+  to the new call site (`delta, decay = algorithm.compute_update(grad, p,
+  states[i], param_lr[i], scratch=...)`, then `if decay is not None:
+  p.data.mul_(decay)` before `p.data.sub_(delta)`) -- mechanical, same
+  shape for both, no strategy needs to know which algorithms use `decay`
+  and which don't.
+
+**Verified, stated precisely:** extended
+`smoke_test_adafactor_equivalence.py` to cover the full configuration
+surface against `core.optimizers.ChunkedXPUAdafactor` directly --
+`scale_parameter` on and off, `weight_decay` on and off (including the
+legacy's own default combination, `scale_parameter=True, weight_decay=
+1.0`), momentum on and off, both strategies, float32 and bf16. All match
+to float32 precision in float32 (~6e-8 to ~2e-6 depending on
+configuration) and to ordinary bf16 rounding-noise levels in bf16 --
+`scale_parameter=True`'s own formula checked in the well-behaved
+(non-zero-init) regime specifically, so this confirms the `p_rms`-based
+math itself is faithfully ported, not just the degenerate case. New file
+`smoke_test_came_equivalence.py` does the same for `CAMEAlgorithm`
+against `core.optimizers.ChunkedXPUCAME` directly -- the first time this
+class was checked against the *in-repo* legacy reference with real
+tensors, rather than the original external-reference numpy comparison.
+float32 matches to ~4e-6 (with or without decay -- confirmed identical,
+so decay itself adds no error); bf16 shows a real, bounded, mildly-
+growing divergence (~4e-3 to ~5e-2 over 40 steps) present identically
+with `weight_decay=0`, so unrelated to this session's change -- likely
+from CAME's own longer chain of sqrt/divide operations compounding bf16
+rounding more per step than Adafactor's simpler one. Noted as a new data
+point, not chased further this session.
+
+**A test-methodology bug was also found and fixed along the way,
+unrelated to the contract extension itself:** running the new
+`smoke_test_composed_adafactor.py` on real XPU hardware produced a false
+failure -- `AdafactorAlgorithm`'s gradient-normalized update doesn't
+shrink its own step size as loss shrinks (unlike raw-gradient SGD), so
+once training converges very tightly (it reached ~1e-6 loss on this toy
+problem on the user's XPU run), it keeps taking full-sized steps and
+visibly oscillates around the optimum -- confirmed this happens with
+*zero* offload/reload involved at all, just continued training, by
+direct investigation. The test's old check compared resumed loss against
+the loss immediately before offload, which happened to be sampled right
+at a lucky near-zero point -- comparing noise to noise. Fixed in both
+`smoke_test_composed_came.py` and `smoke_test_composed_adafactor.py`
+two ways: (1) added a direct, much stronger check -- snapshot state
+before offload, compare with `torch.equal()` after reload, independent
+of any downstream training dynamics at all; (2) changed the training-
+continues check to compare against the *original* starting loss rather
+than the fragile near-offload value. Confirmed the fix still catches a
+real corruption (simulated by substituting `reset_states()` for the
+round trip) before committing it, and confirmed it doesn't change what
+CAME's own already-passing real-XPU numbers report.
 
 ## What changes for the playground UI
 

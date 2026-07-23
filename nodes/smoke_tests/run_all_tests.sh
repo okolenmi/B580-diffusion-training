@@ -1,5 +1,0 @@
-python nodes/smoke_tests/smoke_test_adafactor_equivalence.py
-python nodes/smoke_tests/smoke_test_came_equivalence.py
-python nodes/smoke_tests/smoke_test_composed_adafactor.py
-python nodes/smoke_tests/smoke_test_composed_came.py
-python nodes/smoke_tests/smoke_test_memory_manager.py

@@ -31,13 +31,10 @@ logic can go wrong, not N ad hoc copies of it -- see
 nodes/memory/manager.py's module docstring for the full reasoning.
 
 What this strategy does NOT do yet, deliberately not silently skipped:
-  - No torch.xpu.MemPool integration (the legacy ChunkedXPUAdafactor/
-    ChunkedXPUCAME wrap their scratch buffer's allocation in one, to
-    reduce allocator fragmentation) -- MemoryManager.get_buffer() is
-    exactly the seam that integration would go through later (wrap the
-    torch.empty() call inside it in a MemPool context), without this
-    strategy needing to change at all -- real, valuable, separate
-    follow-up.
+  - `torch.xpu.MemPool` integration exists now (opt-in -- see
+    `__init__` and `nodes/memory/manager.py`'s module docstring for
+    real, documented tradeoffs), but is not enabled by default and not
+    yet confirmed on real XPU hardware by anyone.
   - Passes its buffer to Algorithm.compute_update()'s `scratch` parameter,
     but no Algorithm implemented so far (CAMEAlgorithm included) actually
     uses it for its own internal intermediates yet -- so the *sole*
@@ -59,15 +56,20 @@ _SCRATCH_TAG = "grad_cast"
 
 class ChunkedScratchBufferStrategy(ExecutionStrategy):
 
-    def __init__(self, memory: MemoryManager | None = None):
+    def __init__(self, memory: MemoryManager | None = None, use_mempool: bool = False):
         """memory: inject a shared MemoryManager (e.g. if a future caller
         wants several strategies/handles to share one memory budget). A
         strategy owns its own private instance by default -- matches
         ComposedOptimizerHandle's existing pattern of each handle owning
         its own strategy instance, so there's no implicit global state
         either way.
+
+        use_mempool: passed straight through to the default MemoryManager
+        (ignored if an explicit `memory` is given -- set it on that
+        instance instead). Default off -- see nodes/memory/manager.py's
+        module docstring for real, documented tradeoffs before enabling.
         """
-        self.memory = memory if memory is not None else MemoryManager()
+        self.memory = memory if memory is not None else MemoryManager(use_mempool=use_mempool)
 
     def step(self, algorithm, params, states, param_lr, n_steps: int = 1) -> None:
         algorithm.begin_step(n_steps)

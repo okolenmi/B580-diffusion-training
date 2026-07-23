@@ -41,14 +41,46 @@ bug class described above):
     the memory back (e.g. before an offload round trip, or when a handle
     is being discarded), not just made available for later reuse.
 
-What this does NOT do (real, separate, honestly-out-of-scope follow-up):
-no torch.xpu.MemPool integration yet -- get_buffer()'s single
-torch.empty() call is exactly the seam that would wrap, later, without
-any caller of this class needing to change. No cross-process or
-cross-device-transfer support. No automatic eviction under memory
-pressure -- a manager holds whatever it's been asked to hold until told
-to release/free it, on purpose, so behavior stays predictable rather than
-depending on runtime memory conditions.
+What this does NOT do: no automatic eviction under memory pressure -- a
+manager holds whatever it's been asked to hold until told to release/
+free it, on purpose, so behavior stays predictable rather than depending
+on runtime memory conditions. No cross-process or cross-device-transfer
+support.
+
+**torch.xpu.MemPool integration, added this round -- opt-in, stated
+precisely rather than assumed safe.** `get_buffer()`'s single
+`torch.empty()` call was always documented as the seam this would wrap
+through later; `MemoryManager(use_mempool=True)` now does that, routing
+every allocation for XPU-device tags through a per-device
+`torch.xpu.MemPool()` via `torch.xpu.use_mem_pool()`, confirmed against
+PyTorch's actual source (`torch/xpu/memory.py`) rather than assumed --
+`torch.xpu.MemPool(allocator=None, use_on_oom=False)` and
+`torch.xpu.use_mem_pool(pool, device=None)` are the real, current
+signatures. Two real, documented tradeoffs found while researching this
+(from PyTorch's own issue tracker) and worth knowing before turning it
+on, not glossed over:
+
+- Allocations inside `use_mem_pool` don't get the default caching
+  allocator's normal OOM-retry-with-defragmentation behavior --
+  `pytorch/pytorch#159674` reports a real OOM under `use_mem_pool` at a
+  point where the default allocator would have succeeded by retrying
+  after a cache flush. A MemPool trades some of that resilience for
+  reduced fragmentation.
+- Nesting two `use_mem_pool` context managers has a real, currently-open
+  bug (`pytorch/pytorch#161193`) where the second pool silently gets no
+  allocations at all. Not this class's usage pattern (each `get_buffer()`
+  call enters and exits its own context around a single `torch.empty()`,
+  never nested), but worth knowing if this class is ever extended.
+
+Default `use_mempool=False` -- explicit opt-in only, so nothing about
+this class's already-verified behavior changes for existing callers.
+**Not yet verified on real XPU hardware by anyone** -- CPU can confirm
+the plumbing (default-off path unaffected; `use_mempool=True` on a
+non-XPU device raises a clear error rather than failing confusingly deep
+inside `get_buffer()`) but not the actual fragmentation-reduction claim
+or either risk above in practice. See
+`nodes/smoke_tests/smoke_test_memory_manager.py` for what is and isn't
+covered.
 """
 
 from __future__ import annotations
@@ -81,18 +113,48 @@ class MemoryManager:
     lazily to the largest size ever requested for that tag and kept alive
     across get_buffer() calls until explicitly release()d (logically
     freed, allocation kept) or free()d (allocation actually dropped).
-    See module docstring for the full reasoning.
+    See module docstring for the full reasoning, including the
+    use_mempool option's real, documented tradeoffs.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, use_mempool: bool = False) -> None:
         self._buffers: dict[_BufferKey, _Buffer] = {}
+        self._use_mempool = use_mempool
+        self._mempools: dict[str, Any] = {}  # device str -> torch.xpu.MemPool
+        if use_mempool and not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            raise RuntimeError(
+                "MemoryManager(use_mempool=True) requires a working torch.xpu "
+                "backend (torch.xpu.is_available() must be True). A build can "
+                "expose the torch.xpu.MemPool class while it's still a "
+                "non-functional stub ('Tried to instantiate dummy base class "
+                "MemPool') if no real XPU backend is compiled in -- confirmed "
+                "directly in this session's own (CUDA-only) sandbox build, which "
+                "is why this class checks is_available() rather than just "
+                "hasattr(). Construct with use_mempool=False (the default) instead."
+            )
+
+    def _mempool_for(self, device):
+        """Lazily create (or return the existing) per-device MemPool, or
+        None if use_mempool is off or the device isn't XPU -- MemPool is
+        XPU-specific, so a manager serving mixed devices (unusual, but
+        not disallowed) only pools the XPU ones."""
+        if not self._use_mempool:
+            return None
+        device_str = str(device)
+        if not device_str.startswith("xpu"):
+            return None
+        if device_str not in self._mempools:
+            self._mempools[device_str] = torch.xpu.MemPool()
+        return self._mempools[device_str]
 
     def get_buffer(self, tag: str, numel: int, dtype: torch.dtype, device) -> torch.Tensor:
         """Return a 1-D tensor of at least `numel` elements registered
         under `tag` (for this dtype/device). Reuses the existing buffer
         if one is already large enough; grows (reallocates) if not;
         never shrinks, so a tag's buffer only gets reallocated as often
-        as its largest-ever request changes.
+        as its largest-ever request changes. If use_mempool=True and
+        device is XPU, a (re)allocation routes through this manager's
+        per-device torch.xpu.MemPool -- see module docstring.
 
         Raises RuntimeError if this tag is already marked in-use (i.e.
         get_buffer() was called for it and neither release() nor free()
@@ -114,7 +176,13 @@ class MemoryManager:
                 f"silently alias the same storage across two callers."
             )
         if buf is None or buf.tensor.numel() < numel:
-            buf = _Buffer(tensor=torch.empty(numel, dtype=dtype, device=device))
+            pool = self._mempool_for(device)
+            if pool is not None:
+                with torch.xpu.use_mem_pool(pool, device=device):
+                    tensor = torch.empty(numel, dtype=dtype, device=device)
+            else:
+                tensor = torch.empty(numel, dtype=dtype, device=device)
+            buf = _Buffer(tensor=tensor)
             self._buffers[key] = buf
         buf.in_use = True
         return buf.tensor
@@ -156,8 +224,19 @@ class MemoryManager:
         trip -- see strategies/chunked.py) -- a manager should never
         silently keep holding device memory past the point its owner
         believed it had been released.
+
+        Also drops this manager's own references to any per-device
+        MemPool it created (use_mempool=True only) -- since every buffer
+        that pool backed is also being dropped here, this should let the
+        pool's memory be reclaimed once nothing else references it.
+        Genuinely uncertain about MemPool's exact teardown semantics
+        beyond normal Python refcounting (no documented explicit
+        "destroy" API was found) -- stated honestly rather than assumed;
+        needs real-hardware confirmation, not just an assertion here that
+        it works.
         """
         self._buffers.clear()
+        self._mempools.clear()
 
     def stats(self) -> dict[str, Any]:
         """Per-tag byte usage plus a total, for diagnostics. This is the

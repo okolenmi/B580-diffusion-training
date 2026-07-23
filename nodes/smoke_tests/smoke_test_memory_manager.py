@@ -11,6 +11,14 @@ actually drop references. Real torch tensors are used throughout (not a
 numpy-backed mock) so `.data_ptr()` identity checks are checking real
 underlying storage, not simulated behavior.
 
+Also covers the use_mempool plumbing (check [5]) -- but only the parts
+CPU actually can: default-off behavior is completely unaffected, and
+requesting use_mempool=True on a build/environment without a working
+torch.xpu backend raises a clear error rather than failing confusingly
+later. Does NOT and CANNOT verify the actual MemPool allocation path or
+its real fragmentation-reduction claim -- that needs real XPU hardware,
+not covered by this file. See manager.py's module docstring.
+
 Prints a clear PASS/FAIL summary, mirroring smoke_test_composed_came.py's
 convention.
 """
@@ -126,6 +134,35 @@ def test_dtype_device_isolation(failures: list) -> None:
           == 20 * f32.element_size() + 20 * f64.element_size())
 
 
+def test_mempool_plumbing(failures: list) -> None:
+    print("\n[5] use_mempool plumbing (CPU-testable parts only -- see module docstring):")
+    mgr = MemoryManager()  # default use_mempool=False
+    check(failures, "default construction (use_mempool=False) works normally",
+          mgr.get_buffer("t", 10, torch.float32, DEVICE).numel() >= 10)
+
+    has_working_xpu = hasattr(torch, "xpu") and torch.xpu.is_available()
+    if has_working_xpu:
+        print("    (real XPU backend detected in this environment -- "
+              "use_mempool=True should construct without raising)")
+        try:
+            MemoryManager(use_mempool=True)
+            check(failures, "use_mempool=True constructs on a real XPU backend", True)
+        except RuntimeError as e:
+            check(failures, "use_mempool=True constructs on a real XPU backend",
+                  False, str(e))
+    else:
+        raised = False
+        message = ""
+        try:
+            MemoryManager(use_mempool=True)
+        except RuntimeError as e:
+            raised = True
+            message = str(e)
+        check(failures,
+              "use_mempool=True raises a clear RuntimeError (no working XPU backend here)",
+              raised and "use_mempool=False" in message, message)
+
+
 def main():
     print(f"Device: {DEVICE} (pure allocator-bookkeeping logic -- no device-specific "
           f"code path exists in manager.py, so CPU fully exercises it)")
@@ -134,6 +171,7 @@ def main():
     test_double_acquire_raises(failures)
     test_free_and_stats(failures)
     test_dtype_device_isolation(failures)
+    test_mempool_plumbing(failures)
 
     print("\n" + "=" * 60)
     if failures:

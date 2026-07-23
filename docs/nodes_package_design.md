@@ -21,7 +21,8 @@ which will drift):
 ```
 nodes/core.py                              Port, Node (ABC) -- domain-independent
 nodes/memory/manager.py                    MemoryManager -- domain-independent, centralized
-                                            device-buffer acquire/release/free (see "Centralized
+                                            device-buffer acquire/release/free, opt-in
+                                            torch.xpu.MemPool integration (see "Centralized
                                             memory management" section below)
 nodes/optimizer/handle.py                  OptimizerHandle, FusedOptimizerHandle (ABCs)
 nodes/optimizer/node.py                    OptimizerNode (ABC) -- intermediate layer
@@ -112,20 +113,24 @@ in general.
    real XPU hardware -- user-confirmed passing, both strategies, full
    `scale_parameter`/`weight_decay` surface. Both algorithms now have
    the same real-hardware verification level as CAME did alone before.
-2. Decide whether either `ComposedCAMEOptimizerNode` or
-   `ComposedAdafactorOptimizerNode` should start replacing their
-   legacy-wrapping counterparts for real use, or whether to keep building
-   breadth first (a third algorithm -- AdamW is the obvious next data
-   point, no factored second moment at all, bias-correction terms
-   instead of a floor-based warmup) -- a judgment call surfaced to the
-   user rather than assumed.
-3. Longer-term, deferred, real but not urgent: `torch.xpu.MemPool`
-   integration (now a single, well-defined seam inside
-   `MemoryManager.get_buffer()` -- see below), `Algorithm.compute_update`
-   actually using its `scratch` hint (axis 2 of the two-axis distinction
-   below), a `FusedBackwardHookStrategy`, and eventually wiring `nodes/`
-   into the actual training pipeline (`core/trainer.py` currently knows
-   nothing about any of this).
+2. [Done] `torch.xpu.MemPool` integration -- opt-in
+   (`MemoryManager(use_mempool=True)`), default off, real documented
+   tradeoffs (see "Centralized memory management" below). Not yet
+   confirmed on real XPU hardware by anyone.
+3. **User's explicit direction: depth over breadth** -- fill out the
+   full story for CAME and Adafactor (the two deferred items below)
+   before starting a third algorithm or replacing either legacy wrapper
+   for real use. Both of those remain real, open questions for later,
+   not abandoned -- just deliberately not next.
+4. `Algorithm.compute_update` actually using its `scratch` hint (axis 2
+   of the two-axis distinction below) -- the higher-risk one, given the
+   aliasing bug this project already caught once in
+   `core/optimizers.py`'s `ChunkedXPUCAME`. Next up.
+5. A `FusedBackwardHookStrategy` -- needs reading `FusedOptimizerHandle`
+   and the legacy `FusedXPUAdafactor` first; not yet scoped in detail.
+6. Longer-term, still not started: wiring `nodes/` into the actual
+   training pipeline (`core/trainer.py` currently knows nothing about
+   any of this).
 
 **Other docs, and how they relate:**
 - `docs/node_architecture_refactor_plan.md` -- the original, higher-level
@@ -546,13 +551,15 @@ Algorithm/Strategy swap real, usable value rather than a design claim --
 switching it changes nothing about `CAMEAlgorithm` at all.
 
 **What this strategy does NOT do yet** (see `strategies/chunked.py`'s
-module docstring for the precise list): no `torch.xpu.MemPool`
-integration yet, and since `CAMEAlgorithm` doesn't use the `scratch` hint
-yet, the *only* real memory saving right now is the gradient-cast reuse --
-real, but partial, stated precisely rather than implied to be the full
-legacy-equivalent optimization. The buffer *is* now cached across
-`step()` calls rather than allocated fresh each time -- see "Centralized
-memory management" below for how and why.
+module docstring for the precise list): `torch.xpu.MemPool` integration
+now exists (opt-in, see "Universal memory pooling" note below in
+"Centralized memory management"), but since `CAMEAlgorithm` still
+doesn't use the `scratch` hint, the *only* real memory saving from this
+strategy's own logic (independent of whether MemPool is turned on) is
+still the gradient-cast reuse -- real, but partial, stated precisely
+rather than implied to be the full legacy-equivalent optimization. The
+buffer *is* now cached across `step()` calls rather than allocated fresh
+each time -- see "Centralized memory management" below for how and why.
 
 **Smoke test extended** (`nodes/smoke_tests/smoke_test_composed_came.py`)
 to run all real-hardware checks against every registered strategy, not
@@ -626,17 +633,62 @@ reusable buffer-lifecycle class is aimed at in general: if `nodes/` ever
 grows a non-optimizer domain that needs scratch device buffers, it has
 somewhere real to plug into instead of reinventing ad hoc caching again.
 
-**What this does NOT do** (real, separate, honestly-scoped follow-up):
-no `torch.xpu.MemPool` integration yet -- `get_buffer()`'s single
-`torch.empty()` call is exactly the seam that would wrap later, without
-any caller needing to change. No automatic eviction under memory
-pressure -- a manager holds whatever it's told to hold until explicitly
-released/freed, so behavior stays predictable rather than depending on
-runtime memory conditions. Doesn't touch axis 2 of the two-axis
-distinction above (`Algorithm`-internal scratch reuse) -- `CAMEAlgorithm`
-still doesn't use its `scratch` parameter, unchanged by this work.
+**What this still does NOT do** (real, separate, honestly-scoped
+follow-up): no automatic eviction under memory pressure -- a manager
+holds whatever it's told to hold until explicitly released/freed, so
+behavior stays predictable rather than depending on runtime memory
+conditions. Doesn't touch axis 2 of the two-axis distinction above
+(`Algorithm`-internal scratch reuse) -- `CAMEAlgorithm` still doesn't use
+its `scratch` parameter. This is the next item being worked on -- see
+"Concrete next step" above.
 
-**Verified**: `nodes/smoke_tests/smoke_test_memory_manager.py` (real
+**`torch.xpu.MemPool` integration -- added this round, opt-in.**
+`get_buffer()`'s single `torch.empty()` call was always documented as
+the seam this would wrap through later; `MemoryManager(use_mempool=
+True)` now does that, routing allocations for XPU-device tags through a
+per-device `torch.xpu.MemPool()` via `torch.xpu.use_mem_pool()`.
+Confirmed against PyTorch's actual source
+(`torch/xpu/memory.py`, `v2.11.0`) rather than assumed --
+`torch.xpu.MemPool(allocator=None, use_on_oom=False)` and
+`torch.xpu.use_mem_pool(pool, device=None)` are the real, current
+signatures, not guessed at. Two real tradeoffs found while researching
+this (from PyTorch's own issue tracker) and documented rather than
+glossed over: allocations inside a MemPool skip the default caching
+allocator's OOM-retry-with-defragmentation behavior
+(`pytorch/pytorch#159674`), and nesting two `use_mem_pool` contexts has
+an open bug where the second pool silently gets no allocations
+(`pytorch/pytorch#161193` -- not this class's usage pattern, each
+`get_buffer()` call enters/exits its own context around one
+`torch.empty()`, never nested, but worth knowing).
+
+Default `use_mempool=False` -- confirmed this changes nothing about
+already-verified behavior (the full suite, including both composed
+handle tests, still passes identically with the change in place).
+`ChunkedScratchBufferStrategy.__init__` gained a matching `use_mempool`
+pass-through, also defaulted off.
+
+**A real gap in my own first validation attempt, caught before
+shipping:** initially gated `use_mempool=True` behind
+`hasattr(torch.xpu, "MemPool")`, reasoning that would catch "this torch
+build doesn't support XPU." Wrong -- checked directly in this session's
+own (CUDA-only) sandbox build: `hasattr` returns `True` (the class
+exists at the Python level) but `torch.xpu.MemPool()` raises `"Tried to
+instantiate dummy base class MemPool"`, since no real XPU backend is
+compiled in. Fixed to check `torch.xpu.is_available()` instead, the
+actually-correct gate -- verified this now raises a clear error in
+exactly the scenario the wrong check would have let through silently
+until first real use.
+
+**Verified, precisely:** `nodes/smoke_tests/smoke_test_memory_manager.py`'s
+check `[5]` confirms the default-off path works normally and that
+`use_mempool=True` raises cleanly on this session's non-XPU build. What
+it can NOT confirm, and doesn't claim to: whether MemPool actually
+reduces fragmentation in practice, or whether either documented tradeoff
+above manifests on real hardware over real extended training -- both
+need the user's real XPU environment, not attempted here.
+
+**Verified** (buffer bookkeeping itself, unrelated to MemPool):
+`nodes/smoke_tests/smoke_test_memory_manager.py` (real
 torch tensors, CPU -- see the file for why CPU is sufficient: no
 device-specific code path exists in `manager.py` at all, so this isn't a
 "hasn't been hardware-tested" gap the way `ChunkedScratchBufferStrategy`

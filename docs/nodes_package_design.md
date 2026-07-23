@@ -66,6 +66,9 @@ nodes/smoke_tests/smoke_test_came_equivalence.py       Real-torch (CPU) numerica
                                             used an external-reference numpy mock, not this)
 nodes/smoke_tests/smoke_test_composed_adafactor.py     Real-hardware test, mirrors
                                             smoke_test_composed_came.py
+nodes/smoke_tests/xpu_mempool_hardware_check.py        Real-XPU-only, heavier, run manually
+                                            (excluded from run_all.py's glob on purpose):
+                                            `python nodes/smoke_tests/xpu_mempool_hardware_check.py`
 ```
 Also: `server/nodegraph_introspect.py` + `server/routes_nodegraph.py` +
 `server/static/nodegraph.html` (the `/nodegraph` dev tab, reads real
@@ -686,6 +689,20 @@ it can NOT confirm, and doesn't claim to: whether MemPool actually
 reduces fragmentation in practice, or whether either documented tradeoff
 above manifests on real hardware over real extended training -- both
 need the user's real XPU environment, not attempted here.
+`nodes/smoke_tests/xpu_mempool_hardware_check.py` is a separate,
+heavier, real-XPU-only file (deliberately excluded from `run_all.py`'s
+`smoke_test_*.py` glob -- needs real hardware, and one of its checks is
+diagnostic-only rather than pass/fail) covering exactly that gap:
+correctness (bit-exact values with vs. without MemPool), whether
+`free_all()` actually returns real device memory (via
+`torch.xpu.memory_allocated()`, not just this manager's own
+bookkeeping), and a fragmentation comparison under churny allocation
+patterns. Written but not run by Claude -- every API call in it was
+confirmed against PyTorch's real source and against how this sandbox's
+torch build behaves for the no-device case, and every check function was
+dry-run with a monkeypatched `torch.xpu` to catch Python-level bugs
+before asking for real hardware time on it, but the actual numbers it
+prints still need the user's real device to mean anything.
 
 **Verified** (buffer bookkeeping itself, unrelated to MemPool):
 `nodes/smoke_tests/smoke_test_memory_manager.py` (real

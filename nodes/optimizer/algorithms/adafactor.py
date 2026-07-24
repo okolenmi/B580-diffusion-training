@@ -29,12 +29,50 @@ see verification note at the bottom of this docstring.
 - The tiny-parameter batching fast path -- a strategy/batching concern
   by this package's own established reasoning (see `algorithms/base.py`
   and `algorithms/came.py`'s module docstrings), not an algorithm one.
-- Using the `scratch` hint for its own internal intermediates (axis 2 of
-  the two-axis distinction in `docs/nodes_package_design.md`) --
-  deliberately not attempted, same judgment call `CAMEAlgorithm` already
-  made: getting in-place buffer reuse subtly wrong was a real, previously
-  caught bug in `core/optimizers.py`'s `ChunkedXPUCAME`, and this class
-  makes the same conservative choice for the same reason.
+
+**Axis 2 (in-place scratch reuse) -- implemented, and simpler than
+`CAMEAlgorithm`'s version, not a copy of it.** `CAMEAlgorithm`'s
+in-place path mirrors `core/optimizers.py`'s `ChunkedXPUCAME` fix
+closely because that formula genuinely has two sequential normalization
+stages (row/col, then a confidence term derived from the residual)
+needing the buffer reused twice. Adafactor's formula only has one
+normalization stage, so its in-place path needs the buffer reused only
+once -- no separate "res" intermediate to juggle. Same gating principle
+as CAME, not weakened for convenience: the in-place path only runs when
+`scratch is not None`, since `SimpleLoopStrategy` never provides one and
+its `grad = p.grad.detach().float()` can alias `p.grad` itself for
+float32 parameters (confirmed directly -- see the momentum-aliasing
+finding below, and `algorithms/came.py`'s module docstring for the
+identical mechanism checked again there).
+
+**A real, independent inefficiency found while designing the in-place
+path, fixed in *both* code paths, not just the new one:** the original
+factored branch computed `g_view.pow(2)` *twice* -- once for the row
+reduction, once for the column reduction -- each allocating a full
+extra temporary. Confirmed directly that sharing one `g2 = g_view.pow(2)`
+between both `.mean(dim=1)`/`.mean(dim=0)` calls gives bit-identical
+results (squaring is a deterministic per-element operation; reading the
+result twice instead of recomputing it doesn't change any value). Not
+specific to the in-place restructuring at all -- a plain, safe
+efficiency fix that happened to be found while looking closely enough
+at this code to restructure it.
+
+**A second, independent aliasing hazard checked directly, not
+assumed away from the CAME case:** the effective-step-size (`alpha_t`)
+computation reads `param.data` (for `scale_parameter`) but never mutates
+it, and the in-place path's own state mutations (`vr`/`vc`/`vs`/
+`exp_avg`) are always separate persistent tensors, never aliased with
+`grad`/`scratch` -- so the only thing that needed checking here was the
+same `grad`-aliases-`p.grad` hazard already found for CAME, re-verified
+for this class's own call sites rather than assumed to transfer
+automatically.
+
+**Verification, exact rather than "close enough":** the same
+operation-by-operation reasoning as `CAMEAlgorithm`'s -- every in-place
+op performs the identical elementary floating-point operation, in the
+identical order, as the (now-shared-`g2`) out-of-place formula, so the
+two paths are expected, and confirmed, to be bit-exact. See
+`nodes/smoke_tests/smoke_test_adafactor_inplace_equivalence.py`.
 
 **A real, precisely-characterized pathology, found while investigating a
 real report of `scale_parameter=True` training appearing to make almost
@@ -185,13 +223,9 @@ class AdafactorAlgorithm(Algorithm):
         return state
 
     def compute_update(self, grad, param, state: dict[str, Any], lr: float, scratch=None):
-        """scratch accepted for interface compatibility but not used for
-        in-place restructuring -- see module docstring's "what this does
-        NOT cover" section for why. grad is treated as read-only: every
-        op below produces a new tensor rather than mutating `grad` (or a
-        `scratch` view of it) in place, deliberately matching
-        CAMEAlgorithm's own conservative choice. param is read-only,
-        used only for scale_parameter's p_rms."""
+        """param is read-only, used only for scale_parameter's p_rms.
+        See module docstring for the in-place (scratch is not None) vs.
+        always-safe (scratch is None) split, and why it's gated that way."""
         if self._rho_t is None:
             raise RuntimeError(
                 "AdafactorAlgorithm.compute_update() called before begin_step() -- "
@@ -203,31 +237,43 @@ class AdafactorAlgorithm(Algorithm):
         rho_t = self._rho_t
         n = grad.numel()
 
-        # Raw-gradient RMS clipping -- Adafactor's own clip, applied to the
-        # raw gradient before any second-moment normalization (distinct
-        # from CAME's post-normalization clip in algorithms/came.py).
         rms_g = grad.norm() / (n ** 0.5 + 1e-8)
         clip_mul = min(1.0, self.clip_threshold / float(rms_g))
-        g = grad if clip_mul == 1.0 else grad * clip_mul
 
         # Effective step size. scale_parameter=True ties this to the live
         # parameter's own current magnitude -- see module docstring for why
         # this needed `param` and `lr` added to the contract, and for a real,
         # documented pathology this mode has with zero-initialized
-        # parameters (e.g. LoRA's B matrix).
+        # parameters (e.g. LoRA's B matrix). Reads only param.data, never
+        # mutates it -- safe regardless of which path below runs.
         if self.scale_parameter:
             p_rms = param.data.norm(dtype=torch.float32) / (n ** 0.5 + 1e-8)
             alpha_t = float(torch.clamp(p_rms.pow(2), min=max(self.eps1, self.eps2 ** 2)) * lr)
         else:
             alpha_t = max(self.eps1, 1.0) * lr
 
-        factored = g.dim() >= 2
+        decay = (1.0 - self.wd * alpha_t) if self.wd != 0 else None
+        factored = grad.dim() >= 2
+
+        if scratch is not None:
+            update = self._compute_update_inplace(grad, state, rho_t, alpha_t, clip_mul, factored)
+        else:
+            update = self._compute_update_safe(grad, state, rho_t, alpha_t, clip_mul, factored)
+        return update, decay
+
+    def _compute_update_safe(self, grad, state, rho_t, alpha_t, clip_mul, factored):
+        """Always-safe path: never mutates `grad` in place. Used whenever
+        `scratch is None` -- see module docstring for exactly why that's
+        the right gate."""
+        g = grad if clip_mul == 1.0 else grad * clip_mul
+
         if factored:
             g_view = g.reshape(g.shape[0], -1)
-            g2r = g_view.pow(2).mean(dim=1)
-            g2c = g_view.pow(2).mean(dim=0)
-            state["vr"].mul_(rho_t).add_(g2r.add(self.eps1), alpha=1.0 - rho_t)
-            state["vc"].mul_(rho_t).add_(g2c.add(self.eps1), alpha=1.0 - rho_t)
+            g2 = g_view.pow(2)  # shared between both reductions below -- see
+            # module docstring, this is the independent double-allocation
+            # fix, not specific to this being the "safe" path.
+            state["vr"].mul_(rho_t).add_(g2.mean(dim=1).add(self.eps1), alpha=1.0 - rho_t)
+            state["vc"].mul_(rho_t).add_(g2.mean(dim=0).add(self.eps1), alpha=1.0 - rho_t)
             vr_mean_sqrt = state["vr"].mean().add(self.eps1).sqrt()
             vr_sqrt = state["vr"].sqrt().add(self.eps1)
             vc_sqrt = state["vc"].sqrt().add(self.eps1)
@@ -242,8 +288,57 @@ class AdafactorAlgorithm(Algorithm):
             state["exp_avg"].mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
             normalized = state["exp_avg"].clone()
 
-        decay = (1.0 - self.wd * alpha_t) if self.wd != 0 else None
-        return normalized * alpha_t, decay
+        return normalized * alpha_t
+
+    def _compute_update_inplace(self, grad, state, rho_t, alpha_t, clip_mul, factored):
+        """In-place path: reuses `grad` (== `scratch`, same object for
+        every current caller -- see module docstring) as a workspace for
+        the normalized gradient, then (if momentum is on) the final
+        momentum-blended update -- one buffer reused at most twice, never
+        needing a second full-size temp the way CAMEAlgorithm's res/update
+        dance does, since this formula has only one normalization stage.
+        Only ever called when `scratch is not None`. Expected, and
+        verified, to be bit-exact vs. _compute_update_safe().
+        """
+        g = grad
+        if clip_mul != 1.0:
+            g.mul_(clip_mul)
+
+        if factored:
+            g_view = g.reshape(g.shape[0], -1)
+            g2 = g_view.pow(2)  # one unavoidable full-size temp -- g_view's
+            # own (clipped-gradient) value is still needed below for the
+            # normalization step, so squaring can't be done in place here
+            # without destroying it first.
+            state["vr"].mul_(rho_t).add_(g2.mean(dim=1).add(self.eps1), alpha=1.0 - rho_t)
+            state["vc"].mul_(rho_t).add_(g2.mean(dim=0).add(self.eps1), alpha=1.0 - rho_t)
+            vr_mean_sqrt = state["vr"].mean().add(self.eps1).sqrt()
+            vr_sqrt = state["vr"].sqrt().add(self.eps1)
+            vc_sqrt = state["vc"].sqrt().add(self.eps1)
+            g_view.div_(vr_sqrt.unsqueeze(1))
+            g_view.div_(vc_sqrt.unsqueeze(0))
+            g_view.mul_(vr_mean_sqrt)
+            # g_view (== g == grad) now holds `normalized`, in place.
+
+            if self.beta1 is not None:
+                state["exp_avg"].mul_(self.beta1).add_(g_view, alpha=1.0 - self.beta1)
+                # g_view's old (normalized) value is no longer needed
+                # anywhere after the line above -- safe to overwrite with a
+                # copy of exp_avg's (separate storage) current value.
+                g_view.copy_(state["exp_avg"])
+            g_view.mul_(alpha_t)
+            return g.reshape(grad.shape)
+        else:
+            g2 = g.pow(2)
+            state["vs"].mul_(rho_t).add_(g2.add(self.eps1), alpha=1.0 - rho_t)
+            g.div_(state["vs"].sqrt().add(self.eps1))
+            # g now holds `normalized`, in place.
+
+            if self.beta1 is not None:
+                state["exp_avg"].mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
+                g.copy_(state["exp_avg"])
+            g.mul_(alpha_t)
+            return g
 
     def decay_state(self, state: dict[str, Any], factor: float) -> None:
         if factor <= 0:

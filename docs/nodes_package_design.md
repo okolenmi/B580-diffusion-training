@@ -67,6 +67,7 @@ nodes/smoke_tests/smoke_test_came_equivalence.py       Real-torch (CPU) numerica
 nodes/smoke_tests/smoke_test_came_inplace_equivalence.py  Bit-exact check (torch.equal(),
                                             not a tolerance) between CAMEAlgorithm's
                                             in-place (axis-2) and out-of-place code paths
+nodes/smoke_tests/smoke_test_adafactor_inplace_equivalence.py  Same, for AdafactorAlgorithm
 nodes/smoke_tests/smoke_test_composed_adafactor.py     Real-hardware test, mirrors
                                             smoke_test_composed_came.py
 nodes/smoke_tests/xpu_mempool_hardware_check.py        Real-XPU-only, heavier, run manually
@@ -89,6 +90,8 @@ proven" -- check which level a given piece has actually reached):**
 | `MemoryManager` | n/a -- pure allocator logic, no device-specific code path exists | **yes** -- real torch (CPU) via `smoke_test_memory_manager.py`, all checks pass; also exercised indirectly on real XPU through `ChunkedScratchBufferStrategy`'s check `[4]` above |
 | `AdafactorAlgorithm` formulas, full config surface (`scale_parameter`, `weight_decay`, momentum) | yes, real torch (CPU) directly against `core.optimizers.ChunkedXPUAdafactor` -- see `smoke_test_adafactor_equivalence.py` and "Universal Algorithm contract" below | **yes** -- user-run, `smoke_test_adafactor_equivalence.py` and `smoke_test_composed_adafactor.py` both pass on real XPU hardware, both strategies |
 | `ComposedAdafactorOptimizerNode` (both strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adafactor.py` | **yes** -- user-run on real XPU hardware, both strategies |
+| `CAMEAlgorithm` axis-2 in-place path | yes -- bit-exact (`torch.equal()`) vs. out-of-place, `smoke_test_came_inplace_equivalence.py` | not yet |
+| `AdafactorAlgorithm` axis-2 in-place path | yes -- bit-exact (`torch.equal()`) vs. out-of-place, `smoke_test_adafactor_inplace_equivalence.py` | not yet |
 
 **The one open architectural question -- now answered, precisely, not
 just "yes it generalizes":** does the Algorithm/ExecutionStrategy split
@@ -133,17 +136,17 @@ in general.
    before starting a third algorithm or replacing either legacy wrapper
    for real use. Both of those remain real, open questions for later,
    not abandoned -- just deliberately not next.
-4. [Done for CAME] `Algorithm.compute_update` actually using its
-   `scratch` hint (axis 2 of the two-axis distinction below) -- the
-   higher-risk one, given the aliasing bug this project already caught
-   once in `core/optimizers.py`'s `ChunkedXPUCAME`. See "Axis 2:
-   in-place scratch reuse for CAMEAlgorithm" below for the design, a
-   *second* real aliasing hazard found and gated against in this new
-   code (distinct from the original `ChunkedXPUCAME` one), and its
-   bit-exact verification. **Not yet done for `AdafactorAlgorithm`** --
-   same pattern, different formula shape, needs its own careful pass.
+4. [Done, both algorithms] `Algorithm.compute_update` using its
+   `scratch` hint (axis 2) -- CAME first, then Adafactor (simpler:
+   Adafactor's formula has one normalization stage, not two, so its
+   in-place path reuses the buffer once, not twice -- not just a copy of
+   CAME's pattern). Both bit-exact verified (`torch.equal()`) against
+   their own out-of-place paths across dtype/config combinations. See
+   "Axis 2" sections below. Not yet run on real XPU hardware by the user
+   for either -- next real step for this specific piece.
 5. A `FusedBackwardHookStrategy` -- needs reading `FusedOptimizerHandle`
    and the legacy `FusedXPUAdafactor` first; not yet scoped in detail.
+   Next concrete step for this package overall.
 6. Longer-term, still not started: wiring `nodes/` into the actual
    training pipeline (`core/trainer.py` currently knows nothing about
    any of this).
@@ -1025,12 +1028,48 @@ inferring it from matching final numbers: confirmed `p.grad` is
 byte-for-byte unchanged after a `SimpleLoopStrategy` step with float32
 parameters. All pass, CPU, real torch.
 
-**What's still out of scope, precisely:** `AdafactorAlgorithm` doesn't
-use `scratch` yet -- same pattern, would need its own careful pass
-(different formula shape, different intermediates), not attempted this
-round. `g2` (the one remaining short-lived full-size temp) is still a
-fresh allocation every call, matching the legacy reference's own
-proven-sufficient fix rather than an unproven, more aggressive one.
+**Update: the "still out of scope" note below was resolved in the same
+session** -- see "Axis 2: AdafactorAlgorithm" immediately after this.
+`g2` (the one remaining short-lived full-size temp) is still a fresh
+allocation every call in both algorithms, matching the legacy
+reference's own proven-sufficient fix rather than an unproven, more
+aggressive one -- confirmed no further reduction is possible without a
+custom fused kernel, which is out of scope for either.
+
+### Axis 2: AdafactorAlgorithm
+
+Same session, immediately after CAME's version above, prompted directly
+by the user: don't just copy the old pattern out of habit -- use
+something better if one exists, given the testing rigor already in
+place to verify it safely. It did: Adafactor's formula has only *one*
+normalization stage (no CAME-style residual/confidence-term second
+pass), so its in-place path reuses the buffer once, not twice -- simpler
+than CAME's, not a copy of it. Same structure otherwise
+(`_compute_update_safe`/`_compute_update_inplace`, gated on `scratch is
+not None` for the identical reason -- `SimpleLoopStrategy`'s `grad` can
+alias `p.grad` for float32 parameters, re-checked for this class's own
+call sites rather than assumed to transfer from CAME's finding).
+
+**A genuine, independent inefficiency found and fixed in *both* paths
+along the way, not just the new one:** the original factored branch
+computed `g_view.pow(2)` twice -- once per row/col reduction -- each a
+full-size allocation. Confirmed directly that sharing one `g2` between
+both reductions is bit-identical (squaring is deterministic per-element;
+reading a shared result twice changes nothing). A plain correctness-
+preserving efficiency fix, unrelated to scratch reuse, found only
+because restructuring the code required looking closely enough at it.
+
+**Verified, same standard as CAME's:** new file
+`smoke_test_adafactor_inplace_equivalence.py` diffs
+`SimpleLoopStrategy` vs. `ChunkedScratchBufferStrategy` with
+`torch.equal()` across six configurations spanning dtype,
+`scale_parameter`, `weight_decay`, and momentum -- including the legacy's
+own default combination plus momentum together, the most-combined case.
+All bit-exact. `p.grad`-not-corrupted checked directly too. All pass,
+CPU, real torch. **Neither algorithm's in-place path has been run on
+real XPU hardware yet** -- next concrete step for this specific piece
+(the broader package's next step is a `FusedBackwardHookStrategy`, see
+"Concrete next step" above).
 
 ## What changes for the playground UI
 

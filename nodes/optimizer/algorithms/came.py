@@ -49,6 +49,51 @@ vr/vc) compounding bf16 rounding more per step. Not chased further this
 session -- real, but this is the first time this class was compared
 against the legacy reference with actual bf16 tensors rather than a
 numpy mock, so it's a new data point rather than a regression.
+
+**In-place scratch reuse (axis 2), added this round -- gated carefully,
+not attempted unconditionally.** `compute_update()` now has two code
+paths per branch (factored/non-factored): the original, always-safe
+out-of-place formulas (unchanged, used whenever `scratch is None`), and
+a new in-place-restructured version (used only when `scratch is not
+None`) that mirrors `core/optimizers.py`'s `ChunkedXPUCAME.step()`
+exactly -- reusing the same buffer in sequence for the normalized
+gradient, then (once momentum has already consumed its value) for the
+confidence term `res`, then (once the row/col reduction has already
+consumed *its* value) for the final `update` -- eliminating the same two
+full-parameter-sized allocations per step that class's own history
+(`docs/suspicious_findings.md`'s "CAME optimizer VRAM near-ceiling hang"
+entry) already proved matter.
+
+**Why the gate is on `scratch`, not just "is a strategy that provides
+one" -- a real aliasing hazard found and checked, not assumed away.**
+`SimpleLoopStrategy` never passes `scratch`, and for good reason,
+confirmed directly: its `grad = p.grad.detach().float()` returns the
+*same tensor* as `p.grad` itself whenever a parameter's own dtype is
+already `float32` (`.float()` is a no-op cast that returns `self` when
+the dtype already matches -- the identical mechanism behind the
+`ChunkedXPUAdafactor` momentum-aliasing finding in
+`algorithms/adafactor.py`'s docstring, checked again here rather than
+assumed to be a one-off). Mutating `grad` in place under
+`SimpleLoopStrategy` would silently corrupt `p.grad` for any float32
+parameter -- confirmed with a direct repro before writing a single line
+of the in-place path. `ChunkedScratchBufferStrategy`, by contrast,
+always populates its buffer via `grad_view.copy_(p.grad.detach())`
+first -- a real copy, never aliased with `p.grad` -- so `scratch is not
+None` is a reliable signal that the passed `grad` is safe to mutate.
+Every current caller passes `scratch is grad` (the same object) --
+this class relies on that specifically, noted here so it's not a silent
+assumption if a future caller ever passes a distinct scratch buffer.
+
+**Verification, precise rather than "looks right": the two code paths
+are expected to be, and were confirmed to be, bit-exact -- not just
+close.** Every in-place op (`.div_()`, `.mul_()`, `.sub_()`, `.copy_()`)
+performs the identical elementary floating-point operation, in the
+identical order, as its out-of-place counterpart in the original
+formula -- restructuring memory layout, not arithmetic. Verified by
+running `SimpleLoopStrategy` (old path) and `ChunkedScratchBufferStrategy`
+(new path) side by side from identical initial weights/gradients and
+diffing every step with `torch.equal()`, not a tolerance -- see
+`nodes/smoke_tests/smoke_test_composed_came.py`.
 """
 
 from __future__ import annotations
@@ -101,19 +146,19 @@ class CAMEAlgorithm(Algorithm):
         }
 
     def compute_update(self, grad, param, state: dict[str, Any], lr: float, scratch=None):
-        # scratch accepted for interface compatibility (see base.py's
-        # docstring) but not yet used -- this method still allocates
-        # fresh intermediate tensors (g2, normalized, res, ...) rather
-        # than reusing a provided buffer via in-place ops. Restructuring
-        # this to actually use scratch is real, separate follow-up work --
-        # see docs/nodes_package_design.md. Deliberately not rushed here:
-        # getting in-place buffer reuse subtly wrong (aliasing a value
-        # that's still needed) was a real bug this session already had to
-        # catch and fix once, in core/optimizers.py's ChunkedXPUCAME.
         # param accepted per the base.py contract but unused -- CAME's own
         # math never needed it, only Adafactor's scale_parameter does.
         decay = (1.0 - self.wd * lr) if self.wd != 0 else None
         factored = grad.dim() >= 2
+
+        if scratch is not None:
+            return self._compute_update_inplace(grad, state, lr, decay, factored)
+        return self._compute_update_safe(grad, state, lr, decay, factored)
+
+    def _compute_update_safe(self, grad, state, lr, decay, factored):
+        """Always-safe path: never mutates `grad` in place. Used whenever
+        `scratch is None` -- see module docstring for exactly why that's
+        the right gate, not merely a cautious default."""
         g = grad.reshape(grad.shape[0], -1) if factored else grad
 
         if factored:
@@ -155,6 +200,82 @@ class CAMEAlgorithm(Algorithm):
             # Reference does not apply the confidence term for 1D params --
             # momentum is the update directly.
             return state["ea"].clone() * lr, decay
+
+    def _compute_update_inplace(self, grad, state, lr, decay, factored):
+        """In-place path: reuses `grad` (== `scratch`, same object for
+        every current caller -- see module docstring) as a workspace for
+        the normalized gradient, then `res`, then `update` in sequence,
+        mirroring core/optimizers.py's ChunkedXPUCAME.step() exactly.
+        Only ever called when `scratch is not None`, which is this
+        Algorithm's signal that `grad` is safe to mutate -- never called
+        from compute_update() otherwise. Expected, and verified, to be
+        bit-exact vs. _compute_update_safe() -- same elementary
+        floating-point operations in the same order, just written with
+        in-place APIs instead of allocating fresh tensors at each step.
+        """
+        g = grad.reshape(grad.shape[0], -1) if factored else grad
+
+        if factored:
+            g2 = g.pow(2).add(self.eps1)  # one small-lived full-size temp --
+            # matches ChunkedXPUCAME's own verified pattern exactly, which
+            # keeps this one (short-lived, consumed only by the two
+            # .mean() calls below) rather than going further than what's
+            # already proven correct and hang-free on real hardware.
+            state["r"].mul_(self.beta2).add_(g2.mean(dim=1), alpha=1.0 - self.beta2)
+            state["c"].mul_(self.beta2).add_(g2.mean(dim=0), alpha=1.0 - self.beta2)
+            r_mean_sqrt = state["r"].mean().add(self.eps1).sqrt()
+            r_sqrt = state["r"].sqrt().add(self.eps1)
+            c_sqrt = state["c"].sqrt().add(self.eps1)
+            g.div_(r_sqrt.unsqueeze(1))
+            g.div_(c_sqrt.unsqueeze(0))
+            g.mul_(r_mean_sqrt)
+            # g now holds `normalized`, in place.
+
+            rms = g.norm() / (g.numel() ** 0.5 + 1e-8)
+            clip_div = max(float(rms / self.clip_threshold), 1.0)
+            if clip_div != 1.0:
+                g.div_(clip_div)
+            # g now holds clipped `normalized`.
+
+            ea_flat = state["ea"].reshape(g.shape[0], -1)
+            ea_flat.mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
+            # ea updated from g's current value -- g's old (normalized)
+            # value is no longer needed anywhere after this line, which is
+            # exactly what makes reusing it below safe.
+
+            g.sub_(ea_flat).pow_(2).add_(self.eps2)
+            # g now holds `res`, in place -- safe, see above.
+            state["rr"].mul_(self.beta3).add_(g.mean(dim=1), alpha=1.0 - self.beta3)
+            state["rc"].mul_(self.beta3).add_(g.mean(dim=0), alpha=1.0 - self.beta3)
+            rr_mean_sqrt = state["rr"].mean().add(self.eps1).sqrt()
+            rr_sqrt = state["rr"].sqrt().add(self.eps1)
+            rc_sqrt = state["rc"].sqrt().add(self.eps1)
+            # g's current (res) value is no longer needed after the two
+            # .mean() calls just above -- safe to overwrite with a copy of
+            # ea_flat's (separate storage, real values, not aliased) below.
+            g.copy_(ea_flat)
+            g.div_(rr_sqrt.unsqueeze(1))
+            g.div_(rc_sqrt.unsqueeze(0))
+            g.mul_(rr_mean_sqrt)
+            # g now holds `update`, in place.
+            return (g * lr).reshape(grad.shape), decay
+        else:
+            g2 = g.pow(2).add(self.eps1)
+            state["s"].mul_(self.beta2).add_(g2, alpha=1.0 - self.beta2)
+            g.div_(state["s"].sqrt().add(self.eps1))
+            # g now holds `normalized`, in place.
+
+            rms = g.norm() / (g.numel() ** 0.5 + 1e-8)
+            clip_div = max(float(rms / self.clip_threshold), 1.0)
+            if clip_div != 1.0:
+                g.div_(clip_div)
+
+            state["ea"].mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
+            # Reference does not apply the confidence term for 1D params --
+            # momentum is the update directly. g's old (normalized) value
+            # is no longer needed after the line above.
+            g.copy_(state["ea"])
+            return g * lr, decay
 
     def decay_state(self, state: dict[str, Any], factor: float) -> None:
         if factor <= 0:

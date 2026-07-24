@@ -64,6 +64,9 @@ nodes/smoke_tests/smoke_test_came_equivalence.py       Real-torch (CPU) numerica
                                             against core.optimizers.ChunkedXPUCAME directly
                                             (first time -- the original CAME formula check
                                             used an external-reference numpy mock, not this)
+nodes/smoke_tests/smoke_test_came_inplace_equivalence.py  Bit-exact check (torch.equal(),
+                                            not a tolerance) between CAMEAlgorithm's
+                                            in-place (axis-2) and out-of-place code paths
 nodes/smoke_tests/smoke_test_composed_adafactor.py     Real-hardware test, mirrors
                                             smoke_test_composed_came.py
 nodes/smoke_tests/xpu_mempool_hardware_check.py        Real-XPU-only, heavier, run manually
@@ -118,17 +121,27 @@ in general.
    the same real-hardware verification level as CAME did alone before.
 2. [Done] `torch.xpu.MemPool` integration -- opt-in
    (`MemoryManager(use_mempool=True)`), default off, real documented
-   tradeoffs (see "Centralized memory management" below). Not yet
-   confirmed on real XPU hardware by anyone.
+   tradeoffs (see "Centralized memory management" below).
+   **User-confirmed on real XPU hardware** (Intel Arc B580) -- all
+   pass/fail checks passed; the fragmentation-comparison diagnostic
+   showed no difference for the tested workload, stated precisely
+   rather than spun as a win. Two of the originally-cited "documented
+   tradeoffs" were themselves corrected after the user caught a real
+   mischaracterization -- see `nodes/memory/manager.py`'s docstring.
 3. **User's explicit direction: depth over breadth** -- fill out the
    full story for CAME and Adafactor (the two deferred items below)
    before starting a third algorithm or replacing either legacy wrapper
    for real use. Both of those remain real, open questions for later,
    not abandoned -- just deliberately not next.
-4. `Algorithm.compute_update` actually using its `scratch` hint (axis 2
-   of the two-axis distinction below) -- the higher-risk one, given the
-   aliasing bug this project already caught once in
-   `core/optimizers.py`'s `ChunkedXPUCAME`. Next up.
+4. [Done for CAME] `Algorithm.compute_update` actually using its
+   `scratch` hint (axis 2 of the two-axis distinction below) -- the
+   higher-risk one, given the aliasing bug this project already caught
+   once in `core/optimizers.py`'s `ChunkedXPUCAME`. See "Axis 2:
+   in-place scratch reuse for CAMEAlgorithm" below for the design, a
+   *second* real aliasing hazard found and gated against in this new
+   code (distinct from the original `ChunkedXPUCAME` one), and its
+   bit-exact verification. **Not yet done for `AdafactorAlgorithm`** --
+   same pattern, different formula shape, needs its own careful pass.
 5. A `FusedBackwardHookStrategy` -- needs reading `FusedOptimizerHandle`
    and the legacy `FusedXPUAdafactor` first; not yet scoped in detail.
 6. Longer-term, still not started: wiring `nodes/` into the actual
@@ -538,11 +551,12 @@ going in: buffer reuse has two genuinely separate axes.
 
 Built axis 1 (`ChunkedScratchBufferStrategy`) this round; extended
 `Algorithm.compute_update()` with an optional, backward-compatible
-`scratch` parameter as the seam for axis 2 later, but `CAMEAlgorithm`
-explicitly does not use it yet -- documented plainly in the code rather
-than silently ignored, since getting in-place buffer reuse subtly wrong
-(aliasing a value still needed) was a real bug this session already had
-to catch and fix once.
+`scratch` parameter as the seam for axis 2. **Axis 2 itself was
+implemented for `CAMEAlgorithm` in a later round of this same
+refactor** -- see "Axis 2: in-place scratch reuse for CAMEAlgorithm"
+below for the design, the real aliasing hazard found and gated against,
+and its bit-exact verification. `AdafactorAlgorithm` does not use it
+yet -- same reasoning applies there, not yet done.
 
 **Verified**: bit-exact match (`0.000e+00` max diff) between
 `SimpleLoopStrategy` and `ChunkedScratchBufferStrategy` across 60 real
@@ -551,15 +565,17 @@ scratch buffer's per-parameter reshape/slice logic) -- confirms this is
 purely a memory optimization, zero behavior change. `ComposedCAMEOptimizerNode`
 now takes a `strategy` input (`"simple"` or `"chunked"`) making the
 Algorithm/Strategy swap real, usable value rather than a design claim --
-switching it changes nothing about `CAMEAlgorithm` at all.
+switching it changes nothing about `CAMEAlgorithm`'s external behavior
+(internally, it now *does* take a different code path per strategy --
+see below -- but the two are verified bit-exact).
 
 **What this strategy does NOT do yet** (see `strategies/chunked.py`'s
 module docstring for the precise list): `torch.xpu.MemPool` integration
 now exists (opt-in, see "Universal memory pooling" note below in
-"Centralized memory management"), but since `CAMEAlgorithm` still
-doesn't use the `scratch` hint, the *only* real memory saving from this
-strategy's own logic (independent of whether MemPool is turned on) is
-still the gradient-cast reuse -- real, but partial, stated precisely
+"Centralized memory management"). `CAMEAlgorithm` now uses the `scratch`
+hint (axis 2, see below); `AdafactorAlgorithm` doesn't yet -- so the
+memory savings from this strategy are real but currently CAME-only,
+stated precisely
 rather than implied to be the full legacy-equivalent optimization. The
 buffer *is* now cached across `step()` calls rather than allocated fresh
 each time -- see "Centralized memory management" below for how and why.
@@ -951,6 +967,70 @@ than the fragile near-offload value. Confirmed the fix still catches a
 real corruption (simulated by substituting `reset_states()` for the
 round trip) before committing it, and confirmed it doesn't change what
 CAME's own already-passing real-XPU numbers report.
+
+### Axis 2: in-place scratch reuse for CAMEAlgorithm
+
+The higher-risk deferred item, tackled after MemPool integration per the
+user's explicit "deferred items first, depth over breadth" direction.
+`Algorithm.compute_update()` now has two code paths in
+`CAMEAlgorithm` (`_compute_update_safe`, the original, and
+`_compute_update_inplace`, new) -- which one runs depends entirely on
+whether the caller passes `scratch`.
+
+**Studied the actual proven pattern before writing anything.** Read
+`core/optimizers.py`'s `ChunkedXPUCAME.step()` directly rather than
+reinventing the optimization -- its own comment names the original bug
+precisely: `res` and `update` each allocating a fresh full-parameter-
+sized tensor per step was enough to slowly fragment VRAM near the
+ceiling and hang after a couple dozen steps. The fix reuses one buffer
+in sequence -- for the normalized gradient, then (once momentum has
+already read it) for `res`, then (once the row/col reduction has already
+read *that*) for `update` -- and deliberately still allocates one
+separate, short-lived tensor (`g2`) rather than pushing the optimization
+further than what's actually proven hang-free on real hardware.
+`_compute_update_inplace` mirrors this exactly, not a more "clever"
+version of it.
+
+**A real aliasing hazard found and gated against, not assumed away.**
+`SimpleLoopStrategy` never passes `scratch` -- checked *why* that
+matters rather than treating it as an arbitrary strategy difference:
+its `grad = p.grad.detach().float()` returns the *same tensor* as
+`p.grad` itself whenever a parameter's dtype is already `float32`
+(confirmed with a direct repro: `.float()` is a no-op cast returning
+`self` when the dtype already matches -- the identical mechanism behind
+the `ChunkedXPUAdafactor` momentum-aliasing finding documented in
+`algorithms/adafactor.py`). Mutating `grad` in place under that strategy
+would have silently corrupted `p.grad`. So the in-place path is gated
+on `scratch is not None`, not on which strategy is asking -- `Chunked
+ScratchBufferStrategy` always populates its buffer via a real `.copy_()`
+first, never aliased with `p.grad`, so that gate is a reliable safety
+signal in a way "which strategy called this" alone wouldn't have been
+if some future strategy also declined to pass `scratch` for its own
+different reasons.
+
+**Verification, exact rather than "close enough":** worked out from the
+operation-by-operation comparison that the two paths should be
+bit-exact, not merely numerically close -- every in-place op performs
+the identical elementary floating-point operation, in the identical
+order, as its out-of-place counterpart; restructuring memory layout,
+not arithmetic. Confirmed this directly rather than trusting the
+reasoning alone: new file `smoke_test_came_inplace_equivalence.py` runs
+`SimpleLoopStrategy` and `ChunkedScratchBufferStrategy` side by side
+from identical seeds and diffs every step with `torch.equal()` -- across
+float32 and bf16, weight_decay on and off, factored and non-factored
+parameters at deliberately awkward shapes (37x53, 431 -- not round
+numbers, so no shape-alignment coincidence could hide a bug). All
+bit-exact. Also directly checked the specific hazard above rather than
+inferring it from matching final numbers: confirmed `p.grad` is
+byte-for-byte unchanged after a `SimpleLoopStrategy` step with float32
+parameters. All pass, CPU, real torch.
+
+**What's still out of scope, precisely:** `AdafactorAlgorithm` doesn't
+use `scratch` yet -- same pattern, would need its own careful pass
+(different formula shape, different intermediates), not attempted this
+round. `g2` (the one remaining short-lived full-size temp) is still a
+fresh allocation every call, matching the legacy reference's own
+proven-sufficient fix rather than an unproven, more aggressive one.
 
 ## What changes for the playground UI
 

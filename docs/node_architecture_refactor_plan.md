@@ -4,6 +4,35 @@ Started 2026-07. This is a multi-session initiative. Written to survive
 context resets between sessions -- read this file before resuming the work,
 regardless of which Claude session picks it up next.
 
+## Ground rules (set 2026-07-24 -- read this before anything else below)
+
+- **Strict OOP for all new node-graph code.** Node/Port/Handle ABCs, real
+  interfaces, no ad-hoc dict-passing or flag-threading.
+- **Old code (`core/`, `manager/`, `server/`) is reference material only.**
+  Read it to understand current behavior; don't copy its shape into `nodes/`.
+  Design the node version as if starting fresh, wrap the old code via
+  composition only where it's genuinely correct and not worth re-deriving
+  (e.g. optimizer math, LoRA layer injection).
+- **Comment budget, hard rule: comments/docstrings should not dominate a
+  file.** A 1-4 line module docstring stating what the file is and which
+  legacy function it wraps is enough. Long verification narratives,
+  step-by-step reasoning, and "why this is safe" essays belong in this
+  `docs/` folder (or a commit message), not in the `.py` file. Existing
+  files in `nodes/` (`algorithms/came.py` and `algorithms/adafactor.py`
+  especially) were written before this rule and violate it -- real
+  functional code, not urgent to fix, but don't use them as a style
+  template for anything new.
+- **Priority: a working dataset -> LoRA line end to end, not breadth of
+  node types.** The optimizer-depth work below (axis-2 real-hardware runs,
+  `FusedBackwardHookStrategy`, a third algorithm) is paused, not abandoned.
+  Next work goes toward `TrainerNode` -- the piece that actually runs the
+  step loop and is currently missing -- so a full graph (dataset -> model
+  -> LoRA injection -> optimizer -> trained checkpoint) can execute.
+- **Open question #2 (TOML backward compatibility), resolved:** not a
+  requirement. The node graph gets its own config shape; the old TOML/CLI
+  path keeps working untouched, same isolation rule as the `/nodegraph` tab
+  already had.
+
 ## Why (grounded in what actually happened this session, not abstract taste)
 
 Two concrete, felt costs from this session alone:
@@ -308,10 +337,9 @@ category correctly shows zero outputs -- rendered honestly in the UI as
    refactor rather than deferred to the end, on an isolated `/nodegraph`
    tab that doesn't affect the production config path until deliberately
    switched over. See "Refined design decisions" above.
-2. Any existing config files / running training setups that need to keep
-   working *unchanged* throughout the migration (i.e. is backward TOML
-   compatibility a hard requirement, or is a config format change acceptable
-   as part of this)? **Still open.**
+2. ~~Backward TOML compatibility~~ -- **Resolved, see "Ground rules" at the
+   top of this file:** not required. Old TOML/CLI path stays untouched;
+   the node graph gets its own config shape.
 3. ~~Comfortable starting Phase 1~~ -- **Resolved**: first slice shipped
    (optimizer classes introspected and rendered on the new `/nodegraph`
    tab). Next: decide whether to continue deepening Phase 1 (e.g. add

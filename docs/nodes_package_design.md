@@ -8,6 +8,47 @@ decision, but not required just to keep going.
 
 ## Start here: current state
 
+**2026-07-24 update, read first:** priority changed. See
+`docs/node_architecture_refactor_plan.md`'s "Ground rules" section --
+strict OOP going forward, old code is reference-only (not a copy source),
+comments must stay short (detail belongs in this docs folder, not the
+`.py` file -- the sections below predate that rule and are denser than
+new code should be), and the immediate goal is a working dataset -> LoRA
+graph, not further optimizer breadth. Two new domains exist alongside the
+optimizer one, same Adapter-over-legacy-code pattern:
+- `nodes/dataset/` -- `DataSourceNode` (ABC) / `TrainingBatchSource`
+  (Handle ABC); `ManagedDatasetSourceNode` wraps
+  `manager.loader.ManagedDatasetLoader`.
+- `nodes/model/` -- `ModelProviderNode`, `LoRAInjectorNode`,
+  `CheckpointSaverNode` (ABCs) / `ModelWeights`, `TrainableModel` (Handle
+  ABC); `SafetensorsCheckpointNode` wraps checkpoint loading,
+  `ComfyUNetLoRANode` wraps `core.unet_wrapper.ComfyUNetWrapper` +
+  `core.lora.LoRAConfig`, `LoRACheckpointSaverNode` wraps
+  `core.save.save_lora_checkpoint`.
+
+Contract-level smoke test (no torch/hardware needed):
+`nodes/smoke_tests/smoke_test_dataset_model_contracts.py`. Not yet
+functionally verified against real torch/ComfyUI/a real dataset -- next
+step for these two domains.
+
+**Still missing, and the actual next piece of work: `TrainerNode`.**
+Everything above gets you a `TrainableModel` + a `TrainingBatchSource` +
+an `OptimizerHandle` (optimizer domain, already built) as separate typed
+objects -- nothing yet runs the step loop that consumes all three. That's
+the piece that makes "dataset -> LoRA" actually executable, and is the
+next concrete task. Expect this to need `core/train_step.py` (noise
+scheduling, loss, the actual forward/backward) as reference material --
+read it to understand the math and control flow, don't copy its shape;
+it's an 850+ line function tangled with progress/preview/checkpoint
+callbacks specifically because it was never designed with typed
+boundaries in mind.
+
+---
+
+**What follows below (pre-2026-07-24) is the original optimizer-subsystem
+design writeup.** Still accurate for the optimizer domain specifically;
+just no longer the active priority.
+
 **What this is:** a from-scratch, node-graph-shaped rewrite of the
 optimizer subsystem, developed *alongside* the existing, working
 `core/optimizers.py` -- not a replacement yet. `core/optimizers.py` has

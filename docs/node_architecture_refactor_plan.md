@@ -405,3 +405,123 @@ category correctly shows zero outputs -- rendered honestly in the UI as
    defining the formal `Node`/`Port` base classes and wrapping the first
    real node (`OptimizerNode`) behind them, per the Phase 1 description
    above. Needs the user's steer on which feels more valuable to see next.
+
+## 2026-07-25, second pass: bug fixes + file/folder handling + navigation
+
+User-reported, first real hands-on test of the editor. Fixed, in order of
+how much they should have been caught before shipping:
+
+- **Input focus loss after one character.** The widget `<input>`'s
+  `input` handler called `renderAll()` on every keystroke, which wipes
+  and rebuilds every node's DOM -- including the input mid-edit. Replaced
+  with `updatePortDotState()`, a targeted class toggle on the one dot that
+  could be affected; the widget DOM is never touched by typing into it.
+- **Primitive types were being treated as wire-only "handle" types.**
+  `isHandleType` used to be *derived*: "any type name that appears as
+  some node's output is wire-only." That broke the moment a node
+  legitimately output a primitive -- `LoRACheckpointSaverNode` outputs a
+  `str` (the resolved save path), which silently made every unrelated
+  `str`-typed input in the whole registry lose its text box (this is
+  what the user saw as "the LoRA save node's output makes no sense" --
+  the *input* above it had also gone wire-only from the same bug, so the
+  node looked write-only in the wrong direction). Replaced with a
+  hardcoded closed set (`int/float/str/bool/Path/Any/Callable` = widget,
+  everything else = wire-only). Also renamed the saver's output from
+  `path` to `saved_path` so it no longer shares a name with its own
+  `path`-ish input regardless -- the collision was confusing even once
+  the widget rendered correctly.
+- **Tooltips.** `Port.doc` existed but was never sent to the frontend;
+  added to the introspection payload, rendered as the port row's `title`
+  attribute.
+
+**File/folder handling**, the bigger design question. Landed on:
+server-configured base directories per asset kind (reusing
+`paths.get_checkpoints_dir()`/`get_loras_dir()`/`get_datasets_dir()` --
+already-real, already-in-production, not reinvented), with two access
+patterns depending on direction:
+- **Loading** (`path_kind="checkpoint"`/`"dataset"`): a `<select>`
+  populated from `GET /api/nodegraph/assets/{kind}`, plus an upload
+  button for kinds that support it (checkpoint/lora; datasets are
+  structured multi-file directories built by the Dataset Manager, not a
+  single-file upload target).
+- **Saving** (`path_kind="lora_output"`, currently only
+  `LoRACheckpointSaverNode`): free-text relative path (subfolders
+  allowed, e.g. `style_v2/checkpoint_1000.safetensors`) plus a "Browse /
+  Save As" button opening `AssetBrowserDialog` -- navigate folders,
+  create a new one, pick or type a filename. Talks to
+  `GET/POST /api/nodegraph/assets/{kind}/browse` and `/mkdir`.
+
+**Security.** The user's framing was right to take seriously: this
+editor is explicitly meant to be reachable from another device on the
+network (their original design ask), which makes every path string it
+sends a genuinely untrusted input, not a filename an operator typed into
+their own config. `paths.py` already had `resolve_model_path()` /
+`resolve_dataset_path()`, but both are deliberately permissive (accept
+absolute paths, no traversal check) -- correct for their actual caller
+(a local TOML config file, trusted input) but wrong for this one. Added
+`resolve_safe_model_path()` / `resolve_safe_dataset_path()` alongside
+them, not instead: absolute paths rejected, `..` rejected, every
+resolved path checked to still be `.is_relative_to()` the configured
+base directory. Every node/route touching a user-suppliable path now
+uses the safe variant (`SafetensorsCheckpointNode`, `ManagedDatasetSourceNode`,
+`LoRACheckpointSaverNode`, and all of `server/asset_paths.py`'s
+browse/mkdir/upload). Tested directly against traversal strings
+(`../../etc/passwd`, absolute paths, empty/whitespace segments,
+backslash tricks) -- all rejected; legitimate nested paths resolve and
+stay contained. This does mean the graph editor can no longer point a
+loader at an arbitrary absolute path elsewhere on the server, even
+though the trusted-config path (`resolve_model_path`) still can -- a
+deliberate asymmetry, not an oversight.
+
+**On not merging loader/saver nodes into fewer, kind-switching ones.**
+The user's concern (not wanting 10+ near-identical nodes as more
+loaders/savers get added) is legitimate, but there's currently exactly
+one loader and one saver -- merging now would be abstracting over a
+duplication that doesn't exist yet. What *is* shared, and is the actual
+lever against future proliferation, is the file-picking mechanism itself:
+`path_kind` + `server/asset_paths.py` + the one `<select>`/upload widget
++ the one `AssetBrowserDialog`. A second loader (e.g. a LoRA-weights
+loader for resuming training) should reuse all of that, differing only in
+its `path_kind` value and what it does with the loaded tensors -- not
+reimplement picking. Whether it should be a distinct `Node` subclass or a
+`kind`-input-driven branch inside one class is a real decision to make
+*when that second loader is actually being built*, with a concrete second
+case in hand instead of a hypothetical one. One relevant fact for that
+future decision: `ComfyUNetWrapper.__init__` and `SDXLClipEncoder`
+already filter the keys they need out of *whatever* state dict they're
+given (`strict=False` load, prefix-matching) -- so `SafetensorsCheckpointNode`
+splitting into `unet_sd`/`non_unet_sd` up front is convenience, not a
+hard requirement, and a future generic loader could plausibly hand back
+one raw state dict and let each consumer filter its own.
+
+**Navigation.** Mousewheel zooms centered on the cursor (`GraphView.zoomAt`),
+drag pans (empty canvas, or space-held anywhere -- intercepted in the
+capture phase so it overrides a node's own drag/connect behavior), zoom
+controls bottom-right (`-`/reset-to-100%/`+`). Implementation note for
+whoever touches this next: `.ng-viewport`'s CSS transform is the single
+source of truth for pan+zoom; port/wire coordinate math reads pan and
+zoom back out via `getBoundingClientRect()` (already-transformed screen
+rects, divided by `this.zoom`) rather than re-deriving the transform
+independently, specifically to avoid the two going out of sync.
+
+**Not done, deliberately, given the size of this round:** the
+"drag a wire into empty space to get a list of compatible nodes"
+suggestion from the same feedback -- flagged by the user themselves as
+the lowest-priority item ("extra feature that CAN save time"). No
+regression risk in deferring it; it's additive.
+
+**Testing note.** Everything server-side (paths.py's sandboxing,
+asset_paths.py, the renamed node ports, the registry/run/browse/mkdir/upload
+routes) was exercised for real -- FastAPI TestClient, real traversal
+strings, real subfolder upload/browse/list round-trips. The pure graph
+logic in nodegraph.js (`GraphModel`: connection replace-semantics, the
+primitive/handle classification fix, validation, payload building,
+serialize/restore) was re-extracted and re-run under plain Node.js, same
+technique as the previous round. What did *not* get an automated test,
+because this sandbox has no browser: the actual DOM interactions --
+whether the focus fix behaves correctly on a real keystroke, whether the
+pan/zoom math feels right, whether `AssetBrowserDialog` renders
+correctly. Reasoned through carefully and cross-checked against the
+`getBoundingClientRect()`/transform math by hand, but "reasoned through"
+is not "watched it work" -- next real step is the user's own hands-on
+pass, same as this round.

@@ -33,6 +33,8 @@ class PortInfo:
                              # a caller check "is this output's type a subclass of that input's type"
                              # instead of comparing type_str for exact equality, e.g. FusedOptimizerHandle
                              # (a real OptimizerHandle subclass) connecting into an OptimizerHandle input.
+    doc: str = ""            # Port.doc, the tooltip text -- empty for legacy-guessed ports (no such field to read)
+    path_kind: str | None = None  # Port.path_kind -- tells the UI to render a file/folder picker
 
 
 @dataclass
@@ -160,6 +162,8 @@ def introspect_node_class(cls: type) -> NodeInfo:
             default=repr(p.default) if not p.required else None,
             required=p.required,
             type_mro=_type_mro(p.type),
+            doc=p.doc,
+            path_kind=p.path_kind,
         )
         for p in cls.INPUTS.values()
     ]
@@ -170,6 +174,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
             default=None,
             required=p.required,
             type_mro=_type_mro(p.type),
+            doc=p.doc,
         )
         for p in cls.OUTPUTS.values()
     ]
@@ -208,7 +213,8 @@ def node_info_to_dict(info: NodeInfo) -> dict:
     def _ports(ports):
         return [
             {"name": p.name, "type": p.type_str, "default": p.default,
-             "required": p.required, "type_mro": p.type_mro}
+             "required": p.required, "type_mro": p.type_mro,
+             "doc": p.doc, "path_kind": p.path_kind}
             for p in ports
         ]
     return {

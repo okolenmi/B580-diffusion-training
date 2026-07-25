@@ -24,6 +24,8 @@ def _load() -> dict[str, type]:
     from nodes.optimizer.came import CAMEOptimizerNode
     from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerNode
     from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
+    from nodes.primitive.values import (BoolConstantNode, FloatConstantNode,
+                                         IntConstantNode, StringConstantNode)
     from nodes.train.loss import MinSNRLossWeightingNode, UniformLossWeightingNode
     from nodes.train.schedule import ConstantLRScheduleNode, CosineLRScheduleNode
     from nodes.train.supervised import SupervisedLoRATrainerNode
@@ -36,6 +38,7 @@ def _load() -> dict[str, type]:
         ConstantLRScheduleNode, CosineLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode,
         SupervisedLoRATrainerNode,
+        FloatConstantNode, IntConstantNode, StringConstantNode, BoolConstantNode,
     ]
     return {cls.__name__: cls for cls in classes}
 

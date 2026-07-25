@@ -1,9 +1,9 @@
 /* ---------------------------------------------------------------------------
    Node Graph Editor -- interactive version of the old read-only playground.
-   ES6 classes throughout (GraphModel/GraphNode/Connection/GraphView), unlike
-   this codebase's other .js files, deliberately: this *is* the node-graph
-   design the project's OOP rule is about, not a UI feature layered on top
-   of one. See docs/node_architecture_refactor_plan.md.
+   ES6 classes throughout (GraphModel/GraphNode/Connection/GraphView/
+   AssetBrowserDialog), unlike this codebase's other .js files, deliberately:
+   this *is* the node-graph design the project's OOP rule is about, not a UI
+   feature layered on top of one. See docs/node_architecture_refactor_plan.md.
    --------------------------------------------------------------------------- */
 
 (function () {
@@ -11,11 +11,28 @@
 
   const STORAGE_KEY = "ng_graph_v1";
   const NODE_WIDTH = 270;
+  const ZOOM_MIN = 0.2;
+  const ZOOM_MAX = 2.5;
+
+  // Closed set: these are the only types that show a typed-in widget. Every
+  // other type name (ModelWeights, TrainableModel, OptimizerHandle, ...) is
+  // wire-only. Deliberately hardcoded rather than "derived from whatever
+  // appears as some node's output type" -- that derivation looked elegant
+  // but was wrong: a node like the checkpoint saver legitimately outputs a
+  // `str` (the resolved save path), and that alone made every unrelated
+  // `str` input across the whole registry lose its text box.
+  const PRIMITIVE_TYPES = new Set(["int", "float", "str", "bool", "Path", "Any", "Callable"]);
+
+  const PATH_KIND_TO_ASSET_KIND = { checkpoint: "checkpoint", dataset: "dataset", lora_output: "lora" };
 
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = String(s);
     return d.innerHTML;
+  }
+
+  function isTypingTarget(el) {
+    return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
 
   function coerceWidgetValue(rawString, typeStr) {
@@ -28,8 +45,8 @@
   }
 
   /* One spawned node instance on the canvas. Port *declarations* (name,
-     type, required, default) live on classInfo -- this only holds the
-     per-instance state: position, and widget values for unconnected
+     type, required, default, doc, path_kind) live on classInfo -- this only
+     holds per-instance state: position, and widget values for unconnected
      primitive inputs. */
   class GraphNode {
     constructor(id, classInfo, x, y) {
@@ -67,17 +84,13 @@
       for (const domain of Object.keys(registry)) {
         for (const c of registry[domain]) this.classByName[c.class_name] = c;
       }
-      this.handleTypes = new Set();          // any type name that appears as *some* node's output -> wire-only
-      for (const domain of Object.keys(registry)) {
-        for (const c of registry[domain]) for (const o of c.outputs) this.handleTypes.add(o.type);
-      }
       this.nodes = new Map();
       this.connections = new Map();
       this._nextId = 1;
     }
 
     isHandleType(typeStr) {
-      return this.handleTypes.has(typeStr);
+      return !PRIMITIVE_TYPES.has(typeStr);
     }
 
     addNode(classInfo, x, y) {
@@ -191,25 +204,161 @@
     }
   }
 
+  /* Browse/create-folder/pick-a-filename dialog for a "lora_output"-style
+     save target. Talks to /api/nodegraph/assets/{kind}/browse and /mkdir --
+     both sandboxed server-side (see paths.py's resolve_safe_model_path);
+     this dialog never constructs a filesystem path itself, only relative
+     path *strings* that the server resolves and validates on every call. */
+  class AssetBrowserDialog {
+    constructor(assetKind, opts) {
+      this.assetKind = assetKind;
+      this.onConfirm = opts.onConfirm;
+      this.path = "";
+      this.filename = "";
+      const initial = opts.initialValue || "";
+      const slash = initial.lastIndexOf("/");
+      if (slash >= 0) { this.path = initial.slice(0, slash); this.filename = initial.slice(slash + 1); }
+      else { this.filename = initial; }
+      this.el = null;
+    }
+
+    async open() {
+      this.el = document.createElement("div");
+      this.el.className = "ng-modal-overlay";
+      this.el.addEventListener("mousedown", (e) => { if (e.target === this.el) this.close(); });
+      document.body.appendChild(this.el);
+      await this.render();
+    }
+
+    close() {
+      if (this.el) { this.el.remove(); this.el = null; }
+    }
+
+    async render() {
+      if (!this.el) return;
+      const res = await fetch(`/api/nodegraph/assets/${this.assetKind}/browse?path=${encodeURIComponent(this.path)}`);
+      const data = res.ok ? await res.json() : { folders: [], files: [] };
+
+      const segments = this.path ? this.path.split("/") : [];
+      let crumbHtml = `<span class="ng-crumb" data-path="">(root)</span>`;
+      let acc = "";
+      for (const seg of segments) {
+        acc = acc ? acc + "/" + seg : seg;
+        crumbHtml += ` / <span class="ng-crumb" data-path="${escapeHtml(acc)}">${escapeHtml(seg)}</span>`;
+      }
+
+      const entries = data.folders.map(f => `<div class="ng-modal-entry ng-modal-folder" data-name="${escapeHtml(f)}">\u{1F4C1} ${escapeHtml(f)}/</div>`).join("")
+        + data.files.map(f => `<div class="ng-modal-entry ng-modal-file" data-name="${escapeHtml(f)}">\u{1F4C4} ${escapeHtml(f)}</div>`).join("");
+
+      this.el.innerHTML = `
+        <div class="ng-modal">
+          <div class="ng-modal-title">Save into ${escapeHtml(this.assetKind)} directory</div>
+          <div class="ng-modal-crumbs">${crumbHtml}</div>
+          <div class="ng-modal-list">${entries || '<div class="ng-modal-empty">(empty)</div>'}</div>
+          <div class="ng-modal-newfolder">
+            <input type="text" id="ng-modal-newfolder-input" placeholder="new folder name">
+            <button id="ng-modal-newfolder-btn" type="button">+ Folder</button>
+          </div>
+          <div class="ng-modal-filename">
+            <label>Filename</label>
+            <input type="text" id="ng-modal-filename-input" value="${escapeHtml(this.filename)}" placeholder="my_lora.safetensors">
+          </div>
+          <div class="ng-modal-actions">
+            <button id="ng-modal-cancel" type="button">Cancel</button>
+            <button id="ng-modal-save" type="button">Save here</button>
+          </div>
+        </div>`;
+
+      this.el.querySelectorAll(".ng-crumb").forEach(el => {
+        el.addEventListener("click", () => { this.path = el.dataset.path; this.render(); });
+      });
+      this.el.querySelectorAll(".ng-modal-folder").forEach(el => {
+        el.addEventListener("click", () => {
+          this.path = this.path ? this.path + "/" + el.dataset.name : el.dataset.name;
+          this.render();
+        });
+      });
+      this.el.querySelectorAll(".ng-modal-file").forEach(el => {
+        el.addEventListener("click", () => {
+          this.el.querySelector("#ng-modal-filename-input").value = el.dataset.name;
+        });
+      });
+      this.el.querySelector("#ng-modal-newfolder-btn").addEventListener("click", async () => {
+        const name = this.el.querySelector("#ng-modal-newfolder-input").value.trim();
+        if (!name) return;
+        const rel = this.path ? this.path + "/" + name : name;
+        const r = await fetch(`/api/nodegraph/assets/${this.assetKind}/mkdir`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ relative_path: rel }),
+        });
+        if (r.ok) { this.path = rel; this.render(); }
+        else { const err = await r.json(); alert(err.detail || "Could not create folder."); }
+      });
+      this.el.querySelector("#ng-modal-cancel").addEventListener("click", () => this.close());
+      this.el.querySelector("#ng-modal-save").addEventListener("click", () => {
+        const filename = this.el.querySelector("#ng-modal-filename-input").value.trim();
+        if (!filename) { alert("Enter a filename."); return; }
+        if (filename.includes("/") || filename.includes("\\")) { alert("Filename can't contain a path separator -- use the folder browser above instead."); return; }
+        const relPath = this.path ? this.path + "/" + filename : filename;
+        this.onConfirm(relPath);
+        this.close();
+      });
+    }
+  }
+
   /* Rendering + interaction. Owns the DOM, delegates all graph-shape
      decisions to GraphModel. */
   class GraphView {
     constructor(model, els) {
       this.model = model;
-      this.els = els; // {palette, canvas, wires, canvasWrap, runBtn, clearBtn, runStatus, results}
-      this.pendingWire = null; // {fromNode, fromPort, isOutput} while dragging a new connection
+      this.els = els; // {palette, canvas, wires, viewport, canvasWrap, runBtn, clearBtn, runStatus, results, zoomIn, zoomOut, zoomPct}
+      this.pendingWire = null; // {nodeId, portName, isOutput} while dragging a new connection
       this.dragState = null;   // {node, startX, startY, origX, origY} while dragging a node
+      this.panState = null;    // {startX, startY, origPanX, origPanY} while panning the canvas
+      this.spaceHeld = false;
+      this.zoom = 1;
+      this.panX = 0;
+      this.panY = 0;
       this._spawnCascade = 0;
+      this.assetCache = {}; // assetKind -> {options, upload_supported, ...}, warmed in init()
     }
 
-    init() {
+    async init() {
+      await this.warmAssetCache();
       this.renderPalette();
       this.els.runBtn.addEventListener("click", () => this.runGraph());
       this.els.clearBtn.addEventListener("click", () => this.clearAll());
+      this.els.zoomIn.addEventListener("click", () => this.setZoomCentered(this.zoom + 0.1));
+      this.els.zoomOut.addEventListener("click", () => this.setZoomCentered(this.zoom - 0.1));
+      this.els.zoomPct.addEventListener("click", () => this.setZoomCentered(1.0));
+      this.els.canvasWrap.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
+      this.els.canvasWrap.addEventListener("mousedown", (e) => this.onCanvasWrapMouseDown(e), true);
       document.addEventListener("mousemove", (e) => this.onDocMouseMove(e));
       document.addEventListener("mouseup", (e) => this.onDocMouseUp(e));
+      document.addEventListener("keydown", (e) => this.onKeyDown(e));
+      document.addEventListener("keyup", (e) => this.onKeyUp(e));
+      this.applyViewportTransform();
       this.renderAll();
     }
+
+    async warmAssetCache() {
+      const kinds = ["checkpoint", "lora", "dataset"];
+      await Promise.all(kinds.map(async (kind) => {
+        try {
+          const res = await fetch(`/api/nodegraph/assets/${kind}`);
+          if (res.ok) this.assetCache[kind] = await res.json();
+        } catch (e) { console.warn(`Could not load ${kind} asset list:`, e); }
+      }));
+    }
+
+    async refreshAssetCache(assetKind) {
+      try {
+        const res = await fetch(`/api/nodegraph/assets/${assetKind}`);
+        if (res.ok) this.assetCache[assetKind] = await res.json();
+      } catch (e) { console.warn(`Could not refresh ${assetKind} asset list:`, e); }
+    }
+
+    // ---- palette / spawn ----
 
     renderPalette() {
       const p = this.els.palette;
@@ -234,11 +383,12 @@
     }
 
     spawn(classInfo) {
-      const wrap = this.els.canvasWrap;
-      const baseX = wrap.scrollLeft + 60 + (this._spawnCascade % 8) * 24;
-      const baseY = wrap.scrollTop + 60 + (this._spawnCascade % 8) * 24;
+      const rect = this.els.canvasWrap.getBoundingClientRect();
+      const logicalCenterX = (rect.width / 2 - this.panX) / this.zoom;
+      const logicalCenterY = (rect.height / 2 - this.panY) / this.zoom;
+      const cascade = (this._spawnCascade % 8) * 24;
       this._spawnCascade++;
-      const node = this.model.addNode(classInfo, baseX, baseY);
+      const node = this.model.addNode(classInfo, logicalCenterX - NODE_WIDTH / 2 + cascade, logicalCenterY - 60 + cascade);
       this.renderAll();
       this.persist();
       return node;
@@ -256,6 +406,70 @@
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.model.serialize())); }
       catch (e) { console.warn("Could not persist graph:", e); }
     }
+
+    // ---- pan / zoom ----
+
+    applyViewportTransform() {
+      this.els.viewport.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+      this.els.zoomPct.textContent = Math.round(this.zoom * 100) + "%";
+    }
+
+    zoomAt(factor, screenX, screenY) {
+      const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoom * factor));
+      const actualFactor = newZoom / this.zoom;
+      this.panX = screenX - (screenX - this.panX) * actualFactor;
+      this.panY = screenY - (screenY - this.panY) * actualFactor;
+      this.zoom = newZoom;
+      this.applyViewportTransform();
+      this.redrawWires();
+    }
+
+    setZoomCentered(newZoom) {
+      const rect = this.els.canvasWrap.getBoundingClientRect();
+      this.zoomAt(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newZoom)) / this.zoom, rect.width / 2, rect.height / 2);
+    }
+
+    onWheel(e) {
+      e.preventDefault();
+      const rect = this.els.canvasWrap.getBoundingClientRect();
+      const factor = Math.exp(-e.deltaY * 0.001);
+      this.zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
+    }
+
+    onKeyDown(e) {
+      if (e.code === "Space" && !isTypingTarget(e.target)) {
+        this.spaceHeld = true;
+        this.els.canvasWrap.style.cursor = "grab";
+        e.preventDefault();
+      }
+    }
+
+    onKeyUp(e) {
+      if (e.code === "Space") {
+        this.spaceHeld = false;
+        this.els.canvasWrap.style.cursor = "";
+      }
+    }
+
+    beginPan(e) {
+      this.panState = { startX: e.clientX, startY: e.clientY, origPanX: this.panX, origPanY: this.panY };
+      this.els.canvasWrap.classList.add("panning");
+    }
+
+    onCanvasWrapMouseDown(e) {
+      const onNodeOrPort = e.target.closest(".ng-node") || e.target.closest(".ng-port-dot");
+      if (this.spaceHeld && onNodeOrPort) {
+        e.stopPropagation();
+        e.preventDefault();
+        this.beginPan(e);
+        return;
+      }
+      if (!onNodeOrPort) {
+        this.beginPan(e);
+      }
+    }
+
+    // ---- rendering ----
 
     renderAll() {
       this.els.canvas.innerHTML = "";
@@ -288,7 +502,8 @@
         this.persist();
       });
       header.addEventListener("mousedown", (e) => {
-        if (e.target.closest(".ng-node-del")) return;
+        if (e.target.closest(".ng-node-del") || this.spaceHeld) return;
+        e.stopPropagation();
         this.dragState = { node, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y };
       });
       el.appendChild(header);
@@ -318,6 +533,7 @@
     buildPortRow(node, port, isOutput) {
       const row = document.createElement("div");
       row.className = "ng-port" + (isOutput ? " output" : "");
+      if (port.doc) row.title = port.doc;
       const connected = !isOutput && !!this.model.existingConnectionInto(node.id, port.name);
       const dotClasses = ["ng-port-dot"];
       if (isOutput) dotClasses.push("output");
@@ -355,6 +571,15 @@
 
       if (connected) return wrapper; // has a value via wire, no widget needed
 
+      if (port.path_kind === "lora_output") {
+        wrapper.appendChild(this.buildSaveAsWidget(node, port));
+        return wrapper;
+      }
+      if (port.path_kind) {
+        wrapper.appendChild(this.buildPickerWidget(node, port));
+        return wrapper;
+      }
+
       const row = document.createElement("div");
       row.className = "ng-widget-row";
       const current = node.paramValues[port.name];
@@ -362,6 +587,7 @@
         row.innerHTML = `<label style="font-size:11px;"><input type="checkbox" ${current ? "checked" : ""}> use value</label>`;
         row.querySelector("input").addEventListener("change", (e) => {
           node.paramValues[port.name] = e.target.checked;
+          this.updatePortDotState(node.id, port.name);
           this.updateRunButton();
           this.persist();
         });
@@ -369,17 +595,147 @@
         const inputType = (port.type === "int" || port.type === "float") ? "number" : "text";
         const step = port.type === "int" ? "1" : "any";
         const val = current === undefined || current === null ? "" : current;
-        row.innerHTML = `<input type="${inputType}" ${inputType === "number" ? `step="${step}"` : ""} placeholder="${port.required ? "required" : "default: " + (port.default || "\u2014")}" value="${escapeHtml(val)}">`;
-        row.querySelector("input").addEventListener("input", (e) => {
+        const input = document.createElement("input");
+        input.type = inputType;
+        if (inputType === "number") input.step = step;
+        input.placeholder = port.required ? "required" : "default: " + (port.default || "\u2014");
+        input.value = val;
+        if (port.doc) input.title = port.doc;
+        // Targeted update only -- never renderAll() from a keystroke. An
+        // earlier version called renderAll() here, which rebuilds every
+        // node's DOM (including this very input) on every character typed,
+        // dropping focus after one keystroke. This just flips a class on
+        // the one dot that could be affected.
+        input.addEventListener("input", (e) => {
           node.paramValues[port.name] = e.target.value === "" ? undefined : coerceWidgetValue(e.target.value, port.type);
-          this.refreshPortHighlights();
+          this.updatePortDotState(node.id, port.name);
           this.updateRunButton();
           this.persist();
         });
+        row.appendChild(input);
       }
       wrapper.appendChild(row);
       return wrapper;
     }
+
+    buildPickerWidget(node, port) {
+      const assetKind = PATH_KIND_TO_ASSET_KIND[port.path_kind] || port.path_kind;
+      const row = document.createElement("div");
+      row.className = "ng-widget-row ng-picker-row";
+      const select = document.createElement("select");
+      if (port.doc) select.title = port.doc;
+      this.populatePickerOptions(select, assetKind, node.paramValues[port.name]);
+      select.addEventListener("change", (e) => {
+        node.paramValues[port.name] = e.target.value || undefined;
+        this.updatePortDotState(node.id, port.name);
+        this.updateRunButton();
+        this.persist();
+      });
+      row.appendChild(select);
+
+      const info = this.assetCache[assetKind];
+      if (!info || info.upload_supported) {
+        const uploadBtn = document.createElement("button");
+        uploadBtn.type = "button";
+        uploadBtn.className = "ng-picker-upload";
+        uploadBtn.textContent = "\u2191";
+        uploadBtn.title = "Upload a new file";
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.style.display = "none";
+        fileInput.addEventListener("change", async () => {
+          const file = fileInput.files[0];
+          if (!file) return;
+          const ok = await this.uploadFile(assetKind, file);
+          if (!ok) return;
+          await this.refreshAssetCache(assetKind);
+          this.populatePickerOptions(select, assetKind, file.name);
+          node.paramValues[port.name] = file.name;
+          this.updatePortDotState(node.id, port.name);
+          this.updateRunButton();
+          this.persist();
+        });
+        uploadBtn.addEventListener("click", () => fileInput.click());
+        row.appendChild(uploadBtn);
+        row.appendChild(fileInput);
+      }
+      return row;
+    }
+
+    buildSaveAsWidget(node, port) {
+      const assetKind = PATH_KIND_TO_ASSET_KIND[port.path_kind] || port.path_kind;
+      const row = document.createElement("div");
+      row.className = "ng-widget-row ng-picker-row";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "e.g. style_v2/checkpoint_1000.safetensors";
+      input.value = node.paramValues[port.name] || "";
+      if (port.doc) input.title = port.doc;
+      input.addEventListener("input", (e) => {
+        node.paramValues[port.name] = e.target.value === "" ? undefined : e.target.value;
+        this.updatePortDotState(node.id, port.name);
+        this.updateRunButton();
+        this.persist();
+      });
+      const browseBtn = document.createElement("button");
+      browseBtn.type = "button";
+      browseBtn.className = "ng-picker-upload";
+      browseBtn.textContent = "\u2026";
+      browseBtn.title = "Browse / Save As";
+      browseBtn.addEventListener("click", () => {
+        const dialog = new AssetBrowserDialog(assetKind, {
+          initialValue: node.paramValues[port.name] || "",
+          onConfirm: (relPath) => {
+            node.paramValues[port.name] = relPath;
+            input.value = relPath;
+            this.updatePortDotState(node.id, port.name);
+            this.updateRunButton();
+            this.persist();
+          },
+        });
+        dialog.open();
+      });
+      row.appendChild(input);
+      row.appendChild(browseBtn);
+      return row;
+    }
+
+    populatePickerOptions(select, assetKind, currentValue) {
+      const info = this.assetCache[assetKind];
+      const options = info ? info.options : [];
+      select.innerHTML = `<option value="">\u2014 choose \u2014</option>` +
+        options.map(o => `<option value="${escapeHtml(o.value)}"${o.value === currentValue ? " selected" : ""}>${escapeHtml(o.label)}</option>`).join("");
+    }
+
+    async uploadFile(assetKind, file) {
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res = await fetch(`/api/nodegraph/assets/${assetKind}/upload`, { method: "POST", body: form });
+        if (!res.ok) { const err = await res.json(); alert(err.detail || "Upload failed."); return false; }
+        return true;
+      } catch (e) {
+        alert("Upload failed: " + e.message);
+        return false;
+      }
+    }
+
+    // ---- targeted (non-destructive) updates ----
+
+    updatePortDotState(nodeId, portName) {
+      const dot = this.els.canvas.querySelector(
+        `.ng-port-dot[data-node-id="${nodeId}"][data-is-output="0"][data-port-name="${CSS.escape(portName)}"]`);
+      if (!dot) return;
+      const node = this.model.nodes.get(nodeId);
+      const port = node.classInfo.inputs.find(p => p.name === portName);
+      const connected = !!this.model.existingConnectionInto(nodeId, portName);
+      const v = node.paramValues[portName];
+      const unmet = !!port.required && !connected && (v === undefined || v === null || v === "");
+      dot.classList.toggle("required-unmet", unmet);
+      dot.classList.toggle("connected", connected);
+    }
+
+    // ---- ports / wires ----
 
     measurePorts(node) {
       const el = this.els.canvas.querySelector(`.ng-node[data-node-id="${node.id}"]`);
@@ -388,7 +744,10 @@
       node.portOffsets = { inputs: {}, outputs: {} };
       el.querySelectorAll(".ng-port-dot").forEach((dot) => {
         const r = dot.getBoundingClientRect();
-        const offset = { x: r.left + r.width / 2 - nodeRect.left, y: r.top + r.height / 2 - nodeRect.top };
+        // getBoundingClientRect() reflects the current CSS zoom transform,
+        // so these deltas are in screen pixels; divide by zoom to store
+        // them in the same logical units as node.x/node.y.
+        const offset = { x: (r.left + r.width / 2 - nodeRect.left) / this.zoom, y: (r.top + r.height / 2 - nodeRect.top) / this.zoom };
         const bucket = dot.dataset.isOutput === "1" ? node.portOffsets.outputs : node.portOffsets.inputs;
         bucket[dot.dataset.portName] = offset;
       });
@@ -428,25 +787,29 @@
       }
     }
 
-    refreshPortHighlights() {
-      // Cheap enough to just re-render; keeps widget-vs-wire-vs-unmet state
-      // (dot color, hint text) always derived from the model, never hand-toggled.
-      this.renderAll();
-    }
-
     beginWire(nodeId, portName, isOutput) {
       this.pendingWire = { nodeId, portName, isOutput };
     }
 
+    // clientX/clientY -> logical canvas coordinates. canvas.getBoundingClientRect()
+    // already reflects the current pan+zoom (it's a live transformed element),
+    // so this only needs to divide out the zoom -- no separate pan bookkeeping.
     canvasMousePos(e) {
       const rect = this.els.canvas.getBoundingClientRect();
-      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      return { x: (e.clientX - rect.left) / this.zoom, y: (e.clientY - rect.top) / this.zoom };
     }
 
     onDocMouseMove(e) {
+      if (this.panState) {
+        this.panX = this.panState.origPanX + (e.clientX - this.panState.startX);
+        this.panY = this.panState.origPanY + (e.clientY - this.panState.startY);
+        this.applyViewportTransform();
+        this.redrawWires();
+        return;
+      }
       if (this.dragState) {
-        const dx = e.clientX - this.dragState.startX;
-        const dy = e.clientY - this.dragState.startY;
+        const dx = (e.clientX - this.dragState.startX) / this.zoom;
+        const dy = (e.clientY - this.dragState.startY) / this.zoom;
         const node = this.dragState.node;
         node.x = this.dragState.origX + dx;
         node.y = this.dragState.origY + dy;
@@ -473,6 +836,10 @@
     }
 
     onDocMouseUp(e) {
+      if (this.panState) {
+        this.panState = null;
+        this.els.canvasWrap.classList.remove("panning");
+      }
       if (this.dragState) {
         this.dragState = null;
         this.persist();
@@ -512,6 +879,8 @@
       this.renderAll();
       this.persist();
     }
+
+    // ---- run ----
 
     setStatus(text, isError) {
       this.els.runStatus.textContent = text;
@@ -589,11 +958,15 @@
       palette: document.getElementById("ng-palette"),
       canvas: document.getElementById("ng-canvas"),
       wires: document.getElementById("ng-wires"),
+      viewport: document.getElementById("ng-viewport"),
       canvasWrap: document.getElementById("ng-canvas-wrap"),
       runBtn: document.getElementById("ng-run-btn"),
       clearBtn: document.getElementById("ng-clear-btn"),
       runStatus: document.getElementById("ng-run-status"),
       results: document.getElementById("ng-results"),
+      zoomIn: document.getElementById("ng-zoom-in"),
+      zoomOut: document.getElementById("ng-zoom-out"),
+      zoomPct: document.getElementById("ng-zoom-pct"),
     };
     try {
       const res = await fetch("/api/nodegraph/registry");
@@ -605,7 +978,7 @@
         try { model.restore(JSON.parse(saved)); } catch (e) { console.warn("Could not restore saved graph:", e); }
       }
       const view = new GraphView(model, els);
-      view.init();
+      await view.init();
     } catch (err) {
       els.palette.textContent = "Failed to load node registry: " + err.message;
     }

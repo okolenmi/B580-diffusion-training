@@ -8,10 +8,10 @@ docstring for why that's a deliberate, not accidental, distinction).
 Neither touches config.py, config_model.py, or the training launch path.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from . import graph_executor
+from . import asset_paths, graph_executor
 from .nodegraph_introspect import introspect_optimizer_nodes, introspect_registry, node_info_to_dict
 
 router = APIRouter(prefix="/nodegraph")
@@ -48,6 +48,56 @@ async def list_registry():
             detail=f"Could not introspect the node registry ({type(e).__name__}: {e}).",
         )
     return {domain: [node_info_to_dict(i) for i in infos] for domain, infos in groups.items()}
+
+
+@router.get("/assets/{kind}")
+async def list_assets(kind: str):
+    """Options for a path_kind picker widget -- see server/asset_paths.py.
+    kind: 'checkpoint', 'lora', or 'dataset'."""
+    try:
+        return asset_paths.list_options(kind)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/assets/{kind}/upload")
+async def upload_asset(kind: str, file: UploadFile = File(...), relative_path: str | None = Form(None)):
+    """Saves an uploaded file into the configured directory for `kind` --
+    what makes the picker usable from a browser on a different machine
+    than the server: there's no local filesystem to browse, so the file
+    has to come over HTTP. relative_path lets the "Save As" dialog upload
+    into a chosen subfolder; if omitted, falls back to the file's own
+    name at the top level."""
+    try:
+        content = await file.read()
+        target = relative_path or file.filename
+        saved_path = asset_paths.save_upload(kind, target, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"kind": kind, "relative_path": target, "saved_path": saved_path}
+
+
+@router.get("/assets/{kind}/browse")
+async def browse_assets(kind: str, path: str = ""):
+    """Immediate children of `path` (folders + .safetensors files) for the
+    "Save As" dialog -- see server/asset_paths.py.browse(). Root is path=""."""
+    try:
+        return asset_paths.browse(kind, path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class MkdirRequest(BaseModel):
+    relative_path: str
+
+
+@router.post("/assets/{kind}/mkdir")
+async def mkdir_asset(kind: str, request: MkdirRequest):
+    try:
+        created = asset_paths.make_subfolder(kind, request.relative_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"kind": kind, "relative_path": request.relative_path, "created": created}
 
 
 class GraphNodeIn(BaseModel):

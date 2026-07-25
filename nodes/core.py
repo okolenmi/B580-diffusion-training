@@ -31,6 +31,10 @@ class Port:
     required: bool = True
     default: Any = None
     doc: str = ""
+    path_kind: str | None = None  # e.g. "checkpoint"/"lora"/"dataset" -- tells the graph
+    # editor this string/Path input should be a picker against a server-configured
+    # directory (see server/asset_paths.py) instead of freeform text. None = ordinary
+    # widget. Purely a UI hint; build() never reads this.
 
 
 class Node(ABC):

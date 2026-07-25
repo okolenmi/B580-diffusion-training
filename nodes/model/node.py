@@ -38,12 +38,14 @@ class LoRAInjectorNode(Node):
 class CheckpointSaverNode(Node):
 
     OUTPUTS: ClassVar[dict[str, Port]] = {
-        "path": Port(name="path", type=str, required=True),
+        "saved_path": Port(name="saved_path", type=str, required=True,
+                            doc="The resolved absolute path the checkpoint was actually written to."),
     }
 
     COMMON_INPUTS: ClassVar[dict[str, Port]] = {
         "model": Port(name="model", type=TrainableModel, required=True),
-        "path": Port(name="path", type=str, required=True),
+        "relative_path": Port(name="relative_path", type=str, required=True,
+                               doc="Path relative to the configured directory for this checkpoint kind."),
     }
 
     @abstractmethod

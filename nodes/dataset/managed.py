@@ -34,7 +34,10 @@ class ManagedDatasetSourceNode(DataSourceNode):
     """Streams batches from a manager-managed dataset (safetensors shards + sqlite index)."""
 
     INPUTS: ClassVar[dict[str, Port]] = {
-        "dataset_root": Port(name="dataset_root", type=Path, required=True),
+        "dataset_root": Port(name="dataset_root", type=Path, required=True, path_kind="dataset",
+                              doc="Dataset name from the library. Absolute paths and '..' are rejected -- "
+                                  "this field is reachable from the graph editor over the network, so "
+                                  "it's sandboxed to the configured datasets directory."),
         "set_identifier": Port(name="set_identifier", type=Any, required=False, default=None,
                                 doc="Training-set name or ID; None = every trajectory in the dataset."),
         "shuffle": Port(name="shuffle", type=bool, required=False, default=True),
@@ -44,10 +47,11 @@ class ManagedDatasetSourceNode(DataSourceNode):
 
     def build(self, **inputs) -> dict[str, TrainingBatchSource]:
         self.validate_inputs(inputs)
+        import paths
         from manager.loader import ManagedDatasetLoader
 
         loader = ManagedDatasetLoader(
-            dataset_root=Path(inputs["dataset_root"]),
+            dataset_root=paths.resolve_safe_dataset_path(str(inputs["dataset_root"])),
             set_identifier=inputs.get("set_identifier", self.INPUTS["set_identifier"].default),
             shuffle=inputs.get("shuffle", self.INPUTS["shuffle"].default),
             batch_size=inputs.get("batch_size", self.INPUTS["batch_size"].default),

@@ -5,7 +5,7 @@ All paths are resolved relative to COMFY_DIR which is the working directory
 for training runs.
 """
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import os
 import sys
 
@@ -235,6 +235,51 @@ def resolve_model_path(path_str: str | Path, kind: str) -> Path:
     anything stored elsewhere.
     """
     return resolve_path(path_str, base=_model_base_dir(kind))
+
+
+def resolve_dataset_path(name_or_path: str | Path) -> Path:
+    """Resolve a dataset reference that may be given as either a bare
+    dataset name (looked up under get_datasets_dir(), matching what
+    ManagedDatasetLibrary.list_datasets() returns) or an absolute path
+    elsewhere. Same convention as resolve_model_path() for
+    checkpoints/loras -- kept separate since datasets live in their own
+    directory, not checkpoints_dir/loras_dir.
+    """
+    return resolve_path(name_or_path, base=get_datasets_dir())
+
+
+def _resolve_safe_relative(relative_str: str, base_dir: Path) -> Path:
+    """Resolve relative_str against base_dir, refusing anything that could
+    read or write outside it: absolute paths, '..' segments, empty
+    segments, backslash tricks. Distinct from resolve_path()/
+    resolve_model_path() above, which stay permissive on purpose -- those
+    exist for a trusted local TOML config an operator hand-edits.
+    This one exists for the graph editor, which is explicitly meant to be
+    reachable from another device over the network; treat every path it
+    hands over as untrusted input, not a filename.
+    """
+    if not relative_str or relative_str != relative_str.strip():
+        raise ValueError("Path must not be empty or have leading/trailing whitespace.")
+    normalized = relative_str.replace("\\", "/")
+    parsed = PurePosixPath(normalized)
+    if parsed.is_absolute() or ".." in parsed.parts or "" in parsed.parts:
+        raise ValueError(f"Invalid relative path: {relative_str!r}")
+    base_resolved = base_dir.resolve()
+    resolved = (base_resolved / Path(*parsed.parts)).resolve()
+    if resolved != base_resolved and not resolved.is_relative_to(base_resolved):
+        raise ValueError(f"Path escapes the configured directory: {relative_str!r}")
+    return resolved
+
+
+def resolve_safe_model_path(relative_str: str, kind: str) -> Path:
+    """Sandboxed counterpart to resolve_model_path() -- see
+    _resolve_safe_relative()'s docstring for why the two aren't merged."""
+    return _resolve_safe_relative(relative_str, _model_base_dir(kind))
+
+
+def resolve_safe_dataset_path(relative_str: str) -> Path:
+    """Sandboxed counterpart to resolve_dataset_path()."""
+    return _resolve_safe_relative(relative_str, get_datasets_dir())
 
 
 def get_resume_dir(kind: str) -> Path:

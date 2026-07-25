@@ -58,17 +58,32 @@
   #ng-run-status { font-size: 12px; color: var(--text-dim); }
 
   .ng-canvas-wrap {
-    flex: 1; overflow: auto; position: relative;
+    flex: 1; overflow: hidden; position: relative; cursor: grab;
     background:
       linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
       linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px;
     background-color: var(--bg);
   }
+  .ng-canvas-wrap.panning { cursor: grabbing; }
+  .ng-viewport { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
   .ng-canvas { position: relative; width: 3200px; height: 2000px; }
   .ng-wires { position: absolute; top: 0; left: 0; width: 3200px; height: 2000px; pointer-events: none; }
   .ng-wires path.ng-wire { stroke: var(--accent); stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
   .ng-wires path.ng-wire:hover { stroke: var(--red); }
   .ng-wires path.ng-pending { stroke: var(--text-dim); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
+
+  .ng-zoom-controls {
+    position: absolute; bottom: 16px; right: 16px; z-index: 5;
+    display: flex; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .ng-zoom-controls button, .ng-zoom-controls .ng-zoom-pct {
+    padding: 6px 10px; background: var(--surface); border: none; border-right: 1px solid var(--border);
+    color: var(--text); font-size: 12px; cursor: pointer; font-family: 'JetBrains Mono', monospace;
+  }
+  .ng-zoom-controls button:last-child { border-right: none; }
+  .ng-zoom-controls button:hover { background: var(--surface-alt); }
+  .ng-zoom-pct { cursor: default; color: var(--text-dim); min-width: 44px; text-align: center; }
 
   .ng-node {
     position: absolute; width: 270px; background: var(--surface);
@@ -102,16 +117,59 @@
   .ng-port-hint { color: var(--text-dim); font-size: 10px; font-style: italic; margin-left: auto; }
 
   .ng-widget-row { padding: 0 12px 4px 28px; }
-  .ng-widget-row input[type=text], .ng-widget-row input[type=number] {
+  .ng-widget-row input[type=text], .ng-widget-row input[type=number], .ng-widget-row select {
     width: 100%; box-sizing: border-box; font-size: 11px; padding: 3px 6px;
     background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);
   }
+  .ng-picker-row { display: flex; gap: 4px; }
+  .ng-picker-row select { flex: 1; min-width: 0; }
+  .ng-picker-upload {
+    flex-shrink: 0; padding: 3px 8px; font-size: 11px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--surface-alt); color: var(--text-dim); cursor: pointer;
+  }
+  .ng-picker-upload:hover { color: var(--text); border-color: var(--accent); }
 
   .ng-results { max-height: 240px; overflow-y: auto; border-top: 1px solid var(--border); padding: 10px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
   .ng-result-line { padding: 3px 0; }
   .ng-result-ok { color: var(--green); }
   .ng-result-err { color: var(--red); }
   .ng-result-skip { color: var(--text-dim); }
+
+  .ng-modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;
+    background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center;
+  }
+  .ng-modal {
+    width: 420px; max-width: 90vw; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  }
+  .ng-modal-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+  .ng-modal-crumbs { color: var(--text-dim); margin-bottom: 8px; }
+  .ng-crumb { cursor: pointer; color: var(--accent); }
+  .ng-crumb:hover { text-decoration: underline; }
+  .ng-modal-list {
+    max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px;
+    margin-bottom: 10px; background: var(--bg);
+  }
+  .ng-modal-entry { padding: 5px 10px; cursor: pointer; color: var(--text); }
+  .ng-modal-entry:hover { background: var(--surface-alt); }
+  .ng-modal-empty { padding: 10px; color: var(--text-dim); font-style: italic; }
+  .ng-modal-newfolder { display: flex; gap: 6px; margin-bottom: 10px; }
+  .ng-modal-newfolder input { flex: 1; min-width: 0; }
+  .ng-modal-filename { margin-bottom: 14px; }
+  .ng-modal-filename label { display: block; color: var(--text-dim); margin-bottom: 4px; }
+  .ng-modal input[type=text] {
+    width: 100%; box-sizing: border-box; padding: 5px 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .ng-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .ng-modal-actions button, .ng-modal-newfolder button {
+    padding: 6px 14px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--surface-alt); color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  #ng-modal-save { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -136,8 +194,15 @@
         <span id="ng-run-status"></span>
       </div>
       <div class="ng-canvas-wrap" id="ng-canvas-wrap">
-        <svg class="ng-wires" id="ng-wires"></svg>
-        <div class="ng-canvas" id="ng-canvas"></div>
+        <div class="ng-viewport" id="ng-viewport">
+          <svg class="ng-wires" id="ng-wires"></svg>
+          <div class="ng-canvas" id="ng-canvas"></div>
+        </div>
+        <div class="ng-zoom-controls">
+          <button id="ng-zoom-out" title="Zoom out 10%">&minus;</button>
+          <span class="ng-zoom-pct" id="ng-zoom-pct" title="Reset to 100%">100%</span>
+          <button id="ng-zoom-in" title="Zoom in 10%">+</button>
+        </div>
       </div>
       <div class="ng-results" id="ng-results"></div>
     </div>

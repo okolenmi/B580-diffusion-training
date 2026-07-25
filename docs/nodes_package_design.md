@@ -26,22 +26,58 @@ optimizer one, same Adapter-over-legacy-code pattern:
   `core.lora.LoRAConfig`, `LoRACheckpointSaverNode` wraps
   `core.save.save_lora_checkpoint`.
 
-Contract-level smoke test (no torch/hardware needed):
-`nodes/smoke_tests/smoke_test_dataset_model_contracts.py`. Not yet
-functionally verified against real torch/ComfyUI/a real dataset -- next
-step for these two domains.
+**2026-07-25 update:** `TrainerNode` now exists (`nodes/train/`) --
+a v1 step loop, not the full feature set. Read this before touching it:
 
-**Still missing, and the actual next piece of work: `TrainerNode`.**
-Everything above gets you a `TrainableModel` + a `TrainingBatchSource` +
-an `OptimizerHandle` (optimizer domain, already built) as separate typed
-objects -- nothing yet runs the step loop that consumes all three. That's
-the piece that makes "dataset -> LoRA" actually executable, and is the
-next concrete task. Expect this to need `core/train_step.py` (noise
-scheduling, loss, the actual forward/backward) as reference material --
-read it to understand the math and control flow, don't copy its shape;
-it's an 850+ line function tangled with progress/preview/checkpoint
-callbacks specifically because it was never designed with typed
-boundaries in mind.
+- `nodes/train/node.py` -- `TrainerNode` ABC. `nodes/train/supervised.py`
+  -- `SupervisedLoRATrainerNode`, the only concrete implementation so far.
+  `nodes/train/schedule.py` (`LRSchedule` + nodes: constant, cosine) and
+  `nodes/train/loss.py` (`LossWeighting` + nodes: uniform, min-SNR-gamma
+  eps form) are small, fresh, decoupled reimplementations -- not wrapped
+  from `core/schedules.py`, because that module takes the whole
+  `CommonSettings` Pydantic object as a parameter and pulling that into
+  `nodes/` would defeat the point of the typed-port boundary.
+- `nodes/model/text_encoder.py` -- `TextEncoderNode` / `SDXLTextEncoderNode`,
+  wraps `core.clip_encode.SDXLClipEncoder`. Needed because `TrainerNode`
+  encodes each batch's prompt itself (managed-dataset batches carry
+  `prompt`/`neg_prompt` strings, not precomputed embeddings).
+- **Explicit v1 scope reduction** (deferred, not forgotten -- each of
+  these is a real feature of `core/train_step.py` that a future
+  `TrainerNode` subclass or a `SupervisedLoRATrainerNode` extension
+  should add): single conditioning pass per batch, no CFG cond/uncond
+  dual pass (dataset batches' pre-blended `target` field is used as-is,
+  `target_p`/`target_n` ignored); no gradient accumulation (`grad_accum`
+  is hardcoded to 1); no cyclic/teacher-rollout caching, no DAgger, no
+  adversarial pre-conditioning, no timestep gating; no resume/step-offset
+  handling; no teacher->student eps<->vpred conversion at train time
+  (assumes the dataset's stored `target` already matches the student's
+  own parameterization). Checkpointing/preview/progress aren't built in --
+  `TrainerNode.COMMON_INPUTS["on_step"]` is a `callback(step, loss)` hook
+  a caller can use to drive e.g. `LoRACheckpointSaverNode` periodically;
+  no such orchestration node exists yet.
+- **Not yet functionally verified.** This sandbox has no torch and no
+  GPU/XPU, so `SupervisedLoRATrainerNode.build()` has only been checked
+  for syntax and contract shape (`nodes/smoke_tests/smoke_test_train_contracts.py`,
+  passing), never actually run against a real checkpoint + dataset. The
+  math was written by close reading of `core/train_step.py`'s
+  `_run_one_step`/`_run_pass` (forward -> per-sample MSE against
+  `target` -> optional SNR weight -> mean -> backward -> optimizer step),
+  and every legacy call site it wraps was checked against the real method
+  signatures in `core/unet_wrapper.py` and `nodes/optimizer/handle.py` --
+  but "read carefully" isn't "ran once." First real next step for anyone
+  with actual hardware: run it against one real checkpoint + a small real
+  managed dataset, expect to find at least one wrong assumption.
+
+Full dataset -> LoRA graph is now expressible end to end
+(`ManagedDatasetSourceNode` -> `SafetensorsCheckpointNode` ->
+`ComfyUNetLoRANode` -> some `OptimizerNode` + `SDXLTextEncoderNode` ->
+`SupervisedLoRATrainerNode` -> `LoRACheckpointSaverNode`), just not yet
+proven to run. No orchestration/graph-execution node or script wires
+these together automatically yet either -- someone has to call
+`.build()` on each in order and thread outputs into the next node's
+inputs by hand. That wiring layer is itself a real piece of remaining
+work (the actual "ComfyUI-like" graph executor), separate from any one
+node's correctness.
 
 ---
 

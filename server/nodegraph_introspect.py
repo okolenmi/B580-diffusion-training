@@ -29,6 +29,10 @@ class PortInfo:
     type_str: str          # best-effort human-readable type (from annotation, or "any" if untyped)
     default: str | None     # repr() of the default, or None if required (no default)
     required: bool
+    type_mro: list[str]     # [type_str, ...its base classes...], "Any" alone for typing.Any -- lets
+                             # a caller check "is this output's type a subclass of that input's type"
+                             # instead of comparing type_str for exact equality, e.g. FusedOptimizerHandle
+                             # (a real OptimizerHandle subclass) connecting into an OptimizerHandle input.
 
 
 @dataclass
@@ -47,6 +51,14 @@ def _type_str(annotation: Any) -> str:
     if hasattr(annotation, "__name__"):
         return annotation.__name__
     return str(annotation)
+
+
+def _type_mro(t: Any) -> list[str]:
+    if t is Any or t is inspect.Parameter.empty:
+        return ["Any"]
+    if isinstance(t, type):
+        return [c.__name__ for c in t.__mro__ if c.__name__ not in ("object", "ABC")]
+    return [str(t)]
 
 
 def introspect_legacy_class(cls: type, category: str | None = None) -> NodeInfo:
@@ -91,6 +103,7 @@ def introspect_legacy_class(cls: type, category: str | None = None) -> NodeInfo:
             type_str=_type_str(param.annotation),
             default=repr(param.default) if has_default else None,
             required=not has_default,
+            type_mro=_type_mro(param.annotation),
         ))
     outputs = []
     if category is not None:
@@ -99,6 +112,7 @@ def introspect_legacy_class(cls: type, category: str | None = None) -> NodeInfo:
             type_str=cls.__name__,
             default=None,
             required=True,
+            type_mro=_type_mro(cls),
         ))
     return NodeInfo(
         class_name=cls.__name__,
@@ -145,6 +159,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
             type_str=_port_type_str(p.type),
             default=repr(p.default) if not p.required else None,
             required=p.required,
+            type_mro=_type_mro(p.type),
         )
         for p in cls.INPUTS.values()
     ]
@@ -154,6 +169,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
             type_str=_port_type_str(p.type),
             default=None,
             required=p.required,
+            type_mro=_type_mro(p.type),
         )
         for p in cls.OUTPUTS.values()
     ]
@@ -191,7 +207,8 @@ def introspect_optimizer_nodes() -> list[NodeInfo]:
 def node_info_to_dict(info: NodeInfo) -> dict:
     def _ports(ports):
         return [
-            {"name": p.name, "type": p.type_str, "default": p.default, "required": p.required}
+            {"name": p.name, "type": p.type_str, "default": p.default,
+             "required": p.required, "type_mro": p.type_mro}
             for p in ports
         ]
     return {
@@ -202,3 +219,18 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         "inputs": _ports(info.inputs),
         "outputs": _ports(info.outputs),
     }
+
+
+def introspect_registry() -> dict[str, list[NodeInfo]]:
+    """Every node in server.nodegraph_registry, grouped by domain (derived
+    from module path -- see nodegraph_registry.domain_of). This is what the
+    interactive graph editor's palette is built from; introspect_optimizer_nodes()
+    above predates it and stays only because /nodegraph/optimizers is still
+    a valid, narrower endpoint, not because this duplicates it by hand."""
+    from . import nodegraph_registry
+
+    groups: dict[str, list[NodeInfo]] = {}
+    for cls in nodegraph_registry.get_registry().values():
+        domain = nodegraph_registry.domain_of(cls)
+        groups.setdefault(domain, []).append(introspect_node_class(cls))
+    return groups

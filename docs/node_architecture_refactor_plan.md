@@ -317,6 +317,63 @@ prove the core "ports auto-derived from real code, rendered without a
 ComfyUI-style performance cost" idea end-to-end before building anything
 more elaborate on top of it.
 
+**2026-07-25: the deferred part above now exists.** `/nodegraph` is a real
+editor, not a read-only listing:
+- `server/nodegraph_registry.py` -- single source of truth mapping
+  class_name -> real class, across every migrated domain (dataset, model,
+  optimizer, train), used by both the palette listing and the executor.
+- `server/graph_executor.py` -- `GraphExecutor`: topological sort, cycle
+  detection, and *real* `issubclass()` type-checking on every edge before
+  anything runs (using the actual `Port.type` objects -- so e.g. a
+  `FusedOptimizerHandle` output correctly satisfies an `OptimizerHandle`
+  input, being a real subclass of it, not a string-equality coincidence).
+  Executes nodes in order, stops at the first failing node, returns a
+  per-node result. Declared as `POST /api/nodegraph/run`, a plain (non-
+  async) route handler so FastAPI runs it in its thread pool instead of
+  blocking the event loop -- a training-node run can take a while.
+- `nodegraph_introspect.py` gained `type_mro` on every `PortInfo` (the
+  port type's own MRO chain) specifically so the *frontend* can do the
+  same subclass-aware compatibility check the backend does, instead of
+  falling back to exact string equality and rejecting valid connections.
+- `server/static/nodegraph.js` -- the actual editor: `GraphModel` (pure
+  graph state/rules) + `GraphView` (DOM/drag/wire rendering) as real ES6
+  classes, deliberately, unlike this codebase's other `.js` files -- this
+  *is* the node-graph design the OOP rule is about, not a UI feature next
+  to it. Palette grouped by domain; drag from an output dot to an input
+  dot to connect (single connection per input, connecting a second one
+  replaces the first); click a wire to delete it; unconnected primitive
+  inputs (int/float/str/bool/Path) get an inline widget, anything whose
+  type appears as *some* node's output type in the registry is wire-only
+  (derived from the registry, not a hardcoded type list). Autosaves to
+  `localStorage` (per-browser, not shared, not a server-side save file --
+  see "known gaps" below).
+- Tests: `server/smoke_tests/smoke_test_graph_executor.py` -- runs real
+  (unmocked) torch-free registry nodes (`CosineLRScheduleNode`,
+  `MinSNRLossWeightingNode`) through the real executor, plus synthetic
+  `Node` subclasses for cycle detection and the subclass-compatibility
+  case. Passing. The pure-JS graph logic (`GraphModel`) was tested the
+  same way -- extracted and run under plain Node.js, not a browser --
+  covering connection replace-semantics, validation, payload building,
+  and serialize/restore round-tripping.
+
+**Known gaps, not fixed here:**
+- **No progress streaming.** `Run` blocks until the whole graph finishes
+  or a node fails; `TrainerNode`'s `on_step` callback exists specifically
+  to make a streaming version possible (wire it to the existing SSE
+  infrastructure in `routes_sse.py`/`sse.py`) but nothing does that yet.
+- **`OptimizerNode`'s `params` input has no real wire source.** It's typed
+  `Any` and expects a raw parameter list/iterable, but nothing in the
+  graph currently outputs one -- `TrainableModel` exposes
+  `.trainable_parameters()` as a *method*, not a port. Today you'd have to
+  type a literal into the `params` widget, which is not actually usable.
+  Real fix is a small adapter node (e.g. `ModelParametersNode`,
+  `TrainableModel -> Any`) or loosening `OptimizerNode`'s params-consuming
+  adapters to accept a `TrainableModel` directly -- neither done here,
+  flagging instead of scope-creeping this into the graph-editor task.
+- **No server-side graph save/load**, no multi-user sharing of a graph,
+  no undo. `localStorage` autosave covers "don't lose my work on refresh"
+  and nothing more.
+
 **Follow-up, same session**: outputs added. Standardized rule adopted:
 a node wrapping a constructor has exactly one output, an instance of that
 class -- but *inputs* are 100% derivable from the real signature alone

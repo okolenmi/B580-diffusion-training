@@ -104,9 +104,12 @@ async def dataset_manager():
 
 @app.get("/nodegraph", response_class=HTMLResponse)
 async def nodegraph_playground():
-    """Dev/testing tab for the node-graph architecture refactor -- see
-    docs/node_architecture_refactor_plan.md. Fully isolated from the
-    production config/training path; safe to iterate on independently."""
+    """Interactive node-graph editor -- spawn nodes from the registry,
+    connect ports, Run executes the submitted graph server-side (see
+    server/graph_executor.py). Still isolated from the production
+    config/training path -- executing a graph here only calls .build() on
+    nodes/ classes, same boundary as everything else under nodes/. See
+    docs/node_architecture_refactor_plan.md."""
     path = settings.project_root / "server/static/nodegraph.html"
     with open(path) as f:
         return f.read()

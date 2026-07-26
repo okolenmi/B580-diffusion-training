@@ -10,9 +10,10 @@ every concrete subclass.
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from ..core import Node, Port
+from ..model.handle import ParameterList
 from .handle import OptimizerHandle
 
 
@@ -46,8 +47,10 @@ class OptimizerNode(Node):
 
     COMMON_INPUTS: ClassVar[dict[str, Port]] = {
         "params": Port(
-            name="params", type=Any, required=True,
-            doc="Trainable parameters (or param groups with per-group lr) to optimize.",
+            name="params", type=ParameterList, required=True,
+            doc="Trainable parameters to optimize -- connect a ModelParametersNode here, "
+                "not a model output directly (a model wraps its parameters, it isn't a "
+                "list of them).",
         ),
         "lr": Port(
             name="lr", type=float, required=False, default=1e-5,

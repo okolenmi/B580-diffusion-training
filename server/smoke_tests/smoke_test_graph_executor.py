@@ -49,6 +49,32 @@ def test_unknown_class_raises_graph_error():
         pass
 
 
+def test_trainer_output_connects_to_saver_input():
+    """Regression test: LoRACheckpointSaverNode.model used to be typed
+    ComfyUNetTrainableModel (a subclass), but TrainerNode outputs the
+    TrainableModel ABC -- issubclass(ABC, subclass) is false, so this
+    connection was rejected even though it's exactly the intended wiring."""
+    from server.graph_executor import _is_compatible
+    _is_compatible(nodegraph_registry.get_registry()["SupervisedLoRATrainerNode"], "model",
+                    nodegraph_registry.get_registry()["LoRACheckpointSaverNode"], "model")
+
+
+def test_model_output_rejected_into_optimizer_params():
+    """Regression test: OptimizerNode.params used to be typed Any, so a
+    TrainableModel output could be wired directly into it -- type-valid,
+    semantically wrong, would crash inside the real optimizer constructor.
+    Now rejected at graph-build time, with ModelParametersNode as the real path."""
+    from server.graph_executor import GraphError, _is_compatible
+    reg = nodegraph_registry.get_registry()
+    try:
+        _is_compatible(reg["ComfyUNetLoRANode"], "model", reg["AdamWOptimizerNode"], "params")
+        raise AssertionError("model -> params should be rejected")
+    except GraphError:
+        pass
+    _is_compatible(reg["ComfyUNetLoRANode"], "model", reg["ModelParametersNode"], "model")
+    _is_compatible(reg["ModelParametersNode"], "params", reg["AdamWOptimizerNode"], "params")
+
+
 class _HandleA:
     pass
 
@@ -109,6 +135,8 @@ def main():
     test_real_registry_torch_free_execution()
     test_real_registry_missing_input_reported_not_crashed()
     test_unknown_class_raises_graph_error()
+    test_trainer_output_connects_to_saver_input()
+    test_model_output_rejected_into_optimizer_params()
     test_subclass_aware_connection_allowed()
     test_cycle_detected()
     print("All graph_executor checks passed.")

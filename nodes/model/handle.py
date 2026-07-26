@@ -14,6 +14,15 @@ class ModelWeights:
         self.non_unet_sd = non_unet_sd
 
 
+class ParameterList(list):
+    """A list of trainable tensors, typed distinctly from a plain `Any` so
+    an OptimizerNode's `params` input can reject an accidental TrainableModel
+    connection outright instead of accepting it (Any accepts everything)
+    and crashing later inside the real optimizer constructor. Genuinely
+    just a list otherwise -- torch optimizers accept any iterable, so this
+    is a free drop-in, not a wrapper callers need to unwrap."""
+
+
 class TrainableModel(ABC):
     """Runtime contract for a model ready to be trained."""
 

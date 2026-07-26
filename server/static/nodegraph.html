@@ -59,18 +59,30 @@
 
   .ng-canvas-wrap {
     flex: 1; overflow: hidden; position: relative; cursor: grab;
-    background:
-      linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
-      linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px;
     background-color: var(--bg);
   }
   .ng-canvas-wrap.panning { cursor: grabbing; }
   .ng-viewport { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
-  .ng-canvas { position: relative; width: 3200px; height: 2000px; }
-  .ng-wires { position: absolute; top: 0; left: 0; width: 3200px; height: 2000px; pointer-events: none; }
+  .ng-canvas {
+    position: relative; width: 3200px; height: 2000px;
+    background:
+      linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
+      linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px;
+    /* Grid lives on the transformed element itself (not canvas-wrap) so it
+       pans and zooms together with the nodes, via the same CSS transform --
+       no separate JS math to keep a "moving grid" in sync. */
+  }
+  .ng-wires {
+    position: absolute; top: 0; left: 0; width: 3200px; height: 2000px; pointer-events: none;
+    overflow: visible; /* nodes/wires can legitimately sit outside this nominal box
+      (dragged far, or the view panned past it) -- without this the SVG clips
+      any path outside its own declared width/height, which looked like wires
+      vanishing behind an invisible border. */
+  }
   .ng-wires path.ng-wire { stroke: var(--accent); stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
   .ng-wires path.ng-wire:hover { stroke: var(--red); }
   .ng-wires path.ng-pending { stroke: var(--text-dim); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
+  .ng-origin-marker { stroke: var(--text-dim); stroke-width: 1.5; fill: none; opacity: 0.5; }
 
   .ng-zoom-controls {
     position: absolute; bottom: 16px; right: 16px; z-index: 5;
@@ -121,6 +133,8 @@
     width: 100%; box-sizing: border-box; font-size: 11px; padding: 3px 6px;
     background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);
   }
+  .ng-checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); }
+  .ng-checkbox-label input[type=checkbox] { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
   .ng-picker-row { display: flex; gap: 4px; }
   .ng-picker-row select { flex: 1; min-width: 0; }
   .ng-picker-upload {
@@ -170,6 +184,20 @@
     background: var(--surface-alt); color: var(--text); font-size: 12px; cursor: pointer;
   }
   #ng-modal-save { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+
+  .ng-suggest-menu {
+    position: fixed; z-index: 90; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+    max-height: 260px; overflow-y: auto; min-width: 200px;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  }
+  .ng-suggest-header { padding: 6px 10px; color: var(--text-dim); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+  .ng-suggest-item { padding: 7px 10px; cursor: pointer; color: var(--text); border-bottom: 1px solid var(--border); }
+  .ng-suggest-item:last-child { border-bottom: none; }
+  .ng-suggest-item:hover { background: var(--surface-alt); }
+  .ng-suggest-item-port { color: var(--text-dim); font-size: 10px; }
+  .ng-suggest-empty { padding: 10px; color: var(--text-dim); font-style: italic; }
 </style>
 </head>
 <body>

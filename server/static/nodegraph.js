@@ -338,7 +338,24 @@
       document.addEventListener("keydown", (e) => this.onKeyDown(e));
       document.addEventListener("keyup", (e) => this.onKeyUp(e));
       this.applyViewportTransform();
+      this.drawOriginMarker();
       this.renderAll();
+    }
+
+    drawOriginMarker() {
+      const ns = "http://www.w3.org/2000/svg";
+      const group = document.createElementNS(ns, "g");
+      group.setAttribute("class", "ng-origin-marker");
+      const circle = document.createElementNS(ns, "circle");
+      circle.setAttribute("cx", "0"); circle.setAttribute("cy", "0"); circle.setAttribute("r", "14");
+      const hLine = document.createElementNS(ns, "line");
+      hLine.setAttribute("x1", "-20"); hLine.setAttribute("y1", "0"); hLine.setAttribute("x2", "20"); hLine.setAttribute("y2", "0");
+      const vLine = document.createElementNS(ns, "line");
+      vLine.setAttribute("x1", "0"); vLine.setAttribute("y1", "-20"); vLine.setAttribute("x2", "0"); vLine.setAttribute("y2", "20");
+      group.appendChild(circle);
+      group.appendChild(hLine);
+      group.appendChild(vLine);
+      this.els.wires.appendChild(group);
     }
 
     async warmAssetCache() {
@@ -437,6 +454,10 @@
     }
 
     onKeyDown(e) {
+      if (e.code === "Escape") {
+        this.closeSuggestionMenu();
+        return;
+      }
       if (e.code === "Space" && !isTypingTarget(e.target)) {
         this.spaceHeld = true;
         this.els.canvasWrap.style.cursor = "grab";
@@ -584,7 +605,7 @@
       row.className = "ng-widget-row";
       const current = node.paramValues[port.name];
       if (port.type === "bool") {
-        row.innerHTML = `<label style="font-size:11px;"><input type="checkbox" ${current ? "checked" : ""}> use value</label>`;
+        row.innerHTML = `<label class="ng-checkbox-label"><input type="checkbox" ${current ? "checked" : ""}> true</label>`;
         row.querySelector("input").addEventListener("change", (e) => {
           node.paramValues[port.name] = e.target.checked;
           this.updatePortDotState(node.id, port.name);
@@ -848,15 +869,102 @@
         const target = document.elementFromPoint(e.clientX, e.clientY);
         const pending = this.els.wires.querySelector("path.ng-pending");
         if (pending) pending.remove();
+        const wire = this.pendingWire;
+        this.pendingWire = null;
         if (target && target.classList && target.classList.contains("ng-port-dot")) {
-          this.tryCompleteWire(this.pendingWire, {
+          this.tryCompleteWire(wire, {
             nodeId: target.dataset.nodeId,
             portName: target.dataset.portName,
             isOutput: target.dataset.isOutput === "1",
           });
+        } else {
+          this.suggestNodesForDroppedWire(wire, e.clientX, e.clientY);
         }
-        this.pendingWire = null;
       }
+    }
+
+    // ---- compatible-node suggestion menu (dropping a wire on empty space) ----
+
+    suggestNodesForDroppedWire(wire, screenX, screenY) {
+      const node = this.model.nodes.get(wire.nodeId);
+      if (!node) return;
+      const port = (wire.isOutput ? node.classInfo.outputs : node.classInfo.inputs).find(p => p.name === wire.portName);
+      if (!port) return;
+
+      const matches = [];
+      for (const domain of Object.keys(this.model.registry)) {
+        for (const classInfo of this.model.registry[domain]) {
+          const candidates = wire.isOutput ? classInfo.inputs : classInfo.outputs;
+          for (const candidate of candidates) {
+            const compatible = wire.isOutput
+              ? this.model.typesCompatible(port.type_mro, candidate.type, candidate.type_mro)
+              : this.model.typesCompatible(candidate.type_mro, port.type, port.type_mro);
+            if (compatible) { matches.push({ classInfo, port: candidate }); break; }
+          }
+        }
+      }
+      this.showSuggestionMenu(screenX, screenY, matches, wire);
+    }
+
+    showSuggestionMenu(screenX, screenY, matches, wire) {
+      this.closeSuggestionMenu();
+      const menu = document.createElement("div");
+      menu.className = "ng-suggest-menu";
+      menu.style.left = Math.max(4, Math.min(screenX, window.innerWidth - 220)) + "px";
+      menu.style.top = Math.max(4, Math.min(screenY, window.innerHeight - 300)) + "px";
+
+      const header = document.createElement("div");
+      header.className = "ng-suggest-header";
+      header.textContent = wire.isOutput ? "Connect to an input on\u2026" : "Connect to an output on\u2026";
+      menu.appendChild(header);
+
+      if (matches.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "ng-suggest-empty";
+        empty.textContent = "No compatible nodes.";
+        menu.appendChild(empty);
+      } else {
+        for (const m of matches) {
+          const item = document.createElement("div");
+          item.className = "ng-suggest-item";
+          item.innerHTML = `${escapeHtml(m.classInfo.class_name)}<div class="ng-suggest-item-port">${wire.isOutput ? "\u2192" : "\u2190"} ${escapeHtml(m.port.name)}</div>`;
+          item.addEventListener("click", () => {
+            this.spawnAndConnect(m.classInfo, m.port, wire, screenX, screenY);
+            this.closeSuggestionMenu();
+          });
+          menu.appendChild(item);
+        }
+      }
+
+      document.body.appendChild(menu);
+      this._suggestMenu = menu;
+      // Dismiss on the next click anywhere outside the menu. Deferred by a
+      // tick so the mouseup that opened the menu doesn't immediately count
+      // as the dismissing click.
+      setTimeout(() => {
+        this._suggestMenuDismiss = (ev) => { if (!menu.contains(ev.target)) this.closeSuggestionMenu(); };
+        document.addEventListener("mousedown", this._suggestMenuDismiss);
+      }, 0);
+    }
+
+    closeSuggestionMenu() {
+      if (this._suggestMenu) { this._suggestMenu.remove(); this._suggestMenu = null; }
+      if (this._suggestMenuDismiss) {
+        document.removeEventListener("mousedown", this._suggestMenuDismiss);
+        this._suggestMenuDismiss = null;
+      }
+    }
+
+    spawnAndConnect(classInfo, matchedPort, wire, screenX, screenY) {
+      const pos = this.canvasMousePos({ clientX: screenX, clientY: screenY });
+      const newNode = this.model.addNode(classInfo, pos.x - NODE_WIDTH / 2, pos.y - 20);
+      if (wire.isOutput) {
+        this.model.addConnection(wire.nodeId, wire.portName, newNode.id, matchedPort.name);
+      } else {
+        this.model.addConnection(newNode.id, matchedPort.name, wire.nodeId, wire.portName);
+      }
+      this.renderAll();
+      this.persist();
     }
 
     tryCompleteWire(a, b) {

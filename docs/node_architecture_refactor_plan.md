@@ -525,3 +525,82 @@ correctly. Reasoned through carefully and cross-checked against the
 `getBoundingClientRect()`/transform math by hand, but "reasoned through"
 is not "watched it work" -- next real step is the user's own hands-on
 pass, same as this round.
+
+## 2026-07-25, third pass: two real connection bugs, suggestion menu, polish
+
+Second round of hands-on testing. Two of these were graph-design bugs
+that actually blocked running anything, not UI polish:
+
+- **`TrainableModel` \u2192 `ComfyUNetTrainableModel` rejected.**
+  `LoRACheckpointSaverNode.INPUTS["model"]` was typed as
+  `ComfyUNetTrainableModel` (the concrete class) instead of `TrainableModel`
+  (the ABC `TrainerNode` actually outputs) -- backwards subclass direction,
+  `issubclass(TrainableModel, ComfyUNetTrainableModel)` is false. Retyped
+  the port to the ABC and added an explicit `isinstance` check inside
+  `build()` instead (it still needs `.raw`, which isn't part of the ABC --
+  narrowing at the type-checked boundary was wrong, narrowing at the point
+  that actually needs the concrete type is right).
+- **"What is `params`" / a `ComfyUNetLoRANode.model` output connecting
+  straight into `AdamWOptimizerNode.params`.** `params` was typed `Any`,
+  which accepts literally anything -- including a `TrainableModel`, which
+  would have crashed inside the real optimizer constructor at run time
+  (it needs an iterable of tensors, not a model wrapper). This is the
+  exact gap flagged as a known limitation in the first `/nodegraph`
+  session and never fixed until it was actually hit. Added
+  `nodes/model/parameters.py`'s `ModelParametersNode` (`TrainableModel` ->
+  `ParameterList`) and a real `ParameterList(list)` type (behaves as a
+  plain list everywhere -- torch optimizers accept any iterable -- but is
+  a distinct, checkable type so `OptimizerNode.params` now *rejects* a
+  `TrainableModel` connection outright instead of silently accepting it).
+  Both now covered by regression tests in
+  `server/smoke_tests/smoke_test_graph_executor.py` specifically so this
+  class of bug (ABC/subclass direction, `Any` masking a real mismatch)
+  gets caught before it reaches a person again.
+
+**"Suggest compatible nodes when a wire is dropped on empty space"** --
+implemented. Drop a wire anywhere that isn't a valid opposite-kind port
+and a small menu appears listing every registry node with a compatible
+port (both directions -- dragging from an output lists nodes with a
+matching input, and vice versa), using the same `type_mro`-based
+subclass-aware check the direct-connection path already uses, so the
+suggestions are exactly the set of things that would actually be allowed
+to connect, not a guess. Picking one spawns it at the drop point and
+wires it automatically. Dismisses on a click outside the menu or Escape.
+Matching logic re-verified in isolation the same way as the rest of
+`GraphModel` (extracted, run under plain Node.js) -- includes a check
+that it does NOT suggest `AdamWOptimizerNode` for a `TrainableModel`
+output, i.e. it doesn't just repeat the bug above with better UX.
+
+**Three smaller, real fixes:**
+- Wires disappearing past an "invisible border": the SVG had a fixed
+  3200x2000 box and default SVG clipping, so any wire endpoint outside
+  that box (easy to hit -- nodes can be dragged or panned arbitrarily far,
+  including negative coordinates) got clipped. Added `overflow: visible`
+  to the wires SVG; the box size stops being a hard limit.
+- Checkboxes: sized explicitly (browser default checkbox size doesn't
+  match this UI's scale) and dropped the "use value" label, which
+  described the widget mechanism instead of what checking it means;
+  replaced with "true", read together with the port name already shown
+  above it.
+- Grid not panning with content, no reference point: the grid background
+  was a static CSS pattern on `.ng-canvas-wrap` (untransformed), separate
+  from `.ng-viewport` (which gets the pan/zoom transform) -- moved the
+  grid onto `.ng-canvas` itself, inside the transformed element, so it
+  pans and zooms with the graph via the same CSS transform instead of
+  needing separate JS math to fake it. Added a small circle+crosshair
+  marker at logical (0,0) as a fixed visual reference point, drawn once
+  at init (lives in the same transformed SVG as the wires, so it moves
+  correctly for free).
+
+**Testing note, same shape as the last two rounds:** the two connection
+bugs and the suggestion menu's matching logic were verified for real
+(Python: `_is_compatible` against the actual registry classes, now also
+as permanent regression tests; JS: `GraphModel`'s matching logic
+extracted and run under Node.js against a realistic fixture covering
+both wire directions). The CSS fixes (wire clipping, grid, checkbox
+sizing, origin marker) are reasoned through rather than watched in a
+browser -- still no headless browser in this sandbox. This is the third
+round where that's been true; if a fourth round turns up more DOM-only
+issues, worth the person knowing that's a real, structural gap in how
+much this environment can verify, not carelessness on any one of these
+passes.

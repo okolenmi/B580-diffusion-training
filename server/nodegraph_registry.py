@@ -18,6 +18,7 @@ def _load() -> dict[str, type]:
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
     from nodes.model.lora_injector import ComfyUNetLoRANode
     from nodes.model.lora_saver import LoRACheckpointSaverNode
+    from nodes.model.parameters import ModelParametersNode
     from nodes.model.text_encoder import SDXLTextEncoderNode
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.adamw import AdamWOptimizerNode
@@ -32,7 +33,8 @@ def _load() -> dict[str, type]:
 
     classes = [
         ManagedDatasetSourceNode,
-        SafetensorsCheckpointNode, ComfyUNetLoRANode, SDXLTextEncoderNode, LoRACheckpointSaverNode,
+        SafetensorsCheckpointNode, ComfyUNetLoRANode, SDXLTextEncoderNode,
+        ModelParametersNode, LoRACheckpointSaverNode,
         AdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
         ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,

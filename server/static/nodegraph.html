@@ -60,29 +60,40 @@
   .ng-canvas-wrap {
     flex: 1; overflow: hidden; position: relative; cursor: grab;
     background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 24px 24px; /* fixed -- deliberately NOT multiplied by zoom, so the grid
+      never gets denser/sparser or blurs at odd scales. background-position is updated in JS
+      (GraphView.applyViewportTransform) to track panX/panY 1:1, so it still visibly pans with
+      the content -- just doesn't zoom with it. This lives on canvas-wrap (the untransformed
+      viewport container, not .ng-canvas) specifically so it always covers the full visible
+      area regardless of where node coordinates happen to be. */
   }
   .ng-canvas-wrap.panning { cursor: grabbing; }
   .ng-viewport { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
-  .ng-canvas {
-    position: relative; width: 3200px; height: 2000px;
-    background:
-      linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 24px 24px,
-      linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 24px 24px;
-    /* Grid lives on the transformed element itself (not canvas-wrap) so it
-       pans and zooms together with the nodes, via the same CSS transform --
-       no separate JS math to keep a "moving grid" in sync. */
-  }
-  .ng-wires {
+  .ng-canvas { position: relative; width: 3200px; height: 2000px; }
+  .ng-wires, .ng-wires-top {
     position: absolute; top: 0; left: 0; width: 3200px; height: 2000px; pointer-events: none;
     overflow: visible; /* nodes/wires can legitimately sit outside this nominal box
       (dragged far, or the view panned past it) -- without this the SVG clips
       any path outside its own declared width/height, which looked like wires
       vanishing behind an invisible border. */
   }
+  /* .ng-wires sits below .ng-canvas in DOM order (drawn first -> painted first
+     -> behind nodes), .ng-wires-top sits above it (drawn last -> painted last
+     -> in front of nodes). Completed connections stay behind node bodies so
+     they don't visually clutter them; the wire actively being dragged goes on
+     .ng-wires-top so it's never occluded while you're aiming it at a port. */
   .ng-wires path.ng-wire { stroke: var(--accent); stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
   .ng-wires path.ng-wire:hover { stroke: var(--red); }
-  .ng-wires path.ng-pending { stroke: var(--text-dim); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
+  .ng-wires-top path.ng-pending { stroke: var(--text-dim); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
   .ng-origin-marker { stroke: var(--text-dim); stroke-width: 1.5; fill: none; opacity: 0.5; }
+
+  .ng-port-dot.compatible-target {
+    box-shadow: 0 0 0 5px var(--accent-glow);
+    transform: scale(1.35);
+  }
 
   .ng-zoom-controls {
     position: absolute; bottom: 16px; right: 16px; z-index: 5;
@@ -102,7 +113,7 @@
     border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none;
   }
-  .ng-node-header { background: var(--surface-alt); padding: 8px 30px 8px 12px; cursor: grab; position: relative; }
+  .ng-node-header { background: var(--surface-alt); padding: 8px 90px 8px 12px; cursor: grab; position: relative; }
   .ng-node-header:active { cursor: grabbing; }
   .ng-node-title { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; color: var(--text); }
   .ng-node-module { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
@@ -111,7 +122,19 @@
     color: var(--text-dim); cursor: pointer; font-size: 15px; line-height: 1;
   }
   .ng-node-del:hover { color: var(--red); }
+  .ng-node-modes { position: absolute; top: 7px; right: 28px; display: flex; gap: 2px; }
+  .ng-mode-btn {
+    width: 16px; height: 16px; padding: 0; font-size: 9px; line-height: 16px; text-align: center;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+    color: var(--text-dim); cursor: pointer;
+  }
+  .ng-mode-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
   .ng-node-doc { font-size: 11px; color: var(--text-dim); padding: 6px 12px; border-bottom: 1px solid var(--border); font-style: italic; }
+
+  .ng-node-compact .ng-port { padding: 2px 12px; }
+  .ng-node-minimized .ng-ports-label { display: none; }
+  .ng-node-minimized .ng-port-dotonly { padding: 3px 12px; display: flex; }
+  .ng-node-minimized .ng-port-dotonly.output { justify-content: flex-end; }
 
   .ng-ports-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); padding: 4px 12px 2px; }
   .ng-port { display: flex; align-items: center; gap: 6px; padding: 3px 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; position: relative; }
@@ -133,6 +156,12 @@
     width: 100%; box-sizing: border-box; font-size: 11px; padding: 3px 6px;
     background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);
   }
+  /* Removed, not restyled: neither engine exposes the spinner button's own
+     colors to CSS, so there's no way to make the stock white-with-gray-arrows
+     control match a dark theme -- only whether it's shown at all. */
+  .ng-widget-row input[type=number] { -moz-appearance: textfield; }
+  .ng-widget-row input[type=number]::-webkit-outer-spin-button,
+  .ng-widget-row input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .ng-checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); }
   .ng-checkbox-label input[type=checkbox] { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
   .ng-picker-row { display: flex; gap: 4px; }
@@ -225,6 +254,7 @@
         <div class="ng-viewport" id="ng-viewport">
           <svg class="ng-wires" id="ng-wires"></svg>
           <div class="ng-canvas" id="ng-canvas"></div>
+          <svg class="ng-wires-top" id="ng-wires-top"></svg>
         </div>
         <div class="ng-zoom-controls">
           <button id="ng-zoom-out" title="Zoom out 10%">&minus;</button>

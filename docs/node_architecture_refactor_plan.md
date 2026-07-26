@@ -604,3 +604,95 @@ round where that's been true; if a fourth round turns up more DOM-only
 issues, worth the person knowing that's a real, structural gap in how
 much this environment can verify, not carelessness on any one of these
 passes.
+
+## 2026-07-26: first real run, and a real training bug
+
+The graph ran on actual hardware for the first time. Every node succeeded
+except `SupervisedLoRATrainerNode`, which hit
+`RuntimeError: One of the differentiated Tensors does not require grad`
+on the first `loss.backward()`. Worth recording the diagnosis in full,
+since it wasn't a bug in this codebase's own node code -- it's a real
+interaction between LoRA-only (frozen-base) training and ComfyUI's own
+gradient-checkpointing implementation, and the next person to hit it
+(with a different optimizer, a different LoRA config, whatever) needs to
+know it's not something new they broke.
+
+**Root cause**, traced by reading ComfyUI's actual source
+(`comfy/ldm/modules/diffusionmodules/util.py`, fetched from
+`comfyanonymous/ComfyUI` on GitHub to confirm rather than guess):
+`ComfyUNetWrapper` builds its UNet with `use_checkpoint=True` by default
+(`core/unet_wrapper.py`'s `SDXL_CONFIG`), and `nodes/model/lora_injector.py`
+never exposed that as a port, so every graph run got it whether it
+wanted it or not. ComfyUI's homegrown `checkpoint()` calls
+`torch.autograd.grad(output_tensors, ctx.input_tensors + ctx.input_params, ...)`
+on every checkpointed block's backward pass, where `ctx.input_params` is
+*that block's entire `self.parameters()`* -- not filtered down to the
+ones that actually require grad. `torch.autograd.grad`'s `inputs=` list
+requires every tensor in it to have `requires_grad=True`; `allow_unused=True`
+(which ComfyUI does pass) only covers "present in inputs but not used in
+this particular graph," not "structurally can never require grad." In a
+full fine-tune every parameter requires grad, so this never comes up. In
+a LoRA setup, only the specific layers `target_modules` matched got
+converted -- every checkpointed block still contains at least one frozen
+parameter (a norm weight, a bias, whatever LoRA didn't target), and the
+first one of those in `self.parameters()` throws. `core/trainer.py`
+having a `--no_checkpoint` CLI flag (`use_checkpoint=not comm.no_checkpoint`)
+is corroborating evidence the old codebase's authors hit this too.
+
+**Fix:** `ComfyUNetLoRANode` gained a `use_checkpoint` input, defaulting
+to `False` (the doc string on the port spells out the mechanism above, so
+it's discoverable from the graph editor itself, not just this file).
+Verified the plumbing (the node passes the right value through to
+`ComfyUNetWrapper`'s constructor, default and explicit-True both) by
+mocking out `torch`/`core.lora`/`core.unet_wrapper` at the `sys.modules`
+level -- this sandbox still has neither real torch nor ComfyUI installed,
+so that's a check on this node's own logic, not a real end-to-end rerun
+of the training step. That rerun, with `use_checkpoint` at its new
+default, is the actual next real test, on real hardware, same as this one.
+
+**Two connection bugs**, found in the same run's initial wiring, both real
+design mistakes rather than user error -- recorded here since they're
+now fixed but worth remembering why they existed:
+- `ModelParametersNode`'s output feeding `LoRACheckpointSaverNode.model`
+  directly was the *wrong* wiring the person tried (correctly suspected
+  it): the trainer's `model` output should go to the saver, not the raw
+  extracted parameter list. Once `TrainableModel` \u2192 `ComfyUNetTrainableModel`
+  connections started working (see the 2026-07-25 third-pass entry above),
+  the correct path -- `ComfyUNetLoRANode.model` \u2192 `SupervisedLoRATrainerNode.model`
+  \u2192 `LoRACheckpointSaverNode.model`, with `ModelParametersNode` branching
+  off separately into the optimizer's `params` -- became the only one the
+  type checker allows, which is the actual point of typing these ports
+  precisely instead of leaving them as `Any`.
+
+**Other feedback from this round, implemented:**
+- The wire being actively dragged now renders on its own SVG layer above
+  node bodies (`#ng-wires-top`, DOM-ordered after `.ng-canvas` instead of
+  before it); completed connections stay on `#ng-wires`, behind nodes, so
+  they don't visually clutter node bodies. Compatible ports light up
+  (glow + slight scale, reusing the `--accent-glow` token already in
+  `style.css`) the moment a wire drag starts, computed with the same
+  `type_mro` check the connection logic itself uses.
+- Grid: moved off `.ng-canvas` (which only covers positive logical
+  coordinates 0..3200/0..2000, so the grid was only ever visible
+  bottom-right of the logical origin) onto `.ng-canvas-wrap` with a fixed
+  `background-size` and `background-position` synced to `panX`/`panY` in
+  `applyViewportTransform()` -- pans with content, doesn't rescale with
+  zoom, covers the whole visible viewport regardless of where nodes are.
+- Three node display modes -- full (unchanged), compact (all ports, no
+  widgets/descriptions), minimized (name + only required-or-connected
+  port dots, no text) -- toggled per-node via three small buttons next to
+  the delete button, persisted in `displayMode` alongside position and
+  param values.
+- Number input spinner arrows: removed (`-moz-appearance: textfield` /
+  `-webkit-appearance: none`) rather than restyled -- neither engine
+  exposes the spinner's own colors to CSS, particularly not Firefox,
+  so hiding is the only reliable fix, not a compromise short of a better one.
+
+**Testing note, unchanged from the last three rounds:** the training-bug
+diagnosis is the strongest evidence yet for why "reasoned through
+carefully" and "verified" have been kept as distinct claims throughout
+this doc -- reading ComfyUI's real source and cross-referencing the old
+trainer's own escape hatch produced a specific, checkable diagnosis, but
+it's still not the same as watching `loss.backward()` succeed. Every
+other CSS/interaction change this round is reasoned-through only, same
+gap as before (no browser in this sandbox).

@@ -54,6 +54,7 @@
       this.classInfo = classInfo;
       this.x = x;
       this.y = y;
+      this.displayMode = "full"; // "full" | "compact" | "minimized"
       this.paramValues = {};
       for (const p of classInfo.inputs) {
         if (p.default !== null && p.default !== undefined) {
@@ -178,7 +179,8 @@
     serialize() {
       return {
         nodes: Array.from(this.nodes.values()).map(n => ({
-          id: n.id, class_name: n.classInfo.class_name, x: n.x, y: n.y, paramValues: n.paramValues,
+          id: n.id, class_name: n.classInfo.class_name, x: n.x, y: n.y,
+          paramValues: n.paramValues, displayMode: n.displayMode,
         })),
         connections: Array.from(this.connections.values()).map(c => ({
           fromNode: c.fromNode, fromPort: c.fromPort, toNode: c.toNode, toPort: c.toPort,
@@ -193,6 +195,7 @@
         if (!classInfo) { console.warn("Skipping unknown saved node class:", n.class_name); continue; }
         const node = new GraphNode(n.id, classInfo, n.x, n.y);
         node.paramValues = n.paramValues || {};
+        node.displayMode = n.displayMode || "full";
         this.nodes.set(n.id, node);
       }
       for (const c of saved.connections || []) {
@@ -429,6 +432,7 @@
     applyViewportTransform() {
       this.els.viewport.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
       this.els.zoomPct.textContent = Math.round(this.zoom * 100) + "%";
+      this.els.canvasWrap.style.backgroundPosition = `${this.panX}px ${this.panY}px`;
     }
 
     zoomAt(factor, screenX, screenY) {
@@ -502,8 +506,9 @@
 
     buildNodeEl(node) {
       const ci = node.classInfo;
+      const mode = node.displayMode || "full";
       const el = document.createElement("div");
-      el.className = "ng-node";
+      el.className = "ng-node ng-node-" + mode;
       el.style.left = node.x + "px";
       el.style.top = node.y + "px";
       el.style.width = NODE_WIDTH + "px";
@@ -513,8 +518,13 @@
       header.className = "ng-node-header";
       header.innerHTML = `
         <button class="ng-node-del" title="Delete node">\u00d7</button>
+        <div class="ng-node-modes">
+          <button class="ng-mode-btn" data-mode="minimized" title="Minimized: name + required/connected dots only">M</button>
+          <button class="ng-mode-btn" data-mode="compact" title="Compact: all ports, no widgets or descriptions">C</button>
+          <button class="ng-mode-btn" data-mode="full" title="Full detail">F</button>
+        </div>
         <div class="ng-node-title">${escapeHtml(ci.class_name)}</div>
-        <div class="ng-node-module">${escapeHtml(ci.module)}</div>
+        ${mode !== "minimized" ? `<div class="ng-node-module">${escapeHtml(ci.module)}</div>` : ""}
       `;
       header.querySelector(".ng-node-del").addEventListener("click", (e) => {
         e.stopPropagation();
@@ -522,14 +532,32 @@
         this.renderAll();
         this.persist();
       });
+      header.querySelectorAll(".ng-mode-btn").forEach((btn) => {
+        if (btn.dataset.mode === mode) btn.classList.add("active");
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          node.displayMode = btn.dataset.mode;
+          this.renderAll();
+          this.persist();
+        });
+      });
       header.addEventListener("mousedown", (e) => {
-        if (e.target.closest(".ng-node-del") || this.spaceHeld) return;
+        if (e.target.closest(".ng-node-del") || e.target.closest(".ng-mode-btn") || this.spaceHeld) return;
         e.stopPropagation();
         this.dragState = { node, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y };
       });
       el.appendChild(header);
 
-      if (ci.doc) {
+      if (mode === "minimized") {
+        for (const p of ci.inputs) {
+          if (!(p.required || this.model.existingConnectionInto(node.id, p.name))) continue;
+          el.appendChild(this.buildDotOnlyRow(node, p, false));
+        }
+        for (const p of ci.outputs) el.appendChild(this.buildDotOnlyRow(node, p, true));
+        return el;
+      }
+
+      if (ci.doc && mode === "full") {
         const doc = document.createElement("div");
         doc.className = "ng-node-doc";
         doc.textContent = ci.doc;
@@ -540,7 +568,9 @@
       inLabel.className = "ng-ports-label";
       inLabel.textContent = "Inputs";
       el.appendChild(inLabel);
-      for (const p of ci.inputs) el.appendChild(this.buildInputBlock(node, p));
+      for (const p of ci.inputs) {
+        el.appendChild(mode === "compact" ? this.buildPortRow(node, p, false) : this.buildInputBlock(node, p));
+      }
 
       const outLabel = document.createElement("div");
       outLabel.className = "ng-ports-label";
@@ -570,6 +600,28 @@
         e.stopPropagation();
         this.beginWire(node.id, port.name, isOutput);
       });
+      return row;
+    }
+
+    buildDotOnlyRow(node, port, isOutput) {
+      const row = document.createElement("div");
+      row.className = "ng-port ng-port-dotonly" + (isOutput ? " output" : "");
+      row.title = port.name + (port.doc ? ": " + port.doc : "") + ` (${port.type})`;
+      const connected = !isOutput && !!this.model.existingConnectionInto(node.id, port.name);
+      const dotClasses = ["ng-port-dot"];
+      if (isOutput) dotClasses.push("output");
+      if (!isOutput && port.required && !connected) dotClasses.push("required-unmet");
+      if (connected) dotClasses.push("connected");
+      const dot = document.createElement("span");
+      dot.className = dotClasses.join(" ");
+      dot.dataset.nodeId = node.id;
+      dot.dataset.portName = port.name;
+      dot.dataset.isOutput = isOutput ? "1" : "0";
+      dot.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        this.beginWire(node.id, port.name, isOutput);
+      });
+      row.appendChild(dot);
       return row;
     }
 
@@ -810,6 +862,34 @@
 
     beginWire(nodeId, portName, isOutput) {
       this.pendingWire = { nodeId, portName, isOutput };
+      this.highlightCompatibleTargets(nodeId, portName, isOutput);
+    }
+
+    highlightCompatibleTargets(sourceNodeId, sourcePortName, sourceIsOutput) {
+      const sourceNode = this.model.nodes.get(sourceNodeId);
+      if (!sourceNode) return;
+      const sourcePort = (sourceIsOutput ? sourceNode.classInfo.outputs : sourceNode.classInfo.inputs)
+        .find(p => p.name === sourcePortName);
+      if (!sourcePort) return;
+
+      this.els.canvas.querySelectorAll(".ng-port-dot").forEach((dot) => {
+        const isOutputDot = dot.dataset.isOutput === "1";
+        if (isOutputDot === sourceIsOutput || dot.dataset.nodeId === sourceNodeId) return;
+        const targetNode = this.model.nodes.get(dot.dataset.nodeId);
+        if (!targetNode) return;
+        const targetPort = (isOutputDot ? targetNode.classInfo.outputs : targetNode.classInfo.inputs)
+          .find(p => p.name === dot.dataset.portName);
+        if (!targetPort) return;
+        const compatible = sourceIsOutput
+          ? this.model.typesCompatible(sourcePort.type_mro, targetPort.type, targetPort.type_mro)
+          : this.model.typesCompatible(targetPort.type_mro, sourcePort.type, sourcePort.type_mro);
+        if (compatible) dot.classList.add("compatible-target");
+      });
+    }
+
+    clearCompatibleHighlights() {
+      this.els.canvas.querySelectorAll(".ng-port-dot.compatible-target")
+        .forEach(dot => dot.classList.remove("compatible-target"));
     }
 
     // clientX/clientY -> logical canvas coordinates. canvas.getBoundingClientRect()
@@ -843,11 +923,11 @@
         const from = this.portCanvasPos(this.pendingWire.nodeId, this.pendingWire.portName, this.pendingWire.isOutput);
         if (!from) return;
         const mouse = this.canvasMousePos(e);
-        let path = this.els.wires.querySelector("path.ng-pending");
+        let path = this.els.wiresTop.querySelector("path.ng-pending");
         if (!path) {
           path = document.createElementNS("http://www.w3.org/2000/svg", "path");
           path.setAttribute("class", "ng-pending");
-          this.els.wires.appendChild(path);
+          this.els.wiresTop.appendChild(path);
         }
         const d = this.pendingWire.isOutput
           ? this.wirePath(from.x, from.y, mouse.x, mouse.y)
@@ -867,8 +947,9 @@
       }
       if (this.pendingWire) {
         const target = document.elementFromPoint(e.clientX, e.clientY);
-        const pending = this.els.wires.querySelector("path.ng-pending");
+        const pending = this.els.wiresTop.querySelector("path.ng-pending");
         if (pending) pending.remove();
+        this.clearCompatibleHighlights();
         const wire = this.pendingWire;
         this.pendingWire = null;
         if (target && target.classList && target.classList.contains("ng-port-dot")) {
@@ -1066,6 +1147,7 @@
       palette: document.getElementById("ng-palette"),
       canvas: document.getElementById("ng-canvas"),
       wires: document.getElementById("ng-wires"),
+      wiresTop: document.getElementById("ng-wires-top"),
       viewport: document.getElementById("ng-viewport"),
       canvasWrap: document.getElementById("ng-canvas-wrap"),
       runBtn: document.getElementById("ng-run-btn"),

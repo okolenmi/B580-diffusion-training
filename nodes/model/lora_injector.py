@@ -58,6 +58,19 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         "alpha": Port(name="alpha", type=float, required=False, default=1.0),
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
         "target_modules": Port(name="target_modules", type=Any, required=False, default=None),
+        "use_checkpoint": Port(
+            name="use_checkpoint", type=bool, required=False, default=False,
+            doc="Gradient checkpointing. Defaults to False for LoRA training -- ComfyUI's "
+                "own checkpoint() (comfy/ldm/modules/diffusionmodules/util.py) passes an "
+                "entire block's self.parameters() into torch.autograd.grad()'s inputs= list "
+                "on every backward, not filtered to the ones that actually require grad. "
+                "With a frozen base + LoRA, essentially every block has at least one frozen "
+                "parameter (a norm weight, a bias, anything LoRA didn't target), and that "
+                "call raises 'One of the differentiated Tensors does not require grad' the "
+                "moment it hits one. True trades VRAM for that crash; only turn it on if "
+                "every parameter in every checkpointed block is itself LoRA-adapted, which "
+                "target_modules would have to be built specifically to guarantee.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -77,6 +90,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             weights.unet_sd,
             device=inputs.get("device", self.INPUTS["device"].default),
             dtype=inputs.get("dtype") or torch.bfloat16,
+            use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
             lora_config=lora_config,
         )
         result = {"model": ComfyUNetTrainableModel(wrapper)}

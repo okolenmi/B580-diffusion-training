@@ -11,6 +11,7 @@ from ..core import Node, Port
 from ..dataset.handle import TrainingBatchSource
 from ..model.handle import TrainableModel
 from ..model.text_encoder import TextEncoder
+from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
 from .loss import LossWeighting
 from .schedule import LRSchedule
@@ -32,8 +33,14 @@ class TrainerNode(Node):
         "steps": Port(name="steps", type=int, required=True),
         "loss_weighting": Port(name="loss_weighting", type=LossWeighting, required=False,
                                 default=None, doc="None = uniform weighting."),
+        "monitor": Port(name="monitor", type=MonitorHandle, required=False, default=None,
+                         doc="Optional -- wire a MonitorNode here (e.g. "
+                             "TrainingProgressMonitorNode) for a live step/loss/lr feed, "
+                             "watchable from that node's 'Look inside' dashboard while "
+                             "this is still running."),
         "on_step": Port(name="on_step", type=Callable, required=False, default=None,
-                         doc="Optional callback(step, loss) -- checkpoint/preview/progress hook."),
+                         doc="Optional callback(step, loss) -- for programmatic use "
+                             "(tests, scripts); `monitor` above is the graph-editor path."),
     }
 
     @abstractmethod

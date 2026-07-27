@@ -37,6 +37,23 @@ class Port:
     # widget. Purely a UI hint; build() never reads this.
 
 
+class ExecutionContext:
+    """Infrastructure a Node's build() may need beyond its declared Ports
+    -- e.g. MonitorNode's live-data bus. Constructed once per graph run
+    (see server/graph_executor.py) and passed to every node explicitly,
+    not reached for as a module-level global: a node that needs
+    something from the outside world takes it as an injected dependency,
+    the same way it takes typed Port values, rather than importing a
+    singleton. Deliberately a plain, extensible bag of optional fields --
+    a node that doesn't need anything here just doesn't touch it; a
+    future need (a logger, a cache, whatever) is one more field, not a
+    new global to invent.
+    """
+
+    def __init__(self, monitor_bus=None):
+        self.monitor_bus = monitor_bus
+
+
 class Node(ABC):
     """The universal node contract.
 
@@ -66,6 +83,9 @@ class Node(ABC):
 
     INPUTS: ClassVar[dict[str, Port]] = {}
     OUTPUTS: ClassVar[dict[str, Port]] = {}
+
+    def __init__(self, context: ExecutionContext | None = None):
+        self.context = context or ExecutionContext()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

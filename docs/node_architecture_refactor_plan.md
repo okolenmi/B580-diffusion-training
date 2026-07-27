@@ -696,3 +696,128 @@ trainer's own escape hatch produced a specific, checkable diagnosis, but
 it's still not the same as watching `loss.backward()` succeed. Every
 other CSS/interaction change this round is reasoned-through only, same
 gap as before (no browser in this sandbox).
+
+## 2026-07-26, second entry: MonitorNode -- live dashboards from inside the graph
+
+New node *format*, not just a new node: a node that, instead of only
+producing a value once, exposes a live data channel a separate page can
+watch while the graph is still running. First (only, so far) concrete
+instance: `TrainingProgressMonitorNode`, wired into `SupervisedLoRATrainerNode`'s
+new optional `monitor` input, feeding a step/loss/lr dashboard.
+
+**Dependency injection instead of a singleton -- by explicit request.**
+The first draft of this had a module-level `bus = MonitorBus()` in
+`monitor_bus.py`, the same shape as `server/sse.py`'s existing `sse =
+SSEManager()`. Told directly this was the wrong call ("Singleton is a way
+to a garbage project that is difficult to expand"), and it was --
+anything, anywhere, could reach into that instance by importing the
+module, which is exactly the kind of hidden coupling that makes a
+codebase hard to test or extend later. Fixed by adding
+`nodes.core.ExecutionContext`: a plain, explicit bag of injected
+infrastructure (right now just `monitor_bus`, extensible to more later
+without inventing a new global each time), constructed once per graph
+run and passed to every `Node` instance's constructor
+(`Node.__init__(self, context=None)`, defaulting to a fresh empty one so
+every existing `cls()` call site -- tests included -- kept working
+unchanged). The one real `MonitorBus` lives on `app.state`, created once
+in `main.py`'s lifespan; `GraphExecutor` receives it as a constructor
+argument and threads it through `ExecutionContext` into every node;
+`TrainingProgressMonitorNode.build()` reads `self.context.monitor_bus`
+and hands it to `LiveMonitorHandle`'s constructor -- nothing in `nodes/`
+imports `monitor_bus` directly or reaches for a global anywhere. A test
+now asserts the module has no such attribute
+(`smoke_test_monitor_bus.py::test_no_module_level_singleton`), so this
+can't quietly regress back to the shape it started in.
+`server/sse.py`'s own singleton is the same pattern and wasn't touched --
+out of scope for this task (a live, working, unrelated system), but
+worth fixing the same way whenever it's next actually touched, not
+before.
+
+**MonitorBus** (`monitor_bus.py`, top-level like `paths.py` so `nodes/`
+can depend on it without importing `server/`): thread-safe pub-sub,
+history buffer (a dashboard opened after a run has already started still
+sees recent data, not just future events) plus live fan-out to any
+number of subscribers. Same core pattern as `SSEManager`
+(`asyncio.Queue` per subscriber, `call_soon_threadsafe` bridging since
+`report()` gets called from a FastAPI worker thread -- graph execution --
+not the event loop) -- not the same class, because the domain doesn't
+share cleanly (string `monitor_id` keys, a generic payload dict, the
+history buffer `SSEManager` doesn't have). Verified for real:
+cross-thread delivery (a background `threading.Thread` reporting while
+an `asyncio` subscriber awaits `q.get()`), history replay order, clean
+unsubscribe. The actual SSE route's generator logic (connect message,
+history replay, live delivery, cleanup on cancel) was also verified
+directly with `asyncio` primitives -- `TestClient`'s streaming mode hung
+against a genuinely-infinite generator in this sandbox (a harness
+limitation, `client.get()` waits for the full body of a stream that
+never ends; `client.stream()` + `iter_lines()` also hung for reasons not
+fully chased down), so the generator was tested by driving it directly
+with `asyncio.wait_for`/manual cancellation instead, which exercises the
+same code path the route actually runs.
+
+**`monitor_id` is client-generated, not server-assigned.** Decided this
+specifically to avoid a deeper problem: `POST /api/nodegraph/run` blocks
+until the whole graph finishes, so if the ID were assigned inside
+`build()`, nobody could open the dashboard until the run was already
+over -- exactly backwards for a *live* monitor. Generated in
+`nodegraph.js` the moment a monitor-domain node is spawned
+(`GraphView.generateMonitorId`), stored as a normal (editable) string
+param -- same widget any other `str` input gets, no special-casing needed
+in the picker/widget code -- so the "Look inside" link and the live
+quick-info readout on the node itself can both connect before Run is
+even clicked.
+
+**The graph node itself updates live too**, not just the dashboard page:
+`GraphView.trackMonitorConnection` opens one `EventSource` per
+monitor-domain node present in the graph (independent of whether *this*
+tab started the run -- it's watching a `monitor_id`, not a request) and
+keeps it alive across `renderAll()` calls, which otherwise tear down and
+rebuild every node's DOM from scratch on nearly every interaction --
+rebinding to the freshly-rendered quick-info element each render instead
+of reconnecting, and repainting the last known value immediately so it
+doesn't flash "no data yet" after every unrelated graph edit. Closed and
+removed from tracking the moment its node is deleted or the graph is
+cleared (`cleanupMonitorConnections`, swept at the end of every
+`renderAll()`).
+
+**The dashboard page** (`monitor_dashboard.html`/`.js`, served at
+`/nodegraph/monitor/{id}`): per the person's own steer -- "the only
+useful thing from the old dashboard is the graph... with other things you
+may be creative" -- reused exactly one thing from the existing dashboard
+tab: the symmetric-log chart scale (linear across the middle 50% of plot
+height, logarithmic across the top/bottom 25% for outliers, so a handful
+of loss spikes don't flatten the everyday range into a line). Ported
+into `loss_chart.js`'s `LossChart`, a real instantiable class taking a
+canvas element -- not `window.ChartManager`, the existing dashboard tab's
+page-level singleton bound to a hardcoded `#loss-chart` id. `chart.js`
+itself is untouched; the production dashboard keeps working exactly as
+before. The scale math (range computation, the symlog mapping, tick
+formatting) was checked with a mocked canvas under plain Node.js:
+monotonicity (higher loss maps to a smaller/higher-up y), correct
+range ordering (`fullMin < linMin < linMax < fullMax`), clamping at
+extreme values, and the smoothing window's gating behavior. Everything
+*around* the chart -- the metric cards, layout, connection-status
+indicator, ETA/rate estimation -- is new, not ported from the old
+dashboard tab's markup.
+
+**Also fixed, same session, small but real:**
+- Node mode-toggle buttons: icons (\u2022 minimized, \u25b2 compact, \u25cf full)
+  instead of letters, per direct request.
+- Minimized mode: inputs and outputs now render as two side-by-side
+  columns (`.ng-min-columns`) instead of one stacked list -- outputs'
+  dots sit on the node's right edge (`align-items: flex-end`), matching
+  every other display mode's left-input/right-output convention, which
+  minimized mode had been breaking.
+- `SupervisedLoRATrainerNode._run_step`'s parameter list, already long,
+  would have grown again for `monitor` -- bundled the per-run-constant
+  arguments (model, optimizer, text_encoder, schedule, weighting,
+  device, on_step, monitor, ...) into a small `_StepContext` dataclass
+  instead, so `_run_step(ctx, batch, step)` stays readable regardless of
+  how many things a run needs to carry from now on.
+
+**Not done:** no reconnection backoff tuning on the dashboard's
+`EventSource` (relies on the browser's built-in auto-reconnect, which is
+fine for a dev tool but has no user-visible retry count or backoff
+control); no persistence of monitor history server-side beyond the
+in-memory `deque` (a server restart loses it, same as every other
+in-process state this graph system has so far).

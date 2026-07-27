@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from nodes.core import ExecutionContext
+
 from . import nodegraph_registry
 
 
@@ -100,9 +102,11 @@ def _describe(value: Any) -> Any:
 
 class GraphExecutor:
 
-    def __init__(self, nodes: list[NodeSpec], edges: list[EdgeSpec]):
+    def __init__(self, nodes: list[NodeSpec], edges: list[EdgeSpec],
+                 context: ExecutionContext | None = None):
         self.nodes = {n.id: n for n in nodes}
         self.edges = edges
+        self.context = context or ExecutionContext()
         self._registry = nodegraph_registry.get_registry()
 
     def _resolve_class(self, spec: NodeSpec) -> type:
@@ -132,7 +136,7 @@ class GraphExecutor:
                     inputs[e.to_port] = outputs_by_node[e.from_node][e.from_port]
 
             try:
-                outputs = cls().build(**inputs)
+                outputs = cls(self.context).build(**inputs)
             except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome to report, not a crash
                 results.append(NodeResult(node_id=node_id, ok=False,
                                            error=f"{type(exc).__name__}: {exc}"))

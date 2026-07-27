@@ -324,6 +324,11 @@
       this.panY = 0;
       this._spawnCascade = 0;
       this.assetCache = {}; // assetKind -> {options, upload_supported, ...}, warmed in init()
+      this.monitorConnections = new Map(); // nodeId -> {eventSource, monitorId, quickInfoEl, lastData}
+      // Kept alive across renderAll() calls (which rebuild all node DOM from
+      // scratch) rather than reconnected every render -- see
+      // trackMonitorConnection(). Cleaned up when a node is removed, see
+      // cleanupMonitorConnections().
     }
 
     async init() {
@@ -502,6 +507,16 @@
       for (const node of this.model.nodes.values()) this.measurePorts(node);
       this.redrawWires();
       this.updateRunButton();
+      this.cleanupMonitorConnections();
+    }
+
+    cleanupMonitorConnections() {
+      for (const [nodeId, conn] of this.monitorConnections) {
+        if (!this.model.nodes.has(nodeId)) {
+          conn.eventSource.close();
+          this.monitorConnections.delete(nodeId);
+        }
+      }
     }
 
     buildNodeEl(node) {
@@ -519,9 +534,9 @@
       header.innerHTML = `
         <button class="ng-node-del" title="Delete node">\u00d7</button>
         <div class="ng-node-modes">
-          <button class="ng-mode-btn" data-mode="minimized" title="Minimized: name + required/connected dots only">M</button>
-          <button class="ng-mode-btn" data-mode="compact" title="Compact: all ports, no widgets or descriptions">C</button>
-          <button class="ng-mode-btn" data-mode="full" title="Full detail">F</button>
+          <button class="ng-mode-btn" data-mode="minimized" title="Minimized: name + required/connected dots only">\u2022</button>
+          <button class="ng-mode-btn" data-mode="compact" title="Compact: all ports, no widgets or descriptions">\u25b2</button>
+          <button class="ng-mode-btn" data-mode="full" title="Full detail">\u25cf</button>
         </div>
         <div class="ng-node-title">${escapeHtml(ci.class_name)}</div>
         ${mode !== "minimized" ? `<div class="ng-node-module">${escapeHtml(ci.module)}</div>` : ""}
@@ -549,11 +564,21 @@
       el.appendChild(header);
 
       if (mode === "minimized") {
+        const cols = document.createElement("div");
+        cols.className = "ng-min-columns";
+        const inCol = document.createElement("div");
+        inCol.className = "ng-min-col ng-min-col-inputs";
         for (const p of ci.inputs) {
           if (!(p.required || this.model.existingConnectionInto(node.id, p.name))) continue;
-          el.appendChild(this.buildDotOnlyRow(node, p, false));
+          inCol.appendChild(this.buildDotOnlyRow(node, p, false));
         }
-        for (const p of ci.outputs) el.appendChild(this.buildDotOnlyRow(node, p, true));
+        const outCol = document.createElement("div");
+        outCol.className = "ng-min-col ng-min-col-outputs";
+        for (const p of ci.outputs) outCol.appendChild(this.buildDotOnlyRow(node, p, true));
+        cols.appendChild(inCol);
+        cols.appendChild(outCol);
+        el.appendChild(cols);
+        this.appendMonitorControls(node, el, mode);
         return el;
       }
 
@@ -578,7 +603,80 @@
       el.appendChild(outLabel);
       for (const p of ci.outputs) el.appendChild(this.buildPortRow(node, p, true));
 
+      this.appendMonitorControls(node, el, mode);
       return el;
+    }
+
+    // ---- MonitorNode-family UI: "Look inside" + live quick-info on the node itself ----
+
+    appendMonitorControls(node, el, mode) {
+      if (node.classInfo.domain !== "monitor") return;
+      if (!node.paramValues.monitor_id) {
+        node.paramValues.monitor_id = this.generateMonitorId();
+        this.persist();
+      }
+      const monitorId = node.paramValues.monitor_id;
+
+      const row = document.createElement("div");
+      row.className = "ng-monitor-controls";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ng-lookinside-btn";
+      btn.textContent = mode === "minimized" ? "\u2197" : "Look inside \u2197";
+      btn.title = "Open the live dashboard for this monitor in a new tab";
+      btn.addEventListener("mousedown", (e) => e.stopPropagation());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        window.open(`/nodegraph/monitor/${encodeURIComponent(monitorId)}`, "_blank");
+      });
+      row.appendChild(btn);
+
+      if (mode !== "minimized") {
+        const quickInfo = document.createElement("span");
+        quickInfo.className = "ng-monitor-quickinfo";
+        quickInfo.textContent = "no data yet";
+        row.appendChild(quickInfo);
+        this.trackMonitorConnection(node.id, monitorId, quickInfo);
+      } else {
+        this.trackMonitorConnection(node.id, monitorId, null);
+      }
+      el.appendChild(row);
+    }
+
+    generateMonitorId() {
+      return "mon-" + Math.random().toString(36).slice(2, 10);
+    }
+
+    trackMonitorConnection(nodeId, monitorId, quickInfoEl) {
+      const existing = this.monitorConnections.get(nodeId);
+      if (existing && existing.monitorId === monitorId) {
+        // Same subscription, just rebind to this render's (freshly-built)
+        // display element and repaint the last known value immediately so
+        // it doesn't flash "no data yet" after every renderAll().
+        existing.quickInfoEl = quickInfoEl;
+        if (quickInfoEl && existing.lastData) quickInfoEl.textContent = this.formatQuickInfo(existing.lastData);
+        return;
+      }
+      if (existing) existing.eventSource.close(); // monitor_id changed under us -- reconnect
+
+      const source = new EventSource(`/api/nodegraph/monitor/${encodeURIComponent(monitorId)}/stream`);
+      const record = { eventSource: source, monitorId, quickInfoEl, lastData: null };
+      source.onmessage = (ev) => {
+        let data;
+        try { data = JSON.parse(ev.data); } catch (e) { return; }
+        if (data.step === undefined) return; // control message ({"type":"connected"}) or unrelated shape
+        record.lastData = data;
+        if (record.quickInfoEl && record.quickInfoEl.isConnected) {
+          record.quickInfoEl.textContent = this.formatQuickInfo(data);
+        }
+      };
+      this.monitorConnections.set(nodeId, record);
+    }
+
+    formatQuickInfo(data) {
+      const stepStr = data.total_steps ? `${data.step}/${data.total_steps}` : `${data.step}`;
+      const lossStr = data.loss !== undefined && data.loss !== null ? data.loss.toFixed(4) : "?";
+      return `step ${stepStr} \u00b7 loss ${lossStr}`;
     }
 
     buildPortRow(node, port, isOutput) {

@@ -20,6 +20,7 @@ def _load() -> dict[str, type]:
     from nodes.model.lora_saver import LoRACheckpointSaverNode
     from nodes.model.parameters import ModelParametersNode
     from nodes.model.text_encoder import SDXLTextEncoderNode
+    from nodes.monitor.training_progress import TrainingProgressMonitorNode
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.adamw import AdamWOptimizerNode
     from nodes.optimizer.came import CAMEOptimizerNode
@@ -35,6 +36,7 @@ def _load() -> dict[str, type]:
         ManagedDatasetSourceNode,
         SafetensorsCheckpointNode, ComfyUNetLoRANode, SDXLTextEncoderNode,
         ModelParametersNode, LoRACheckpointSaverNode,
+        TrainingProgressMonitorNode,
         AdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
         ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,

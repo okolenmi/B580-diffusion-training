@@ -8,8 +8,10 @@ docstring for why that's a deliberate, not accidental, distinction).
 Neither touches config.py, config_model.py, or the training launch path.
 """
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
+
+from nodes.core import ExecutionContext
 
 from . import asset_paths, graph_executor
 from .nodegraph_introspect import introspect_optimizer_nodes, introspect_registry, node_info_to_dict
@@ -47,7 +49,17 @@ async def list_registry():
             status_code=500,
             detail=f"Could not introspect the node registry ({type(e).__name__}: {e}).",
         )
-    return {domain: [node_info_to_dict(i) for i in infos] for domain, infos in groups.items()}
+    result = {}
+    for domain, infos in groups.items():
+        entries = []
+        for info in infos:
+            entry = node_info_to_dict(info)
+            entry["domain"] = domain  # same value as the grouping key, but on the node
+            # itself too -- lets the frontend ask "is this a monitor-family node" without
+            # re-deriving domain_of()'s module-path logic client-side in JS.
+            entries.append(entry)
+        result[domain] = entries
+    return result
 
 
 @router.get("/assets/{kind}")
@@ -119,7 +131,7 @@ class GraphRunRequest(BaseModel):
 
 
 @router.post("/run")
-def run_graph(request: GraphRunRequest):
+def run_graph(payload: GraphRunRequest, request: Request):
     """Executes the submitted graph in topological order. Declared as a
     plain `def`, not `async def`, so FastAPI runs it in its worker thread
     pool instead of the event loop -- a SupervisedLoRATrainerNode run can
@@ -127,18 +139,21 @@ def run_graph(request: GraphRunRequest):
     freeze every other request (SSE progress for real training runs
     included) until it finished.
 
-    No streaming progress yet -- the response only arrives once the whole
-    graph finishes or a node fails. TrainerNode's `on_step` callback
-    exists specifically to make a progress-streaming version possible
-    later; wiring it to SSE is a real next step, not done here.
+    Progress streaming exists now for MonitorNode-family nodes (see
+    nodes/monitor/) via the injected ExecutionContext's monitor_bus --
+    this endpoint's own response still only arrives once the whole graph
+    finishes or a node fails, but a node that reports through a monitor
+    can be watched live at /nodegraph/monitor/{monitor_id} while this
+    call is still blocked.
     """
     nodes = [graph_executor.NodeSpec(id=n.id, class_name=n.class_name, params=n.params)
-             for n in request.nodes]
+             for n in payload.nodes]
     edges = [graph_executor.EdgeSpec(from_node=e.from_node, from_port=e.from_port,
                                       to_node=e.to_node, to_port=e.to_port)
-             for e in request.edges]
+             for e in payload.edges]
+    context = ExecutionContext(monitor_bus=request.app.state.monitor_bus)
     try:
-        executor = graph_executor.GraphExecutor(nodes, edges)
+        executor = graph_executor.GraphExecutor(nodes, edges, context)
         results = executor.run()
     except graph_executor.GraphError as e:
         raise HTTPException(status_code=400, detail=str(e))

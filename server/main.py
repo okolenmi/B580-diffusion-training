@@ -10,6 +10,7 @@ from .config import settings
 from .process_manager import cleanup_orphaned_runs
 from .routes_config import router as config_router
 from .routes_history import router as history_router
+from .routes_monitor import router as monitor_router
 from .routes_settings import router as settings_router
 from .routes_sse import router as sse_router
 from .routes_training import router as training_router
@@ -17,6 +18,7 @@ from .routes_datasets import router as datasets_router
 from .routes_nodegraph import router as nodegraph_router
 
 import paths as _paths
+from monitor_bus import MonitorBus
 
 
 @asynccontextmanager
@@ -24,6 +26,12 @@ async def lifespan(app: FastAPI):
     """Lifecycle events."""
     # Initialize Main Server DB
     db.init_db(settings.db_path)
+
+    # One MonitorBus for the process's lifetime, owned by app.state (not a
+    # module-level singleton -- see monitor_bus.py's docstring). Route
+    # handlers read it via request.app.state.monitor_bus; graph execution
+    # receives it through nodes.core.ExecutionContext, not an import.
+    app.state.monitor_bus = MonitorBus()
 
     # Sync paths.py's module-level overrides with the resolved settings (DB
     # override if set, else env var / ComfyUI default) so this process's own
@@ -86,6 +94,7 @@ app.include_router(sse_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
 app.include_router(nodegraph_router, prefix="/api")
+app.include_router(monitor_router, prefix="/api")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -111,6 +120,17 @@ async def nodegraph_playground():
     nodes/ classes, same boundary as everything else under nodes/. See
     docs/node_architecture_refactor_plan.md."""
     path = settings.project_root / "server/static/nodegraph.html"
+    with open(path) as f:
+        return f.read()
+
+
+@app.get("/nodegraph/monitor/{monitor_id}", response_class=HTMLResponse)
+async def monitor_dashboard(monitor_id: str):
+    """"Look inside" a MonitorNode -- live dashboard for one monitor_id,
+    served independently of any running graph (see server/routes_monitor.py
+    for the SSE stream it connects to). monitor_id isn't used server-side
+    here; the page reads it from its own URL."""
+    path = settings.project_root / "server/static/monitor_dashboard.html"
     with open(path) as f:
         return f.read()
 

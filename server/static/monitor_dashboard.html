@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Training Monitor</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  .mon-topbar {
+    padding: 16px 24px; display: flex; align-items: center; gap: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mon-topbar h1 { font-size: 18px; margin: 0; color: var(--text); }
+  .mon-id {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim);
+    background: var(--surface-alt); padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  }
+  .mon-id:hover { color: var(--text); }
+  .mon-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); margin-left: auto; }
+  .mon-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+  .mon-status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .mon-status-dot.disconnected { background: var(--red); }
+  .mon-body { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  .mon-progress-track {
+    height: 6px; border-radius: 3px; background: var(--surface-alt); overflow: hidden; margin-top: 10px;
+  }
+  .mon-progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+</style>
+</head>
+<body>
+  <div class="mon-topbar">
+    <h1>Training Monitor</h1>
+    <span class="mon-id" id="mon-id" title="Click to copy">id: \u2014</span>
+    <div class="mon-status"><span class="mon-status-dot" id="mon-status-dot"></span><span id="mon-status-text">connecting\u2026</span></div>
+  </div>
+
+  <div class="mon-body">
+    <div class="metrics-grid" id="mon-metrics">
+      <div class="metric-card"><div class="metric-label">Step</div><div class="metric-value" id="m-step">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">Loss</div><div class="metric-value" id="m-loss">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">Smoothed</div><div class="metric-value" id="m-smoothed">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">LR</div><div class="metric-value" id="m-lr">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">Steps/sec</div><div class="metric-value" id="m-rate">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">Elapsed</div><div class="metric-value" id="m-elapsed">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">ETA</div><div class="metric-value" id="m-eta">\u2014</div></div>
+    </div>
+    <div class="mon-progress-track"><div class="mon-progress-fill" id="m-progress-fill"></div></div>
+
+    <div class="card" style="margin-top: 24px;">
+      <div class="card-header">Loss</div>
+      <div class="chart-container" style="height: 60vh; min-height: 420px;">
+        <canvas id="mon-loss-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/loss_chart.js"></script>
+  <script src="/static/monitor_dashboard.js"></script>
+</body>
+</html>

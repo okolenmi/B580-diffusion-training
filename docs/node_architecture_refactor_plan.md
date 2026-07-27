@@ -821,3 +821,51 @@ fine for a dev tool but has no user-visible retry count or backoff
 control); no persistence of monitor history server-side beyond the
 in-memory `deque` (a server restart loses it, same as every other
 in-process state this graph system has so far).
+
+## 2026-07-27: visual bugs from a screenshot -- both had real root causes
+
+The node header and the dashboard chart both "looked broken" in a
+screenshot; both had a specific, findable cause rather than needing
+general aesthetic tweaking.
+
+- **Node header collision** ("icons not in center"). The actual bug: the
+  header used absolute-positioned buttons coordinated with a hardcoded
+  `padding-right: 90px` on the header, and `.ng-node-title` had no
+  `overflow`/`white-space` handling. A long class name (`TrainingProgressMonitorNode`,
+  ~28 characters) doesn't fit in the ~150px left after that padding at
+  13px monospace, so it wrapped to a second line -- which flowed straight
+  into the space where the absolutely-positioned mode/delete buttons sit,
+  producing the cramped overlap in the screenshot. Restructured the
+  header as a real flex row (`title flex:1, min-width:0, ellipsis` +
+  `modes` + `delete`, all as normal flex children) instead of continuing
+  to hand-coordinate padding numbers with absolutely-positioned overlays --
+  removes this whole bug class, not just this one instance of it, since
+  adding or resizing a button no longer requires updating a magic
+  padding value somewhere else. Separately, the icons themselves really
+  were mis-centered: `line-height: 16px` centering assumes symmetric font
+  metrics around the baseline, which symbol glyphs (\u2022 \u25b2 \u25cf) generally
+  don't have -- replaced with flexbox centering (`align-items: center;
+  justify-content: center`), which centers the actual rendered glyph box
+  regardless of font metrics. Also sized up per direct request: 16x16px/8px
+  font \u2192 22x22px/13px font.
+- **Dashboard chart rendering tiny in a large empty container.** The
+  `<canvas>` element had no CSS size of its own. `LossChart._draw()`
+  sizes the canvas's *pixel buffer* from `getBoundingClientRect()`, but
+  never sets the canvas's own CSS display size -- that's the page's job,
+  same as the original dashboard tab does it (`#loss-chart { width:
+  100%; height: 100%; display: block; }` in style.css). Without an
+  equivalent rule for `#mon-loss-chart`, the canvas fell back to the
+  browser's ~300x150px default regardless of `.chart-container`'s actual
+  size, which is exactly what the screenshot showed: a small fixed-size
+  chart pinned to the corner of a much bigger, mostly-empty card. Fixed
+  with the same CSS rule, scoped to this page's canvas id.
+- Found while fixing the above: `monitor_dashboard.html` had several
+  literal `\u2014`/`\u2026` character sequences written directly in the HTML
+  (the placeholder text before JS populates real values) -- the same
+  mistake already caught once before in `nodegraph.html`'s zoom-out
+  button (`\uXXXX` is a JS/Python string-escape convention; plain HTML
+  doesn't interpret it, so browsers would have shown the literal text
+  "\u2014" until the first SSE message arrived). Replaced with real HTML
+  entities (`&mdash;`, `&hellip;`). Worth remembering as a recurring
+  mistake, not a one-off: written as JS is the reflex, HTML needs entities.
+- Small addition while in there: a percentage label next to the progress bar.

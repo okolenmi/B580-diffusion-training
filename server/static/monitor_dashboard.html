@@ -14,39 +14,53 @@
   .mon-id {
     font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim);
     background: var(--surface-alt); padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    border: 1px solid transparent;
   }
-  .mon-id:hover { color: var(--text); }
+  .mon-id:hover { color: var(--text); border-color: var(--border); }
   .mon-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); margin-left: auto; }
   .mon-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
   .mon-status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .mon-status-dot.disconnected { background: var(--red); }
   .mon-body { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+  .mon-progress-row { display: flex; align-items: center; gap: 10px; margin: 14px 0 24px; }
   .mon-progress-track {
-    height: 6px; border-radius: 3px; background: var(--surface-alt); overflow: hidden; margin-top: 10px;
+    flex: 1; height: 6px; border-radius: 3px; background: var(--surface-alt); overflow: hidden;
   }
   .mon-progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+  .mon-progress-pct { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); min-width: 36px; text-align: right; }
+
+  /* The canvas element has no intrinsic size of its own -- without this it
+     falls back to the browser default (~300x150 CSS px) regardless of how
+     large .chart-container is, which is what made the chart render as a
+     tiny fixed-size box in the corner of a mostly-empty card. */
+  #mon-loss-chart { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
   <div class="mon-topbar">
     <h1>Training Monitor</h1>
-    <span class="mon-id" id="mon-id" title="Click to copy">id: \u2014</span>
-    <div class="mon-status"><span class="mon-status-dot" id="mon-status-dot"></span><span id="mon-status-text">connecting\u2026</span></div>
+    <span class="mon-id" id="mon-id" title="Click to copy">id: &mdash;</span>
+    <div class="mon-status"><span class="mon-status-dot" id="mon-status-dot"></span><span id="mon-status-text">connecting&hellip;</span></div>
   </div>
 
   <div class="mon-body">
     <div class="metrics-grid" id="mon-metrics">
-      <div class="metric-card"><div class="metric-label">Step</div><div class="metric-value" id="m-step">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">Loss</div><div class="metric-value" id="m-loss">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">Smoothed</div><div class="metric-value" id="m-smoothed">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">LR</div><div class="metric-value" id="m-lr">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">Steps/sec</div><div class="metric-value" id="m-rate">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">Elapsed</div><div class="metric-value" id="m-elapsed">\u2014</div></div>
-      <div class="metric-card"><div class="metric-label">ETA</div><div class="metric-value" id="m-eta">\u2014</div></div>
+      <div class="metric-card"><div class="metric-label">Step</div><div class="metric-value" id="m-step">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Loss</div><div class="metric-value" id="m-loss">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Smoothed</div><div class="metric-value" id="m-smoothed">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">LR</div><div class="metric-value" id="m-lr">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Steps/sec</div><div class="metric-value" id="m-rate">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Elapsed</div><div class="metric-value" id="m-elapsed">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">ETA</div><div class="metric-value" id="m-eta">&mdash;</div></div>
     </div>
-    <div class="mon-progress-track"><div class="mon-progress-fill" id="m-progress-fill"></div></div>
 
-    <div class="card" style="margin-top: 24px;">
+    <div class="mon-progress-row">
+      <div class="mon-progress-track"><div class="mon-progress-fill" id="m-progress-fill"></div></div>
+      <div class="mon-progress-pct" id="m-progress-pct">0%</div>
+    </div>
+
+    <div class="card">
       <div class="card-header">Loss</div>
       <div class="chart-container" style="height: 60vh; min-height: 420px;">
         <canvas id="mon-loss-chart"></canvas>

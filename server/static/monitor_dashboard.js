@@ -51,6 +51,7 @@
       if (data.total_steps) {
         const pct = Math.min(100, (data.step / data.total_steps) * 100);
         e.progressFill.style.width = pct + "%";
+        e.progressPct.textContent = Math.round(pct) + "%";
       }
 
       const elapsedS = (now - this.firstEventTime) / 1000;
@@ -109,6 +110,7 @@
       elapsed: document.getElementById("m-elapsed"),
       eta: document.getElementById("m-eta"),
       progressFill: document.getElementById("m-progress-fill"),
+      progressPct: document.getElementById("m-progress-pct"),
     };
 
     const dashboard = new MonitorDashboard(monitorId, els);

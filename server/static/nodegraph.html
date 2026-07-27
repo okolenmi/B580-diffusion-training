@@ -113,19 +113,27 @@
     border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none;
   }
-  .ng-node-header { background: var(--surface-alt); padding: 8px 90px 8px 12px; cursor: grab; position: relative; }
+  .ng-node-header { background: var(--surface-alt); padding: 8px 10px; cursor: grab; }
   .ng-node-header:active { cursor: grabbing; }
-  .ng-node-title { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; color: var(--text); }
-  .ng-node-module { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+  .ng-node-header-row { display: flex; align-items: center; gap: 6px; }
+  .ng-node-title {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; color: var(--text);
+  }
+  .ng-node-module { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
   .ng-node-del {
-    position: absolute; top: 6px; right: 8px; background: none; border: none;
-    color: var(--text-dim); cursor: pointer; font-size: 15px; line-height: 1;
+    flex-shrink: 0; background: none; border: none; padding: 0 2px;
+    color: var(--text-dim); cursor: pointer; font-size: 16px; line-height: 1;
   }
   .ng-node-del:hover { color: var(--red); }
-  .ng-node-modes { position: absolute; top: 7px; right: 28px; display: flex; gap: 2px; }
+  .ng-node-modes { flex-shrink: 0; display: flex; gap: 3px; }
   .ng-mode-btn {
-    width: 16px; height: 16px; padding: 0; font-size: 8px; line-height: 16px; text-align: center;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+    width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; /* real box-centering --
+      the previous line-height trick left symbol glyphs (▲ ● •) sitting visibly low,
+      since their font metrics aren't vertically symmetric the way line-height assumes */
+    font-size: 13px; line-height: 1;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
     color: var(--text-dim); cursor: pointer;
   }
   .ng-mode-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }

@@ -23,8 +23,31 @@ class ParameterList(list):
     is a free drop-in, not a wrapper callers need to unwrap."""
 
 
-class TrainableModel(ABC):
-    """Runtime contract for a model ready to be trained."""
+class TrainedWeightsExportable(ABC):
+    """Anything that can hand back a plain, save-ready adapter state dict
+    (CPU tensors, keyed for safetensors). What LoRACheckpointSaverNode
+    actually depends on. TrainableModel extends this below rather than
+    the saver node depending on TrainableModel directly, specifically so
+    a second, non-trainable implementer -- a frozen, already-extracted
+    snapshot with no forward/train/eval/to (see FrozenLoRASnapshot in
+    nodes/model/lora_phases.py) -- is a normal, separately-typed ABC
+    implementer the graph's own issubclass() port check accepts at the
+    same saver input, not a special case the saver has to know about."""
+
+    @abstractmethod
+    def trained_state_dict(self) -> dict:
+        ...
+
+
+class TrainableModel(TrainedWeightsExportable, ABC):
+    """Runtime contract for a model ready to be trained. Extending
+    TrainedWeightsExportable means every TrainableModel is required to
+    say how to export what it learned -- a reasonable universal
+    requirement (not a LoRA-specific one; a hypothetical future
+    full-finetune TrainableModel would just export its own full weight
+    diff through the same method), and the concrete reason
+    LoRACheckpointSaverNode's model input can stay typed at this ABC
+    without narrowing to a concrete class."""
 
     @abstractmethod
     def forward(self, x_t, timestep, context, y):

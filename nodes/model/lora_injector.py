@@ -37,13 +37,23 @@ class ComfyUNetTrainableModel(TrainableModel):
         self._wrapper.to(device=device, **kwargs)
         return self
 
-    def state_dict(self) -> dict:
-        return self._wrapper.get_lora_weights()
+    def trained_state_dict(self) -> dict:
+        """Full-stack LoRA weights: every nodes/model/lora_phases.py
+        generation this model has been split into, folded into one
+        portable adapter (see that module's extract_combined_weights).
+        Deferred import to avoid a lora_phases <-> lora_injector cycle --
+        lora_phases already needs ComfyUNetTrainableModel at import time
+        (LoRAPhaseSplitNode's isinstance check), so this direction has
+        to be the lazy one. Identical output to a plain wrapper.get_lora_weights()
+        call for a model that's never been split (single-generation registry)."""
+        from .lora_phases import extract_combined_weights
+        return extract_combined_weights(self._wrapper.lora_registry)
 
     @property
     def raw(self):
         """Escape hatch to the wrapped ComfyUNetWrapper, for callers (e.g.
-        LoRACheckpointSaverNode) that need the full legacy object."""
+        LoRAPhaseSplitNode) that need the full legacy object, not just
+        the TrainableModel contract."""
         return self._wrapper
 
 
@@ -59,17 +69,20 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
         "target_modules": Port(name="target_modules", type=Any, required=False, default=None),
         "use_checkpoint": Port(
-            name="use_checkpoint", type=bool, required=False, default=False,
-            doc="Gradient checkpointing. Defaults to False for LoRA training -- ComfyUI's "
+            name="use_checkpoint", type=bool, required=False, default=True,
+            doc="Gradient (activation) checkpointing -- trades recompute time for a real "
+                "cut in peak VRAM (dominant cost is activations, not the frozen base weights "
+                "or the tiny LoRA adapters). Defaults to True: VRAM is the priority here, and "
+                "this is the single biggest lever available for it. Set False if you'd rather "
+                "trade back for faster steps. Was previously unusable for LoRA -- ComfyUI's "
                 "own checkpoint() (comfy/ldm/modules/diffusionmodules/util.py) passes an "
                 "entire block's self.parameters() into torch.autograd.grad()'s inputs= list "
-                "on every backward, not filtered to the ones that actually require grad. "
-                "With a frozen base + LoRA, essentially every block has at least one frozen "
-                "parameter (a norm weight, a bias, anything LoRA didn't target), and that "
-                "call raises 'One of the differentiated Tensors does not require grad' the "
-                "moment it hits one. True trades VRAM for that crash; only turn it on if "
-                "every parameter in every checkpointed block is itself LoRA-adapted, which "
-                "target_modules would have to be built specifically to guarantee.",
+                "unfiltered, and a frozen base + LoRA block almost always has at least one "
+                "frozen parameter (a norm weight, a bias, anything LoRA didn't target) in "
+                "there, which used to crash with 'One of the differentiated Tensors does not "
+                "require grad'. This node now patches that (nodes/model/gradient_checkpointing.py) "
+                "before building the model whenever this is True -- see "
+                "docs/vram_and_lora_phase_split.md for the root-cause writeup.",
         ),
     }
 
@@ -80,6 +93,10 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         from core.unet_wrapper import ComfyUNetWrapper
 
         weights: ModelWeights = inputs["weights"]
+        use_checkpoint = inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default)
+        if use_checkpoint:
+            from .gradient_checkpointing import enable_frozen_param_safe_checkpointing
+            enable_frozen_param_safe_checkpointing()
         lora_config = LoRAConfig(
             rank=inputs.get("rank", self.INPUTS["rank"].default),
             alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
@@ -90,7 +107,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             weights.unet_sd,
             device=inputs.get("device", self.INPUTS["device"].default),
             dtype=inputs.get("dtype") or torch.bfloat16,
-            use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
+            use_checkpoint=use_checkpoint,
             lora_config=lora_config,
         )
         result = {"model": ComfyUNetTrainableModel(wrapper)}

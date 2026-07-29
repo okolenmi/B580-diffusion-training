@@ -23,8 +23,9 @@ optimizer one, same Adapter-over-legacy-code pattern:
   `CheckpointSaverNode` (ABCs) / `ModelWeights`, `TrainableModel` (Handle
   ABC); `SafetensorsCheckpointNode` wraps checkpoint loading,
   `ComfyUNetLoRANode` wraps `core.unet_wrapper.ComfyUNetWrapper` +
-  `core.lora.LoRAConfig`, `LoRACheckpointSaverNode` wraps
-  `core.save.save_lora_checkpoint`.
+  `core.lora.LoRAConfig`. **2026-07-28 update below:**
+  `LoRACheckpointSaverNode` no longer wraps `core.save.save_lora_checkpoint`
+  at all -- see that entry.
 
 **2026-07-25 update:** `TrainerNode` now exists (`nodes/train/`) --
 a v1 step loop, not the full feature set. Read this before touching it:
@@ -78,6 +79,87 @@ these together automatically yet either -- someone has to call
 inputs by hand. That wiring layer is itself a real piece of remaining
 work (the actual "ComfyUI-like" graph executor), separate from any one
 node's correctness.
+
+**2026-07-28 update: VRAM optimization + the LoRA "warm-up" (phase-split)
+feature.** Full writeup, including the math and the alternative design
+this rejected, in `docs/vram_and_lora_phase_split.md` -- summary here:
+
+- **Gradient checkpointing, actually usable for LoRA now.**
+  `nodes/model/gradient_checkpointing.py` patches ComfyUI's
+  `CheckpointFunction` (`comfy/ldm/modules/diffusionmodules/util.py`) at
+  the one specific point that made it crash on any frozen-base + LoRA
+  block -- confirmed by reading ComfyUI's real source (fetched during
+  this session, not assumed), not by pattern-matching the error message.
+  `ComfyUNetLoRANode.INPUTS["use_checkpoint"]` now defaults to `True`
+  (was `False` -- it was categorically broken before, so there was
+  nothing to default to). This is the single biggest available VRAM
+  lever for this training path (activations dominate, not the frozen
+  base or the tiny adapters), traded against real recompute cost.
+  **Not run against real ComfyUI** -- unavailable in this sandbox, same
+  constraint as everything else ComfyUI-dependent (see the "Not yet
+  functionally verified" note above). What *is* verified: the patch's
+  actual gradient-filtering logic, real torch, against a faithful
+  verbatim reproduction of ComfyUI's real `CheckpointFunction` registered
+  as a stand-in module (`smoke_test_gradient_checkpointing.py`) -- real
+  gradients checked against a non-checkpointed reference, not just
+  "doesn't crash."
+- **`CachingTextEncoderNode`** (`nodes/model/text_encoder_cache.py`): an
+  LRU-cached `TextEncoder` decorator. `SupervisedLoRATrainerNode`
+  currently re-encodes every batch's prompt through CLIP every step;
+  wrapping the encoder in this skips that entirely on a repeat (the
+  normal case for a dataset with a small, reused caption set), which is
+  both a compute win and a peak-activation-memory win (CLIP's own
+  forward pass has real activation memory on top of the UNet's).
+- **LoRA phase-split / "warm-up" training** (`nodes/model/lora_phases.py`,
+  `LoRAPhaseSplitNode`): the user's actual ask -- train a fraction of
+  steps as a "warm-up," then continue with a fresh adapter whose own
+  weights contain none of the warm-up phase's changes, addressing a real
+  observed failure mode (early training's coarse, destructive changes
+  degrading fine object structure). Chosen design: stack a brand new,
+  independently-optimizer-tracked adapter on top of the frozen previous
+  one (composition, reusing `core.lora.LoRALinear`/`LoRAConv2d` as the
+  frozen base of the stack) rather than merging the current adapter into
+  the frozen base weights and reinitializing it in place -- the rejected
+  alternative had a real correctness trap (reinitializing `lora_A` back
+  to zero-effect while `lora_B` is *already* zero kills gradient flow to
+  both, a well-known LoRA init gotcha) and would have entangled a fresh
+  phase's optimizer state with the previous phase's momentum/second
+  moments, tied to the same Parameter objects. The stacked design sidesteps
+  both by construction: new generation = genuinely new tensors, so a
+  fresh `OptimizerNode` just starts clean, no manual reset needed. This
+  also generalizes past a single 20%-then-80% split to an N-phase
+  curriculum for free (`LoRAPhaseSplitNode` chained multiple times) --
+  offered as the "better solution" the user asked for if one existed,
+  not just the literal two-phase ask.
+  Required generalizing `nodes/model/handle.py`'s planned
+  `LoRAWeightsExportable` into `TrainedWeightsExportable`, with
+  `TrainableModel` extending it, once it became clear the graph editor's
+  *actual* port-compatibility check (`server/graph_executor.py
+  ._is_compatible`, real `issubclass()` against declared port types, not
+  runtime types) would otherwise reject wiring a normal
+  `SupervisedLoRATrainerNode` output into the same `LoRACheckpointSaverNode`
+  input a phase-split snapshot needs to also use -- caught by writing the
+  contract check against the real function before assuming the design
+  worked, not by reasoning about it in the abstract (see
+  `smoke_test_lora_phase_split.py`'s `check_contracts`).
+  **Verification:** real torch (CPU), real (untouched)
+  `core.lora.LoRALinear`/`LoRAConv2d` as the base of the stack --
+  forward equivalence, gradient isolation across a split, and (the
+  strongest check) round-tripping the combined/per-phase extracted
+  weights through `core.lora`'s own, completely unmodified
+  `load_lora_into_model`, then comparing forward() output -- for both
+  Linear and Conv2d, including a real caught-and-fixed bug in the
+  Conv2d grouped-convolution case (naive concatenation silently produces
+  wrong output when `groups > 1`; fixed with a groups-aware reshape/cat
+  that reduces to the naive case when `groups == 1`, which is what this
+  architecture's convs actually use -- see `_combine_conv_generations`'s
+  docstring and `docs/vram_and_lora_phase_split.md` for the derivation).
+  Also verified: the never-split case is byte-identical to the old
+  `core.lora.extract_lora_weights` output (zero behavior change for
+  anyone not using this feature), and a real 3-generation chain.
+  **Not run on real ComfyUI/XPU hardware** -- same constraint as above;
+  what's verified is the adapter-stacking math and graph-typing, not an
+  actual end-to-end training run using it.
 
 ---
 

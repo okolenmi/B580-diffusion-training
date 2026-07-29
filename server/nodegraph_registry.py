@@ -15,13 +15,16 @@ _CACHE: dict[str, type] | None = None
 
 def _load() -> dict[str, type]:
     from nodes.dataset.managed import ManagedDatasetSourceNode
+    from nodes.dataset.renoise import RenoiseBatchSourceNode
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
+    from nodes.model.lora_checkpoint_loader import LoRACheckpointLoaderNode
     from nodes.model.lora_injector import ComfyUNetLoRANode
     from nodes.model.lora_phases import LoRAPhaseSplitNode
     from nodes.model.lora_saver import LoRACheckpointSaverNode
     from nodes.model.parameters import ModelParametersNode
     from nodes.model.text_encoder import SDXLTextEncoderNode
     from nodes.model.text_encoder_cache import CachingTextEncoderNode
+    from nodes.model.text_encoder_prewarm import PrewarmedTextEncoderNode
     from nodes.monitor.training_progress import TrainingProgressMonitorNode
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.adamw import AdamWOptimizerNode
@@ -35,9 +38,9 @@ def _load() -> dict[str, type]:
     from nodes.train.supervised import SupervisedLoRATrainerNode
 
     classes = [
-        ManagedDatasetSourceNode,
-        SafetensorsCheckpointNode, ComfyUNetLoRANode, SDXLTextEncoderNode,
-        CachingTextEncoderNode,
+        ManagedDatasetSourceNode, RenoiseBatchSourceNode,
+        SafetensorsCheckpointNode, ComfyUNetLoRANode, LoRACheckpointLoaderNode, SDXLTextEncoderNode,
+        CachingTextEncoderNode, PrewarmedTextEncoderNode,
         ModelParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,
         TrainingProgressMonitorNode,
         AdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,

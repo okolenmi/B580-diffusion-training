@@ -168,13 +168,15 @@ def _generation_classes():
     return _generation_classes_cache
 
 
-def _lora_key(full_module_name: str) -> str:
+def lora_key(full_module_name: str) -> str:
     """Same convention as core.lora._key_to_lora_key -- this is a stable
     external file-format detail (ComfyUI/Kohya's lora_unet_... naming),
     not a design choice, so reimplementing the two-line mapping here
     (rather than importing a private helper across module boundaries) is
     just restating the same fixed format, not duplicating logic that
-    could drift."""
+    could drift. Public (not _-prefixed): nodes/model/lora_checkpoint_loader.py
+    needs the identical mapping too -- one shared copy in nodes/, not a
+    third private reimplementation of the same two lines."""
     path = full_module_name
     if path.startswith("model.diffusion_model."):
         path = path[len("model.diffusion_model."):]
@@ -259,7 +261,7 @@ def extract_combined_weights(registry) -> dict:
     weights = {}
     for full_name, _parent, _attr, layer in registry:
         chain = _generation_chain(layer)
-        key = _lora_key(full_name)
+        key = lora_key(full_name)
         if len(chain) == 1:
             A, B, _scaling = chain[0]
             weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
@@ -286,7 +288,7 @@ def extract_own_generation_weights(registry) -> dict:
     weights = {}
     for full_name, _parent, _attr, layer in registry:
         A, B = layer.get_lora_weights()
-        key = _lora_key(full_name)
+        key = lora_key(full_name)
         weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
         weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
         weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)

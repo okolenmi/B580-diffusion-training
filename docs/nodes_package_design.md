@@ -161,6 +161,25 @@ this rejected, in `docs/vram_and_lora_phase_split.md` -- summary here:
   what's verified is the adapter-stacking math and graph-typing, not an
   actual end-to-end training run using it.
 
+**2026-07-28, second entry:** dataset renoising, CLIP prewarm, LoRA
+checkpoint loading -- full writeup in
+`docs/dataset_renoising_and_clip_prewarm.md`. Short version: the user
+caught a real error in my first-round summary (dataset timestep sampling
+is not "matches mainstream tools" -- `manager/builder.py`'s ingestion
+bakes one *fixed, shared* ~20-value timestep grid reused identically
+across the whole dataset, verified directly in that file). Fixed without
+re-ingesting: `nodes/dataset/renoise.py`'s `RenoiseBatchSource` recovers
+x0 exactly from what's already stored (`core/noise_schedule.py`'s
+eps_to_x0/vpred_to_x0, the proven inverse of ingestion's own forward
+formula) and resamples a fresh continuous timestep per sample on the fly.
+Also built: `nodes/model/text_encoder_prewarm.py`'s
+`PrewarmedTextEncoderNode` (mirrors `core/trainer.py`'s own
+cache-then-unload pattern for CLIP, ~1.5GB VRAM freed, the likely biggest
+single difference from the old pipeline's VRAM footprint), and
+`nodes/model/lora_checkpoint_loader.py`'s `LoRACheckpointLoaderNode`
+(resume training / frozen base for `LoRAPhaseSplitNode` -- same node,
+same underlying operation, just different downstream wiring).
+
 ---
 
 **What follows below (pre-2026-07-24) is the original optimizer-subsystem

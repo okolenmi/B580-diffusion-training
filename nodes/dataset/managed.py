@@ -43,6 +43,12 @@ class ManagedDatasetSourceNode(DataSourceNode):
         "shuffle": Port(name="shuffle", type=bool, required=False, default=True),
         "batch_size": Port(name="batch_size", type=int, required=False, default=1),
         "use_dataset_cfg": Port(name="use_dataset_cfg", type=bool, required=False, default=True),
+        "t_low": Port(name="t_low", type=int, required=False, default=1,
+                      doc="Only affects 'lora_raw'-format trajectories (see manager/builder.py's "
+                          "run_lora_ingestion_task) -- every other format has its own t baked in."),
+        "t_high": Port(name="t_high", type=int, required=False, default=999),
+        "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
+                       doc="uniform / low / mid / high / logit."),
     }
 
     def build(self, **inputs) -> dict[str, TrainingBatchSource]:
@@ -56,6 +62,9 @@ class ManagedDatasetSourceNode(DataSourceNode):
             shuffle=inputs.get("shuffle", self.INPUTS["shuffle"].default),
             batch_size=inputs.get("batch_size", self.INPUTS["batch_size"].default),
             use_dataset_cfg=inputs.get("use_dataset_cfg", self.INPUTS["use_dataset_cfg"].default),
+            t_low=inputs.get("t_low", self.INPUTS["t_low"].default),
+            t_high=inputs.get("t_high", self.INPUTS["t_high"].default),
+            t_mode=inputs.get("t_mode", self.INPUTS["t_mode"].default),
         )
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)

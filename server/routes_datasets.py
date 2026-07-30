@@ -163,6 +163,7 @@ async def api_start_task(
     auto_caption: bool = Body(True),
     resize_mode: str = Body("center_crop"),
     ingest_latent_size: int = Body(64),
+    model_type: str = Body("eps"),
     lib: ManagedDatasetLibrary = Depends(get_library),
     runner: DataTaskRunner = Depends(get_data_runner)
 ):
@@ -228,6 +229,25 @@ async def api_start_task(
                 t_mode=t_mode, t_low=t_low, t_high=t_high
             )
             
+        elif type == "lora":
+            if not image_dir: raise ValueError("Image directory not specified")
+
+            p_dir = Path(image_dir)
+            img_exts = {".png", ".jpg", ".jpeg", ".webp"}
+            if recursive: files = [p for p in p_dir.glob("**/*") if p.is_file() and p.suffix.lower() in img_exts]
+            else: files = [p for p in p_dir.glob("*") if p.is_file() and p.suffix.lower() in img_exts]
+
+            task_id = create_task(ds.db_path, 'lora', len(files))
+
+            _task_manager.start_task(
+                ds.root, task_id, runner.run_lora_ingestion_task,
+                ds.root, model_path, p_dir,
+                recursive=recursive, resize_mode=resize_mode,
+                latent_size=ingest_latent_size,
+                neg_prompt=negative_prompt, model_type=model_type,
+                seed=seed,
+            )
+
         return {"ok": True, "task_id": task_id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

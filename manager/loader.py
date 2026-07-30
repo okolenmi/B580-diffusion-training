@@ -9,18 +9,25 @@ import torch
 from .db import get_training_set_trajectories, get_training_set_by_name
 from .storage import ShardLoader
 from core.model_io import raw_to_target
+from core.noise_schedule import eps_to_vpred, get_alpha_sigma, sample_timestep
 
 
 class ManagedDatasetLoader:
     """Streams data from a virtual training set, with optional sample batching."""
 
     def __init__(self, dataset_root: Path, set_identifier: Optional[Union[int, str]] = None,
-                 shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True):
+                 shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True,
+                 t_low: int = 1, t_high: int = 999, t_mode: str = "uniform"):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
         self.batch_size = batch_size
         self.use_dataset_cfg = use_dataset_cfg
+        # Only used for "lora_raw"-format trajectories (see _load_all_samples) --
+        # every other format already has its own t baked in at ingestion time.
+        self.t_low = t_low
+        self.t_high = t_high
+        self.t_mode = t_mode
         self._samples: list | None = None  # loaded once on first iteration, reused
         
         if set_identifier is not None:
@@ -81,7 +88,25 @@ class ManagedDatasetLoader:
                             meta = json.loads(t["metadata"])
                             neg_prompt = meta.get("neg", "")
 
-                            if meta.get("compressed"):
+                            if meta.get("format") == "lora_raw":
+                                # Simple images+captions format (manager/builder.py's
+                                # run_lora_ingestion_task) -- one clean latent, no
+                                # noise/timestep baked in at all. Resampled fresh
+                                # every __iter__() call (every epoch), not here --
+                                # see __iter__/_materialize, and
+                                # docs/dataset_renoising_and_clip_prewarm.md for why
+                                # baking a fixed grid in at ingestion time was the
+                                # thing being avoided.
+                                all_samples.append({
+                                    "x0":          loader.get_image_latent(t["shard_index"]),
+                                    "prompt":      t["prompt"],
+                                    "neg_prompt":  neg_prompt,
+                                    "seed":        t["seed"],
+                                    "metadata":    t["metadata"],
+                                    "traj_type":   meta.get("type", "good"),
+                                })
+                                continue
+                            elif meta.get("compressed"):
                                 trajectory_samples = loader.get_compressed_trajectory(t["shard_index"])
                                 if "model_type" not in meta:
                                     import warnings
@@ -161,6 +186,37 @@ class ManagedDatasetLoader:
                 loader.close()
         return all_samples
 
+    def _materialize(self, s: Dict) -> Dict:
+        """Turn a "lora_raw" sample (just x0) into a trainable one -- fresh
+        noise and timestep every call, which is the point: called from
+        __iter__ per batch, not from _load_all_samples (which is cached and
+        would otherwise bake one fixed draw in for the loader's whole
+        lifetime, reintroducing the same fixed-grid problem this format
+        exists to avoid -- see docs/dataset_renoising_and_clip_prewarm.md).
+        Samples that already have "x_t" (any other format) pass through
+        unchanged -- this is a no-op for them, not just "cheap.\""""
+        if "x_t" in s:
+            return s
+        x0 = s["x0"]
+        try:
+            model_type = json.loads(s["metadata"]).get("model_type", "eps")
+        except (json.JSONDecodeError, TypeError):
+            model_type = "eps"
+
+        t_val = sample_timestep(random, self.t_mode, self.t_low, self.t_high)
+        at, st = get_alpha_sigma(t_val)
+        eps = torch.randn_like(x0)
+        x_t = x0 + st * eps
+        target = eps_to_vpred(eps, x_t, at, st) if model_type == "vpred" else eps
+
+        out = dict(s)
+        out["x_t"] = x_t
+        out["target"] = target
+        out["target_p"] = None
+        out["target_n"] = None
+        out["t"] = t_val
+        return out
+
     @staticmethod
     def _merge_samples(samples: list) -> Dict:
         """Merge individual samples into a single batched dict."""
@@ -199,7 +255,7 @@ class ManagedDatasetLoader:
         # 1. Group by key (prompt, neg_prompt, size)
         buckets = {}
         for s in self._samples:
-            size = s["x_t"].shape[2:]
+            size = (s["x_t"] if "x_t" in s else s["x0"]).shape[2:]
             key = (s["prompt"], s["neg_prompt"], size)
             if key not in buckets:
                 buckets[key] = []
@@ -216,6 +272,9 @@ class ManagedDatasetLoader:
                 # Drop incomplete last batch if shuffling (common training practice)
                 if len(chunk) < self.batch_size and self.shuffle:
                     continue
+                # Fresh noise/timestep per "lora_raw" sample, every batch --
+                # a no-op for every other format (see _materialize).
+                chunk = [self._materialize(s) for s in chunk]
                 all_batches.append(self._merge_samples(chunk))
 
         if not all_batches:

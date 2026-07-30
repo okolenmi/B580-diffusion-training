@@ -43,11 +43,24 @@ class _StepContext:
     total_steps: int
     on_step: Optional[Callable] = None
     monitor: Optional[MonitorHandle] = None
+    profile: bool = False
 
 
 class SupervisedLoRATrainerNode(TrainerNode):
 
-    INPUTS: ClassVar[dict[str, Port]] = {**TrainerNode.COMMON_INPUTS}
+    INPUTS: ClassVar[dict[str, Port]] = {
+        **TrainerNode.COMMON_INPUTS,
+        "profile": Port(
+            name="profile", type=bool, required=False, default=False,
+            doc="Per-phase step timing (data wait / text encode / forward / backward / "
+                "optimizer step) printed every step, and included in monitor.report() if a "
+                "monitor is wired -- the breakdown this project didn't have a way to see. "
+                "Off by default: correct phase timing needs a device synchronize() between "
+                "phases (core.comfy_setup.xpu_synchronize), which blocks the async pipeline "
+                "and makes steps measurably slower than a normal run while this is on. Use "
+                "it for a short diagnostic run, not for real training.",
+        ),
+    }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
         self.validate_inputs(inputs)
@@ -70,25 +83,37 @@ class SupervisedLoRATrainerNode(TrainerNode):
             total_steps=steps,
             on_step=inputs.get("on_step"),
             monitor=inputs.get("monitor"),
+            profile=inputs.get("profile", self.INPUTS["profile"].default),
         )
 
         step = 0
+        batch_ready_at = time.perf_counter()
         while step < steps:
             for batch in batches:
                 if step >= steps:
                     break
-                self._run_step(ctx, batch, step)
+                wait_ms = (time.perf_counter() - batch_ready_at) * 1000
+                self._run_step(ctx, batch, step, wait_ms)
                 step += 1
+                batch_ready_at = time.perf_counter()
 
         result = {"model": model}
         self.validate_outputs(result)
         return result
 
     @staticmethod
-    def _run_step(ctx: _StepContext, batch: dict, step: int) -> None:
+    def _run_step(ctx: _StepContext, batch: dict, step: int, wait_ms: float = 0.0) -> None:
         import torch
         from core.model_io import comfy_input_transform
         from core.noise_schedule import get_alpha_sigma
+
+        timing = None
+        t0 = None
+        if ctx.profile:
+            from core.comfy_setup import xpu_synchronize
+            xpu_synchronize()
+            timing = {"data_wait_ms": wait_ms}
+            t0 = time.perf_counter()
 
         x_t = batch["x_t"].to(ctx.device)
         target = batch["target"].to(ctx.device)
@@ -102,6 +127,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
         ctx_emb = ctx_emb.to(device=ctx.device, dtype=torch.bfloat16)
         y = y.to(device=ctx.device, dtype=torch.bfloat16)
 
+        t1 = None
+        if ctx.profile:
+            xpu_synchronize()
+            t1 = time.perf_counter()
+            timing["encode_ms"] = (t1 - t0) * 1000
+
         lr = ctx.lr_schedule.value(step)
         ctx.optimizer.update_lr(lr)
         if ctx.is_fused:
@@ -110,20 +141,48 @@ class SupervisedLoRATrainerNode(TrainerNode):
             ctx.optimizer.zero_grad()
 
         pred = ctx.model.forward(xc, t, ctx_emb, y)
+
+        t2 = None
+        if ctx.profile:
+            xpu_synchronize()
+            t2 = time.perf_counter()
+            timing["forward_ms"] = (t2 - t1) * 1000
+
         per_sample = (pred.float() - target.float()).pow(2)
         per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
         weight = ctx.loss_weighting.weight(float(sigma.float().mean().item()))
         loss = per_sample.mean() * weight
         loss.backward()
 
+        t3 = None
+        if ctx.profile:
+            xpu_synchronize()
+            t3 = time.perf_counter()
+            timing["backward_ms"] = (t3 - t2) * 1000
+
         if not ctx.is_fused:
             ctx.optimizer.step(n_steps=1)
+
+        if ctx.profile:
+            xpu_synchronize()
+            t4 = time.perf_counter()
+            timing["optim_ms"] = (t4 - t3) * 1000
+            timing["step_total_ms"] = (t4 - t0) * 1000 + wait_ms
 
         loss_value = float(loss.item())
         if ctx.on_step is not None:
             ctx.on_step(step, loss_value)
-        if ctx.monitor is not None:
-            ctx.monitor.report({
+        if ctx.monitor is not None or ctx.profile:
+            report = {
                 "step": step, "total_steps": ctx.total_steps,
                 "loss": loss_value, "lr": lr, "t": time.time(),
-            })
+            }
+            if timing is not None:
+                report.update(timing)
+            if ctx.monitor is not None:
+                ctx.monitor.report(report)
+        if ctx.profile:
+            print(f"  [step {step}] wait={timing['data_wait_ms']:.0f}ms "
+                  f"encode={timing['encode_ms']:.0f}ms forward={timing['forward_ms']:.0f}ms "
+                  f"backward={timing['backward_ms']:.0f}ms optim={timing['optim_ms']:.0f}ms "
+                  f"total={timing['step_total_ms']:.0f}ms")

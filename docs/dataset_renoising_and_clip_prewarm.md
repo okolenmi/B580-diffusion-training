@@ -1,5 +1,45 @@
 # Dataset renoising, CLIP prewarm, LoRA checkpoint loading, 2026-07-28 (cont.)
 
+**Update, same day, third round:** `RenoiseBatchSource` (below) still works
+but is superseded for plain LoRA use -- user doesn't want to work with a
+distillation-shaped dataset at all for LoRA. New, simpler path instead:
+
+- **`manager/storage.py`**: `ShardWriter.add_image_latent` / `ShardLoader.get_image_latent`
+  -- one clean latent per trajectory, no t/target/compressed structure.
+- **`manager/builder.py`**: `run_lora_ingestion_task` -- images + `.txt`
+  caption sidecars, one VAE encode per image, no timestep loop, no
+  eps/vpred/dual-pass bookkeeping. Trajectory metadata gets
+  `"format": "lora_raw"`.
+- **`manager/loader.py`**: `ManagedDatasetLoader` now branches on that flag
+  -- `_load_all_samples` loads raw x0 only; `_materialize` (called from
+  `__iter__`, per batch, every epoch -- not from `_load_all_samples`,
+  which is cached) samples a fresh timestep+noise and builds `(x_t,
+  target, t)` on the spot. New ctor params `t_low/t_high/t_mode`, also on
+  `ManagedDatasetSourceNode`.
+- Verified for real (`manager/smoke_tests/smoke_test_lora_raw_dataset.py`,
+  real sqlite+shard round trip, no mocks): two separate `__iter__()`
+  calls on the same trajectory get different `(x_t, t)`, and both still
+  recover the exact original `x0` via `eps_to_x0`.
+- `nodes/dataset/renoise.py` is unchanged, still there for anyone with an
+  already-precomputed distillation-shaped dataset who doesn't want to
+  re-ingest -- just not the recommended path anymore for a fresh LoRA
+  dataset, which should use `run_lora_ingestion_task` instead.
+
+**Also added, `nodes/train/supervised.py`:** `profile: bool` port on
+`SupervisedLoRATrainerNode` (default `False`) -- per-phase step timing
+(data wait / text encode / forward / backward / optimizer step), printed
+every step and included in `monitor.report()`. Uses
+`core.comfy_setup.xpu_synchronize()` between phases for real numbers, not
+just CPU dispatch time -- so it's opt-in (blocks the async pipeline,
+measurably slower while it's on, don't leave it on for real training).
+Answers "no way to see what's taking time" directly. Real prime suspect
+worth checking first, cheaply, before profiling: `use_checkpoint=True`
+(this session's own earlier change, now the default) trades compute for
+VRAM -- typically 20-30% slower steps is the expected cost of that
+trade, not a bug. Try `use_checkpoint=False` as a first, free A/B check.
+
+---
+
 Continuation of `docs/vram_and_lora_phase_split.md`, same day. Three
 things, driven directly by user feedback on the first round: a real bug
 in how the dataset was described (my mistake, corrected here), the CLIP

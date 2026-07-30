@@ -397,6 +397,125 @@ class DataTaskRunner:
 
         return torch.from_numpy(np.array(img)).permute(2, 0, 1).unsqueeze(0)
 
+    def run_lora_ingestion_task(self, dataset_root: Path, model_path: Path, image_dir: Path,
+                                latent_size: int = 64, recursive: bool = True,
+                                resize_mode: str = "resize",
+                                neg_prompt: str = "",
+                                model_type: str = "eps",
+                                seed: int = 42,
+                                task_id: int = None):
+        """VAE-encode real images to clean latents, one per image -- the
+        simple "just images and captions" LoRA format, no distillation
+        machinery involved at all.
+
+        Unlike run_ingestion_task (which bakes a fixed grid of n_timesteps
+        noise draws per image directly into the shard, reused identically
+        for every image), this stores only x0. Noise and timestep are
+        sampled fresh every time a sample is actually drawn for training
+        (manager/loader.py's ManagedDatasetLoader, gated on this
+        trajectory's metadata["format"] == "lora_raw") -- standard practice
+        (kohya-ss/diffusers/OneTrainer all do this), and specifically avoids
+        the fixed-grid regularity documented in
+        docs/dataset_renoising_and_clip_prewarm.md. Also simpler and faster
+        to ingest: one VAE encode per image, no noise loop, no eps/vpred
+        target computation, no cond/uncond dual-pass bookkeeping.
+
+        Captions: a same-basename .txt sidecar file next to each image
+        (empty string if missing) -- same convention run_ingestion_task uses.
+        """
+        try:
+            if task_id: update_task_progress(dataset_root / "metadata.db", task_id, 0, pid=os.getpid())
+
+            source_id = add_source(dataset_root / "metadata.db", f"{image_dir.name}_lora", "real",
+                                str(model_path), {
+                                    "image_dir": str(image_dir), "recursive": recursive,
+                                    "resize_mode": resize_mode, "format": "lora_raw",
+                                    "model_type": model_type,
+                                })
+
+            print(f"  Loading VAE from: {model_path.name}")
+            sd = load_file(str(model_path))
+            vae_sd = {k.replace("first_stage_model.", ""): v
+                    for k, v in sd.items() if k.startswith("first_stage_model")}
+            vae = VAEDecoder.from_vae_sd(vae_sd, device=self.device)
+            previewer = PreviewGenerator(self.device, vae_sd)
+            del sd; xpu_empty_cache(); gc.collect()
+
+            px = latent_size * 8
+
+            img_exts = {".png", ".jpg", ".jpeg", ".webp"}
+            if recursive:
+                image_files = [p for p in image_dir.glob("**/*")
+                               if p.is_file() and p.suffix.lower() in img_exts]
+            else:
+                image_files = [p for p in image_dir.glob("*")
+                               if p.is_file() and p.suffix.lower() in img_exts]
+
+            image_prompts = []
+            for img_path in image_files:
+                cap_path = img_path.with_suffix(".txt")
+                image_prompts.append(cap_path.read_text().strip() if cap_path.exists() else "")
+
+            shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
+            shard_writer = ShardWriter(shard_file)
+            pending_trajs = []
+            trajs_in_shard = 0
+            preview_tasks = []
+
+            for i, img_path in enumerate(tqdm(image_files, desc="Ingest")):
+                try:
+                    img_tensor = self._preprocess_image(img_path, px, resize_mode)
+                    with torch.no_grad():
+                        x0 = vae.encode(img_tensor).to(device=self.device, dtype=torch.float32)
+                    del img_tensor
+                    x0_cpu = x0.cpu().contiguous()
+
+                    rel_preview = f"previews/lora_{uuid.uuid4().hex[:16]}.webp"
+                    preview_tasks.append((x0_cpu, dataset_root / rel_preview))
+
+                    shard_index = shard_writer.add_image_latent(x0_cpu)
+                    pending_trajs.append({
+                        "shard_index": shard_index,
+                        "sample_count": 1,
+                        "seed": seed + i,
+                        "prompt": image_prompts[i],
+                        "preview_path": rel_preview,
+                        "metadata_json": json.dumps({
+                            "neg": neg_prompt, "format": "lora_raw",
+                            "model_type": model_type, "type": "good",
+                        }),
+                    })
+                    trajs_in_shard += 1
+                    if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
+                        self._finalize_shard(dataset_root, shard_writer, shard_file,
+                                             source_id, pending_trajs)
+                        shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
+                        shard_writer = ShardWriter(shard_file)
+                        pending_trajs = []
+                        trajs_in_shard = 0
+                    if task_id: update_task_progress(dataset_root / "metadata.db", task_id, i + 1)
+                    del x0
+
+                except Exception as e:
+                    print(f"    Failed {img_path.name}: {e}")
+
+            if pending_trajs:
+                self._finalize_shard(dataset_root, shard_writer, shard_file,
+                                     source_id, pending_trajs)
+
+            if preview_tasks:
+                print(f"  Generating {len(preview_tasks)} previews...")
+                for latent, preview_path in preview_tasks:
+                    previewer.generate_preview(latent, preview_path)
+
+            vae.free(); previewer.free(); del vae, previewer
+            xpu_empty_cache(); gc.collect()
+            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'finished')
+
+        except Exception as e:
+            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
+            raise e
+
     def run_ingestion_task(self, dataset_root: Path, model_path: Path, image_dir: Path,
                            latent_size: int = 64, recursive: bool = True,
                            resize_mode: str = "resize",

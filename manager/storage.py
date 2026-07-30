@@ -66,6 +66,18 @@ class ShardWriter:
         self.current_index += 1
         return traj_id
 
+    def add_image_latent(self, x0: "torch.Tensor") -> int:
+        """Store one clean (un-noised) VAE latent -- the whole trajectory for a
+        plain image+caption LoRA sample (see manager/builder.py's
+        run_lora_ingestion_task). No t/target/compressed-sequence structure at
+        all, unlike add_trajectory/add_compressed_trajectory above -- noise and
+        timestep are sampled fresh at train time (manager/loader.py), not
+        baked in here."""
+        idx = self.current_index
+        self.samples_buffer[f"x0_{idx}"] = x0.contiguous()
+        self.current_index += 1
+        return idx
+
     def write(self):
         """Finalize and write to disk."""
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +160,11 @@ class ShardLoader:
                 "st": m.get("st", 0.0)
             })
         return samples
+
+    def get_image_latent(self, index: int):
+        """Counterpart to ShardWriter.add_image_latent."""
+        self._ensure_open()
+        return self.get_tensor(f"x0_{index}")
 
     def close(self):
         self._file = None

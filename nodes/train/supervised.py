@@ -92,6 +92,14 @@ class SupervisedLoRATrainerNode(TrainerNode):
             for batch in batches:
                 if step >= steps:
                     break
+                if self.context.should_cancel():
+                    # Cooperative stop, between steps only -- never mid
+                    # backward/optimizer-step. Not a failure: the model
+                    # trained so far is a normal, valid output, same as a
+                    # run that finished all its steps, just fewer of them.
+                    result = {"model": model}
+                    self.validate_outputs(result)
+                    return result
                 wait_ms = (time.perf_counter() - batch_ready_at) * 1000
                 self._run_step(ctx, batch, step, wait_ms)
                 step += 1

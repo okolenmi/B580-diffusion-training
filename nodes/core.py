@@ -50,8 +50,19 @@ class ExecutionContext:
     new global to invent.
     """
 
-    def __init__(self, monitor_bus=None):
+    def __init__(self, monitor_bus=None, cancel_event=None):
         self.monitor_bus = monitor_bus
+        # threading.Event, not asyncio -- graph execution runs in a plain
+        # background thread (server/routes_nodegraph.py), and a Node's
+        # build() (e.g. SupervisedLoRATrainerNode's step loop) polls this
+        # cooperatively between steps, never mid-backward-pass. None means
+        # "not cancellable" (e.g. a direct Python call/test, no server
+        # involved) -- should_cancel() handles that without every caller
+        # needing its own None-check.
+        self.cancel_event = cancel_event
+
+    def should_cancel(self) -> bool:
+        return self.cancel_event is not None and self.cancel_event.is_set()
 
 
 class Node(ABC):

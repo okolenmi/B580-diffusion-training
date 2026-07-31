@@ -335,6 +335,7 @@
       await this.warmAssetCache();
       this.renderPalette();
       this.els.runBtn.addEventListener("click", () => this.runGraph());
+      this.els.stopBtn.addEventListener("click", () => this.stopGraph());
       this.els.clearBtn.addEventListener("click", () => this.clearAll());
       this.els.zoomIn.addEventListener("click", () => this.setZoomCentered(this.zoom + 0.1));
       this.els.zoomOut.addEventListener("click", () => this.setZoomCentered(this.zoom - 0.1));
@@ -1190,6 +1191,8 @@
         return;
       }
       this.els.runBtn.disabled = true;
+      this.els.stopBtn.style.display = "inline-block";
+      this.els.stopBtn.disabled = false;
       this.setStatus("Running\u2026");
       try {
         const res = await fetch("/api/nodegraph/run", {
@@ -1199,13 +1202,52 @@
         });
         const data = await res.json();
         if (!res.ok) { this.setStatus(data.detail || `HTTP ${res.status}`, true); this.renderResults(null, [], data.detail); return; }
-        this.renderResults(data.results, []);
-        this.setStatus("Done.");
+        this.currentExecutionId = data.execution_id;
+        await this.pollExecution(data.execution_id);
       } catch (err) {
         this.setStatus("Request failed: " + err.message, true);
       } finally {
+        this.currentExecutionId = null;
+        this.els.stopBtn.style.display = "none";
         this.updateRunButton();
       }
+    }
+
+    async pollExecution(executionId) {
+      // 1s between polls -- frequent enough to feel responsive without
+      // hammering the server for a run that can last a long time.
+      while (true) {
+        await new Promise(r => setTimeout(r, 1000));
+        const res = await fetch(`/api/nodegraph/run/${executionId}`);
+        if (!res.ok) { this.setStatus(`HTTP ${res.status} polling status`, true); return; }
+        const data = await res.json();
+        if (data.status === "running") continue;
+        if (data.status === "finished") {
+          this.renderResults(data.results, []);
+          this.setStatus("Done.");
+        } else if (data.status === "stopped") {
+          this.renderResults(data.results, []);
+          this.setStatus("Stopped -- results below are from before the stop.");
+        } else {
+          this.setStatus(data.error || "Failed.", true);
+          this.renderResults(null, [], data.error);
+        }
+        return;
+      }
+    }
+
+    async stopGraph() {
+      if (!this.currentExecutionId) return;
+      this.els.stopBtn.disabled = true;
+      this.setStatus("Stopping\u2026");
+      try {
+        await fetch(`/api/nodegraph/run/${this.currentExecutionId}/stop`, { method: "POST" });
+      } catch (err) {
+        this.setStatus("Stop request failed: " + err.message, true);
+      }
+      // Not setting status/results here -- the pollExecution() loop
+      // already in flight will pick up status="stopped" on its next poll
+      // and finish the run's normal cleanup (button states etc).
     }
 
     renderResults(results, problems, hardError) {
@@ -1251,6 +1293,7 @@
       viewport: document.getElementById("ng-viewport"),
       canvasWrap: document.getElementById("ng-canvas-wrap"),
       runBtn: document.getElementById("ng-run-btn"),
+      stopBtn: document.getElementById("ng-stop-btn"),
       clearBtn: document.getElementById("ng-clear-btn"),
       runStatus: document.getElementById("ng-run-status"),
       results: document.getElementById("ng-results"),

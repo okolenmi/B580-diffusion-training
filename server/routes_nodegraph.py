@@ -8,6 +8,10 @@ docstring for why that's a deliberate, not accidental, distinction).
 Neither touches config.py, config_model.py, or the training launch path.
 """
 
+import threading
+import time
+import uuid
+
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
@@ -17,6 +21,88 @@ from . import asset_paths, graph_executor
 from .nodegraph_introspect import introspect_optimizer_nodes, introspect_registry, node_info_to_dict
 
 router = APIRouter(prefix="/nodegraph")
+
+
+class _Execution:
+    """One /run call's state -- a threading.Event a running
+    SupervisedLoRATrainerNode polls cooperatively between steps
+    (nodes/train/supervised.py, via ExecutionContext.should_cancel()),
+    plus whatever's needed to answer a later status poll. Registered here
+    specifically so /run/{id}/stop has something to set: the thread
+    running executor.run() and the request that eventually asks "is it
+    done yet" are different requests entirely, so this can't just be a
+    local variable."""
+
+    def __init__(self):
+        self.cancel_event = threading.Event()
+        self.status = "running"  # running -> finished | error | stopped
+        self.results = None
+        self.error = None
+        self.started_at = time.time()
+
+
+class _ExecutionRegistry:
+    """Plain dict + lock -- no eviction policy, matching this project's
+    existing DataTaskManager (server/routes_datasets.py): a long-running
+    dev server accumulates a bounded number of these (one per graph run a
+    person actually triggers), not an unbounded stream, so there's
+    nothing here that needs pruning to stay healthy."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._executions: dict[str, _Execution] = {}
+
+    def start(self, nodes, edges, monitor_bus) -> str:
+        """Allocates the execution's id/cancel_event *before* building the
+        GraphExecutor, and only starts the thread once the executor holds
+        the real (correctly cancel_event-wired) context -- not built,
+        then swapped in after the thread's already running, which would
+        race the worker thread reading self.context before the swap
+        happened. GraphExecutor's own construction doesn't validate
+        anything (confirmed directly, not assumed) -- node classes and
+        edges only get checked once run() actually starts, inside the
+        thread, so any GraphError shows up through the normal status
+        poll (status="error"), same path as a node's build() failing.
+        """
+        execution_id = uuid.uuid4().hex
+        execution = _Execution()
+        context = ExecutionContext(monitor_bus=monitor_bus, cancel_event=execution.cancel_event)
+        executor = graph_executor.GraphExecutor(nodes, edges, context)
+
+        with self._lock:
+            self._executions[execution_id] = execution
+
+        def _worker():
+            try:
+                results = executor.run()
+                execution.results = [
+                    {"node_id": r.node_id, "ok": r.ok, "outputs": r.outputs, "error": r.error}
+                    for r in results
+                ]
+                execution.status = "stopped" if execution.cancel_event.is_set() else "finished"
+            except graph_executor.GraphError as e:
+                execution.error = str(e)
+                execution.status = "error"
+            except Exception as e:
+                execution.error = f"{type(e).__name__}: {e}"
+                execution.status = "error"
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return execution_id
+
+    def get(self, execution_id: str) -> _Execution | None:
+        with self._lock:
+            return self._executions.get(execution_id)
+
+    def stop(self, execution_id: str) -> bool:
+        execution = self.get(execution_id)
+        if execution is None:
+            return False
+        execution.cancel_event.set()
+        return True
+
+
+_registry = _ExecutionRegistry()
 
 
 @router.get("/optimizers")
@@ -132,33 +218,52 @@ class GraphRunRequest(BaseModel):
 
 @router.post("/run")
 def run_graph(payload: GraphRunRequest, request: Request):
-    """Executes the submitted graph in topological order. Declared as a
-    plain `def`, not `async def`, so FastAPI runs it in its worker thread
-    pool instead of the event loop -- a SupervisedLoRATrainerNode run can
-    take a long time, and blocking the event loop for that long would
-    freeze every other request (SSE progress for real training runs
-    included) until it finished.
+    """Starts the submitted graph running in a background thread and
+    returns immediately with an execution_id -- does not wait for the
+    graph to finish, or for anything about the graph to be validated:
+    GraphExecutor only checks node classes/edges once run() actually
+    starts (inside the background thread here), not at construction, so
+    a bad class name or a dangling edge reports through the same status
+    poll as any other failure (status="error", error=<message>) rather
+    than a synchronous 400 -- one reporting path for every kind of
+    failure instead of two.
 
-    Progress streaming exists now for MonitorNode-family nodes (see
-    nodes/monitor/) via the injected ExecutionContext's monitor_bus --
-    this endpoint's own response still only arrives once the whole graph
-    finishes or a node fails, but a node that reports through a monitor
-    can be watched live at /nodegraph/monitor/{monitor_id} while this
-    call is still blocked.
+    GET /run/{execution_id} to poll status/results; POST
+    /run/{execution_id}/stop to cancel a run in progress (cooperative --
+    see nodes/train/supervised.py's step loop; stops between steps, not
+    mid-backward-pass, and whatever's been trained so far is kept, not
+    discarded).
+
+    Progress streaming exists separately for MonitorNode-family nodes
+    (see nodes/monitor/) via the injected ExecutionContext's monitor_bus,
+    watchable at /nodegraph/monitor/{monitor_id}/stream regardless of
+    this endpoint's own polling.
     """
     nodes = [graph_executor.NodeSpec(id=n.id, class_name=n.class_name, params=n.params)
              for n in payload.nodes]
     edges = [graph_executor.EdgeSpec(from_node=e.from_node, from_port=e.from_port,
                                       to_node=e.to_node, to_port=e.to_port)
              for e in payload.edges]
-    context = ExecutionContext(monitor_bus=request.app.state.monitor_bus)
-    try:
-        executor = graph_executor.GraphExecutor(nodes, edges, context)
-        results = executor.run()
-    except graph_executor.GraphError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
-    return {"results": [
-        {"node_id": r.node_id, "ok": r.ok, "outputs": r.outputs, "error": r.error}
-        for r in results
-    ]}
+    execution_id = _registry.start(nodes, edges, request.app.state.monitor_bus)
+    return {"execution_id": execution_id}
+
+
+@router.get("/run/{execution_id}")
+def run_status(execution_id: str):
+    execution = _registry.get(execution_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail=f"No execution with id {execution_id}.")
+    return {
+        "status": execution.status,
+        "results": execution.results,
+        "error": execution.error,
+        "started_at": execution.started_at,
+    }
+
+
+@router.post("/run/{execution_id}/stop")
+def stop_run(execution_id: str):
+    if not _registry.stop(execution_id):
+        raise HTTPException(status_code=404, detail=f"No execution with id {execution_id}.")
+    return {"ok": True}

@@ -665,6 +665,211 @@ class ChunkedXPUCAME:
             _move_optional_list(lst, dev)
 
 
+class ForeachXPUCAME:
+    """CAME (Luo et al., ACL 2023) -- same algorithm and formulas as
+    ChunkedXPUCAME above (verified against it directly, not re-derived
+    from the paper -- see smoke_test_foreach_came_equivalence.py), but
+    built for LoRA's parameter scale instead of full fine-tuning's.
+
+    Two things ChunkedXPUCAME does that only make sense for a scale LoRA
+    never reaches:
+
+    1. A shared, reused scratch buffer (torch.xpu.MemPool) sized to the
+       single largest parameter, so no more than one parameter's gradient
+       occupies extra memory at a time -- necessary when parameters can be
+       full-fine-tune-sized, pure overhead when the total gradient memory
+       for every LoRA adapter combined is a few MB. This class just clones
+       each gradient directly, same as ForeachXPUAdafactor already does.
+
+    2. Converting every per-parameter normalization scalar (clip_div,
+       vr_mean_sqrt, rr_mean_sqrt) to a Python float before using it --
+       ChunkedXPUCAME's own comments say this was done deliberately, to
+       dodge a *different*, apparently worse XPU sync ChunkedXPUAdafactor's
+       author had found with plain 0-dim-tensor broadcasts. But
+       ForeachXPUAdafactor (this file, above) already contradicts that:
+       its own comments ("avoid .item() sync by doing tensor
+       multiplication") show that keeping these as 0-dim tensors and
+       using tensor-tensor ops instead -- never calling float()/.item() at
+       all -- avoids the sync entirely, for the exact same shape of
+       operation. That's the fix applied here, following that already-
+       established pattern rather than inventing a new one: every
+       scalar-shaped intermediate (clip_div, the two mean_sqrt values)
+       stays a device tensor for its entire life, including the
+       clip_div != 1.0 check -- which becomes an unconditional divide by
+       a tensor (dividing by a tensor holding 1.0 is a numerically exact
+       no-op, so removing the Python-level branch changes nothing about
+       the result, only removes the sync needed to evaluate the branch).
+
+    For a real LoRA-scale parameter count (order of 100+ small adapter
+    tensors), ChunkedXPUCAME forces roughly 3 device-to-host
+    synchronizations *per parameter, per step* (clip, vr_mean, rr_mean) --
+    a plausible, measured explanation for a training step's optimizer
+    phase taking far longer than its forward+backward combined, since
+    each sync is a real wall-clock stall independent of how little data
+    it's moving. This class removes all of them; nothing here is queued
+    for a host round-trip until PyTorch actually needs one (e.g. saving a
+    checkpoint), which for a full graph-async run is effectively never
+    during the step itself.
+    """
+
+    def __init__(self, params, lr=1e-4, eps=(1e-30, 1e-16),
+                 clip_threshold=1.0, betas=(0.9, 0.999, 0.9999),
+                 weight_decay=0.0, device="xpu"):
+        if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
+            self.params = []
+            self.param_lr = []
+            for group in params:
+                p_list = group['params'] if isinstance(group['params'], (list, tuple)) else [group['params']]
+                group_lr = group.get('lr', lr)
+                for p in p_list:
+                    self.params.append(p)
+                    self.param_lr.append(group_lr)
+        else:
+            self.params = list(params)
+            self.param_lr = [lr] * len(self.params)
+
+        self.lr = lr
+        self.eps1, self.eps2 = eps
+        self.clip_threshold = clip_threshold
+        self.beta1, self.beta2, self.beta3 = betas
+        self.wd = weight_decay
+        self.device = device
+        self.t = 0
+
+        n = len(self.params)
+        self.vr = [None] * n
+        self.vc = [None] * n
+        self.vs = [None] * n
+        self.exp_avg = [None] * n
+        self.res_r = [None] * n
+        self.res_c = [None] * n
+
+    def zero_grad(self):
+        for p in self.params:
+            if p.grad is not None:
+                p.grad.zero_()
+
+    def _factored_normalize(self, sq, row_buf, col_buf, beta, dev):
+        """Identical formula to ChunkedXPUCAME._factored_normalize -- only
+        difference is the last return value stays a 0-dim tensor instead
+        of being converted with float()."""
+        row_new = sq.mean(dim=1)
+        col_new = sq.mean(dim=0)
+        if row_buf is None:
+            row_buf = torch.zeros_like(row_new)
+            col_buf = torch.zeros_like(col_new)
+        elif row_buf.device != dev:
+            row_buf, col_buf = row_buf.to(dev), col_buf.to(dev)
+        row_buf.mul_(beta).add_(row_new, alpha=1.0 - beta)
+        col_buf.mul_(beta).add_(col_new, alpha=1.0 - beta)
+        row_mean_sqrt = row_buf.mean().add(self.eps1).sqrt()  # stays a tensor -- see class docstring
+        row_sqrt = row_buf.sqrt().add(self.eps1)
+        col_sqrt = col_buf.sqrt().add(self.eps1)
+        return row_buf, col_buf, row_sqrt, col_sqrt, row_mean_sqrt
+
+    def step(self, n_steps: int = 1):
+        self.t += n_steps
+        dev = self.device
+
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+
+            lr = self.param_lr[i]
+            n = p.numel()
+            orig_shape = p.shape
+
+            g = p.grad.detach().float()
+            p.grad = None
+
+            factored = g.dim() >= 2
+            if factored:
+                g_view = g.reshape(g.shape[0], -1)
+                g2 = g_view.pow(2).add(self.eps1)
+                self.vr[i], self.vc[i], vr_sqrt, vc_sqrt, vr_mean_sqrt = \
+                    self._factored_normalize(g2, self.vr[i], self.vc[i], self.beta2, dev)
+
+                g_view.div_(vr_sqrt.unsqueeze(1))
+                g_view.div_(vc_sqrt.unsqueeze(0))
+                g_view.mul_(vr_mean_sqrt)
+            else:
+                g2 = g.pow(2).add(self.eps1)
+                if self.vs[i] is None:
+                    self.vs[i] = torch.zeros_like(g2)
+                elif self.vs[i].device != dev:
+                    self.vs[i] = self.vs[i].to(dev)
+                self.vs[i].mul_(self.beta2).add_(g2, alpha=1.0 - self.beta2)
+                g.div_(self.vs[i].sqrt().add(self.eps1))
+
+            # Clip the *normalized* update by its own RMS -- applied after
+            # normalization, matching ChunkedXPUCAME exactly (my first pass
+            # at this had the order backwards -- caught by
+            # smoke_test_foreach_came_equivalence.py, not by inspection).
+            # Unconditional tensor divide instead of the float()+branch
+            # ChunkedXPUCAME uses -- see class docstring.
+            rms_g = g.norm() / (n ** 0.5 + 1e-8)
+            clip_div = torch.clamp(rms_g / self.clip_threshold, min=1.0)
+            g.div_(clip_div)
+
+            ea = self.exp_avg[i]
+            if ea is None:
+                ea = torch.zeros_like(g)
+            elif ea.device != dev:
+                ea = ea.to(dev)
+            ea.mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
+            self.exp_avg[i] = ea
+
+            if factored:
+                g.sub_(ea).pow_(2).add_(self.eps2)
+                res_view = g.reshape(g.shape[0], -1)
+                self.res_r[i], self.res_c[i], rr_sqrt, rc_sqrt, rr_mean_sqrt = \
+                    self._factored_normalize(res_view, self.res_r[i], self.res_c[i],
+                                             self.beta3, dev)
+                update_view = g.reshape(g.shape[0], -1)
+                update_view.copy_(ea.reshape(g.shape[0], -1))
+                update_view.div_(rr_sqrt.unsqueeze(1))
+                update_view.div_(rc_sqrt.unsqueeze(0))
+                update_view.mul_(rr_mean_sqrt)
+                update = g.reshape(orig_shape)
+            else:
+                g.copy_(ea)
+                update = g
+
+            if self.wd != 0:
+                p.data.add_(p.data, alpha=-self.wd * lr)
+            p.data.add_(update.to(dtype=p.dtype), alpha=-lr)
+
+    def reset_states(self):
+        for i in range(len(self.params)):
+            self.vr[i] = None; self.vc[i] = None; self.vs[i] = None
+            self.exp_avg[i] = None
+            self.res_r[i] = None; self.res_c[i] = None
+
+    def decay_states(self, factor: float):
+        if factor <= 0:
+            return self.reset_states()
+        for i in range(len(self.params)):
+            for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                        self.res_r, self.res_c):
+                if lst[i] is not None:
+                    lst[i].mul_(factor)
+
+    def free_states(self):
+        del self.vr, self.vc, self.vs, self.exp_avg, self.res_r, self.res_c
+        gc.collect()
+
+    def offload_states_to_cpu(self):
+        for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                    self.res_r, self.res_c):
+            _move_optional_list(lst, "cpu")
+
+    def reload_states_to_device(self, device=None):
+        dev = device if device is not None else self.device
+        for lst in (self.vr, self.vc, self.vs, self.exp_avg,
+                    self.res_r, self.res_c):
+            _move_optional_list(lst, dev)
+
+
 # ---------------------------------------------------------------------------
 # ForeachXPUAdafactor — vectorized update using torch._foreach ops
 # ---------------------------------------------------------------------------

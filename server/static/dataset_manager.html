@@ -53,6 +53,7 @@
                         <select id="gen-source-type" class="cfg-input">
                             <option value="teacher">Teacher (Synthetic)</option>
                             <option value="real">Real (VAE Encoding)</option>
+                            <option value="lora">LoRA (Images + Captions)</option>
                         </select>
                     </div>
                 </div>
@@ -252,6 +253,64 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- LoRA Mode -->
+                    <div id="gen-lora-options" style="display:none;">
+                        <div class="generator-grid">
+                            <div class="gen-col">
+                                <div class="option-row">
+                                    <label class="option-label">VAE Source (Checkpoint)</label>
+                                    <select id="gen-lora-vae-model"></select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Image Directory Path</label>
+                                    <input type="text" id="gen-lora-image-dir" class="cfg-input" placeholder="/path/to/images">
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Target Resolution</label>
+                                    <select id="gen-lora-latent-size">
+                                        <option value="32">256px (32 latent)</option>
+                                        <option value="64" selected>512px (64 latent)</option>
+                                        <option value="96">768px (96 latent)</option>
+                                        <option value="128">1024px (128 latent)</option>
+                                    </select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Resize Mode</label>
+                                    <select id="gen-lora-resize-mode">
+                                        <option value="center_crop" selected>Center Crop — fill square, no distortion</option>
+                                        <option value="fit">Fit — preserve full aspect ratio, non-square</option>
+                                        <option value="pad">Pad — preserve aspect ratio, fill with black</option>
+                                        <option value="resize">Stretch — distort to square</option>
+                                    </select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Model Type</label>
+                                    <select id="gen-lora-model-type">
+                                        <option value="eps" selected>eps (standard)</option>
+                                        <option value="vpred">v-prediction</option>
+                                    </select>
+                                </div>
+                                <div class="option-row">
+                                    <label class="option-label">Negative Prompt (optional, same for all images)</label>
+                                    <input type="text" id="gen-lora-negative-prompt" class="cfg-input" placeholder="blurry, low quality...">
+                                </div>
+                                <button class="btn btn-start btn-block mt-1">START INGESTION TASK</button>
+                            </div>
+                            <div class="gen-col p-1-5">
+                                <label><input type="checkbox" id="gen-lora-recursive" checked> Recursive Scanning</label>
+                                <p class="text-dim mt-1" style="font-size: 0.8rem;">
+                                    Just images and captions -- each image needs a same-name .txt file next
+                                    to it for its caption (e.g. cat.png + cat.txt), empty caption if missing.
+                                    No timestep/noise grid baked in at ingestion -- unlike Real mode, this
+                                    format samples a fresh noise/timestep every training epoch instead
+                                    (configurable on the ManagedDatasetSourceNode in the graph editor:
+                                    t_low / t_high / t_mode).
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </section>

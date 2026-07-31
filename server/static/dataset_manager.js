@@ -75,6 +75,13 @@
         });
     }
 
+    function updateModeVisibility() {
+        const type = document.getElementById("gen-source-type").value;
+        document.getElementById("gen-teacher-options").style.display = type === "teacher" ? "grid" : "none";
+        document.getElementById("gen-real-options").style.display = type === "real" ? "block" : "none";
+        document.getElementById("gen-lora-options").style.display = type === "lora" ? "block" : "none";
+    }
+
     function initGeneratorUI() {
         const typeSelect = document.getElementById("gen-source-type");
         const posModeSelect = document.getElementById("gen-pos-mode");
@@ -82,9 +89,7 @@
 
         if (typeSelect) {
             typeSelect.onchange = () => {
-                const isTeacher = typeSelect.value === "teacher";
-                document.getElementById("gen-teacher-options").style.display = isTeacher ? "grid" : "none";
-                document.getElementById("gen-real-options").style.display = isTeacher ? "none" : "block";
+                updateModeVisibility();
                 saveSettings();
             };
         }
@@ -151,11 +156,8 @@
             });
 
             // Trigger visual updates
-            const typeSelect = document.getElementById("gen-source-type");
-            if (typeSelect) {
-                const isTeacher = typeSelect.value === "teacher";
-                document.getElementById("gen-teacher-options").style.display = isTeacher ? "grid" : "none";
-                document.getElementById("gen-real-options").style.display = isTeacher ? "none" : "block";
+            if (document.getElementById("gen-source-type")) {
+                updateModeVisibility();
             }
 
             const ev = new Event("change");
@@ -916,7 +918,7 @@
                 payload.neg_max_keywords = getInt("gen-neg-max");
             }
 
-        } else {
+        } else if (type === "real") {
             payload.model_name = getStr("gen-vae-model");
             payload.image_dir = getStr("gen-image-dir");
             payload.recursive = document.getElementById("gen-recursive").checked;
@@ -927,6 +929,15 @@
             payload.t_low = getInt("gen-real-t-low");
             payload.t_high = getInt("gen-real-t-high");
             payload.n_timesteps = getInt("gen-real-n-timesteps");
+
+        } else if (type === "lora") {
+            payload.model_name = getStr("gen-lora-vae-model");
+            payload.image_dir = getStr("gen-lora-image-dir");
+            payload.recursive = document.getElementById("gen-lora-recursive").checked;
+            payload.resize_mode = getStr("gen-lora-resize-mode");
+            payload.ingest_latent_size = parseInt(getStr("gen-lora-latent-size"));
+            payload.model_type = getStr("gen-lora-model-type");
+            payload.negative_prompt = getStr("gen-lora-negative-prompt");
         }
 
         fetch("/api/datasets/tasks/start", {
@@ -964,7 +975,8 @@
             .then(data => {
                 const selects = [
                     document.getElementById("gen-teacher-model"),
-                    document.getElementById("gen-vae-model")
+                    document.getElementById("gen-vae-model"),
+                    document.getElementById("gen-lora-vae-model")
                 ];
                 selects.forEach(select => {
                     if (!select) return;
@@ -1009,6 +1021,9 @@
         
         const btnGenR = document.querySelector("#gen-real-options .btn-start");
         if (btnGenR) btnGenR.onclick = startGeneration;
+
+        const btnGenL = document.querySelector("#gen-lora-options .btn-start");
+        if (btnGenL) btnGenL.onclick = startGeneration;
 
         const btnSelectAll = document.getElementById("btn-select-all");
         if (btnSelectAll) {

@@ -56,6 +56,9 @@ Status of each strategy, stated precisely:
     XPU hardware" status. Its MemoryManager-backed scratch-buffer
     behavior is already covered by strategies/chunked.py's own tests
     (algorithm-agnostic), not re-tested here.
+  - "foreach": same equivalence verification (bit-exact vs. "simple" on
+    CPU, algorithm-agnostic, see strategies/foreach.py's own tests). Not
+    yet run on real XPU hardware.
 """
 
 from __future__ import annotations
@@ -69,10 +72,12 @@ from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .strategies.simple import SimpleLoopStrategy
 from .strategies.chunked import ChunkedScratchBufferStrategy
+from .strategies.foreach import ForeachApplyStrategy
 
 _STRATEGIES = {
     "simple": SimpleLoopStrategy,
     "chunked": ChunkedScratchBufferStrategy,
+    "foreach": ForeachApplyStrategy,
 }
 
 
@@ -102,9 +107,9 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                                   "conservatively instead."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="'simple' or 'chunked' -- both equivalence-verified "
-                              "against the legacy reference, neither yet run on real "
-                              "XPU hardware. See this module's docstring."),
+                          doc="'simple', 'chunked', or 'foreach' -- all three "
+                              "equivalence-verified against the legacy reference, none "
+                              "yet run on real XPU hardware. See this module's docstring."),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:

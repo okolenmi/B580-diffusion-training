@@ -29,6 +29,8 @@ Status of each combination, stated precisely:
     docstring for exactly what it does and doesn't optimize yet (no
     MemPool integration, and CAMEAlgorithm doesn't yet use the scratch
     hint for its own internal intermediates).
+  - "foreach": bit-exact vs. "simple" on CPU (algorithm-agnostic check,
+    see strategies/foreach.py). Not yet run on real XPU hardware.
 
 Once "chunked" (or a further-optimized successor) is real-hardware
 validated and matches core/optimizers.py's ChunkedXPUCAME on actual VRAM
@@ -48,10 +50,12 @@ from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .strategies.simple import SimpleLoopStrategy
 from .strategies.chunked import ChunkedScratchBufferStrategy
+from .strategies.foreach import ForeachApplyStrategy
 
 _STRATEGIES = {
     "simple": SimpleLoopStrategy,
     "chunked": ChunkedScratchBufferStrategy,
+    "foreach": ForeachApplyStrategy,
 }
 
 
@@ -75,8 +79,10 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
                                   "same generic mechanism, not a CAME-specific addition)."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="'simple' (real-hardware validated) or 'chunked' "
-                              "(equivalence-verified, not yet real-hardware validated)."),
+                          doc="'simple' (real-hardware validated), 'chunked' "
+                              "(equivalence-verified, not yet real-hardware validated), "
+                              "or 'foreach' (equivalence-verified, see strategies/foreach.py; "
+                              "not yet real-hardware validated)."),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:

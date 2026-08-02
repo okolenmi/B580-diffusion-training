@@ -180,6 +180,21 @@ single difference from the old pipeline's VRAM footprint), and
 (resume training / frozen base for `LoRAPhaseSplitNode` -- same node,
 same underlying operation, just different downstream wiring).
 
+**2026-08-02 update:** optimizer work resumed, by explicit user
+direction (overriding the 2026-07-24 note above that it was deprioritized
+-- that note is about default priority, not a permanent freeze). Two new
+pieces, both real reimplementations, neither wrapping legacy code:
+`AdamWAlgorithm` and `ForeachApplyStrategy`, plus `ComposedAdamWOptimizerNode`
+wiring them together the same way `ComposedCAMEOptimizerNode` does for
+CAME. Full writeup, including a real bf16 rounding bug the equivalence
+test caught in `ForeachApplyStrategy` before it shipped, in "Fourth data
+point: AdamWAlgorithm, and a third strategy" below, alongside the
+pre-existing CAME/Adafactor writeup. Updated file list, verification
+table, and "Concrete next step" list are further down in this same
+optimizer section -- this entry is only a pointer, kept short per the
+2026-07-24 comment-budget rule which applies to this doc's *new* entries
+too, not just `.py` files.
+
 ---
 
 **What follows below (pre-2026-07-24) is the original optimizer-subsystem
@@ -215,21 +230,34 @@ nodes/optimizer/algorithms/adafactor.py    AdafactorAlgorithm -- FRESH reimpleme
                                             re-verified against core.optimizers.ChunkedXPUAdafactor
                                             directly; scale_parameter=False, weight_decay=0
                                             only -- see "Third data point" section below
+nodes/optimizer/algorithms/adamw.py        AdamWAlgorithm -- FRESH reimplementation,
+                                            re-verified against core.optimizers.CPUAdamW
+                                            directly -- see "Fourth data point" section below
 nodes/optimizer/strategies/base.py         ExecutionStrategy (ABC)
 nodes/optimizer/strategies/simple.py       SimpleLoopStrategy -- real-hardware validated
 nodes/optimizer/strategies/chunked.py      ChunkedScratchBufferStrategy -- real-hardware
                                             validated, now MemoryManager-backed for real
                                             cross-step buffer caching (see "two-axis
                                             distinction" below)
+nodes/optimizer/strategies/foreach.py      ForeachApplyStrategy -- algorithm-agnostic,
+                                            batches the decay+delta apply step via
+                                            torch._foreach_*; bit-exact vs. SimpleLoopStrategy
+                                            once a real bf16 rounding bug was found and fixed
+                                            -- see "Fourth data point" section below
 nodes/optimizer/composed.py                ComposedOptimizerHandle -- generic glue for
                                             any Algorithm + any ExecutionStrategy
 nodes/optimizer/composed_came.py           ComposedCAMEOptimizerNode -- CAME algorithm,
-                                            selectable strategy ("simple" or "chunked")
+                                            selectable strategy ("simple", "chunked", or
+                                            "foreach")
 nodes/optimizer/composed_adafactor.py      ComposedAdafactorOptimizerNode -- Adafactor
-                                            algorithm, selectable strategy, scale_parameter
+                                            algorithm, selectable strategy ("simple",
+                                            "chunked", or "foreach"), scale_parameter
                                             and weight_decay both fully supported (see
                                             "Universal Algorithm contract" section below),
                                             default off for safety, not legacy parity
+nodes/optimizer/composed_adamw.py          ComposedAdamWOptimizerNode -- AdamW algorithm,
+                                            selectable strategy ("simple", default, or
+                                            "chunked" or "foreach")
 nodes/smoke_tests/smoke_test_composed_came.py   Real-hardware test, run with:
                                             `python nodes/smoke_tests/smoke_test_composed_came.py`
 nodes/smoke_tests/smoke_test_memory_manager.py  Real-torch (CPU) test for MemoryManager, run with:
@@ -248,6 +276,18 @@ nodes/smoke_tests/smoke_test_came_inplace_equivalence.py  Bit-exact check (torch
 nodes/smoke_tests/smoke_test_adafactor_inplace_equivalence.py  Same, for AdafactorAlgorithm
 nodes/smoke_tests/smoke_test_composed_adafactor.py     Real-hardware test, mirrors
                                             smoke_test_composed_came.py
+nodes/smoke_tests/smoke_test_adamw_equivalence.py      Real-torch (CPU) numerical check
+                                            against core.optimizers.CPUAdamW directly,
+                                            all three strategies, float32 and bf16,
+                                            weight_decay on/off
+nodes/smoke_tests/smoke_test_composed_adamw.py         Real-hardware test, mirrors
+                                            smoke_test_composed_adafactor.py
+nodes/smoke_tests/smoke_test_foreach_strategy_equivalence.py   Bit-exact check
+                                            (torch.equal()) between ForeachApplyStrategy and
+                                            SimpleLoopStrategy, across all three Algorithms
+                                            (algorithm-agnostic by construction) -- this is
+                                            the test that caught the bf16 foreach_mul_ bug,
+                                            see "Fourth data point" section below
 nodes/smoke_tests/xpu_mempool_hardware_check.py        Real-XPU-only, heavier, run manually
                                             (excluded from run_all.py's glob on purpose):
                                             `python nodes/smoke_tests/xpu_mempool_hardware_check.py`
@@ -270,6 +310,9 @@ proven" -- check which level a given piece has actually reached):**
 | `ComposedAdafactorOptimizerNode` (both strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adafactor.py` | **yes** -- user-run on real XPU hardware, both strategies |
 | `CAMEAlgorithm` axis-2 in-place path | yes -- bit-exact (`torch.equal()`) vs. out-of-place, `smoke_test_came_inplace_equivalence.py` | not yet |
 | `AdafactorAlgorithm` axis-2 in-place path | yes -- bit-exact (`torch.equal()`) vs. out-of-place, `smoke_test_adafactor_inplace_equivalence.py` | not yet |
+| `AdamWAlgorithm` formulas | yes, real torch (CPU) directly against `core.optimizers.CPUAdamW` -- `smoke_test_adamw_equivalence.py`, all three strategies, float32 and bf16, weight_decay on/off | not yet |
+| `ComposedAdamWOptimizerNode` (all three strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adamw.py` | not yet |
+| `ForeachApplyStrategy` | yes -- bit-exact (`torch.equal()`) vs. `SimpleLoopStrategy`, all three Algorithms, float32 and bf16, `smoke_test_foreach_strategy_equivalence.py`. Caught and required a real fix, not just a passing run first try -- see "Fourth data point" below | not yet |
 
 **The one open architectural question -- now answered, precisely, not
 just "yes it generalizes":** does the Algorithm/ExecutionStrategy split
@@ -324,10 +367,28 @@ in general.
    for either -- next real step for this specific piece.
 5. A `FusedBackwardHookStrategy` -- needs reading `FusedOptimizerHandle`
    and the legacy `FusedXPUAdafactor` first; not yet scoped in detail.
-   Next concrete step for this package overall.
+   Still the concrete next step for closing out the legacy-import list
+   entirely (`nodes/optimizer/fused_adafactor.py` is now the only
+   remaining Node with no non-legacy alternative at all -- `adamw.py`'s
+   `AdamWOptimizerNode` and `foreach_adafactor.py`/`foreach_came.py` all
+   have one now, via item 7 below, even though none have been formally
+   retired -- see that item for why not).
 6. Longer-term, still not started: wiring `nodes/` into the actual
    training pipeline (`core/trainer.py` currently knows nothing about
    any of this).
+7. [Done, 2026-08-02] `AdamWAlgorithm` + `ComposedAdamWOptimizerNode`,
+   and `ForeachApplyStrategy` (wired into all three composed nodes, not
+   just AdamW's). Full writeup in "Fourth data point" below. This was
+   *added* by explicit user request, not part of the original numbered
+   sequence above -- it doesn't retire `adamw.py`, `foreach_adafactor.py`,
+   or `foreach_came.py` (those still import `core.optimizers` directly
+   and still work); it gives each of them a real, equivalence-verified,
+   non-legacy alternative to eventually switch to, same "add first,
+   retire later once real-hardware-validated" discipline as
+   `composed_came.py`/`composed_adafactor.py` already established for
+   CAME/Adafactor (see "Once 'chunked'... is real-hardware validated"
+   note a few paragraphs below). Retiring any of the three legacy
+   wrappers is real, separate, deliberately-not-this-step work.
 
 **Other docs, and how they relate:**
 - `docs/node_architecture_refactor_plan.md` -- the original, higher-level
@@ -1248,6 +1309,122 @@ CPU, real torch. **Neither algorithm's in-place path has been run on
 real XPU hardware yet** -- next concrete step for this specific piece
 (the broader package's next step is a `FusedBackwardHookStrategy`, see
 "Concrete next step" above).
+
+## Fourth data point: AdamWAlgorithm, and a third strategy
+
+**Why AdamW got a fresh `Algorithm` at all, rather than staying a
+`core.optimizers.CPUAdamW` wrapper:** the user's direct instruction this
+session -- new node-graph work is strict OOP, old code is reference-only,
+and a maintainable non-legacy path was explicitly asked for. `CPUAdamW`
+itself is a real, different design (CPU-resident, round-trips state to
+CPU every step -- see its own module for why) that this doesn't try to
+replace on its own terms; what it replaces is the *need to import
+`core.optimizers` at all* for a device-resident, strategy-selectable
+AdamW built entirely from this package's own pieces. `AdamWOptimizerNode`
+(the `CPUAdamW`-wrapping Node) hasn't been touched or retired -- same
+add-first discipline as CAME/Adafactor's composed nodes.
+
+**The formula itself is the well-known bias-corrected-lr AdamW variant,
+matched exactly to `CPUAdamW`'s own choices, both checked by reading that
+class directly, not assumed:** state is `m`/`v`, always float32
+regardless of the parameter's own dtype; `t` and the bias-correction
+factor (`sqrt(1-b2^t)/(1-b1^t)`) are tracked once per real step via
+`begin_step()`, the same lifecycle hook `AdafactorAlgorithm`'s `rho_t`
+already uses, not a new mechanism; decoupled weight decay is applied at
+the *base* `lr`, not the bias-corrected `lr_t` -- confirmed this is
+`CPUAdamW`'s actual, deliberate choice (not an oversight) by reading its
+source directly, and matched it rather than "fixing" it, since changing
+established optimizer behavior wasn't asked for and would be a real
+behavior change dressed up as a refactor. One thing intentionally *not*
+carried over: `CPUAdamW` unconditionally uses a single scalar `self.lr`
+for every parameter regardless of what per-group `lr` a caller passes it
+(confirmed by reading its `__init__` -- it stores the constructor's `lr`
+argument only, param groups' own `lr` keys are silently ignored).
+`AdamWAlgorithm.compute_update()` instead uses whatever `lr` argument
+`ComposedOptimizerHandle` passes it per parameter, which is how the
+`Algorithm` contract already works for CAME/Adafactor -- functionally
+identical today (`ComposedOptimizerHandle` doesn't yet expose per-param
+`lr` override either, see "Universal Algorithm contract" above), but not
+silently re-baking `CPUAdamW`'s narrower assumption into new code.
+
+**Verified against `CPUAdamW` directly, real torch (CPU), 40 steps, a 2D
+and a 1D parameter together:** `smoke_test_adamw_equivalence.py`, all
+three strategies, weight_decay on/off, float32 (~3e-8 max diff, tolerance
+1e-5) and bf16 (~5e-3 max diff, tolerance 1e-2 -- same order of tolerance
+`AdafactorAlgorithm`'s own bf16 checks use, for the same reason: bf16
+rounding order sensitivity, not a formula error). `ComposedAdamWOptimizerNode`
+itself gets the same lifecycle test as CAME/Adafactor
+(`smoke_test_composed_adamw.py`): toy regression, offload/reload round
+trip with exact state preservation, decay/lr-update/reset/free, and the
+`chunked`-only `MemoryManager` caching check. All pass, CPU, real torch.
+**Not yet run on real XPU hardware** -- consistent with every other
+not-yet-user-run piece in the table above.
+
+### `ForeachApplyStrategy`, and a real bf16 bug the equivalence test caught
+
+**What it actually batches, stated precisely because the legacy
+`ForeachXPUAdafactor` this is loosely inspired by overclaims this exact
+point:** reading `core.optimizers.ForeachXPUAdafactor` directly showed
+its "factored" branch (parameters with `dim >= 2` -- i.e. most of what
+LoRA actually trains, `lora_A`/`lora_B` matrices) falls back to a plain
+per-parameter Python loop, not real `torch._foreach_*` batching, because
+the row/column reductions inside factored Adafactor math aren't
+shape-uniform across an arbitrary parameter set. Only its "unfactored"
+branch batches for real. Rather than reproduce that same
+partially-true "foreach" naming, `ForeachApplyStrategy` batches something
+narrower but honestly, fully general: the mechanical apply step every
+`Algorithm` shares regardless of its own math -- `param.data *= decay;
+param.data -= delta` -- grouped by `(device, dtype)` (torch's `foreach_*`
+ops need matching dtype/device across a list, not matching shape; shapes
+differing pairwise is fine). Per-parameter `compute_update()` itself
+still runs one call at a time, same cost as `SimpleLoopStrategy` -- this
+strategy reduces Python-interpreter/kernel-launch overhead specifically
+for the apply step, which matters more, not less, for LoRA's
+many-small-parameters case than for a handful of huge tensors. No
+`MemoryManager`/scratch-buffer reuse yet, unlike
+`ChunkedScratchBufferStrategy` -- first slice, buffer reuse on top is
+real, separate follow-up work.
+
+**Algorithm-agnostic by construction, so it was added to all three
+composed nodes' `_STRATEGIES` dicts at once** (`composed_came.py`,
+`composed_adafactor.py`, `composed_adamw.py`) -- no CAME/Adafactor/AdamW-
+specific code was needed, which is the entire point of the
+Algorithm/ExecutionStrategy split proving out again on a third data
+point.
+
+**The bug, found by the equivalence test doing its actual job, not
+skipped past:** first version applied `decay` via
+`torch._foreach_mul_(tensors, list_of_python_floats)` -- the natural
+reading of the ScalarList overload. `smoke_test_foreach_strategy_equivalence.py`
+(bit-exact `torch.equal()` vs. `SimpleLoopStrategy`, all three
+algorithms, float32 and bf16) failed on Adafactor+bf16 specifically,
+first run. Isolated directly, not guessed at: 2000 random-tensor trials
+comparing eager `.mul_()` against `torch._foreach_mul_` with the same
+scalar, both bf16 -- **`torch._foreach_sub_` matched eager exactly, 0/2000
+mismatches; `torch._foreach_mul_`'s ScalarList overload (`list[float]`)
+diverged on 1872/2000**, almost certainly a different internal rounding
+path (likely a fused multi-tensor kernel with different intermediate
+precision) than plain eager `bf16 * scalar`. Why it only showed up for
+Adafactor and not CAME/AdamW in the first run: the bug is latent in all
+three (it's a property of the op, not the algorithm), CAME/AdamW's
+particular random gradients just didn't cross a bf16 rounding boundary
+within 25 steps that run -- a reminder that a passing bit-exact check
+across *some* configurations doesn't clear the ones it didn't happen to
+stress, which is exactly why this test spans all three algorithms rather
+than testing the strategy against just one. **Root-caused and fixed**,
+not just tolerance-relaxed until it passed: passing each decay scalar as
+a 0-dim `torch.tensor(decay, dtype=torch.float32)` instead of a bare
+Python float routes `torch._foreach_mul_` through the same code path as
+eager -- confirmed bit-exact across 3500+ trials afterward (mixed shapes,
+realistic decay magnitudes close to 1.0, both float32 and bf16). See the
+`decay`-handling comment in `strategies/foreach.py`'s `step()` for the
+fix itself. Re-ran the full smoke suite after the fix, including
+`smoke_test_composed_came.py`/`smoke_test_composed_adafactor.py` (which
+picked up `"foreach"` automatically, no test changes needed, since both
+iterate their own module's `_STRATEGIES` dict) -- all pass.
+
+**Not yet run on real XPU hardware** -- same status as everything else
+in the "Concrete next step" list not yet marked done.
 
 ## What changes for the playground UI
 

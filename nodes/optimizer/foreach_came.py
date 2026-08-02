@@ -67,6 +67,15 @@ class ForeachCAMEOptimizerNode(OptimizerNode):
         "betas": Port(name="betas", type=tuple, required=False, default=(0.9, 0.999, 0.9999)),
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=0.0),
         "device": Port(name="device", type=str, required=False, default="xpu"),
+        "verbose_profile": Port(
+            name="verbose_profile", type=bool, required=False, default=False,
+            doc="Per-phase timing breakdown (cast/normalize/clip/momentum+residual/update) "
+                "printed every step, with a device sync between each phase for real numbers. "
+                "Also prints which optimizer class is actually active either way, "
+                "unconditionally, even with this off -- if you expected ForeachXPUCAME and "
+                "the server log says ChunkedXPUCAME, that's the graph still wired to the old "
+                "CAMEOptimizerNode, not this one.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:
@@ -80,6 +89,7 @@ class ForeachCAMEOptimizerNode(OptimizerNode):
             betas=inputs.get("betas", self.INPUTS["betas"].default),
             weight_decay=inputs.get("weight_decay", self.INPUTS["weight_decay"].default),
             device=inputs.get("device", self.INPUTS["device"].default),
+            verbose_profile=inputs.get("verbose_profile", self.INPUTS["verbose_profile"].default),
         )
         result = {"optimizer": ForeachCAMEOptimizerHandle(legacy)}
         self.validate_outputs(result)

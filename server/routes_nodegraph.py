@@ -86,6 +86,29 @@ class _ExecutionRegistry:
             except Exception as e:
                 execution.error = f"{type(e).__name__}: {e}"
                 execution.status = "error"
+            finally:
+                # By the time this runs, executor.run() has already
+                # returned -- its own stack frame held the actual heavy
+                # per-node outputs (models, tensors, optimizer state) and
+                # released them the moment it returned, before this
+                # `finally` block even starts. What's left is PyTorch's
+                # caching allocator still holding that freed device memory
+                # reserved for this process to reuse, rather than handing
+                # it back to the driver -- which is why VRAM can still
+                # look "full" in nvidia-smi/xpu-smi even once every
+                # reference is really gone. empty_cache() is what actually
+                # returns it; gc.collect() first matters because CPython's
+                # refcounting alone won't free anything sitting in a
+                # reference cycle (an nn.Module's parent/child
+                # back-references, or an autograd graph, are exactly that
+                # shape).
+                import gc
+                gc.collect()
+                try:
+                    from core.comfy_setup import xpu_empty_cache
+                    xpu_empty_cache()
+                except Exception as cleanup_exc:  # noqa: BLE001 -- best-effort, never mask the run's own result
+                    print(f"[nodegraph] VRAM cleanup after run failed (non-fatal): {cleanup_exc}")
 
         threading.Thread(target=_worker, daemon=True).start()
         return execution_id

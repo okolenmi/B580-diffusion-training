@@ -85,12 +85,50 @@ def check_two_concurrent_runs_have_independent_cancel_events():
     print("    PASS")
 
 
+def check_cleanup_runs_after_a_finished_execution():
+    print("[VRAM cleanup (gc.collect + xpu_empty_cache) actually runs after a run finishes]")
+    import unittest.mock as mock
+    calls = []
+    with mock.patch("core.comfy_setup.xpu_empty_cache", side_effect=lambda: calls.append(1)):
+        registry = _ExecutionRegistry()
+        nodes = [NodeSpec(id="a", class_name="IntConstantNode", params={"value": 1})]
+        execution_id = registry.start(nodes, [], monitor_bus=None)
+        _wait_for(registry, execution_id)
+        # _wait_for only waits for `status` to leave "running", which this
+        # implementation sets *before* the finally: block's cleanup runs --
+        # give the (already-finishing) worker thread a moment to reach it.
+        deadline = time.time() + 2.0
+        while not calls and time.time() < deadline:
+            time.sleep(0.01)
+    assert calls, "xpu_empty_cache was never called after the run finished"
+    print("    PASS")
+
+
+def check_cleanup_runs_even_after_a_failed_execution():
+    print("[cleanup also runs when the graph itself errors, not just on success]")
+    import unittest.mock as mock
+    calls = []
+    with mock.patch("core.comfy_setup.xpu_empty_cache", side_effect=lambda: calls.append(1)):
+        registry = _ExecutionRegistry()
+        nodes = [NodeSpec(id="a", class_name="NotARealNodeClass", params={})]
+        execution_id = registry.start(nodes, [], monitor_bus=None)
+        execution = _wait_for(registry, execution_id)
+        assert execution.status == "error"
+        deadline = time.time() + 2.0
+        while not calls and time.time() < deadline:
+            time.sleep(0.01)
+    assert calls, "xpu_empty_cache was never called after a failed run"
+    print("    PASS")
+
+
 def main():
     check_normal_run_finishes_with_results()
     check_unknown_class_reports_via_status_poll()
     check_unknown_execution_id()
     check_stop_sets_the_cancel_event()
     check_two_concurrent_runs_have_independent_cancel_events()
+    check_cleanup_runs_after_a_finished_execution()
+    check_cleanup_runs_even_after_a_failed_execution()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

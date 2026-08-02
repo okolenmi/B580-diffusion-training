@@ -427,7 +427,7 @@ class ChunkedXPUCAME:
 
     def __init__(self, params, lr=1e-4, eps=(1e-30, 1e-16),
                  clip_threshold=1.0, betas=(0.9, 0.999, 0.9999),
-                 weight_decay=0.0, device="xpu"):
+                 weight_decay=0.0, device="xpu", verbose_profile=False):
         if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
             self.params = []
             self.param_lr = []
@@ -448,6 +448,7 @@ class ChunkedXPUCAME:
         self.wd = weight_decay
         self.device = device
         self.t = 0
+        self.verbose_profile = verbose_profile
 
         n = len(self.params)
         self.vr = [None] * n
@@ -458,6 +459,15 @@ class ChunkedXPUCAME:
         self.res_c = [None] * n
 
         self._scratch = None
+
+        # See ForeachXPUCAME's identical print, below -- same reason:
+        # cheap, unconditional, answers "which one is actually running"
+        # from the server log directly. If you expected ForeachXPUCAME
+        # and see this instead, that's your answer already, before
+        # reading anything about timing at all.
+        print(f"[Optimizer] ChunkedXPUCAME active: {n} parameter tensor(s), device={device}. "
+              f"This is the slower, per-parameter-synchronizing implementation -- "
+              f"ForeachCAMEOptimizerNode (ForeachXPUCAME) is the fast one for LoRA.")
         self._use_pool = False
         self._pool = None
         self._initialized = False
@@ -714,7 +724,7 @@ class ForeachXPUCAME:
 
     def __init__(self, params, lr=1e-4, eps=(1e-30, 1e-16),
                  clip_threshold=1.0, betas=(0.9, 0.999, 0.9999),
-                 weight_decay=0.0, device="xpu"):
+                 weight_decay=0.0, device="xpu", verbose_profile=False):
         if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
             self.params = []
             self.param_lr = []
@@ -735,6 +745,7 @@ class ForeachXPUCAME:
         self.wd = weight_decay
         self.device = device
         self.t = 0
+        self.verbose_profile = verbose_profile
 
         n = len(self.params)
         self.vr = [None] * n
@@ -743,6 +754,14 @@ class ForeachXPUCAME:
         self.exp_avg = [None] * n
         self.res_r = [None] * n
         self.res_c = [None] * n
+
+        # One-time, unconditional (not gated behind verbose_profile) --
+        # cheap, and directly answers "which optimizer is actually
+        # running" from the server's own console log without needing to
+        # inspect the graph. Print, not a logger call, to match this
+        # file's existing style (e.g. AdamWOptimizerHandle.decay_states'
+        # own print, above).
+        print(f"[Optimizer] ForeachXPUCAME active: {n} parameter tensor(s), device={device}.")
 
     def zero_grad(self):
         for p in self.params:
@@ -771,6 +790,14 @@ class ForeachXPUCAME:
         self.t += n_steps
         dev = self.device
 
+        phase_ms = None
+        if self.verbose_profile:
+            import time as _time
+            from .comfy_setup import xpu_synchronize
+            phase_ms = {"cast": 0.0, "normalize": 0.0, "clip": 0.0, "momentum_residual": 0.0, "update": 0.0}
+            xpu_synchronize()
+            _step_t0 = _time.perf_counter()
+
         for i, p in enumerate(self.params):
             if p.grad is None:
                 continue
@@ -779,8 +806,12 @@ class ForeachXPUCAME:
             n = p.numel()
             orig_shape = p.shape
 
+            if self.verbose_profile:
+                xpu_synchronize(); _t = _time.perf_counter()
             g = p.grad.detach().float()
             p.grad = None
+            if self.verbose_profile:
+                xpu_synchronize(); _now = _time.perf_counter(); phase_ms["cast"] += (_now - _t) * 1000; _t = _now
 
             factored = g.dim() >= 2
             if factored:
@@ -800,6 +831,8 @@ class ForeachXPUCAME:
                     self.vs[i] = self.vs[i].to(dev)
                 self.vs[i].mul_(self.beta2).add_(g2, alpha=1.0 - self.beta2)
                 g.div_(self.vs[i].sqrt().add(self.eps1))
+            if self.verbose_profile:
+                xpu_synchronize(); _now = _time.perf_counter(); phase_ms["normalize"] += (_now - _t) * 1000; _t = _now
 
             # Clip the *normalized* update by its own RMS -- applied after
             # normalization, matching ChunkedXPUCAME exactly (my first pass
@@ -810,6 +843,8 @@ class ForeachXPUCAME:
             rms_g = g.norm() / (n ** 0.5 + 1e-8)
             clip_div = torch.clamp(rms_g / self.clip_threshold, min=1.0)
             g.div_(clip_div)
+            if self.verbose_profile:
+                xpu_synchronize(); _now = _time.perf_counter(); phase_ms["clip"] += (_now - _t) * 1000; _t = _now
 
             ea = self.exp_avg[i]
             if ea is None:
@@ -818,6 +853,9 @@ class ForeachXPUCAME:
                 ea = ea.to(dev)
             ea.mul_(self.beta1).add_(g, alpha=1.0 - self.beta1)
             self.exp_avg[i] = ea
+            if self.verbose_profile:
+                xpu_synchronize(); _now = _time.perf_counter()
+                phase_ms["momentum_residual"] += (_now - _t) * 1000; _t = _now
 
             if factored:
                 g.sub_(ea).pow_(2).add_(self.eps2)
@@ -838,6 +876,14 @@ class ForeachXPUCAME:
             if self.wd != 0:
                 p.data.add_(p.data, alpha=-self.wd * lr)
             p.data.add_(update.to(dtype=p.dtype), alpha=-lr)
+            if self.verbose_profile:
+                xpu_synchronize(); _now = _time.perf_counter(); phase_ms["update"] += (_now - _t) * 1000
+
+        if self.verbose_profile:
+            xpu_synchronize()
+            total_ms = (_time.perf_counter() - _step_t0) * 1000
+            breakdown = " ".join(f"{k}={v:.0f}ms" for k, v in phase_ms.items())
+            print(f"  [ForeachXPUCAME profile] {len(self.params)} params, total={total_ms:.0f}ms -- {breakdown}")
 
     def reset_states(self):
         for i in range(len(self.params)):

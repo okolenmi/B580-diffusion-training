@@ -60,6 +60,24 @@ def xpu_synchronize():
         torch.xpu.synchronize()
 
 
+def xpu_memory_stats() -> dict | None:
+    """(allocated_mb, reserved_mb) or None if there's no XPU. Two separate
+    numbers on purpose: allocated is memory actually holding live tensors
+    right now; reserved is PyTorch's caching allocator's total pool
+    (>= allocated, can stay high after tensors are freed since the
+    allocator keeps freed blocks around for reuse rather than returning
+    them to the driver -- see xpu_empty_cache). Growing *allocated* means
+    something's genuinely still referencing more memory over time (a real
+    leak to chase); reserved growing while allocated stays flat is just
+    the allocator's own bookkeeping, not a leak."""
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return {
+            "allocated_mb": torch.xpu.memory_allocated() / (1024 ** 2),
+            "reserved_mb": torch.xpu.memory_reserved() / (1024 ** 2),
+        }
+    return None
+
+
 _VRAM_DEBUG = os.environ.get("TRAIN_VRAM_DEBUG", "0") == "1"
 
 

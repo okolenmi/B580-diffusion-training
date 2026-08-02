@@ -58,7 +58,21 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "Off by default: correct phase timing needs a device synchronize() between "
                 "phases (core.comfy_setup.xpu_synchronize), which blocks the async pipeline "
                 "and makes steps measurably slower than a normal run while this is on. Use "
-                "it for a short diagnostic run, not for real training.",
+                "it for a short diagnostic run, not for real training. Also reports "
+                "vram_allocated_mb/vram_reserved_mb each step when profiling -- allocated "
+                "growing over many steps is a real, live reference leak; reserved growing "
+                "while allocated stays flat is just the caching allocator's own bookkeeping, "
+                "not a leak (see core.comfy_setup.xpu_memory_stats's docstring).",
+        ),
+        "empty_cache_every_n_steps": Port(
+            name="empty_cache_every_n_steps", type=int, required=False, default=0,
+            doc="0 disables this. When >0, calls gc.collect() + xpu_empty_cache() every N "
+                "steps. This only returns *unused* cached memory to the driver -- it cannot "
+                "free memory still genuinely referenced by something, so it won't help a real "
+                "reference leak (check profile=True's vram_allocated_mb for that), only "
+                "caching-allocator fragmentation/bookkeeping. Costs a device sync each time "
+                "it runs (same as any other explicit synchronize), so a very small N will "
+                "cost real step time -- start high (e.g. 50) and go lower only if needed.",
         ),
     }
 
@@ -68,6 +82,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
         model: TrainableModel = inputs["model"]
         batches: TrainingBatchSource = inputs["batches"]
         steps: int = inputs["steps"]
+        empty_cache_every_n_steps: int = inputs.get(
+            "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
@@ -103,6 +119,11 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 wait_ms = (time.perf_counter() - batch_ready_at) * 1000
                 self._run_step(ctx, batch, step, wait_ms)
                 step += 1
+                if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
+                    import gc
+                    from core.comfy_setup import xpu_empty_cache
+                    gc.collect()
+                    xpu_empty_cache()
                 batch_ready_at = time.perf_counter()
 
         result = {"model": model}
@@ -176,6 +197,11 @@ class SupervisedLoRATrainerNode(TrainerNode):
             t4 = time.perf_counter()
             timing["optim_ms"] = (t4 - t3) * 1000
             timing["step_total_ms"] = (t4 - t0) * 1000 + wait_ms
+            from core.comfy_setup import xpu_memory_stats
+            mem = xpu_memory_stats()
+            if mem is not None:
+                timing["vram_allocated_mb"] = mem["allocated_mb"]
+                timing["vram_reserved_mb"] = mem["reserved_mb"]
 
         loss_value = float(loss.item())
         if ctx.on_step is not None:
@@ -190,7 +216,11 @@ class SupervisedLoRATrainerNode(TrainerNode):
             if ctx.monitor is not None:
                 ctx.monitor.report(report)
         if ctx.profile:
+            vram_part = ""
+            if "vram_allocated_mb" in timing:
+                vram_part = (f" vram_allocated={timing['vram_allocated_mb']:.0f}MB "
+                             f"vram_reserved={timing['vram_reserved_mb']:.0f}MB")
             print(f"  [step {step}] wait={timing['data_wait_ms']:.0f}ms "
                   f"encode={timing['encode_ms']:.0f}ms forward={timing['forward_ms']:.0f}ms "
                   f"backward={timing['backward_ms']:.0f}ms optim={timing['optim_ms']:.0f}ms "
-                  f"total={timing['step_total_ms']:.0f}ms")
+                  f"total={timing['step_total_ms']:.0f}ms" + vram_part)

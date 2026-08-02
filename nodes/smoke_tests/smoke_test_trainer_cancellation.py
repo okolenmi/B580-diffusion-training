@@ -159,10 +159,26 @@ def check_no_cancel_event_runs_normally():
     print("    PASS")
 
 
+def check_empty_cache_every_n_steps_does_not_crash():
+    print("[empty_cache_every_n_steps runs cleanly (no XPU here, so it's a no-op path, but must not raise)]")
+    model = _FakeModel()
+    node = SupervisedLoRATrainerNode()
+    node.context = ExecutionContext()
+    result = node.build(
+        model=model, optimizer=_FakeOptimizer(), text_encoder=_FakeTextEncoder(),
+        batches=_FiniteBatches(), steps=10,
+        lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+        empty_cache_every_n_steps=3,
+    )
+    assert model.calls == 10
+    print("    PASS")
+
+
 def main():
     check_cancel_before_first_step_trains_zero_steps()
     check_cancel_mid_run_stops_but_keeps_progress()
     check_no_cancel_event_runs_normally()
+    check_empty_cache_every_n_steps_does_not_crash()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

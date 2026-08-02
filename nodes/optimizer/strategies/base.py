@@ -22,6 +22,23 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+def apply_update(param, delta, decay) -> None:
+    """param.data *= decay (if decay is not None); param.data -= delta.
+    The one piece of "how do you push an already-computed (delta, decay)
+    onto a parameter" logic every non-batched execution path needs --
+    SimpleLoopStrategy's per-parameter loop and ComposedFusedOptimizerHandle's
+    per-parameter backward hook (composed_fused.py) both call this rather
+    than each writing the same three lines. ChunkedScratchBufferStrategy
+    and ForeachApplyStrategy don't -- their apply steps are genuinely
+    different (in-place scratch reuse; batched torch._foreach_* across a
+    (device, dtype) group), not just a style variant of this one, so
+    forcing them through this same helper would be the wrong kind of
+    reuse."""
+    if decay is not None:
+        param.data.mul_(decay)
+    param.data.sub_(delta.to(dtype=param.dtype))
+
+
 class ExecutionStrategy(ABC):
 
     @abstractmethod

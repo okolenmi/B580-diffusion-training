@@ -12,10 +12,21 @@ FusedXPUAdafactor actually are, on inspection -- 2 algorithms x up to 3
 memory strategies, hand-crossed, with CAME only getting 1 of the 3 possible
 strategies because writing each combination by hand is expensive). See
 docs/nodes_package_design.md's "Algorithm/ExecutionStrategy separation"
-section for the full reasoning, including why the tiny-parameter batching
-trick some of the old classes use is a strategy concern, not an algorithm
-one -- it changes how state is *allocated/batched* for many small
-parameters, never what update *formula* gets computed.
+section for the full reasoning.
+
+**Correction, made after actually reading `FusedXPUAdafactor._update_param`
+directly for later work in this package (see
+docs/nodes_package_design.md's "Fifth data point" section):** an earlier
+version of this docstring characterized that class's `TINY_NUMEL`
+small-parameter special case as a batching/storage concern, not an
+algorithm one. That's not quite right -- it swaps in a genuinely different
+*formula* for small parameters (exact elementwise second-moment tracking,
+not the row/col factored approximation), not merely a different memory
+layout for the same computation. Left uncorrected here would mean this
+docstring assumes something about that trick's category which turned out
+to be false; the accurate version is: extending `AdafactorAlgorithm` to
+add that branch would be real algorithm-engineering work, not a strategy
+concern -- not yet done, see the design doc section above for why.
 
 **Revised design decision (this contract was extended once already --
 here's why, stated precisely):** an earlier version of this docstring

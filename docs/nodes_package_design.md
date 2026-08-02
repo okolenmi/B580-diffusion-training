@@ -258,6 +258,24 @@ nodes/optimizer/composed_adafactor.py      ComposedAdafactorOptimizerNode -- Ada
 nodes/optimizer/composed_adamw.py          ComposedAdamWOptimizerNode -- AdamW algorithm,
                                             selectable strategy ("simple", default, or
                                             "chunked" or "foreach")
+nodes/optimizer/composed_fused.py          ComposedFusedOptimizerHandle -- any Algorithm,
+                                            executed via backward hooks instead of an
+                                            explicit step() call; a Handle-level composition,
+                                            not an ExecutionStrategy (see its own module
+                                            docstring for why) -- see "Fifth data point"
+                                            section below
+nodes/optimizer/composed_fused_adafactor.py  ComposedFusedAdafactorOptimizerNode -- the
+                                            direct non-legacy alternative to
+                                            fused_adafactor.py's FusedAdafactorOptimizerNode,
+                                            equivalence-verified against FusedXPUAdafactor
+                                            (with one documented, deliberate divergence --
+                                            see "Fifth data point" below)
+nodes/optimizer/composed_fused_came.py     ComposedFusedCAMEOptimizerNode -- no legacy
+                                            fused CAME class exists; demonstrates
+                                            ComposedFusedOptimizerHandle's genuine
+                                            algorithm-agnosticism, doesn't replace anything
+nodes/optimizer/composed_fused_adamw.py    ComposedFusedAdamWOptimizerNode -- same
+                                            position as composed_fused_came.py
 nodes/smoke_tests/smoke_test_composed_came.py   Real-hardware test, run with:
                                             `python nodes/smoke_tests/smoke_test_composed_came.py`
 nodes/smoke_tests/smoke_test_memory_manager.py  Real-torch (CPU) test for MemoryManager, run with:
@@ -288,6 +306,16 @@ nodes/smoke_tests/smoke_test_foreach_strategy_equivalence.py   Bit-exact check
                                             (algorithm-agnostic by construction) -- this is
                                             the test that caught the bf16 foreach_mul_ bug,
                                             see "Fourth data point" section below
+nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py    Real backward()/real hooks,
+                                            against core.optimizers.FusedXPUAdafactor
+                                            directly -- also where a real, pre-existing
+                                            legacy momentum-aliasing bug was found and
+                                            deliberately not replicated, see "Fifth data
+                                            point" section below
+nodes/smoke_tests/smoke_test_composed_fused.py                 Lifecycle + Node-build
+                                            check for ComposedFusedOptimizerHandle across
+                                            all three Algorithms (CAME/Adafactor/AdamW) and
+                                            all three fused Node classes
 nodes/smoke_tests/xpu_mempool_hardware_check.py        Real-XPU-only, heavier, run manually
                                             (excluded from run_all.py's glob on purpose):
                                             `python nodes/smoke_tests/xpu_mempool_hardware_check.py`
@@ -313,6 +341,8 @@ proven" -- check which level a given piece has actually reached):**
 | `AdamWAlgorithm` formulas | yes, real torch (CPU) directly against `core.optimizers.CPUAdamW` -- `smoke_test_adamw_equivalence.py`, all three strategies, float32 and bf16, weight_decay on/off | not yet |
 | `ComposedAdamWOptimizerNode` (all three strategies) | yes, real torch (CPU) toy regression + full lifecycle, `smoke_test_composed_adamw.py` | not yet |
 | `ForeachApplyStrategy` | yes -- bit-exact (`torch.equal()`) vs. `SimpleLoopStrategy`, all three Algorithms, float32 and bf16, `smoke_test_foreach_strategy_equivalence.py`. Caught and required a real fix, not just a passing run first try -- see "Fourth data point" below | not yet |
+| `ComposedFusedOptimizerHandle` + `ComposedFusedAdafactorOptimizerNode` | yes, real torch (CPU), real `.backward()` and real backward hooks (not simulated `.grad`) -- against `core.optimizers.FusedXPUAdafactor` directly, `smoke_test_fused_adafactor_equivalence.py`. Single-pass and multi-pass (distillation `sub_steps=2`) both checked. One deliberate, documented divergence found and *not* replicated: a real pre-existing momentum-aliasing bug in the legacy class itself, float32-parameters-specific -- see "Fifth data point" below | not yet |
+| `ComposedFusedOptimizerHandle` with `CAMEAlgorithm`/`AdamWAlgorithm` | yes, real torch (CPU), full lifecycle (`smoke_test_composed_fused.py`) -- no legacy fused reference exists for either, so this checks internal correctness and algorithm-agnosticism, not equivalence to anything | not yet, and no legacy reference to validate against even in principle |
 
 **The one open architectural question -- now answered, precisely, not
 just "yes it generalizes":** does the Algorithm/ExecutionStrategy split
@@ -365,17 +395,25 @@ in general.
    their own out-of-place paths across dtype/config combinations. See
    "Axis 2" sections below. Not yet run on real XPU hardware by the user
    for either -- next real step for this specific piece.
-5. A `FusedBackwardHookStrategy` -- needs reading `FusedOptimizerHandle`
-   and the legacy `FusedXPUAdafactor` first; not yet scoped in detail.
-   Still the concrete next step for closing out the legacy-import list
-   entirely (`nodes/optimizer/fused_adafactor.py` is now the only
-   remaining Node with no non-legacy alternative at all -- `adamw.py`'s
-   `AdamWOptimizerNode` and `foreach_adafactor.py`/`foreach_came.py` all
-   have one now, via item 7 below, even though none have been formally
-   retired -- see that item for why not).
+5. [Done, 2026-08-02] A fused/backward-hook execution path -- turned out
+   not to be an `ExecutionStrategy` once actually scoped (see
+   `composed_fused.py`'s module docstring for why), so it's
+   `ComposedFusedOptimizerHandle` instead, a Handle-level composition
+   that reuses `ComposedOptimizerHandle`'s lifecycle methods directly via
+   subclassing. Verified against `core.optimizers.FusedXPUAdafactor`
+   directly, real backward()/real hooks -- and found a real,
+   pre-existing bug in that legacy class along the way (float32-specific
+   momentum-buffer aliasing corruption), deliberately not replicated.
+   Full writeup in "Fifth data point" below. This closes out the
+   legacy-import list from item 7's note above: every one of
+   `adamw.py`/`foreach_adafactor.py`/`foreach_came.py`/`fused_adafactor.py`
+   now has a real, non-legacy, equivalence-checked-where-checkable
+   alternative sitting next to it, none retired yet (same discipline
+   as always -- retiring any of them is separate, deliberate, later work).
 6. Longer-term, still not started: wiring `nodes/` into the actual
    training pipeline (`core/trainer.py` currently knows nothing about
-   any of this).
+   any of this). This is now the actual next concrete step -- nothing
+   else on this list is still open.
 7. [Done, 2026-08-02] `AdamWAlgorithm` + `ComposedAdamWOptimizerNode`,
    and `ForeachApplyStrategy` (wired into all three composed nodes, not
    just AdamW's). Full writeup in "Fourth data point" below. This was
@@ -1425,6 +1463,131 @@ iterate their own module's `_STRATEGIES` dict) -- all pass.
 
 **Not yet run on real XPU hardware** -- same status as everything else
 in the "Concrete next step" list not yet marked done.
+
+## Fifth data point: ComposedFusedOptimizerHandle, and a real bug found in the legacy reference itself
+
+**Why this isn't `FusedBackwardHookStrategy`, the name it was originally
+filed under above:** actually scoping it (reading `FusedOptimizerHandle`'s
+contract and `core.optimizers.FusedXPUAdafactor`'s real implementation,
+not assuming) showed the fused execution model doesn't fit
+`ExecutionStrategy.step()` at all -- `step()` is called *after* backward()
+finishes; fused execution's whole point is updating each parameter the
+moment *its own* gradient is ready, *during* backward(), via
+`register_post_accumulate_grad_hook`. There's no meaningful `step()` for
+a strategy object to implement here. So it's `composed_fused.py`'s
+`ComposedFusedOptimizerHandle` instead -- a `ComposedOptimizerHandle`
+subclass (reusing its offload/reload/decay/reset lifecycle methods
+unmodified, generic over "a list of per-parameter state dicts" exactly as
+designed) that adds hook registration and the multi-pass accumulation
+state machine on top. Renaming something mid-scoping instead of forcing
+the original name to fit is the right call here, not scope creep --
+confirmed by writing it both ways in reasoning first and only committing
+to the one that didn't need to fight the contracts already in place.
+
+**Algorithm-agnostic by construction, proven on three data points at
+once, not just asserted:** the same `ComposedFusedOptimizerHandle` class
+drives `AdafactorAlgorithm`, `CAMEAlgorithm`, and `AdamWAlgorithm` in
+`composed_fused_adafactor.py`/`composed_fused_came.py`/`composed_fused_adamw.py`
+-- no algorithm-specific code anywhere in `composed_fused.py` itself.
+Only `composed_fused_adafactor.py` has a legacy class to check against
+(`FusedXPUAdafactor` -- the only fused optimizer that exists in
+`core/optimizers.py`); CAME and AdamW's fused nodes exist to demonstrate
+the generalization holds, not to replace anything, and are explicit about
+that in their own module docstrings.
+
+**A real, pre-existing bug found in the legacy reference itself while
+writing the equivalence test, confirmed precisely, and deliberately not
+replicated:** `FusedXPUAdafactor._update_param`'s momentum path does
+`g = self.exp_avg[i]` (an alias, not a copy) and then, a few lines later,
+`p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))`. For a **float32**
+parameter, `self.exp_avg[i]` is already float32, so `.to(dtype=p.dtype)`
+returns the *same tensor object* rather than a copy (nothing to convert)
+-- and the following `.mul_(alpha_t)` then mutates that object in place,
+permanently shrinking the stored momentum buffer by `alpha_t` (~lr) as an
+unintended side effect of computing that step's update. Confirmed
+directly, not inferred: isolated a single call and showed
+`legacy.exp_avg[i]` *exactly equals that step's applied delta* after the
+call (`check_legacy_float32_momentum_bug()` in
+`smoke_test_fused_adafactor_equivalence.py`) -- and confirmed the
+mechanism, not just the symptom, by showing the same call with a **bf16**
+parameter does *not* corrupt `exp_avg` (a bf16 parameter means
+`.to(dtype=p.dtype)` performs a real cast from the float32 state,
+producing a genuine copy, breaking the alias). Practical effect: legacy's
+momentum decays far more aggressively than its own `beta1` schedule
+intends, compounding every step it fires, entirely by accident. This is
+why weight values matched almost exactly for one isolated step (the
+corruption hasn't had a chance to compound yet) but diverged badly (~0.3
+absolute, initially assumed to be a bug in the *new* code) over 15 real
+training steps -- tracked down before concluding anything, not
+tolerance-adjusted away. `AdafactorAlgorithm`'s own momentum blend
+explicitly clones before any further scaling (`normalized =
+state["exp_avg"].clone()`, see algorithms/adafactor.py), so it was never
+going to have this exact bug -- confirmed directly rather than assumed,
+via `check_new_momentum_not_corrupted()` in the same test file.
+**Deliberately not replicated in `ComposedFusedOptimizerHandle`** -- this
+session's direct instruction was to build a better alternative, not to
+copy the old code's behavior faithfully, and a bug is exactly the kind of
+behavior that instruction means not to copy. Consequence for the
+equivalence test: float32+momentum is excluded from the direct multi-step
+tolerance-checked grid (matching the legacy reference there would mean
+matching its bug); bf16+momentum stays in that grid since the bug doesn't
+trigger there, so it's still a real formula check.
+
+**A related correction, while here:** `algorithms/base.py`'s module
+docstring, written in an earlier session, characterizes
+`FusedXPUAdafactor`'s `TINY_NUMEL` special case (parameters under 10,000
+elements get one full elementwise second-moment buffer instead of
+row/col-factored ones) as a batching/storage trick, not a formula change.
+Reading `_update_param` directly for *this* session's work shows that's
+not quite right: the tiny-parameter path computes a genuinely different
+update (exact elementwise second-moment tracking, not the row/col
+factored approximation) -- a real, different formula, not merely a
+different memory layout for the same one. `AdafactorAlgorithm` doesn't
+implement this branch, so `ComposedFusedAdafactorOptimizerNode` (and, for
+that matter, every non-fused composed Adafactor node) diverges from
+`FusedXPUAdafactor`/`ForeachXPUAdafactor` for parameters under 10,000
+elements -- most individual LoRA matrices, practically speaking. Extending
+`AdafactorAlgorithm` to add this branch is real, separate
+algorithm-engineering work (it would benefit every strategy at once, not
+just the fused one), not done as part of this pass -- flagged here rather
+than silently left inconsistent with the module docstring that describes
+it differently.
+
+**Multi-pass (`sub_steps`, this codebase's conditional+unconditional
+distillation shape) verified with two real, separate `.backward()` calls
+per logical step**, gradient accumulation left entirely to autograd's own
+default add-into-`.grad()` behavior on both sides (nothing here needed to
+implement accumulation itself) -- checked that no update is applied after
+the first pass and that the second pass's update matches, both directly
+against `FusedXPUAdafactor` doing the identical sequence. One
+simplification found while re-deriving the state machine rather than
+porting it line-for-line: legacy advances its own `t`/`rho_t` lazily,
+inside the hook, because at `begin_step()` time it doesn't yet know which
+parameter's hook will fire first. That workaround turned out to be
+unnecessary here -- `Algorithm.begin_step()` (see algorithms/base.py) is
+already designed to be called exactly once per logical step by whatever's
+driving it, and `ComposedFusedOptimizerHandle.begin_step(sub_steps)` *is*
+called exactly once per logical step, by contract, before any of that
+step's backward() calls -- so it just calls `self.algorithm.begin_step(1)`
+synchronously, right there. Simpler, and provably equivalent (same call
+count, same relative timing) without tracking "was this the first hook
+firing" for that specific purpose.
+
+**Verified**, all real torch (CPU), real `.backward()`/real backward
+hooks (not simulated `.grad`, which wouldn't exercise the actual
+mechanism under test):
+`smoke_test_fused_adafactor_equivalence.py` -- the two bug-confirmation
+checks above, single-pass equivalence across weight_decay/scale_parameter/
+momentum, float32 and bf16 (all passing, all >= `TINY_NUMEL` per the
+divergence noted above), and the multi-pass check. `smoke_test_composed_fused.py`
+-- full lifecycle (toy regression via real backward(), offload/reload
+with exact state preservation, decay/reset/free, and confirming
+`free_states()` actually removes the hooks -- checked by running another
+real `backward()` afterward and confirming the parameter no longer
+changes, not just that the internal hook list is empty) across all three
+algorithms, plus a `build()` check for all three fused Node classes.
+
+**Not yet run on real XPU hardware.**
 
 ## What changes for the playground UI
 

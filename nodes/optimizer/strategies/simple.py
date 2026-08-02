@@ -17,7 +17,7 @@ it exists, which is the whole payoff of doing this split properly.
 
 from __future__ import annotations
 
-from .base import ExecutionStrategy
+from .base import ExecutionStrategy, apply_update
 
 
 class SimpleLoopStrategy(ExecutionStrategy):
@@ -29,9 +29,7 @@ class SimpleLoopStrategy(ExecutionStrategy):
                 continue
             grad = p.grad.detach().float()
             delta, decay = algorithm.compute_update(grad, p, states[i], param_lr[i])
-            if decay is not None:
-                p.data.mul_(decay)
-            p.data.sub_(delta.to(dtype=p.dtype))
+            apply_update(p, delta, decay)
 
     def zero_grad(self, params) -> None:
         for p in params:

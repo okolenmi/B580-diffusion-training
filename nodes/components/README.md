@@ -11,6 +11,13 @@ which subpackage currently depends on what.
 Nothing has moved here yet -- this folder exists to hold that work as it
 happens, not as a completed migration.
 
+See `docs/theoretical_pipeline_design.md`'s "Prioritized backlog" for the
+current ordered plan of what lands here first (diffusion-process math and
+device-backend handling, replacing `core/noise_schedule.py`'s/
+`core/comfy_setup.py`'s module-level state -- see that doc's sections 1.4/
+1.5/4.2 for the reasoning) and why the bigger items (a full step-pipeline
+refactor, cross-component offload orchestration) are sequenced later.
+
 When something does move here: equivalence-test it against the
 `core`/`manager` code it replaces before anything switches over to it,
 same discipline `nodes/optimizer/` already used (see that subpackage's

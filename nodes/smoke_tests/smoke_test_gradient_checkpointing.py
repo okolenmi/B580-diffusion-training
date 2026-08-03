@@ -1,8 +1,7 @@
 """Verifies nodes/model/gradient_checkpointing.py's patch logic.
 
 ComfyUI itself isn't installed in this sandbox (no `comfy` package, no
-COMFY_DIR) -- this project's own docs/node_architecture_refactor_plan.md
-notes the same constraint for everything ComfyUI-dependent. What this
+COMFY_DIR) -- true for everything ComfyUI-dependent in this project. What this
 test CAN do, and does: register a stand-in module at the exact import
 path enable_frozen_param_safe_checkpointing() patches
 (comfy.ldm.modules.diffusionmodules.util), containing a faithful,

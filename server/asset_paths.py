@@ -5,10 +5,10 @@ Every relative path accepted here goes through paths.py's sandboxed
 resolvers (resolve_safe_model_path / resolve_safe_dataset_path) -- this
 module never builds a path itself and never uses the permissive
 resolve_model_path/resolve_dataset_path. The graph editor is explicitly
-meant to be reachable from another device on the network (see
-docs/node_architecture_refactor_plan.md), so every path string it hands
-over is treated as untrusted input, the same posture a file-upload
-handler on any public web app would take -- not just here to be tidy.
+meant to be reachable from another device on the network, so every path
+string it hands over is treated as untrusted input, the same posture a
+file-upload handler on any public web app would take -- not just here to
+be tidy.
 
 Datasets are read-only from this module's point of view: a managed
 dataset is a structured multi-file directory built by the Dataset

@@ -1,5 +1,5 @@
 """Node-graph routes -- editor tab, isolated from the production
-config/training path (see docs/node_architecture_refactor_plan.md).
+config/training path (see docs/nodes_package_design.md).
 
 /optimizers and /registry are pure introspection: read declared metadata,
 build nothing, run nothing. /run is different in kind -- it actually

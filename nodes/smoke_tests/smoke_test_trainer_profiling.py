@@ -17,6 +17,9 @@ from nodes.train.supervised import SupervisedLoRATrainerNode, _StepContext
 from nodes.train.loss import UniformLossWeighting
 from nodes.train.schedule import ConstantLRSchedule
 from nodes.monitor.handle import MonitorHandle
+from nodes.components.device import DeviceContext
+from nodes.components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedule,
+                                         EpsParameterization, KarrasInputScaler)
 
 
 class _FakeModel:
@@ -67,10 +70,14 @@ def _make_batch():
 
 
 def _make_ctx(profile: bool, monitor=None) -> _StepContext:
+    device = torch.device("cpu")
     return _StepContext(
         model=_FakeModel(), optimizer=_FakeOptimizer(), text_encoder=_FakeTextEncoder(),
         lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
-        is_fused=False, device=torch.device("cpu"), total_steps=10,
+        diffusion_process=DiffusionProcess(
+            DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler()),
+        device_ctx=DeviceContext.for_device(device),
+        is_fused=False, device=device, total_steps=10,
         monitor=monitor, profile=profile,
     )
 

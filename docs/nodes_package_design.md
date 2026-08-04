@@ -81,10 +81,12 @@ compatibility.**
   to anything else in `nodes/` that allocates a reusable device buffer.
 - **A theoretically ideal training-pipeline design**, to use as a
   comparison target for what `nodes/` currently is vs. what it should
-  become. Done -- see `docs/theoretical_pipeline_design.md` for the full
-  from-scratch design (3 iterations) and its gap analysis/prioritized
-  backlog against everything below. Planning only; nothing in that
-  backlog has been implemented yet.
+  become. Done -- see `docs/theoretical_pipeline_design.md` for the
+  from-scratch design and the final gap analysis/prioritized backlog
+  against everything below (that section incorporates all three passes,
+  documented separately in `docs/theoretical_pipeline_design_iteration2.md`
+  and `docs/theoretical_pipeline_design_iteration3.md`). Planning only;
+  nothing in that backlog has been implemented yet.
 
 ## Optimizer subpackage (most mature part of `nodes/`)
 

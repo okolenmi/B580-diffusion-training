@@ -213,6 +213,13 @@ deep.
 The fix is straightforward: an object, constructed explicitly, holding its
 own tensors.
 
+*(Revised in iteration 2, section A.1, to state explicitly what was only
+implicit here: this interface is scoped to discrete-time,
+variance-preserving diffusion on purpose, not "any noising process" --
+a continuous-time process gets a separate sibling contract rather than
+being forced through this one. `DiscreteLinearNoiseSchedule` below is
+unaffected by that revision.)*
+
 ```python
 class NoiseSchedule(ABC):
     @abstractmethod
@@ -295,6 +302,17 @@ class VPredParameterization(Parameterization):
         denom = sigma ** 2 + 1.0
         return x_t * sigma / denom + raw / torch.sqrt(denom)
 ```
+
+Worth being explicit about, rather than leaving it implicit: the `x_t`
+these formulas take is in the k-diffusion/`ModelSamplingDiscrete`
+convention `NoiseSchedule` already uses (`sigma = sqrt((1-alphas_cumprod)
+/alphas_cumprod)`, an alpha-normalized noise-to-signal ratio) --
+`x0 + sigma*eps`, not the raw DDPM `x_t = alpha*x0 + sqrt(1-alphas_cumprod)*eps`
+a dataset loader would actually produce. Converting between the two is
+exactly `ModelInputTransform`'s job, immediately below -- `Parameterization`
+and `NoiseSchedule` never see raw DDPM-space `x_t` directly, only the
+already-transformed value. Stating this once, here, rather than leaving a
+reader to infer it from the schedule's own formula.
 
 And the third piece, `core/model_io.py`'s `comfy_input_transform`, becomes
 a matching one-method `ModelInputTransform` Strategy. All three compose
@@ -543,7 +561,19 @@ actually have" as a value other components could consult if asked to.
 class ResourceBudget:
     """A stated VRAM ceiling for one run, plus a safety margin. Purely
     descriptive -- constructing this doesn't enforce anything by itself;
-    a ResourcePolicy is what turns it into actual choices (see below)."""
+    a ResourcePolicy is what turns it into actual choices (see below).
+
+    vram_budget_mb measures against the allocator's *reserved* memory --
+    the same figure DeviceContext.memory_stats()'s reserved_mb field
+    reports (section 1.5), not allocated_mb. Reserved is what actually
+    determines whether the OS hands back an out-of-memory error next,
+    since it includes the allocator's own held-but-currently-unused pool,
+    not just tensors presently live -- allocated_mb alone would let a
+    caller believe it has headroom the allocator has already claimed and
+    won't necessarily release. Every consumer of ResourceBudget (including
+    iteration 2's CheckpointPlacementPolicy) compares against reserved_mb
+    consistently -- stated once, here, rather than left for each consumer
+    to assume independently."""
     vram_budget_mb: float
     vram_reserve_mb: float = 512.0  # headroom kept free on purpose
 
@@ -553,7 +583,14 @@ class ResourcePolicy(ABC):
     Returns *descriptions* of what to build (which ExecutionStrategy
     class, which ActivationCheckpointingStrategy instance), not the
     built objects themselves -- keeps this a pure decision, testable
-    without constructing real models/optimizers."""
+    without constructing real models/optimizers.
+
+    Grown to four more methods in iteration 2, section A.2
+    (adapter_strategy/lora_scaling_policy/frozen_weight_store/
+    parameter_group_policy) once there were more VRAM/quality-affecting
+    choices than these original three -- shown here as iteration 1 first
+    defined it, for the reasoning that motivated it; iteration 2's
+    version is the current one."""
 
     @abstractmethod
     def checkpointing_strategy(self) -> "ActivationCheckpointingStrategy":
@@ -1063,7 +1100,14 @@ project already holds itself to elsewhere:
 ## Gap analysis: this design vs. current `nodes/`
 
 Now the comparison the earlier sections deliberately avoided making until
-the design was settled.
+the design was settled -- and, per the actual sequencing the design work
+followed, done here for real only after the true iteration 3 (fixes,
+`docs/theoretical_pipeline_design_iteration2.md`'s "Left for iteration 3"
+list) landed, incorporating both iteration 2's additions and iteration
+3's fixes. An earlier version of this section existed after what was, at
+the time, mislabeled "iteration 3" and was flagged provisional in
+`docs/theoretical_pipeline_design_iteration2.md`'s opening note -- this
+is that redo, not a second draft sitting alongside the first.
 
 ### 4.1 What already matches -- no changes recommended
 
@@ -1072,7 +1116,8 @@ the design was settled.
 | `Builder`/`Port` (1.1) | `nodes/core.py`'s `Node`/`Port` | Already this, arrived at independently. Keep as-is. |
 | `Algorithm` x `ExecutionStrategy` x `Handle` composition (referenced throughout) | `nodes/optimizer/` in full | This design's generalization target *is* this subpackage, already done correctly. Reference implementation, not a gap. |
 | Pooled device buffers (1.3) | `nodes/memory/manager.py`'s `MemoryManager` | Interface is correct; gap is adoption breadth, not design (see 4.2). |
-| `LossWeighting`/`LRSchedule` (referenced in 2.1) | `nodes/train/loss.py`/`schedule.py` | Already clean Strategy-pattern ABCs. No changes. |
+| `LossWeighting`/`LRSchedule` (referenced in 2.1) | `nodes/train/loss.py`/`schedule.py` | Already clean Strategy-pattern ABCs -- confirmed twice over: iteration 2's `P2LossWeighting` (B.7) needed zero interface change to add. No changes. |
+| `Algorithm.init_state()`'s state representation (referenced throughout `nodes/optimizer/`) | `nodes/optimizer/algorithms/*.py` | Contract already returns "a plain dict of named tensors," not specifically fp32 plain tensors -- confirmed in iteration 2 (B.8) that nothing here structurally blocks a future block-quantized-state `Algorithm`. No interface change needed if that's ever built. |
 | Injected pub/sub, not a singleton bus (3.2's reasoning) | `nodes/monitor/`'s `MonitorHandle`/`LiveMonitorHandle` | Already the house reference example for "no singleton" done right -- explicitly reused, not redesigned, for `OffloadOrchestrator`. |
 | Decorator-wrapped `TrainingBatchSource` (2.5) | `nodes/dataset/renoise.py`'s `RenoiseBatchSource` | Same pattern this design's `PrefetchingBatchSource` should follow -- prior art already exists, reuse the idiom. |
 | Composition-over-mutation for stacked state (referenced in 1.2) | `nodes/model/lora_phases.py`'s `LoRAGeneration` | Independent instance of the same principle `DeviceResident`'s offload-vs-free distinction is built on. Good existing precedent, worth citing when this design is implemented. |
@@ -1088,14 +1133,14 @@ imports from all three directly (`core.model_io.comfy_input_transform`,
 `core.noise_schedule.get_alpha_sigma`, `core.comfy_setup.xpu_synchronize`/
 `xpu_empty_cache`/`xpu_memory_stats`). This is the literal, current
 "dependency on old singleton code" the next step is about. **Highest
-priority** -- see section 5's backlog, items 1-2.
+priority** -- see the backlog below, items 1-2.
 
 **`nodes/components/`.** Empty except a README. This is the design's
 intended home for `NoiseSchedule`/`Parameterization`/`DiffusionProcess`
 (1.4), `DeviceContext` (1.5), and arguably `ProjectLayout` (1.6, though
-its blast radius is bigger -- see 5's notes). Nothing to change about the
-package's own stated discipline (equivalence-test before switching over)
--- it's exactly right, just not used yet.
+its blast radius is bigger -- see the backlog's notes). Nothing to change
+about the package's own stated discipline (equivalence-test before
+switching over) -- it's exactly right, just not used yet.
 
 **`DeviceResident` (1.2).** Doesn't exist. `OptimizerHandle` has the
 closest existing equivalent (`offload_states_to_cpu`/
@@ -1110,16 +1155,53 @@ call site). `TrainableModel` and `TextEncoder` currently have no
 size, and `TextEncoder.unload()` is a `release()`-shaped operation with
 no `offload()` tier (it either holds the model or doesn't -- no
 "paused, still resident on CPU, cheap to bring back" state distinct from
-"fully unloaded"). Real, addressable gaps, not large ones.
+"fully unloaded"). Real, addressable gaps, not large ones. Iteration 2's
+A.4 also resolves what this section previously called out as an *open*
+sub-gap ("the wrapper doesn't expose frozen-base size") -- it's still a
+gap today (nothing computes it), but it's no longer an *unresolved* one;
+`FrozenWeightStore` below is what it now waits on.
 
-**`ActivationCheckpointingStrategy` (2.3).** Doesn't exist as an object.
-The current fix in `nodes/model/gradient_checkpointing.py` is correct and
-verified (`smoke_test_gradient_checkpointing.py`) -- this is purely about
-exposing it as a composable `apply()`-shaped object instead of a function
-`ComfyUNetLoRANode.build()` calls conditionally on a `bool` port. This is
-this design's highest-value *small* change: the biggest existing VRAM
-lever (per `docs/vram_and_lora_phase_split.md`'s own framing), currently
-the least composable piece of code that implements it.
+**`ParameterGroupPolicy` (iteration 2, A.3).** Doesn't exist -- and
+checked directly against the real code, not assumed: `nodes/optimizer/
+composed.py`'s `ComposedOptimizerHandle.update_lr()` currently does
+`self.param_lr = [new_lr] * len(self.params)` unconditionally, every
+step. Nothing is broken *today* (nothing sets a non-uniform `param_lr`
+today), but the moment a run wants per-group rates (LoRA+, or anything
+else), that line silently erases them on the very next scheduler tick.
+Worth landing before it's needed, not after something breaks because of
+it -- small, precise, behavior-preserving for every current caller.
+
+**`AdapterStrategy` / `LoRAScalingPolicy` / `FrozenWeightStore`
+(iteration 2, A.2/A.4, B.2/B.4/B.5).** None exist. Today, `core.lora`'s
+LoRA math is wrapped directly by `nodes/model/lora_injector.py` with one
+fixed scaling formula (`alpha/rank`) and no alternative to plain LoRA --
+correct and verified, but with no seam for `RankStabilizedScaling`
+(free, provably-motivated, see B.2), `DoRAAdapter` (real quality win,
+bounded new forward-pass code, see B.4), or a `FrozenWeightStore`
+seam that would let a future `NF4WeightStore` (B.5 -- this design's
+single highest-value future VRAM lever, reversing this document's own
+earlier "too risky" dismissal) exist without restructuring
+`TrainableModel` again later. Recommend building the seam
+(`AdapterStrategy`/`FrozenWeightStore` interfaces, `PlainLoRAAdapter`/
+`BF16WeightStore` as the exactly-today-behavior implementations) as its
+own slice; `RankStabilizedScaling` is cheap enough to land in the same
+slice; `DoRAAdapter` and `NF4WeightStore` are each their own,
+later, dedicated efforts (see backlog).
+
+**`ActivationCheckpointingStrategy` (2.3), and `CheckpointPlacementPolicy`
+(iteration 2, B.6) as a further layer on top.** Neither exists as an
+object. The current fix in `nodes/model/gradient_checkpointing.py` is
+correct and verified (`smoke_test_gradient_checkpointing.py`) -- this is
+purely about exposing it as a composable `apply()`-shaped object instead
+of a function `ComfyUNetLoRANode.build()` calls conditionally on a `bool`
+port. This design's highest-value *small* change: the biggest existing
+VRAM lever (per `docs/vram_and_lora_phase_split.md`'s own framing),
+currently the least composable piece of code that implements it.
+`CheckpointPlacementPolicy` (selective, cost-ratio-ranked placement
+instead of all-or-nothing) is a separate, later concern -- it needs real
+per-block activation/recompute measurements that don't exist yet
+(extending `profile=True` to block granularity is its own instrumentation
+task), so it's sequenced well after the strategy object itself.
 
 **`TrainingStepPipeline`/`StepPhase` (2.1).** Doesn't exist.
 `SupervisedLoRATrainerNode._run_step` is one ~90-line static method
@@ -1131,20 +1213,34 @@ additive change. It's also the change that unblocks the most currently-
 documented "explicit v1 scope" gaps (CFG dual-pass, grad accumulation,
 resume cadence) from needing monolith surgery each. Recommend doing this
 *after* the smaller, additive changes above have landed and settled (see
-priority order in section 5) -- not first, precisely because it's the
-highest-blast-radius item and shouldn't be the one thing this design's
-adoption is first judged on.
+backlog) -- not first, precisely because it's the highest-blast-radius
+item and shouldn't be the one thing this design's adoption is first
+judged on.
 
-**`ResourceBudget`/`ResourcePolicy` (2.2).** Doesn't exist even as a
-manual-only shim. Every VRAM-affecting choice today is an independent
-port on an independent node (`ComfyUNetLoRANode.use_checkpoint`,
+**`ResourceBudget`/`ResourcePolicy` (2.2, expanded in iteration 2's A.2
+to 7 methods).** Doesn't exist even as a manual-only shim. Every
+VRAM/quality-affecting choice today is an independent port on an
+independent node (`ComfyUNetLoRANode.use_checkpoint`,
 `ComposedCAMEOptimizerNode`'s `strategy` argument, `SDXLTextEncoderNode`
 having no cache toggle of its own -- caching is a separate node,
-`CachingTextEncoderNode`, wired in front of it). Consolidating these into
-one `ManualResourcePolicy` object is a real but low-risk change (it can
-wrap the existing independent choices without changing any of their
-current behavior); worth doing once there are three or more such flags to
-consolidate, which is already true today.
+`CachingTextEncoderNode`, wired in front of it, and now also LoRA's
+adapter/scaling/weight-store choices from iteration 2). Consolidating
+these into one `ManualResourcePolicy` object is a real but low-risk
+change (it can wrap the existing independent choices without changing
+any of their current behavior); worth doing once there are several such
+flags to consolidate, which is already true today and more true after
+iteration 2's additions.
+
+**`MinSNRLossWeighting`'s v-prediction branch, and `P2LossWeighting`
+(iteration 2, B.1/B.7).** Different in kind from every other item in this
+section: the v-prediction gap is already documented in the *existing*
+code's own docstring, doesn't need a new class or a design decision --
+just finishing a branch that's already scoped, in code that already
+exists. `P2LossWeighting` is a genuinely new, tiny, optional addition to
+`nodes/train/loss.py` next to it. Grouped together here because they land
+in the same file, not because they're the same kind of work -- see the
+backlog for why they're sequenced early despite that difference (a small
+job doesn't need to wait for whatever else looks more "structural").
 
 **`ResourceCoordinator`/`OffloadOrchestrator` (3.1, 3.2).** Doesn't
 exist. Nothing today tracks "every live device-resident object in this
@@ -1153,10 +1249,10 @@ cache rebuilds, in `core/trainer.py` -- explicitly legacy, out of
 `nodes/`'s scope) are hand-written per call site. This is the piece most
 directly aimed at the still-open VRAM-pressure hang/device-lost report,
 and also the piece with the least existing prior art to build from --
-correctly sequenced last in the backlog (section 5) because it needs
-several real `DeviceResident`s to exist and be exercised individually
-first, or there's nothing concrete to coordinate yet and the abstraction
-risks being speculative.
+correctly sequenced last in the backlog because it needs several real
+`DeviceResident`s to exist and be exercised individually first, or
+there's nothing concrete to coordinate yet and the abstraction risks
+being speculative.
 
 **`PrefetchingBatchSource` (2.5).** Doesn't exist. `data_wait_ms`
 (already reported by `profile=True`) is the number that should decide
@@ -1191,49 +1287,105 @@ hand-rolled offload logic.
 
 Concrete, ordered, sized to be independently landable slices -- each one
 equivalence-tested against whatever it replaces, per the project's
-existing discipline, before anything switches over to it.
+existing discipline, before anything switches over to it. Merges the
+original backlog with iteration 2's additions in one sequence (not two
+lists) -- reordering, not just appending, since several iteration-2 items
+are smaller and lower-risk than several iteration-1 items that were
+already on the list.
 
 1. **`nodes/components/diffusion.py`**: `NoiseSchedule` /
-   `Parameterization` / `DiffusionProcess` (design section 1.4).
-   Equivalence-test against `core.noise_schedule`'s free functions
-   (bit-exact, CPU, same discipline as the optimizer `Algorithm`
-   equivalence tests). Removes `core.noise_schedule`/`core.model_io`
-   imports from `nodes/train/supervised.py`'s `_run_step`. Small,
-   self-contained, zero behavior change if done correctly -- good first
-   slice.
+   `Parameterization` / `DiffusionProcess` (1.4). Equivalence-test against
+   `core.noise_schedule`'s free functions (bit-exact, CPU, same discipline
+   as the optimizer `Algorithm` equivalence tests). Removes
+   `core.noise_schedule`/`core.model_io` imports from
+   `nodes/train/supervised.py`'s `_run_step`. Small, self-contained, zero
+   behavior change if done correctly -- good first slice.
 2. **`nodes/components/device.py`**: `DeviceContext` (1.5). Removes
    `core.comfy_setup` imports from `_run_step`'s profiling branch.
    Equivalence: same `hasattr`/`is_available` gating, moved, not changed.
 3. **`DeviceResident` ABC** in `nodes/core.py` or a new
    `nodes/memory/handle.py`; retrofit `OptimizerHandle` to satisfy it
    (additive alias methods, no existing call site touched).
-4. **`ActivationCheckpointingStrategy`** in `nodes/model/` (2.3), wrapping
+4. **`ParameterGroupPolicy` fix to `ComposedOptimizerHandle`** (iteration
+   2, A.3) -- separate base rate from per-group ratio in `update_lr()`.
+   Behavior-preserving (`UniformGroups` reproduces today's exact
+   `[lr] * len(params)`); closes a real latent bug before anything
+   actually needs per-group rates, not after.
+5. **`LoRAScalingPolicy`** (`ClassicLoRAScaling`/`RankStabilizedScaling`,
+   iteration 2, B.2) in the LoRA-construction path. Zero risk, zero cost,
+   opt-in -- `ClassicLoRAScaling` stays the default, reproducing today's
+   `alpha/rank` exactly.
+6. **Finish `MinSNRLossWeighting`'s v-prediction branch; add
+   `P2LossWeighting`** (iteration 2, B.1/B.7) in `nodes/train/loss.py`.
+   The v-pred completion needs no new design (already scoped in the
+   existing docstring); `P2LossWeighting` is additive. Both small,
+   independent of everything else on this list.
+7. **`ActivationCheckpointingStrategy`** in `nodes/model/` (2.3), wrapping
    today's monkeypatch as `FrozenParamSafeCheckpointing`. Additive --
    `ComfyUNetLoRANode`'s existing `use_checkpoint: bool` port can stay,
    mapped internally to `NoCheckpointing()`/`FrozenParamSafeCheckpointing()`,
    so nothing wired to it today breaks.
-5. **`ProjectLayout`** replacing `paths.py`'s module-global pattern (1.6).
-   Larger blast radius than 1-4 -- `server/*` and `manager/*` also depend
+8. **`ProjectLayout`** replacing `paths.py`'s module-global pattern (1.6).
+   Larger blast radius than 1-7 -- `server/*` and `manager/*` also depend
    on `paths.py` today, so this needs a bridging period (both the old
    module functions and the new object correct and in sync) rather than
    a clean swap. Sequenced after the smaller wins above so the pattern
    ("equivalence-test, land small, keep old path until validated") is
    well-practiced on lower-stakes changes first.
-6. **`TrainingStepPipeline`/`StepPhase` refactor** of
-   `SupervisedLoRATrainerNode` (2.1). The biggest single change here --
-   deliberately last among the "make the existing thing correct-shaped"
-   items, once 1-5 are stable and the phase boundaries they'd need
-   (device context, diffusion process, checkpointing strategy) already
-   exist as real objects instead of being invented at the same time as
-   the pipeline that uses them.
-7. **`PrefetchingBatchSource`** (2.5) -- only once a real dataset/hardware
-   combination shows `data_wait_ms` actually matters; the measurement
-   already exists, so this is demand-driven, not speculative.
-8. **`ResourceCoordinator`/`OffloadOrchestrator`** (3.1, 3.2) -- sequenced
-   last on purpose: needs several real `DeviceResident`s (item 3, plus
-   `TrainableModel`/`TextEncoder` conformance) in place and individually
-   exercised first, or it's coordinating nothing concrete yet.
+9. **`AdapterStrategy`/`FrozenWeightStore` seam** (iteration 2, A.2/A.4,
+   B.4/B.5's seam only -- `PlainLoRAAdapter`/`BF16WeightStore`, both
+   exactly reproducing today's behavior). Medium effort -- touches
+   `core.lora`'s wrapping path in `nodes/model/`. Not yet: `DoRAAdapter`
+   or `NF4WeightStore` themselves (see the two "further out" items
+   below) -- this slice is the seam, not the new techniques it enables.
+10. **`TrainingStepPipeline`/`StepPhase` refactor** of
+    `SupervisedLoRATrainerNode` (2.1). The biggest single change here --
+    deliberately this late among the "make the existing thing
+    correct-shaped" items, once 1-9 are stable and the phase boundaries
+    it needs (device context, diffusion process, checkpointing strategy,
+    adapter/weight-store seam) already exist as real objects instead of
+    being invented at the same time as the pipeline that uses them.
+11. **`PrefetchingBatchSource`** (2.5) -- only once a real dataset/hardware
+    combination shows `data_wait_ms` actually matters; the measurement
+    already exists, so this is demand-driven, not speculative.
+12. **`ResourceCoordinator`/`OffloadOrchestrator`** (3.1, 3.2) -- sequenced
+    last on purpose: needs several real `DeviceResident`s (item 3, plus
+    `TrainableModel`/`TextEncoder` conformance) in place and individually
+    exercised first, or it's coordinating nothing concrete yet.
+
+**Further out -- real, valuable, deliberately not numbered into the
+sequence above** because each needs something the numbered list doesn't
+provide by itself (real profiling data, a larger validation effort, or a
+genuine behavioral change rather than a behavior-preserving refactor):
+
+- **`DoRAAdapter`** (iteration 2, B.4) -- once item 9's seam exists. Its
+  own equivalence/quality-comparison pass, not just an equivalence test
+  (it's a real quality claim, not a refactor).
+- **`NF4WeightStore`** (QLoRA, iteration 2, B.5) -- this document's single
+  highest-value future VRAM lever, and explicitly *not* squeezed into the
+  numbered list: needs a real dequantization implementation (kernel or
+  scratch-buffer-backed dequant-then-matmul, via `MemoryManager`) and,
+  per B.5's own caveat, verification against this project's actual UNet
+  specifically, not assumed from the LLM literature. Its own dedicated
+  effort.
+- **`CheckpointPlacementPolicy`/`GreedyRatioPlacement`** (iteration 2,
+  B.6) -- blocked on extending `profile=True` to real per-block
+  activation/recompute measurements, which doesn't exist yet and is its
+  own instrumentation task before this policy has real numbers to rank
+  against.
+- **`RescaledZeroTerminalSNRSchedule` plus finishing real v-prediction
+  training end to end** (iteration 2, B.1) -- unlike everything else in
+  this backlog, this isn't equivalence-tested against existing behavior
+  (there's no old code path to match); it's a genuine training-behavior
+  change that needs real training runs and qualitative image-quality
+  evaluation to validate, not a unit test. Sequenced separately for that
+  reason, not because it's unimportant.
+- **`LoRAPlusGroups` actually wired into a run** (iteration 2, B.3) --
+  once item 4 lands, opting in is a one-line `parameter_group_policy=
+  LoRAPlusGroups(...)` change, not worth its own numbered slot; listed
+  here only so it isn't forgotten as the actual payoff of item 4.
 
 Not on this list, deliberately: `ComponentRegistry`, `TrainingRecipe`,
-`AutoResourcePolicy`, layer-wise base offload, quantized base weights --
-see "Deliberately deferred or rejected" above for why each one waits.
+`AutoResourcePolicy`, layer-wise base offload, flow matching, GaLore,
+8-bit optimizer moments -- see "Deliberately deferred or rejected" above
+and iteration 2's B.8 for why each one waits.

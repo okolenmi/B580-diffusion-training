@@ -14,7 +14,10 @@ doesn't block a new capability is explicitly left for iteration 3 (listed,
 not resolved, at the end) -- that's what "iteration 3 should be just
 fixes" means, taken literally.
 
-**A sequencing correction, stated plainly rather than quietly fixed:**
+**A sequencing correction, stated plainly rather than quietly fixed**
+*(resolved in `docs/theoretical_pipeline_design_iteration3.md` -- section
+4 has since been redone in place; this note is kept as-is for the record
+of why it was provisional at the time):*
 `docs/theoretical_pipeline_design.md`'s section 4 (the gap analysis against
 `nodes/`) was written immediately after what I'd internally called
 "iteration 3" -- i.e., after the whole thing, under the *old* (wrong)
@@ -253,6 +256,20 @@ class RescaledZeroTerminalSNRSchedule(DiscreteLinearNoiseSchedule):
         alphas_cumprod = sqrt_ac ** 2
         return alphas_cumprod.sqrt(), ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
 ```
+
+Worth stating precisely, checked by hand rather than left implicit:
+`alphas_cumprod[-1]` is exactly `0.0` after this rescale, so `sigma_t[-1]`
+is exactly `inf` (a real IEEE-754 division-by-zero-tensor result, not an
+exception) -- by construction, not a bug. `VPredParameterization.to_x0()`
+stays well-defined there (`x_t/denom -> 0` and `sigma/sqrt(denom) -> 1`
+as `sigma -> inf`, so `x0 -> -raw`, a clean finite limit -- checked
+directly, not assumed, which is the actual content of B.1's v-prediction
+requirement above, not just a citation of the paper's own claim). Any
+code that touches `sigma_t` *outside* the `Parameterization` abstraction
+(a stray `1 / sigma` somewhere) will get a real `inf` at exactly the last
+index and needs to be checked for that -- one more reason B.1's
+constructor-time compatibility check exists, though it only catches the
+parameterization mismatch, not every possible stray use of raw `sigma`.
 
 A `DiffusionProcess` (iteration 1) built from
 `RescaledZeroTerminalSNRSchedule` and `EpsParameterization` together is a
@@ -747,6 +764,10 @@ optimizer = build_optimizer(model.trainable_parameters(), policy, memory,
 ---
 
 ## Left for iteration 3 (fixes only, listed, not resolved)
+
+*(Resolved in `docs/theoretical_pipeline_design_iteration3.md`, item by
+item -- left exactly as originally written below, for the record of what
+was actually deferred at the time.)*
 
 Per the definition given for this pass: iteration 3 should be fixes, not
 new capability. Collected here so it isn't lost, deliberately not

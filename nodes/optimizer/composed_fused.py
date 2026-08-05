@@ -73,7 +73,7 @@ specific purpose.
 from __future__ import annotations
 
 from .algorithms.base import Algorithm
-from .composed import ComposedOptimizerHandle
+from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import FusedOptimizerHandle
 from .strategies.base import ExecutionStrategy, apply_update
 
@@ -102,9 +102,10 @@ class _NoStepStrategy(ExecutionStrategy):
 
 class ComposedFusedOptimizerHandle(ComposedOptimizerHandle, FusedOptimizerHandle):
 
-    def __init__(self, algorithm: Algorithm, params, lr: float, device):
+    def __init__(self, algorithm: Algorithm, params, lr: float, device,
+                 group_policy: ParameterGroupPolicy | None = None):
         super().__init__(algorithm=algorithm, strategy=_NoStepStrategy(),
-                          params=params, lr=lr, device=device)
+                          params=params, lr=lr, device=device, group_policy=group_policy)
         self._hooks = []
         self._in_backward = False
         self._sub_steps_required = 1

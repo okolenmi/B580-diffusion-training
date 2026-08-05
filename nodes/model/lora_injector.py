@@ -41,6 +41,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from ..core import Port
+from .gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
 from .handle import ModelWeights, TrainableModel
 from .node import LoRAInjectorNode
 
@@ -157,9 +158,9 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "unfiltered, and a frozen base + LoRA block almost always has at least one "
                 "frozen parameter (a norm weight, a bias, anything LoRA didn't target) in "
                 "there, which used to crash with 'One of the differentiated Tensors does not "
-                "require grad'. This node now patches that (nodes/model/gradient_checkpointing.py) "
-                "before building the model whenever this is True -- see "
-                "docs/vram_and_lora_phase_split.md for the root-cause writeup.",
+                "require grad'. Mapped internally to FrozenParamSafeCheckpointing (True) or "
+                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py for the "
+                "root-cause writeup and docs/vram_and_lora_phase_split.md for the fuller one.",
         ),
     }
 
@@ -171,9 +172,9 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
 
         weights: ModelWeights = inputs["weights"]
         use_checkpoint = inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default)
-        if use_checkpoint:
-            from .gradient_checkpointing import enable_frozen_param_safe_checkpointing
-            enable_frozen_param_safe_checkpointing()
+        checkpointing_strategy = (
+            FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
+        checkpointing_strategy.apply()
         lora_config = LoRAConfig(
             rank=inputs.get("rank", self.INPUTS["rank"].default),
             alpha=_effective_alpha(

@@ -28,9 +28,58 @@ top of proven logic, not a reimplementation of it.
 
 See docs/vram_and_lora_phase_split.md for the fuller write-up and the
 2026-07-26 diagnosis this patch resolves.
+
+ActivationCheckpointingStrategy (docs/training_pipeline_design.md section
+2.3): the fix above is correct, but was only exposed as a global,
+process-wide monkeypatch triggered by a bare bool -- not itself an object
+another piece of code can compose with or substitute. FrozenParamSafeCheckpointing
+below is the exact same mechanism, unchanged, now with an apply() method;
+NoCheckpointing is the explicit "did nothing" case for when checkpointing
+is off, replacing an implicit "the if just wasn't taken".
+
+Section 2.3 also designs a per-block CheckpointPlacementPolicy
+(EveryBlockPlacement/GreedyRatioPlacement) for checkpointing a subset of
+blocks by a memory/recompute cost ratio, rather than uniformly all-or-
+nothing. Deliberately NOT implemented here -- the design doc's own
+calibration note says GreedyRatioPlacement "should be treated as
+unvalidated until real BlockCost numbers exist [from actual per-block
+profiling on real hardware] -- shipping it with guessed costs would be
+worse than not having it". FrozenParamSafeCheckpointing therefore takes
+no placement parameter yet; adding one with nothing real to pass it would
+be scaffolding, not a feature.
 """
 
 from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+
+class ActivationCheckpointingStrategy(ABC):
+
+    @abstractmethod
+    def apply(self) -> None:
+        """Install whatever's needed (a monkeypatch, a wrapper) before the
+        model is built. Idempotent -- calling twice is a no-op."""
+
+
+class NoCheckpointing(ActivationCheckpointingStrategy):
+
+    def apply(self) -> None:
+        pass  # explicit "did nothing", not "wasn't asked"
+
+
+class FrozenParamSafeCheckpointing(ActivationCheckpointingStrategy):
+    """The fix above, as an object. apply() delegates to
+    enable_frozen_param_safe_checkpointing() unchanged rather than
+    duplicating that function's body here -- it's delicate autograd code,
+    already verified by smoke_test_gradient_checkpointing.py, and
+    transcribing it a second place risks the two copies drifting apart
+    for no benefit. This class is the interface other code should compose
+    with going forward; the free function keeps the one real
+    implementation."""
+
+    def apply(self) -> None:
+        enable_frozen_param_safe_checkpointing()
 
 
 def enable_frozen_param_safe_checkpointing() -> None:

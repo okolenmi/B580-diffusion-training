@@ -3,15 +3,82 @@
 Adapter only -- core.unet_wrapper.ComfyUNetWrapper and core.lora already do
 the real work (UNet construction, LoRA layer injection); this wraps them
 behind the TrainableModel/LoRAInjectorNode contracts.
+
+LoRAScalingPolicy (docs/training_pipeline_design.md section 3.2): standard
+LoRA scales its output by alpha/rank, which Kalajdzievski (arXiv:2312.03732,
+2023) proves collapses adapter output/gradient magnitude as rank grows --
+the reason LoRA is usually kept at low rank in practice, since higher ranks
+"should" add capacity but empirically don't, because the scaling itself
+suppresses them. RankStabilizedScaling's alpha/sqrt(rank) fixes that, at
+zero VRAM/inference cost.
+
+core.lora.LoRALinear/LoRAConv2d always compute `scaling = (alpha/rank) *
+weight` themselves, internally, with no seam to override that formula
+directly (confirmed by reading core/lora.py -- not modified here, per this
+project's standing rule about legacy code). So this Node applies whatever
+LoRAScalingPolicy it's given *before* core.lora ever runs, by solving for
+the "effective alpha" that makes core.lora's own fixed formula land on the
+policy's chosen scaling: `effective_alpha = policy.scaling(alpha, rank) *
+rank`, so that core.lora's `effective_alpha / rank` recovers exactly
+`policy.scaling(alpha, rank)`. For ClassicLoRAScaling this is an identity
+(effective_alpha == alpha, zero behavior change); the algebra is otherwise
+straightforward but worth being explicit about since it's the whole trick.
+
+One real, worth-knowing side effect of this seam: core.lora.extract_lora_weights
+saves each layer's *effective* alpha into the checkpoint (not the nominal
+value this Node was given), and load_lora_into_model restores scaling via
+its own hardcoded alpha/rank on resume -- which is exactly why the round
+trip stays correct regardless of which policy produced the effective value
+in the first place. The one cosmetic consequence: if a checkpoint's saved
+alpha is inspected directly, or if core.lora's "alpha mismatch" print ever
+fires on a config change, the number shown is the effective alpha, not
+whatever nominal `alpha` was typed into this Node's Port.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from ..core import Port
 from .handle import ModelWeights, TrainableModel
 from .node import LoRAInjectorNode
+
+
+class LoRAScalingPolicy(ABC):
+
+    @abstractmethod
+    def scaling(self, alpha: float, rank: int) -> float:
+        ...
+
+
+class ClassicLoRAScaling(LoRAScalingPolicy):
+    """Today's actual behavior -- core.lora's existing alpha/rank formula,
+    unchanged. Default, so nothing wired to this Node today changes."""
+
+    def scaling(self, alpha: float, rank: int) -> float:
+        return alpha / rank
+
+
+class RankStabilizedScaling(LoRAScalingPolicy):
+    """Kalajdzievski, "A Rank Stabilization Scaling Factor for Fine-Tuning
+    with LoRA" (arXiv:2312.03732, 2023). Its actual value depends on
+    training at higher rank than this project's current default (rank=64)
+    to have anything to stabilize -- worth pairing with a rank increase,
+    not independently useful at the current default rank by itself."""
+
+    def scaling(self, alpha: float, rank: int) -> float:
+        return alpha / (rank ** 0.5)
+
+
+def _effective_alpha(alpha: float, rank: int, policy: LoRAScalingPolicy) -> float:
+    """The seam itself, pulled out as its own function so it's directly
+    testable without constructing a whole ComfyUNetWrapper -- see this
+    module's docstring for the derivation. ClassicLoRAScaling is the
+    identity (returns alpha unchanged); anything else changes what
+    core.lora ends up computing for `scaling` without core.lora itself
+    changing at all."""
+    return policy.scaling(alpha, rank) * rank
 
 
 class ComfyUNetTrainableModel(TrainableModel):
@@ -66,6 +133,16 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                        doc="torch dtype; None resolves to torch.bfloat16."),
         "rank": Port(name="rank", type=int, required=False, default=64),
         "alpha": Port(name="alpha", type=float, required=False, default=1.0),
+        "scaling_policy": Port(
+            name="scaling_policy", type=LoRAScalingPolicy, required=False, default=None,
+            doc="None = ClassicLoRAScaling (today's exact alpha/rank behavior). "
+                "RankStabilizedScaling (alpha/sqrt(rank)) is worth pairing with a higher "
+                "rank than this Node's default (64) -- see LoRAScalingPolicy's module "
+                "docstring for why alpha/rank alone suppresses higher ranks. Applied via "
+                "an effective-alpha seam ahead of core.lora, not a core.lora change -- "
+                "same docstring covers the one cosmetic side effect (checkpoint-saved "
+                "alpha is the effective value, not this Port's nominal one).",
+        ),
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
         "target_modules": Port(name="target_modules", type=Any, required=False, default=None),
         "use_checkpoint": Port(
@@ -99,7 +176,11 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             enable_frozen_param_safe_checkpointing()
         lora_config = LoRAConfig(
             rank=inputs.get("rank", self.INPUTS["rank"].default),
-            alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
+            alpha=_effective_alpha(
+                alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
+                rank=inputs.get("rank", self.INPUTS["rank"].default),
+                policy=inputs.get("scaling_policy") or ClassicLoRAScaling(),
+            ),
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),
         )

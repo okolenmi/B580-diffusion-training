@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 
@@ -51,6 +52,15 @@ class ForeachCAMEOptimizerHandle(OptimizerHandle):
 
     def free_states(self) -> None:
         self._legacy.free_states()
+
+    def footprint_bytes(self) -> int:
+        # getattr(..., ()): ForeachXPUCAME.free_states() `del`s all six of
+        # these entirely (confirmed directly) -- 0 is the correct
+        # post-release answer, not an AttributeError.
+        legacy = self._legacy
+        return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
+                                 getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()),
+                                 getattr(legacy, "res_r", ()), getattr(legacy, "res_c", ()))
 
 
 class ForeachCAMEOptimizerNode(OptimizerNode):

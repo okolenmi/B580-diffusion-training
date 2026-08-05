@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import FusedOptimizerHandle
 from .node import OptimizerNode
 
@@ -73,6 +74,21 @@ class FusedAdafactorOptimizerHandle(FusedOptimizerHandle):
         # confirmed by reading it -- so this correctly tears down the
         # backward hooks registered by build(), not just the state tensors.
         self._legacy.free_states()
+
+    def footprint_bytes(self) -> int:
+        # getattr(..., ()): FusedXPUAdafactor.free_states() `del`s
+        # vr/vc/vs/exp_avg entirely (confirmed directly) -- 0 is the
+        # correct post-release answer, not an AttributeError.
+        #
+        # _tiny_vs_map: parameters below TINY_NUMEL elements route through
+        # a separate per-parameter batched fast path (a dict, not the
+        # vr/vc/vs/exp_avg lists) -- same real gap as
+        # AdafactorOptimizerHandle's, see that class's footprint_bytes()
+        # comment; confirmed by reading step()/free_states() directly.
+        legacy = self._legacy
+        return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
+                                 getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()),
+                                 getattr(legacy, "_tiny_vs_map", {}).values())
 
 
 class FusedAdafactorOptimizerNode(OptimizerNode):

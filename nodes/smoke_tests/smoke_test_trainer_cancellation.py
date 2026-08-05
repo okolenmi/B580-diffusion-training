@@ -77,6 +77,9 @@ class _FakeOptimizer(OptimizerHandle):
     def free_states(self):
         pass
 
+    def footprint_bytes(self):
+        return 0
+
 
 class _FakeTextEncoder:
     def encode(self, prompt, batch_size, height, width):

@@ -37,6 +37,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 
@@ -90,8 +91,13 @@ class AdamWOptimizerHandle(OptimizerHandle):
     def free_states(self) -> None:
         self._legacy.free_states()
 
-
-class AdamWOptimizerNode(OptimizerNode):
+    def footprint_bytes(self) -> int:
+        # getattr(..., ()), not self._legacy.m/.v directly: CPUAdamW.free_states()
+        # does `del self.m, self.v` (confirmed by reading it), not clear-in-place --
+        # so after release() these attributes don't exist at all, and the
+        # correct "best-effort current usage" answer at that point is 0, not
+        # an AttributeError.
+        return sum_tensor_bytes(getattr(self._legacy, "m", ()), getattr(self._legacy, "v", ()))
     """CPU-resident AdamW -- see core.optimizers.CPUAdamW's own module
     comment (FP32 states on CPU, saved to disc as BF16). Right for full
     fine-tuning; a measured trap for LoRA -- see SimpleAdamWOptimizerNode
@@ -186,6 +192,10 @@ class SimpleAdamWOptimizerHandle(OptimizerHandle):
 
     def free_states(self) -> None:
         self._legacy.state.clear()
+
+    def footprint_bytes(self) -> int:
+        return sum(val.numel() * val.element_size()
+                   for _state, _key, val in self._each_state_tensor())
 
 
 class SimpleAdamWOptimizerNode(OptimizerNode):

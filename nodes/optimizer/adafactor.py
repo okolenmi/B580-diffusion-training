@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 
@@ -46,6 +47,27 @@ class AdafactorOptimizerHandle(OptimizerHandle):
 
     def free_states(self) -> None:
         self._legacy.free_states()
+
+    def footprint_bytes(self) -> int:
+        # vr/vc/vs/exp_avg: factored row/col second-moment state plus the
+        # momentum buffer, each a list of Optional[Tensor] -- None until
+        # that parameter's state is lazily allocated on its first step
+        # (confirmed by reading ChunkedXPUAdafactor.__init__ directly).
+        # getattr(..., ()): free_states() does `del self.vr, ...` (also
+        # confirmed directly), so these don't exist at all post-release --
+        # correct answer there is 0, not an AttributeError.
+        #
+        # _tiny_vs: parameters below TINY_NUMEL elements route through a
+        # separate batched fast path with its own single shared state
+        # tensor, not through vr/vc/vs/exp_avg at all (confirmed by
+        # reading the step()/offload_states_to_cpu() methods directly --
+        # missing this made footprint_bytes() silently report 0 for an
+        # all-small-parameters optimizer, caught by
+        # smoke_test_device_resident_retrofit.py before this fix).
+        legacy = self._legacy
+        return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
+                                 getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()),
+                                 [getattr(legacy, "_tiny_vs", None)])
 
 
 class AdafactorOptimizerNode(OptimizerNode):

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 
@@ -50,6 +51,14 @@ class ForeachAdafactorOptimizerHandle(OptimizerHandle):
 
     def free_states(self) -> None:
         self._legacy.free_states()
+
+    def footprint_bytes(self) -> int:
+        # getattr(..., ()): ForeachXPUAdafactor.free_states() `del`s
+        # vr/vc/vs/exp_avg entirely (confirmed directly) -- 0 is the
+        # correct post-release answer, not an AttributeError.
+        legacy = self._legacy
+        return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
+                                 getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()))
 
 
 class ForeachAdafactorOptimizerNode(OptimizerNode):

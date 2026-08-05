@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..memory.handle import sum_tensor_bytes
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 
@@ -56,6 +57,17 @@ class CAMEOptimizerHandle(OptimizerHandle):
 
     def free_states(self) -> None:
         self._legacy.free_states()
+
+    def footprint_bytes(self) -> int:
+        # Same factored vr/vc/vs/exp_avg as Adafactor, plus CAME's own
+        # res_r/res_c residual-confidence state -- all Optional[Tensor]
+        # lists, None until lazily allocated (ChunkedXPUCAME.__init__).
+        # getattr(..., ()): free_states() `del`s these entirely (also
+        # confirmed directly) -- 0 is the correct post-release answer.
+        legacy = self._legacy
+        return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
+                                 getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()),
+                                 getattr(legacy, "res_r", ()), getattr(legacy, "res_c", ()))
 
 
 class CAMEOptimizerNode(OptimizerNode):

@@ -74,3 +74,12 @@ class ComposedOptimizerHandle(OptimizerHandle):
         self.strategy.free_extra()
         import gc
         gc.collect()
+
+    def footprint_bytes(self) -> int:
+        """Generic over self.states' real shape (list of per-parameter
+        state dicts) -- same reason every other lifecycle method here is
+        written once: correct for ComposedFusedOptimizerHandle and any
+        future Algorithm/ExecutionStrategy pair for free, by construction,
+        without writing this again."""
+        return sum(t.numel() * t.element_size()
+                   for state in self.states for t in state.values())

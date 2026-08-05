@@ -11,14 +11,26 @@ Every method here corresponds to something this codebase's training loop
 (core/train_step.py, core/trainer.py) actually calls on an optimizer today
 -- this isn't a speculative interface, it's the real, exercised surface
 area, made explicit and enforced instead of implicit and duck-typed.
+
+Extends DeviceResident (nodes/memory/handle.py): offload/reload/release
+are concrete here, aliasing the five methods below that already existed
+and that every concrete subclass already implements -- no existing call
+site of offload_states_to_cpu/reload_states_to_device/free_states needed
+to change. footprint_bytes() stays abstract: there's no generic body
+possible at this level (state layout is genuinely different per concrete
+subclass -- a dict-of-tensors per parameter here, a handful of named
+Optional[Tensor] lists there), so each concrete Handle below implements
+it directly against its own real state.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..memory.handle import DeviceResident
 
-class OptimizerHandle(ABC):
+
+class OptimizerHandle(DeviceResident, ABC):
 
     @property
     @abstractmethod
@@ -56,10 +68,18 @@ class OptimizerHandle(ABC):
         """Move all optimizer state off the training device, freeing device
         memory (used between cyclic-training cache rebuilds)."""
 
+    def offload(self) -> None:
+        """DeviceResident conformance -- see offload_states_to_cpu()."""
+        self.offload_states_to_cpu()
+
     @abstractmethod
     def reload_states_to_device(self, device: str | None = None) -> None:
         """Move optimizer state back onto a device (None = whatever device
         this handle was originally built for)."""
+
+    def reload(self, device: str | None = None) -> None:
+        """DeviceResident conformance -- see reload_states_to_device()."""
+        self.reload_states_to_device(device)
 
     @abstractmethod
     def decay_states(self, factor: float) -> None:
@@ -75,6 +95,10 @@ class OptimizerHandle(ABC):
     def free_states(self) -> None:
         """Release all optimizer state entirely (used when the optimizer
         itself is being discarded, not just paused)."""
+
+    def release(self) -> None:
+        """DeviceResident conformance -- see free_states()."""
+        self.free_states()
 
 
 class FusedOptimizerHandle(OptimizerHandle):

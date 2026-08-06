@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from ..core import Port
+from ..components.layout import ProjectLayout
 from .handle import ModelWeights
 from .node import ModelProviderNode
 
@@ -22,14 +23,20 @@ class SafetensorsCheckpointNode(ModelProviderNode):
                           "e.g. 'sdxl/base.safetensors'). Absolute paths and '..' are rejected -- this "
                           "field is reachable from the graph editor over the network, so it's sandboxed "
                           "to the configured directory regardless of what's typed here."),
+        "project_layout": Port(
+            name="project_layout", type=ProjectLayout, required=False, default=None,
+            doc="None = ProjectLayout.from_paths_module() -- today's exact directory resolution "
+                "(paths.py's set_comfy_dir()/environment/.env), just snapshotted once instead of "
+                "read from module-global state at call time. See nodes/components/layout.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, ModelWeights]:
         self.validate_inputs(inputs)
-        import paths
         from safetensors.torch import load_file
 
-        resolved = paths.resolve_safe_model_path(str(inputs["path"]), "checkpoint")
+        layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
+        resolved = layout.resolve_safe_model_path(str(inputs["path"]), "checkpoint")
         sd = load_file(str(resolved))
         unet_sd = {k: v for k, v in sd.items() if _is_unet_key(k)}
         non_unet_sd = {k: v for k, v in sd.items() if not _is_unet_key(k)}

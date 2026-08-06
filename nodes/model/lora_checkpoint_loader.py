@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..components.layout import ProjectLayout
 from .handle import TrainableModel
 from .lora_injector import ComfyUNetTrainableModel
 from .lora_phases import lora_key
@@ -51,11 +52,14 @@ class LoRACheckpointLoaderNode(LoRAInjectorNode):
             doc="Path relative to the configured LoRA directory -- the same directory "
                 "LoRACheckpointSaverNode writes to. Absolute paths and '..' are rejected.",
         ),
+        "project_layout": Port(
+            name="project_layout", type=ProjectLayout, required=False, default=None,
+            doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
         self.validate_inputs(inputs)
-        import paths
         from safetensors.torch import load_file
 
         from core.lora import LoRAConv2d, LoRALinear, load_lora_into_model
@@ -67,7 +71,8 @@ class LoRACheckpointLoaderNode(LoRAInjectorNode):
                 f"(operates on its LoRA layer registry directly), got {type(model).__name__}."
             )
 
-        resolved = paths.resolve_safe_model_path(inputs["relative_path"], "lora")
+        layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
+        resolved = layout.resolve_safe_model_path(inputs["relative_path"], "lora")
         state_dict = load_file(str(resolved))
 
         registry = model.raw.lora_registry

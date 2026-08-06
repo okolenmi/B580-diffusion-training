@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Iterator
 
 from ..core import Port
+from ..components.layout import ProjectLayout
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
 
@@ -49,15 +50,19 @@ class ManagedDatasetSourceNode(DataSourceNode):
         "t_high": Port(name="t_high", type=int, required=False, default=999),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
                        doc="uniform / low / mid / high / logit."),
+        "project_layout": Port(
+            name="project_layout", type=ProjectLayout, required=False, default=None,
+            doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainingBatchSource]:
         self.validate_inputs(inputs)
-        import paths
         from manager.loader import ManagedDatasetLoader
 
+        layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
         loader = ManagedDatasetLoader(
-            dataset_root=paths.resolve_safe_dataset_path(str(inputs["dataset_root"])),
+            dataset_root=layout.resolve_safe_dataset_path(str(inputs["dataset_root"])),
             set_identifier=inputs.get("set_identifier", self.INPUTS["set_identifier"].default),
             shuffle=inputs.get("shuffle", self.INPUTS["shuffle"].default),
             batch_size=inputs.get("batch_size", self.INPUTS["batch_size"].default),

@@ -31,7 +31,7 @@ class _FakeWrapper:
 def check_contracts():
     print("[contracts]")
     assert not getattr(LoRACheckpointLoaderNode, "__abstractmethods__", None)
-    assert set(LoRACheckpointLoaderNode.INPUTS) == {"model", "relative_path"}
+    assert set(LoRACheckpointLoaderNode.INPUTS) == {"model", "relative_path", "project_layout"}
     assert set(LoRACheckpointLoaderNode.OUTPUTS) == {"model"}
     print("    PASS")
 

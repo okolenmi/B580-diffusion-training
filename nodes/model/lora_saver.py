@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Port
+from ..components.layout import ProjectLayout
 from .handle import TrainedWeightsExportable
 from .node import CheckpointSaverNode
 
@@ -57,11 +58,14 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
                 "from the graph editor over the network, so it's sandboxed to the "
                 "configured directory regardless of what's typed here.",
         ),
+        "project_layout": Port(
+            name="project_layout", type=ProjectLayout, required=False, default=None,
+            doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, str]:
         self.validate_inputs(inputs)
-        import paths
         from safetensors.torch import save_file
 
         model = inputs["model"]
@@ -75,7 +79,8 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
             raise ValueError("LoRACheckpointSaverNode: nothing to save -- "
                               "trained_state_dict() returned an empty dict.")
 
-        resolved = paths.resolve_safe_model_path(inputs["relative_path"], "lora")
+        layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
+        resolved = layout.resolve_safe_model_path(inputs["relative_path"], "lora")
         resolved.parent.mkdir(parents=True, exist_ok=True)
         tmp = resolved.with_suffix(resolved.suffix + ".tmp")
         save_file(state_dict, str(tmp))

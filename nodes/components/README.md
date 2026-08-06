@@ -1,12 +1,13 @@
 # `nodes/components/`
 
 Destination for rewritten, non-legacy versions of the technical pieces
-`nodes/` currently imports from `core/` or `manager/` -- dataset loading
-(`manager.loader.ManagedDatasetLoader`), UNet/LoRA construction
-(`core.unet_wrapper`, `core.lora`), noise-schedule math
-(`core.noise_schedule`), model I/O parameterization (`core.model_io`),
-and similar. See `docs/nodes_package_design.md` for the full picture of
-which subpackage currently depends on what.
+`nodes/` currently imports from `core/`, `manager/`, or the project root
+(`paths.py`) -- dataset loading (`manager.loader.ManagedDatasetLoader`),
+UNet/LoRA construction (`core.unet_wrapper`, `core.lora`), noise-schedule
+math (`core.noise_schedule`), model I/O parameterization
+(`core.model_io`), directory configuration (`paths.py`), and similar. See
+`docs/nodes_package_design.md` for the full picture of which subpackage
+currently depends on what.
 
 `diffusion.py` (`NoiseSchedule`/`Parameterization`/`ModelInputTransform`/
 `DiffusionProcess`) and `device.py` (`DeviceContext`) have landed --
@@ -21,6 +22,21 @@ material, per the project's existing rule) -- `nodes/dataset/renoise.py`
 still imports them directly and is intentionally out of scope for this
 slice (its `sample_timestep` usage isn't part of the `NoiseSchedule`/
 `Parameterization` contract at all).
+
+`layout.py` (`ProjectLayout`) has also landed -- backlog item 8,
+equivalence-tested against `paths.py` in
+`nodes/smoke_tests/smoke_test_project_layout.py`, and wired into the four
+`nodes/` Nodes that called `paths.resolve_safe_model_path`/
+`resolve_safe_dataset_path` directly
+(`nodes/model/checkpoint_loader.py`/`lora_saver.py`/
+`lora_checkpoint_loader.py`, `nodes/dataset/managed.py`). Larger blast
+radius than the other items, deliberately kept narrow here: `paths.py`
+itself is untouched and remains the one source of truth --
+`server/*`/`manager/*`/`core/*` all still depend on its module functions
+directly and are **not** migrated by this change. This is a bridging
+period, not a clean swap, per the design doc's own framing -- both
+mechanisms read the same underlying state, so they stay correct and in
+sync until server/manager get migrated too, later, separately.
 
 Everything else in the "destination for" list above is still to move.
 See `docs/training_pipeline_design.md`'s "Prioritized backlog" (section

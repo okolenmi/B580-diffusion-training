@@ -41,6 +41,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from ..core import Port
+from .frozen_weight_store import BF16WeightStore
 from .gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
 from .handle import ModelWeights, TrainableModel
 from .node import LoRAInjectorNode
@@ -123,6 +124,66 @@ class ComfyUNetTrainableModel(TrainableModel):
         LoRAPhaseSplitNode) that need the full legacy object, not just
         the TrainableModel contract."""
         return self._wrapper
+
+    def footprint_bytes(self) -> int:
+        """The frozen base's footprint -- everything in the wrapped
+        UNetModel's state_dict() except the currently-trainable LoRA A/B
+        parameters, each wrapped in BF16WeightStore (today's actual
+        storage; see that class's docstring for why this doesn't change
+        when a future NF4WeightStore lands). Matched against
+        lora_parameters() by data_ptr(), not name or object identity:
+        state_dict() calls .detach() on every tensor by default, a new
+        Python object sharing the same underlying storage, so identity
+        comparison against the live nn.Parameter objects would silently
+        never match anything -- checked directly, not assumed. Name-based
+        matching (anything ending in ".lora_A"/".lora_B") was considered
+        and rejected: after a nodes/model/lora_phases.py phase split, an
+        earlier, now-frozen generation's own lora_A/lora_B keeps that
+        exact name at its own nested path (LoRAGeneration.inner is a
+        genuine submodule), so a name-based filter would wrongly exclude
+        already-frozen weight from the frozen count. data_ptr() against
+        lora_parameters() -- which already correctly returns only the
+        top-of-stack, currently-trainable pair per layer -- gets this
+        right in both the split and non-split case for free."""
+        if self._wrapper is None:
+            return 0
+        trainable_ptrs = {p.data_ptr() for p in self._wrapper.lora_parameters()}
+        return sum(
+            BF16WeightStore(tensor).footprint_bytes()
+            for tensor in self._wrapper.state_dict().values()
+            if tensor.data_ptr() not in trainable_ptrs
+        )
+
+    def offload(self) -> None:
+        """Cheap, reversible: move to CPU, remember the device to come
+        back to. Doesn't touch LoRA state, dtype, or anything about the
+        model's identity -- same object, same weights, just relocated."""
+        self._device_before_offload = self._wrapper.device
+        self._wrapper.to(device="cpu")
+
+    def reload(self, device: str | None = None) -> None:
+        target = device or getattr(self, "_device_before_offload", None)
+        if target is None:
+            raise RuntimeError(
+                "reload() needs an explicit device, or a prior offload() to "
+                "remember one -- neither was given."
+            )
+        self._wrapper.to(device=target)
+
+    def release(self) -> None:
+        """Not reversible -- drops the wrapped model entirely. Moves to
+        CPU first for a clean drop rather than releasing a live device
+        reference, then drops the reference itself; whatever built this
+        TrainableModel has to build it again. Every other method on this
+        object (forward/train/eval/to/trained_state_dict) is correctly
+        unusable afterward -- only footprint_bytes() is special-cased to
+        report 0 rather than raise, matching DeviceResident's own
+        "best-effort current usage" contract for a released object."""
+        if self._wrapper is not None:
+            self._wrapper.to(device="cpu")
+            self._wrapper = None
+        import gc
+        gc.collect()
 
 
 class ComfyUNetLoRANode(LoRAInjectorNode):

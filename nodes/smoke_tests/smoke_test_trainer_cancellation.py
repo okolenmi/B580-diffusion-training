@@ -47,6 +47,18 @@ class _FakeModel(TrainableModel):
     def trained_state_dict(self):
         return {}
 
+    def footprint_bytes(self):
+        return self.p.numel() * self.p.element_size()
+
+    def offload(self):
+        pass
+
+    def reload(self, device=None):
+        pass
+
+    def release(self):
+        pass
+
 
 class _FakeOptimizer(OptimizerHandle):
     @property

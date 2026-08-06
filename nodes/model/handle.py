@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..memory.handle import DeviceResident
+
 
 class ModelWeights:
     """A loaded checkpoint's UNet state dict, separated from everything else
@@ -39,7 +41,7 @@ class TrainedWeightsExportable(ABC):
         ...
 
 
-class TrainableModel(TrainedWeightsExportable, ABC):
+class TrainableModel(TrainedWeightsExportable, DeviceResident, ABC):
     """Runtime contract for a model ready to be trained. Extending
     TrainedWeightsExportable means every TrainableModel is required to
     say how to export what it learned -- a reasonable universal
@@ -47,7 +49,17 @@ class TrainableModel(TrainedWeightsExportable, ABC):
     full-finetune TrainableModel would just export its own full weight
     diff through the same method), and the concrete reason
     LoRACheckpointSaverNode's model input can stay typed at this ABC
-    without narrowing to a concrete class."""
+    without narrowing to a concrete class.
+
+    Extends DeviceResident (nodes/memory/handle.py, docs/training_pipeline_design.md
+    section 1.2) as of the FrozenWeightStore seam (section 3.3) landing --
+    footprint_bytes() specifically wasn't answerable before that existed
+    (see nodes/model/frozen_weight_store.py). to()/train()/eval() above
+    predate this and stay as they are; offload()/reload()/release() are
+    new, narrower-purpose siblings (offload/reload are specifically the
+    cheap, reversible, stay-resident-on-host operation; release is the
+    non-reversible drop -- to() is a general device/dtype move with
+    neither of those specific lifecycle meanings)."""
 
     @abstractmethod
     def forward(self, x_t, timestep, context, y):

@@ -98,6 +98,9 @@ class AdamWOptimizerHandle(OptimizerHandle):
         # correct "best-effort current usage" answer at that point is 0, not
         # an AttributeError.
         return sum_tensor_bytes(getattr(self._legacy, "m", ()), getattr(self._legacy, "v", ()))
+
+
+class AdamWOptimizerNode(OptimizerNode):
     """CPU-resident AdamW -- see core.optimizers.CPUAdamW's own module
     comment (FP32 states on CPU, saved to disc as BF16). Right for full
     fine-tuning; a measured trap for LoRA -- see SimpleAdamWOptimizerNode

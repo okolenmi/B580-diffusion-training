@@ -2,8 +2,8 @@
 keyed on (prompt, batch_size, height, width).
 
 VRAM/compute rationale: SupervisedLoRATrainerNode encodes every batch's
-prompt from scratch, every step (see nodes/train/supervised.py's
-_run_step) -- for a managed dataset whose captions repeat (the common
+prompt from scratch, every step (see nodes/train/step_pipeline.py's
+EncodeConditioningPhase) -- for a managed dataset whose captions repeat (the common
 case: a handful of style/character tags reused across many images), that
 means CLIP re-runs a full forward pass, with its own real activation
 memory on top of the UNet's, for conditioning this codebase already
@@ -23,7 +23,8 @@ from .text_encoder import TextEncoder, TextEncoderNode
 
 class CachingTextEncoder(TextEncoder):
     """Every caller in this codebase already does .to(device=...) on
-    encode()'s return value (see SupervisedLoRATrainerNode._run_step), so
+    encode()'s return value (see nodes/train/step_pipeline.py's
+    EncodeConditioningPhase), so
     caching on CPU and handing the same tensors back on a hit needs no
     device-placement special-casing here -- correct whether the caller
     gets a fresh (already-on-device) or cached (CPU) pair."""

@@ -13,12 +13,12 @@ There's no reliable signal for "nothing new is ever coming" in a
 streaming decorator; it would have to guess. This node sidesteps
 guessing by taking the dataset as an input and doing one real pass over
 it first -- the exact (prompt, batch_size, height, width) keys
-SupervisedLoRATrainerNode._run_step will request are derived the same
-way it derives them (batch["x_t"].shape gives batch_size and, *8 for the
-VAE downsample factor, height/width), so this doesn't need to guess at
-that either. That pass is cheap: ManagedDatasetLoader-backed sources just
-read already-stored tensors, no VAE/CLIP calls, and it also warms the
-loader's own internal sample cache as a side effect.
+nodes/train/step_pipeline.py's EncodeConditioningPhase will request are
+derived the same way it derives them (batch["x_t"].shape gives batch_size
+and, *8 for the VAE downsample factor, height/width), so this doesn't
+need to guess at that either. That pass is cheap: ManagedDatasetLoader-backed
+sources just read already-stored tensors, no VAE/CLIP calls, and it also
+warms the loader's own internal sample cache as a side effect.
 
 Composes CachingTextEncoder (nodes/model/text_encoder_cache.py) rather
 than being its own cache implementation -- this node's only real job is

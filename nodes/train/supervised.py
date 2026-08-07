@@ -8,13 +8,20 @@ adversarial pre-conditioning, no timestep gating, no resume/checkpoint
 cadence (use `on_step` for that). Assumes the dataset's stored `target` is
 already in the student's own prediction parameterization -- no
 teacher/student eps<->vpred conversion at train time.
+
+The step itself is a TrainingStepPipeline (nodes/train/step_pipeline.py,
+docs/training_pipeline_design.md section 2.1) -- build() constructs the
+phase list once per run; a future change (CFG dual-pass, gradient
+accumulation) is "construct one more phase, insert it in the list", not
+"edit the method that does everything" (see step_pipeline.py's own
+docstring for the full reasoning, including why the profile=True output
+shape genuinely changes here, checked against every real consumer in this
+codebase first).
 """
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass
-from typing import Callable, ClassVar, Optional
+from typing import ClassVar
 
 from ..components.device import DeviceContext
 from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedule,
@@ -22,33 +29,14 @@ from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedul
 from ..core import Port
 from ..dataset.handle import TrainingBatchSource
 from ..model.handle import TrainableModel
-from ..model.text_encoder import TextEncoder
-from ..monitor.handle import MonitorHandle
-from ..optimizer.handle import FusedOptimizerHandle, OptimizerHandle
-from .loss import LossWeighting, UniformLossWeighting
+from ..optimizer.handle import FusedOptimizerHandle
+from .loss import UniformLossWeighting
 from .node import TrainerNode
-from .schedule import LRSchedule
-
-
-@dataclass
-class _StepContext:
-    """Everything about a run that stays fixed step to step -- bundled so
-    _run_step takes (ctx, batch, step) instead of an ever-growing
-    parameter list every time the loop needs one more thing (this is the
-    second time; `monitor` is what pushed it over into "bundle this")."""
-    model: TrainableModel
-    optimizer: OptimizerHandle
-    text_encoder: TextEncoder
-    lr_schedule: LRSchedule
-    loss_weighting: LossWeighting
-    diffusion_process: DiffusionProcess
-    device_ctx: DeviceContext
-    is_fused: bool
-    device: object
-    total_steps: int
-    on_step: Optional[Callable] = None
-    monitor: Optional[MonitorHandle] = None
-    profile: bool = False
+from .step_pipeline import (BackwardPhase, EncodeConditioningPhase, FetchBatchPhase,
+                             ForwardPhase, LossPhase, MonitoringPhase,
+                             OptimizerBeginStepPhase, OptimizerStepPhase,
+                             PrepareDiffusionInputsPhase, StepState, TimedPhase,
+                             TrainingStepPipeline)
 
 
 class SupervisedLoRATrainerNode(TrainerNode):
@@ -65,7 +53,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
         ),
         "profile": Port(
             name="profile", type=bool, required=False, default=False,
-            doc="Per-phase step timing (data wait / text encode / forward / backward / "
+            doc="Per-phase step timing (fetch batch / prepare diffusion inputs / encode "
+                "conditioning / optimizer begin step / forward / loss / backward / "
                 "optimizer step) printed every step, and included in monitor.report() if a "
                 "monitor is wired -- the breakdown this project didn't have a way to see. "
                 "Off by default: correct phase timing needs a device synchronize() between "
@@ -75,7 +64,10 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "vram_allocated_mb/vram_reserved_mb each step when profiling -- allocated "
                 "growing over many steps is a real, live reference leak; reserved growing "
                 "while allocated stays flat is just the caching allocator's own bookkeeping, "
-                "not a leak (see nodes/components/device.py's DeviceContext.memory_stats).",
+                "not a leak (see nodes/components/device.py's DeviceContext.memory_stats). "
+                "Per-phase keys are named after each phase (see "
+                "nodes/train/step_pipeline.py) -- more granular than, and not the same "
+                "key names as, an older version of this Port's output.",
         ),
         "empty_cache_every_n_steps": Port(
             name="empty_cache_every_n_steps", type=int, required=False, default=0,
@@ -97,141 +89,68 @@ class SupervisedLoRATrainerNode(TrainerNode):
         steps: int = inputs["steps"]
         empty_cache_every_n_steps: int = inputs.get(
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
+        profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
         optimizer = inputs["optimizer"]
-        ctx = _StepContext(
-            model=model,
-            optimizer=optimizer,
-            text_encoder=inputs["text_encoder"],
-            lr_schedule=inputs["lr_schedule"],
-            loss_weighting=inputs.get("loss_weighting") or UniformLossWeighting(),
-            diffusion_process=inputs.get("diffusion_process") or DiffusionProcess(
-                DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler()),
-            device_ctx=DeviceContext.for_device(device),
-            is_fused=isinstance(optimizer, FusedOptimizerHandle),
-            device=device,
-            total_steps=steps,
-            on_step=inputs.get("on_step"),
-            monitor=inputs.get("monitor"),
-            profile=inputs.get("profile", self.INPUTS["profile"].default),
-        )
+        is_fused = isinstance(optimizer, FusedOptimizerHandle)
+        device_ctx = DeviceContext.for_device(device)
+        diffusion_process = inputs.get("diffusion_process") or DiffusionProcess(
+            DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
+        loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
+
+        phases = [
+            FetchBatchPhase(batches),
+            PrepareDiffusionInputsPhase(diffusion_process),
+            EncodeConditioningPhase(inputs["text_encoder"]),
+            OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused),
+            ForwardPhase(),
+            LossPhase(loss_weighting),
+            BackwardPhase(),
+            OptimizerStepPhase(optimizer, is_fused),
+        ]
+        if profile:
+            phases = [TimedPhase(p, device_ctx, _phase_label(p)) for p in phases]
+        phases.append(MonitoringPhase(
+            total_steps=steps, device_ctx=device_ctx, on_step=inputs.get("on_step"),
+            monitor=inputs.get("monitor"), profile=profile))
+        pipeline = TrainingStepPipeline(phases)
 
         step = 0
-        batch_ready_at = time.perf_counter()
         while step < steps:
-            for batch in batches:
-                if step >= steps:
-                    break
-                if self.context.should_cancel():
-                    # Cooperative stop, between steps only -- never mid
-                    # backward/optimizer-step. Not a failure: the model
-                    # trained so far is a normal, valid output, same as a
-                    # run that finished all its steps, just fewer of them.
-                    result = {"model": model}
-                    self.validate_outputs(result)
-                    return result
-                wait_ms = (time.perf_counter() - batch_ready_at) * 1000
-                self._run_step(ctx, batch, step, wait_ms)
-                step += 1
-                if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
-                    import gc
-                    gc.collect()
-                    ctx.device_ctx.empty_cache()
-                batch_ready_at = time.perf_counter()
+            if self.context.should_cancel():
+                # Cooperative stop, between steps only -- never mid
+                # backward/optimizer-step. Not a failure: the model
+                # trained so far is a normal, valid output, same as a
+                # run that finished all its steps, just fewer of them.
+                result = {"model": model}
+                self.validate_outputs(result)
+                return result
+            state = StepState(step=step, batch=None, model=model, device=device)
+            pipeline.run_step(state)
+            step += 1
+            if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
+                import gc
+                gc.collect()
+                device_ctx.empty_cache()
 
         result = {"model": model}
         self.validate_outputs(result)
         return result
 
-    @staticmethod
-    def _run_step(ctx: _StepContext, batch: dict, step: int, wait_ms: float = 0.0) -> None:
-        import torch
 
-        timing = None
-        t0 = None
-        if ctx.profile:
-            ctx.device_ctx.synchronize()
-            timing = {"data_wait_ms": wait_ms}
-            t0 = time.perf_counter()
-
-        x_t = batch["x_t"].to(ctx.device)
-        target = batch["target"].to(ctx.device)
-        t = batch["t"].to(device=ctx.device, dtype=torch.long).view(-1)
-        _, sigma = ctx.diffusion_process.schedule.alpha_sigma(t)
-        xc = ctx.diffusion_process.input_transform.scale_input(x_t, sigma)
-
-        batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
-        ctx_emb, y = ctx.text_encoder.encode(batch["prompt"], batch_size=x_t.shape[0],
-                                              height=batch_h, width=batch_w)
-        ctx_emb = ctx_emb.to(device=ctx.device, dtype=torch.bfloat16)
-        y = y.to(device=ctx.device, dtype=torch.bfloat16)
-
-        t1 = None
-        if ctx.profile:
-            ctx.device_ctx.synchronize()
-            t1 = time.perf_counter()
-            timing["encode_ms"] = (t1 - t0) * 1000
-
-        lr = ctx.lr_schedule.value(step)
-        ctx.optimizer.update_lr(lr)
-        if ctx.is_fused:
-            ctx.optimizer.begin_step(sub_steps=1)
-        else:
-            ctx.optimizer.zero_grad()
-
-        pred = ctx.model.forward(xc, t, ctx_emb, y)
-
-        t2 = None
-        if ctx.profile:
-            ctx.device_ctx.synchronize()
-            t2 = time.perf_counter()
-            timing["forward_ms"] = (t2 - t1) * 1000
-
-        per_sample = (pred.float() - target.float()).pow(2)
-        per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
-        weight = ctx.loss_weighting.weight(float(sigma.float().mean().item()))
-        loss = per_sample.mean() * weight
-        loss.backward()
-
-        t3 = None
-        if ctx.profile:
-            ctx.device_ctx.synchronize()
-            t3 = time.perf_counter()
-            timing["backward_ms"] = (t3 - t2) * 1000
-
-        if not ctx.is_fused:
-            ctx.optimizer.step(n_steps=1)
-
-        if ctx.profile:
-            ctx.device_ctx.synchronize()
-            t4 = time.perf_counter()
-            timing["optim_ms"] = (t4 - t3) * 1000
-            timing["step_total_ms"] = (t4 - t0) * 1000 + wait_ms
-            mem = ctx.device_ctx.memory_stats()
-            if mem is not None:
-                timing["vram_allocated_mb"] = mem["allocated_mb"]
-                timing["vram_reserved_mb"] = mem["reserved_mb"]
-
-        loss_value = float(loss.item())
-        if ctx.on_step is not None:
-            ctx.on_step(step, loss_value)
-        if ctx.monitor is not None or ctx.profile:
-            report = {
-                "step": step, "total_steps": ctx.total_steps,
-                "loss": loss_value, "lr": lr, "t": time.time(),
-            }
-            if timing is not None:
-                report.update(timing)
-            if ctx.monitor is not None:
-                ctx.monitor.report(report)
-        if ctx.profile:
-            vram_part = ""
-            if "vram_allocated_mb" in timing:
-                vram_part = (f" vram_allocated={timing['vram_allocated_mb']:.0f}MB "
-                             f"vram_reserved={timing['vram_reserved_mb']:.0f}MB")
-            print(f"  [step {step}] wait={timing['data_wait_ms']:.0f}ms "
-                  f"encode={timing['encode_ms']:.0f}ms forward={timing['forward_ms']:.0f}ms "
-                  f"backward={timing['backward_ms']:.0f}ms optim={timing['optim_ms']:.0f}ms "
-                  f"total={timing['step_total_ms']:.0f}ms" + vram_part)
+def _phase_label(phase) -> str:
+    """CamelCase class name -> snake_case label, minus a trailing
+    "Phase" -- FetchBatchPhase -> "fetch_batch". Mechanical, not
+    hand-maintained per phase, so a new phase class gets a sensible
+    label for free."""
+    name = type(phase).__name__
+    if name.endswith("Phase"):
+        name = name[: -len("Phase")]
+    out = []
+    for i, ch in enumerate(name):
+        if ch.isupper() and i > 0:
+            out.append("_")
+        out.append(ch.lower())
+    return "".join(out)

@@ -29,6 +29,18 @@ class _CountingEncoder(TextEncoder):
     def unload(self) -> None:
         self.unloaded = True
 
+    def footprint_bytes(self) -> int:
+        return 0
+
+    def offload(self) -> None:
+        pass
+
+    def reload(self, device=None) -> None:
+        pass
+
+    def release(self) -> None:
+        pass
+
 
 class _FakeDataset(TrainingBatchSource):
     def __init__(self, batches):

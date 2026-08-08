@@ -148,6 +148,18 @@ class _FakeTextEncoder:
     def unload(self):
         pass
 
+    def footprint_bytes(self):
+        return 0
+
+    def offload(self):
+        pass
+
+    def reload(self, device=None):
+        pass
+
+    def release(self):
+        pass
+
 
 class _FixedBatchSource:
     """Repeats one exact, pre-built batch forever."""

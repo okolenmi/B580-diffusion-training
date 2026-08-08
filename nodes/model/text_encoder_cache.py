@@ -50,6 +50,21 @@ class CachingTextEncoder(TextEncoder):
     def unload(self) -> None:
         self._inner.unload()
 
+    def footprint_bytes(self) -> int:
+        # The cache itself holds only CPU tensors (entry = (ctx.detach()
+        # .cpu(), y.detach().cpu()) above) -- doesn't count toward device
+        # footprint at all, so this is exactly self._inner's own.
+        return self._inner.footprint_bytes()
+
+    def offload(self) -> None:
+        self._inner.offload()
+
+    def reload(self, device: str | None = None) -> None:
+        self._inner.reload(device)
+
+    def release(self) -> None:
+        self._inner.release()
+
     def clear_cache(self) -> None:
         self._cache.clear()
 

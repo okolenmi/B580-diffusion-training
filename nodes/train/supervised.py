@@ -28,6 +28,7 @@ from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedul
                                      EpsParameterization, KarrasInputScaler)
 from ..core import Port
 from ..dataset.handle import TrainingBatchSource
+from ..memory.coordinator import ResourceCoordinator
 from ..model.handle import TrainableModel
 from ..optimizer.handle import FusedOptimizerHandle
 from .loss import UniformLossWeighting
@@ -65,6 +66,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "growing over many steps is a real, live reference leak; reserved growing "
                 "while allocated stays flat is just the caching allocator's own bookkeeping, "
                 "not a leak (see nodes/components/device.py's DeviceContext.memory_stats). "
+                "Also reports tracked_footprint_mb -- the sum of every registered "
+                "DeviceResident's own footprint_bytes() (model/optimizer/text_encoder), "
+                "independent of what the device driver reports. The two staying roughly in "
+                "sync is a sanity check that DeviceResident accounting reflects reality; it "
+                "won't match vram_allocated_mb exactly (this doesn't account for "
+                "activations), so don't expect equality, just no growing gap over time. "
                 "Per-phase keys are named after each phase (see "
                 "nodes/train/step_pipeline.py) -- more granular than, and not the same "
                 "key names as, an older version of this Port's output.",
@@ -100,6 +107,18 @@ class SupervisedLoRATrainerNode(TrainerNode):
             DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
 
+        # Registered for profile=True's tracked_footprint_mb cross-check
+        # (nodes/train/step_pipeline.py's MonitoringPhase) -- not (yet)
+        # driving any offload decisions itself. See
+        # nodes/memory/coordinator.py's OffloadOrchestrator for that half
+        # of backlog item 12, not wired in here: nothing in
+        # SupervisedLoRATrainerNode v1's own documented scope publishes a
+        # TrainingLifecycleEvent for it to react to yet.
+        coordinator = ResourceCoordinator()
+        coordinator.register("model", model)
+        coordinator.register("optimizer", optimizer)
+        coordinator.register("text_encoder", inputs["text_encoder"])
+
         phases = [
             FetchBatchPhase(batches),
             PrepareDiffusionInputsPhase(diffusion_process),
@@ -114,7 +133,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
             phases = [TimedPhase(p, device_ctx, _phase_label(p)) for p in phases]
         phases.append(MonitoringPhase(
             total_steps=steps, device_ctx=device_ctx, on_step=inputs.get("on_step"),
-            monitor=inputs.get("monitor"), profile=profile))
+            monitor=inputs.get("monitor"), profile=profile, coordinator=coordinator))
         pipeline = TrainingStepPipeline(phases)
 
         step = 0

@@ -285,12 +285,14 @@ class MonitoringPhase(StepPhase):
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  on_step: Optional[Callable] = None,
-                 monitor: Optional[MonitorHandle] = None, profile: bool = False):
+                 monitor: Optional[MonitorHandle] = None, profile: bool = False,
+                 coordinator=None):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._on_step = on_step
         self._monitor = monitor
         self._profile = profile
+        self._coordinator = coordinator
 
     def run(self, state: StepState) -> StepState:
         loss_value = float(state.extras["loss"].item())
@@ -301,6 +303,7 @@ class MonitoringPhase(StepPhase):
 
         timing = state.extras.get("timing_ms")
         mem = None
+        tracked_mb = None
         if self._monitor is not None or self._profile:
             report = {
                 "step": state.step, "total_steps": self._total_steps,
@@ -317,6 +320,18 @@ class MonitoringPhase(StepPhase):
                 if mem is not None:
                     report["vram_allocated_mb"] = mem["allocated_mb"]
                     report["vram_reserved_mb"] = mem["reserved_mb"]
+                if self._coordinator is not None:
+                    # A cross-check, not a replacement for mem above: the
+                    # sum of every registered DeviceResident's own
+                    # footprint_bytes(), independent of what the device
+                    # driver itself reports. The two agreeing (roughly --
+                    # this doesn't account for activations, only the
+                    # residents this run explicitly registered) is a
+                    # useful sanity signal that DeviceResident accounting
+                    # actually reflects reality; a growing gap between
+                    # them is worth investigating on its own.
+                    tracked_mb = self._coordinator.total_footprint_bytes() / (1024 ** 2)
+                    report["tracked_footprint_mb"] = tracked_mb
             if self._monitor is not None:
                 self._monitor.report(report)
 
@@ -330,6 +345,11 @@ class MonitoringPhase(StepPhase):
             if mem is not None:
                 vram_part = (f" vram_allocated={mem['allocated_mb']:.0f}MB "
                              f"vram_reserved={mem['reserved_mb']:.0f}MB")
-            print(f"  [step {state.step}] {parts} total={total:.0f}ms" + vram_part)
+            tracked_part = ""
+            if self._coordinator is not None:
+                if tracked_mb is None:
+                    tracked_mb = self._coordinator.total_footprint_bytes() / (1024 ** 2)
+                tracked_part = f" tracked_footprint={tracked_mb:.0f}MB"
+            print(f"  [step {state.step}] {parts} total={total:.0f}ms" + vram_part + tracked_part)
 
         return state

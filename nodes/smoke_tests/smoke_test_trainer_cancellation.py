@@ -100,6 +100,18 @@ class _FakeTextEncoder:
     def unload(self):
         pass
 
+    def footprint_bytes(self):
+        return 0
+
+    def offload(self):
+        pass
+
+    def reload(self, device=None):
+        pass
+
+    def release(self):
+        pass
+
 
 class _FiniteBatches:
     """Cycles the same batch forever -- SupervisedLoRATrainerNode's outer

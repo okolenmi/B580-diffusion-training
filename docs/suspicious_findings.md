@@ -5,6 +5,78 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Open
 
+- **[2026-08] 8 real, working Node classes exist but aren't selectable in
+  the graph editor -- `server/nodegraph_registry.py`'s list is stale.**
+  Confirmed directly, not a hypothesis: walked every concrete `Node`
+  subclass under `nodes/` and diffed against
+  `server.nodegraph_registry.get_registry()`'s actual returned set.
+  Missing:
+
+  - `P2LossWeightingNode` (`nodes/train/loss.py`).
+  - `PrefetchingBatchSourceNode` (`nodes/dataset/prefetch.py`).
+  - `ComposedAdamWOptimizerNode`, `ComposedAdafactorOptimizerNode`,
+    `ComposedCAMEOptimizerNode`, `ComposedFusedAdamWOptimizerNode`,
+    `ComposedFusedAdafactorOptimizerNode`,
+    `ComposedFusedCAMEOptimizerNode` (`nodes/optimizer/composed_*.py`) --
+    predate the 2026-08 nodes/ session entirely (from the earlier
+    Algorithm/ExecutionStrategy optimizer rewrite); not introduced by
+    that session, a pre-existing gap its own registry check happened to
+    surface.
+
+  All 8 are real, already-tested classes with nowhere to be selected
+  from. The fix is mechanical (add each to `server/nodegraph_registry.py`'s
+  import list and `classes` list, same as every other entry there),
+  low-risk, no new logic needed. Not applied yet -- see
+  `docs/session_handoff.md` for why and for exactly what to do.
+
+- **[2026-08] Training produces unstable/deforming results -- useful
+  change and anatomy/content deformation appear at the same LoRA power
+  level.** User-reported after a real training run (rank 48, alpha 1,
+  dropout 0, weight_decay 0, t range [150, 999], LR 1e-5, clip_threshold
+  1, 18000 steps). At LoRA power 2.0 a visible, useful change is there
+  but comes with significant anatomy/content deformation; at power 1.0
+  the useful change is much less visible but negative effects (some
+  deformation) are still present. Not investigated. See
+  `docs/session_handoff.md` for candidate hypotheses and suggested
+  cheap-first experiments -- none diagnosed as *the* cause, genuine
+  experimentation needed, not "apply hypothesis #1 and declare it
+  fixed."
+
+- **[2026-08] VRAM usage grows (not just runs high) with a dataset of
+  mixed image dimensions, eventually crashing.** User-reported: more
+  than 2x the expected batch-size footprint, and growing over time
+  rather than stabilizing, specifically correlated with varying image
+  dimensions across the dataset. Not investigated. Leading hypothesis
+  (general PyTorch allocator behavior, not traced in this codebase):
+  caching-allocator fragmentation from constantly-varying tensor shapes,
+  not a genuine leak -- see `docs/session_handoff.md` for the reasoning
+  and the one real data point (`vram_allocated=5539MB` vs
+  `vram_reserved=9802MB`) that's mildly consistent with it, plus a
+  separate, real concern surfaced while looking at this:
+  `DeviceResident.footprint_bytes()` (items 3/9/12 of the 2026-08
+  session) doesn't check actual device placement anywhere, which could
+  explain `tracked_footprint_mb` coming out *higher* than
+  `vram_allocated_mb` in that same log line -- backwards from what
+  static-weight-only accounting vs. real allocated-including-activations
+  should show.
+
+- **[2026-08] Training is much slower than the pre-nodes/ implementation
+  -- `optimizer_step` dominates step time.** User-reported, with one real
+  `profile=True` log line (batch size 2, 512px): `forward=245ms
+  backward=287ms optimizer_step=1041ms total=1575ms` --
+  `optimizer_step` alone is ~66% of total step time, disproportionate for
+  a LoRA's small, fixed parameter set. Fairly confident leading
+  hypothesis given `clip_threshold=1` in the reported settings (an
+  Adafactor/CAME-family parameter): the optimizer node in use is a
+  "Chunked" variant (`AdafactorOptimizerNode`/`CAMEOptimizerNode`, real
+  per-parameter device syncs, built for VRAM-bounded large-parameter-count
+  scenarios) rather than the matching "Foreach" variant
+  (`ForeachAdafactorOptimizerNode`/`ForeachCAMEOptimizerNode`, vectorized,
+  explicitly documented in `nodes/optimizer/foreach_came.py` as "the
+  right default for LoRA's small, fixed parameter set"). See
+  `docs/session_handoff.md` for the full reasoning and fallback steps if
+  a Foreach node is already in use.
+
 - **[2026-07] "Device lost" errors and silent training hangs after
   VRAM-pressure events, reported from real ComfyUI use (not this
   project's `nodes/` work).** User-reported, not yet investigated here.

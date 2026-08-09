@@ -104,12 +104,29 @@ class TrainingStepPipeline:
 
 class TimedPhase(StepPhase):
     """Wraps any StepPhase, records wall time with a real synchronize()
-    on both sides (see this module's docstring for why)."""
+    on both sides (see this module's docstring for why).
 
-    def __init__(self, inner: StepPhase, device_ctx: DeviceContext, label: str):
+    **capture_memory, docs/optimizer_execution_redesign_plan.md Phase 1
+    follow-up.** Every prior VRAM measurement in this investigation only
+    snapshotted once per step, at the very end -- enough to see *that*
+    reserved jumps between two steps, nothing about *which phase within
+    the step* actually did it (a real, specific gap this codebase's own
+    earlier "probably mid-forward" guess should never have papered
+    over). When True, records device_ctx.memory_stats() right after
+    each phase's own synchronize() -- so each phase's number reflects
+    memory state at a point genuinely known to be after that phase
+    finished, not a guess. Off by default, and only meaningful when
+    `profile` is already True (real per-step overhead on top of
+    profile's own -- an 8x memory_stats() call instead of 1x -- so this
+    is for a short, targeted diagnostic run, same caveat as profile
+    itself, not for real training)."""
+
+    def __init__(self, inner: StepPhase, device_ctx: DeviceContext, label: str,
+                 capture_memory: bool = False):
         self.inner = inner
         self.device_ctx = device_ctx
         self.label = label
+        self.capture_memory = capture_memory
 
     def run(self, state: StepState) -> StepState:
         self.device_ctx.synchronize()
@@ -117,6 +134,10 @@ class TimedPhase(StepPhase):
         state = self.inner.run(state)
         self.device_ctx.synchronize()
         state.extras.setdefault("timing_ms", {})[self.label] = (time.perf_counter() - t0) * 1000
+        if self.capture_memory:
+            mem = self.device_ctx.memory_stats()
+            if mem is not None:
+                state.extras.setdefault("phase_mem", {})[self.label] = mem
         return state
 
 
@@ -400,5 +421,24 @@ class MonitoringPhase(StepPhase):
             optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
             print(f"  [step {state.step}]{optimizer_part} {parts} total={total:.0f}ms"
                   + vram_part + tracked_part)
+
+            phase_mem = state.extras.get("phase_mem")
+            if phase_mem:
+                # Per-phase reserved_mb, each relative to the *previous
+                # phase's own* snapshot -- directly shows which phase's
+                # synchronize() boundary is where reserved actually
+                # moves, instead of inferring it from end-of-step
+                # snapshots two steps apart. First phase's delta is
+                # against this step's own start (prev_reserved seeded
+                # from the very first entry) so a jump in fetch_batch
+                # itself isn't silently attributed to nothing.
+                prev_reserved = None
+                phase_parts = []
+                for label, m in phase_mem.items():
+                    r = m["reserved_mb"]
+                    delta = "" if prev_reserved is None else f"{r - prev_reserved:+.0f}"
+                    phase_parts.append(f"{label}={r:.0f}MB({delta})" if delta else f"{label}={r:.0f}MB")
+                    prev_reserved = r
+                print(f"    [step {state.step}] reserved by phase: " + " ".join(phase_parts))
 
         return state

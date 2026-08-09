@@ -98,6 +98,21 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "it runs (same as any other explicit synchronize), so a very small N will "
                 "cost real step time -- start high (e.g. 50) and go lower only if needed.",
         ),
+        "profile_memory_per_phase": Port(
+            name="profile_memory_per_phase", type=bool, required=False, default=False,
+            doc="Only meaningful when profile=True. Every other VRAM number this node reports "
+                "is a single end-of-step snapshot -- enough to see reserved differs between "
+                "two steps, nothing about which phase within a step actually did it. This "
+                "records vram_reserved_mb right after *each* phase's own synchronize() (fetch "
+                "batch / prepare diffusion inputs / encode conditioning / optimizer begin step "
+                "/ forward / loss / backward / optimizer step), printed as a second line per "
+                "step: 'reserved by phase: label=XMB(+delta) ...', each delta relative to the "
+                "previous phase's own snapshot in that same step -- so a jump shows up "
+                "attributed to the specific phase that caused it, not inferred after the fact. "
+                "Real added cost on top of profile=True's own overhead (an extra "
+                "memory_stats() call per phase, 8x instead of 1x) -- for a short, targeted "
+                "run chasing exactly this question, not for real training.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -109,6 +124,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
         empty_cache_every_n_steps: int = inputs.get(
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
         profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
+        profile_memory_per_phase: bool = inputs.get(
+            "profile_memory_per_phase", self.INPUTS["profile_memory_per_phase"].default)
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
@@ -155,7 +172,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
             OptimizerStepPhase(optimizer, is_fused),
         ]
         if profile:
-            phases = [TimedPhase(p, device_ctx, _phase_label(p)) for p in phases]
+            phases = [TimedPhase(p, device_ctx, _phase_label(p), capture_memory=profile_memory_per_phase)
+                      for p in phases]
         phases.append(MonitoringPhase(
             total_steps=steps, device_ctx=device_ctx, on_step=inputs.get("on_step"),
             monitor=inputs.get("monitor"), profile=profile, coordinator=coordinator,

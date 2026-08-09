@@ -26,8 +26,15 @@ are confirmed but not urgent) so they don't get lost. Newest first.
   All 8 are real, already-tested classes with nowhere to be selected
   from. The fix is mechanical (add each to `server/nodegraph_registry.py`'s
   import list and `classes` list, same as every other entry there),
-  low-risk, no new logic needed. Not applied yet -- see
-  `docs/session_handoff.md` for why and for exactly what to do.
+  low-risk, no new logic needed. **Applied** -- `_load()` now imports and
+  registers all 8. Verified statically (no torch/ComfyUI in the sandbox,
+  same limitation as always): an `ast`-based walk of every concrete `Node`
+  subclass under `nodes/` against both `_load()`'s import list and its
+  `classes` list shows an exact match in both directions (nothing missing,
+  nothing registered that doesn't exist) -- the same check the prior
+  session did by hand with a live import, redone here without needing a
+  real import. Not yet confirmed against the actual running palette --
+  waiting on the person to apply the patch and check `/nodegraph`.
 
 - **[2026-08] Training produces unstable/deforming results -- useful
   change and anatomy/content deformation appear at the same LoRA power

@@ -15,6 +15,7 @@ _CACHE: dict[str, type] | None = None
 
 def _load() -> dict[str, type]:
     from nodes.dataset.managed import ManagedDatasetSourceNode
+    from nodes.dataset.prefetch import PrefetchingBatchSourceNode
     from nodes.dataset.renoise import RenoiseBatchSourceNode
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
     from nodes.model.lora_checkpoint_loader import LoRACheckpointLoaderNode
@@ -29,26 +30,35 @@ def _load() -> dict[str, type]:
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.adamw import AdamWOptimizerNode, SimpleAdamWOptimizerNode
     from nodes.optimizer.came import CAMEOptimizerNode
+    from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode
+    from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
+    from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode
+    from nodes.optimizer.composed_fused_adafactor import ComposedFusedAdafactorOptimizerNode
+    from nodes.optimizer.composed_fused_adamw import ComposedFusedAdamWOptimizerNode
+    from nodes.optimizer.composed_fused_came import ComposedFusedCAMEOptimizerNode
     from nodes.optimizer.foreach_came import ForeachCAMEOptimizerNode
     from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerNode
     from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
     from nodes.primitive.values import (BoolConstantNode, FloatConstantNode,
                                          IntConstantNode, StringConstantNode)
-    from nodes.train.loss import MinSNRLossWeightingNode, UniformLossWeightingNode
+    from nodes.train.loss import (MinSNRLossWeightingNode, P2LossWeightingNode,
+                                   UniformLossWeightingNode)
     from nodes.train.schedule import ConstantLRScheduleNode, CosineLRScheduleNode
     from nodes.train.supervised import SupervisedLoRATrainerNode
 
     classes = [
-        ManagedDatasetSourceNode, RenoiseBatchSourceNode,
+        ManagedDatasetSourceNode, PrefetchingBatchSourceNode, RenoiseBatchSourceNode,
         SafetensorsCheckpointNode, ComfyUNetLoRANode, LoRACheckpointLoaderNode, SDXLTextEncoderNode,
         CachingTextEncoderNode, PrewarmedTextEncoderNode,
         ModelParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,
         TrainingProgressMonitorNode,
         AdamWOptimizerNode, SimpleAdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
+        ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
+        ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
         ForeachCAMEOptimizerNode,
         ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,
-        UniformLossWeightingNode, MinSNRLossWeightingNode,
+        UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,
         SupervisedLoRATrainerNode,
         FloatConstantNode, IntConstantNode, StringConstantNode, BoolConstantNode,
     ]

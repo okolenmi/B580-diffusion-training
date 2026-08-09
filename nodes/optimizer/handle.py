@@ -141,3 +141,30 @@ class FusedOptimizerHandle(OptimizerHandle):
     def prepare_next_pass(self) -> None:
         """Call between accumulated backward() calls within one logical
         update (when sub_steps > 1), before the next backward() call."""
+
+
+def describe_optimizer(handle: OptimizerHandle) -> str:
+    """Human-readable identity for a constructed optimizer -- which
+    concrete implementation is actually running, not just "CAME
+    optimizer". Written because "It was Foreach or Composed" turned out
+    to be a real, costly ambiguity mid-investigation (see
+    docs/optimizer_execution_redesign_plan.md) -- this makes it
+    unambiguous and durable (part of the profile report every step, not
+    a construction-time console print someone has to have kept
+    scrollback for).
+
+    Generic over both families: legacy (core.optimizers-backed) handles
+    already have a distinct class per concrete implementation --
+    CAMEOptimizerHandle vs. ForeachCAMEOptimizerHandle -- so the class
+    name alone is descriptive there. ComposedOptimizerHandle
+    (composed.py) is one class for every Algorithm+ExecutionStrategy
+    pair, so the class name alone says nothing useful -- this reads
+    .algorithm/.strategy directly (real, existing attributes -- see
+    ComposedOptimizerHandle.__init__) to disambiguate exactly which
+    combination this run is actually using."""
+    name = type(handle).__name__
+    algorithm = getattr(handle, "algorithm", None)
+    strategy = getattr(handle, "strategy", None)
+    if algorithm is not None and strategy is not None:
+        return f"{name}[{type(algorithm).__name__}+{type(strategy).__name__}]"
+    return name

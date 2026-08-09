@@ -281,18 +281,40 @@ class MonitoringPhase(StepPhase):
     built inline. Always last, never TimedPhase-wrapped -- report-
     building/printing overhead was never counted in the old step_total_ms
     either, and wrapping it would be circular (it needs to read
-    timing_ms to build the report it would also be timed into)."""
+    timing_ms to build the report it would also be timed into).
+
+    **Extended, docs/optimizer_execution_redesign_plan.md Phase 0** --
+    two additions, both gated behind the same `profile` flag as the
+    existing vram_allocated_mb/vram_reserved_mb reporting, so this
+    doesn't change anything about a real (non-profiled) run:
+
+    1. `optimizer_id` (from optimizer.handle.describe_optimizer(),
+       computed once by the caller and passed in as a plain string --
+       this class doesn't need the actual optimizer object) is included
+       in every report/print line. Directly closes the "It was Foreach
+       or Composed" ambiguity that cost real time mid-investigation --
+       which concrete implementation produced a given number is now
+       part of the number's own record, not something to reconstruct
+       from separate console scrollback.
+    2. Baseline deltas for reserved_mb and num_alloc_retries, captured
+       on this instance's first profiled step and diffed against every
+       report after. A single snapshot line can't distinguish "stable
+       but high" from "climbing" -- this makes that distinction
+       possible from a handful of report lines pulled from anywhere in
+       one run, not just by comparing separately-run reports by hand."""
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
-                 coordinator=None):
+                 coordinator=None, optimizer_id: str = ""):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._on_step = on_step
         self._monitor = monitor
         self._profile = profile
         self._coordinator = coordinator
+        self._optimizer_id = optimizer_id
+        self._baseline_mem: Optional[dict[str, float]] = None
 
     def run(self, state: StepState) -> StepState:
         loss_value = float(state.extras["loss"].item())
@@ -309,6 +331,8 @@ class MonitoringPhase(StepPhase):
                 "step": state.step, "total_steps": self._total_steps,
                 "loss": loss_value, "lr": lr, "t": time.time(),
             }
+            if self._optimizer_id:
+                report["optimizer"] = self._optimizer_id
             if timing is not None:
                 # timing_ms's own keys are bare phase labels (fetch_batch,
                 # not fetch_batch_ms) -- the report dict is the one place
@@ -318,8 +342,13 @@ class MonitoringPhase(StepPhase):
                 report["step_total_ms"] = sum(timing.values())
                 mem = self._device_ctx.memory_stats()
                 if mem is not None:
-                    report["vram_allocated_mb"] = mem["allocated_mb"]
-                    report["vram_reserved_mb"] = mem["reserved_mb"]
+                    report.update({f"vram_{k}": v for k, v in mem.items()})
+                    if self._baseline_mem is None:
+                        self._baseline_mem = mem
+                    report["vram_reserved_delta_mb"] = (
+                        mem["reserved_mb"] - self._baseline_mem["reserved_mb"])
+                    report["vram_alloc_retries_delta"] = (
+                        mem["num_alloc_retries"] - self._baseline_mem["num_alloc_retries"])
                 if self._coordinator is not None:
                     # A cross-check, not a replacement for mem above: the
                     # sum of every registered DeviceResident's own
@@ -341,15 +370,35 @@ class MonitoringPhase(StepPhase):
             total = sum(timing.values())
             if mem is None:
                 mem = self._device_ctx.memory_stats()
+                if mem is not None and self._baseline_mem is None:
+                    self._baseline_mem = mem
             vram_part = ""
             if mem is not None:
-                vram_part = (f" vram_allocated={mem['allocated_mb']:.0f}MB "
-                             f"vram_reserved={mem['reserved_mb']:.0f}MB")
+                base = self._baseline_mem or mem
+                reserved_delta = mem["reserved_mb"] - base["reserved_mb"]
+                retries_delta = mem["num_alloc_retries"] - base["num_alloc_retries"]
+                # allocated/reserved kept first, matching the original line's
+                # shape exactly (nothing that was already grepping this line
+                # for those two fields breaks); everything from Phase 0's
+                # richer memory_stats() appended after, not replacing it.
+                vram_part = (
+                    f" vram_allocated={mem['allocated_mb']:.0f}MB"
+                    f" vram_reserved={mem['reserved_mb']:.0f}MB"
+                    f" (peak={mem['peak_reserved_mb']:.0f}MB"
+                    f" delta_from_baseline={reserved_delta:+.0f}MB)"
+                    f" vram_active={mem['active_mb']:.0f}MB"
+                    f" vram_requested={mem['requested_mb']:.0f}MB"
+                    f" alloc_retries={mem['num_alloc_retries']:.0f}"
+                    f" (delta={retries_delta:+.0f})"
+                    f" segments={mem['num_segments']:.0f}"
+                )
             tracked_part = ""
             if self._coordinator is not None:
                 if tracked_mb is None:
                     tracked_mb = self._coordinator.total_footprint_bytes() / (1024 ** 2)
                 tracked_part = f" tracked_footprint={tracked_mb:.0f}MB"
-            print(f"  [step {state.step}] {parts} total={total:.0f}ms" + vram_part + tracked_part)
+            optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
+            print(f"  [step {state.step}]{optimizer_part} {parts} total={total:.0f}ms"
+                  + vram_part + tracked_part)
 
         return state

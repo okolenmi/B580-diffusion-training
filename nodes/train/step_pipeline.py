@@ -178,13 +178,57 @@ class PrepareDiffusionInputsPhase(StepPhase):
     input scaling from DiffusionProcess -- everything the forward pass
     needs about the diffusion process specifically, separated from both
     "fetch a batch" and "run the model" so a different NoiseSchedule/
-    Parameterization/ModelInputTransform touches only this phase."""
+    Parameterization/ModelInputTransform touches only this phase.
 
-    def __init__(self, diffusion_process: DiffusionProcess):
+    **LoRA timestep gate, docs/optimizer_execution_redesign_plan.md
+    Phase 8.** core/lora.py's set_lora_gate()/compute_lora_gate() exists
+    specifically to keep a LoRA's contribution close to the frozen base
+    at timesteps outside the dataset's own actually-trained range --
+    used throughout the legacy core/ pipeline, previously wholly absent
+    from nodes/ (confirmed via exhaustive grep -- zero references
+    anywhere under nodes/ before this). Wired here, at the same point
+    the legacy pipeline calls it (core/train_step.py: right after the
+    per-batch `t` tensor is available, before the forward pass that
+    would apply the gated delta) using the same function, not a
+    reimplementation.
+
+    Off by default (gate_enabled=False), matching core/config_model.py's
+    own documented default exactly ("Off by default: LoRA applies
+    uniformly across all timesteps") -- this is a real behavior change
+    only for someone who explicitly turns it on, not a silent change to
+    every existing run. When enabled, gate_train_low/gate_train_high
+    must be set to match whatever t_low/t_high the dataset source node
+    was actually configured with (ManagedDatasetSourceNode's own
+    t_low/t_high inputs) -- there is deliberately no automatic sync
+    between the two yet (the dataset batch would need to carry its own
+    t_low/t_high through to here for that, a real, separate, somewhat
+    more invasive follow-up -- not done this round to avoid touching the
+    batch-collation path for a first cut of this feature). Mismatched
+    values here don't error -- they just gate against the wrong range
+    silently, so this needs to be set deliberately, not guessed.
+
+    Known limitation, inherited from core/lora.py's own design, not
+    introduced here: `_current_gate` is a module-level global, not
+    scoped to any one model/build -- if a single process ever runs
+    multiple concurrent trainer builds (not this project's current
+    architecture, but worth stating precisely), one build's gate could
+    leak into another's forward calls. set_lora_gate(None) is called
+    unconditionally every step when disabled (matching
+    core/train_step.py's own exact if/else pattern) specifically so a
+    previous step or build's gate can never silently persist."""
+
+    def __init__(self, diffusion_process: DiffusionProcess,
+                 gate_enabled: bool = False, gate_train_low: float = 0.0,
+                 gate_train_high: float = 999.0, gate_width: float = 100.0):
         self._process = diffusion_process
+        self._gate_enabled = gate_enabled
+        self._gate_train_low = gate_train_low
+        self._gate_train_high = gate_train_high
+        self._gate_width = gate_width
 
     def run(self, state: StepState) -> StepState:
         import torch
+        from core.lora import compute_lora_gate, set_lora_gate
 
         batch = state.batch
         x_t = batch["x_t"].to(state.device)
@@ -197,6 +241,13 @@ class PrepareDiffusionInputsPhase(StepPhase):
         state.extras["t"] = t
         state.extras["sigma"] = sigma
         state.extras["xc"] = xc
+
+        if self._gate_enabled:
+            set_lora_gate(compute_lora_gate(
+                t, self._gate_train_low, self._gate_train_high, self._gate_width))
+        else:
+            set_lora_gate(None)
+
         return state
 
 

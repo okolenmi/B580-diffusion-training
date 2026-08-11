@@ -52,6 +52,39 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "RescaledZeroTerminalSNRSchedule + VPredParameterization) to change any "
                 "of the three -- see nodes/components/diffusion.py.",
         ),
+        "gate_enabled": Port(
+            name="gate_enabled", type=bool, required=False, default=False,
+            doc="docs/optimizer_execution_redesign_plan.md Phase 8. Off by default -- "
+                "matches core/config_model.py's own documented default for the legacy "
+                "pipeline's equivalent setting exactly ('LoRA applies uniformly across all "
+                "timesteps'). When True, keeps the LoRA's contribution close to the frozen "
+                "base at timesteps outside [gate_train_low, gate_train_high] instead of "
+                "applying the learned delta at full strength everywhere, including "
+                "timesteps the dataset never actually supervised. Set gate_train_low/"
+                "gate_train_high to match whatever t_low/t_high the dataset source node "
+                "was configured with -- not automatically synced from it yet (see "
+                "PrepareDiffusionInputsPhase's own docstring, nodes/train/step_pipeline.py, "
+                "for exactly why and what a real auto-sync would need), so a mismatch here "
+                "gates against the wrong range silently rather than erroring.",
+        ),
+        "gate_train_low": Port(
+            name="gate_train_low", type=float, required=False, default=0.0,
+            doc="Only used when gate_enabled=True. Must match the dataset source node's "
+                "own t_low (ManagedDatasetSourceNode) -- see gate_enabled's doc.",
+        ),
+        "gate_train_high": Port(
+            name="gate_train_high", type=float, required=False, default=999.0,
+            doc="Only used when gate_enabled=True. Must match the dataset source node's "
+                "own t_high (ManagedDatasetSourceNode) -- see gate_enabled's doc.",
+        ),
+        "gate_width": Port(
+            name="gate_width", type=float, required=False, default=100.0,
+            doc="Only used when gate_enabled=True. Smaller = sharper cutoff right at "
+                "[gate_train_low, gate_train_high]'s edges, larger = more gradual handoff. "
+                "Same parameter, same default, as the legacy pipeline's gate_width "
+                "(core/config_model.py) -- see core/lora.py's compute_lora_gate for the "
+                "exact formula and a worked numeric example.",
+        ),
         "profile": Port(
             name="profile", type=bool, required=False, default=False,
             doc="Per-phase step timing (fetch batch / prepare diffusion inputs / encode "
@@ -163,7 +196,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
 
         phases = [
             FetchBatchPhase(batches),
-            PrepareDiffusionInputsPhase(diffusion_process),
+            PrepareDiffusionInputsPhase(
+                diffusion_process,
+                gate_enabled=inputs.get("gate_enabled", self.INPUTS["gate_enabled"].default),
+                gate_train_low=inputs.get("gate_train_low", self.INPUTS["gate_train_low"].default),
+                gate_train_high=inputs.get("gate_train_high", self.INPUTS["gate_train_high"].default),
+                gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
             EncodeConditioningPhase(inputs["text_encoder"]),
             OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused),
             ForwardPhase(),

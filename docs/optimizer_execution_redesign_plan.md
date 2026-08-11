@@ -387,26 +387,58 @@ VRAM-near-ceiling entries to reflect whatever Phase 3/4 actually
 measured — real numbers, not the hypotheses in this doc, once they
 exist.
 
-## Phase 8 — training quality (found this investigation, tracked here, not started)
+## Phase 8 — training quality (found this investigation; LoRA gate now implemented, caption dropout still tracked/deferred)
 
 Two real, confirmed gaps, neither a speed/VRAM issue, both found while
 tracing why produced LoRAs were low quality ("ruins backgrounds/overall
 quality more than brings useful changes, at any LR"):
 
-1. **Missing LoRA gate wiring.** `core/lora.py`'s
+1. **Missing LoRA gate wiring — IMPLEMENTED.** `core/lora.py`'s
    `set_lora_gate()`/`compute_lora_gate()` keeps the LoRA delta close to
    the frozen base at timesteps outside the dataset's own trained
    `t_low`/`t_high` range. Used throughout the legacy `core/` pipeline;
-   zero references anywhere under `nodes/` (confirmed via exhaustive
-   grep). If a nodes/-trained LoRA used a restricted `t_low`/`t_high`,
-   the delta applies at full, ungated strength at every timestep during
-   generation, including ones never supervised — high timesteps control
-   coarse structure, so this is a real, concrete candidate for
-   "ruins backgrounds/composition regardless of LR." Design work needed
-   before this can be fixed: the dataset's own `t_low`/`t_high`
-   (`nodes/dataset/managed.py`, already a real per-dataset setting) has
-   to actually reach the step pipeline / LoRA injection somehow — not
-   yet designed, let alone built.
+   confirmed absent from `nodes/` via exhaustive grep before this round.
+   Wired now: `PrepareDiffusionInputsPhase`
+   (`nodes/train/step_pipeline.py`) calls `compute_lora_gate`/
+   `set_lora_gate` at the same point the legacy pipeline does — right
+   after the batch's `t` tensor is available, before the forward pass —
+   using the same functions, not a reimplementation. New
+   `gate_enabled`/`gate_train_low`/`gate_train_high`/`gate_width` ports
+   on `SupervisedLoRATrainerNode`, `gate_enabled` defaulting to `False`
+   to match `core/config_model.py`'s own documented legacy default
+   exactly ("LoRA applies uniformly across all timesteps") — a real
+   behavior change only for someone who explicitly turns it on.
+
+   **Known limitation, not fixed this round**: `gate_train_low`/
+   `gate_train_high` must be set manually to match whatever `t_low`/
+   `t_high` the dataset source node (`ManagedDatasetSourceNode`) was
+   actually configured with — no automatic sync yet. A real fix would
+   have the dataset's batch carry its own `t_low`/`t_high` through to
+   the step pipeline directly (touching `manager/loader.py`'s
+   collation), avoiding the two-places-to-keep-in-sync risk this shares
+   with the legacy pipeline's own design — deliberately not attempted
+   this round to keep the change scoped and low-risk (this is
+   correctness-critical code; a first cut matching a proven pattern
+   beats a more ambitious redesign with less scrutiny behind it).
+
+   Verified: loaded the real `step_pipeline.py` file (package-aware
+   import so its actual relative imports resolve, not a hand-copied
+   approximation) with `torch`/`core.lora` mocked to record calls —
+   confirmed `gate_enabled=False` calls `set_lora_gate(None)` and never
+   calls `compute_lora_gate`; `gate_enabled=True` calls
+   `compute_lora_gate(t, train_low, train_high, width)` then
+   `set_lora_gate()` with its exact result; and that disabling the gate
+   again after it was enabled still resets to `None` unconditionally
+   (matters because `_current_gate` is a module-level global, not
+   scoped to one build — inherited from `core/lora.py`'s own existing
+   design, not introduced here). Also statically confirmed the port
+   declarations, the `PrepareDiffusionInputsPhase(...)` call site's
+   keyword arguments, and the constructor's real parameter names all
+   agree exactly, and that `core/lora.py`'s real `compute_lora_gate`
+   signature matches the positional call. **Not done**: a real run —
+   this needs the person to actually set a restricted `t_low`/`t_high`
+   on their dataset, matching `gate_train_low`/`gate_train_high`, and
+   compare generation quality with `gate_enabled` True vs. False.
 2. **No caption/conditioning dropout.** Confirmed absent from this
    entire codebase, both pipelines, via exhaustive search. Standard
    technique (kohya-ss `--caption_dropout_rate`, diffusers
@@ -419,10 +451,9 @@ quality more than brings useful changes, at any LR"):
    per-batch materialization (same place noise/timestep already get
    resampled fresh) — with probability `p` (typically 5-20% for LoRA),
    swap that sample's prompt to `""` for that step. Explicitly deferred
-   by the person this round — tracked here, not built.
+   by the person — tracked here, not built.
 
-Neither is blocked on Phase 2-6 or vice versa — independent work,
-picked up whenever prioritized over the speed/VRAM items above.
+Neither is blocked on Phase 2-6 or vice versa — independent work.
 
 ## Sequencing summary
 
@@ -448,12 +479,18 @@ Phase 0 (instrumentation, DONE) ─┬─> Phase 1 (diagnostics, DONE) ─┬─
                                                 v
                                        Phase 7 (docs)
 
-Phase 8 (training quality: LoRA gate wiring, caption dropout) --
-independent of everything above, tracked, not started.
+Phase 8 (training quality: LoRA gate wiring IMPLEMENTED, caption
+dropout still deferred) -- independent of everything above.
 ```
 
-The two concrete next actions, in order: run
+The concrete next actions, in order: (1) run
 `smoke_test_shape_grouped_equivalence.py` on real hardware, then a real
 `profile=True` run with `strategy="shape_grouped"` against the `1041ms`
-baseline. Everything from Phase 3 onward is gated on those two numbers
-actually coming back good.
+baseline — everything from Phase 3 onward is gated on those two numbers.
+(2) Separately, independently: set a real restricted `t_low`/`t_high` on
+a dataset, matching `gate_train_low`/`gate_train_high`, and compare a
+LoRA trained with `gate_enabled=True` against one with it `False` —
+this is the check that tells us whether the missing-gate hypothesis was
+actually the (or a) real cause of the reported quality problem, not
+just a real, confirmed gap that may or may not have been relevant to
+this specific person's actual settings.

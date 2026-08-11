@@ -136,6 +136,49 @@ class Algorithm(ABC):
         real in-place restructuring looks like when done correctly.
         """
 
+    def compute_update_batched(self, grad_stack, params: list, states: list[dict],
+                                lr: float):
+        """docs/optimizer_execution_redesign_plan.md Phase 2. Same contract
+        as compute_update(), but for a *group* of k parameters that share
+        an identical shape (and, critically, an identical lr -- see
+        ShapeGroupedBatchStrategy's grouping key for why that matters,
+        not just shape): `grad_stack` is `(k, *shape)`, `params`/`states`
+        are length-k lists (states NOT pre-stacked -- exactly how state is
+        laid out for batched math is algorithm-specific, so an override is
+        responsible for its own stacking; see algorithms/came.py's
+        override for the actual pattern: stack fresh from each member's
+        existing dict, compute, scatter results back into those same
+        dicts, so ComposedOptimizerHandle's state lifecycle -- offload/
+        reload/decay/reset, all written once generically over a flat list
+        of per-parameter dicts -- needs no changes at all). Returns
+        `(delta_stack, decay)`: `delta_stack` is `(k, *shape)`, `decay` is
+        shared across the whole group (`None`, or a single float -- true
+        by construction whenever wd/lr are the algorithm-level and
+        group-level constants they currently are for every Algorithm this
+        contract has; an Algorithm whose decay genuinely varied per group
+        member would need this contract extended again, the same way `lr`
+        already was once -- see this module's own docstring for that
+        precedent).
+
+        Default implementation: loops calling compute_update() once per
+        group member and stacks the results -- correct for *any*
+        Algorithm satisfying the base contract, just without the actual
+        batching speedup. This is what makes ShapeGroupedBatchStrategy
+        usable with an Algorithm that hasn't written a real batched
+        override yet (Adafactor, AdamW, as of this writing -- Phase 5) --
+        it still produces correct results, just at SimpleLoopStrategy's
+        existing per-member cost. Override this (as CAMEAlgorithm does)
+        only once real multi-tensor batched math for that algorithm has
+        been written and numerically verified -- see
+        algorithms/came.py's own override and its verification notes."""
+        deltas = []
+        decay = None
+        for i in range(grad_stack.shape[0]):
+            d, decay = self.compute_update(grad_stack[i], params[i], states[i], lr)
+            deltas.append(d)
+        import torch
+        return torch.stack(deltas, dim=0), decay
+
     @abstractmethod
     def decay_state(self, state: dict[str, Any], factor: float) -> None:
         """Scale state in place by factor. factor<=0 should behave like a

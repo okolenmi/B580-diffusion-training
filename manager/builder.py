@@ -352,6 +352,102 @@ class DataTaskRunner:
             if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
             raise e
 
+    def _fit_crop_boxes(self, w: int, h: int, px: int, max_aspect_ratio: float):
+        """docs/optimizer_execution_redesign_plan.md's VRAM findings: a
+        "fit"-mode image whose long side is unbounded (only the short
+        side is pinned to px) is exactly what produced the confirmed
+        ratchet effect -- a genuinely bigger forward-pass tensor forcing
+        the allocator to hold a bigger reserved block afterward,
+        permanently, once encountered (measured directly: +560MB in one
+        step, attributed to the forward phase specifically via per-phase
+        VRAM capture). This bounds it at ingestion time instead: when the
+        "fit" result's long side would exceed max_aspect_ratio * px,
+        split it into multiple crops along the long axis instead of
+        letting one oversized sample through. Each crop becomes its own
+        independent dataset sample (own x0, own shard entry) -- full
+        resolution preserved per crop, no downsampling quality loss,
+        unlike capping via a smaller px.
+
+        Deliberately NO overlap between crops, and each source image's
+        caption is reused unchanged for every one of its crops (both:
+        explicit, discussed tradeoffs, not oversights -- overlap adds
+        redundant compute/storage for smoother coverage; a real per-crop
+        captioning story is real, separate, future work if it turns out
+        to matter).
+
+        Returns (list of (left, top, right, bottom) boxes in the
+        *resized* image's own coordinate space, resized_w, resized_h).
+        Single box (whole image, same as the unmodified "fit" behavior)
+        when already within the cap -- this is a strict superset of the
+        old "fit" behavior, not a replacement: existing datasets ingested
+        under the cap default won't change.
+
+        Boxes tile the long axis in `n = ceil(long_side / cap)` *equal*
+        segments, not "n-1 full-size crops plus one small leftover" --
+        avoids one disproportionately-small trailing crop. Each box is
+        independently snapped to a multiple of 8 in both dimensions
+        (same divisible-by-8 requirement "fit" mode already has, for the
+        same reason -- VAE downsampling), centered within its own
+        segment the same way plain "fit" mode centers its single crop.
+
+        Verified (pure arithmetic, no image data needed to check this
+        part): in-bounds, /8-aligned, within-cap, and full-coverage
+        checks across 6 cases including the actual ~2.34x aspect ratio
+        from this investigation's own real data (500x1180) and both
+        tall/wide orientations -- see /tmp/test_crop_math.py from this
+        session (not shipped -- this project's own test convention is
+        nodes/smoke_tests/, this was this session's own pre-check)."""
+        import math
+        scale = px / min(w, h)
+        new_w, new_h = round(w * scale), round(h * scale)
+        cap = round(max_aspect_ratio * px)
+        long_side = max(new_w, new_h)
+
+        if long_side <= cap:
+            adj_w = new_w - (new_w % 8)
+            adj_h = new_h - (new_h % 8)
+            left = (new_w - adj_w) // 2
+            top = (new_h - adj_h) // 2
+            return [(left, top, left + adj_w, top + adj_h)], new_w, new_h
+
+        n = math.ceil(long_side / cap)
+        seg = long_side / n
+        boxes = []
+        for i in range(n):
+            start = round(i * seg)
+            end = round((i + 1) * seg) if i < n - 1 else long_side
+            box = (start, 0, end, new_h) if new_w >= new_h else (0, start, new_w, end)
+            bw, bh = box[2] - box[0], box[3] - box[1]
+            adj_w = bw - (bw % 8)
+            adj_h = bh - (bh % 8)
+            cl = box[0] + (bw - adj_w) // 2
+            ct = box[1] + (bh - adj_h) // 2
+            boxes.append((cl, ct, cl + adj_w, ct + adj_h))
+        return boxes, new_w, new_h
+
+    def _preprocess_image_crops(self, img_path: Path, px: int, resize_mode: str,
+                                 max_aspect_ratio: float) -> list:
+        """Like _preprocess_image, but for resize_mode="fit" specifically,
+        returns a LIST of (3, H, W) tensors -- more than one whenever the
+        image's long side exceeds max_aspect_ratio * px (see
+        _fit_crop_boxes). Every other resize_mode already produces a
+        fixed px*px square by construction (center_crop/pad/resize all
+        cap both dimensions at px directly), so this cap is a genuine
+        no-op for them -- always returns exactly one tensor, the same one
+        _preprocess_image would have, no behavior change for existing
+        datasets using those modes."""
+        if resize_mode != "fit":
+            return [self._preprocess_image(img_path, px, resize_mode)]
+
+        img = Image.open(img_path).convert("RGB")
+        w, h = img.size
+        scale = px / min(w, h)
+        new_w, new_h = round(w * scale), round(h * scale)
+        resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        boxes, _, _ = self._fit_crop_boxes(w, h, px, max_aspect_ratio)
+        return [torch.from_numpy(np.array(resized.crop(box))).permute(2, 0, 1).unsqueeze(0)
+                for box in boxes]
+
     def _preprocess_image(self, img_path: Path, px: int, resize_mode: str) -> torch.Tensor:
         """Load and preprocess an image, returning a (3, H, W) tensor on CPU.
 
@@ -403,6 +499,7 @@ class DataTaskRunner:
                                 neg_prompt: str = "",
                                 model_type: str = "eps",
                                 seed: int = 42,
+                                max_aspect_ratio: float = 2.0,
                                 task_id: int = None):
         """VAE-encode real images to clean latents, one per image -- the
         simple "just images and captions" LoRA format, no distillation
@@ -422,6 +519,20 @@ class DataTaskRunner:
 
         Captions: a same-basename .txt sidecar file next to each image
         (empty string if missing) -- same convention run_ingestion_task uses.
+
+        max_aspect_ratio: only affects resize_mode="fit" (the only mode
+        whose long side isn't already capped at px by construction -- see
+        _preprocess_image_crops). Confirmed on real hardware this
+        session: an unbounded "fit" long side is what produced a real,
+        measured VRAM ratchet (+560MB reserved in a single step,
+        attributed directly to the forward phase via per-phase capture)
+        and a 5-8x forward/backward slowdown, consistent with attention's
+        quadratic cost scaling against this UNet's own verified
+        transformer_depth config. Default 2.0 (long side up to 2x the
+        short side, i.e. up to 2x px*px worth of area, before an image
+        gets split into multiple same-caption crops instead of one
+        oversized sample) -- a starting point, not independently tuned
+        against this project's own real datasets yet.
         """
         try:
             if task_id: update_task_progress(dataset_root / "metadata.db", task_id, 0, pid=os.getpid())
@@ -430,7 +541,7 @@ class DataTaskRunner:
                                 str(model_path), {
                                     "image_dir": str(image_dir), "recursive": recursive,
                                     "resize_mode": resize_mode, "format": "lora_raw",
-                                    "model_type": model_type,
+                                    "model_type": model_type, "max_aspect_ratio": max_aspect_ratio,
                                 })
 
             print(f"  Loading VAE from: {model_path.name}")
@@ -461,40 +572,51 @@ class DataTaskRunner:
             pending_trajs = []
             trajs_in_shard = 0
             preview_tasks = []
+            sample_count = 0
+            split_image_count = 0
 
             for i, img_path in enumerate(tqdm(image_files, desc="Ingest")):
                 try:
-                    img_tensor = self._preprocess_image(img_path, px, resize_mode)
-                    with torch.no_grad():
-                        x0 = vae.encode(img_tensor).to(device=self.device, dtype=torch.float32)
-                    del img_tensor
-                    x0_cpu = x0.cpu().contiguous()
+                    img_tensors = self._preprocess_image_crops(
+                        img_path, px, resize_mode, max_aspect_ratio)
+                    if len(img_tensors) > 1:
+                        split_image_count += 1
+                        tqdm.write(f"    {img_path.name}: long side exceeds "
+                                   f"{max_aspect_ratio}x{px}px, split into "
+                                   f"{len(img_tensors)} crops")
 
-                    rel_preview = f"previews/lora_{uuid.uuid4().hex[:16]}.webp"
-                    preview_tasks.append((x0_cpu, dataset_root / rel_preview))
+                    for crop_idx, img_tensor in enumerate(img_tensors):
+                        with torch.no_grad():
+                            x0 = vae.encode(img_tensor).to(device=self.device, dtype=torch.float32)
+                        del img_tensor
+                        x0_cpu = x0.cpu().contiguous()
 
-                    shard_index = shard_writer.add_image_latent(x0_cpu)
-                    pending_trajs.append({
-                        "shard_index": shard_index,
-                        "sample_count": 1,
-                        "seed": seed + i,
-                        "prompt": image_prompts[i],
-                        "preview_path": rel_preview,
-                        "metadata_json": json.dumps({
-                            "neg": neg_prompt, "format": "lora_raw",
-                            "model_type": model_type, "type": "good",
-                        }),
-                    })
-                    trajs_in_shard += 1
-                    if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
-                        self._finalize_shard(dataset_root, shard_writer, shard_file,
-                                             source_id, pending_trajs)
-                        shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
-                        shard_writer = ShardWriter(shard_file)
-                        pending_trajs = []
-                        trajs_in_shard = 0
+                        rel_preview = f"previews/lora_{uuid.uuid4().hex[:16]}.webp"
+                        preview_tasks.append((x0_cpu, dataset_root / rel_preview))
+
+                        shard_index = shard_writer.add_image_latent(x0_cpu)
+                        pending_trajs.append({
+                            "shard_index": shard_index,
+                            "sample_count": 1,
+                            "seed": seed + sample_count,
+                            "prompt": image_prompts[i],
+                            "preview_path": rel_preview,
+                            "metadata_json": json.dumps({
+                                "neg": neg_prompt, "format": "lora_raw",
+                                "model_type": model_type, "type": "good",
+                            }),
+                        })
+                        sample_count += 1
+                        trajs_in_shard += 1
+                        if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
+                            self._finalize_shard(dataset_root, shard_writer, shard_file,
+                                                 source_id, pending_trajs)
+                            shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
+                            shard_writer = ShardWriter(shard_file)
+                            pending_trajs = []
+                            trajs_in_shard = 0
+                        del x0
                     if task_id: update_task_progress(dataset_root / "metadata.db", task_id, i + 1)
-                    del x0
 
                 except Exception as e:
                     print(f"    Failed {img_path.name}: {e}")
@@ -502,6 +624,11 @@ class DataTaskRunner:
             if pending_trajs:
                 self._finalize_shard(dataset_root, shard_writer, shard_file,
                                      source_id, pending_trajs)
+
+            if split_image_count:
+                print(f"  {split_image_count}/{len(image_files)} image(s) split "
+                     f"into multiple crops ({sample_count} total sample(s) "
+                     f"from {len(image_files)} source image(s))")
 
             if preview_tasks:
                 print(f"  Generating {len(preview_tasks)} previews...")

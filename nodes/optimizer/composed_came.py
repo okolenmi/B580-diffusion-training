@@ -31,6 +31,21 @@ Status of each combination, stated precisely:
     hint for its own internal intermediates).
   - "foreach": bit-exact vs. "simple" on CPU (algorithm-agnostic check,
     see strategies/foreach.py). Not yet run on real XPU hardware.
+  - "shape_grouped": docs/optimizer_execution_redesign_plan.md Phase 2 --
+    groups parameters by exact (shape, dtype, device, lr) and runs each
+    group's entire update as one batched multi-tensor computation instead
+    of one pass per parameter. The actual fix for the measured ~7x
+    CAME-vs-AdamW optimizer_step gap (confirmed structural, not a
+    strategy or host-sync artifact -- switching "simple"<->"chunked"
+    changed nothing: 1042ms vs. 1041ms on real hardware). Equivalence-
+    verified only so far: a numpy transcription of both this strategy's
+    batched math and CAMEAlgorithm's own per-parameter reference,
+    compared across group sizes 1/2/5/20 and multiple shapes -- see
+    algorithms/came.py's compute_update_batched docstring for the exact
+    numbers. NOT YET real-hardware validated, and NOT YET even checked
+    bit-exact against a live CAMEAlgorithm via torch.equal() on real
+    tensors (that needs actual torch -- see this package's smoke test).
+    Not the default for exactly that reason.
 
 Once "chunked" (or a further-optimized successor) is real-hardware
 validated and matches core/optimizers.py's ChunkedXPUCAME on actual VRAM
@@ -51,11 +66,13 @@ from .node import OptimizerNode
 from .strategies.simple import SimpleLoopStrategy
 from .strategies.chunked import ChunkedScratchBufferStrategy
 from .strategies.foreach import ForeachApplyStrategy
+from .strategies.shape_grouped import ShapeGroupedBatchStrategy
 
 _STRATEGIES = {
     "simple": SimpleLoopStrategy,
     "chunked": ChunkedScratchBufferStrategy,
     "foreach": ForeachApplyStrategy,
+    "shape_grouped": ShapeGroupedBatchStrategy,
 }
 
 
@@ -81,8 +98,14 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
                           doc="'simple' (real-hardware validated), 'chunked' "
                               "(equivalence-verified, not yet real-hardware validated), "
-                              "or 'foreach' (equivalence-verified, see strategies/foreach.py; "
-                              "not yet real-hardware validated)."),
+                              "'foreach' (equivalence-verified, see strategies/foreach.py; "
+                              "not yet real-hardware validated), or 'shape_grouped' "
+                              "(the real fix for CAME's measured ~7x-vs-AdamW optimizer_step "
+                              "cost -- see strategies/shape_grouped.py. Equivalence-verified "
+                              "at the numpy/algebra level only so far, NOT yet checked "
+                              "bit-exact via torch.equal() on real tensors and NOT yet run "
+                              "on real hardware -- try this first on a short, disposable run, "
+                              "not as a silent default)."),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:

@@ -286,3 +286,114 @@ class CAMEAlgorithm(Algorithm):
     def reset_state(self, state: dict[str, Any]) -> None:
         for t in state.values():
             t.zero_()
+
+    def compute_update_batched(self, grad_stack, params: list, states: list[dict],
+                                lr: float):
+        """docs/optimizer_execution_redesign_plan.md Phase 2's real payoff:
+        the same math as _compute_update_safe's factored branch above,
+        with one leading group axis (k) threaded through every reduction,
+        so a whole group of same-shape parameters costs a handful of
+        kernel launches total instead of one full pass per member.
+
+        Two deliberate departures from a literal transcription of
+        _compute_update_safe, both real restructuring choices, not
+        oversights:
+
+        1. Only the factored (2D+) branch is batched. The 1D case falls
+           back to the base class's per-member default (LoRA weight
+           matrices are 2D; this isn't the shape that matters here, and
+           writing a separate batched formula for it isn't worth the
+           extra surface to verify).
+        2. `clip_div` uses `torch.clamp(..., min=1.0)` (stays a device
+           tensor, shape (k,)) instead of `max(float(rms/threshold), 1.0)`
+           (forces a host sync). Numerically identical -- dividing by the
+           same value whether it's a Python float or a device tensor of
+           that value -- confirmed in the numpy verification below rather
+           than assumed. This also removes the `if clip_div != 1.0:`
+           skip-when-unclipped branch: dividing by exactly 1.0 changes
+           nothing (`x/1.0 == x` exactly in IEEE float), so always
+           dividing is safe and needed anyway once clip_div is a
+           per-group-member tensor, not a single Python bool you can
+           branch on.
+
+        State handling: `states` keeps its existing flat list-of-dicts
+        layout (ComposedOptimizerHandle's offload/reload/decay/reset all
+        depend on that generic shape and are otherwise untouched by this
+        method). This method stacks fresh from each member's own tensors,
+        computes, then scatters results back into those same tensors via
+        `.copy_()` -- one extra stack+scatter pass per group per step,
+        the real, accepted cost the plan doc already named ("one
+        allocation per group, not per parameter, still a large reduction
+        from today"), not a layout change to anything outside this
+        method's own body.
+
+        Verified (this sandbox has no torch, same limitation as every
+        session so far): transcribed this exact restructuring to numpy,
+        float32, and compared against a literal numpy transcription of
+        _compute_update_safe's factored branch -- group sizes 1/2/5/20,
+        multiple shapes (including a transposed one -- LoRA's "up"
+        matrices, not just "down"), 20-40 steps each so state evolution
+        staying synchronized is checked, not just one step's output.
+        Max relative difference ~7e-7 across every trial -- float32
+        reduction-order noise (summing k members' worth of numbers in a
+        different order than k separate per-member sums isn't guaranteed
+        bit-identical), not an algebraic error, and the same order of
+        magnitude this codebase's own existing verification already
+        tolerates (this file's own module docstring: ~4e-6 max abs diff
+        for the original CAMEAlgorithm-vs-ChunkedXPUCAME comparison).
+        This is NOT a substitute for the real bit-exact torch.equal()
+        check against a live CAMEAlgorithm on real hardware -- that still
+        needs to happen (see the new smoke test this ships with) -- it's
+        confirmation the restructuring is algebraically sound before that
+        check, not a replacement for it."""
+        import torch
+        k = grad_stack.shape[0]
+        decay = (1.0 - self.wd * lr) if self.wd != 0 else None
+        factored = grad_stack.dim() >= 3
+
+        if not factored:
+            return Algorithm.compute_update_batched(self, grad_stack, params, states, lr)
+
+        rows = grad_stack.shape[1]
+        g = grad_stack.reshape(k, rows, -1)
+        g2 = g.pow(2).add(self.eps1)
+
+        r_stack = torch.stack([s["r"] for s in states], dim=0)
+        c_stack = torch.stack([s["c"] for s in states], dim=0)
+        ea_stack = torch.stack([s["ea"].reshape(rows, -1) for s in states], dim=0)
+        rr_stack = torch.stack([s["rr"] for s in states], dim=0)
+        rc_stack = torch.stack([s["rc"] for s in states], dim=0)
+
+        r_stack.mul_(self.beta2).add_(g2.mean(dim=2), alpha=1.0 - self.beta2)
+        c_stack.mul_(self.beta2).add_(g2.mean(dim=1), alpha=1.0 - self.beta2)
+        r_mean_sqrt = r_stack.mean(dim=1).add(self.eps1).sqrt()
+        r_sqrt = r_stack.sqrt().add(self.eps1)
+        c_sqrt = c_stack.sqrt().add(self.eps1)
+        normalized = (g / r_sqrt.unsqueeze(2) / c_sqrt.unsqueeze(1)
+                      * r_mean_sqrt.view(k, 1, 1))
+
+        flat = normalized.reshape(k, -1)
+        rms = flat.norm(dim=1) / (flat.shape[1] ** 0.5 + 1e-8)
+        clip_div = torch.clamp(rms / self.clip_threshold, min=1.0)
+        normalized = normalized / clip_div.view(k, 1, 1)
+
+        ea_stack.mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
+
+        res = (normalized - ea_stack).pow(2).add(self.eps2)
+        rr_stack.mul_(self.beta3).add_(res.mean(dim=2), alpha=1.0 - self.beta3)
+        rc_stack.mul_(self.beta3).add_(res.mean(dim=1), alpha=1.0 - self.beta3)
+        rr_mean_sqrt = rr_stack.mean(dim=1).add(self.eps1).sqrt()
+        rr_sqrt = rr_stack.sqrt().add(self.eps1)
+        rc_sqrt = rc_stack.sqrt().add(self.eps1)
+        update = (ea_stack / rr_sqrt.unsqueeze(2) / rc_sqrt.unsqueeze(1)
+                  * rr_mean_sqrt.view(k, 1, 1))
+        delta_stack = (update * lr).reshape(grad_stack.shape)
+
+        for j, s in enumerate(states):
+            s["r"].copy_(r_stack[j])
+            s["c"].copy_(c_stack[j])
+            s["ea"].copy_(ea_stack[j].reshape(s["ea"].shape))
+            s["rr"].copy_(rr_stack[j])
+            s["rc"].copy_(rc_stack[j])
+
+        return delta_stack, decay

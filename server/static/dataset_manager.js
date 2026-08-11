@@ -938,6 +938,7 @@
             payload.ingest_latent_size = parseInt(getStr("gen-lora-latent-size"));
             payload.model_type = getStr("gen-lora-model-type");
             payload.negative_prompt = getStr("gen-lora-negative-prompt");
+            payload.max_aspect_ratio = parseFloat(getStr("gen-lora-max-aspect-ratio"));
         }
 
         fetch("/api/datasets/tasks/start", {

@@ -164,6 +164,7 @@ async def api_start_task(
     resize_mode: str = Body("center_crop"),
     ingest_latent_size: int = Body(64),
     model_type: str = Body("eps"),
+    max_aspect_ratio: float = Body(2.0),
     lib: ManagedDatasetLibrary = Depends(get_library),
     runner: DataTaskRunner = Depends(get_data_runner)
 ):
@@ -245,7 +246,7 @@ async def api_start_task(
                 recursive=recursive, resize_mode=resize_mode,
                 latent_size=ingest_latent_size,
                 neg_prompt=negative_prompt, model_type=model_type,
-                seed=seed,
+                seed=seed, max_aspect_ratio=max_aspect_ratio,
             )
 
         return {"ok": True, "task_id": task_id}

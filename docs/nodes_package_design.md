@@ -61,7 +61,7 @@ compatibility.**
 |---|---|
 | `nodes/core.py` | `Node`/`Port` base. Stable, no dependencies. |
 | `nodes/memory/` | `MemoryManager` -- centralized device-buffer lifecycle (get/release/free, optional `torch.xpu.MemPool`). Used today only by `ChunkedScratchBufferStrategy`. Should be the standard path project-wide; isn't yet. |
-| `nodes/optimizer/` | Real rewrite, not a wrapper, for the math itself: `Algorithm` (CAME/Adafactor/AdamW) x `ExecutionStrategy` (simple/chunked/foreach) x `ComposedFusedOptimizerHandle` (backward-hook execution), all equivalence-tested against the legacy classes they correspond to. Legacy-wrapping nodes (`adamw.py`, `foreach_adafactor.py`, `foreach_came.py`, `fused_adafactor.py`) still exist, unretired, as a fallback until the composed nodes are validated on real XPU hardware. See "Optimizer subpackage" below for detail. |
+| `nodes/optimizer/` | Real rewrite, not a wrapper, for the math itself: `Algorithm` (CAME/Adafactor/AdamW) x `ExecutionStrategy` (simple/chunked/foreach/shape_grouped) x `ComposedFusedOptimizerHandle` (backward-hook execution). The first three strategies are equivalence-tested against the legacy classes they correspond to and real-hardware validated (see table below for exactly which). `shape_grouped` (docs/optimizer_execution_redesign_plan.md Phase 2) is CAME-only, equivalence-verified via numpy/`torch.allclose()` but its own shipped smoke test has not been run even once yet -- see "Optimizer subpackage" below, don't assume it's at the same verification bar as the other three from this row alone. Legacy-wrapping nodes (`adamw.py`, `foreach_adafactor.py`, `foreach_came.py`, `fused_adafactor.py`) still exist, unretired, as a fallback until the composed nodes are validated on real XPU hardware. |
 | `nodes/model/` | Mostly adapter-only. `lora_injector.py` delegates real UNet construction and LoRA-layer injection to `core.unet_wrapper`/`core.lora` entirely. `gradient_checkpointing.py` patches ComfyUI's own `CheckpointFunction` directly (third-party, not this project's old code, but still not owned/rewritten). `checkpoint_loader.py`, `lora_saver.py`, `lora_checkpoint_loader.py`, `parameters.py`, `text_encoder*.py`, `lora_phases.py` are real, self-contained `nodes/` logic (caching, phase-split bookkeeping, port contracts) -- not legacy wraps, but they still call into old code for the underlying model/tensor operations they sit on top of. |
 | `nodes/dataset/` | Adapter-only. `managed.py` wraps `manager.loader.ManagedDatasetLoader` completely -- no dataset logic reimplemented in `nodes/` yet. `renoise.py` is real `nodes/` logic (decorates any `TrainingBatchSource`). |
 | `nodes/train/` | `SupervisedLoRATrainerNode` -- real, working v1 step loop (see its own module docstring for explicit scope limits: no CFG dual-pass, no grad accumulation, no resume cadence). Calls `core.model_io`/`core.noise_schedule`/`core.comfy_setup` directly for per-step math -- not yet reimplemented, a `nodes/components/` candidate. `loss.py`/`schedule.py` (loss weighting, LR schedules) are self-contained, no legacy dependency. |
@@ -89,12 +89,18 @@ compatibility.**
 
 `Algorithm` (pure per-parameter math: `CAMEAlgorithm`, `AdafactorAlgorithm`,
 `AdamWAlgorithm`) x `ExecutionStrategy` (how updates get applied:
-`SimpleLoopStrategy`, `ChunkedScratchBufferStrategy`, `ForeachApplyStrategy`),
-composed by `ComposedOptimizerHandle`. Fused (backward-hook) execution
-doesn't fit that same `step()`-driven contract, so it's a separate
-`ComposedFusedOptimizerHandle` instead, reusing the same lifecycle methods
-via subclassing. All three algorithms work with all three strategies and
-with the fused handle -- proven, not just designed to.
+`SimpleLoopStrategy`, `ChunkedScratchBufferStrategy`, `ForeachApplyStrategy`,
+`ShapeGroupedBatchStrategy`), composed by `ComposedOptimizerHandle`. Fused
+(backward-hook) execution doesn't fit that same `step()`-driven contract,
+so it's a separate `ComposedFusedOptimizerHandle` instead, reusing the same
+lifecycle methods via subclassing. All three algorithms work with the
+first three strategies and with the fused handle -- proven, not just
+designed to. `ShapeGroupedBatchStrategy` (docs/optimizer_execution_redesign_plan.md
+Phase 2) is CAME-only so far -- `Algorithm.compute_update_batched()`'s
+default implementation (loop + stack) makes it usable with Adafactor/AdamW
+too without erroring, but only `CAMEAlgorithm` has a real vectorized
+override as of this writing, so it's the only one that gets this
+strategy's actual speed benefit today.
 
 **Verified, all real torch. Note which checks are deliberately CPU-only
 by design (bit-exact/tolerance numerical checks don't need a specific
@@ -105,11 +111,12 @@ whatever hardware they're run on:**
 |---|---|---|
 | CAME/Adafactor `Algorithm`s, `SimpleLoopStrategy` + `ChunkedScratchBufferStrategy` | Equivalence-tested vs. `ChunkedXPUCAME`/`ChunkedXPUAdafactor` directly | **yes** -- user-confirmed on an Intel Arc B580, both strategies |
 | `MemoryManager` | `smoke_test_memory_manager.py` | **yes** -- user-confirmed, including cross-step buffer reuse |
-| AdamW `Algorithm`, all 3 strategies | Equivalence-tested vs. `CPUAdamW` directly (deliberately CPU-only -- see below) | **yes** for `ComposedAdamWOptimizerNode`'s own lifecycle test (`smoke_test_composed_adamw.py`, auto-detects device); the dedicated formula-equivalence test is CPU-only by design |
+| AdamW `Algorithm`, all 3 original strategies | Equivalence-tested vs. `CPUAdamW` directly (deliberately CPU-only -- see below) | **yes** for `ComposedAdamWOptimizerNode`'s own lifecycle test (`smoke_test_composed_adamw.py`, auto-detects device); the dedicated formula-equivalence test is CPU-only by design |
 | `ForeachApplyStrategy` | Bit-exact vs. `SimpleLoopStrategy`, all 3 algorithms | Equivalence test is CPU-only by design (bit-exact comparison doesn't need a specific device); exercised via CAME/Adafactor's own composed lifecycle tests too |
 | `ComposedFusedOptimizerHandle` + Adafactor | Equivalence-tested vs. `FusedXPUAdafactor` directly, real backward()/hooks, single- and multi-pass | Equivalence test is CPU-only by design; not yet separately run with device="xpu" |
 | `ComposedFusedOptimizerHandle` + CAME/AdamW | No legacy reference exists; internal lifecycle + generalization checked | Lifecycle test is CPU-only by design; no legacy reference to check against on any device |
 | axis-2 in-place scratch paths (CAME/Adafactor) | Bit-exact vs. out-of-place | not yet |
+| `ShapeGroupedBatchStrategy` + `CAMEAlgorithm` (docs/optimizer_execution_redesign_plan.md Phase 2) | `torch.allclose()` (NOT bit-exact -- this restructuring genuinely changes floating-point reduction order, see `algorithms/came.py`'s own docstring) vs. `SimpleLoopStrategy`, `smoke_test_shape_grouped_equivalence.py`; also a separate numpy-level check of the same math before this was written into torch at all | **not yet run at all** -- smoke test is shipped but has not been executed even once (no torch in the sandbox that wrote it); this is a meaningfully lower verification bar than every other row in this table until that changes |
 
 **Why several of these are "CPU-only by design", not an oversight:**
 equivalence/bit-exactness is a property of the math, not the device --
@@ -147,12 +154,24 @@ choices, made once and not re-litigated per file):
 - Foreach/chunked/fused variants of one algorithm don't share a legacy
   reference across all three families evenly: CAME/AdamW have no legacy
   fused class to check against at all (only Adafactor does).
+- `ShapeGroupedBatchStrategy` + `CAMEAlgorithm.compute_update_batched()`
+  (docs/optimizer_execution_redesign_plan.md Phase 2) replaces
+  `CAMEAlgorithm`'s own host-sync `clip_div = max(float(rms/threshold),
+  1.0)` with `torch.clamp(rms/threshold, min=1.0)`, kept as a per-group-
+  member device tensor instead of a Python float. Numerically identical
+  (dividing by the same value regardless of whether it's a Python float
+  or a device tensor of that value) but not literally the same
+  operation sequence -- worth stating as its own divergence rather than
+  folding it silently into "the batching restructuring," since it's a
+  deliberate choice with its own reasoning (a per-member tensor can't be
+  branched on with a Python `if` the way a single scalar could), not an
+  incidental side effect of adding the batch axis.
 
 File index: `algorithms/{came,adafactor,adamw}.py`, `strategies/{simple,
-chunked,foreach}.py`, `composed.py` (the `step()`-driven handle),
-`composed_fused.py` (the hook-driven handle), `composed_{came,adafactor,
-adamw}.py` and `composed_fused_{came,adafactor,adamw}.py` (the Node
-wrappers), `handle.py` (`OptimizerHandle`/`FusedOptimizerHandle` ABCs).
+chunked,foreach,shape_grouped}.py`, `composed.py` (the `step()`-driven
+handle), `composed_fused.py` (the hook-driven handle), `composed_{came,
+adafactor,adamw}.py` and `composed_fused_{came,adafactor,adamw}.py` (the
+Node wrappers), `handle.py` (`OptimizerHandle`/`FusedOptimizerHandle` ABCs).
 Legacy-wrapping Nodes sit alongside these, unretired: `adamw.py`,
 `adafactor.py`, `came.py`, `foreach_adafactor.py`, `foreach_came.py`,
 `fused_adafactor.py`.

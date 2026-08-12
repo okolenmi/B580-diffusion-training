@@ -178,23 +178,38 @@ pipeline) when picked up.
    explicitly setting `strategy="chunked"`, this is a real, distinct
    contributor, independent of dataset shape.
 
-## Open unknowns that gate parts of this plan
+   **Correction, tested directly since this was written**: the person
+   ran `strategy="simple"` vs. `strategy="chunked"` back to back on the
+   same config. Practical VRAM difference was negligible —
+   `reserved=9796MB`/`segments=898` (simple) vs.
+   `reserved=9794MB`/`segments=897` (chunked), essentially noise. The
+   code-level asymmetry described above is real (checked directly,
+   still true), but it doesn't translate into a measurable practical
+   VRAM difference at this parameter count — apparently too small a
+   contributor next to the workload's other memory usage to show up.
+   Not the VRAM story; see "Status update" above for the real one.
 
-- Which exact optimizer class produced the `967ms`/VRAM numbers —
-  `ForeachCAMEOptimizerNode`, or `ComposedCAMEOptimizerNode` at which
-  `strategy`? The print-on-construction lines
-  (`core/optimizers.py`) or an explicit log of `strategy=...` answer
-  this directly; not yet confirmed which.
-- Whether the VRAM reserved/allocated gap is *growing* over a run or
-  stable-but-high. Every number seen so far is a single snapshot.
-- Whether periodic preview generation runs during the profiled window
-  (a plausible independent VRAM contributor — different resolution/batch
-  shape than training, unrelated to dataset uniformity).
-- Whether `PYTORCH_ALLOC_CONF=expandable_segments:True` (or
-  `max_split_size_mb`) does anything measurable on this XPU build.
+## Open unknowns from when this plan was written — all resolved since (kept for the record, not because they're still open)
 
-None of these block starting Phase 0/1 (below) — they're exactly what
-Phase 0/1 is for.
+- ~~Which exact optimizer class produced the `967ms`/VRAM numbers~~ —
+  resolved: confirmed via later direct A/B testing (see "Status update"
+  above) that it doesn't matter which — every current CAME
+  implementation shows the same cost.
+- ~~Whether the VRAM reserved/allocated gap is growing over a run or
+  stable-but-high~~ — resolved: stable, not growing, on a uniform-shape
+  dataset (200-step run, `alloc_retries=0` throughout). Growing *is*
+  real, but only on non-square datasets, and via a different, now-
+  identified mechanism (the ratchet effect, see above) — not
+  fragmentation.
+- ~~Whether periodic preview generation runs during the profiled
+  window~~ — resolved: it doesn't, and can't. Preview generation isn't
+  wired into the `nodes/` training pipeline at all (checked directly —
+  no preview phase exists in `step_pipeline.py`), only into the legacy
+  `core/trainer.py` path.
+- ~~Whether `PYTORCH_ALLOC_CONF=expandable_segments:True` does anything
+  measurable~~ — resolved: tried by the person, no measurable effect —
+  consistent with there being no fragmentation to fix in the first
+  place (`alloc_retries` was already `0` without it).
 
 ## Phase 0 — instrumentation (DONE)
 
@@ -293,9 +308,9 @@ the default.
 1. Add `strategy="shape_grouped"` as a new option on
    `ComposedCAMEOptimizerNode` — done, default stays `"simple"` until
    validated.
-2. Bit-exact... — see "Verification actually done" above for the real
-   status: equivalence-verified via numpy plus a shipped-but-not-yet-run
-   smoke test, not yet run against real torch tensors.
+2. Equivalence testing — see "Verification actually done" above for the
+   real status: verified via numpy plus a shipped-but-not-yet-run smoke
+   test, not yet run against real torch tensors.
 3. Real-hardware run: same profiling setup as the original report
    (`profile=True`, same rank/resolution/batch), compare
    `optimizer_step` and reserved/allocated directly against the

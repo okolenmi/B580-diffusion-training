@@ -5,84 +5,44 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Open
 
-- **[2026-08] 8 real, working Node classes exist but aren't selectable in
-  the graph editor -- `server/nodegraph_registry.py`'s list is stale.**
-  Confirmed directly, not a hypothesis: walked every concrete `Node`
-  subclass under `nodes/` and diffed against
-  `server.nodegraph_registry.get_registry()`'s actual returned set.
-  Missing:
-
-  - `P2LossWeightingNode` (`nodes/train/loss.py`).
-  - `PrefetchingBatchSourceNode` (`nodes/dataset/prefetch.py`).
-  - `ComposedAdamWOptimizerNode`, `ComposedAdafactorOptimizerNode`,
-    `ComposedCAMEOptimizerNode`, `ComposedFusedAdamWOptimizerNode`,
-    `ComposedFusedAdafactorOptimizerNode`,
-    `ComposedFusedCAMEOptimizerNode` (`nodes/optimizer/composed_*.py`) --
-    predate the 2026-08 nodes/ session entirely (from the earlier
-    Algorithm/ExecutionStrategy optimizer rewrite); not introduced by
-    that session, a pre-existing gap its own registry check happened to
-    surface.
-
-  All 8 are real, already-tested classes with nowhere to be selected
-  from. The fix is mechanical (add each to `server/nodegraph_registry.py`'s
-  import list and `classes` list, same as every other entry there),
-  low-risk, no new logic needed. **Applied** -- `_load()` now imports and
-  registers all 8. Verified statically (no torch/ComfyUI in the sandbox,
-  same limitation as always): an `ast`-based walk of every concrete `Node`
-  subclass under `nodes/` against both `_load()`'s import list and its
-  `classes` list shows an exact match in both directions (nothing missing,
-  nothing registered that doesn't exist) -- the same check the prior
-  session did by hand with a live import, redone here without needing a
-  real import. Not yet confirmed against the actual running palette --
-  waiting on the person to apply the patch and check `/nodegraph`.
+- **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
+  device placement anywhere.** Surfaced while investigating a VRAM
+  report later found to have a different, unrelated root cause (see
+  "Pending user testing" below): `tracked_footprint_mb` was consistently
+  reported *higher* than `vram_allocated_mb` in real profiling output,
+  backwards from what static-weight-only accounting vs. real
+  allocated-including-activations should show. Not traced further --
+  still open, independent of the VRAM-ratchet finding below (that one's
+  fully explained by the allocator's `reserved` behavior on an uncapped
+  image long side, doesn't touch `footprint_bytes()` at all).
 
 - **[2026-08] Training produces unstable/deforming results -- useful
   change and anatomy/content deformation appear at the same LoRA power
   level.** User-reported after a real training run (rank 48, alpha 1,
-  dropout 0, weight_decay 0, t range [150, 999], LR 1e-5, clip_threshold
-  1, 18000 steps). At LoRA power 2.0 a visible, useful change is there
-  but comes with significant anatomy/content deformation; at power 1.0
-  the useful change is much less visible but negative effects (some
-  deformation) are still present. Not investigated. See
-  `docs/session_handoff.md` for candidate hypotheses and suggested
-  cheap-first experiments -- none diagnosed as *the* cause, genuine
-  experimentation needed, not "apply hypothesis #1 and declare it
-  fixed."
+  dropout 0, weight_decay 0, **t range [150, 999]**, LR 1e-5,
+  clip_threshold 1, 18000 steps). At LoRA power 2.0 a visible, useful
+  change is there but comes with significant anatomy/content
+  deformation; at power 1.0 the useful change is much less visible but
+  negative effects (some deformation) are still present.
 
-- **[2026-08] VRAM usage grows (not just runs high) with a dataset of
-  mixed image dimensions, eventually crashing.** User-reported: more
-  than 2x the expected batch-size footprint, and growing over time
-  rather than stabilizing, specifically correlated with varying image
-  dimensions across the dataset. Not investigated. Leading hypothesis
-  (general PyTorch allocator behavior, not traced in this codebase):
-  caching-allocator fragmentation from constantly-varying tensor shapes,
-  not a genuine leak -- see `docs/session_handoff.md` for the reasoning
-  and the one real data point (`vram_allocated=5539MB` vs
-  `vram_reserved=9802MB`) that's mildly consistent with it, plus a
-  separate, real concern surfaced while looking at this:
-  `DeviceResident.footprint_bytes()` (items 3/9/12 of the 2026-08
-  session) doesn't check actual device placement anywhere, which could
-  explain `tracked_footprint_mb` coming out *higher* than
-  `vram_allocated_mb` in that same log line -- backwards from what
-  static-weight-only accounting vs. real allocated-including-activations
-  should show.
-
-- **[2026-08] Training is much slower than the pre-nodes/ implementation
-  -- `optimizer_step` dominates step time.** User-reported, with one real
-  `profile=True` log line (batch size 2, 512px): `forward=245ms
-  backward=287ms optimizer_step=1041ms total=1575ms` --
-  `optimizer_step` alone is ~66% of total step time, disproportionate for
-  a LoRA's small, fixed parameter set. Fairly confident leading
-  hypothesis given `clip_threshold=1` in the reported settings (an
-  Adafactor/CAME-family parameter): the optimizer node in use is a
-  "Chunked" variant (`AdafactorOptimizerNode`/`CAMEOptimizerNode`, real
-  per-parameter device syncs, built for VRAM-bounded large-parameter-count
-  scenarios) rather than the matching "Foreach" variant
-  (`ForeachAdafactorOptimizerNode`/`ForeachCAMEOptimizerNode`, vectorized,
-  explicitly documented in `nodes/optimizer/foreach_came.py` as "the
-  right default for LoRA's small, fixed parameter set"). See
-  `docs/session_handoff.md` for the full reasoning and fallback steps if
-  a Foreach node is already in use.
+  **Strong candidate now identified, not confirmed**: `t range [150,
+  999]` excludes the low end of the timestep range (t<150). Separately
+  confirmed (2026-08, see `docs/optimizer_execution_redesign_plan.md`
+  Phase 8): `core/lora.py`'s `set_lora_gate()`/`compute_lora_gate()` --
+  which exists specifically to keep the LoRA's contribution close to
+  the frozen base outside a dataset's own trained t-range -- had zero
+  wiring anywhere in `nodes/` (confirmed via exhaustive grep). A LoRA
+  trained on this t range, run through `nodes/`, would apply its full,
+  ungated delta at every timestep during generation, including t<150 --
+  never supervised at all. That's a plausible, mechanistic match for
+  "useful change and deformation showing up together, worse at higher
+  power" (an un-gated delta doesn't get *weaker* at unsupervised
+  timesteps, it gets applied at exactly the same strength as everywhere
+  else). The gate is now wired and available
+  (`gate_enabled`/`gate_train_low`/`gate_train_high`/`gate_width` on
+  `SupervisedLoRATrainerNode`) but **not run** -- moved to "Pending user
+  testing" below rather than left here, since there's now a concrete,
+  implemented thing to test, not just a hypothesis to investigate.
 
 - **[2026-07] "Device lost" errors and silent training hangs after
   VRAM-pressure events, reported from real ComfyUI use (not this
@@ -171,6 +131,80 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Pending user testing
 
+- **[2026-08] LoRA timestep gate now wired -- candidate fix for the
+  deformation/quality report above.** `core/lora.py`'s
+  `set_lora_gate()`/`compute_lora_gate()`, previously wired throughout
+  the legacy `core/` pipeline and completely absent from `nodes/`
+  (confirmed via exhaustive grep), is now called from
+  `PrepareDiffusionInputsPhase` (`nodes/train/step_pipeline.py`) at the
+  same point the legacy pipeline calls it. New `gate_enabled` (default
+  `False`, matching the legacy default)/`gate_train_low`/
+  `gate_train_high`/`gate_width` ports on `SupervisedLoRATrainerNode`.
+  Verified: real `step_pipeline.py` file loaded directly (not a copy)
+  with `torch`/`core.lora` mocked to record calls -- both the
+  enabled and disabled branches call the right functions with the right
+  arguments, and the gate correctly resets to `None` when disabled
+  after having been enabled. **Not run** -- needs the person to set a
+  restricted `t_low`/`t_high` on a dataset (their own earlier report
+  used `[150, 999]` -- a good real case to retest), matching
+  `gate_train_low`/`gate_train_high`, and compare LoRA quality with
+  `gate_enabled` `True` vs. `False`. Full detail:
+  `docs/optimizer_execution_redesign_plan.md` Phase 8.
+
+- **[2026-08] VRAM ratchet on non-square datasets -- root cause found,
+  fix implemented, not yet confirmed.** Original hypothesis here
+  (caching-allocator fragmentation from varying tensor shapes) tested
+  directly and found wrong: `num_alloc_retries` stayed `0` across a
+  200-step run, `vram_reserved` stayed flat (delta in single-digit MB)
+  -- no fragmentation, no growth, on a uniform-shape dataset. On an
+  actual non-square dataset, real per-phase VRAM capture (built this
+  investigation specifically because a single end-of-step snapshot
+  couldn't answer "which phase caused this") caught the real mechanism
+  live: the entire VRAM jump (+560MB in one step) happened at exactly
+  one phase boundary, `forward`, nowhere else in the step moved at all.
+  Root cause: `resize_mode="fit"` preserves aspect ratio with no cap on
+  the long side -- a sufficiently tall/wide image forces genuinely
+  larger tensors through `forward`, the allocator grabs a bigger
+  reserved block and keeps it permanently (nothing in this pipeline
+  calls `empty_cache()` on its own). Fix: `manager/builder.py`'s
+  `run_lora_ingestion_task` gets a new `max_aspect_ratio` parameter
+  (default `2.0`) -- images whose "fit"-resized long side would exceed
+  it get split into multiple same-caption crops instead of one
+  oversized sample. Wired through the UI
+  (`server/static/dataset_manager.html`/`.js`). Crop-box arithmetic
+  verified against the actual committed function. **Not run** -- needs
+  the person to re-ingest a non-square dataset with the new cap and
+  confirm `vram_reserved` stays bounded. Full detail:
+  `docs/optimizer_execution_redesign_plan.md` Phase 4.
+
+- **[2026-08] CAME `optimizer_step` ~7x AdamW's -- confirmed structural,
+  not the old "Chunked vs. Foreach host-sync" hypothesis, fix
+  implemented, not yet confirmed.** Original hypothesis here (wrong
+  optimizer node in use, "Chunked" instead of "Foreach") tested directly
+  and found wrong: `ForeachCAMEOptimizerNode` and
+  `ComposedCAMEOptimizerNode` (any strategy) showed the same ~1041ms
+  `optimizer_step`, and running the legacy `CAMEOptimizerNode` through
+  the current, properly-synchronized profiler gave the same number too
+  -- ruling out both "wrong node" and "the old pre-nodes/ pipeline was
+  genuinely faster" (its own timer, `core/timer.py`'s `StepTimer`, has
+  zero `synchronize()` calls anywhere in it, so it never measured real
+  GPU execution time to begin with). Real cause, confirmed by direct
+  A/B: CAME vs. AdamW, same everything else, `1041ms` vs. `148ms` -- CAME's
+  math runs as an un-batched per-parameter Python loop in every current
+  implementation (confirmed by reading all four: `ChunkedXPUCAME`,
+  `ForeachXPUCAME`, and every `ComposedCAMEOptimizerNode` strategy).
+  Fix: new `ShapeGroupedBatchStrategy`
+  (`nodes/optimizer/strategies/shape_grouped.py`), groups parameters by
+  exact shape/dtype/device/lr and runs each group's entire update as one
+  batched computation. Equivalence-verified via a numpy transcription of
+  the exact math (~7e-7 max relative difference across group sizes
+  1/2/5/20 and multiple shapes) and a shipped smoke test
+  (`nodes/smoke_tests/smoke_test_shape_grouped_equivalence.py`). **Not
+  run** -- needs the person to run that smoke test on real hardware,
+  then a `profile=True` comparison against the `1041ms` baseline with
+  `strategy="shape_grouped"`. Full detail:
+  `docs/optimizer_execution_redesign_plan.md` Phase 2/3.
+
 - **[2026-07] Persistent ~500MB VRAM growth after preview generation.**
   Reported as compounding slowly (not just a one-time jump), first appeared
   sometime after an earlier preview-VRAM fix (exact point unknown). Ruled
@@ -201,6 +235,17 @@ are confirmed but not urgent) so they don't get lost. Newest first.
   VRAM after applying that patch.
 
 ## Resolved
+
+- **[2026-08] 8 real, working Node classes existed but weren't
+  selectable in the graph editor -- `server/nodegraph_registry.py`'s
+  list was stale.** Confirmed directly, not a hypothesis: walked every
+  concrete `Node` subclass under `nodes/` and diffed against
+  `server.nodegraph_registry.get_registry()`'s actual returned set.
+  Missing: `P2LossWeightingNode`, `PrefetchingBatchSourceNode`, and six
+  `Composed*OptimizerNode` classes predating the 2026-08 `nodes/`
+  session entirely. Fix: added each to `server/nodegraph_registry.py`'s
+  import list and `classes` list. Confirmed fixed by user ("I can now
+  see and use new nodes").
 
 - **[2026-07] CAME optimizer VRAM near-ceiling hang after ~60 steps.** Root
   cause: `res` and `update` in `ChunkedXPUCAME.step()` each allocated a fresh

@@ -3,62 +3,20 @@ ExecutionStrategy.
 
 Same relationship to AdafactorOptimizerNode (adafactor.py, which wraps
 the legacy core.optimizers.ChunkedXPUAdafactor) as ComposedCAMEOptimizerNode
-has to CAMEOptimizerNode -- see that module's docstring for the pattern.
+has to CAMEOptimizerNode.
 
-This is the second Algorithm built in this package, and this Node is
-where the Algorithm/ExecutionStrategy split's generalization actually
-gets exercised end-to-end: the same `_STRATEGIES` dict, same
-`SimpleLoopStrategy`/`ChunkedScratchBufferStrategy` classes as
-`composed_came.py`, completely unmodified, now driving a differently-
-shaped algorithm. See `algorithms/adafactor.py`'s module docstring for
-the full verification writeup.
+`INPUTS` below default to the conservative, predictable values
+(`scale_parameter=False, weight_decay=0.0`) rather than
+`AdafactorOptimizerNode`'s own legacy defaults (`scale_parameter=True,
+weight_decay=1.0`): those legacy defaults are unusual (full weight decay
+of 1.0 shrinks any parameter by ~5% per step at a typical lr, dominating
+training over enough steps unless that's actually intended). Pass
+`scale_parameter=True, weight_decay=1.0` explicitly to match the legacy
+wrapper's defaults.
 
-**`scale_parameter` and `weight_decay` are now both implemented and
-verified** (an earlier version of this Node fixed both off, pending a
-real interface extension -- see `algorithms/base.py`'s module docstring
-for that extension). Both `INPUTS` below default to the conservative,
-predictable values (`scale_parameter=False, weight_decay=0.0`) rather
-than `AdafactorOptimizerNode`'s own legacy defaults
-(`scale_parameter=True, weight_decay=1.0`) -- a deliberate choice, not an
-oversight: those legacy defaults are unusual (full weight decay of 1.0
-shrinks any parameter by ~5% per step at a typical lr, dominating
-training over enough steps unless that's actually intended), and
-defaulting this Node to match them would have silently changed already-
-tested toy-regression behavior for anyone not paying close attention.
-Pass `scale_parameter=True, weight_decay=1.0` explicitly to match the
-legacy wrapper's defaults exactly -- verified to do so, see
-`algorithms/adafactor.py`.
-
-**A real, precisely-characterized pathology worth knowing before turning
-`scale_parameter=True` on**: its effective step size is
-`clamp(param_rms**2, min=~1e-6) * lr` -- for a parameter initialized at
-or near zero (LoRA's B matrix, by convention, is initialized to exactly
-zero), this collapses to roughly `1e-6 * lr`, about a millionth of the
-plain step size, and stays there indefinitely: near-zero updates keep
-the parameter near zero, which keeps `alpha_t` near the floor -- a
-self-reinforcing near-standstill, not a bug in this implementation or
-the legacy reference (both reproduce it identically, verified directly
-against `core.optimizers.ChunkedXPUAdafactor`). This is very likely the
-explanation for training appearing to make near-zero progress under
-`scale_parameter=True` in practice. `scale_parameter=False` (this Node's
-default) doesn't have this failure mode at all -- effective step size is
-just `lr`, independent of the parameter's own magnitude.
-
-Status of each strategy, stated precisely:
-  - "simple": equivalence-verified against core.optimizers.ChunkedXPUAdafactor
-    directly (real torch, CPU), across scale_parameter on/off, weight
-    decay on/off, momentum on/off, factored and non-factored parameters,
-    float32 and bf16 -- see algorithms/adafactor.py's module docstring
-    for the full breakdown and numbers. Not yet run on real XPU hardware
-    (unlike ComposedCAMEOptimizerNode's "simple", which the user has
-    validated there).
-  - "chunked": same equivalence verification, same "not yet run on real
-    XPU hardware" status. Its MemoryManager-backed scratch-buffer
-    behavior is already covered by strategies/chunked.py's own tests
-    (algorithm-agnostic), not re-tested here.
-  - "foreach": same equivalence verification (bit-exact vs. "simple" on
-    CPU, algorithm-agnostic, see strategies/foreach.py's own tests). Not
-    yet run on real XPU hardware.
+See each strategy's own module docstring and nodes/smoke_tests/ for what
+each one optimizes and its current equivalence/hardware-validation
+status.
 """
 
 from __future__ import annotations
@@ -67,7 +25,7 @@ from typing import ClassVar
 
 from ..core import Port
 from .algorithms.adafactor import AdafactorAlgorithm
-from .composed import ComposedOptimizerHandle
+from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .strategies.simple import SimpleLoopStrategy
@@ -83,9 +41,7 @@ _STRATEGIES = {
 
 class ComposedAdafactorOptimizerNode(OptimizerNode):
     """Adafactor, composed from a pure-math Algorithm + a selectable
-    ExecutionStrategy. scale_parameter and weight_decay both fully
-    supported and verified -- see module docstring for their (safe,
-    conservative) defaults and why they differ from the legacy wrapper's."""
+    ExecutionStrategy."""
 
     INPUTS: ClassVar[dict[str, Port]] = {
         **OptimizerNode.COMMON_INPUTS,
@@ -96,10 +52,12 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                          "second moment; set for additional first-moment momentum."),
         "scale_parameter": Port(name="scale_parameter", type=bool, required=False, default=False,
                                  doc="True ties the effective step size to the parameter's "
-                                     "own current RMS (the legacy default) -- has a real "
+                                     "own current RMS (the legacy default). Has a real "
                                      "failure mode for parameters initialized at/near zero "
-                                     "(e.g. LoRA's B matrix). See module docstring before "
-                                     "enabling."),
+                                     "(e.g. LoRA's B matrix): effective step size collapses "
+                                     "to roughly 1e-6 * lr and stays there, a self-reinforcing "
+                                     "near-standstill. False (default) has no such dependency "
+                                     "-- effective step size is just lr."),
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=0.0,
                               doc="Decoupled weight decay -- p *= 1 - wd*alpha_t, matching "
                                   "the legacy reference exactly. Legacy default is 1.0, not "
@@ -107,9 +65,15 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                                   "conservatively instead."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="'simple', 'chunked', or 'foreach' -- all three "
-                              "equivalence-verified against the legacy reference, none "
-                              "yet run on real XPU hardware. See this module's docstring."),
+                          doc="One of 'simple', 'chunked', 'foreach' -- see each "
+                              "strategy's own docstring for what it optimizes and its "
+                              "current validation status."),
+        "group_policy": Port(
+            name="group_policy", type=ParameterGroupPolicy, required=False, default=None,
+            doc="None = UniformGroups (every parameter at the base lr). "
+                "LoRAPlusGroups(...) trains LoRA's B matrices at a higher rate than A -- "
+                "see nodes/optimizer/composed.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:
@@ -133,6 +97,7 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
             params=inputs["params"],
             lr=inputs.get("lr", self.INPUTS["lr"].default),
             device=inputs.get("device", self.INPUTS["device"].default),
+            group_policy=inputs.get("group_policy"),
         )
         result = {"optimizer": handle}
         self.validate_outputs(result)

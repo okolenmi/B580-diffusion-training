@@ -1,24 +1,23 @@
 """ComposedAdamWOptimizerNode: AdamWAlgorithm + a selectable ExecutionStrategy.
 
 Same relationship to adamw.py's AdamWOptimizerNode/SimpleAdamWOptimizerNode
-as ComposedCAMEOptimizerNode has to CAMEOptimizerNode -- see that module's
-docstring for the pattern. Unlike CAME/Adafactor's composed nodes, this
-one has no legacy `core.optimizers` class it's meant to eventually
-replace end-to-end for the CPU path: CPUAdamW's own CPU-resident design is
-a real, different tradeoff (see adamw.py's module docstring), not
-something this Node's device-resident math is trying to reproduce. What it
-does replace is *AdamWOptimizerNode's need to import core.optimizers at
-all* for anyone who wants a device-resident, strategy-selectable AdamW
-built entirely from this package's own Algorithm/ExecutionStrategy pieces.
+as ComposedCAMEOptimizerNode has to CAMEOptimizerNode. Unlike CAME/
+Adafactor's composed nodes, this one has no legacy core.optimizers class
+it's meant to eventually replace end-to-end for the CPU path: CPUAdamW's
+own CPU-resident design is a real, different tradeoff (see adamw.py's
+module docstring), not something this Node's device-resident math is
+trying to reproduce. What it does replace is *AdamWOptimizerNode's need
+to import core.optimizers at all* for anyone who wants a device-resident,
+strategy-selectable AdamW built entirely from this package's own
+Algorithm/ExecutionStrategy pieces.
 
 Verified against CPUAdamW's own formula directly (same bias-corrected-lr
 AdamW variant, same decoupled-decay-at-base-lr convention) --
 see nodes/smoke_tests/smoke_test_adamw_equivalence.py.
 
-`strategy="foreach"` is `ForeachApplyStrategy` -- see that module's
-docstring. Included here (and in composed_came.py/composed_adafactor.py)
-because it's algorithm-agnostic by construction: no AdamW-specific code
-was needed to add it.
+`strategy="foreach"` is `ForeachApplyStrategy` -- included here (and in
+composed_came.py/composed_adafactor.py) because it's algorithm-agnostic
+by construction: no AdamW-specific code was needed to add it.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from typing import ClassVar
 
 from ..core import Port
 from .algorithms.adamw import AdamWAlgorithm
-from .composed import ComposedOptimizerHandle
+from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .strategies.simple import SimpleLoopStrategy
@@ -52,14 +51,15 @@ class ComposedAdamWOptimizerNode(OptimizerNode):
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=1e-2),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="'simple', 'chunked', or 'foreach' -- all three "
-                              "equivalence-verified against CPUAdamW, none yet run on "
-                              "real XPU hardware. 'simple' is the default for consistency "
-                              "with ComposedCAMEOptimizerNode/ComposedAdafactorOptimizerNode "
-                              "(the most order-preserving option, easiest to reason about "
-                              "if something looks wrong) -- 'foreach' is the one to reach "
-                              "for once real-hardware numbers justify it, see "
-                              "strategies/foreach.py."),
+                          doc="One of 'simple', 'chunked', 'foreach' -- see this "
+                              "module's docstring and each strategy's own docstring for "
+                              "what it optimizes and its current validation status."),
+        "group_policy": Port(
+            name="group_policy", type=ParameterGroupPolicy, required=False, default=None,
+            doc="None = UniformGroups (every parameter at the base lr). "
+                "LoRAPlusGroups(...) trains LoRA's B matrices at a higher rate than A -- "
+                "see nodes/optimizer/composed.py.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:
@@ -81,6 +81,7 @@ class ComposedAdamWOptimizerNode(OptimizerNode):
             params=inputs["params"],
             lr=inputs.get("lr", self.INPUTS["lr"].default),
             device=inputs.get("device", self.INPUTS["device"].default),
+            group_policy=inputs.get("group_policy"),
         )
         result = {"optimizer": handle}
         self.validate_outputs(result)

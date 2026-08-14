@@ -41,6 +41,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from ..core import Port
+from ..resource_policy import ResourcePolicy
 from .frozen_weight_store import BF16WeightStore
 from .gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
 from .handle import ModelWeights, TrainableModel
@@ -211,17 +212,17 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             name="use_checkpoint", type=bool, required=False, default=True,
             doc="Gradient (activation) checkpointing -- trades recompute time for a real "
                 "cut in peak VRAM (dominant cost is activations, not the frozen base weights "
-                "or the tiny LoRA adapters). Defaults to True: VRAM is the priority here, and "
-                "this is the single biggest lever available for it. Set False if you'd rather "
-                "trade back for faster steps. Was previously unusable for LoRA -- ComfyUI's "
-                "own checkpoint() (comfy/ldm/modules/diffusionmodules/util.py) passes an "
-                "entire block's self.parameters() into torch.autograd.grad()'s inputs= list "
-                "unfiltered, and a frozen base + LoRA block almost always has at least one "
-                "frozen parameter (a norm weight, a bias, anything LoRA didn't target) in "
-                "there, which used to crash with 'One of the differentiated Tensors does not "
-                "require grad'. Mapped internally to FrozenParamSafeCheckpointing (True) or "
-                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py for the "
-                "root-cause writeup and docs/vram_and_lora_phase_split.md for the fuller one.",
+                "or the tiny LoRA adapters). Defaults to True. Set False to trade back for "
+                "faster steps. Mapped internally to FrozenParamSafeCheckpointing (True) or "
+                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py. "
+                "Ignored if resource_policy is given.",
+        ),
+        "resource_policy": Port(
+            name="resource_policy", type=ResourcePolicy, required=False, default=None,
+            doc="None = use_checkpoint and scaling_policy above, independently. When given, "
+                "fully replaces both -- its checkpointing_strategy() and "
+                "lora_scaling_policy() are used instead, and use_checkpoint/scaling_policy "
+                "are ignored.",
         ),
     }
 
@@ -232,16 +233,23 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         from core.unet_wrapper import ComfyUNetWrapper
 
         weights: ModelWeights = inputs["weights"]
-        use_checkpoint = inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default)
-        checkpointing_strategy = (
-            FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
+        resource_policy = inputs.get("resource_policy")
+        if resource_policy is not None:
+            checkpointing_strategy = resource_policy.checkpointing_strategy()
+            scaling_policy = resource_policy.lora_scaling_policy()
+            use_checkpoint = not isinstance(checkpointing_strategy, NoCheckpointing)
+        else:
+            use_checkpoint = inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default)
+            checkpointing_strategy = (
+                FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
+            scaling_policy = inputs.get("scaling_policy") or ClassicLoRAScaling()
         checkpointing_strategy.apply()
         lora_config = LoRAConfig(
             rank=inputs.get("rank", self.INPUTS["rank"].default),
             alpha=_effective_alpha(
                 alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
                 rank=inputs.get("rank", self.INPUTS["rank"].default),
-                policy=inputs.get("scaling_policy") or ClassicLoRAScaling(),
+                policy=scaling_policy,
             ),
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),

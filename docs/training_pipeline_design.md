@@ -31,14 +31,14 @@ illustrative code it originally sat next to has been removed.
 What's left in this document, in full, with illustrative code, is only
 what's genuinely still open: two seam-only techniques not yet built out
 (`DoRAAdapter`, `NF4WeightStore`), one policy blocked on missing
-instrumentation (`CheckpointPlacementPolicy`), two consolidating
-abstractions not yet needed (`ResourceBudget`/`ResourcePolicy`,
-`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`/`ResourceProfile`),
-and two pieces of *validation* work that landing code alone can't finish
-(`RescaledZeroTerminalSNRSchedule` needs a real end-to-end v-prediction
-training run; `LoRAPlusGroups` needs a real tuned run, not just existing
-as an opt-in policy). This remains a planning document for those pieces
--- their illustrative code is a strong proposal, not a spec set in stone,
+instrumentation (`CheckpointPlacementPolicy`), consolidating abstractions
+not yet needed (`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`,
+`ResourceProfile`), and two pieces of *validation* work that landing code
+alone can't finish (`RescaledZeroTerminalSNRSchedule` needs a real
+end-to-end v-prediction training run; `LoRAPlusGroups` needs a real tuned
+run, not just existing as an opt-in policy). This remains a planning
+document for those pieces -- their illustrative code is a strong
+proposal, not a spec set in stone,
 same as before. Section 9 (Implementation status) is where this gets
 compared against what `nodes/` actually is today; section 10 (Prioritized
 backlog) is the ordered, concrete plan for what's left.
@@ -381,116 +381,75 @@ independently once actually needed.
 
 ### 2.2 Resource budget as a first-class value, resource policy as a Strategy
 
-**Not implemented -- still open, and now the natural next step** (see the
-backlog, section 10, item 1): "should this run use activation
-checkpointing," "which `ExecutionStrategy` should the optimizer use,"
-"should the text encoder cache be warmed," "which LoRA adapter family,
-which weight-quantization scheme, which parameter-group policy, which
-`DiffusionProcess`" are each an independent manual flag on an independent
-node/port today -- more of them now than when this was first written,
-since 3.1-3.4's seams landed as additional independent choices. That's
-fine as a default (explicit is better than magic), but there's still no
-single place that represents "how much VRAM headroom does this run
-actually have," or the full set of VRAM/quality-affecting choices a run
-makes, as values other components could consult.
+**Implemented**, but scoped down from the illustration this section used
+to show, for reasons found while actually building it rather than
+assumed in advance: `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy`
+(`nodes/resource_policy.py`) cover exactly three choices --
+`checkpointing_strategy()`, `lora_scaling_policy()`, and
+`parameter_group_policy()` -- not the seven this section originally
+sketched. `adapter_strategy()`/`frozen_weight_store()` were cut because
+neither `AdapterStrategy` implementation nor a chosen `FrozenWeightStore`
+is reachable from `ComfyUNetLoRANode`'s real construction path at all
+yet (3.1, 3.3) -- a policy method for a choice nothing can act on would
+be scaffolding, not a feature. `optimizer_execution_strategy()` was cut
+because `ExecutionStrategy` selection is already a real Port (`strategy`)
+on each `Composed*OptimizerNode`, but which *Algorithm* to use (CAME/
+Adafactor/AdamW) is a choice of *Node class*, not a Port value -- there's
+no single generic "the" optimizer node a `ResourcePolicy` method could
+hand this to. `enable_text_encoder_cache()` was cut because whether
+caching happens is decided by *which Node* is wired into the graph
+(`CachingTextEncoderNode` vs. a plain `TextEncoderNode`), not a flag any
+single Node's `build()` could read and act on after the fact -- graph
+topology, not a constructor-time choice.
 
-```python
-@dataclass(frozen=True)
-class ResourceBudget:
-    """A stated VRAM ceiling for one run, plus a safety margin. Purely
-    descriptive -- constructing this doesn't enforce anything by itself;
-    a ResourcePolicy is what turns it into actual choices (see below).
+**A real architectural correction, found by building this rather than
+foreseen in the design:** a `ResourcePolicy` returning
+`ActivationCheckpointingStrategy`/`LoRAScalingPolicy` (both `model/`) and
+`ParameterGroupPolicy` (`optimizer/`) needs those types in its method
+signatures -- but a module living outside any one domain package can't
+`import` from two domain packages at once without violating the Acyclic
+Domain Dependency Rule (5.7). Resolved the same way `DiffusionProcess`
+(1.4) already resolves an analogous problem: every method uses a
+forward-reference string type hint only (structural, via `from __future__
+import annotations`, not a per-method style choice), so the module needs
+zero real cross-domain imports. The concrete cost of this fix:
+`ManualResourcePolicy` doesn't compute its own sensible defaults the way
+this section's original illustration had it do (`adapter_strategy or
+PlainLoRAAdapter()`-style fallbacks) -- doing that would need exactly the
+imports being avoided. Instead `ManualResourcePolicy` is a pure carrier
+(every field required, nothing defaulted internally), and each consuming
+Node builds its own default instance from classes it already imports --
+the same pattern `diffusion_process` (1.4) already uses for its `None ->
+locally-constructed default` ports.
 
-    vram_budget_mb measures against the allocator's *reserved* memory --
-    the same figure DeviceContext.memory_stats()'s reserved_mb field
-    reports (1.5), not allocated_mb. Reserved is what actually determines
-    whether the OS hands back an out-of-memory error next, since it
-    includes the allocator's own held-but-currently-unused pool, not just
-    tensors presently live -- allocated_mb alone would let a caller
-    believe it has headroom the allocator has already claimed and won't
-    necessarily release. Every consumer of ResourceBudget (including
-    CheckpointPlacementPolicy, 2.3) compares against reserved_mb
-    consistently -- stated once, here, rather than left for each consumer
-    to assume independently."""
-    vram_budget_mb: float
-    vram_reserve_mb: float = 512.0  # headroom kept free on purpose
+**Wiring, and a second deliberate deviation from the original
+illustration:** `ComfyUNetLoRANode` gets an optional `resource_policy`
+port that, when given, fully replaces its existing `use_checkpoint`/
+`scaling_policy` ports (both of which still work unchanged when
+`resource_policy` is `None` -- the default). The three
+`Composed*OptimizerNode` classes get a direct `group_policy` port
+instead of a `resource_policy` one -- deliberately: routing
+`parameter_group_policy()` selection through a full `ResourcePolicy`
+there would force an optimizer node to also supply a
+`checkpointing_strategy`/`lora_scaling_policy` it has no use for, just to
+pick a parameter-group policy, which is worse ergonomics than the
+scattered-flags problem this item exists to fix. So this isn't "one
+`ResourcePolicy` object, four identical consumers" -- it's
+`ResourcePolicy` where two of its three choices naturally co-locate
+(`ComfyUNetLoRANode`), and a simpler, direct port where the third one
+doesn't. A real, previously-undocumented gap closed as a side effect:
+`LoRAPlusGroups` (3.4) has existed since the `ParameterGroupPolicy` fix
+landed, but no Node ever exposed a way to actually select it from the
+graph until this port existed.
 
+See `nodes/smoke_tests/smoke_test_resource_policy.py` for the
+contract-level verification and the end-to-end `group_policy` checks
+against real `ComposedOptimizerHandle` instances.
 
-class ResourcePolicy(ABC):
-    """Decides the VRAM/speed/quality-affecting choices a run needs to
-    make. Returns *descriptions* of what to build (which ExecutionStrategy
-    class, which ActivationCheckpointingStrategy instance), not the built
-    objects themselves -- keeps this a pure decision, testable without
-    constructing real models/optimizers."""
-
-    @abstractmethod
-    def checkpointing_strategy(self) -> "ActivationCheckpointingStrategy":
-        ...
-    @abstractmethod
-    def optimizer_execution_strategy(self) -> type:
-        ...
-    @abstractmethod
-    def enable_text_encoder_cache(self) -> bool:
-        ...
-    @abstractmethod
-    def adapter_strategy(self) -> "AdapterStrategy":
-        ...
-    @abstractmethod
-    def lora_scaling_policy(self) -> "LoRAScalingPolicy":
-        ...
-    @abstractmethod
-    def frozen_weight_store(self) -> type["FrozenWeightStore"]:
-        ...
-    @abstractmethod
-    def parameter_group_policy(self) -> "ParameterGroupPolicy":
-        ...
-
-
-class ManualResourcePolicy(ResourcePolicy):
-    """Today's actual behavior, made explicit: every choice is a
-    constructor argument, no inspection of budget/hardware at all. This
-    stays the default -- see section 7's note on why an inspect-and-decide
-    AutoResourcePolicy is deliberately not designed in detail."""
-
-    def __init__(self, checkpointing: "ActivationCheckpointingStrategy",
-                 optimizer_strategy: type, text_encoder_cache: bool,
-                 adapter_strategy: "AdapterStrategy" = None,
-                 lora_scaling_policy: "LoRAScalingPolicy" = None,
-                 frozen_weight_store: type = None,
-                 parameter_group_policy: "ParameterGroupPolicy" = None):
-        self._checkpointing = checkpointing
-        self._optimizer_strategy = optimizer_strategy
-        self._text_encoder_cache = text_encoder_cache
-        self._adapter_strategy = adapter_strategy or PlainLoRAAdapter()
-        self._lora_scaling_policy = lora_scaling_policy or ClassicLoRAScaling()
-        self._frozen_weight_store = frozen_weight_store or BF16WeightStore
-        self._parameter_group_policy = parameter_group_policy or UniformGroups()
-
-    def checkpointing_strategy(self):
-        return self._checkpointing
-    def optimizer_execution_strategy(self):
-        return self._optimizer_strategy
-    def enable_text_encoder_cache(self):
-        return self._text_encoder_cache
-    def adapter_strategy(self):
-        return self._adapter_strategy
-    def lora_scaling_policy(self):
-        return self._lora_scaling_policy
-    def frozen_weight_store(self):
-        return self._frozen_weight_store
-    def parameter_group_policy(self):
-        return self._parameter_group_policy
-```
-
-Every default above (`PlainLoRAAdapter`, `ClassicLoRAScaling`,
-`BF16WeightStore`, `UniformGroups`) reproduces today's actual behavior
-exactly -- nothing changes for an existing run unless it explicitly opts
-into one of the techniques in section 3 or 4. The payoff of having one
-`ResourcePolicy` type at all, even with only a manual implementation:
-every VRAM/quality-affecting choice now has one shared shape a future
-automatic policy could implement against, instead of being unrelated
-flags on unrelated node classes. That future policy is explicitly not
-designed here -- see section 7.
+`ResourceBudget` itself is implemented but inert -- nothing constructs
+or consumes one yet. `CheckpointPlacementPolicy` (2.3) is its first
+designed consumer, still blocked on the per-block profiling
+instrumentation described there, not on `ResourceBudget` itself.
 
 ### 2.3 Activation checkpointing: strategy and placement
 
@@ -582,10 +541,9 @@ to per-block granularity -- its own separate instrumentation task).
 should be treated as unvalidated until real `BlockCost` numbers exist --
 shipping it with guessed costs would be worse than not having it, since a
 bad placement decision gets neither the VRAM savings nor the untouched
-speed of the two extremes. This calibration verdict is unchanged since
-`nodes/model/gradient_checkpointing.py`'s own docstring cites it directly
--- **the actual blocker is the per-block profiling instrumentation, not
-the policy class itself** (see the backlog, section 10).
+speed of the two extremes. **The actual blocker is the per-block
+profiling instrumentation, not the policy class itself** (see the
+backlog, section 10).
 
 ### 2.4 Text encoder cache becomes visible to resource accounting
 
@@ -666,9 +624,11 @@ see `nodes/model/adapter_strategy.py`'s own docstring for exactly why
 that's correct for `BF16WeightStore` and would not be for a real
 `NF4WeightStore` (3.3).
 
-`DoRAAdapter` below is **not implemented** -- this is real code cited
-directly by `nodes/model/adapter_strategy.py`'s module docstring, so its
-wording is preserved rather than reworded:
+`DoRAAdapter` below is **not implemented** -- design rationale for it
+lives here, not in `nodes/model/adapter_strategy.py` (which points back
+to this section rather than duplicating this content, so the one place
+describing an unbuilt class can't drift out of sync with the class
+actually getting built):
 
 ```python
 class DoRAAdapter(AdapterStrategy):
@@ -698,8 +658,22 @@ class DoRAAdapter(AdapterStrategy):
 ```
 
 The seam this needed (`AdapterStrategy` existing at all, with a real
-second conformance checked against it) now exists -- see the backlog,
-section 10, for why this is buildable now in a way it wasn't before.
+second conformance checked against it) exists -- but stated plainly
+rather than glossed over, and checked directly against the real call
+graph rather than assumed: **neither `AdapterStrategy` implementation is
+reachable from `ComfyUNetLoRANode`'s real construction path today.** LoRA injection
+there still runs entirely through `core.lora._inject_lora`'s own
+tree-walk (matching SDXL's specific attention-block structure --
+`to_q`/`to_k`/`to_v`/`to_out.0`, `time_embed`/`label_emb` segment
+matching, per-block weighting), not through `AdapterStrategy.wrap()`.
+Wiring it in for real means either modifying `core/lora.py` (against
+this project's standing rule) or re-deriving that tree-walk inside
+`nodes/` -- genuinely separate, large work, correctly out of scope for
+the seam-building slice that already landed and equivalence-tested
+`PlainLoRAAdapter` against it. `DoRAAdapter` can be built and
+quality-tested against the seam as written below, but making it
+*trainable in a real run* needs that live-wiring gap closed too -- see
+the backlog, section 10, item 3, which accounts for both.
 
 ### 3.2 `LoRAScalingPolicy`
 
@@ -759,9 +733,9 @@ its LLM results.
 (`nodes/model/frozen_weight_store.py`) -- the frozen base kept exactly as
 loaded, no change to any existing forward path. This closed the
 `TrainableModel.footprint_bytes()` gap (1.2) it existed for.
-`NF4WeightStore` below is **not implemented**; this is real code cited
-directly by `nodes/model/frozen_weight_store.py`'s module docstring, so
-its wording is preserved:
+`NF4WeightStore` below is **not implemented** -- design rationale for it
+lives here, not in `nodes/model/frozen_weight_store.py` (which points
+back to this section rather than duplicating this content):
 
 ```python
 class NF4WeightStore(FrozenWeightStore):
@@ -1024,10 +998,17 @@ domain ABCs live in each domain's own `handle.py`), including in
 
 Concrete, to make sections 1-5 legible as a whole rather than a list of
 classes. **Most of the classes below are real now** (see each section for
-the exact file); `PipelineFactory` itself, `ManualResourcePolicy`, and
-`ResourceBudget` are not, so this still isn't code that runs as shown --
-it's the wiring a real script would do once section 10's remaining items
-land, annotated below for which pieces exist today vs. which don't:
+the exact file); `PipelineFactory` and `build_trainable_model`/
+`build_optimizer`/`build_text_encoder` (illustrative Builder functions,
+standing in for whatever a real script or `ComfyUNetLoRANode.build()`-
+style Node actually does) are not, so this still isn't code that runs
+exactly as shown -- annotated below for which pieces exist today vs.
+which don't. `ManualResourcePolicy`'s constructor below uses its real,
+current 3-argument shape (checkpointing, lora_scaling_policy,
+parameter_group_policy) -- not the 7-argument version this section's
+own text used to illustrate before it was actually built (2.2 covers
+why the scope narrowed and how each dropped choice is still made,
+just not through this object):
 
 ```python
 layout = ProjectLayout(...)                              # 1.6, real
@@ -1038,22 +1019,24 @@ process = DiffusionProcess(schedule, VPredParameterization(), KarrasInputScaler(
 # real class, but this specific combination is unvalidated -- see 1.4
 # DiffusionProcess.__post_init__ rejects EpsParameterization here -- see 1.4
 
-policy = ManualResourcePolicy(                            # 2.2, NOT implemented
-    checkpointing=FrozenParamSafeCheckpointing(placement=EveryBlockPlacement()),  # 2.3:
-    # FrozenParamSafeCheckpointing is real; EveryBlockPlacement/placement itself is not
-    optimizer_strategy=ChunkedScratchBufferStrategy,
-    text_encoder_cache=True,
-    adapter_strategy=PlainLoRAAdapter(),          # 3.1, real -- DoRAAdapter() NOT implemented
-    lora_scaling_policy=RankStabilizedScaling(),  # 3.2, real
-    frozen_weight_store=BF16WeightStore,          # 3.3, real -- NF4WeightStore NOT implemented
-    parameter_group_policy=UniformGroups(),       # 3.4, real -- LoRAPlusGroups(...) real but unvalidated
+policy = ManualResourcePolicy(                            # 2.2, real,
+    checkpointing=FrozenParamSafeCheckpointing(),         # current 3-argument shape
+    lora_scaling_policy=RankStabilizedScaling(),          # 3.2, real
+    parameter_group_policy=UniformGroups(),               # 3.4, real -- LoRAPlusGroups(...) real but unvalidated
 )
+# adapter_strategy, frozen_weight_store, optimizer_execution_strategy, and
+# text_encoder_cache are each still their own independent choice, not
+# routed through `policy` -- see 2.2 for why each one is scoped out
+adapter_strategy = PlainLoRAAdapter()          # 3.1, real -- DoRAAdapter() NOT implemented,
+                                                # and neither is reachable from a real build yet
+frozen_weight_store = BF16WeightStore          # 3.3, real -- NF4WeightStore NOT implemented
 memory = MemoryManager()                                  # 1.3, unchanged, real
 coordinator = ResourceCoordinator()                        # 5.1, real
 
-model = build_trainable_model(weights, policy, device_ctx)   # a Builder; wires
-                                                               # FrozenWeightStore +
-                                                               # AdapterStrategy + scaling
+model = build_trainable_model(weights, policy, adapter_strategy,
+                               frozen_weight_store, device_ctx)   # a Builder; wires
+                                                                   # FrozenWeightStore +
+                                                                   # AdapterStrategy + scaling
 coordinator.register("model", model)                         # 1.2 DeviceResident, real
 optimizer = build_optimizer(model.trainable_parameters(), policy, memory,
                              group_policy=policy.parameter_group_policy())
@@ -1205,9 +1188,10 @@ matter anymore -- both are equally done.
 | `ActivationCheckpointingStrategy` (2.3) | `nodes/model/gradient_checkpointing.py` | Backlog item 7. `CheckpointPlacementPolicy` itself still open -- see 9.2. |
 | Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
-| `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_injector.py` | Backlog item 9 (part 2), item 5. `DoRAAdapter` itself still open -- see 9.2. |
+| `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_injector.py` | Backlog item 9 (part 2), item 5. Seam built and equivalence-tested, not live-wired into `ComfyUNetLoRANode` (still `core.lora._inject_lora`). `DoRAAdapter` still open -- see 9.2. |
 | `FrozenWeightStore`/`BF16WeightStore` (3.3) | `nodes/model/frozen_weight_store.py` | Backlog item 9 (part 1). `NF4WeightStore` itself still open -- see 9.2. |
-| `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `LoRAPlusGroups` real but unvalidated -- see 9.2. |
+| `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
+| `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy` (2.2) | `nodes/resource_policy.py` | Scoped to 3 of the design's original 7 methods -- see 2.2 for why. Wired into `ComfyUNetLoRANode` (`resource_policy` port) and, via a separate direct `group_policy` port, all three `Composed*OptimizerNode` classes. |
 | `LossWeighting`/`LRSchedule` (section 4) | `nodes/train/loss.py`/`schedule.py` | Pre-existing clean ABCs, confirmed by `P2LossWeighting` needing zero interface change; v-pred branch + `P2LossWeighting` are backlog item 6. |
 | `Algorithm.init_state()`'s state representation | `nodes/optimizer/algorithms/*.py` | Pre-existing -- contract already returns "a plain dict of named tensors," not specifically fp32; nothing structurally blocks a future quantized-state `Algorithm`. |
 | `ResourceCoordinator`/`OffloadOrchestrator` (5.1, 5.2) | `nodes/memory/coordinator.py` | Backlog item 12. Doesn't by itself fix the still-open VRAM-hang report -- see 9.3. |
@@ -1221,24 +1205,16 @@ matter anymore -- both are equally done.
 Everything below is real -- these are the only pieces of this document
 still asking for something. See section 10 for the ordered plan.
 
-**`ResourceBudget`/`ResourcePolicy` (2.2).** Doesn't exist even as a
-manual-only shim. Every VRAM/quality-affecting choice today is an
-independent port on an independent node -- more of them now than before
-(`ComfyUNetLoRANode.use_checkpoint`, `ComposedCAMEOptimizerNode`'s
-`strategy`, `CachingTextEncoderNode`'s presence/absence, LoRA's
-adapter/scaling/weight-store/parameter-group choices, and now
-`diffusion_process`, `gate_enabled`). Consolidating these into one
-`ManualResourcePolicy` object is a real but low-risk change (it can wrap
-the existing independent choices without changing any of their current
-behavior) -- worth doing now more than ever, since there are more flags
-to consolidate than when this was first written.
-
 **`DoRAAdapter` (3.1).** Doesn't exist. The seam it needs
 (`AdapterStrategy`, with a real second conformance already checked
-against it) does now, which it didn't before -- this is buildable in a
-way it wasn't before item 9 landed. Real quality win, bounded new
-forward-pass code (weight normalization + magnitude scaling), its own
-equivalence/quality-testing pass, additive to `PlainLoRAAdapter`.
+against it) does now, which it didn't before. Real quality win, bounded
+new forward-pass code (weight normalization + magnitude scaling), its
+own equivalence/quality-testing pass, additive to `PlainLoRAAdapter`.
+**Building the class alone isn't sufficient to train with it, though:**
+neither `AdapterStrategy` implementation is reachable from
+`ComfyUNetLoRANode`'s real construction path yet (still
+`core.lora._inject_lora`'s own tree-walk) -- see 3.1 and backlog item 3
+for both halves of what's actually needed.
 
 **`NF4WeightStore` (3.3).** Doesn't exist. Still this document's single
 highest-value remaining item -- needs a real dequantization
@@ -1260,11 +1236,12 @@ this list) -- what's missing is a real training run with
 every closed item, there's no old code path to equivalence-test against;
 this needs real training runs to trust, not a unit test.
 
-**`LoRAPlusGroups` real tuning (3.4).** The class itself is implemented
-(unlike everything else in this list) -- what's missing is actually
-running a LoRA training job with it wired in and comparing against a
-`UniformGroups` baseline, at whatever `ratio` turns out to matter for
-this project's own data.
+**`LoRAPlusGroups` real tuning (3.4).** The class is implemented and, as
+of 2.2's `group_policy` port, actually selectable from the graph on every
+`Composed*OptimizerNode` (unlike everything else in this list) -- what's
+missing is actually running a LoRA training job with it wired in and
+comparing against a `UniformGroups` baseline, at whatever `ratio` turns
+out to matter for this project's own data.
 
 **`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`/`ResourceProfile`
 (5.3, 5.4, 5.5).** None exist. `ComponentRegistry`/`TrainingRecipe` are
@@ -1292,35 +1269,26 @@ hand-rolled offload logic.
 
 ## 10. Prioritized backlog
 
-**The original 12-item backlog is entirely complete** -- `DiffusionProcess`/
-`DeviceContext`, `DeviceResident` (with `OptimizerHandle`/`TrainableModel`/
-`TextEncoder` all conforming), the `ParameterGroupPolicy` fix,
-`LoRAScalingPolicy`, Min-SNR's v-prediction branch + `P2LossWeighting`,
+**The original 12-item backlog is entirely complete, and so is the item
+that led this list after it** -- `DiffusionProcess`/`DeviceContext`,
+`DeviceResident` (with `OptimizerHandle`/`TrainableModel`/`TextEncoder`
+all conforming), the `ParameterGroupPolicy` fix, `LoRAScalingPolicy`,
+Min-SNR's v-prediction branch + `P2LossWeighting`,
 `ActivationCheckpointingStrategy`, `ProjectLayout`, the
 `AdapterStrategy`/`FrozenWeightStore` seam, `TrainingStepPipeline`/
-`StepPhase`, `PrefetchingBatchSource`, and `ResourceCoordinator`/
-`OffloadOrchestrator` are all real, tested code -- see section 9.1 for
-exactly where each one lives. What follows is a fresh list: only what's
-actually still open, ordered by what unblocks what, sized to be
-independently landable slices, each one equivalence-tested against
+`StepPhase`, `PrefetchingBatchSource`, `ResourceCoordinator`/
+`OffloadOrchestrator`, and `ResourceBudget`/`ResourcePolicy`/
+`ManualResourcePolicy` are all real, tested code -- see section 9.1 for
+exactly where each one lives, and 2.2 for two real deviations
+`ResourcePolicy`'s implementation took from this document's own
+illustration once it was actually built. What follows is a fresh list:
+only what's actually still open, ordered by what unblocks what, sized to
+be independently landable slices, each one equivalence-tested against
 whatever it replaces (or, for the two validation-only items at the end,
 tested by a real training run instead) before anything switches over to
 it.
 
-1. **`ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy`** (2.2).
-   Doesn't exist even as a manual-only shim, and every seam built since
-   this backlog was first written (adapter strategy, scaling policy,
-   weight store, parameter group policy, plus `diffusion_process` and
-   `gate_enabled`) is one more independent flag it would consolidate --
-   there are more of them now than when this item was last considered,
-   not fewer. Low risk: `ManualResourcePolicy` can wrap the existing
-   independent choices without changing any of their current behavior.
-   Sequenced first because everything else on this list (`DoRAAdapter`,
-   `NF4WeightStore`, `CheckpointPlacementPolicy`) is a new choice this
-   object would need a slot for -- landing it first means those don't
-   each need their own ad hoc wiring into `SupervisedLoRATrainerNode`'s
-   ports.
-2. **`ResourceProfile`** (5.5). Small, and cheaper now than it would have
+1. **`ResourceProfile`** (5.5). Small, and cheaper now than it would have
    been earlier -- every `DeviceResident` it aggregates
    (`OptimizerHandle`, `TrainableModel`, `TextEncoder`) already exists and
    is exercised in real runs. Real, standing diagnostic value for the
@@ -1328,7 +1296,7 @@ it.
    "how much of my VRAM is the text encoder cache vs. optimizer scratch
    vs. the model itself" isn't answerable from the current single
    allocator-level number.
-3. **Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
+2. **Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
    `GreedyRatioPlacement`** (2.3). The actual blocker has always been the
    instrumentation, not the policy class -- extending `profile=True` (or
    its `nodes/`-native successor) to real per-block activation/recompute
@@ -1336,12 +1304,20 @@ it.
    itself. `EveryBlockPlacement` stays the safe default until real
    `BlockCost` numbers exist; shipping `GreedyRatioPlacement` with guessed
    costs would be worse than not having it.
-4. **`DoRAAdapter`** (3.1). Buildable now in a way it wasn't before item 9
-   of the old backlog landed -- the seam (`AdapterStrategy`, with
-   `PlainLoRAAdapter` as a real, tested conformance already checked
-   against it) exists. Its own equivalence/quality-comparison pass, not
-   just an equivalence test (it's a real quality claim, not a refactor).
-5. **`NF4WeightStore`** (3.3). This document's single highest-value
+3. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
+   path, then `DoRAAdapter`** (3.1). Two real pieces, not one: the
+   `AdapterStrategy` seam and `PlainLoRAAdapter` exist and are
+   equivalence-tested, but neither is reachable from the actual model
+   that gets trained -- `core.lora._inject_lora`'s tree-walk still does
+   real LoRA injection unmodified. Live-wiring that (replacing the
+   tree-walk's per-layer `LoRALinear`/`LoRAConv2d` construction with
+   `AdapterStrategy.wrap()` calls, without touching `core/lora.py`
+   itself) is its own real, nontrivial equivalence-tested slice -- once
+   it lands, `DoRAAdapter` is buildable and, for the first time,
+   actually trainable, not just seam-equivalence-tested in isolation.
+   Its own equivalence/quality-comparison pass beyond that, not just an
+   equivalence test (it's a real quality claim, not a refactor).
+4. **`NF4WeightStore`** (3.3). This document's single highest-value
    remaining item, and still its own dedicated effort, not a slice of
    anything else: needs a real dequantization implementation (a fused
    dequant-matmul kernel or an explicit dequantize-then-matmul path via
@@ -1363,12 +1339,12 @@ missing is a real run:**
   own data. Unlike everything numbered above, there's no old code path to
   equivalence-test against; this needs real training runs to trust, not a
   unit test.
-- **`LoRAPlusGroups`, actually run** (3.4). Opting in is already a
-  one-line `parameter_group_policy=LoRAPlusGroups(...)` change -- what's
-  missing is running it on a real LoRA training job and comparing against
-  a `UniformGroups` baseline, at whatever `ratio` (the `16.0` default is
-  an unverified starting point) turns out to matter for this project's
-  own data.
+- **`LoRAPlusGroups`, actually run** (3.4). Opting in is now a one-line
+  `group_policy=LoRAPlusGroups(...)` change on any `Composed*OptimizerNode`
+  (2.2) -- what's missing is running it on a real LoRA training job and
+  comparing against a `UniformGroups` baseline, at whatever `ratio` (the
+  `16.0` default is an unverified starting point) turns out to matter for
+  this project's own data.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

@@ -1,5 +1,6 @@
 """Patches comfy.ldm.modules.diffusionmodules.util.CheckpointFunction so
 activation checkpointing works with a frozen base + LoRA model.
+See docs/training_pipeline_design.md section 2.3 for design rationale.
 
 Root cause (confirmed by reading ComfyUI's real source, not guessed): the
 stock CheckpointFunction.backward() calls
@@ -26,27 +27,11 @@ shallow-copy re-run under torch.enable_grad(), the autocast context) is
 copied unchanged from comfy's own implementation -- this is a filter on
 top of proven logic, not a reimplementation of it.
 
-See docs/vram_and_lora_phase_split.md for the fuller write-up and the
-2026-07-26 diagnosis this patch resolves.
-
-ActivationCheckpointingStrategy (docs/training_pipeline_design.md section
-2.3): the fix above is correct, but was only exposed as a global,
-process-wide monkeypatch triggered by a bare bool -- not itself an object
-another piece of code can compose with or substitute. FrozenParamSafeCheckpointing
-below is the exact same mechanism, unchanged, now with an apply() method;
-NoCheckpointing is the explicit "did nothing" case for when checkpointing
-is off, replacing an implicit "the if just wasn't taken".
-
-Section 2.3 also designs a per-block CheckpointPlacementPolicy
-(EveryBlockPlacement/GreedyRatioPlacement) for checkpointing a subset of
-blocks by a memory/recompute cost ratio, rather than uniformly all-or-
-nothing. Deliberately NOT implemented here -- the design doc's own
-calibration note says GreedyRatioPlacement "should be treated as
-unvalidated until real BlockCost numbers exist [from actual per-block
-profiling on real hardware] -- shipping it with guessed costs would be
-worse than not having it". FrozenParamSafeCheckpointing therefore takes
-no placement parameter yet; adding one with nothing real to pass it would
-be scaffolding, not a feature.
+ActivationCheckpointingStrategy makes the fix above composable: an
+object with an apply() method instead of a global, process-wide
+monkeypatch triggered directly by a bare bool. FrozenParamSafeCheckpointing
+is the mechanism above, unchanged; NoCheckpointing is the explicit "did
+nothing" case for when checkpointing is off.
 """
 
 from __future__ import annotations

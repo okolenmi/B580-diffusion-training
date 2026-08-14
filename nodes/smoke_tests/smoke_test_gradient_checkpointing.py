@@ -6,12 +6,12 @@ test CAN do, and does: register a stand-in module at the exact import
 path enable_frozen_param_safe_checkpointing() patches
 (comfy.ldm.modules.diffusionmodules.util), containing a faithful,
 verbatim reproduction of the real CheckpointFunction/checkpoint() (fetched
-directly from github.com/comfyanonymous/ComfyUI during this session, not
-reconstructed from memory) -- then run the REAL patch function against
-it and check real gradients, not just "doesn't crash." This verifies the
-patch's actual logic exactly; it does not verify the import path itself
-still matches ComfyUI's current source layout, which needs confirming on
-a machine with ComfyUI installed (see docs/vram_and_lora_phase_split.md).
+directly from github.com/comfyanonymous/ComfyUI, not reconstructed from
+memory) -- then run the REAL patch function against it and check real
+gradients, not just "doesn't crash." This verifies the patch's actual
+logic exactly; it does not verify the import path itself still matches
+ComfyUI's current source layout, which needs confirming on a machine with
+ComfyUI installed.
 """
 
 import sys

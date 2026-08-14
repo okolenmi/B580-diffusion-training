@@ -5,10 +5,9 @@ the first 20% of steps, then the rest), where each phase's own weight
 changes stay separately extractable -- a checkpoint made from just the
 post-warm-up phase should contain none of the warm-up phase's changes.
 
-Design (see docs/vram_and_lora_phase_split.md for the full writeup,
-including the alternative this rejected): stack a brand new, independent
-adapter on top of the current one instead of merging the current one into
-the frozen base weights and reinitializing it in place. Concretely, each
+Design: stack a brand new, independent adapter on top of the current one
+instead of merging the current one into the frozen base weights and
+reinitializing it in place. Concretely, each
 LoRAGeneration wraps an `inner` module (either the original
 core.lora.LoRALinear/LoRAConv2d, or an earlier LoRAGeneration) and adds
 its own low-rank delta on top, computed exactly like core.lora's own
@@ -33,9 +32,8 @@ ComfyUNetTrainableModel.trained_state_dict() calls). The combination is
 exact, not approximate: concatenating every generation's (A, B*scaling)
 pair along the rank axis produces a single rank-sum(r_i) adapter whose
 output is bit-for-bit (up to ordinary floating-point summation order)
-identical to the live stacked-generations forward pass. See
-docs/vram_and_lora_phase_split.md for the derivation;
-smoke_test_lora_phase_split.py checks it directly against a fresh
+identical to the live stacked-generations forward pass.
+smoke_test_lora_phase_split.py checks this directly against a fresh
 core.lora.LoRALinear/LoRAConv2d loaded with the combined weights, not
 just against itself.
 

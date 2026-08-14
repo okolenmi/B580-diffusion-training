@@ -51,15 +51,13 @@ class TrainableModel(TrainedWeightsExportable, DeviceResident, ABC):
     LoRACheckpointSaverNode's model input can stay typed at this ABC
     without narrowing to a concrete class.
 
-    Extends DeviceResident (nodes/memory/handle.py, docs/training_pipeline_design.md
-    section 1.2) as of the FrozenWeightStore seam (section 3.3) landing --
-    footprint_bytes() specifically wasn't answerable before that existed
-    (see nodes/model/frozen_weight_store.py). to()/train()/eval() above
-    predate this and stay as they are; offload()/reload()/release() are
-    new, narrower-purpose siblings (offload/reload are specifically the
-    cheap, reversible, stay-resident-on-host operation; release is the
-    non-reversible drop -- to() is a general device/dtype move with
-    neither of those specific lifecycle meanings)."""
+    Extends DeviceResident (nodes/memory/handle.py) -- footprint_bytes()
+    needs a FrozenWeightStore to answer for the frozen base's
+    contribution (see nodes/model/frozen_weight_store.py). to()/train()/
+    eval() are a general device/dtype move and mode switch;
+    offload()/reload()/release() are narrower-purpose siblings: offload/
+    reload are specifically the cheap, reversible, stay-resident-on-host
+    operation, release is the non-reversible drop."""
 
     @abstractmethod
     def forward(self, x_t, timestep, context, y):

@@ -1,12 +1,5 @@
-"""ResourceCoordinator/OffloadOrchestrator (backlog item 12,
-docs/training_pipeline_design.md sections 5.1, 5.2).
-
-Sequenced last in the whole backlog on purpose: needs several real
-DeviceResidents in place and individually exercised first, or it's
-coordinating nothing concrete yet. That's now true --
-OptimizerHandle (item 3), TrainableModel (item 9), and TextEncoder (this
-item) are all real, tested DeviceResidents.
-"""
+"""ResourceCoordinator/OffloadOrchestrator: tracking and event-driven
+offload coordination for every DeviceResident a run constructs."""
 
 from __future__ import annotations
 
@@ -48,13 +41,9 @@ class ResourceCoordinator:
 
 class TrainingLifecycleEvent(ABC):
     """Marker base -- each concrete event is a plain, immutable value; no
-    behavior of its own. The three below are illustrative, matching the
-    points core/trainer.py's own hand-written offload calls already exist
-    at today -- not yet published by anything in nodes/train/, since
-    SupervisedLoRATrainerNode v1's own documented scope (see that
-    module's docstring) excludes cyclic/teacher-rollout caching,
-    checkpoint cadence, and preview generation entirely. Ready for when
-    that functionality gets ported to nodes/, not simulating it now."""
+    behavior of its own. The three below correspond to the points a
+    training loop's own offload calls would happen at (cache rebuild,
+    preview generation, checkpoint save)."""
 
 
 class CacheRebuildStarting(TrainingLifecycleEvent):
@@ -73,33 +62,20 @@ class CheckpointSaveStarting(TrainingLifecycleEvent):
 
 class OffloadOrchestrator:
     """Subscribes to TrainingLifecycleEvents, drives a ResourceCoordinator
-    in response. This is the principled version of what core/trainer.py's
-    hand-written offload calls at specific points in the training loop
-    are doing today, ad hoc, per call site -- made into one reviewed
-    place with an explicit, testable event -> action mapping, rather than
-    N scattered `.to("cpu")` calls that each have to remember to exist.
+    in response -- one reviewed place with an explicit, testable
+    event -> action mapping, instead of scattered per-call-site
+    `.to("cpu")` calls that each have to remember to exist.
 
-    A genuine, non-trivial piece of design, not a small refactor -- and
-    explicitly NOT a claim that it fixes the open "device lost" report on
-    its own. That report needs its actual root cause found first --
-    docs/suspicious_findings.md's entry on it describes a plausible
-    root-cause *shape* (an async/non-blocking transfer without a matching
-    explicit synchronize on the XPU offload path, per a similar symptom
-    traced elsewhere to exactly that), not a confirmed diagnosis in this
-    codebase. A correctness bug of that shape, if that's what it is,
-    isn't fixed by this orchestrator's existence -- this fixes the
-    *coordination* problem (one reviewed place offload calls happen,
-    instead of scattered per-call-site `.to("cpu")`s), which is necessary
-    but not sufficient on its own.
+    This coordinates *when* registered residents offload in response to
+    a published event; it doesn't fix a correctness bug in code that
+    doesn't publish events through it at all.
 
-    Same explicit-injection, no-singleton shape monitor_bus.py's
-    MonitorBus and nodes/monitor/handle.py's MonitorHandle already
-    establish for this project's other cross-cutting concern -- not
-    reusing either class directly (MonitorBus is async-event-loop-shaped,
-    for SSE streaming to a dashboard; this is a synchronous, in-process
-    dispatcher, a genuinely different shape), but the same architectural
-    principle: constructed explicitly, handed to whatever needs it, never
-    a module-level instance reached for by import."""
+    Same explicit-injection, no-singleton shape as this project's other
+    cross-cutting concern (MonitorBus/MonitorHandle) -- not reusing
+    either class directly (MonitorBus is async-event-loop-shaped, for SSE
+    streaming; this is a synchronous, in-process dispatcher), but the
+    same principle: constructed explicitly, handed to whatever needs it,
+    never a module-level instance reached for by import."""
 
     def __init__(self, coordinator: ResourceCoordinator, device_ctx):
         self._coordinator = coordinator

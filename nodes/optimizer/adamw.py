@@ -4,18 +4,15 @@ cases (full fine-tune vs. LoRA), not just a performance knob.
 
 AdamWOptimizerNode wraps core.optimizers.CPUAdamW. Unlike the other
 adapters in this package, this one is not a pure pass-through: CPUAdamW
-does not implement decay_states/reset_states at all (confirmed by reading
-core/optimizers.py directly -- a real, latent bug, since core/trainer.py
-calls optimizer.decay_states(...) unconditionally in cyclic-tuning mode,
-so combining optimizer="adamw" with cyclic tuning would raise
-AttributeError the first time anyone actually tried it). Because
-OptimizerHandle declares decay_states/reset_states as required abstract
-methods, this adapter is *forced* to implement them for
-AdamWOptimizerHandle to be instantiable at all -- see
-docs/nodes_package_design.md's "worked example" section for the reasoning.
-The implementation is new code, written and verified fresh here, not
-copied from anywhere -- core/optimizers.py's CPUAdamW itself is never
-touched.
+does not implement decay_states/reset_states at all (a real, latent bug,
+since core/trainer.py calls optimizer.decay_states(...) unconditionally
+in cyclic-tuning mode, so combining optimizer="adamw" with cyclic tuning
+would raise AttributeError the first time anyone actually tried it).
+Because OptimizerHandle declares decay_states/reset_states as required
+abstract methods, this adapter is *forced* to implement them for
+AdamWOptimizerHandle to be instantiable at all. The implementation is new
+code, written and verified fresh here, not copied from anywhere --
+core/optimizers.py's CPUAdamW itself is never touched.
 
 One genuine correctness point, not just a style choice: CPUAdamW.step()
 does self.m[i].mul_(self.b1)... unconditionally, with no "is this None"

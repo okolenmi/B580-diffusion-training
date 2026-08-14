@@ -1,52 +1,33 @@
 """TrainingStepPipeline: a training step as an ordered list of StepPhases,
-not one method. docs/training_pipeline_design.md section 2.1.
+not one method.
 
-Concrete phases below map onto what SupervisedLoRATrainerNode._run_step
-used to do as one method, before this refactor -- separated so a future
-change (CFG dual-pass, gradient accumulation, DAgger chain-mixing) is
-"construct one more phase, insert it in the list", not "edit the method
-that does everything". More granular than the design doc's own
-illustrative 7-phase list (FetchBatch/EncodeConditioning/Forward/Loss/
-Backward/OptimizerStep/Monitoring): update_lr()/zero_grad()/begin_step()
-and the diffusion-input prep (x_t/target/t/sigma/xc) each got their own
-phase here (OptimizerBeginStepPhase, PrepareDiffusionInputsPhase) rather
-than folding into ForwardPhase/EncodeConditioningPhase, because each is
-genuinely its own reason to change (a new noise schedule doesn't touch
-optimizer state; a new optimizer's begin-step semantics don't touch
-diffusion math) -- the same "one reason to change" test this whole
-section is built around.
+Concrete phases below map onto what a training step actually does --
+separated so a future change (CFG dual-pass, gradient accumulation,
+DAgger chain-mixing) is "construct one more phase, insert it in the
+list", not "edit the method that does everything". update_lr()/
+zero_grad()/begin_step() and the diffusion-input prep (x_t/target/t/
+sigma/xc) each get their own phase (OptimizerBeginStepPhase,
+PrepareDiffusionInputsPhase) rather than folding into ForwardPhase/
+EncodeConditioningPhase, because each is genuinely its own reason to
+change (a new noise schedule doesn't touch optimizer state; a new
+optimizer's begin-step semantics don't touch diffusion math).
 
-**Profiling** (docs/training_pipeline_design.md section 2.1's own
-example): TimedPhase wraps any phase and records wall time, with a real
-device_ctx.synchronize() before/after (async dispatch means an untimed op
-can finish after the Python call that launched it returns -- the same
-correctness requirement the old profile=True implementation already
-documented). Turning profiling on/off is "wrap every phase in TimedPhase
-or don't", decided once where the pipeline is assembled -- not a
-`profile: bool` parameter threaded through nine phases' own logic.
-
-**The profiling *output* genuinely changes shape, on purpose, checked
-directly rather than assumed to be safe:** the old timing dict's keys
-(data_wait_ms/encode_ms/forward_ms/backward_ms/optim_ms/step_total_ms)
-don't survive as-is -- TimedPhase labels each phase by its own name
-(fetch_batch/prepare_diffusion_inputs/encode_conditioning/
-optimizer_begin_step/forward/loss/backward/optimizer_step), which is more
-accurate than the old grouping (the old "encode_ms" actually included
-x_t/target/t loading and diffusion-schedule math ahead of the real
-text-encoder call, not just encoding -- confirmed by re-reading the old
-_run_step directly). Grepped server/*.py, manager/*.py, and every
-server/static/*.js file for the old key names before making this change:
-zero matches -- nothing in this codebase's server, manager, or frontend
-code depends on the old names, so this is a safe, intentional
-improvement to the diagnostic output, not a silent regression. The
-*training* behavior (gradients, loss values, parameter updates, LR
-schedule) is unchanged either way -- only the profile=True report/print
-shape differs.
+**Profiling.** TimedPhase wraps any phase and records wall time, with a
+real device_ctx.synchronize() before/after (async dispatch means an
+untimed op can finish after the Python call that launched it returns).
+Turning profiling on/off is "wrap every phase in TimedPhase or don't",
+decided once where the pipeline is assembled -- not a `profile: bool`
+parameter threaded through every phase's own logic. TimedPhase labels
+each phase by its own name (fetch_batch/prepare_diffusion_inputs/
+encode_conditioning/optimizer_begin_step/forward/loss/backward/
+optimizer_step) -- the profile=True report/print shape reflects this
+per-phase breakdown; training behavior (gradients, loss values,
+parameter updates, LR schedule) is unaffected either way.
 
 **Cancellation is deliberately NOT a StepPhase** -- it's the outer loop's
 concern (whether to run another step at all), not a transformation of
-StepState mid-pipeline, same "between steps only, never mid backward/
-optimizer-step" guarantee as before. See SupervisedLoRATrainerNode.build().
+StepState mid-pipeline: only between steps, never mid backward/
+optimizer-step. See SupervisedLoRATrainerNode.build().
 """
 
 from __future__ import annotations
@@ -106,20 +87,16 @@ class TimedPhase(StepPhase):
     """Wraps any StepPhase, records wall time with a real synchronize()
     on both sides (see this module's docstring for why).
 
-    **capture_memory, docs/optimizer_execution_redesign_plan.md Phase 1
-    follow-up.** Every prior VRAM measurement in this investigation only
-    snapshotted once per step, at the very end -- enough to see *that*
-    reserved jumps between two steps, nothing about *which phase within
-    the step* actually did it (a real, specific gap this codebase's own
-    earlier "probably mid-forward" guess should never have papered
-    over). When True, records device_ctx.memory_stats() right after
-    each phase's own synchronize() -- so each phase's number reflects
-    memory state at a point genuinely known to be after that phase
-    finished, not a guess. Off by default, and only meaningful when
-    `profile` is already True (real per-step overhead on top of
-    profile's own -- an 8x memory_stats() call instead of 1x -- so this
-    is for a short, targeted diagnostic run, same caveat as profile
-    itself, not for real training)."""
+    **capture_memory.** A single per-step VRAM snapshot at the end can
+    show *that* reserved memory jumped between two steps, but nothing
+    about *which phase within the step* did it. When True, records
+    device_ctx.memory_stats() right after each phase's own synchronize()
+    -- so each phase's number reflects memory state at a point genuinely
+    known to be after that phase finished, not a guess. Off by default,
+    and only meaningful when `profile` is already True (real per-step
+    overhead on top of profile's own -- an 8x memory_stats() call
+    instead of 1x -- so this is for a short, targeted diagnostic run,
+    same caveat as profile itself, not for real training)."""
 
     def __init__(self, inner: StepPhase, device_ctx: DeviceContext, label: str,
                  capture_memory: bool = False):
@@ -180,42 +157,30 @@ class PrepareDiffusionInputsPhase(StepPhase):
     "fetch a batch" and "run the model" so a different NoiseSchedule/
     Parameterization/ModelInputTransform touches only this phase.
 
-    **LoRA timestep gate, docs/optimizer_execution_redesign_plan.md
-    Phase 8.** core/lora.py's set_lora_gate()/compute_lora_gate() exists
-    specifically to keep a LoRA's contribution close to the frozen base
-    at timesteps outside the dataset's own actually-trained range --
-    used throughout the legacy core/ pipeline, previously wholly absent
-    from nodes/ (confirmed via exhaustive grep -- zero references
-    anywhere under nodes/ before this). Wired here, at the same point
-    the legacy pipeline calls it (core/train_step.py: right after the
-    per-batch `t` tensor is available, before the forward pass that
-    would apply the gated delta) using the same function, not a
+    **LoRA timestep gate.** core/lora.py's set_lora_gate()/
+    compute_lora_gate() keeps a LoRA's contribution close to the frozen
+    base at timesteps outside the dataset's own actually-trained range.
+    Wired here at the same point the legacy pipeline calls it (right
+    after the per-batch `t` tensor is available, before the forward pass
+    that would apply the gated delta), using the same function, not a
     reimplementation.
 
-    Off by default (gate_enabled=False), matching core/config_model.py's
-    own documented default exactly ("Off by default: LoRA applies
-    uniformly across all timesteps") -- this is a real behavior change
-    only for someone who explicitly turns it on, not a silent change to
-    every existing run. When enabled, gate_train_low/gate_train_high
-    must be set to match whatever t_low/t_high the dataset source node
-    was actually configured with (ManagedDatasetSourceNode's own
-    t_low/t_high inputs) -- there is deliberately no automatic sync
-    between the two yet (the dataset batch would need to carry its own
-    t_low/t_high through to here for that, a real, separate, somewhat
-    more invasive follow-up -- not done this round to avoid touching the
-    batch-collation path for a first cut of this feature). Mismatched
-    values here don't error -- they just gate against the wrong range
-    silently, so this needs to be set deliberately, not guessed.
+    Off by default (gate_enabled=False) -- LoRA applies uniformly across
+    all timesteps unless explicitly turned on. When enabled,
+    gate_train_low/gate_train_high must be set to match whatever
+    t_low/t_high the dataset source node was actually configured with
+    (ManagedDatasetSourceNode's own t_low/t_high inputs) -- there is
+    deliberately no automatic sync between the two. Mismatched values
+    here don't error -- they just gate against the wrong range silently,
+    so this needs to be set deliberately, not guessed.
 
-    Known limitation, inherited from core/lora.py's own design, not
-    introduced here: `_current_gate` is a module-level global, not
-    scoped to any one model/build -- if a single process ever runs
-    multiple concurrent trainer builds (not this project's current
-    architecture, but worth stating precisely), one build's gate could
-    leak into another's forward calls. set_lora_gate(None) is called
-    unconditionally every step when disabled (matching
-    core/train_step.py's own exact if/else pattern) specifically so a
-    previous step or build's gate can never silently persist."""
+    Known limitation, inherited from core/lora.py's own design:
+    `_current_gate` is a module-level global, not scoped to any one
+    model/build -- if a single process ever runs multiple concurrent
+    trainer builds, one build's gate could leak into another's forward
+    calls. set_lora_gate(None) is called unconditionally every step when
+    disabled, specifically so a previous step or build's gate can never
+    silently persist."""
 
     def __init__(self, diffusion_process: DiffusionProcess,
                  gate_enabled: bool = False, gate_train_low: float = 0.0,
@@ -355,19 +320,17 @@ class MonitoringPhase(StepPhase):
     either, and wrapping it would be circular (it needs to read
     timing_ms to build the report it would also be timed into).
 
-    **Extended, docs/optimizer_execution_redesign_plan.md Phase 0** --
-    two additions, both gated behind the same `profile` flag as the
-    existing vram_allocated_mb/vram_reserved_mb reporting, so this
-    doesn't change anything about a real (non-profiled) run:
+    Two additions beyond the base report, both gated behind the same
+    `profile` flag as the existing vram_allocated_mb/vram_reserved_mb
+    reporting, so this doesn't change anything about a real
+    (non-profiled) run:
 
     1. `optimizer_id` (from optimizer.handle.describe_optimizer(),
        computed once by the caller and passed in as a plain string --
        this class doesn't need the actual optimizer object) is included
-       in every report/print line. Directly closes the "It was Foreach
-       or Composed" ambiguity that cost real time mid-investigation --
-       which concrete implementation produced a given number is now
-       part of the number's own record, not something to reconstruct
-       from separate console scrollback.
+       in every report/print line, so which concrete optimizer
+       implementation produced a given number is part of the number's
+       own record.
     2. Baseline deltas for reserved_mb and num_alloc_retries, captured
        on this instance's first profiled step and diffed against every
        report after. A single snapshot line can't distinguish "stable
@@ -451,8 +414,8 @@ class MonitoringPhase(StepPhase):
                 retries_delta = mem["num_alloc_retries"] - base["num_alloc_retries"]
                 # allocated/reserved kept first, matching the original line's
                 # shape exactly (nothing that was already grepping this line
-                # for those two fields breaks); everything from Phase 0's
-                # richer memory_stats() appended after, not replacing it.
+                # for those two fields breaks); richer memory_stats() fields
+                # appended after, not replacing it.
                 vram_part = (
                     f" vram_allocated={mem['allocated_mb']:.0f}MB"
                     f" vram_reserved={mem['reserved_mb']:.0f}MB"

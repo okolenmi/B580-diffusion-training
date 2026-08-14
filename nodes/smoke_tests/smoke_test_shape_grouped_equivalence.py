@@ -7,14 +7,13 @@ Unlike smoke_test_foreach_strategy_equivalence.py, this is NOT a bit-exact
 (torch.equal()) check -- ShapeGroupedBatchStrategy genuinely restructures
 CAMEAlgorithm's math (adds a batch axis to every reduction, replaces the
 host-sync clip with a device-tensor torch.clamp()), so a small amount of
-floating-point reduction-order difference is expected and was already
-found, precisely, in a numpy pre-check (see algorithms/came.py's
-compute_update_batched docstring: ~7e-7 max relative difference). This
-test checks the same thing with real torch tensors on real hardware
-instead of numpy standing in for them -- torch.allclose() with a
-tolerance sized to that same expectation (not loosened further to make a
-real divergence pass silently, and not tightened to demand bit-exactness
-this restructuring was never expected to have).
+floating-point reduction-order difference is expected (summing k members'
+worth of numbers in a different order than k separate per-member sums
+isn't guaranteed bit-identical). This test checks that difference stays
+within a tolerance sized to that expectation using real torch tensors on
+real hardware, not loosened further to make a real divergence pass
+silently, and not tightened to demand bit-exactness this restructuring
+was never expected to have.
 
 Three things this specifically needs to prove, each with its own case
 below:

@@ -1,63 +1,28 @@
 """Algorithm: pure per-parameter update math.
 
 Knows the shape of persistent state a single parameter needs, and how to
-turn a gradient + that state into an update -- nothing else. In particular:
-no knowledge of GPU memory management, scratch buffers, torch._foreach_*
-vectorization, or backward hooks. That separation is the entire point: it's
-what turns "run algorithm X under execution strategy Y" into a composition
-of two independently-written, independently-testable pieces instead of an
-M-algorithms x N-strategies grid of hand-written classes (which is what
-core/optimizers.py's ChunkedXPUAdafactor/ChunkedXPUCAME/ForeachXPUAdafactor/
-FusedXPUAdafactor actually are, on inspection -- 2 algorithms x up to 3
-memory strategies, hand-crossed, with CAME only getting 1 of the 3 possible
-strategies because writing each combination by hand is expensive). See
-docs/nodes_package_design.md's "Algorithm/ExecutionStrategy separation"
-section for the full reasoning.
+turn a gradient + that state into an update -- nothing else. In
+particular: no knowledge of GPU memory management, scratch buffers,
+torch._foreach_* vectorization, or backward hooks. That separation is
+what turns "run algorithm X under execution strategy Y" into a
+composition of two independently-written, independently-testable pieces
+instead of an M-algorithms x N-strategies grid of hand-written classes.
 
-**Correction, made after actually reading `FusedXPUAdafactor._update_param`
-directly for later work in this package (see
-docs/nodes_package_design.md's "Fifth data point" section):** an earlier
-version of this docstring characterized that class's `TINY_NUMEL`
-small-parameter special case as a batching/storage concern, not an
-algorithm one. That's not quite right -- it swaps in a genuinely different
-*formula* for small parameters (exact elementwise second-moment tracking,
-not the row/col factored approximation), not merely a different memory
-layout for the same computation. Left uncorrected here would mean this
-docstring assumes something about that trick's category which turned out
-to be false; the accurate version is: extending `AdafactorAlgorithm` to
-add that branch would be real algorithm-engineering work, not a strategy
-concern -- not yet done, see the design doc section above for why.
-
-**Revised design decision (this contract was extended once already --
-here's why, stated precisely):** an earlier version of this docstring
-said lr was deliberately unknown to Algorithm, with an ExecutionStrategy
-applying `param -= lr * update` uniformly. That held for CAME, but broke
-down for real when `AdafactorAlgorithm` was built: Adafactor's
+compute_update() takes `param` (read-only) and `lr`, and returns
+`(delta, decay)`: `delta` is the final, already-lr-scaled amount to
+subtract, and `decay` is either `None` or a multiplicative factor an
+ExecutionStrategy applies to `param.data` *before* subtracting `delta`
+(decoupled weight decay, or anything else that rescales the parameter's
+current value rather than adding to it). `Algorithm` itself never
+mutates `param` directly -- `decay` describes what to do, an
+ExecutionStrategy is what does it -- keeping "pure math, `state` is the
+only thing mutated in place" intact even though `param` is visible.
+`param`/`lr` are both needed by real algorithms: Adafactor's
 `scale_parameter` mode computes its effective step size from
-`clamp(param_rms**2, min) * lr` -- genuinely dependent on both `lr` and
-the *live parameter's own current magnitude* -- and its weight decay
-(`p *= 1 - wd*alpha_t`) is a *multiplicative* rescale of the live
-parameter, coupled to that same `alpha_t`, which no additive delta could
-express regardless of what `compute_update()` receives as input.
-
-So `compute_update()` now receives `param` (read-only access to the
-parameter's current value) and `lr`, and returns `(delta, decay)`:
-`delta` is the final, already-lr-scaled amount to subtract, and `decay`
-is either `None` or a multiplicative factor an ExecutionStrategy applies
-to `param.data` *before* subtracting `delta` -- matching the order every
-legacy optimizer in `core/optimizers.py` actually uses (decay first,
-then the additive step). `Algorithm` itself never mutates `param` --
-`decay` is a description of what to do, not an action taken directly --
-keeping the "pure math, `state` is the only thing mutated in place"
-property intact even though `param` is now visible to it.
-
-This is a genuine, load-bearing generalization, not a speculative one:
-`CAMEAlgorithm` didn't strictly need `param`/`lr`/`decay` for its own
-update math, but folding `lr` into its own return value and adding
-`weight_decay` support through the exact same `decay` mechanism was
-close to free once the contract existed -- real, working feature parity
-CAME's port didn't have before (see `algorithms/came.py`). One universal
-contract, not a special case bolted on for Adafactor alone.
+`clamp(param_rms**2, min) * lr`, genuinely dependent on both `lr` and the
+live parameter's own current magnitude, and its weight decay
+(`p *= 1 - wd*alpha_t`) is a multiplicative rescale no additive delta
+alone could express.
 """
 
 from __future__ import annotations
@@ -130,19 +95,14 @@ class Algorithm(ABC):
         that wants to restructure its *own* internal computation (e.g.
         writing successive intermediates into the same buffer rather than
         allocating a fresh tensor per intermediate step) to reduce peak
-        memory further. See docs/nodes_package_design.md's follow-up notes
-        on this distinction, and this session's earlier, carefully-verified
-        buffer-reuse fix in core/optimizers.py's ChunkedXPUCAME for what
-        real in-place restructuring looks like when done correctly.
+        memory further.
         """
 
     def compute_update_batched(self, grad_stack, params: list, states: list[dict],
                                 lr: float):
-        """docs/optimizer_execution_redesign_plan.md Phase 2. Same contract
-        as compute_update(), but for a *group* of k parameters that share
-        an identical shape (and, critically, an identical lr -- see
-        ShapeGroupedBatchStrategy's grouping key for why that matters,
-        not just shape): `grad_stack` is `(k, *shape)`, `params`/`states`
+        """Same contract as compute_update(), but for a *group* of k
+        parameters that share an identical shape (and, critically, an
+        identical lr): `grad_stack` is `(k, *shape)`, `params`/`states`
         are length-k lists (states NOT pre-stacked -- exactly how state is
         laid out for batched math is algorithm-specific, so an override is
         responsible for its own stacking; see algorithms/came.py's
@@ -156,21 +116,15 @@ class Algorithm(ABC):
         by construction whenever wd/lr are the algorithm-level and
         group-level constants they currently are for every Algorithm this
         contract has; an Algorithm whose decay genuinely varied per group
-        member would need this contract extended again, the same way `lr`
-        already was once -- see this module's own docstring for that
-        precedent).
+        member would need this contract extended again).
 
         Default implementation: loops calling compute_update() once per
         group member and stacks the results -- correct for *any*
         Algorithm satisfying the base contract, just without the actual
-        batching speedup. This is what makes ShapeGroupedBatchStrategy
-        usable with an Algorithm that hasn't written a real batched
-        override yet (Adafactor, AdamW, as of this writing -- Phase 5) --
-        it still produces correct results, just at SimpleLoopStrategy's
-        existing per-member cost. Override this (as CAMEAlgorithm does)
-        only once real multi-tensor batched math for that algorithm has
-        been written and numerically verified -- see
-        algorithms/came.py's own override and its verification notes."""
+        batching speedup. Override this (as CAMEAlgorithm does) only once
+        real multi-tensor batched math for that algorithm has been
+        written and numerically verified -- see algorithms/came.py's own
+        override."""
         deltas = []
         decay = None
         for i in range(grad_stack.shape[0]):

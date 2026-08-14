@@ -1,22 +1,17 @@
-"""SupervisedLoRATrainerNode: v1 training loop for the dataset -> LoRA case.
+"""SupervisedLoRATrainerNode: training loop for the dataset -> LoRA case.
 
-Scope, explicit -- deliberately deferred, not forgotten (see
-docs/nodes_package_design.md's TrainerNode section for the running list):
-single conditioning pass per batch (no CFG cond/uncond dual pass), no
-gradient accumulation, no cyclic/teacher-rollout caching, no DAgger, no
-adversarial pre-conditioning, no timestep gating, no resume/checkpoint
-cadence (use `on_step` for that). Assumes the dataset's stored `target` is
+Scope, explicit: single conditioning pass per batch (no CFG cond/uncond
+dual pass), no gradient accumulation, no cyclic/teacher-rollout caching,
+no DAgger, no adversarial pre-conditioning, no resume/checkpoint cadence
+(use `on_step` for that). Assumes the dataset's stored `target` is
 already in the student's own prediction parameterization -- no
 teacher/student eps<->vpred conversion at train time.
 
-The step itself is a TrainingStepPipeline (nodes/train/step_pipeline.py,
-docs/training_pipeline_design.md section 2.1) -- build() constructs the
-phase list once per run; a future change (CFG dual-pass, gradient
-accumulation) is "construct one more phase, insert it in the list", not
-"edit the method that does everything" (see step_pipeline.py's own
-docstring for the full reasoning, including why the profile=True output
-shape genuinely changes here, checked against every real consumer in this
-codebase first).
+The step itself is a TrainingStepPipeline (nodes/train/step_pipeline.py)
+-- build() constructs the phase list once per run; a future change (CFG
+dual-pass, gradient accumulation) is "construct one more phase, insert it
+in the list", not "edit the method that does everything" (see
+step_pipeline.py's own docstring).
 """
 
 from __future__ import annotations
@@ -54,10 +49,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
         ),
         "gate_enabled": Port(
             name="gate_enabled", type=bool, required=False, default=False,
-            doc="docs/optimizer_execution_redesign_plan.md Phase 8. Off by default -- "
-                "matches core/config_model.py's own documented default for the legacy "
-                "pipeline's equivalent setting exactly ('LoRA applies uniformly across all "
-                "timesteps'). When True, keeps the LoRA's contribution close to the frozen "
+            doc="Off by default -- LoRA applies uniformly across all "
+                "timesteps. When True, keeps the LoRA's contribution close to the frozen "
                 "base at timesteps outside [gate_train_low, gate_train_high] instead of "
                 "applying the learned delta at full strength everywhere, including "
                 "timesteps the dataset never actually supervised. Set gate_train_low/"
@@ -99,8 +92,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "growing over many steps is a real, live reference leak; reserved growing "
                 "while allocated stays flat is just the caching allocator's own bookkeeping, "
                 "not necessarily a leak (see nodes/components/device.py's "
-                "DeviceContext.memory_stats -- as of docs/optimizer_execution_redesign_plan.md "
-                "Phase 0, also reports vram_peak_reserved_mb/vram_peak_allocated_mb, "
+                "DeviceContext.memory_stats -- also reports vram_peak_reserved_mb/"
+                "vram_peak_allocated_mb, "
                 "vram_active_mb/vram_requested_mb (the fragmentation/rounding overhead as "
                 "direct numbers, not an inference from the allocated/reserved gap alone), "
                 "vram_num_alloc_retries (the strongest single fragmentation signal -- a real "
@@ -166,14 +159,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
         is_fused = isinstance(optimizer, FusedOptimizerHandle)
         device_ctx = DeviceContext.for_device(device)
 
-        # docs/optimizer_execution_redesign_plan.md Phase 0 -- three
-        # one-time, unconditional (not gated behind `profile`) prints,
-        # cheap and directly answering questions that cost real
-        # back-and-forth to answer by hand last round: which concrete
-        # optimizer is this run actually using, is an allocator-config
-        # env var actually being read, and does this run's real LoRA
-        # shape distribution make Phase 2's shape-grouped batching worth
-        # building at all.
+        # Three one-time, unconditional (not gated behind `profile`)
+        # prints, cheap and directly answering: which concrete optimizer
+        # is this run actually using, is an allocator-config env var
+        # actually being read, and does this run's real LoRA shape
+        # distribution have enough same-shape parameter groups for
+        # shape-based batching to be worth using.
         optimizer_id = describe_optimizer(optimizer)
         print(f"[SupervisedLoRATrainerNode] optimizer: {optimizer_id}")
         print(f"[SupervisedLoRATrainerNode] allocator config env: {allocator_conf_env()}")
@@ -183,12 +174,11 @@ class SupervisedLoRATrainerNode(TrainerNode):
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
 
         # Registered for profile=True's tracked_footprint_mb cross-check
-        # (nodes/train/step_pipeline.py's MonitoringPhase) -- not (yet)
-        # driving any offload decisions itself. See
-        # nodes/memory/coordinator.py's OffloadOrchestrator for that half
-        # of backlog item 12, not wired in here: nothing in
-        # SupervisedLoRATrainerNode v1's own documented scope publishes a
-        # TrainingLifecycleEvent for it to react to yet.
+        # (nodes/train/step_pipeline.py's MonitoringPhase) -- not driving
+        # any offload decisions itself here. See
+        # nodes/memory/coordinator.py's OffloadOrchestrator for that;
+        # nothing here publishes a TrainingLifecycleEvent for it to react
+        # to yet.
         coordinator = ResourceCoordinator()
         coordinator.register("model", model)
         coordinator.register("optimizer", optimizer)
@@ -243,11 +233,9 @@ class SupervisedLoRATrainerNode(TrainerNode):
 
 def _log_shape_histogram(params) -> None:
     """One-time, unconditional -- cheap (a handful of ops over at most a
-    few hundred small tensors), and directly answers the question
-    docs/optimizer_execution_redesign_plan.md's Phase 0 needs before
-    Phase 2's shape-grouped batching is worth building: does this run's
-    actual LoRA configuration have enough same-shape parameter groups
-    for exact-shape grouping to pay off, or is it closer to the
+    few hundred small tensors), and directly answers whether this run's
+    actual LoRA configuration has enough same-shape parameter groups for
+    exact-shape-grouped batching to pay off, or is closer to the
     pathological all-unique-shapes case where it wouldn't help at all.
     Reports against the real, built graph's real parameters -- not a
     hand-approximated config -- so this number is trustworthy without

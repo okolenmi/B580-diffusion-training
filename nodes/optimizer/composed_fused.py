@@ -22,25 +22,18 @@ uses. What's actually new here is small and specific to the hook-driven
 execution model: hook registration/teardown, and the multi-pass
 ("sub_steps") accumulation state machine below.
 
-Confirmed algorithm-agnostic by construction (not just asserted): the
-same class drives CAMEAlgorithm, AdafactorAlgorithm, and AdamWAlgorithm
-in composed_fused_came.py/composed_fused_adafactor.py/composed_fused_adamw.py,
-no algorithm-specific code anywhere in this file. See
-docs/nodes_package_design.md's "Fifth data point" section for the
-equivalence writeup (against core.optimizers.FusedXPUAdafactor, the one
-legacy fused class that exists) and one deliberate, documented divergence
-from it: FusedXPUAdafactor's TINY_NUMEL special case (a real formula
-change for small parameters -- full elementwise second-moment tracking
-instead of the row/col factored approximation, not merely a storage
-optimization, confirmed by reading it directly) is Adafactor-specific
-algorithm work, not a fused-execution concern, and isn't replicated here
--- this handle always uses whatever formula the Algorithm it's given
-computes, same as every other composed node.
+Algorithm-agnostic by construction: the same class drives CAMEAlgorithm,
+AdafactorAlgorithm, and AdamWAlgorithm in
+composed_fused_came.py/composed_fused_adafactor.py/composed_fused_adamw.py,
+no algorithm-specific code anywhere in this file. One behavioral
+divergence worth knowing: the legacy FusedXPUAdafactor has a
+TINY_NUMEL special case for small parameters (full elementwise
+second-moment tracking instead of the row/col factored approximation) --
+that's Adafactor-specific algorithm work, not a fused-execution concern,
+and isn't replicated here. This handle always uses whatever formula the
+Algorithm it's given computes.
 
-**The multi-pass state machine, freshly derived, not copied** (matched to
-FusedXPUAdafactor's real behavior by reading it, then re-derived from
-what the *contract* actually requires -- see the simplification note on
-`algorithm.begin_step()` below): `begin_step(sub_steps)` starts a new
+**The multi-pass state machine.** `begin_step(sub_steps)` starts a new
 logical optimizer step that will span exactly `sub_steps` backward()
 calls (>1 for this codebase's conditional+unconditional distillation
 pair). Gradients accumulate via autograd's own default add-into-`.grad`
@@ -51,23 +44,15 @@ it actually read `.grad` and apply an update -- earlier passes return
 immediately, leaving `.grad` untouched for autograd to keep accumulating
 into. `prepare_next_pass()` must be called between each backward() call
 within one logical step so the next pass's first-hook-firing is detected
-correctly (mirrors the legacy contract exactly, confirmed against
-FusedOptimizerHandle's own docstring).
+correctly.
 
-**One real simplification found while re-deriving this, not carried over
-from the legacy version:** FusedXPUAdafactor advances its own `t`/`rho_t`
-lazily, inside the hook, on the first hook-firing of the last pass --
-because at construction/begin_step() time it doesn't yet know which
-parameter's hook will fire first. That workaround isn't needed here:
-`Algorithm.begin_step()` is a lifecycle hook already designed to be
-called exactly once per logical step by whatever's driving it (see
+`Algorithm.begin_step()` is a lifecycle hook designed to be called
+exactly once per logical step by whatever's driving it (see
 algorithms/base.py) -- and `begin_step(sub_steps)` below *is* called
 exactly once per logical step, by contract, before any of that step's
 backward() calls happen. So it just calls `self.algorithm.begin_step(1)`
-directly, synchronously, right there -- simpler, and provably equivalent
-(same call count, same timing relative to the parameters' own updates)
-without needing to track "was this the first hook firing" for that
-specific purpose.
+directly, synchronously, right there, without needing to track "was this
+the first hook firing" separately.
 """
 
 from __future__ import annotations

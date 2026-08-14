@@ -30,12 +30,7 @@ class OptimizerNode(Node):
     subclasses build their own INPUTS as {**COMMON_INPUTS, <their own
     extra hyperparameter ports>}, so the shared ports are declared once
     and each subclass only has to write down what's actually different
-    about it -- exactly the reduction in duplication the intermediate
-    layer is supposed to provide, applied to *interface declarations*
-    rather than *lifecycle method bodies* (contrast with the earlier,
-    reverted attempt to share lifecycle *implementations* directly on
-    core/optimizers.py's classes -- see docs/nodes_package_design.md for
-    why that approach was abandoned in favor of this one).
+    about it.
     """
 
     OUTPUTS: ClassVar[dict[str, Port]] = {

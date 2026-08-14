@@ -4,8 +4,7 @@ Deliberately separate from OptimizerNode (nodes/optimizer/node.py). A Node
 represents a *construction* step in the graph (config in, object out); a
 Handle is the actual runtime object that construction produces, used later
 during real training -- different concern, different lifetime, so it gets
-its own interface rather than being folded into the Node itself. See
-docs/nodes_package_design.md, "Runtime Handle ABCs".
+its own interface rather than being folded into the Node itself.
 
 Every method here corresponds to something this codebase's training loop
 (core/train_step.py, core/trainer.py) actually calls on an optimizer today
@@ -123,12 +122,9 @@ class FusedOptimizerHandle(OptimizerHandle):
     begin_step before backward, prepare_next_pass between accumulated
     passes), not anything about which algorithm's math runs inside the
     hook. A future fused implementation of a different algorithm (CAME,
-    say) could satisfy this same contract -- see
-    docs/nodes_package_design.md's "Fused optimizer family" section for
-    why that's a real possibility this interface doesn't foreclose, but
-    also for why it's a substantial new algorithm-engineering task in
-    core/optimizers.py, not something this adapter layer unlocks by
-    itself.
+    say) could satisfy this same contract -- a substantial new
+    algorithm-engineering task in core/optimizers.py, not something this
+    adapter layer unlocks by itself.
     """
 
     @abstractmethod
@@ -146,12 +142,9 @@ class FusedOptimizerHandle(OptimizerHandle):
 def describe_optimizer(handle: OptimizerHandle) -> str:
     """Human-readable identity for a constructed optimizer -- which
     concrete implementation is actually running, not just "CAME
-    optimizer". Written because "It was Foreach or Composed" turned out
-    to be a real, costly ambiguity mid-investigation (see
-    docs/optimizer_execution_redesign_plan.md) -- this makes it
-    unambiguous and durable (part of the profile report every step, not
-    a construction-time console print someone has to have kept
-    scrollback for).
+    optimizer". Part of the profile report every step, not a
+    construction-time console print someone has to have kept scrollback
+    for.
 
     Generic over both families: legacy (core.optimizers-backed) handles
     already have a distinct class per concrete implementation --

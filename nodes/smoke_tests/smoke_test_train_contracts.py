@@ -2,8 +2,7 @@
 TrainerNode) plus the model domain's TextEncoderNode. Pure Python, no
 torch/hardware needed -- verifies declarations and the pure-math strategy
 classes, not the actual step loop (SupervisedLoRATrainerNode.build()
-needs real torch tensors and a real model; see the "Not yet verified"
-note in docs/nodes_package_design.md's TrainerNode section)."""
+needs real torch tensors and a real model)."""
 
 import inspect
 import sys

@@ -1,47 +1,30 @@
 """ChunkedScratchBufferStrategy: shares one scratch buffer across parameters.
 
-Implements one specific, honest slice of memory optimization -- see
-docs/nodes_package_design.md's follow-up notes for the two-axis
-distinction this is built around: reusing *one* buffer across *different
-parameters* (this strategy) vs. an Algorithm reusing a buffer for its *own
-internal* sequential intermediates (a separate, Algorithm-specific
-concern -- see algorithms/base.py's compute_update() docstring and
-algorithms/came.py's current honest non-implementation of it).
+One specific, honest slice of memory optimization: reusing *one* buffer
+across *different parameters* (this strategy) vs. an Algorithm reusing a
+buffer for its *own internal* sequential intermediates (a separate,
+Algorithm-specific concern -- see algorithms/base.py's compute_update()
+docstring).
 
 What this strategy actually saves: without it, `p.grad.detach().float()`
 allocates a fresh tensor for every parameter, every step. With it, one
 buffer sized to the largest managed parameter is reused (via `.copy_()`,
 an in-place write) for every parameter's gradient in turn, within one
-step() call -- AND, since the buffer now lives in a
+step() call -- AND, since the buffer lives in a
 nodes.memory.manager.MemoryManager instead of a plain torch.empty() call
 made fresh each time, it's reused *across* step() calls too (allocated
 once, then only regrown if a later step's largest parameter is bigger
 than what's already held).
 
 Routing the buffer through MemoryManager instead of managing it as a raw
-attribute here is a deliberate choice, not just "use the new utility
-class because it exists": the reset-vs-free asymmetry bug found in
-core/optimizers.py's legacy classes (`_scratch`/`_pool` cleared in
-free_states() but not reset_states() in some classes -- see
-docs/nodes_package_design.md's "Course correction" section) is exactly
-the class of bug a hand-rolled `self._scratch` attribute here would be
-one careless edit away from reintroducing. Centralizing acquire/release/
-free through one reviewed class means there's exactly one place that
-logic can go wrong, not N ad hoc copies of it -- see
-nodes/memory/manager.py's module docstring for the full reasoning.
+attribute here avoids the reset-vs-free asymmetry bug class MemoryManager
+itself exists to prevent -- see nodes/memory/manager.py's module
+docstring.
 
-What this strategy does NOT do yet, deliberately not silently skipped:
-  - `torch.xpu.MemPool` integration exists now (opt-in -- see
-    `__init__` and `nodes/memory/manager.py`'s module docstring for
-    real, documented tradeoffs), but is not enabled by default and not
-    yet confirmed on real XPU hardware by anyone.
-  - Passes its buffer to Algorithm.compute_update()'s `scratch` parameter,
-    but no Algorithm implemented so far (CAMEAlgorithm included) actually
-    uses it for its own internal intermediates yet -- so the *sole*
-    memory saving from this strategy right now is the gradient-cast
-    reuse described above (now also cached across steps), not the deeper
-    savings the legacy verified fix achieved. Real, but partial, stated
-    precisely rather than implied to be the full picture.
+What this strategy passes its buffer to Algorithm.compute_update()'s
+`scratch` parameter, but whether a given Algorithm actually uses that for
+its own internal intermediates is up to the Algorithm -- see each
+Algorithm's own module docstring for whether it does.
 """
 
 from __future__ import annotations

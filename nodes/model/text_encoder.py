@@ -1,12 +1,6 @@
 """TextEncoderNode: builds a text encoder from checkpoint weights (SDXL dual CLIP).
 
-TextEncoder extends DeviceResident (nodes/memory/handle.py,
-docs/training_pipeline_design.md section 1.2) as of backlog item 12 --
-the last conformance gap item 3/9 left open (TrainableModel's landed in
-item 9; TextEncoder wasn't blocked on anything, just not itemized until
-ResourceCoordinator/OffloadOrchestrator (5.1/5.2) actually needed a
-second real DeviceResident besides the model to coordinate anything
-meaningful)."""
+TextEncoder extends DeviceResident (nodes/memory/handle.py)."""
 
 from __future__ import annotations
 

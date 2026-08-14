@@ -1,99 +1,44 @@
 """CAMEAlgorithm: pure per-parameter CAME update math.
 
-Algorithm faithfully follows the official reference implementation
-(github.com/yangluo7/CAME, came_pytorch/CAME.py) -- Luo et al., "CAME:
-Confidence-guided Adaptive Memory Efficient Optimization", ACL 2023. This
-is a fresh, from-scratch reimplementation (not a wrapper around
-core.optimizers.ChunkedXPUCAME) -- its formulas were re-verified
-numerically against the reference before writing torch code here, since
-restructuring math into a new pure-function shape is exactly the kind of
-change that can silently alter behavior if done carelessly.
+Reference: Luo et al., "CAME: Confidence-guided Adaptive Memory Efficient
+Optimization" (ACL 2023), github.com/yangluo7/CAME. A fresh
+reimplementation, not a wrapper around core.optimizers.ChunkedXPUCAME.
 
-Verification result, stated precisely rather than just "verified" -- this
-implementation adds eps1 *after* each sqrt() (e.g. `r_sqrt = state["r"].
-sqrt().add(eps1)`) as a denominator-safety term the bare reference formula
-(`1/sqrt(r/r.mean())`, no epsilon there at all) doesn't have. Checked this
-is the actual, sole source of divergence and that it's bounded rather than
-compounding: over 15 steps with realistic gradient magnitudes, absolute
-difference from the reference is ~1e-8, relative difference ~4e-10 --
-jumps once from float64-noise level (~1e-14) at step 0 to this plateau,
-then stays flat rather than growing across further steps. Both far below
-fp32 precision (~1e-7 relative), the precision this actually runs at.
-Same eps-after-sqrt pattern was already used in this session's earlier
-ChunkedXPUCAME work and found similarly harmless there. Verified both the
-factored (2D+) and non-factored (1D, no confidence term applied -- matches
-the reference's own non-factored branch, which uses momentum directly)
-code paths.
+Deliberate deviation from the bare reference formula: this implementation
+adds `eps1` after each `sqrt()` (e.g. `r_sqrt = state["r"].sqrt().add(eps1)`)
+as a denominator-safety term the reference (`1/sqrt(r/r.mean())`, no
+epsilon) doesn't have -- a bounded, non-compounding numerical-safety
+addition, not a formula change.
 
-Deliberately contains NO GPU memory management, scratch buffers, or
-batching logic of any kind -- see algorithms/base.py's module docstring
-for why. Any ExecutionStrategy drives this class one parameter at a time.
-
-**Weight decay added along with the base.py contract extension** (see
-that module's docstring for the full reasoning -- this was built for
-Adafactor's `scale_parameter`, and CAME's own weight decay came along for
-free once `lr`/`param`/the `decay` return value existed). Matches the
+Contains no GPU memory management, scratch buffers, or batching logic --
+see algorithms/base.py's module docstring for why. Any ExecutionStrategy
+drives this class one parameter at a time. Weight decay matches the
 reference's own decoupled decay exactly: `p *= 1 - wd*lr`, applied via
-the generic `decay` mechanism rather than anything CAME-specific -- no
-strategy code needed to know CAME has weight decay at all. Verified
-directly against `core.optimizers.ChunkedXPUCAME` (real torch, not the
-external-reference numpy comparison this class's core formulas were
-originally checked against): float32 matches to ~4e-6 max abs diff over
-40 steps (with or without weight decay -- confirmed identical, so decay
-adds no extra error). bf16 shows a larger, but bounded and
-mildly-growing (not exploding) divergence -- ~3.9e-3 at step 0 growing
-to ~4.7e-2 by step 40 -- present identically with weight_decay=0, so
-unrelated to this addition; likely from CAME's own longer chain of
-sqrt/divide operations (r/c *and* rr/rc, vs. Adafactor's single
-vr/vc) compounding bf16 rounding more per step. Not chased further this
-session -- real, but this is the first time this class was compared
-against the legacy reference with actual bf16 tensors rather than a
-numpy mock, so it's a new data point rather than a regression.
+the generic `decay` return value rather than anything CAME-specific.
 
-**In-place scratch reuse (axis 2), added this round -- gated carefully,
-not attempted unconditionally.** `compute_update()` now has two code
-paths per branch (factored/non-factored): the original, always-safe
-out-of-place formulas (unchanged, used whenever `scratch is None`), and
-a new in-place-restructured version (used only when `scratch is not
-None`) that mirrors `core/optimizers.py`'s `ChunkedXPUCAME.step()`
-exactly -- reusing the same buffer in sequence for the normalized
-gradient, then (once momentum has already consumed its value) for the
-confidence term `res`, then (once the row/col reduction has already
-consumed *its* value) for the final `update` -- eliminating the same two
-full-parameter-sized allocations per step that class's own history
-(`docs/suspicious_findings.md`'s "CAME optimizer VRAM near-ceiling hang"
-entry) already proved matter.
+`compute_update()` has two code paths per branch (factored/non-factored):
+the original out-of-place formulas (used whenever `scratch is None`), and
+an in-place-restructured version (used only when `scratch is not None`)
+that reuses the same buffer in sequence for the normalized gradient, then
+the confidence term `res`, then the final `update`.
 
 **Why the gate is on `scratch`, not just "is a strategy that provides
-one" -- a real aliasing hazard found and checked, not assumed away.**
-`SimpleLoopStrategy` never passes `scratch`, and for good reason,
-confirmed directly: its `grad = p.grad.detach().float()` returns the
-*same tensor* as `p.grad` itself whenever a parameter's own dtype is
-already `float32` (`.float()` is a no-op cast that returns `self` when
-the dtype already matches -- the identical mechanism behind the
-`ChunkedXPUAdafactor` momentum-aliasing finding in
-`algorithms/adafactor.py`'s docstring, checked again here rather than
-assumed to be a one-off). Mutating `grad` in place under
-`SimpleLoopStrategy` would silently corrupt `p.grad` for any float32
-parameter -- confirmed with a direct repro before writing a single line
-of the in-place path. `ChunkedScratchBufferStrategy`, by contrast,
-always populates its buffer via `grad_view.copy_(p.grad.detach())`
-first -- a real copy, never aliased with `p.grad` -- so `scratch is not
-None` is a reliable signal that the passed `grad` is safe to mutate.
-Every current caller passes `scratch is grad` (the same object) --
-this class relies on that specifically, noted here so it's not a silent
-assumption if a future caller ever passes a distinct scratch buffer.
+one".** `SimpleLoopStrategy` never passes `scratch`: its
+`grad = p.grad.detach().float()` returns the *same tensor* as `p.grad`
+itself whenever a parameter's own dtype is already `float32` (`.float()`
+is a no-op cast that returns `self` when the dtype already matches).
+Mutating `grad` in place under `SimpleLoopStrategy` would silently
+corrupt `p.grad` for any float32 parameter. `ChunkedScratchBufferStrategy`,
+by contrast, always populates its buffer via
+`grad_view.copy_(p.grad.detach())` first -- a real copy, never aliased
+with `p.grad` -- so `scratch is not None` is a reliable signal that the
+passed `grad` is safe to mutate. Every current caller passes
+`scratch is grad` (the same object) -- this class relies on that
+specifically.
 
-**Verification, precise rather than "looks right": the two code paths
-are expected to be, and were confirmed to be, bit-exact -- not just
-close.** Every in-place op (`.div_()`, `.mul_()`, `.sub_()`, `.copy_()`)
-performs the identical elementary floating-point operation, in the
-identical order, as its out-of-place counterpart in the original
-formula -- restructuring memory layout, not arithmetic. Verified by
-running `SimpleLoopStrategy` (old path) and `ChunkedScratchBufferStrategy`
-(new path) side by side from identical initial weights/gradients and
-diffing every step with `torch.equal()`, not a tolerance -- see
-`nodes/smoke_tests/smoke_test_composed_came.py`.
+See nodes/smoke_tests/smoke_test_composed_came.py for the equivalence
+verification (bit-exact comparison between the two code paths, and
+against core.optimizers.ChunkedXPUCAME).
 """
 
 from __future__ import annotations
@@ -137,9 +82,9 @@ class CAMEAlgorithm(Algorithm):
                 "rc": torch.zeros(cols, dtype=torch.float32, device=device),
             }
         # 1D (non-factored) case -- reference doesn't apply the confidence
-        # term here at all (verified earlier this session by reading the
-        # reference's non-factored branch directly: `update = exp_avg.
-        # clone()`), so no rr/rc state is needed for this shape.
+        # term here at all (its non-factored branch does
+        # `update = exp_avg.clone()`), so no rr/rc state is needed for
+        # this shape.
         return {
             "s": torch.zeros(param_shape, dtype=torch.float32, device=device),
             "ea": torch.zeros(param_shape, dtype=torch.float32, device=device),
@@ -289,27 +234,22 @@ class CAMEAlgorithm(Algorithm):
 
     def compute_update_batched(self, grad_stack, params: list, states: list[dict],
                                 lr: float):
-        """docs/optimizer_execution_redesign_plan.md Phase 2's real payoff:
-        the same math as _compute_update_safe's factored branch above,
+        """The same math as _compute_update_safe's factored branch above,
         with one leading group axis (k) threaded through every reduction,
         so a whole group of same-shape parameters costs a handful of
         kernel launches total instead of one full pass per member.
 
         Two deliberate departures from a literal transcription of
-        _compute_update_safe, both real restructuring choices, not
-        oversights:
+        _compute_update_safe:
 
         1. Only the factored (2D+) branch is batched. The 1D case falls
            back to the base class's per-member default (LoRA weight
-           matrices are 2D; this isn't the shape that matters here, and
-           writing a separate batched formula for it isn't worth the
-           extra surface to verify).
+           matrices are 2D; this isn't the shape that matters here).
         2. `clip_div` uses `torch.clamp(..., min=1.0)` (stays a device
            tensor, shape (k,)) instead of `max(float(rms/threshold), 1.0)`
            (forces a host sync). Numerically identical -- dividing by the
            same value whether it's a Python float or a device tensor of
-           that value -- confirmed in the numpy verification below rather
-           than assumed. This also removes the `if clip_div != 1.0:`
+           that value. This also removes the `if clip_div != 1.0:`
            skip-when-unclipped branch: dividing by exactly 1.0 changes
            nothing (`x/1.0 == x` exactly in IEEE float), so always
            dividing is safe and needed anyway once clip_div is a
@@ -321,31 +261,13 @@ class CAMEAlgorithm(Algorithm):
         depend on that generic shape and are otherwise untouched by this
         method). This method stacks fresh from each member's own tensors,
         computes, then scatters results back into those same tensors via
-        `.copy_()` -- one extra stack+scatter pass per group per step,
-        the real, accepted cost the plan doc already named ("one
-        allocation per group, not per parameter, still a large reduction
-        from today"), not a layout change to anything outside this
-        method's own body.
+        `.copy_()` -- one extra stack+scatter pass per group per step.
 
-        Verified (this sandbox has no torch, same limitation as every
-        session so far): transcribed this exact restructuring to numpy,
-        float32, and compared against a literal numpy transcription of
-        _compute_update_safe's factored branch -- group sizes 1/2/5/20,
-        multiple shapes (including a transposed one -- LoRA's "up"
-        matrices, not just "down"), 20-40 steps each so state evolution
-        staying synchronized is checked, not just one step's output.
-        Max relative difference ~7e-7 across every trial -- float32
-        reduction-order noise (summing k members' worth of numbers in a
-        different order than k separate per-member sums isn't guaranteed
-        bit-identical), not an algebraic error, and the same order of
-        magnitude this codebase's own existing verification already
-        tolerates (this file's own module docstring: ~4e-6 max abs diff
-        for the original CAMEAlgorithm-vs-ChunkedXPUCAME comparison).
-        This is NOT a substitute for the real bit-exact torch.equal()
-        check against a live CAMEAlgorithm on real hardware -- that still
-        needs to happen (see the new smoke test this ships with) -- it's
-        confirmation the restructuring is algebraically sound before that
-        check, not a replacement for it."""
+        See nodes/smoke_tests/smoke_test_shape_grouped_equivalence.py for
+        the numerical equivalence check against a per-member CAMEAlgorithm
+        (a tolerance-based comparison, not bit-exact -- restructuring the
+        reduction order is expected to introduce a small, bounded amount
+        of floating-point difference)."""
         import torch
         k = grad_stack.shape[0]
         decay = (1.0 - self.wd * lr) if self.wd != 0 else None

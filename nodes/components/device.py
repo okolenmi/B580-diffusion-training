@@ -1,19 +1,15 @@
 """DeviceContext: backend-specific device operations (empty_cache/synchronize/
-memory_stats), selected once via for_device() instead of core.comfy_setup's
-hasattr(torch, "xpu")/is_available() checks duplicated at every call site.
-See docs/training_pipeline_design.md section 1.5.
+memory_stats), selected once via for_device() instead of hasattr(torch,
+"xpu")/is_available() checks duplicated at every call site.
 
-**memory_stats() extended, docs/optimizer_execution_redesign_plan.md Phase
-0.** Previously just {'allocated_mb', 'reserved_mb'} -- enough to see *that*
-there's a reserved/allocated gap, nothing about *why*. torch.xpu.memory_stats()
-(confirmed real, documented -- docs.pytorch.org/docs/stable/generated/
-torch.xpu.memory.memory_stats.html -- mirrors torch.cuda's own allocator
+memory_stats() returns more than a plain {'allocated_mb', 'reserved_mb'}
+pair -- enough to see *that* there's a reserved/allocated gap, nothing
+about *why*. torch.xpu.memory_stats() (mirrors torch.cuda's own allocator
 stats dict key-for-key) exposes the actual allocator internals: segment
 count, active vs. reserved-but-inactive bytes, and critically
 num_alloc_retries -- a direct, unambiguous fragmentation signal (a failed
 allocation that forced a cache flush + retry), not an inference from a
-snapshot gap. All new keys are additive; every existing caller of the old
-two keys is unaffected.
+snapshot gap.
 """
 
 from __future__ import annotations
@@ -28,17 +24,15 @@ def allocator_conf_env() -> str:
     """Which allocator-config env var (if any) is actually set, checked in
     the order PyTorch itself resolves them (generalized name first, then
     the older per-backend/CUDA-specific names still supported for back
-    compat) -- see docs/optimizer_execution_redesign_plan.md Phase 1 for
-    why this specifically is being tested (PYTORCH_ALLOC_CONF is the
-    newer, backend-agnostic name; current PyTorch warns that
+    compat -- PYTORCH_ALLOC_CONF is the newer, backend-agnostic name;
     PYTORCH_CUDA_ALLOC_CONF is deprecated in its favor). Printed once per
     run so a person testing this env var gets direct confirmation it was
     actually read, in the same place as the numbers it's meant to
     affect, rather than needing to remember what they exported. Not
     underscore-prefixed -- deliberately part of this module's public
-    surface, reused directly by nodes/train/supervised.py's own
-    one-time startup prints rather than each call site re-implementing
-    the same env var precedence check."""
+    surface, reused directly by other one-time startup prints rather
+    than each call site re-implementing the same env var precedence
+    check."""
     for key in ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_XPU_ALLOC_CONF"):
         val = os.environ.get(key)
         if val:
@@ -131,18 +125,8 @@ class DeviceContext(ABC):
 
 
 class _XPUDeviceContext(DeviceContext):
-    """empty_cache/synchronize match core.comfy_setup.xpu_empty_cache/
-    xpu_synchronize exactly -- same hasattr(torch, "xpu") and
-    torch.xpu.is_available() guard, moved from free functions into one
-    object's methods. memory_stats() no longer matches
-    core.comfy_setup.xpu_memory_stats() (that one's still the original
-    two-key {allocated_mb, reserved_mb} version, and as of grepping this
-    codebase directly, isn't actually called from anywhere anymore --
-    left as-is, out of scope here, not on this project's current
-    nodes/-pipeline path); this class's own version is the one
-    SupervisedLoRATrainerNode's profile output actually uses, extended
-    per docs/optimizer_execution_redesign_plan.md Phase 0 -- see this
-    module's own top docstring."""
+    """empty_cache/synchronize use the same hasattr(torch, "xpu") and
+    torch.xpu.is_available() guard a correct XPU caller always needs."""
 
     def empty_cache(self) -> None:
         if hasattr(torch, "xpu") and torch.xpu.is_available():
@@ -160,10 +144,8 @@ class _XPUDeviceContext(DeviceContext):
 
 
 class _CUDADeviceContext(DeviceContext):
-    """Same three operations for CUDA. core.comfy_setup has no CUDA
-    equivalent (this project targets XPU) -- added here because
-    for_device() dispatches on the device string prefix and "cuda" is a
-    real, reachable one; not exercised by any current caller."""
+    """Same three operations for CUDA, reachable when for_device()
+    dispatches on a "cuda"-prefixed device string."""
 
     def empty_cache(self) -> None:
         if torch.cuda.is_available():

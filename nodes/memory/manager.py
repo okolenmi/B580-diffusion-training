@@ -1,37 +1,20 @@
 """MemoryManager: centralized, explicit device-buffer lifecycle.
 
-Motivation, stated precisely rather than "because centralizing memory is
-good practice" -- strategies/chunked.py's own module docstring already
-flagged two concrete gaps in its first version: the scratch buffer was
-allocated fresh on every step() call (no cross-step caching), and there
-was no torch.xpu.MemPool integration. Building a second ad hoc
-`self._scratch` attribute directly on that strategy to fix the first gap
-would have been exactly the kind of thing this package's design already
-rejected once: `docs/nodes_package_design.md`'s "Course correction"
-section documents a real reset-vs-free asymmetry bug
-(`_scratch`/`_pool` cleared in `free_states()` but not `reset_states()`
-in some of `core/optimizers.py`'s legacy classes) that came directly from
-several classes each hand-managing their own scratch-buffer attributes.
-That bug class isn't specific to the old code's shape -- any class that
-owns a cached buffer and exposes multiple lifecycle hooks (offload, free,
-reset) that each need to remember to touch it is one forgotten line away
-from the same mistake. Centralizing acquire/release/free through one
-reviewed class, used by anything that needs a reusable buffer, means
-there's exactly one place this can go wrong, not N ad hoc copies of it.
+Motivation: any class that owns a cached buffer and exposes multiple
+lifecycle hooks (offload, free, reset) that each need to remember to
+touch it is one forgotten line away from a reset-vs-free asymmetry bug
+(a buffer cleared in one lifecycle method but not another). Centralizing
+acquire/release/free through one reviewed class, used by anything that
+needs a reusable buffer, means there's exactly one place this can go
+wrong, not N ad hoc copies of it.
 
-Deliberately a plain, explicit, injectable object -- NOT a global
-singleton or module-level dict. Anything that wants shared buffers (e.g.
-multiple ExecutionStrategy instances working on the same OptimizerHandle,
-or -- looking ahead -- a future non-optimizer node domain, such as the
-preview-generation VRAM growth tracked in docs/suspicious_findings.md)
-constructs one instance and passes it around, exactly like Algorithm and
-ExecutionStrategy are already passed around explicitly rather than looked
-up implicitly. Domain-independent on purpose: lives next to nodes/core.py,
-not under nodes/optimizer/, so nothing about it is optimizer-specific.
+Deliberately a plain, explicit, injectable object -- not a global
+singleton or module-level dict. Anything that wants shared buffers
+constructs one instance and passes it around. Domain-independent on
+purpose: lives next to core.py, not under any single domain package.
 
-Three distinct operations, kept separate on purpose (collapsing them into
-one method is exactly the kind of shortcut that produces the asymmetry
-bug class described above):
+Three distinct operations, kept separate on purpose (collapsing them
+into one method reintroduces the asymmetry-bug class above):
   - get_buffer(): acquire-or-reuse a named buffer, marks it in-use.
   - release(): mark a buffer no longer needed *this call*, but keep the
     underlying allocation around for next time -- the cheap, common path
@@ -47,56 +30,12 @@ free it, on purpose, so behavior stays predictable rather than depending
 on runtime memory conditions. No cross-process or cross-device-transfer
 support.
 
-**torch.xpu.MemPool integration, added this round -- opt-in, stated
-precisely rather than assumed safe.** `get_buffer()`'s single
-`torch.empty()` call was always documented as the seam this would wrap
-through later; `MemoryManager(use_mempool=True)` now does that, routing
-every allocation for XPU-device tags through a per-device
-`torch.xpu.MemPool()` via `torch.xpu.use_mem_pool()`, confirmed against
-PyTorch's actual source (`torch/xpu/memory.py`) rather than assumed --
-`torch.xpu.MemPool(allocator=None, use_on_oom=False)` and
-`torch.xpu.use_mem_pool(pool, device=None)` are the real, current
-signatures.
-
-**Correction, made after the fact -- both of the tradeoffs originally
-cited here were mischaracterized, caught by the user, re-checked, and
-fixed rather than left wrong:**
-
-- `pytorch/pytorch#161193` (nesting two `use_mem_pool` contexts) was
-  cited as "currently open." Wrong -- it's closed, and its fix landed in
-  `CUDACachingAllocator.cpp`, CUDA-specific code. Re-checked directly:
-  the issue page shows "Closed" and is tagged `module: cuda`. No
-  evidence found (in PyTorch's or Intel's own `torch-xpu-ops` issue
-  tracker) that XPU's separate allocator implementation ever had or has
-  the same bug. Still not this class's usage pattern either way (each
-  `get_buffer()` call enters and exits its own context around one
-  `torch.empty()`, never nested).
-- `pytorch/pytorch#159674` (OOM-retry skipped inside `use_mem_pool`) is
-  genuinely still open, but was presented here as a general MemPool
-  tradeoff without being clear it's specifically about CUDA's
-  `cudaMalloc`-based caching allocator (tagged `module: cuda`,
-  reproduction is CUDA-only) -- not confirmed, one way or the other, to
-  apply to XPU's own, separately-implemented allocator. Kept here as a
-  "known on CUDA, unconfirmed on XPU" data point worth being aware of --
-  not as an established XPU risk.
-
-Real lesson, not just a correction: two `web_fetch` calls to
-docs.pytorch.org failed to return usable content earlier in this same
-research pass, before the `web_search` that found these issues. That's
-plausibly why less scrutiny went into confirming these two citations
-specifically than into the API signatures above (which were checked
-against actual source) -- worth naming plainly rather than glossing
-over, since the fix here is to have checked harder the first time, not
-to avoid citing external sources going forward.
-
-Default `use_mempool=False` -- explicit opt-in only, so nothing about
-this class's already-verified behavior changes for existing callers.
-**Verified on real XPU hardware by the user** (an Intel Arc B580) --
-see `nodes/smoke_tests/xpu_mempool_hardware_check.py`'s own results,
-recorded in `docs/nodes_package_design.md`: correctness (bit-exact
-values with vs. without MemPool), `free_all()` actually releasing real
-device memory, and a fragmentation comparison, confirmed real rather
-than just plumbing-tested.
+`MemoryManager(use_mempool=True)` routes every allocation for XPU-device
+tags through a per-device `torch.xpu.MemPool()` via
+`torch.xpu.use_mem_pool()` (`torch.xpu.MemPool(allocator=None,
+use_on_oom=False)` and `torch.xpu.use_mem_pool(pool, device=None)` are
+the real signatures, per torch/xpu/memory.py). Default
+`use_mempool=False` -- explicit opt-in only.
 """
 
 from __future__ import annotations
@@ -143,8 +82,7 @@ class MemoryManager:
                 "backend (torch.xpu.is_available() must be True). A build can "
                 "expose the torch.xpu.MemPool class while it's still a "
                 "non-functional stub ('Tried to instantiate dummy base class "
-                "MemPool') if no real XPU backend is compiled in -- confirmed "
-                "directly in this session's own (CUDA-only) sandbox build, which "
+                "MemPool') if no real XPU backend is compiled in, which "
                 "is why this class checks is_available() rather than just "
                 "hasattr(). Construct with use_mempool=False (the default) instead."
             )
@@ -175,12 +113,9 @@ class MemoryManager:
         Raises RuntimeError if this tag is already marked in-use (i.e.
         get_buffer() was called for it and neither release() nor free()
         has been called since) -- re-acquiring it here would silently
-        alias the same storage across two live users, which is exactly
-        the kind of aliasing bug docs/nodes_package_design.md notes was
-        already caught and fixed once, in core/optimizers.py's
-        ChunkedXPUCAME. Failing loudly here catches that class of mistake
-        at the point it happens instead of as silently-wrong numbers
-        somewhere downstream.
+        alias the same storage across two live users. Failing loudly
+        here catches that class of mistake at the point it happens
+        instead of as silently-wrong numbers somewhere downstream.
         """
         key = _BufferKey(tag=tag, dtype=dtype, device=str(device))
         buf = self._buffers.get(key)

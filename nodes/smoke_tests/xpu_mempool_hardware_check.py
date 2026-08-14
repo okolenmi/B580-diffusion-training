@@ -1,15 +1,9 @@
 """Real-XPU-hardware-only tests for MemoryManager's torch.xpu.MemPool
 integration (use_mempool=True).
 
-Written blind (no XPU hardware in the sandbox that wrote this), then
-run for real by the user on an Intel Arc B580 -- all pass/fail checks
-passed; see docs/nodes_package_design.md's "Centralized memory
-management" section for the full recorded results, including what the
-two diagnostic checks' numbers actually showed (not just that they ran).
-One real bug needed a hardware-only fix: torch.xpu.memory_allocated()
-and friends reject a bare "xpu" device string without an index -- see
-the DEVICE constant below for the fix and why CPU-only development
-couldn't have caught it.
+Requires real XPU hardware -- torch.xpu.memory_allocated() and friends
+reject a bare "xpu" device string without an index; see the DEVICE
+constant below.
 
 Run this directly on your XPU machine:
 
@@ -53,9 +47,8 @@ What each check covers, and why it matters:
       side. Deliberately NOT scored pass/fail -- there's no threshold to
       assert against without a first real reading of these numbers on
       real hardware. Lower reserved/peak under use_mempool=True would
-      support the fragmentation-reduction claim from
-      docs/nodes_package_design.md; no meaningful difference (or worse)
-      would argue against enabling it here.
+      support the fragmentation-reduction claim; no meaningful
+      difference (or worse) would argue against enabling it here.
 
   [5] (--stress only, off by default) A closer look at the documented
       OOM-retry tradeoff (pytorch/pytorch#159674): allocations inside
@@ -206,8 +199,8 @@ def check4_fragmentation_comparison(n_allocs: int = 200) -> None:
         mgr.free_all()
 
     print("    No automatic pass/fail here. Lower reserved/peak_reserved under "
-          "use_mempool=True would support the fragmentation-reduction claim in "
-          "docs/nodes_package_design.md; no meaningful difference (or worse) "
+          "use_mempool=True would support the fragmentation-reduction claim; "
+          "no meaningful difference (or worse) "
           "numbers would argue against enabling it for this workload.")
 
 

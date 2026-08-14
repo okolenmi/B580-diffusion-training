@@ -1,11 +1,10 @@
 """ComposedFusedCAMEOptimizerNode: CAMEAlgorithm, executed via backward
 hooks through ComposedFusedOptimizerHandle.
 
-No legacy fused CAME class exists to wrap or compare against -- see
-docs/nodes_package_design.md's "fused optimizer family" section for why
-that's a real algorithm-engineering gap in core/optimizers.py, not
-something this adapter layer was ever going to unlock by itself. What
-this Node demonstrates instead: ComposedFusedOptimizerHandle is genuinely
+No legacy fused CAME class exists to wrap or compare against -- a real
+algorithm-engineering gap in core/optimizers.py, not something this
+adapter layer was ever going to unlock by itself. What this Node
+demonstrates instead: ComposedFusedOptimizerHandle is genuinely
 algorithm-agnostic, not secretly Adafactor-shaped -- CAMEAlgorithm plugs
 into it with zero changes to composed_fused.py, exactly as
 composed_fused_adafactor.py does. No independent formula verification

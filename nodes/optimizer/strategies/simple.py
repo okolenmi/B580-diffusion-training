@@ -2,17 +2,9 @@
 
 A plain Python for-loop over parameters, calling algorithm.compute_update()
 for each and applying the result directly -- no scratch-buffer reuse, no
-MemPool, no torch._foreach_* vectorization, no backward-hook fusion. This
-is deliberately the least sophisticated strategy possible: the point of
-this first slice is proving the Algorithm/ExecutionStrategy split actually
-composes into a working optimizer, not matching core/optimizers.py's
-memory-optimized classes' performance yet. A ChunkedScratchBufferStrategy
-(reusing this session's already-verified scratch-buffer/MemPool pattern)
-is real, valuable follow-up work -- but it can be built and tested entirely
-independently of any Algorithm, and any Algorithm that satisfies the
-Algorithm contract (this session's CAMEAlgorithm, or a future
-AdafactorAlgorithm/AdamWAlgorithm) will work with it unchanged the moment
-it exists, which is the whole payoff of doing this split properly.
+MemPool, no torch._foreach_* vectorization, no backward-hook fusion. The
+least sophisticated strategy, and the baseline every other strategy's
+equivalence tests compare against.
 """
 
 from __future__ import annotations

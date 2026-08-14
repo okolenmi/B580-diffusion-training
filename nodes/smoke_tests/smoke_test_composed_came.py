@@ -3,16 +3,15 @@
 Run this directly: `python nodes/smoke_tests/smoke_test_composed_came.py`
 Or for just one strategy: `python ... --strategy chunked`
 
-Everything in nodes/optimizer/{algorithms,strategies,composed*}.py was
-verified so far using a numpy-backed fake tensor (no real torch, no real
-device) -- see docs/nodes_package_design.md's verification section. That
-caught real formula/logic bugs cheaply, but structurally cannot catch
-anything specific to real torch/device behavior: dtype casting, actual
-XPU/CPU tensor placement, or whether training can correctly continue after
-a real offload-to-CPU-and-reload-to-device round trip. This script
-exercises exactly those, on whatever real device is actually available,
-for every registered strategy (currently "simple" and "chunked" -- see
-composed_came.py's _STRATEGIES).
+Everything in nodes/optimizer/{algorithms,strategies,composed*}.py can be
+verified using a numpy-backed fake tensor (no real torch, no real
+device), which catches real formula/logic bugs cheaply, but structurally
+cannot catch anything specific to real torch/device behavior: dtype
+casting, actual XPU/CPU tensor placement, or whether training can
+correctly continue after a real offload-to-CPU-and-reload-to-device round
+trip. This script exercises exactly those, on whatever real device is
+actually available, for every registered strategy (currently "simple" and
+"chunked" -- see composed_came.py's _STRATEGIES).
 
 What it checks per strategy, in order:
   1. A real toy linear-regression fit via actual torch autograd
@@ -50,7 +49,7 @@ What it checks per strategy, in order:
      correctly free that cached buffer? See strategies/chunked.py's
      module docstring for why this matters -- a cached buffer that isn't
      freed on offload is exactly the reset-vs-free asymmetry bug class
-     documented in docs/nodes_package_design.md.
+     MemoryManager exists to prevent.
 
 Prints a clear PASS/FAIL summary per strategy, plus an overall summary.
 Does not touch core/, manager/, server/, or the training pipeline in any

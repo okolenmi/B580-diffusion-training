@@ -1,68 +1,27 @@
 """AdapterStrategy: how a trainable delta composes with a frozen weight.
-docs/training_pipeline_design.md section 3.1.
+See docs/training_pipeline_design.md section 3.1 for design rationale.
 
 Plain LoRA -- a low-rank pair of matrices added to a frozen weight -- is
-one way to parameterize a trainable delta, not the only one. Today's
-core.lora-wrapping code hardcodes it as the only option; this makes it an
-explicit choice. PlainLoRAAdapter below is that choice, made real and
-tested; DoRAAdapter (Liu et al., "DoRA: Weight-Decomposed Low-Rank
-Adaptation", arXiv:2402.09353, ICML 2024 Oral) is deliberately NOT built
-here -- the design doc's own calibration for this section calls it "a
-genuine new forward-pass code path (weight normalization + magnitude
-scaling), not a formula tweak -- worth building... once the seam exists,
-additive to PlainLoRAAdapter, not a replacement for it." This module is
-that seam.
+one way to parameterize a trainable delta, not the only one.
+PlainLoRAAdapter wraps core.lora.LoRALinear/LoRAConv2d's math unchanged.
 
-**Deviations from the design doc's minimal illustrative signature, and
-why.** The doc shows `AdapterStrategy.wrap(self, frozen, rank,
-scaling_policy) -> AdaptedLayer`. Two real gaps had to be closed to make
-that actually callable:
+wrap() takes two parameters beyond a minimal (frozen, rank, scaling_policy)
+signature, both structurally necessary: `alpha`, since
+`scaling_policy.scaling(alpha, rank)` needs one, and `original` (the whole
+source nn.Linear/nn.Conv2d), since LoRALinear/LoRAConv2d's constructors
+need bias, in/out features, and conv stride/padding/dilation/groups --
+not just a weight tensor.
 
-1. No `alpha` parameter, despite `scaling_policy.scaling(alpha, rank)`
-   structurally needing one -- added here as a required parameter.
-2. `frozen: FrozenWeightStore` wraps one weight *tensor*
-   (nodes/model/frozen_weight_store.py), but core.lora.LoRALinear/
-   LoRAConv2d's constructors -- the "genuinely-correct legacy math"
-   PlainLoRAAdapter wraps, unchanged, per this project's standing rule --
-   need the *whole* original nn.Linear/nn.Conv2d (bias, in/out features,
-   or conv stride/padding/dilation/groups), not just its weight. Added
-   `original` as a required parameter alongside `frozen`.
-
-**The more fundamental limit, stated plainly rather than glossed over:**
-PlainLoRAAdapter only actually honors BF16WeightStore, and checks that at
-wrap() time instead of silently ignoring `frozen`. core.lora.LoRALinear/
-LoRAConv2d's forward() reads its own stored base_weight/base_bias buffers
-directly -- it never calls frozen.materialize() at all. For
-BF16WeightStore this is genuinely behavior-identical to "materialize()
-every forward pass" (materialize() is a no-op passthrough there -- bf16
-is already the working precision, nothing to dequantize), so wrapping the
-legacy class unchanged is exactly correct. It would NOT be correct for a
-real NF4WeightStore: honoring that for real needs the adapted layer's
-forward pass to actually call frozen.materialize() every time (to
-dequantize on the fly), which means either a genuinely new AdaptedLayer
-implementation or a core/lora.py change -- neither of which is this
-slice's job (NF4WeightStore itself is explicitly deferred, see
-nodes/model/frozen_weight_store.py). `frozen` stays a real, checked
-parameter here -- not a decorative one -- specifically so a future
-NF4-aware AdapterStrategy has an actual, already-proven contract to
-implement against, and so PlainLoRAAdapter fails loudly instead of
-silently producing wrong results if handed a weight store it can't
-actually honor.
-
-**Also stated plainly: this is not yet wired into ComfyUNetLoRANode's
-real construction path.** core.lora's actual per-layer injection lives
-inside a tree-walk (core.lora._inject_lora) matching SDXL's specific
-attention-block structure (to_q/to_k/to_v/to_out.0, time_embed/label_emb
-segment matching, per-block weighting) -- genuinely complex, correct,
-tested legacy logic. Wiring AdapterStrategy into it for real would mean
-either modifying core/lora.py (against this project's standing rule) or
-re-deriving that tree-walk in nodes/ (large, high-risk, arguably beyond
-"medium effort"). Neither is this slice's job either -- this module
-builds and equivalence-tests the seam itself
-(smoke_test_adapter_strategy.py), which is what the backlog item actually
-promises ("seam only... this slice is the seam, not the new techniques it
-enables"). Live-wiring into the whole-UNet injection path is real,
-separate, later work.
+PlainLoRAAdapter only honors BF16WeightStore, and checks that at wrap()
+time rather than silently ignoring `frozen`. LoRALinear/LoRAConv2d's
+forward() reads its own stored base_weight/base_bias buffers directly --
+it never calls frozen.materialize(). For BF16WeightStore this is
+behavior-identical to calling materialize() every forward pass
+(materialize() is a no-op passthrough there), so wrapping the class
+unchanged is correct. It would not be correct for a weight store whose
+materialize() actually does work (e.g. dequantizing on the fly) --
+honoring that needs a forward pass that actually calls materialize(),
+which PlainLoRAAdapter's wrapped legacy class does not do.
 """
 
 from __future__ import annotations
@@ -108,11 +67,9 @@ class AdapterStrategy(ABC):
 
 
 class PlainLoRAAdapter(AdapterStrategy):
-    """Today's core.lora.LoRALinear/LoRAConv2d math, wrapped -- unchanged,
-    per the existing rule: genuinely-correct legacy math gets wrapped,
-    not re-derived. See this module's docstring for the real limits this
-    honors rather than glosses over (BF16WeightStore only; not yet
-    reachable from ComfyUNetLoRANode's real construction path)."""
+    """core.lora.LoRALinear/LoRAConv2d math, wrapped unchanged. See this
+    module's docstring for the real limits this honors (BF16WeightStore
+    only)."""
 
     def wrap(self, original, frozen: FrozenWeightStore, rank: int, alpha: float,
               scaling_policy: LoRAScalingPolicy, dropout: float = 0.0,

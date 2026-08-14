@@ -1,17 +1,15 @@
 """Domain-independent node/port primitives.
 
-See docs/nodes_package_design.md for the full design reasoning. Short
-version: a Node declares a fixed, typed set of input and output Ports as
-real class-level data (not guessed from a constructor signature), and
+A Node declares a fixed, typed set of input and output Ports as real
+class-level data (not guessed from a constructor signature), and
 build() turns input values into output values. Nothing here knows anything
 about optimizers, models, or training -- that's what domain-family ABCs
-(nodes/optimizer/node.py, and future nodes/<domain>/node.py modules) are
+(nodes/optimizer/node.py, and other nodes/<domain>/node.py modules) are
 for.
 
 This package never imports from or modifies core/, manager/, or server/
 except read-only, at the point a concrete node wraps an already-verified
-class from one of those (see nodes/optimizer/*.py for the pattern). See
-docs/nodes_package_design.md's "Course correction" section for why.
+class from one of those (see nodes/optimizer/*.py for the pattern).
 """
 
 from __future__ import annotations

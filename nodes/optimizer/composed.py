@@ -4,26 +4,16 @@ any ExecutionStrategy pair.
 This is the actual payoff of the Algorithm/ExecutionStrategy split: the
 lifecycle methods (offload_states_to_cpu, reload_states_to_device,
 decay_states, reset_states, free_states) are written exactly ONCE, here,
-generically over "a list of per-parameter state dicts" -- rather than
-hand-duplicated (with real, found-by-testing inconsistencies -- see
-docs/nodes_package_design.md's "course correction" section) across
-core/optimizers.py's 5 classes. Any future Algorithm or ExecutionStrategy
-gets these for free by construction, correctly, without writing them again.
+generically over "a list of per-parameter state dicts". Any future
+Algorithm or ExecutionStrategy gets these for free by construction.
 
-ParameterGroupPolicy fixes a real latent bug, closed here before anything
-needs it rather than after it ships silently broken: `param_lr` was
-already stored as one entry per parameter, but `update_lr()` (called by
-the LR schedule every step) unconditionally overwrote every entry with
-the same value --
-`self.param_lr = [new_lr] * len(self.params)` -- so anything that had
-set a per-parameter ratio at construction would have it erased on the
-very next step. UniformGroups is the default and reproduces that same
-`[lr] * len(params)` exactly, for every existing caller; LoRAPlusGroups
+ParameterGroupPolicy gives one multiplier per parameter, applied on top
+of whatever base rate the LRSchedule produces this step. UniformGroups
+is the default (every parameter at the same rate). LoRAPlusGroups
 (Hayou, Ghosh, Yu, "LoRA+: Efficient Low Rank Adaptation of Large
-Models", arXiv:2402.12354, ICML 2024) is the first real consumer once one
-is needed, not wired to anything yet -- `is_b_matrix` is a plain
-predicate over a parameter, decoupled from any one LoRA implementation's
-own naming.
+Models", arXiv:2402.12354, ICML 2024) trains B matrices (zero-initialized)
+at a higher rate than A -- `is_b_matrix` is a plain predicate over a
+parameter, decoupled from any one LoRA implementation's own naming.
 """
 
 from __future__ import annotations

@@ -63,6 +63,12 @@ doc's own rule) -- `nodes/` is where new work lands.
 - `ResourceCoordinator`/`OffloadOrchestrator` --
   `nodes/memory/coordinator.py` (5.1, 5.2). Doesn't by itself fix the
   open VRAM-hang report against `core/trainer.py`.
+- `ResourceProfile` -- `nodes/memory/profile.py` (5.5). Per-`DeviceResident`
+  VRAM breakdown, wired into `profile=True`'s existing report
+  (`resident_<name>_mb` alongside `tracked_footprint_mb`). Real gap
+  found while landing this, not yet fixed: no shared `MemoryManager`
+  reachable from the trainer node, so `memory_manager_stats` is always
+  `None` in a real run today -- see the module docstring.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility
@@ -81,17 +87,21 @@ doc's own rule) -- `nodes/` is where new work lands.
 See `docs/training_pipeline_design.md` section 10 for the full reasoning
 behind this order.
 
-1. `ResourceProfile` (5.5) -- one aggregate per-component VRAM report
-2. Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
+1. Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
    `GreedyRatioPlacement` (2.3) -- blocked on the instrumentation, not
    the policy class
-3. Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
+2. Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
    path, then `DoRAAdapter` (3.1)
-4. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
+3. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
    a real dequantization implementation
-5. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
+4. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
    a `UniformGroups` baseline (3.4)
+
+**Not yet its own item, nothing above needs it yet:** thread a shared
+`MemoryManager` through optimizer construction so `ResourceProfile`'s
+`memory_manager_stats` is ever populated in a real run -- see
+`nodes/memory/profile.py`'s module docstring.
 
 **Not recommended near-term:** `ComponentRegistry`/`TrainingRecipe`/
 `PipelineFactory` (5.3, 5.4) -- nothing built through
@@ -104,4 +114,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`a3b5747` (2026-08-14).
+`157bc7a` (2026-08-15).

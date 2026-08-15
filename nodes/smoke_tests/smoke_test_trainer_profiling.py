@@ -174,6 +174,8 @@ def check_profile_off_unchanged_behavior():
     for label in EXPECTED_PHASE_LABELS:
         assert f"{label}_ms" not in report, f"{label}_ms should not be present when profile=False"
     assert "step_total_ms" not in report
+    assert "tracked_footprint_mb" not in report
+    assert "resident_model_mb" not in report
     assert optimizer.stepped == 1
     print("    PASS")
 
@@ -200,11 +202,38 @@ def check_profile_on_without_monitor_does_not_crash():
     print("    PASS")
 
 
+def check_profile_on_reports_resident_footprint_breakdown():
+    print("[profile=True: resident_<name>_mb breakdown (ResourceProfile, backlog item 1) "
+          "present and sums to tracked_footprint_mb]")
+    monitor = _RecordingMonitor()
+    _run(profile=True, monitor=monitor)
+    report = monitor.reports[0]
+    for key in ("resident_model_mb", "resident_optimizer_mb", "resident_text_encoder_mb"):
+        assert key in report, f"missing {key}"
+        assert report[key] >= 0, f"{key} was negative: {report[key]}"
+    resident_sum = (report["resident_model_mb"] + report["resident_optimizer_mb"]
+                     + report["resident_text_encoder_mb"])
+    assert abs(report["tracked_footprint_mb"] - resident_sum) < 1e-9, (
+        f"tracked_footprint_mb ({report['tracked_footprint_mb']}) != sum of "
+        f"resident_*_mb ({resident_sum})")
+    # _FakeModel's one 4x4 float32 parameter: 16 * 4 bytes; _FakeOptimizer and
+    # _FakeTextEncoder both hardcode footprint_bytes() -> 0 (see their classes
+    # above) -- real, known values, not just "some positive number".
+    expected_model_mb = (4 * 4 * 4) / (1024 ** 2)
+    assert abs(report["resident_model_mb"] - expected_model_mb) < 1e-9, (
+        f"resident_model_mb ({report['resident_model_mb']}) != expected ({expected_model_mb})")
+    assert report["resident_optimizer_mb"] == 0.0
+    assert report["resident_text_encoder_mb"] == 0.0
+    print(f"    PASS: resident_model_mb={report['resident_model_mb']:.6f} "
+          f"tracked_footprint_mb={report['tracked_footprint_mb']:.6f}")
+
+
 def main():
     check_contracts()
     check_profile_off_unchanged_behavior()
     check_profile_on_produces_full_timing_breakdown()
     check_profile_on_without_monitor_does_not_crash()
+    check_profile_on_reports_resident_footprint_breakdown()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

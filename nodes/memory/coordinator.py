@@ -27,8 +27,21 @@ class ResourceCoordinator:
     def register(self, name: str, resident: DeviceResident) -> None:
         self._residents[name] = resident
 
+    def per_resident_footprint_bytes(self) -> dict[str, int]:
+        """Public counterpart to total_footprint_bytes()'s sum -- added
+        for nodes/memory/profile.py's ResourceProfile, which needs the
+        per-resident breakdown, not just the total. Reaching into
+        self._residents from outside this class (ResourceProfile.capture()
+        used to do exactly that, in the design doc's own illustrative
+        section 5.5 code) is the private-attribute leak this method
+        exists to close -- ResourceProfile now calls this instead.
+        Keyed by whatever name register() was given (e.g. "model",
+        "optimizer", "text_encoder") -- not hardcoded here, so a resident
+        added or renamed later is picked up automatically."""
+        return {name: r.footprint_bytes() for name, r in self._residents.items()}
+
     def total_footprint_bytes(self) -> int:
-        return sum(r.footprint_bytes() for r in self._residents.values())
+        return sum(self.per_resident_footprint_bytes().values())
 
     def offload_all_except(self, keep: set) -> None:
         for name, resident in self._residents.items():

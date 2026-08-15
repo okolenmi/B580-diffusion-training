@@ -153,6 +153,18 @@ are confirmed but not urgent) so they don't get lost. Newest first.
   when it fires (visibility fix already shipped). Generalizing it or removing
   it once no one has 2816-dim checkpoints left to load is lower priority.
 
+- **[2026-08] No shared `MemoryManager` reachable from
+  `SupervisedLoRATrainerNode.build()`.** Found while wiring
+  `ResourceProfile` (`nodes/memory/profile.py`, design doc section 5.5):
+  `nodes/optimizer/strategies/chunked.py`'s `ChunkedScratchBufferStrategy`
+  constructs its own private `MemoryManager` when none is injected, and
+  nothing between it and the trainer node passes one in, so there's no
+  single instance to hand `ResourceProfile.capture()` --
+  `memory_manager_stats` is `None` in every real run today. Harmless
+  right now (each strategy's private manager is internally consistent on
+  its own), not fixed here -- see `docs/training_pipeline_design.md`
+  section 10's note on this for when it'd actually start to matter.
+
 - **`config_model.py` doesn't yet warn about grad_accum's real-update math
   anywhere in the UI/docs.** The step-counting refactor fixed the mechanism,
   but nothing explains "steps now means real updates, cache/compute cost

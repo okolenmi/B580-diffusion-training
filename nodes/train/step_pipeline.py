@@ -42,6 +42,7 @@ from ..components.diffusion import DiffusionProcess
 from ..dataset.handle import TrainingBatchSource
 from ..model.handle import TrainableModel
 from ..model.text_encoder import TextEncoder
+from ..memory.profile import ResourceProfile
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
 from .loss import LossWeighting
@@ -336,7 +337,19 @@ class MonitoringPhase(StepPhase):
        report after. A single snapshot line can't distinguish "stable
        but high" from "climbing" -- this makes that distinction
        possible from a handful of report lines pulled from anywhere in
-       one run, not just by comparing separately-run reports by hand."""
+       one run, not just by comparing separately-run reports by hand.
+
+    tracked_footprint_mb was already this: a single rolled-up total
+    from ResourceCoordinator, no per-component breakdown. Now built via
+    ResourceProfile.capture() (nodes/memory/profile.py, section 5.5)
+    instead of calling coordinator.total_footprint_bytes() directly --
+    same total (still reported, unchanged key), plus a new
+    resident_<name>_mb per component (model/optimizer/text_encoder,
+    matching whatever names build() registered) so "which one actually
+    grew" doesn't need a separate investigation each time. memory=None
+    always for now -- see profile.py's module docstring for the real,
+    open gap that makes memory_manager_stats unpopulated in a real run
+    today."""
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  on_step: Optional[Callable] = None,
@@ -361,6 +374,7 @@ class MonitoringPhase(StepPhase):
         timing = state.extras.get("timing_ms")
         mem = None
         tracked_mb = None
+        resource_profile: Optional[ResourceProfile] = None
         if self._monitor is not None or self._profile:
             report = {
                 "step": state.step, "total_steps": self._total_steps,
@@ -394,8 +408,12 @@ class MonitoringPhase(StepPhase):
                     # useful sanity signal that DeviceResident accounting
                     # actually reflects reality; a growing gap between
                     # them is worth investigating on its own.
-                    tracked_mb = self._coordinator.total_footprint_bytes() / (1024 ** 2)
+                    resource_profile = ResourceProfile.capture(
+                        self._coordinator, None, self._device_ctx)
+                    tracked_mb = sum(resource_profile.per_resident_bytes.values()) / (1024 ** 2)
                     report["tracked_footprint_mb"] = tracked_mb
+                    for name, nbytes in resource_profile.per_resident_bytes.items():
+                        report[f"resident_{name}_mb"] = nbytes / (1024 ** 2)
             if self._monitor is not None:
                 self._monitor.report(report)
 
@@ -429,12 +447,27 @@ class MonitoringPhase(StepPhase):
                 )
             tracked_part = ""
             if self._coordinator is not None:
+                if resource_profile is None:
+                    resource_profile = ResourceProfile.capture(
+                        self._coordinator, None, self._device_ctx)
                 if tracked_mb is None:
-                    tracked_mb = self._coordinator.total_footprint_bytes() / (1024 ** 2)
+                    tracked_mb = sum(resource_profile.per_resident_bytes.values()) / (1024 ** 2)
                 tracked_part = f" tracked_footprint={tracked_mb:.0f}MB"
             optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
             print(f"  [step {state.step}]{optimizer_part} {parts} total={total:.0f}ms"
                   + vram_part + tracked_part)
+
+            if resource_profile is not None and resource_profile.per_resident_bytes:
+                # Same total as tracked_footprint_mb above, broken down by
+                # resident -- "which one actually grew" without a separate
+                # investigation. resource_profile.memory_manager_stats is
+                # always None today (see nodes/memory/profile.py's module
+                # docstring for the real, open gap) so it's not printed
+                # here yet -- nothing to show.
+                resident_parts = " ".join(
+                    f"{name}={nbytes / (1024 ** 2):.0f}MB"
+                    for name, nbytes in resource_profile.per_resident_bytes.items())
+                print(f"    [step {state.step}] resident footprint: " + resident_parts)
 
             phase_mem = state.extras.get("phase_mem")
             if phase_mem:

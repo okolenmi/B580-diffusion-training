@@ -47,11 +47,18 @@ class _FakeResident(DeviceResident):
 
 
 def check_register_and_total_footprint():
-    print("\n=== register()/total_footprint_bytes() ===")
+    print("\n=== register()/per_resident_footprint_bytes()/total_footprint_bytes() ===")
     coord = ResourceCoordinator()
     coord.register("a", _FakeResident(100))
     coord.register("b", _FakeResident(250))
     record(coord.total_footprint_bytes() == 350, "sums every registered resident's footprint")
+    per_resident = coord.per_resident_footprint_bytes()
+    record(per_resident == {"a": 100, "b": 250},
+           "per_resident_footprint_bytes() returns the real per-name breakdown",
+           detail=str(per_resident))
+    record(sum(per_resident.values()) == coord.total_footprint_bytes(),
+           "total_footprint_bytes() is exactly the sum of per_resident_footprint_bytes() "
+           "(single source of truth, not two separately-maintained numbers)")
 
 
 def check_offload_all_except():

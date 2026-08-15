@@ -1195,6 +1195,7 @@ matter anymore -- both are equally done.
 | `LossWeighting`/`LRSchedule` (section 4) | `nodes/train/loss.py`/`schedule.py` | Pre-existing clean ABCs, confirmed by `P2LossWeighting` needing zero interface change; v-pred branch + `P2LossWeighting` are backlog item 6. |
 | `Algorithm.init_state()`'s state representation | `nodes/optimizer/algorithms/*.py` | Pre-existing -- contract already returns "a plain dict of named tensors," not specifically fp32; nothing structurally blocks a future quantized-state `Algorithm`. |
 | `ResourceCoordinator`/`OffloadOrchestrator` (5.1, 5.2) | `nodes/memory/coordinator.py` | Backlog item 12. Doesn't by itself fix the still-open VRAM-hang report -- see 9.3. |
+| `ResourceProfile` (5.5) | `nodes/memory/profile.py` | Backlog item 1. Wired into `SupervisedLoRATrainerNode`'s existing `profile=True` reporting (`nodes/train/step_pipeline.py`'s `MonitoringPhase`) -- `resident_<name>_mb` per-`DeviceResident` breakdown alongside the existing `tracked_footprint_mb` total, same gate, no new port. `memory_manager_stats` is `None` in a real run today -- real gap found while landing this, not fixed here: no shared `MemoryManager` instance is reachable from `SupervisedLoRATrainerNode.build()` to pass to `capture()`; `ChunkedScratchBufferStrategy` (`nodes/optimizer/strategies/chunked.py`) constructs its own private one when none is injected, and nothing upstream injects a shared one. See `nodes/memory/profile.py`'s module docstring. |
 | Injected pub/sub, not a singleton bus (5.2's reasoning) | `nodes/monitor/`'s `MonitorHandle`/`LiveMonitorHandle` | Pre-existing house reference for "no singleton" done right -- explicitly reused, not redesigned, for `OffloadOrchestrator`. |
 | Decorator-wrapped `TrainingBatchSource` (2.5) | `nodes/dataset/renoise.py`'s `RenoiseBatchSource` | Pre-existing pattern `PrefetchingBatchSource` followed. |
 | Composition-over-mutation for stacked state (1.2) | `nodes/model/lora_phases.py`'s `LoRAGeneration` | Pre-existing, independent instance of the same principle `DeviceResident`'s offload-vs-free distinction is built on. |
@@ -1243,16 +1244,13 @@ missing is actually running a LoRA training job with it wired in and
 comparing against a `UniformGroups` baseline, at whatever `ratio` turns
 out to matter for this project's own data.
 
-**`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`/`ResourceProfile`
-(5.3, 5.4, 5.5).** None exist. `ComponentRegistry`/`TrainingRecipe` are
-still not recommended as near-term work (see 5.3, 5.4 for the current
-reasoning -- unlike when this was written, `nodes/components/` now has
-real content, but nothing in it is graph-editor-selectable, so the
-side-by-side-registration problem these solve still hasn't materialized).
-`ResourceProfile` is smaller and now cheaper to build than when this was
-written, since the `DeviceResident`s it would aggregate all exist --
-real, standing diagnostic value for the VRAM-pressure investigation in
-`docs/suspicious_findings.md`.
+**`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory` (5.3, 5.4).**
+None exist. Still not recommended as near-term work (see 5.3, 5.4 for
+the current reasoning -- `nodes/components/` now has real content, but
+nothing in it is graph-editor-selectable, so the side-by-side-
+registration problem these solve still hasn't materialized).
+`ResourceProfile` (5.5), the fourth item this paragraph used to list, is
+done -- see 9.1.
 
 ### 9.3 What's explicitly out of scope
 
@@ -1269,34 +1267,26 @@ hand-rolled offload logic.
 
 ## 10. Prioritized backlog
 
-**The original 12-item backlog is entirely complete, and so is the item
-that led this list after it** -- `DiffusionProcess`/`DeviceContext`,
+**The original 12-item backlog is entirely complete, and so are the two
+items that led this list after it** -- `DiffusionProcess`/`DeviceContext`,
 `DeviceResident` (with `OptimizerHandle`/`TrainableModel`/`TextEncoder`
 all conforming), the `ParameterGroupPolicy` fix, `LoRAScalingPolicy`,
 Min-SNR's v-prediction branch + `P2LossWeighting`,
 `ActivationCheckpointingStrategy`, `ProjectLayout`, the
 `AdapterStrategy`/`FrozenWeightStore` seam, `TrainingStepPipeline`/
 `StepPhase`, `PrefetchingBatchSource`, `ResourceCoordinator`/
-`OffloadOrchestrator`, and `ResourceBudget`/`ResourcePolicy`/
-`ManualResourcePolicy` are all real, tested code -- see section 9.1 for
-exactly where each one lives, and 2.2 for two real deviations
-`ResourcePolicy`'s implementation took from this document's own
-illustration once it was actually built. What follows is a fresh list:
-only what's actually still open, ordered by what unblocks what, sized to
-be independently landable slices, each one equivalence-tested against
-whatever it replaces (or, for the two validation-only items at the end,
-tested by a real training run instead) before anything switches over to
-it.
+`OffloadOrchestrator`, `ResourceBudget`/`ResourcePolicy`/
+`ManualResourcePolicy`, and `ResourceProfile` are all real, tested code
+-- see section 9.1 for exactly where each one lives, and 2.2 for two real
+deviations `ResourcePolicy`'s implementation took from this document's
+own illustration once it was actually built. What follows is a fresh
+list: only what's actually still open, ordered by what unblocks what,
+sized to be independently landable slices, each one equivalence-tested
+against whatever it replaces (or, for the two validation-only items at
+the end, tested by a real training run instead) before anything switches
+over to it.
 
-1. **`ResourceProfile`** (5.5). Small, and cheaper now than it would have
-   been earlier -- every `DeviceResident` it aggregates
-   (`OptimizerHandle`, `TrainableModel`, `TextEncoder`) already exists and
-   is exercised in real runs. Real, standing diagnostic value for the
-   still-open VRAM-pressure investigation in `docs/suspicious_findings.md`:
-   "how much of my VRAM is the text encoder cache vs. optimizer scratch
-   vs. the model itself" isn't answerable from the current single
-   allocator-level number.
-2. **Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
+1. **Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
    `GreedyRatioPlacement`** (2.3). The actual blocker has always been the
    instrumentation, not the policy class -- extending `profile=True` (or
    its `nodes/`-native successor) to real per-block activation/recompute
@@ -1304,7 +1294,7 @@ it.
    itself. `EveryBlockPlacement` stays the safe default until real
    `BlockCost` numbers exist; shipping `GreedyRatioPlacement` with guessed
    costs would be worse than not having it.
-3. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
+2. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
    path, then `DoRAAdapter`** (3.1). Two real pieces, not one: the
    `AdapterStrategy` seam and `PlainLoRAAdapter` exist and are
    equivalence-tested, but neither is reachable from the actual model
@@ -1317,7 +1307,7 @@ it.
    actually trainable, not just seam-equivalence-tested in isolation.
    Its own equivalence/quality-comparison pass beyond that, not just an
    equivalence test (it's a real quality claim, not a refactor).
-4. **`NF4WeightStore`** (3.3). This document's single highest-value
+3. **`NF4WeightStore`** (3.3). This document's single highest-value
    remaining item, and still its own dedicated effort, not a slice of
    anything else: needs a real dequantization implementation (a fused
    dequant-matmul kernel or an explicit dequantize-then-matmul path via
@@ -1327,6 +1317,22 @@ it.
    inherited from QLoRA's own LLM benchmarks. Sequenced after
    `DoRAAdapter` since the two are confirmed-compatible in published work
    (QDoRA) and `DoRAAdapter` is the smaller, faster piece to land first.
+
+**A real gap surfaced while landing `ResourceProfile`, not yet its own
+backlog item because nothing above needs it yet:** there is no single
+shared `MemoryManager` instance reachable from
+`SupervisedLoRATrainerNode.build()` -- each optimizer execution strategy
+that uses one (`ChunkedScratchBufferStrategy`) constructs its own private
+instance when none is injected, and no `Composed*OptimizerNode` exposes
+a port to inject a shared one. Harmless today (each strategy's own
+private manager is internally consistent), but it means
+`ResourceProfile.memory_manager_stats` is `None` in every real run, and
+it'll become a real problem the moment two things need to share one VRAM
+budget on purpose (e.g. a future `AutoResourcePolicy`, or several
+strategies deliberately pooling scratch space) -- worth threading a
+shared `MemoryManager` through optimizer construction as part of
+whichever future item first has a concrete reason to, rather than
+speculatively now.
 
 **Validation work, not construction -- real code exists for both, what's
 missing is a real run:**

@@ -32,6 +32,13 @@ object with an apply() method instead of a global, process-wide
 monkeypatch triggered directly by a bare bool. FrozenParamSafeCheckpointing
 is the mechanism above, unchanged; NoCheckpointing is the explicit "did
 nothing" case for when checkpointing is off.
+
+See nodes/model/block_profiler.py for a third strategy,
+ProfilingCheckpointing -- same mechanism, plus per-block recompute
+timing/activation-memory instrumentation, composed via
+enable_frozen_param_safe_checkpointing()'s optional recompute_wrapper
+parameter below rather than a second copy of this delicate autograd
+code.
 """
 
 from __future__ import annotations
@@ -67,15 +74,36 @@ class FrozenParamSafeCheckpointing(ActivationCheckpointingStrategy):
         enable_frozen_param_safe_checkpointing()
 
 
-def enable_frozen_param_safe_checkpointing() -> None:
-    """Idempotent -- safe to call every time a LoRA model with
-    use_checkpoint=True is built. Only touches comfy's module-global
-    CheckpointFunction the first time; every later call is a no-op.
+def enable_frozen_param_safe_checkpointing(recompute_wrapper=None) -> None:
+    """Idempotent per (patched-at-all, recompute_wrapper identity) pair,
+    not just "already patched at all" -- calling this twice with the
+    same recompute_wrapper (None counts as its own identity) is a
+    no-op, matching the original unparameterized behavior exactly when
+    recompute_wrapper=None every time (FrozenParamSafeCheckpointing's
+    own call site never passes one). Calling it with a *different*
+    recompute_wrapper (e.g. switching from FrozenParamSafeCheckpointing
+    to nodes/model/block_profiler.py's ProfilingCheckpointing, or back,
+    within one process) re-installs the patch with the new wrapper --
+    a real, narrow need: ComfyUNetLoRANode.build() calls
+    checkpointing_strategy.apply() fresh on every graph run, not once
+    per process, so two different runs in the same server process can
+    legitimately want different instrumentation.
+
+    recompute_wrapper: optional `(run_function, args) -> output_tensors`,
+    called in place of `ctx.run_function(*args)` during backward's own
+    recompute -- None (the default) costs nothing extra and is exactly
+    the original call. See block_profiler.py's module docstring for why
+    this is the one correct place to measure a checkpointed block's real
+    recompute time/activation memory: it's the actual, real recompute a
+    non-profiled run already pays for, not a separate profiling-only
+    forward pass.
     """
     import torch
     from comfy.ldm.modules.diffusionmodules import util as comfy_ckpt_util
 
-    if getattr(comfy_ckpt_util.CheckpointFunction, "_frozen_param_safe", False):
+    current = comfy_ckpt_util.CheckpointFunction
+    if (getattr(current, "_frozen_param_safe", False)
+            and getattr(current, "_recompute_wrapper_identity", None) is recompute_wrapper):
         return
 
     class FrozenParamSafeCheckpointFunction(torch.autograd.Function):
@@ -101,7 +129,10 @@ def enable_frozen_param_safe_checkpointing() -> None:
                 # Same "first op mutates storage in place" guard as the
                 # original -- detach()'d tensors can't be mutated in place.
                 shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
-                output_tensors = ctx.run_function(*shallow_copies)
+                if recompute_wrapper is not None:
+                    output_tensors = recompute_wrapper(ctx.run_function, shallow_copies)
+                else:
+                    output_tensors = ctx.run_function(*shallow_copies)
 
             trainable_params = [p for p in ctx.input_params if p.requires_grad]
             grad_targets = ctx.input_tensors + trainable_params
@@ -120,4 +151,5 @@ def enable_frozen_param_safe_checkpointing() -> None:
             return (None, None) + tuple(tensor_grads) + param_grads
 
     FrozenParamSafeCheckpointFunction._frozen_param_safe = True
+    FrozenParamSafeCheckpointFunction._recompute_wrapper_identity = recompute_wrapper
     comfy_ckpt_util.CheckpointFunction = FrozenParamSafeCheckpointFunction

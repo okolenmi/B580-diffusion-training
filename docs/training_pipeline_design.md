@@ -484,66 +484,51 @@ recomputation -- ranking candidate checkpoint points by their actual
 memory-saved-per-recompute-cost ratio, which is the more directly
 applicable idea here since a UNet's blocks aren't uniform cost (attention
 blocks vs. plain conv/resnet blocks differ in both activation size and
-recompute time). **Not implemented -- still open:**
+recompute time).
 
-```python
-@dataclass(frozen=True)
-class BlockCost:
-    """Per-block estimates a placement policy needs. Producing these
-    accurately (profiling real activation sizes and real recompute time
-    per block, on real hardware) is itself nontrivial work -- see
-    calibration below."""
-    activation_bytes: int
-    recompute_ms: float
+**Implemented -- both halves, backlog item 1.** `BlockCost`/
+`CheckpointPlacementPolicy`/`EveryBlockPlacement`/`GreedyRatioPlacement`,
+essentially as sketched here originally (one real correction:
+`GreedyRatioPlacement` fits against `vram_budget_mb - vram_reserve_mb`,
+not the raw ceiling -- `vram_reserve_mb` postdates this sketch), in
+`nodes/model/checkpoint_placement.py`. The actual blocker, the per-block
+profiling instrumentation, is `nodes/model/block_profiler.py`'s
+`BlockProfileCollector`/`ProfilingCheckpointing` -- a third
+`ActivationCheckpointingStrategy`, composed with the existing correctness
+fix via a new optional `recompute_wrapper` parameter on
+`enable_frozen_param_safe_checkpointing()` rather than a second copy of
+that delicate autograd code. It measures each checkpointed block's real
+recompute (the existing backward-time re-run of the block's forward,
+already paid for by checkpointing itself -- no separate profiling-only
+pass needed): wall time directly, and activation memory via
+`DeviceContext.memory_stats()`'s `allocated_mb` delta around that same
+call.
 
+**Two real findings, confirmed against ComfyUI's actual source
+(cloned directly, not guessed) while building this:**
+- In `comfy/ldm/modules/diffusionmodules/openaimodel.py`,
+  `ResBlock.forward()` calls `checkpoint(self._forward, ...)` -- a bound
+  method, so `ctx.run_function.__self__` is the real block instance.
+  That's what makes real per-block labels (`type(instance).__name__` +
+  a first-seen ordinal, e.g. `"ResBlock#4"`) possible without needing
+  the block's dotted path in the UNet.
+- `comfy/ldm/modules/attention.py`'s `BasicTransformerBlock.forward()`
+  does **not** call `checkpoint()` at all in this pinned ComfyUI
+  version -- its `checkpoint=True` constructor parameter is unused dead
+  wiring. In practice, only `ResBlock` instances ever reach this
+  profiler or get placed by `GreedyRatioPlacement` -- a real, grounded
+  constraint on what this item can decide over today, not a gap in the
+  implementation.
 
-class CheckpointPlacementPolicy(ABC):
-    @abstractmethod
-    def select(self, blocks: list[BlockCost], budget: ResourceBudget) -> list[bool]:
-        """One bool per block: True = checkpoint it (recompute during
-        backward); False = keep its activations resident."""
-
-
-class EveryBlockPlacement(CheckpointPlacementPolicy):
-    """Today's actual, only behavior -- checkpoint everything."""
-    def select(self, blocks, budget):
-        return [True] * len(blocks)
-
-
-class GreedyRatioPlacement(CheckpointPlacementPolicy):
-    """Ranks blocks by activation_bytes/recompute_ms (memory saved per
-    unit recompute cost) and checkpoints the best-ratio blocks first
-    until the *remaining* uncompressed blocks' activation memory fits the
-    budget. A direct, simplified reading of Korthikanti et al.'s
-    cost-ratio ranking idea -- not their full method, which also reasons
-    about which *operations within* a block to recompute, not just
-    whole-block on/off."""
-    def select(self, blocks, budget):
-        order = sorted(range(len(blocks)),
-                        key=lambda i: blocks[i].activation_bytes / max(blocks[i].recompute_ms, 1e-6),
-                        reverse=True)
-        checkpoint = [False] * len(blocks)
-        remaining = sum(b.activation_bytes for b in blocks)
-        for i in order:
-            if remaining <= budget.vram_budget_mb * 2**20:
-                break
-            checkpoint[i] = True
-            remaining -= blocks[i].activation_bytes
-        return checkpoint
-```
-
-**Calibration.** `GreedyRatioPlacement` is only as good as `BlockCost`'s
-numbers, and producing real, trustworthy per-block activation/recompute
-estimates for this specific UNet needs actual profiling on real hardware
-(extending `profile=True`, which already measures whole-step phases, down
-to per-block granularity -- its own separate instrumentation task).
-`EveryBlockPlacement` is the safe, typed default; `GreedyRatioPlacement`
-should be treated as unvalidated until real `BlockCost` numbers exist --
-shipping it with guessed costs would be worse than not having it, since a
-bad placement decision gets neither the VRAM savings nor the untouched
-speed of the two extremes. **The actual blocker is the per-block
-profiling instrumentation, not the policy class itself** (see the
-backlog, section 10).
+**Not wired into `ComfyUNetLoRANode`'s real construction path.** Same
+status `AdapterStrategy`'s seam has (3.1): real, tested, reachable by
+any caller that constructs a `ProfilingCheckpointing` directly, but
+`use_checkpoint`/`resource_policy` don't yet have a way to select it, and
+`GreedyRatioPlacement` isn't wired in as a real choice either --
+`EveryBlockPlacement`'s unconditional behavior stays what
+`use_checkpoint=True` actually does. Real, separate follow-up, once a
+first real profiled run's `BlockCost` numbers exist to validate a real
+placement against -- see section 10.
 
 ### 2.4 Text encoder cache becomes visible to resource accounting
 
@@ -1185,7 +1170,9 @@ matter anymore -- both are equally done.
 | `NoiseSchedule`/`Parameterization`/`DiffusionProcess`/`DeviceContext` (1.4, 1.5) | `nodes/components/diffusion.py`, `nodes/components/device.py` | Backlog items 1-2. |
 | `ProjectLayout` (1.6) | `nodes/components/layout.py` | Backlog item 8. Bridging period still open -- see 1.6. |
 | `TrainingStepPipeline`/`StepPhase` (2.1) | `nodes/train/step_pipeline.py` | Backlog item 10. |
-| `ActivationCheckpointingStrategy` (2.3) | `nodes/model/gradient_checkpointing.py` | Backlog item 7. `CheckpointPlacementPolicy` itself still open -- see 9.2. |
+| `ActivationCheckpointingStrategy` (2.3) | `nodes/model/gradient_checkpointing.py` | Backlog item 7. |
+| `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/`GreedyRatioPlacement` (2.3) | `nodes/model/checkpoint_placement.py` | Backlog item 1 (policy half). `GreedyRatioPlacement` unvalidated -- see 9.2. |
+| `BlockProfileCollector`/`ProfilingCheckpointing` (2.3) | `nodes/model/block_profiler.py` | Backlog item 1 (instrumentation half -- the actual blocker). Only `ResBlock` instances ever reach it in this ComfyUI version -- see 2.3. Not wired into `ComfyUNetLoRANode`'s real construction path -- see 9.2. |
 | Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
 | `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_injector.py` | Backlog item 9 (part 2), item 5. Seam built and equivalence-tested, not live-wired into `ComfyUNetLoRANode` (still `core.lora._inject_lora`). `DoRAAdapter` still open -- see 9.2. |
@@ -1224,11 +1211,16 @@ dequant-then-matmul scratch-buffer story) and verification against this
 project's own real UNet, not assumed from the LLM literature. Its own
 dedicated effort.
 
-**`CheckpointPlacementPolicy`/`GreedyRatioPlacement` (2.3).** Doesn't
-exist. Blocked on the same thing it always was: real per-block
-activation/recompute measurements, which don't exist yet (extending
-`profile=True` to block granularity is its own instrumentation task,
-separate from the policy class itself).
+**`GreedyRatioPlacement` real validation (2.3).** The class, and the
+`BlockProfileCollector`/`ProfilingCheckpointing` instrumentation that
+was actually blocking it, are both implemented and equivalence-tested
+now -- see 9.1. What's missing is the same kind of thing missing from
+`RescaledZeroTerminalSNRSchedule` below: a real profiled run producing
+real `BlockCost` numbers for this project's actual UNet, then a real
+placement decision made from them and compared against
+`EveryBlockPlacement`'s baseline. Not wired into `ComfyUNetLoRANode` yet
+either way -- `use_checkpoint=True` still means `EveryBlockPlacement`'s
+unconditional behavior, real or not.
 
 **`RescaledZeroTerminalSNRSchedule` real end-to-end validation (1.4).**
 The class itself is implemented and wired (unlike everything else in
@@ -1276,25 +1268,19 @@ Min-SNR's v-prediction branch + `P2LossWeighting`,
 `AdapterStrategy`/`FrozenWeightStore` seam, `TrainingStepPipeline`/
 `StepPhase`, `PrefetchingBatchSource`, `ResourceCoordinator`/
 `OffloadOrchestrator`, `ResourceBudget`/`ResourcePolicy`/
-`ManualResourcePolicy`, and `ResourceProfile` are all real, tested code
--- see section 9.1 for exactly where each one lives, and 2.2 for two real
-deviations `ResourcePolicy`'s implementation took from this document's
-own illustration once it was actually built. What follows is a fresh
-list: only what's actually still open, ordered by what unblocks what,
-sized to be independently landable slices, each one equivalence-tested
-against whatever it replaces (or, for the two validation-only items at
-the end, tested by a real training run instead) before anything switches
-over to it.
+`ManualResourcePolicy`, `ResourceProfile`, and
+`BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/
+`GreedyRatioPlacement`/`BlockProfileCollector`/`ProfilingCheckpointing`
+are all real, tested code -- see section 9.1 for exactly where each one
+lives, and 2.2 for two real deviations `ResourcePolicy`'s implementation
+took from this document's own illustration once it was actually built.
+What follows is a fresh list: only what's actually still open, ordered
+by what unblocks what, sized to be independently landable slices, each
+one equivalence-tested against whatever it replaces (or, for the
+validation-only items at the end, tested by a real training run instead)
+before anything switches over to it.
 
-1. **Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
-   `GreedyRatioPlacement`** (2.3). The actual blocker has always been the
-   instrumentation, not the policy class -- extending `profile=True` (or
-   its `nodes/`-native successor) to real per-block activation/recompute
-   measurement is its own task, separate from and prior to the policy
-   itself. `EveryBlockPlacement` stays the safe default until real
-   `BlockCost` numbers exist; shipping `GreedyRatioPlacement` with guessed
-   costs would be worse than not having it.
-2. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
+1. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
    path, then `DoRAAdapter`** (3.1). Two real pieces, not one: the
    `AdapterStrategy` seam and `PlainLoRAAdapter` exist and are
    equivalence-tested, but neither is reachable from the actual model
@@ -1307,7 +1293,7 @@ over to it.
    actually trainable, not just seam-equivalence-tested in isolation.
    Its own equivalence/quality-comparison pass beyond that, not just an
    equivalence test (it's a real quality claim, not a refactor).
-3. **`NF4WeightStore`** (3.3). This document's single highest-value
+2. **`NF4WeightStore`** (3.3). This document's single highest-value
    remaining item, and still its own dedicated effort, not a slice of
    anything else: needs a real dequantization implementation (a fused
    dequant-matmul kernel or an explicit dequantize-then-matmul path via
@@ -1351,6 +1337,13 @@ missing is a real run:**
   comparing against a `UniformGroups` baseline, at whatever `ratio` (the
   `16.0` default is an unverified starting point) turns out to matter for
   this project's own data.
+- **`GreedyRatioPlacement`, wired and run** (2.3). `BlockProfileCollector`/
+  `ProfilingCheckpointing` produce real `BlockCost` numbers now, but
+  nothing has actually run them against this project's own UNet yet, and
+  `ComfyUNetLoRANode` has no port to select `ProfilingCheckpointing` or
+  `GreedyRatioPlacement` in the first place -- both real, separate,
+  smaller follow-ups once a first profiled run's numbers exist to wire
+  a real placement decision against.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

@@ -33,6 +33,15 @@ doc's own rule) -- `nodes/` is where new work lands.
   classes (`group_policy` port).
 - `ActivationCheckpointingStrategy` --
   `nodes/model/gradient_checkpointing.py` (2.3)
+- `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/
+  `GreedyRatioPlacement` -- `nodes/model/checkpoint_placement.py` (2.3).
+  `GreedyRatioPlacement` unvalidated against a real run.
+- `BlockProfileCollector`/`ProfilingCheckpointing` --
+  `nodes/model/block_profiler.py` (2.3). The instrumentation that was
+  actually blocking the above. Real finding: only `ResBlock` instances
+  route through this in the current ComfyUI version -- attention blocks
+  never call `checkpoint()` at all. **Not wired** into
+  `ComfyUNetLoRANode`'s ports yet.
 - Text encoder cache as a `DeviceResident` -- `nodes/model/text_encoder.py`,
   `text_encoder_cache.py` (2.4)
 - `PrefetchingBatchSource` -- `nodes/dataset/prefetch.py` (2.5)
@@ -78,7 +87,7 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 41 smoke tests under `nodes/smoke_tests/` (plus `manager/`, `server/`
+- 47 smoke tests under `nodes/smoke_tests/` (plus `manager/`, `server/`
   ones), runnable on CPU with no ComfyUI/XPU present --
   `nodes/smoke_tests/run_all.py` runs all of them.
 
@@ -87,16 +96,14 @@ doc's own rule) -- `nodes/` is where new work lands.
 See `docs/training_pipeline_design.md` section 10 for the full reasoning
 behind this order.
 
-1. Per-block profiling instrumentation, then `CheckpointPlacementPolicy`/
-   `GreedyRatioPlacement` (2.3) -- blocked on the instrumentation, not
-   the policy class
-2. Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
+1. Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
    path, then `DoRAAdapter` (3.1)
-3. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
+2. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
    a real dequantization implementation
-4. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
+3. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
-   a `UniformGroups` baseline (3.4)
+   a `UniformGroups` baseline (3.4); `GreedyRatioPlacement` wired into
+   `ComfyUNetLoRANode` and run against a real profiled `BlockCost` set (2.3)
 
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
@@ -114,4 +121,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`157bc7a` (2026-08-15).
+`a8adc77` (2026-08-15).

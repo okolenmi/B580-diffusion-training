@@ -33,55 +33,31 @@ in the first place. The one cosmetic consequence: if a checkpoint's saved
 alpha is inspected directly, or if core.lora's "alpha mismatch" print ever
 fires on a config change, the number shown is the effective alpha, not
 whatever nominal `alpha` was typed into this Node's Port.
+
+LoRAScalingPolicy/ClassicLoRAScaling/RankStabilizedScaling/_effective_alpha
+now live in lora_scaling.py, re-exported here unchanged -- moved once
+nodes/model/adapter_injection.py needed them too and importing from here
+directly would have cycled back through this module. See lora_scaling.py's
+own docstring.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from ..core import Port
 from ..resource_policy import ResourcePolicy
 from .frozen_weight_store import BF16WeightStore
+from .adapter_strategy import AdapterStrategy
 from .gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
 from .handle import ModelWeights, TrainableModel
+from .lora_scaling import ClassicLoRAScaling, LoRAScalingPolicy, RankStabilizedScaling, _effective_alpha
 from .node import LoRAInjectorNode
 
-
-class LoRAScalingPolicy(ABC):
-
-    @abstractmethod
-    def scaling(self, alpha: float, rank: int) -> float:
-        ...
-
-
-class ClassicLoRAScaling(LoRAScalingPolicy):
-    """Today's actual behavior -- core.lora's existing alpha/rank formula,
-    unchanged. Default, so nothing wired to this Node today changes."""
-
-    def scaling(self, alpha: float, rank: int) -> float:
-        return alpha / rank
-
-
-class RankStabilizedScaling(LoRAScalingPolicy):
-    """Kalajdzievski, "A Rank Stabilization Scaling Factor for Fine-Tuning
-    with LoRA" (arXiv:2312.03732, 2023). Its actual value depends on
-    training at higher rank than this project's current default (rank=64)
-    to have anything to stabilize -- worth pairing with a rank increase,
-    not independently useful at the current default rank by itself."""
-
-    def scaling(self, alpha: float, rank: int) -> float:
-        return alpha / (rank ** 0.5)
-
-
-def _effective_alpha(alpha: float, rank: int, policy: LoRAScalingPolicy) -> float:
-    """The seam itself, pulled out as its own function so it's directly
-    testable without constructing a whole ComfyUNetWrapper -- see this
-    module's docstring for the derivation. ClassicLoRAScaling is the
-    identity (returns alpha unchanged); anything else changes what
-    core.lora ends up computing for `scaling` without core.lora itself
-    changing at all."""
-    return policy.scaling(alpha, rank) * rank
+__all__ = [
+    "ClassicLoRAScaling", "LoRAScalingPolicy", "RankStabilizedScaling",
+    "ComfyUNetTrainableModel", "ComfyUNetLoRANode",
+]
 
 
 class ComfyUNetTrainableModel(TrainableModel):
@@ -224,6 +200,16 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "lora_scaling_policy() are used instead, and use_checkpoint/scaling_policy "
                 "are ignored.",
         ),
+        "adapter_strategy": Port(
+            name="adapter_strategy", type=AdapterStrategy, required=False, default=None,
+            doc="None = PlainLoRAAdapter (today's exact core.lora.LoRALinear/LoRAConv2d "
+                "behavior, byte-identical -- nothing patched at all, see "
+                "nodes/model/adapter_injection.py for why that's correct, not a shortcut). "
+                "Any other AdapterStrategy (nodes/model/adapter_strategy.py) is live-wired "
+                "into core.lora's real, unmodified injection tree-walk via a scoped, "
+                "restored-on-exit patch -- see adapter_injection.py's module docstring for "
+                "the full mechanism and the alpha-double-application pitfall it avoids.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -232,7 +218,11 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         from core.lora import LoRAConfig
         from core.unet_wrapper import ComfyUNetWrapper
 
+        from .adapter_injection import adapter_strategy_scope
+        from .adapter_strategy import PlainLoRAAdapter
+
         weights: ModelWeights = inputs["weights"]
+        adapter_strategy = inputs.get("adapter_strategy") or PlainLoRAAdapter()
         resource_policy = inputs.get("resource_policy")
         if resource_policy is not None:
             checkpointing_strategy = resource_policy.checkpointing_strategy()
@@ -254,13 +244,14 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),
         )
-        wrapper = ComfyUNetWrapper(
-            weights.unet_sd,
-            device=inputs.get("device", self.INPUTS["device"].default),
-            dtype=inputs.get("dtype") or torch.bfloat16,
-            use_checkpoint=use_checkpoint,
-            lora_config=lora_config,
-        )
+        with adapter_strategy_scope(adapter_strategy):
+            wrapper = ComfyUNetWrapper(
+                weights.unet_sd,
+                device=inputs.get("device", self.INPUTS["device"].default),
+                dtype=inputs.get("dtype") or torch.bfloat16,
+                use_checkpoint=use_checkpoint,
+                lora_config=lora_config,
+            )
         result = {"model": ComfyUNetTrainableModel(wrapper)}
         self.validate_outputs(result)
         return result

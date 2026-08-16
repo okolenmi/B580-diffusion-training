@@ -48,10 +48,13 @@ doc's own rule) -- `nodes/` is where new work lands.
 
 **Model / LoRA**
 - `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` --
-  `nodes/model/adapter_strategy.py`, `lora_injector.py` (3.1, 3.2). Seam
-  built and equivalence-tested, **not live-wired** into
-  `ComfyUNetLoRANode`'s real construction path yet (still
-  `core.lora._inject_lora`).
+  `nodes/model/adapter_strategy.py`, `nodes/model/lora_scaling.py`
+  (3.1, 3.2). **Live-wired** into `ComfyUNetLoRANode`'s real
+  construction path via `nodes/model/adapter_injection.py`'s
+  `adapter_strategy_scope` (new `adapter_strategy` port, default `None`
+  -> `PlainLoRAAdapter()`, no behavior change). Fixed a real recursion
+  hazard along the way (see `adapter_strategy.py`'s
+  `_real_lora_classes()`).
 - `FrozenWeightStore`/`BF16WeightStore` --
   `nodes/model/frozen_weight_store.py` (3.3)
 - `ParameterGroupPolicy`, `LoRAPlusGroups` --
@@ -87,17 +90,17 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 47 smoke tests under `nodes/smoke_tests/` (plus `manager/`, `server/`
-  ones), runnable on CPU with no ComfyUI/XPU present --
-  `nodes/smoke_tests/run_all.py` runs all of them.
+- 45 smoke tests under `nodes/smoke_tests/` (runnable via
+  `nodes/smoke_tests/run_all.py`), plus 3 more under `manager/`/`server/`
+  -- all CPU-only, no ComfyUI/XPU needed.
 
 ## Still open, in priority order
 
 See `docs/training_pipeline_design.md` section 10 for the full reasoning
 behind this order.
 
-1. Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
-   path, then `DoRAAdapter` (3.1)
+1. `DoRAAdapter` (3.1) -- now the only remaining piece, live-wiring is
+   done
 2. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
    a real dequantization implementation
 3. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
@@ -121,4 +124,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`a8adc77` (2026-08-15).
+`09d576e` (2026-08-16).

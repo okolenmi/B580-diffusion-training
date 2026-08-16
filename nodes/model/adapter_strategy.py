@@ -29,7 +29,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .frozen_weight_store import BF16WeightStore, FrozenWeightStore
-from .lora_injector import LoRAScalingPolicy, _effective_alpha
+from .lora_scaling import LoRAScalingPolicy, _effective_alpha
 
 
 class AdaptedLayer(ABC):
@@ -82,7 +82,7 @@ class PlainLoRAAdapter(AdapterStrategy):
             )
         import torch.nn as nn
 
-        from core.lora import LoRAConv2d, LoRALinear
+        LoRALinear, LoRAConv2d = _real_lora_classes()
 
         _register_legacy_adapted_layers()
         effective_alpha = _effective_alpha(alpha=alpha, rank=rank, policy=scaling_policy)
@@ -110,6 +110,42 @@ def _register_legacy_adapted_layers():
     nodes/model/lora_phases.py's docstring for the same reasoning) --
     core.lora imports torch at its own module level, so this genuinely
     can't run until something -- here, wrap() -- actually needs it."""
-    from core.lora import LoRAConv2d, LoRALinear
+    LoRALinear, LoRAConv2d = _real_lora_classes()
     AdaptedLayer.register(LoRALinear)
     AdaptedLayer.register(LoRAConv2d)
+
+
+# Populated by nodes/model/adapter_injection.py's adapter_strategy_scope,
+# at the one moment core.lora.LoRALinear/LoRAConv2d are guaranteed to
+# still be the real classes -- right before it patches them. Never
+# written to from this module.
+_real_lora_classes_cache: dict = {}
+
+
+def _real_lora_classes():
+    """The real core.lora.LoRALinear/LoRAConv2d -- guaranteed real even
+    while adapter_strategy_scope has core.lora.LoRALinear/LoRAConv2d
+    patched to something else.
+
+    Why this exists: PlainLoRAAdapter.wrap() has to construct the real
+    classes regardless of what's calling it -- including when it's
+    being used as the delegate inside some *other* AdapterStrategy
+    (e.g. a future DoRAAdapter reusing PlainLoRAAdapter's construction
+    for its base layer). If wrap() re-imported `core.lora.LoRALinear`
+    live at that point, it would resolve to whatever
+    adapter_strategy_scope currently has installed -- itself, in the
+    case where PlainLoRAAdapter is the delegate -- recursing forever.
+    Confirmed by hitting exactly that RecursionError while building the
+    equivalence test for this (nodes/smoke_tests/smoke_test_adapter_injection.py),
+    not theorized in advance.
+
+    Falls back to a live import when the cache is empty, which is
+    correct precisely because adapter_strategy_scope always populates
+    the cache itself, at the one point core.lora's classes are still
+    guaranteed real, before ever patching them -- so an empty cache
+    means core.lora has never been patched at all yet, and its current
+    classes are simply the real ones."""
+    if _real_lora_classes_cache:
+        return _real_lora_classes_cache["LoRALinear"], _real_lora_classes_cache["LoRAConv2d"]
+    from core.lora import LoRAConv2d, LoRALinear
+    return LoRALinear, LoRAConv2d

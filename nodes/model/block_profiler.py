@@ -46,9 +46,9 @@ real dotted names would mean widening that ABC's surface specifically
 for this. Real, separate follow-up if the ordinal+class-name label ever
 proves not enough to act on -- not bundled into this change.
 
-**Not wired into ComfyUNetLoRANode's real construction path.** Same
-status as AdapterStrategy's seam (section 3.1): real, tested,
-composable via the existing ActivationCheckpointingStrategy interface,
+**Not wired into ComfyUNetLoRANode's real construction path** (unlike
+AdapterStrategy's seam, live-wired as of nodes/model/adapter_injection.py
+-- see design doc section 3.1). Real, tested, composable via the existing ActivationCheckpointingStrategy interface,
 reachable by any caller that constructs a ProfilingCheckpointing
 directly, but ComfyUNetLoRANode's use_checkpoint/resource_policy ports
 don't yet have a way to select it. Exposing it as a real Node input is

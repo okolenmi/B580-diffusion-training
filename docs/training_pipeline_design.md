@@ -387,11 +387,18 @@ assumed in advance: `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy`
 (`nodes/resource_policy.py`) cover exactly three choices --
 `checkpointing_strategy()`, `lora_scaling_policy()`, and
 `parameter_group_policy()` -- not the seven this section originally
-sketched. `adapter_strategy()`/`frozen_weight_store()` were cut because
-neither `AdapterStrategy` implementation nor a chosen `FrozenWeightStore`
-is reachable from `ComfyUNetLoRANode`'s real construction path at all
-yet (3.1, 3.3) -- a policy method for a choice nothing can act on would
-be scaffolding, not a feature. `optimizer_execution_strategy()` was cut
+sketched. `adapter_strategy()` was cut, and stays cut even now that
+`AdapterStrategy` is reachable from `ComfyUNetLoRANode`'s real
+construction path (3.1): it's wired as its own standalone
+`adapter_strategy` port instead, the same way `checkpointing_strategy`
+is a real choice made independently of (and overridden by)
+`resource_policy` rather than routed only through it -- a `ResourcePolicy`
+method for this would duplicate a choice that already has a real,
+working home, not fill a gap. `frozen_weight_store()` was cut because a
+chosen `FrozenWeightStore` still isn't reachable from
+`ComfyUNetLoRANode`'s real construction path (3.3) -- a policy method for
+a choice nothing can act on would be scaffolding, not a feature.
+`optimizer_execution_strategy()` was cut
 because `ExecutionStrategy` selection is already a real Port (`strategy`)
 on each `Composed*OptimizerNode`, but which *Algorithm* to use (CAME/
 Adafactor/AdamW) is a choice of *Node class*, not a Port value -- there's
@@ -520,12 +527,12 @@ call.
   constraint on what this item can decide over today, not a gap in the
   implementation.
 
-**Not wired into `ComfyUNetLoRANode`'s real construction path.** Same
-status `AdapterStrategy`'s seam has (3.1): real, tested, reachable by
-any caller that constructs a `ProfilingCheckpointing` directly, but
-`use_checkpoint`/`resource_policy` don't yet have a way to select it, and
-`GreedyRatioPlacement` isn't wired in as a real choice either --
-`EveryBlockPlacement`'s unconditional behavior stays what
+**Not wired into `ComfyUNetLoRANode`'s real construction path** (unlike
+`AdapterStrategy`'s seam, now live-wired -- see 3.1): real, tested,
+reachable by any caller that constructs a `ProfilingCheckpointing`
+directly, but `use_checkpoint`/`resource_policy` don't yet have a way to
+select it, and `GreedyRatioPlacement` isn't wired in as a real choice
+either -- `EveryBlockPlacement`'s unconditional behavior stays what
 `use_checkpoint=True` actually does. Real, separate follow-up, once a
 first real profiled run's `BlockCost` numbers exist to validate a real
 placement against -- see section 10.
@@ -643,22 +650,54 @@ class DoRAAdapter(AdapterStrategy):
 ```
 
 The seam this needed (`AdapterStrategy` existing at all, with a real
-second conformance checked against it) exists -- but stated plainly
-rather than glossed over, and checked directly against the real call
-graph rather than assumed: **neither `AdapterStrategy` implementation is
-reachable from `ComfyUNetLoRANode`'s real construction path today.** LoRA injection
-there still runs entirely through `core.lora._inject_lora`'s own
-tree-walk (matching SDXL's specific attention-block structure --
-`to_q`/`to_k`/`to_v`/`to_out.0`, `time_embed`/`label_emb` segment
-matching, per-block weighting), not through `AdapterStrategy.wrap()`.
-Wiring it in for real means either modifying `core/lora.py` (against
-this project's standing rule) or re-deriving that tree-walk inside
-`nodes/` -- genuinely separate, large work, correctly out of scope for
-the seam-building slice that already landed and equivalence-tested
-`PlainLoRAAdapter` against it. `DoRAAdapter` can be built and
-quality-tested against the seam as written below, but making it
-*trainable in a real run* needs that live-wiring gap closed too -- see
-the backlog, section 10, item 3, which accounts for both.
+second conformance checked against it) exists, **and is now live-wired
+into `ComfyUNetLoRANode`'s real construction path** --
+`nodes/model/adapter_injection.py`'s `adapter_strategy_scope`, a new
+`adapter_strategy` port (default `None` -> `PlainLoRAAdapter()`, so
+nothing wired to this Node today changes). Neither modifying
+`core/lora.py` (against this project's standing rule) nor re-deriving
+`_inject_lora`'s tree-walk inside `nodes/` turned out to be necessary:
+`_inject_lora` constructs its target layers by calling
+`LoRALinear(...)`/`LoRAConv2d(...)` as plain module-level names, which
+Python resolves from `core.lora`'s own namespace at call time -- a real,
+exploitable seam. `adapter_strategy_scope` temporarily replaces what
+those two names point to for the duration of one `ComfyUNetWrapper(...)`
+construction call, restored on every exit (exception or not), so
+`_inject_lora`'s real, unmodified, already-correct targeting logic keeps
+running exactly as before -- only what happens at each target it finds
+changes. `PlainLoRAAdapter` selected (the default) installs no patch at
+all, since it *is* `core.lora`'s own behavior by definition -- there's
+nothing to intercept.
+
+**A real recursion hazard, found by hitting it, not by predicting it in
+advance**, and now fixed generally rather than routed around: any
+`AdapterStrategy` whose `wrap()` internally constructs real
+`LoRALinear`/`LoRAConv2d` (`PlainLoRAAdapter` does; a future
+`DoRAAdapter` reusing `PlainLoRAAdapter`'s base construction naturally
+would too) would, if it re-imported those classes live from `core.lora`
+while a patch is active, resolve to the patch itself and recurse
+forever. Fixed with a small cache
+(`adapter_strategy.py`'s `_real_lora_classes()`/`_real_lora_classes_cache`)
+that `adapter_strategy_scope` populates with the real classes at the one
+moment they're still guaranteed real -- immediately before patching --
+so `PlainLoRAAdapter.wrap()` gets the real ones regardless of what's
+currently patched or what's calling it.
+
+Also fixed while landing this: `ComfyUNetLoRANode.build()` already
+resolves `scaling_policy` into a single effective alpha *before*
+`core.lora` ever runs (3.2's seam) -- so the `alpha` `_inject_lora` hands
+to each target is already final. `adapter_strategy_scope`'s patched
+construction always passes `ClassicLoRAScaling()` (a proven identity on
+an already-effective alpha) as `wrap()`'s `scaling_policy` argument,
+regardless of what the person actually chose -- passing the real one
+would apply it a second time. Equivalence-tested directly: a `RankStabilizedScaling`-produced
+effective alpha, run through both the real, unpatched path and the
+patched path, land on byte-identical `layer.alpha`/`layer.scaling`.
+
+`DoRAAdapter` above is still **not implemented** -- now genuinely just
+that one remaining piece (design rationale above still applies
+unchanged), not blocked on any wiring gap anymore. Once built, it's
+trainable in a real run immediately, no further live-wiring needed.
 
 ### 3.2 `LoRAScalingPolicy`
 
@@ -1175,7 +1214,8 @@ matter anymore -- both are equally done.
 | `BlockProfileCollector`/`ProfilingCheckpointing` (2.3) | `nodes/model/block_profiler.py` | Backlog item 1 (instrumentation half -- the actual blocker). Only `ResBlock` instances ever reach it in this ComfyUI version -- see 2.3. Not wired into `ComfyUNetLoRANode`'s real construction path -- see 9.2. |
 | Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
-| `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_injector.py` | Backlog item 9 (part 2), item 5. Seam built and equivalence-tested, not live-wired into `ComfyUNetLoRANode` (still `core.lora._inject_lora`). `DoRAAdapter` still open -- see 9.2. |
+| `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` still open -- see 9.2. |
+| `adapter_strategy_scope` (3.1) | `nodes/model/adapter_injection.py` | Live-wires `AdapterStrategy` into `core.lora._inject_lora`'s real, unmodified targeting logic without modifying `core/lora.py`. See 3.1 for the mechanism and the recursion hazard it fixes. |
 | `FrozenWeightStore`/`BF16WeightStore` (3.3) | `nodes/model/frozen_weight_store.py` | Backlog item 9 (part 1). `NF4WeightStore` itself still open -- see 9.2. |
 | `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
 | `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy` (2.2) | `nodes/resource_policy.py` | Scoped to 3 of the design's original 7 methods -- see 2.2 for why. Wired into `ComfyUNetLoRANode` (`resource_policy` port) and, via a separate direct `group_policy` port, all three `Composed*OptimizerNode` classes. |
@@ -1195,14 +1235,13 @@ still asking for something. See section 10 for the ordered plan.
 
 **`DoRAAdapter` (3.1).** Doesn't exist. The seam it needs
 (`AdapterStrategy`, with a real second conformance already checked
-against it) does now, which it didn't before. Real quality win, bounded
-new forward-pass code (weight normalization + magnitude scaling), its
-own equivalence/quality-testing pass, additive to `PlainLoRAAdapter`.
-**Building the class alone isn't sufficient to train with it, though:**
-neither `AdapterStrategy` implementation is reachable from
-`ComfyUNetLoRANode`'s real construction path yet (still
-`core.lora._inject_lora`'s own tree-walk) -- see 3.1 and backlog item 3
-for both halves of what's actually needed.
+against it) does now, and -- unlike when this was last written -- is
+also now live-wired into `ComfyUNetLoRANode`'s real construction path
+(`nodes/model/adapter_injection.py`'s `adapter_strategy_scope`), so
+building `DoRAAdapter` is now the *only* remaining piece, not one of
+two. Real quality win, bounded new forward-pass code (weight
+normalization + magnitude scaling), its own equivalence/quality-testing
+pass, additive to `PlainLoRAAdapter`.
 
 **`NF4WeightStore` (3.3).** Doesn't exist. Still this document's single
 highest-value remaining item -- needs a real dequantization
@@ -1265,10 +1304,11 @@ items that led this list after it** -- `DiffusionProcess`/`DeviceContext`,
 all conforming), the `ParameterGroupPolicy` fix, `LoRAScalingPolicy`,
 Min-SNR's v-prediction branch + `P2LossWeighting`,
 `ActivationCheckpointingStrategy`, `ProjectLayout`, the
-`AdapterStrategy`/`FrozenWeightStore` seam, `TrainingStepPipeline`/
-`StepPhase`, `PrefetchingBatchSource`, `ResourceCoordinator`/
-`OffloadOrchestrator`, `ResourceBudget`/`ResourcePolicy`/
-`ManualResourcePolicy`, `ResourceProfile`, and
+`AdapterStrategy`/`FrozenWeightStore` seam (now live-wired into
+`ComfyUNetLoRANode`'s real construction path -- see 3.1),
+`TrainingStepPipeline`/`StepPhase`, `PrefetchingBatchSource`,
+`ResourceCoordinator`/`OffloadOrchestrator`, `ResourceBudget`/
+`ResourcePolicy`/`ManualResourcePolicy`, `ResourceProfile`, and
 `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/
 `GreedyRatioPlacement`/`BlockProfileCollector`/`ProfilingCheckpointing`
 are all real, tested code -- see section 9.1 for exactly where each one
@@ -1280,18 +1320,12 @@ one equivalence-tested against whatever it replaces (or, for the
 validation-only items at the end, tested by a real training run instead)
 before anything switches over to it.
 
-1. **Wire `AdapterStrategy` into `ComfyUNetLoRANode`'s real construction
-   path, then `DoRAAdapter`** (3.1). Two real pieces, not one: the
-   `AdapterStrategy` seam and `PlainLoRAAdapter` exist and are
-   equivalence-tested, but neither is reachable from the actual model
-   that gets trained -- `core.lora._inject_lora`'s tree-walk still does
-   real LoRA injection unmodified. Live-wiring that (replacing the
-   tree-walk's per-layer `LoRALinear`/`LoRAConv2d` construction with
-   `AdapterStrategy.wrap()` calls, without touching `core/lora.py`
-   itself) is its own real, nontrivial equivalence-tested slice -- once
-   it lands, `DoRAAdapter` is buildable and, for the first time,
-   actually trainable, not just seam-equivalence-tested in isolation.
-   Its own equivalence/quality-comparison pass beyond that, not just an
+1. **`DoRAAdapter`** (3.1). Now the *only* remaining piece for a real,
+   trainable DoRA -- the live-wiring that used to be a separate,
+   prerequisite half of this item is done (`adapter_strategy_scope`,
+   `nodes/model/adapter_injection.py`). Real quality win, bounded new
+   forward-pass code (weight normalization + magnitude scaling), its own
+   equivalence/quality-comparison pass beyond a construction-time
    equivalence test (it's a real quality claim, not a refactor).
 2. **`NF4WeightStore`** (3.3). This document's single highest-value
    remaining item, and still its own dedicated effort, not a slice of

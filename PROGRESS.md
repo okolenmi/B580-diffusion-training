@@ -58,8 +58,13 @@ doc's own rule) -- `nodes/` is where new work lands.
   recursion hazard along the way (see `lora_class_cache.py`'s
   `_real_lora_classes()`). Real gap, not yet closed: checkpoint
   save/load doesn't know about DoRA's `magnitude` parameter.
-- `FrozenWeightStore`/`BF16WeightStore` --
-  `nodes/model/frozen_weight_store.py` (3.3)
+- `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` --
+  `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`
+  (3.3). NF4 quantization grounded directly in bitsandbytes' real source
+  (3.875x compression vs bf16 at realistic scale, double-quant savings
+  matching the QLoRA paper's own reported figure almost exactly). **Not
+  yet wired** into a real forward path -- `materialize()` exists, nothing
+  calls it yet.
 - `ParameterGroupPolicy`, `LoRAPlusGroups` --
   `nodes/optimizer/composed.py` (3.4). Selectable from the graph now,
   **not yet validated** with a real tuned run.
@@ -93,7 +98,7 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 46 smoke tests under `nodes/smoke_tests/` (runnable via
+- 47 smoke tests under `nodes/smoke_tests/` (runnable via
   `nodes/smoke_tests/run_all.py`), plus 3 more under `manager/`/`server/`
   -- all CPU-only, no ComfyUI/XPU needed.
 
@@ -102,14 +107,18 @@ doc's own rule) -- `nodes/` is where new work lands.
 See `docs/training_pipeline_design.md` section 10 for the full reasoning
 behind this order.
 
-1. `NF4WeightStore` (3.3) -- the single remaining unbuilt technique, needs
-   a real dequantization implementation
+1. Wire `NF4WeightStore` into a real forward path (3.3) -- quantization
+   itself is done; needs a layer class that calls `materialize()` during
+   forward (fused dequant-matmul kernel or `MemoryManager`-backed
+   scratch buffer)
 2. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
    a `UniformGroups` baseline (3.4); `GreedyRatioPlacement` wired into
    `ComfyUNetLoRANode` and run against a real profiled `BlockCost` set
    (2.3); `DoRAAdapter` run on real data to confirm the quality
-   improvement shows up here too (3.1)
+   improvement shows up here too (3.1); `NF4WeightStore`'s
+   diffusion-specific quality check against this project's real UNet
+   (3.3)
 3. Real gap, not validation: wire DoRA's `magnitude` into checkpoint
    save/load (`nodes/model/lora_saver.py`,
    `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode`) -- trainable
@@ -131,4 +140,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`a9a66c4` (2026-08-16).
+`7d84c54` (2026-08-17).

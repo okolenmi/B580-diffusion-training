@@ -29,13 +29,13 @@ its *rationale*, which is why that rationale is kept even where the
 illustrative code it originally sat next to has been removed.
 
 What's left in this document, in full, with illustrative code, is only
-what's genuinely still open: one seam-only technique not yet built out
-(`NF4WeightStore`), and two pieces of *validation* work that landing
-code alone can't finish (`RescaledZeroTerminalSNRSchedule` needs a real
-end-to-end v-prediction training run; `LoRAPlusGroups` needs a real tuned
-run, not just existing as an opt-in policy). This remains a planning
-document for those pieces -- their illustrative code is a strong
-proposal, not a spec set in stone,
+what's genuinely still open: wiring `NF4WeightStore` (implemented, see
+3.3) into a real forward path, and two pieces of *validation* work that
+landing code alone can't finish (`RescaledZeroTerminalSNRSchedule` needs
+a real end-to-end v-prediction training run; `LoRAPlusGroups` needs a
+real tuned run, not just existing as an opt-in policy). This remains a
+planning document for those pieces -- their illustrative code is a
+strong proposal, not a spec set in stone,
 same as before. Section 9 (Implementation status) is where this gets
 compared against what `nodes/` actually is today; section 10 (Prioritized
 backlog) is the ordered, concrete plan for what's left.
@@ -773,31 +773,44 @@ its LLM results.
 (`nodes/model/frozen_weight_store.py`) -- the frozen base kept exactly as
 loaded, no change to any existing forward path. This closed the
 `TrainableModel.footprint_bytes()` gap (1.2) it existed for.
-`NF4WeightStore` below is **not implemented** -- design rationale for it
-lives here, not in `nodes/model/frozen_weight_store.py` (which points
-back to this section rather than duplicating this content):
 
-```python
-class NF4WeightStore(FrozenWeightStore):
-    """QLoRA-style blockwise NF4 + double quantization. Deliberately not
-    designed in more detail here -- see calibration below. materialize()
-    would dequantize to bf16 each call; a real implementation needs a
-    genuine decision about caching that dequantized tensor per step vs.
-    re-dequantizing per use (a real VRAM/speed tradeoff this design
-    doesn't resolve for you)."""
-    ...
-```
+`NF4WeightStore` (`nodes/model/nf4_weight_store.py`) is **implemented
+too** -- real blockwise NF4 quantization plus double quantization of the
+per-block scale factors, grounded directly in bitsandbytes' real,
+current source (`bitsandbytes/functional.py`, fetched and read directly,
+not recalled or derived from the paper's equations alone) rather than
+guessed: the 16-value codebook is reproduced in pure PyTorch
+(`torch.special.ndtri`, the inverse standard-normal CDF, in place of
+`scipy.stats.norm.ppf`, avoiding a new dependency) and verified against
+bitsandbytes' own published codebook constants directly, matching to
+float32-rounding precision. Real numbers, checked at a realistic weight
+size (1280x1280, matching an actual SDXL cross-attention projection):
+3.875x compression vs. bf16, and double quantization's own savings
+(0.371 bits/parameter measured) landing almost exactly on the QLoRA
+paper's own reported ~0.37 bits/parameter figure -- a real, independent
+confirmation, not tuned to match.
 
-**Calibration.** This is the single most valuable item left in this whole
-document -- but still not designed in full, on purpose: dequantizing NF4
-on the fly needs either a custom fused dequant-matmul kernel or an
-explicit dequantize-then-matmul path with its own `MemoryManager`-backed
-scratch-buffer story, real substantial systems work, plus the
-diffusion-specific quality caveat above genuinely needs checking against
-this project's own real UNet, not assumed to transfer from the LLM
-literature. Design and validate `NF4WeightStore` as its own dedicated
-effort, scoped like a `nodes/components/` migration with its own
-equivalence-testing pass (see the backlog, section 10).
+**One real, deliberate simplification, not a byte-exact port**: double
+quantization's second level (compressing the per-block absmax values
+themselves) uses plain linear min-max 8-bit quantization here, not
+bitsandbytes' own general-purpose "dynamic" 8-bit map
+(`create_dynamic_map()`) -- a separate, more involved piece of machinery
+whose own exact reproduction would add real complexity for a small share
+of this class's total value (the ~0.37 bits/parameter figure above is
+itself already close to bitsandbytes' own reported number, suggesting
+the choice of second-level scheme matters less than getting the primary
+4-bit NF4 quantization right).
+
+**Not yet wired into a real forward pass.** `materialize()` exists
+specifically so an `AdapterStrategy` could call it each forward for a
+fresh dequantized tensor, but `PlainLoRAAdapter`/`DoRAAdapter` both still
+only honor `BF16WeightStore` and read `core.lora.LoRALinear`/
+`LoRAConv2d`'s own `base_weight` buffer directly -- `materialize()` is
+never actually called from a real forward path yet. That, plus the
+diffusion-specific quality caveat above (which needs an actual training
+run on this project's own UNet to check, not assumed from the LLM
+literature), are both real, separate follow-up work -- see the backlog,
+section 10.
 
 ### 3.4 Per-parameter-group learning rates
 
@@ -1069,7 +1082,8 @@ policy = ManualResourcePolicy(                            # 2.2, real,
 # routed through `policy` -- see 2.2 for why each one is scoped out
 adapter_strategy = PlainLoRAAdapter()          # 3.1, real -- DoRAAdapter() also real now,
                                                 # live-wired via adapter_strategy_scope
-frozen_weight_store = BF16WeightStore          # 3.3, real -- NF4WeightStore NOT implemented
+frozen_weight_store = BF16WeightStore          # 3.3, real -- NF4WeightStore also real now,
+                                                # not yet wired into a forward path
 memory = MemoryManager()                                  # 1.3, unchanged, real
 coordinator = ResourceCoordinator()                        # 5.1, real
 
@@ -1232,7 +1246,7 @@ matter anymore -- both are equally done.
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
 | `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5, and formerly item 1. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` grounded directly in HuggingFace PEFT's real source. Checkpoint save/load doesn't know about `magnitude` yet -- see 3.1. |
 | `adapter_strategy_scope` (3.1) | `nodes/model/adapter_injection.py` | Live-wires `AdapterStrategy` into `core.lora._inject_lora`'s real, unmodified targeting logic without modifying `core/lora.py`. See 3.1 for the mechanism and the recursion hazard it fixes. |
-| `FrozenWeightStore`/`BF16WeightStore` (3.3) | `nodes/model/frozen_weight_store.py` | Backlog item 9 (part 1). `NF4WeightStore` itself still open -- see 9.2. |
+| `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` (3.3) | `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py` | Backlog item 9 (part 1), and formerly item 1. `NF4WeightStore` grounded directly in bitsandbytes' real source -- see 3.3. Not yet wired into a real forward path -- see 9.2. |
 | `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
 | `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy` (2.2) | `nodes/resource_policy.py` | Scoped to 3 of the design's original 7 methods -- see 2.2 for why. Wired into `ComfyUNetLoRANode` (`resource_policy` port) and, via a separate direct `group_policy` port, all three `Composed*OptimizerNode` classes. |
 | `LossWeighting`/`LRSchedule` (section 4) | `nodes/train/loss.py`/`schedule.py` | Pre-existing clean ABCs, confirmed by `P2LossWeighting` needing zero interface change; v-pred branch + `P2LossWeighting` are backlog item 6. |
@@ -1249,12 +1263,14 @@ matter anymore -- both are equally done.
 Everything below is real -- these are the only pieces of this document
 still asking for something. See section 10 for the ordered plan.
 
-**`NF4WeightStore` (3.3).** Doesn't exist. Now this document's single
-remaining unbuilt technique -- needs a real dequantization
-implementation (a fused kernel or a `MemoryManager`-backed
-dequant-then-matmul scratch-buffer story) and verification against this
-project's own real UNet, not assumed from the LLM literature. Its own
-dedicated effort.
+**`NF4WeightStore`, wired into a real forward path (3.3).** The
+quantization itself is done -- real blockwise NF4, real double
+quantization, grounded in bitsandbytes' actual source. What's missing:
+a layer class that actually calls `materialize()` during forward (a
+fused dequant-matmul kernel, or an explicit dequantize-then-matmul path
+with its own `MemoryManager`-backed scratch buffer -- real systems work,
+its own dedicated effort), and verification against this project's own
+real UNet, not assumed from the LLM literature.
 
 **A real gap DoRAAdapter's landing left, honestly flagged rather than
 hidden (3.1).** Checkpoint save/load doesn't know about DoRA's
@@ -1323,24 +1339,25 @@ Min-SNR's v-prediction branch + `P2LossWeighting`,
 `ComfyUNetLoRANode`'s real construction path -- see 3.1),
 `TrainingStepPipeline`/`StepPhase`, `PrefetchingBatchSource`,
 `ResourceCoordinator`/`OffloadOrchestrator`, `ResourceBudget`/
-`ResourcePolicy`/`ManualResourcePolicy`, `ResourceProfile`, and
+`ResourcePolicy`/`ManualResourcePolicy`, `ResourceProfile`,
 `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/
-`GreedyRatioPlacement`/`BlockProfileCollector`/`ProfilingCheckpointing`
-are all real, tested code -- see section 9.1 for exactly where each one
-lives, and 2.2 for two real deviations `ResourcePolicy`'s implementation
-took from this document's own illustration once it was actually built.
-What follows is a fresh list: only what's actually still open, ordered
-by what unblocks what, sized to be independently landable slices, each
-one equivalence-tested against whatever it replaces (or, for the
+`GreedyRatioPlacement`/`BlockProfileCollector`/`ProfilingCheckpointing`,
+`DoRAAdapter`, and `NF4WeightStore`'s quantization itself are all real,
+tested code -- see section 9.1 for exactly where each one lives, and 2.2
+for two real deviations `ResourcePolicy`'s implementation took from this
+document's own illustration once it was actually built. What follows is
+a fresh list: only what's actually still open, ordered by what unblocks
+what, sized to be independently landable slices, each one
+equivalence-tested against whatever it replaces (or, for the
 validation-only items at the end, tested by a real training run instead)
 before anything switches over to it.
 
-1. **`NF4WeightStore`** (3.3). This document's single remaining unbuilt
-   technique, and its own dedicated effort, not a slice of anything
-   else: needs a real dequantization implementation (a fused
-   dequant-matmul kernel or an explicit dequantize-then-matmul path via
-   `MemoryManager`) and verification against this project's actual UNet
-   specifically, not assumed from the LLM literature -- the
+1. **Wire `NF4WeightStore` into a real forward path** (3.3). The
+   quantization itself is done and equivalence-tested; what's left is a
+   layer class that actually calls `materialize()` during forward (a
+   fused dequant-matmul kernel, or an explicit dequantize-then-matmul
+   path via `MemoryManager`) and verification against this project's
+   actual UNet specifically, not assumed from the LLM literature -- the
    diffusion-specific quality caveat in 3.3 needs checking directly, not
    inherited from QLoRA's own LLM benchmarks. `DoRAAdapter` (3.1) is
    done, confirmed compatible with quantized bases in published work

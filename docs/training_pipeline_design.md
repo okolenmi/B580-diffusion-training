@@ -29,12 +29,9 @@ its *rationale*, which is why that rationale is kept even where the
 illustrative code it originally sat next to has been removed.
 
 What's left in this document, in full, with illustrative code, is only
-what's genuinely still open: two seam-only techniques not yet built out
-(`DoRAAdapter`, `NF4WeightStore`), one policy blocked on missing
-instrumentation (`CheckpointPlacementPolicy`), consolidating abstractions
-not yet needed (`ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`,
-`ResourceProfile`), and two pieces of *validation* work that landing code
-alone can't finish (`RescaledZeroTerminalSNRSchedule` needs a real
+what's genuinely still open: one seam-only technique not yet built out
+(`NF4WeightStore`), and two pieces of *validation* work that landing
+code alone can't finish (`RescaledZeroTerminalSNRSchedule` needs a real
 end-to-end v-prediction training run; `LoRAPlusGroups` needs a real tuned
 run, not just existing as an opt-in policy). This remains a planning
 document for those pieces -- their illustrative code is a strong
@@ -616,38 +613,57 @@ see `nodes/model/adapter_strategy.py`'s own docstring for exactly why
 that's correct for `BF16WeightStore` and would not be for a real
 `NF4WeightStore` (3.3).
 
-`DoRAAdapter` below is **not implemented** -- design rationale for it
-lives here, not in `nodes/model/adapter_strategy.py` (which points back
-to this section rather than duplicating this content, so the one place
-describing an unbuilt class can't drift out of sync with the class
-actually getting built):
+**Implemented**: `DoRAAdapter` -- Liu et al., "DoRA: Weight-Decomposed
+Low-Rank Adaptation" (arXiv:2402.09353, ICML 2024 Oral). `nodes/model/dora_layer.py`'s
+`DoRALinear`/`DoRAConv2d`, `nodes/model/adapter_strategy.py`'s
+`DoRAAdapter(AdapterStrategy)`. Decomposes each frozen weight matrix
+into a magnitude component (one learnable scalar per output channel)
+and a direction component (the weight-normalized matrix), applying LoRA
+only to the direction while training the magnitude directly.
 
-```python
-class DoRAAdapter(AdapterStrategy):
-    """Liu et al., 'DoRA: Weight-Decomposed Low-Rank Adaptation'
-    (arXiv:2402.09353, ICML 2024 Oral). Decomposes each frozen weight
-    matrix into a magnitude component (one learnable scalar per output
-    channel) and a direction component (the weight-normalized matrix),
-    applying LoRA only to the direction while training the magnitude
-    directly -- reported to consistently outperform plain LoRA across
-    LLaMA/LLaVA/VL-BART benchmarks, with no added inference cost (the
-    decomposition folds back into a single weight matrix after training,
-    same as plain LoRA). The extra trainable parameter count is one
-    scalar per output channel -- negligible next to the LoRA matrices
-    themselves, let alone the frozen base. Confirmed directly: DoRA and
-    quantized-base training (3.3) already compose in published work
-    ('QDoRA', referenced in the DoRA paper's own repo and in a public
-    Answer.AI FSDP+QDoRA writeup) -- AdapterStrategy and FrozenWeightStore
-    are genuinely orthogonal axes, not one combined 'quality mode' flag.
+**Grounded directly in HuggingFace PEFT's real implementation**
+(`peft/src/peft/tuners/lora/dora.py`, fetched and read directly), not
+the paper's own notation -- which is genuinely ambiguous about which
+axis "column-wise" norm means relative to `nn.Linear`'s
+`[out_features, in_features]` layout. Cross-checked against Meta's
+torchtune, which computes the same thing independently: both take
+`torch.linalg.norm(weight, dim=1)`, one magnitude scalar per *output*
+channel, matching ordinary weight-normalization intuition (Salimans &
+Kingma, 2016). The efficient forward formulation (not "merge the full
+weight, then run one linear/conv", which would cost real VRAM against
+this project's own design goal) is PEFT's, re-derived here by algebraic
+expansion rather than copied verbatim, restructured so bias is never
+itself magnitude-scaled (bias isn't part of the decomposed weight at
+all -- a real, easy-to-get-wrong detail working from the paper's
+weight-only equations directly) and `base_result` is reused rather than
+recomputed. `||base_weight + scaling*BA||`'s gradient is detached, per
+the paper's own section 4.3 (quoted directly in PEFT's source).
 
-    Calibration: real, credible quality improvement at near-zero extra
-    VRAM cost, but a genuine new forward-pass code path (weight
-    normalization + magnitude scaling), not a formula tweak -- worth
-    building and equivalence/quality-testing as a second AdapterStrategy
-    once the seam exists, additive to PlainLoRAAdapter, not a
-    replacement for it."""
-    ...
-```
+**A real, deliberate extension beyond PEFT**: the LoRA timestep gate
+(`core.lora.py`'s `set_lora_gate()`/`compute_lora_gate()`) applies to
+the entire DoRA delta, not just the raw LoRA term inside it, matching
+`LoRALinear`'s own gate semantics exactly -- `gate=0` produces exactly
+the frozen base output. PEFT has no equivalent concept (no LLM
+fine-tuning analogue to "only some timesteps were in the training
+data").
+
+**Built via composition over a real `core.lora.LoRALinear`/`LoRAConv2d`**,
+not a second implementation of parameter setup -- only the forward math
+is genuinely new. Same real limit `PlainLoRAAdapter` has today: only
+`BF16WeightStore` honored (`NF4WeightStore`, 3.3, doesn't exist yet).
+
+**A real, honestly-flagged gap, not yet closed:** checkpoint save/load
+doesn't know about `magnitude` yet. `DoRALinear.load_lora_weights()`
+loads the directional component and recomputes `magnitude` fresh from
+it (useful for starting DoRA training from an existing plain-LoRA
+checkpoint's direction, but not a full round-trip);
+`load_dora_weights()` is the real round-trip, but neither
+`nodes/model/lora_saver.py` nor `LoRACheckpointSaverNode`/
+`LoRACheckpointLoaderNode` call it -- saving/loading a DoRA-trained
+checkpoint correctly is real, separate, unimplemented follow-up work.
+`DoRAAdapter` is trainable in a real run today (live-wired via 3.1's
+`adapter_strategy_scope`, same as `PlainLoRAAdapter`); saving that
+training's real result correctly is not yet wired.
 
 The seam this needed (`AdapterStrategy` existing at all, with a real
 second conformance checked against it) exists, **and is now live-wired
@@ -694,10 +710,10 @@ would apply it a second time. Equivalence-tested directly: a `RankStabilizedScal
 effective alpha, run through both the real, unpatched path and the
 patched path, land on byte-identical `layer.alpha`/`layer.scaling`.
 
-`DoRAAdapter` above is still **not implemented** -- now genuinely just
-that one remaining piece (design rationale above still applies
-unchanged), not blocked on any wiring gap anymore. Once built, it's
-trainable in a real run immediately, no further live-wiring needed.
+`DoRAAdapter` **is now implemented** too -- see above. Once
+`AdapterStrategy` was live-wired, building it was the only remaining
+piece, and it's trainable in a real run immediately, no further
+live-wiring needed.
 
 ### 3.2 `LoRAScalingPolicy`
 
@@ -1051,8 +1067,8 @@ policy = ManualResourcePolicy(                            # 2.2, real,
 # adapter_strategy, frozen_weight_store, optimizer_execution_strategy, and
 # text_encoder_cache are each still their own independent choice, not
 # routed through `policy` -- see 2.2 for why each one is scoped out
-adapter_strategy = PlainLoRAAdapter()          # 3.1, real -- DoRAAdapter() NOT implemented,
-                                                # and neither is reachable from a real build yet
+adapter_strategy = PlainLoRAAdapter()          # 3.1, real -- DoRAAdapter() also real now,
+                                                # live-wired via adapter_strategy_scope
 frozen_weight_store = BF16WeightStore          # 3.3, real -- NF4WeightStore NOT implemented
 memory = MemoryManager()                                  # 1.3, unchanged, real
 coordinator = ResourceCoordinator()                        # 5.1, real
@@ -1214,7 +1230,7 @@ matter anymore -- both are equally done.
 | `BlockProfileCollector`/`ProfilingCheckpointing` (2.3) | `nodes/model/block_profiler.py` | Backlog item 1 (instrumentation half -- the actual blocker). Only `ResBlock` instances ever reach it in this ComfyUI version -- see 2.3. Not wired into `ComfyUNetLoRANode`'s real construction path -- see 9.2. |
 | Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
-| `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` still open -- see 9.2. |
+| `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5, and formerly item 1. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` grounded directly in HuggingFace PEFT's real source. Checkpoint save/load doesn't know about `magnitude` yet -- see 3.1. |
 | `adapter_strategy_scope` (3.1) | `nodes/model/adapter_injection.py` | Live-wires `AdapterStrategy` into `core.lora._inject_lora`'s real, unmodified targeting logic without modifying `core/lora.py`. See 3.1 for the mechanism and the recursion hazard it fixes. |
 | `FrozenWeightStore`/`BF16WeightStore` (3.3) | `nodes/model/frozen_weight_store.py` | Backlog item 9 (part 1). `NF4WeightStore` itself still open -- see 9.2. |
 | `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
@@ -1233,22 +1249,21 @@ matter anymore -- both are equally done.
 Everything below is real -- these are the only pieces of this document
 still asking for something. See section 10 for the ordered plan.
 
-**`DoRAAdapter` (3.1).** Doesn't exist. The seam it needs
-(`AdapterStrategy`, with a real second conformance already checked
-against it) does now, and -- unlike when this was last written -- is
-also now live-wired into `ComfyUNetLoRANode`'s real construction path
-(`nodes/model/adapter_injection.py`'s `adapter_strategy_scope`), so
-building `DoRAAdapter` is now the *only* remaining piece, not one of
-two. Real quality win, bounded new forward-pass code (weight
-normalization + magnitude scaling), its own equivalence/quality-testing
-pass, additive to `PlainLoRAAdapter`.
-
-**`NF4WeightStore` (3.3).** Doesn't exist. Still this document's single
-highest-value remaining item -- needs a real dequantization
+**`NF4WeightStore` (3.3).** Doesn't exist. Now this document's single
+remaining unbuilt technique -- needs a real dequantization
 implementation (a fused kernel or a `MemoryManager`-backed
 dequant-then-matmul scratch-buffer story) and verification against this
 project's own real UNet, not assumed from the LLM literature. Its own
 dedicated effort.
+
+**A real gap DoRAAdapter's landing left, honestly flagged rather than
+hidden (3.1).** Checkpoint save/load doesn't know about DoRA's
+`magnitude` parameter -- `DoRALinear.load_lora_weights()` recomputes it
+fresh from a loaded direction rather than restoring a trained value;
+`load_dora_weights()` is the real round-trip, but nothing in
+`nodes/model/lora_saver.py` or `LoRACheckpointSaverNode`/
+`LoRACheckpointLoaderNode` calls it. `DoRAAdapter` is trainable in a
+real run today; saving that training's real result correctly is not.
 
 **`GreedyRatioPlacement` real validation (2.3).** The class, and the
 `BlockProfileCollector`/`ProfilingCheckpointing` instrumentation that
@@ -1320,23 +1335,16 @@ one equivalence-tested against whatever it replaces (or, for the
 validation-only items at the end, tested by a real training run instead)
 before anything switches over to it.
 
-1. **`DoRAAdapter`** (3.1). Now the *only* remaining piece for a real,
-   trainable DoRA -- the live-wiring that used to be a separate,
-   prerequisite half of this item is done (`adapter_strategy_scope`,
-   `nodes/model/adapter_injection.py`). Real quality win, bounded new
-   forward-pass code (weight normalization + magnitude scaling), its own
-   equivalence/quality-comparison pass beyond a construction-time
-   equivalence test (it's a real quality claim, not a refactor).
-2. **`NF4WeightStore`** (3.3). This document's single highest-value
-   remaining item, and still its own dedicated effort, not a slice of
-   anything else: needs a real dequantization implementation (a fused
+1. **`NF4WeightStore`** (3.3). This document's single remaining unbuilt
+   technique, and its own dedicated effort, not a slice of anything
+   else: needs a real dequantization implementation (a fused
    dequant-matmul kernel or an explicit dequantize-then-matmul path via
    `MemoryManager`) and verification against this project's actual UNet
    specifically, not assumed from the LLM literature -- the
    diffusion-specific quality caveat in 3.3 needs checking directly, not
-   inherited from QLoRA's own LLM benchmarks. Sequenced after
-   `DoRAAdapter` since the two are confirmed-compatible in published work
-   (QDoRA) and `DoRAAdapter` is the smaller, faster piece to land first.
+   inherited from QLoRA's own LLM benchmarks. `DoRAAdapter` (3.1) is
+   done, confirmed compatible with quantized bases in published work
+   (QDoRA) -- nothing about landing this should need to revisit it.
 
 **A real gap surfaced while landing `ResourceProfile`, not yet its own
 backlog item because nothing above needs it yet:** there is no single
@@ -1378,6 +1386,16 @@ missing is a real run:**
   `GreedyRatioPlacement` in the first place -- both real, separate,
   smaller follow-ups once a first profiled run's numbers exist to wire
   a real placement decision against.
+- **`DoRAAdapter`, a real training run** (3.1). Equivalence-tested
+  against an independent reference implementation and identity-at-init,
+  but not yet run on this project's own data to confirm the quality
+  improvement DoRA reports in its own published benchmarks (LLaMA/LLaVA/
+  VL-BART, not diffusion UNets) actually shows up here too. Separately,
+  a real gap, not validation: checkpoint save/load doesn't know about
+  `magnitude` yet (`nodes/model/lora_saver.py`,
+  `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode`) -- `DoRAAdapter`
+  is trainable in a real run today, but saving that training's real
+  result correctly needs this wired first.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

@@ -74,7 +74,8 @@ point, it would resolve to whatever this module currently has patched in
 -- recursing forever. Confirmed by hitting exactly that RecursionError
 while building this module's own equivalence test, not theorized in
 advance. Fixed by having this module cache the real classes (into
-adapter_strategy.py's `_real_lora_classes_cache`) at the one moment
+adapter_strategy.py's PlainLoRAAdapter, which imports it from
+lora_class_cache.py directly) at the one moment
 they're still guaranteed real -- right here, before patching -- so
 PlainLoRAAdapter.wrap() (via adapter_strategy.py's `_real_lora_classes()`)
 always gets the real ones regardless of what's currently patched or what
@@ -95,8 +96,8 @@ from __future__ import annotations
 import contextlib
 
 from .adapter_strategy import AdapterStrategy, PlainLoRAAdapter
-from .adapter_strategy import _real_lora_classes_cache
 from .frozen_weight_store import BF16WeightStore
+from .lora_class_cache import _real_lora_classes_cache
 from .lora_scaling import ClassicLoRAScaling
 
 

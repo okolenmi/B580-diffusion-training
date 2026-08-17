@@ -47,14 +47,17 @@ doc's own rule) -- `nodes/` is where new work lands.
 - `PrefetchingBatchSource` -- `nodes/dataset/prefetch.py` (2.5)
 
 **Model / LoRA**
-- `AdapterStrategy`/`PlainLoRAAdapter`, `LoRAScalingPolicy` --
-  `nodes/model/adapter_strategy.py`, `nodes/model/lora_scaling.py`
-  (3.1, 3.2). **Live-wired** into `ComfyUNetLoRANode`'s real
-  construction path via `nodes/model/adapter_injection.py`'s
-  `adapter_strategy_scope` (new `adapter_strategy` port, default `None`
-  -> `PlainLoRAAdapter()`, no behavior change). Fixed a real recursion
-  hazard along the way (see `adapter_strategy.py`'s
-  `_real_lora_classes()`).
+- `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` --
+  `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`,
+  `nodes/model/lora_scaling.py` (3.1, 3.2). **Live-wired** into
+  `ComfyUNetLoRANode`'s real construction path via
+  `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` (new
+  `adapter_strategy` port, default `None` -> `PlainLoRAAdapter()`, no
+  behavior change). `DoRAAdapter` grounded directly in HuggingFace
+  PEFT's real source (fetched and read, not recalled). Fixed a real
+  recursion hazard along the way (see `lora_class_cache.py`'s
+  `_real_lora_classes()`). Real gap, not yet closed: checkpoint
+  save/load doesn't know about DoRA's `magnitude` parameter.
 - `FrozenWeightStore`/`BF16WeightStore` --
   `nodes/model/frozen_weight_store.py` (3.3)
 - `ParameterGroupPolicy`, `LoRAPlusGroups` --
@@ -90,7 +93,7 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 45 smoke tests under `nodes/smoke_tests/` (runnable via
+- 46 smoke tests under `nodes/smoke_tests/` (runnable via
   `nodes/smoke_tests/run_all.py`), plus 3 more under `manager/`/`server/`
   -- all CPU-only, no ComfyUI/XPU needed.
 
@@ -99,14 +102,18 @@ doc's own rule) -- `nodes/` is where new work lands.
 See `docs/training_pipeline_design.md` section 10 for the full reasoning
 behind this order.
 
-1. `DoRAAdapter` (3.1) -- now the only remaining piece, live-wiring is
-   done
-2. `NF4WeightStore` (3.3) -- single highest-value remaining item, needs
+1. `NF4WeightStore` (3.3) -- the single remaining unbuilt technique, needs
    a real dequantization implementation
-3. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
+2. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
    a `UniformGroups` baseline (3.4); `GreedyRatioPlacement` wired into
-   `ComfyUNetLoRANode` and run against a real profiled `BlockCost` set (2.3)
+   `ComfyUNetLoRANode` and run against a real profiled `BlockCost` set
+   (2.3); `DoRAAdapter` run on real data to confirm the quality
+   improvement shows up here too (3.1)
+3. Real gap, not validation: wire DoRA's `magnitude` into checkpoint
+   save/load (`nodes/model/lora_saver.py`,
+   `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode`) -- trainable
+   today, not correctly saveable yet
 
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
@@ -124,4 +131,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`09d576e` (2026-08-16).
+`a9a66c4` (2026-08-16).

@@ -29,6 +29,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .frozen_weight_store import BF16WeightStore, FrozenWeightStore
+from .lora_class_cache import _real_lora_classes
 from .lora_scaling import LoRAScalingPolicy, _effective_alpha
 
 
@@ -98,6 +99,43 @@ class PlainLoRAAdapter(AdapterStrategy):
         )
 
 
+class DoRAAdapter(AdapterStrategy):
+    """Liu et al., "DoRA: Weight-Decomposed Low-Rank Adaptation"
+    (arXiv:2402.09353, ICML 2024 Oral) -- nodes/model/dora_layer.py's
+    DoRALinear/DoRAConv2d, built via composition over a real
+    core.lora.LoRALinear/LoRAConv2d (see dora_layer.py's module
+    docstring for the full derivation, grounded directly in
+    HuggingFace PEFT's real implementation). Same real limit as
+    PlainLoRAAdapter today: only BF16WeightStore, for the same reason
+    (see this module's docstring)."""
+
+    def wrap(self, original, frozen: FrozenWeightStore, rank: int, alpha: float,
+              scaling_policy: LoRAScalingPolicy, dropout: float = 0.0,
+              weight: float = 1.0) -> AdaptedLayer:
+        if not isinstance(frozen, BF16WeightStore):
+            raise NotImplementedError(
+                f"DoRAAdapter only honors BF16WeightStore today, got "
+                f"{type(frozen).__name__} -- see this class's own docstring, and "
+                f"nodes/model/adapter_strategy.py's module docstring, for exactly why."
+            )
+        import torch.nn as nn
+
+        from .dora_layer import DoRAConv2d, DoRALinear
+
+        _register_dora_adapted_layers()
+        effective_alpha = _effective_alpha(alpha=alpha, rank=rank, policy=scaling_policy)
+        if isinstance(original, nn.Linear):
+            return DoRALinear(original, rank=rank, alpha=effective_alpha,
+                               dropout=dropout, weight=weight)
+        if isinstance(original, nn.Conv2d):
+            return DoRAConv2d(original, rank=rank, alpha=effective_alpha,
+                               dropout=dropout, weight=weight)
+        raise TypeError(
+            f"DoRAAdapter.wrap(): original must be nn.Linear or nn.Conv2d, "
+            f"got {type(original).__name__}."
+        )
+
+
 def _register_legacy_adapted_layers():
     """AdaptedLayer.register(core.lora.LoRALinear/LoRAConv2d) -- virtual
     subclass registration, so isinstance(layer, AdaptedLayer) is True for
@@ -115,37 +153,17 @@ def _register_legacy_adapted_layers():
     AdaptedLayer.register(LoRAConv2d)
 
 
-# Populated by nodes/model/adapter_injection.py's adapter_strategy_scope,
-# at the one moment core.lora.LoRALinear/LoRAConv2d are guaranteed to
-# still be the real classes -- right before it patches them. Never
-# written to from this module.
-_real_lora_classes_cache: dict = {}
-
-
-def _real_lora_classes():
-    """The real core.lora.LoRALinear/LoRAConv2d -- guaranteed real even
-    while adapter_strategy_scope has core.lora.LoRALinear/LoRAConv2d
-    patched to something else.
-
-    Why this exists: PlainLoRAAdapter.wrap() has to construct the real
-    classes regardless of what's calling it -- including when it's
-    being used as the delegate inside some *other* AdapterStrategy
-    (e.g. a future DoRAAdapter reusing PlainLoRAAdapter's construction
-    for its base layer). If wrap() re-imported `core.lora.LoRALinear`
-    live at that point, it would resolve to whatever
-    adapter_strategy_scope currently has installed -- itself, in the
-    case where PlainLoRAAdapter is the delegate -- recursing forever.
-    Confirmed by hitting exactly that RecursionError while building the
-    equivalence test for this (nodes/smoke_tests/smoke_test_adapter_injection.py),
-    not theorized in advance.
-
-    Falls back to a live import when the cache is empty, which is
-    correct precisely because adapter_strategy_scope always populates
-    the cache itself, at the one point core.lora's classes are still
-    guaranteed real, before ever patching them -- so an empty cache
-    means core.lora has never been patched at all yet, and its current
-    classes are simply the real ones."""
-    if _real_lora_classes_cache:
-        return _real_lora_classes_cache["LoRALinear"], _real_lora_classes_cache["LoRAConv2d"]
-    from core.lora import LoRAConv2d, LoRALinear
-    return LoRALinear, LoRAConv2d
+def _register_dora_adapted_layers():
+    """AdaptedLayer.register(DoRALinear/DoRAConv2d) -- same reasoning as
+    _register_legacy_adapted_layers() above, for consistency (both are
+    lazy, both are idempotent), even though dora_layer.py's classes are
+    new code this project fully controls and could have inherited
+    AdaptedLayer directly. Kept as registration instead: dora_layer.py
+    importing AdaptedLayer from this module at its own module level
+    would work today (this module only imports dora_layer.py lazily,
+    inside DoRAAdapter.wrap()), but ties the two modules' import
+    ordering together for no real benefit over registration, which
+    needs no such care."""
+    from .dora_layer import DoRAConv2d, DoRALinear
+    AdaptedLayer.register(DoRALinear)
+    AdaptedLayer.register(DoRAConv2d)

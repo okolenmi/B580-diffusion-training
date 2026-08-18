@@ -10,6 +10,10 @@ momentum (`beta1`), `scale_parameter` (on and off), and `weight_decay`.
 
 Does not cover the tiny-parameter batching fast path -- a strategy/
 batching concern, not an algorithm one (see algorithms/base.py).
+compute_update_batched() batches the common (scale_parameter=False)
+case for ShapeGroupedBatchStrategy -- see that method's own docstring
+for why scale_parameter=True falls back to the per-member default
+instead.
 
 In-place scratch reuse (when `scratch is not None`) needs the shared
 buffer reused only once, since Adafactor's formula has one normalization
@@ -221,3 +225,109 @@ class AdafactorAlgorithm(Algorithm):
         needed for that parity to hold."""
         for t in state.values():
             t.zero_()
+
+    def compute_update_batched(self, grad_stack, params: list, states: list[dict],
+                                lr: float):
+        """The same math as _compute_update_safe's factored branch above,
+        with one leading group axis (k) threaded through every reduction --
+        see algorithms/came.py's own compute_update_batched() for the
+        precedent this follows closely (state stacked fresh, computed,
+        scattered back via .copy_(); a device-tensor torch.clamp() in
+        place of a host-syncing Python min/max).
+
+        **Real scope boundary, not an oversight: only handles
+        scale_parameter=False.** With scale_parameter=True, alpha_t
+        depends on each parameter's own live norm (`param.data.norm()`)
+        -- genuinely different per group member, not a shared
+        group-level constant the way it is here. Worse, `decay` is
+        derived from alpha_t (`1.0 - wd*alpha_t`), so it would ALSO vary
+        per member -- breaking compute_update_batched()'s own contract
+        that decay is shared across a whole group (see algorithms/base.py's
+        docstring, the same assumption CAMEAlgorithm's batched override
+        already relies on). Extending that contract to a per-member decay
+        is real, separate work with no urgent need yet: scale_parameter=True
+        already has its own documented pathology for LoRA's zero-initialized
+        B matrix (see this module's own docstring), and
+        composed_adafactor.py's own recommended default is
+        scale_parameter=False -- the case this method actually batches is
+        also the recommended one. Falls back to the base class's
+        per-member default when scale_parameter=True, same shape as
+        CAMEAlgorithm's own 1D fallback.
+
+        clip_mul is a genuine per-member vector even in the batched case
+        (each member's own gradient norm this step) -- that's fine, it
+        never touches decay, only alpha_t does.
+
+        See nodes/smoke_tests/smoke_test_adafactor_shape_grouped_equivalence.py
+        for the numerical equivalence check against a per-member
+        AdafactorAlgorithm (tolerance-based, not bit-exact -- same
+        reduction-order caveat as CAMEAlgorithm's own batched override)."""
+        import torch
+
+        if self.scale_parameter:
+            return Algorithm.compute_update_batched(self, grad_stack, params, states, lr)
+        if self._rho_t is None:
+            raise RuntimeError(
+                "AdafactorAlgorithm.compute_update_batched() called before begin_step() "
+                "-- see compute_update()'s own RuntimeError for why this must run first."
+            )
+        rho_t = self._rho_t
+        k = grad_stack.shape[0]
+        n = grad_stack[0].numel()  # same for every member -- exact-shape grouping
+
+        alpha_t = max(self.eps1, 1.0) * lr  # group-uniform -- see docstring above
+        decay = (1.0 - self.wd * alpha_t) if self.wd != 0 else None
+        factored = grad_stack.dim() >= 3
+
+        flat = grad_stack.reshape(k, -1)
+        rms_g = flat.norm(dim=1) / (n ** 0.5 + 1e-8)
+        clip_mul = torch.clamp(self.clip_threshold / rms_g, max=1.0)  # per-member, see docstring
+        g = grad_stack * clip_mul.view(k, *([1] * (grad_stack.dim() - 1)))
+
+        if not factored:
+            g2 = g.pow(2)
+            vs_stack = torch.stack([s["vs"] for s in states], dim=0)
+            vs_stack.mul_(rho_t).add_(g2.add(self.eps1), alpha=1.0 - rho_t)
+            normalized = g / vs_stack.sqrt().add(self.eps1)
+
+            if self.beta1 is not None:
+                ea_stack = torch.stack([s["exp_avg"] for s in states], dim=0)
+                ea_stack.mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
+                normalized = ea_stack.clone()
+
+            delta_stack = normalized * alpha_t
+
+            for j, s in enumerate(states):
+                s["vs"].copy_(vs_stack[j])
+                if self.beta1 is not None:
+                    s["exp_avg"].copy_(ea_stack[j])
+            return delta_stack, decay
+
+        rows = grad_stack.shape[1]
+        g_view = g.reshape(k, rows, -1)
+        g2 = g_view.pow(2)
+        vr_stack = torch.stack([s["vr"] for s in states], dim=0)
+        vc_stack = torch.stack([s["vc"] for s in states], dim=0)
+        vr_stack.mul_(rho_t).add_(g2.mean(dim=2).add(self.eps1), alpha=1.0 - rho_t)
+        vc_stack.mul_(rho_t).add_(g2.mean(dim=1).add(self.eps1), alpha=1.0 - rho_t)
+        vr_mean_sqrt = vr_stack.mean(dim=1).add(self.eps1).sqrt()
+        vr_sqrt = vr_stack.sqrt().add(self.eps1)
+        vc_sqrt = vc_stack.sqrt().add(self.eps1)
+        normalized = (g_view / vr_sqrt.unsqueeze(2) / vc_sqrt.unsqueeze(1)
+                      * vr_mean_sqrt.view(k, 1, 1))
+        normalized = normalized.reshape(grad_stack.shape)
+
+        if self.beta1 is not None:
+            ea_stack = torch.stack([s["exp_avg"] for s in states], dim=0)
+            ea_stack.mul_(self.beta1).add_(normalized, alpha=1.0 - self.beta1)
+            normalized = ea_stack.clone()
+
+        delta_stack = normalized * alpha_t
+
+        for j, s in enumerate(states):
+            s["vr"].copy_(vr_stack[j])
+            s["vc"].copy_(vc_stack[j])
+            if self.beta1 is not None:
+                s["exp_avg"].copy_(ea_stack[j].reshape(s["exp_avg"].shape))
+
+        return delta_stack, decay

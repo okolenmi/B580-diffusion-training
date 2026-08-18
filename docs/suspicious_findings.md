@@ -287,7 +287,70 @@ are confirmed but not urgent) so they don't get lost. Newest first.
   then a `profile=True` comparison against the `1041ms` baseline with
   `strategy="shape_grouped"`.
 
-- **[2026-07] Persistent ~500MB VRAM growth after preview generation.**
+- **[2026-08] Same root cause confirmed for Adafactor too, and now fixed
+  for both -- real user report, not just the CAME finding above.** User
+  reported real, felt slowness on real hardware: AdamW 3-4x faster than
+  Adafactor/CAME, specifically worse on a weak CPU, and "even legacy
+  code converted into nodes (adafactor/CAME)" feeling slower. Two things
+  checked directly, not assumed:
+
+  1. **The node wrapper itself is not the cause.**
+     `AdafactorOptimizerHandle.step()`/`CAMEOptimizerHandle.step()`
+     (`nodes/optimizer/adafactor.py`/`came.py`) are one-line pass-throughs
+     to the exact same legacy `core.optimizers` classes `core/trainer.py`
+     calls directly -- confirmed by reading both. Negligible Python call
+     overhead either way; wrapping in a node isn't where a real slowdown
+     could come from.
+  2. **`AdafactorAlgorithm` had the identical gap `CAMEAlgorithm` had
+     before the fix above -- confirmed by reading it, not assumed from
+     the CAME finding alone.** No `compute_update_batched()` override at
+     all, so `ShapeGroupedBatchStrategy` silently fell back to
+     `Algorithm`'s own default (loop + stack -- see algorithms/base.py),
+     giving zero real batching benefit for Adafactor even when
+     `strategy="shape_grouped"` was already selected. `ForeachApplyStrategy`
+     doesn't help either for either optimizer -- confirmed by reading
+     it: it only batches the final `decay`/`delta` *apply* step via
+     `torch._foreach_*`, not the per-parameter algorithm math itself
+     (its own module docstring says so directly). So `strategy="chunked"`
+     and `strategy="foreach"` both still pay a real per-parameter Python
+     loop for Adafactor/CAME's actual update computation -- on a weak
+     CPU, where kernel-dispatch/interpreter overhead dominates over the
+     (tiny, per-LoRA-matrix) actual compute time, this is exactly the
+     kind of cost that shows up as "the optimizer section takes an
+     enormous amount of time," and disproportionately worse than a
+     faster CPU would show.
+
+  Fix: `AdafactorAlgorithm.compute_update_batched()`
+  (`nodes/optimizer/algorithms/adafactor.py`), same pattern as CAME's
+  existing override -- covers the common, already-recommended
+  `scale_parameter=False` case. Real, documented scope boundary, not
+  papered over: `scale_parameter=True` still falls back to the slow
+  per-member path, because `alpha_t` (and therefore `decay`) would
+  genuinely vary per group member in that mode, breaking
+  `compute_update_batched()`'s shared-decay contract -- extending that
+  contract is real, separate work with no urgent need yet, since
+  `scale_parameter=True` already has its own documented pathology for
+  LoRA's zero-initialized B matrix (see `adafactor.py`'s own module
+  docstring) and isn't the recommended setting regardless.
+  Equivalence-tested (bit-exact, not just within tolerance, across every
+  case checked) against the per-member reference --
+  `nodes/smoke_tests/smoke_test_adafactor_shape_grouped_equivalence.py`.
+  **Not run on real hardware** -- same caveat as CAME's own entry above:
+  needs the person to run `strategy="shape_grouped"` on both Adafactor
+  and CAME and compare against their own real `1041ms`-class baseline.
+
+  One more real, honest caveat on the "GPU AdamW is 3-4x faster" part of
+  the report: this is *expected*, not itself a bug. `SimpleAdamWOptimizerNode`
+  wraps `torch.optim.AdamW(foreach=True)` -- PyTorch's own first-party
+  batched multi-tensor kernels, real batching Adafactor/CAME's own math
+  has never had until the fix above. Even with `shape_grouped`, some gap
+  between AdamW and Adafactor/CAME is genuinely expected (more reduction
+  operations per parameter, not just an execution-overhead difference) --
+  the open question `shape_grouped` is meant to answer is whether the gap
+  shrinks to something like that inherent-complexity difference, not
+  whether it disappears entirely.
+
+
   Reported as compounding slowly (not just a one-time jump), first appeared
   sometime after an earlier preview-VRAM fix (exact point unknown). Ruled
   out two candidates by reading the code: CAME's own memory pool (only

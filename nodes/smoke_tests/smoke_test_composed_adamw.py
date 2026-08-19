@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode, _STRATEGIES
+from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
+from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES
 
 
 def pick_device():

@@ -60,6 +60,81 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Resolved
 
+- **[2026-08] `ComposedAdafactorOptimizerNode`/`ComposedAdamWOptimizerNode`
+  crashed real training with `SupervisedLoRATrainerNode: ZeroDivisionError:
+  division by zero` -- real user report on real hardware, not a
+  hypothesis.** Traced directly, not guessed: the crash was reported with
+  `strategy="foreach"` (`AdafactorAlgorithm+ForeachApplyStrategy`, per the
+  server console's own printed optimizer id), which calls
+  `AdafactorAlgorithm.compute_update()` once per parameter -- confirmed by
+  reading `ForeachApplyStrategy` directly, it only batches the final
+  apply step, never the per-parameter algorithm math. Root cause in
+  `compute_update()` itself: `clip_mul = min(1.0, self.clip_threshold /
+  float(rms_g))` converts `rms_g` (a tensor) to a Python float *before*
+  dividing -- when a real parameter's gradient this step has an exactly
+  zero norm (confirmed reachable, not theoretical -- reproduced directly
+  with a plain zero-gradient tensor), Python float division by exactly
+  0.0 raises `ZeroDivisionError`. `core.optimizers.ChunkedXPUAdafactor`
+  (the legacy class this was ported from) does the identical clip
+  computation but stays in tensor space the whole time
+  (`torch.clamp(self.clip_threshold / rms_g, max=1.0)`), which produces
+  `inf` then clamps to `1.0` -- never raises, confirmed directly by
+  reading it. Fix: match the legacy tensor-space computation exactly,
+  converting to Python float only after clamping to a finite value.
+  `CAMEAlgorithm` doesn't have this bug -- confirmed by reading it, its
+  own clip computation divides `rms` by a fixed nonzero `clip_threshold`
+  constant, not by a potentially-zero tensor, a different formula
+  structure. The random-Gaussian-gradient equivalence tests already
+  covering `AdafactorAlgorithm` structurally could never have caught
+  this (`torch.randn()` essentially never produces an exact `0.0` norm)
+  -- a dedicated zero-gradient regression check was added specifically
+  to close that coverage gap, not just to confirm this one fix.
+  Confirmed bit-exact against the legacy reference's own handling of a
+  zero gradient. Awaiting confirmation the fix resolves the real crash
+  on the user's own hardware/workflow.
+
+- **[2026-08] `ComposedAdafactorOptimizerNode`/`ComposedAdamWOptimizerNode`
+  didn't accept `strategy="shape_grouped"` at all --
+  `ValueError: Unknown strategy 'shape_grouped' -- choose one of
+  ['simple', 'chunked', 'foreach']`, real user report.** `ShapeGroupedBatchStrategy`
+  itself was real and already registered on `ComposedCAMEOptimizerNode`,
+  but the same registration was simply missing from the other two
+  composed nodes' own `_STRATEGIES` dicts -- confirmed by reading all
+  three directly, not assumed from the error message alone. Also added a
+  real `AdamWAlgorithm.compute_update_batched()` while fixing this
+  (AdamW's math has no factored reduction and no clip-based division to
+  worry about, so this was a small, low-risk addition once CAME's and
+  Adafactor's own batched overrides had already established the
+  pattern) -- see `smoke_test_adamw_shape_grouped_equivalence.py`
+  (bit-exact against the per-member reference; the existing
+  `smoke_test_adamw_equivalence.py` technically already exercised
+  `shape_grouped` once registered, but its own two parameters are
+  different shapes, so it only ever hit the singleton-group fallback,
+  never the real batched path -- this is why a dedicated test with real
+  same-shape groups was needed).
+
+  **The first fix was wrong, called out directly and correctly by the
+  user: three byte-identical copies of `_STRATEGIES` plus its dispatch
+  logic plus its doc string, one per composed node, is exactly the
+  structure that produces this bug class -- fixing two of three copies
+  and leaving the pattern in place would just leave it ready to happen
+  again.** Confirmed the duplication was real and worse than just the
+  dict: the `strategy` Port's own doc string (hand-written plain text
+  listing valid names) was `composed_adafactor.py`/`composed_adamw.py`'s
+  *own separate* copy, and updating their dicts to add `shape_grouped`
+  did not update those doc strings -- they still said "One of 'simple',
+  'chunked', 'foreach'" after the first fix, a live second bug of the
+  identical class, introduced while fixing the first one.
+  `composed_came.py`'s own doc string happened to already be correct,
+  not because the duplication was safe but because nobody had touched it
+  since `shape_grouped` was first added there. Real fix:
+  `nodes/optimizer/strategy_registry.py` -- one `STRATEGIES` dict, one
+  `resolve_strategy()` dispatch function, one doc string generated from
+  the dict itself (not hand-written), imported by all three composed
+  nodes. Both bug classes (a strategy missing from some copies, a doc
+  string out of sync with the dict) are now structurally impossible, not
+  just fixed once -- there is nothing left to independently drift.
+
 - **[2026-08] 8 real, working Node classes existed but weren't
   selectable in the graph editor -- `server/nodegraph_registry.py`'s
   list was stale.** Confirmed directly, not a hypothesis: walked every

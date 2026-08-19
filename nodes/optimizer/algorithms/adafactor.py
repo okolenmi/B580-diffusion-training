@@ -107,7 +107,20 @@ class AdafactorAlgorithm(Algorithm):
         n = grad.numel()
 
         rms_g = grad.norm() / (n ** 0.5 + 1e-8)
-        clip_mul = min(1.0, self.clip_threshold / float(rms_g))
+        # torch.clamp on the tensor division, not Python float division --
+        # matches core.optimizers.ChunkedXPUAdafactor's own line exactly
+        # (`float(torch.clamp(self.clip_threshold / rms_g, max=1.0))`).
+        # A real bug this fixes, not a defensive rewrite: when rms_g is
+        # exactly 0.0 (a real, reachable case -- a parameter with a
+        # genuinely zero gradient this step, e.g. an unused LoRA target
+        # or one fully zeroed by a block_weight of 0.0), tensor division
+        # produces inf (correctly clamped to 1.0 right after -- "no
+        # clipping needed" is the right answer for a zero gradient).
+        # `self.clip_threshold / float(rms_g)` -- what this line used to
+        # do -- converts to a Python float *before* dividing, and Python
+        # float division by exactly 0.0 raises ZeroDivisionError instead.
+        # Confirmed by reproducing it directly, not theorized.
+        clip_mul = float(torch.clamp(self.clip_threshold / rms_g, max=1.0))
 
         # Effective step size. scale_parameter=True ties this to the live
         # parameter's own current magnitude -- see module docstring for why

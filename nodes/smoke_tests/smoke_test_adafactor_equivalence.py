@@ -108,6 +108,50 @@ def run_case(strategy_name: str, beta1, dtype, scale_parameter: bool,
     return max_diff
 
 
+def check_zero_gradient_does_not_crash():
+    """Regression check for a real bug, not a hypothetical: compute_update()
+    used to convert clip_mul's division to a Python float before dividing
+    (`self.clip_threshold / float(rms_g)`), which raises ZeroDivisionError
+    when rms_g is exactly 0.0 -- a real, reachable case (a parameter with
+    a genuinely zero gradient this step). The legacy reference does the
+    same division in tensor space (`torch.clamp(threshold / rms_g,
+    max=1.0)`, which produces inf then clamps to 1.0, never raising) --
+    confirmed by reading core.optimizers.ChunkedXPUAdafactor directly.
+    Fixed to match. This is exactly the shape of bug the random-gradient
+    cases above structurally cannot catch (torch.randn() essentially
+    never produces an exact 0.0 norm) -- this check exists specifically
+    to keep that gap closed, not to duplicate coverage above."""
+    print("\n=== zero-gradient parameter: no crash, matches the legacy reference ===")
+    torch.manual_seed(7)
+    w_init = torch.randn(30, 40) * 0.1
+
+    w_ref = w_init.clone().requires_grad_(True)
+    algo_legacy = ChunkedXPUAdafactor(
+        params=[w_ref], lr=0.01, clip_threshold=1.0, scale_parameter=False,
+        weight_decay=0.0, device=DEVICE,
+    )
+    w_ref.grad = torch.zeros(30, 40)
+    algo_legacy.step()
+
+    algorithm = AdafactorAlgorithm(clip_threshold=1.0, scale_parameter=False, weight_decay=0.0)
+    algorithm.begin_step()
+    w_new = w_init.clone().requires_grad_(True)
+    state = algorithm.init_state(w_new.shape, torch.float32, DEVICE)
+    try:
+        update, decay = algorithm.compute_update(torch.zeros(30, 40), w_new, state, lr=0.01)
+    except ZeroDivisionError as e:
+        print(f"  FAIL: raised ZeroDivisionError on a zero gradient: {e}")
+        return False
+    with torch.no_grad():
+        w_new -= update
+    diff = (w_ref.detach() - w_new.detach()).abs().max().item()
+    ok = diff < 1e-5
+    status = "PASS" if ok else "FAIL"
+    print(f"  {status}: no crash, and matches the legacy reference's own handling "
+          f"of a zero gradient (max abs diff = {diff:.3e})")
+    return ok
+
+
 def main():
     print(f"Device: {DEVICE} (equivalence check -- pure numerical comparison, "
           f"real hardware not required)")
@@ -125,6 +169,9 @@ def main():
                 failures.append(f"[{strategy_name}] beta1={beta1}, dtype={dtype}, "
                                  f"scale_parameter={scale_parameter}, weight_decay={weight_decay}: "
                                  f"diff {diff:.3e} exceeds tolerance {tol:.0e}")
+
+    if not check_zero_gradient_does_not_crash():
+        failures.append("zero-gradient parameter: crashed or diverged from the legacy reference")
 
     print("\n" + "=" * 60)
     if failures:

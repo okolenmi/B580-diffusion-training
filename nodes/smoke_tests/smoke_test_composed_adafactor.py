@@ -31,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode, _STRATEGIES
+from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode
+from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES
 
 
 def pick_device():

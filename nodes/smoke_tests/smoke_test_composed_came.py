@@ -11,7 +11,7 @@ casting, actual XPU/CPU tensor placement, or whether training can
 correctly continue after a real offload-to-CPU-and-reload-to-device round
 trip. This script exercises exactly those, on whatever real device is
 actually available, for every registered strategy (currently "simple" and
-"chunked" -- see composed_came.py's _STRATEGIES).
+"chunked" -- see strategy_registry.py's STRATEGIES).
 
 What it checks per strategy, in order:
   1. A real toy linear-regression fit via actual torch autograd
@@ -64,7 +64,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode, _STRATEGIES
+from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode
+from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES
 
 
 def pick_device():

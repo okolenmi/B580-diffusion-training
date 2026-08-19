@@ -18,6 +18,13 @@ see nodes/smoke_tests/smoke_test_adamw_equivalence.py.
 `strategy="foreach"` is `ForeachApplyStrategy` -- included here (and in
 composed_came.py/composed_adafactor.py) because it's algorithm-agnostic
 by construction: no AdamW-specific code was needed to add it.
+`strategy="shape_grouped"` (`ShapeGroupedBatchStrategy`) is real here
+too -- AdamWAlgorithm.compute_update_batched() has no factored reduction
+and no clip-based division to worry about (see that method's own
+docstring), so it was a small, low-risk addition once CAME's and
+Adafactor's own batched overrides had already established the pattern.
+The set of valid `strategy` names lives in one place now,
+strategy_registry.py -- see that module's docstring for why.
 """
 
 from __future__ import annotations
@@ -29,15 +36,7 @@ from .algorithms.adamw import AdamWAlgorithm
 from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
-from .strategies.simple import SimpleLoopStrategy
-from .strategies.chunked import ChunkedScratchBufferStrategy
-from .strategies.foreach import ForeachApplyStrategy
-
-_STRATEGIES = {
-    "simple": SimpleLoopStrategy,
-    "chunked": ChunkedScratchBufferStrategy,
-    "foreach": ForeachApplyStrategy,
-}
+from .strategy_registry import STRATEGY_DOC, resolve_strategy
 
 
 class ComposedAdamWOptimizerNode(OptimizerNode):
@@ -51,9 +50,7 @@ class ComposedAdamWOptimizerNode(OptimizerNode):
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=1e-2),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="One of 'simple', 'chunked', 'foreach' -- see this "
-                              "module's docstring and each strategy's own docstring for "
-                              "what it optimizes and its current validation status."),
+                          doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,
             doc="None = UniformGroups (every parameter at the base lr). "
@@ -70,11 +67,7 @@ class ComposedAdamWOptimizerNode(OptimizerNode):
             weight_decay=inputs.get("weight_decay", self.INPUTS["weight_decay"].default),
         )
         strategy_name = inputs.get("strategy", self.INPUTS["strategy"].default)
-        if strategy_name not in _STRATEGIES:
-            raise ValueError(
-                f"Unknown strategy {strategy_name!r} -- choose one of {list(_STRATEGIES)}"
-            )
-        strategy = _STRATEGIES[strategy_name]()
+        strategy = resolve_strategy(strategy_name)
         handle = ComposedOptimizerHandle(
             algorithm=algorithm,
             strategy=strategy,

@@ -19,7 +19,7 @@ import torch
 from core.optimizers import CPUAdamW
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
-from nodes.optimizer.composed_adamw import _STRATEGIES
+from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES
 
 DEVICE = "cpu"
 # Each key: (dtype, weight_decay).

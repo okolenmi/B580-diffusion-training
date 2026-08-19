@@ -66,3 +66,26 @@ class AdamWAlgorithm(Algorithm):
     def reset_state(self, state: dict[str, Any]) -> None:
         for t in state.values():
             t.zero_()
+
+    def compute_update_batched(self, grad_stack, params: list, states: list[dict],
+                                lr: float):
+        """Same math as compute_update(), with one leading group axis (k)
+        threaded through -- see algorithms/came.py's/adafactor.py's own
+        compute_update_batched() for the precedent. Simpler than either:
+        no factored row/col reduction, no clip-based division by a
+        potentially-zero tensor, and decay is already group-uniform by
+        construction (lr is shared by the grouping key) -- nothing here
+        needed a fallback-for-a-harder-case the way Adafactor's
+        scale_parameter=True did."""
+        m_stack = torch.stack([s["m"] for s in states], dim=0)
+        v_stack = torch.stack([s["v"] for s in states], dim=0)
+        m_stack.mul_(self.beta1).add_(grad_stack, alpha=1.0 - self.beta1)
+        v_stack.mul_(self.beta2).addcmul_(grad_stack, grad_stack, value=1.0 - self.beta2)
+        lr_t = lr * self._bias_correction
+        delta_stack = (m_stack / v_stack.sqrt().add(self.eps)).mul_(lr_t)
+        decay = (1.0 - lr * self.wd) if self.wd != 0 else None
+
+        for j, s in enumerate(states):
+            s["m"].copy_(m_stack[j])
+            s["v"].copy_(v_stack[j])
+        return delta_stack, decay

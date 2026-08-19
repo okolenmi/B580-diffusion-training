@@ -10,7 +10,9 @@ manages temporary memory, so choosing between them is purely a memory/
 performance decision, never a correctness one. See each strategy's own
 module docstring (strategies/simple.py, chunked.py, foreach.py,
 shape_grouped.py) and nodes/smoke_tests/ for what each one actually
-optimizes and its current equivalence/hardware-validation status.
+optimizes and its current equivalence/hardware-validation status. The
+set of valid `strategy` names lives in one place now,
+strategy_registry.py -- see that module's docstring for why.
 """
 
 from __future__ import annotations
@@ -22,17 +24,7 @@ from .algorithms.came import CAMEAlgorithm
 from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
-from .strategies.simple import SimpleLoopStrategy
-from .strategies.chunked import ChunkedScratchBufferStrategy
-from .strategies.foreach import ForeachApplyStrategy
-from .strategies.shape_grouped import ShapeGroupedBatchStrategy
-
-_STRATEGIES = {
-    "simple": SimpleLoopStrategy,
-    "chunked": ChunkedScratchBufferStrategy,
-    "foreach": ForeachApplyStrategy,
-    "shape_grouped": ShapeGroupedBatchStrategy,
-}
+from .strategy_registry import STRATEGY_DOC, resolve_strategy
 
 
 class ComposedCAMEOptimizerNode(OptimizerNode):
@@ -54,10 +46,7 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
                                   "same generic mechanism, not a CAME-specific addition)."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc="One of 'simple', 'chunked', 'foreach', 'shape_grouped' -- "
-                              "see this module's docstring and each strategy's own "
-                              "docstring for what it optimizes and its current "
-                              "validation status."),
+                          doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,
             doc="None = UniformGroups (every parameter at the base lr). "
@@ -75,11 +64,7 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
             weight_decay=inputs.get("weight_decay", self.INPUTS["weight_decay"].default),
         )
         strategy_name = inputs.get("strategy", self.INPUTS["strategy"].default)
-        if strategy_name not in _STRATEGIES:
-            raise ValueError(
-                f"Unknown strategy {strategy_name!r} -- choose one of {list(_STRATEGIES)}"
-            )
-        strategy = _STRATEGIES[strategy_name]()
+        strategy = resolve_strategy(strategy_name)
         handle = ComposedOptimizerHandle(
             algorithm=algorithm,
             strategy=strategy,

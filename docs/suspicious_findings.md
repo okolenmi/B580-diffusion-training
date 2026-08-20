@@ -60,6 +60,35 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Resolved
 
+- **[2026-08] `Algorithm.compute_update_batched()`'s default fallback
+  silently applied the wrong `decay` to some group members when `decay`
+  genuinely varied across a group -- found while building
+  `ShapeGroupedForeachStrategy`, not specific to it.** The fallback (used
+  by any `Algorithm` without its own batched override, and by
+  `AdafactorAlgorithm.compute_update_batched()`'s own
+  `scale_parameter=True` case) looped over group members computing
+  `compute_update()` for each, but kept only the *last* member's `decay`
+  in a plain variable that got overwritten each iteration -- correct
+  only when `decay` is actually uniform across the group, which the
+  method's own docstring already claimed but never checked.
+  `AdafactorAlgorithm`'s `scale_parameter=True` breaks that assumption
+  for real: `alpha_t` (and therefore `decay = 1 - wd*alpha_t`) depends on
+  each parameter's own live norm, genuinely different per member. An
+  earlier equivalence test of this exact fallback path
+  (`smoke_test_adafactor_shape_grouped_equivalence.py`'s
+  `scale_parameter=True` check) happened to use `weight_decay=0.0`,
+  where `decay` is always `None` regardless of `alpha_t` -- silently
+  sidestepping the bug rather than proving its absence. Surfaced by a
+  real equivalence-test failure once `weight_decay != 0` was actually
+  run through a batched strategy while building
+  `smoke_test_shape_grouped_foreach_equivalence.py`. Fixed to detect a
+  varying `decay` and raise a clear, specific `RuntimeError` naming the
+  problem and what to do instead (use `simple`/`chunked`/`foreach`, or
+  give the `Algorithm` a real per-member-decay-aware override) rather
+  than silently corrupting training for every group member but the last.
+  Both the new strategy's test and the existing Adafactor test now cover
+  this combination directly.
+
 - **[2026-08] `ComposedAdafactorOptimizerNode`/`ComposedAdamWOptimizerNode`
   crashed real training with `SupervisedLoRATrainerNode: ZeroDivisionError:
   division by zero` -- real user report on real hardware, not a

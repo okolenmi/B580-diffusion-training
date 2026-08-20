@@ -165,6 +165,30 @@ def check_scale_parameter_true_falls_back_and_is_still_correct():
            detail=f"calls={len(calls)}")
 
 
+def check_scale_parameter_true_with_weight_decay_raises_not_corrupts():
+    print("\n=== scale_parameter=True with weight_decay != 0: the case the check "
+          "above never actually covered (it used weight_decay=0.0, where decay is "
+          "always None regardless of alpha_t) -- raises clearly instead of silently "
+          "using the wrong decay for some group members ===")
+    torch.manual_seed(17)
+    shapes = [(12, 20), (12, 20), (12, 20)]
+    params = [torch.randn(s).requires_grad_(True) for s in shapes]
+    handle = ComposedOptimizerHandle(
+        algorithm=_adafactor(scale_parameter=True, weight_decay=0.5),
+        strategy=ShapeGroupedBatchStrategy(),
+        params=params, lr=0.02, device=DEVICE,
+    )
+    for p in params:
+        p.grad = torch.randn(12, 20) * 0.05
+    try:
+        handle.step()
+        record(False, "should have raised RuntimeError (per-member decay silently "
+                       "collapsed to one shared value), but completed without error")
+    except RuntimeError as e:
+        record("decay varies across this group" in str(e),
+               "raised the expected, specific RuntimeError", detail=str(e)[:100])
+
+
 def main():
     print(f"Device: {DEVICE} (float32/bf16 tolerance check -- real hardware "
           f"not required for this part)")
@@ -205,6 +229,7 @@ def main():
     record(ok, "two same-shape params at 1x/16x lr diverged as expected")
 
     check_scale_parameter_true_falls_back_and_is_still_correct()
+    check_scale_parameter_true_with_weight_decay_raises_not_corrupts()
 
     print("\n" + "=" * 60)
     if failures:

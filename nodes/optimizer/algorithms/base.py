@@ -124,14 +124,41 @@ class Algorithm(ABC):
         batching speedup. Override this (as CAMEAlgorithm does) only once
         real multi-tensor batched math for that algorithm has been
         written and numerically verified -- see algorithms/came.py's own
-        override."""
+        override.
+
+        **Real bug this used to have, not just a documented risk: this
+        default silently kept only the *last* group member's decay when
+        decay actually varied across the group** -- exactly
+        AdafactorAlgorithm's scale_parameter=True case (alpha_t, and
+        therefore decay, depends on each parameter's own norm). Found by
+        a real equivalence-test failure
+        (smoke_test_shape_grouped_foreach_equivalence.py), not by
+        inspection -- an earlier test of the same fallback path happened
+        to use weight_decay=0.0, where decay is always None regardless
+        of alpha_t, silently avoiding the bug rather than proving its
+        absence. Now detected and raised explicitly instead of silently
+        applying the wrong decay to every member but the last."""
         deltas = []
-        decay = None
+        decays = []
         for i in range(grad_stack.shape[0]):
-            d, decay = self.compute_update(grad_stack[i], params[i], states[i], lr)
+            d, member_decay = self.compute_update(grad_stack[i], params[i], states[i], lr)
             deltas.append(d)
+            decays.append(member_decay)
         import torch
-        return torch.stack(deltas, dim=0), decay
+
+        first_decay = decays[0]
+        if any(d != first_decay for d in decays[1:]):
+            raise RuntimeError(
+                f"{type(self).__name__}.compute_update()'s decay varies across this "
+                f"group of {len(decays)} same-shape parameters ({decays}) -- "
+                f"compute_update_batched()'s default fallback can only return one "
+                f"decay shared across the whole group (see this method's own "
+                f"docstring). This configuration can't use a batched-math strategy "
+                f"(shape_grouped, shape_grouped_foreach) yet -- use 'simple', "
+                f"'chunked', or 'foreach' instead, or give this Algorithm a real "
+                f"compute_update_batched() override that handles a per-member decay."
+            )
+        return torch.stack(deltas, dim=0), first_decay
 
     @abstractmethod
     def decay_state(self, state: dict[str, Any], factor: float) -> None:

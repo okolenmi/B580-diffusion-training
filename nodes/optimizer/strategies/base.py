@@ -26,17 +26,51 @@ def apply_update(param, delta, decay) -> None:
     """param.data *= decay (if decay is not None); param.data -= delta.
     The one piece of "how do you push an already-computed (delta, decay)
     onto a parameter" logic every non-batched execution path needs --
-    SimpleLoopStrategy's per-parameter loop and ComposedFusedOptimizerHandle's
-    per-parameter backward hook (composed_fused.py) both call this rather
-    than each writing the same three lines. ChunkedScratchBufferStrategy
-    and ForeachApplyStrategy don't -- their apply steps are genuinely
-    different (in-place scratch reuse; batched torch._foreach_* across a
-    (device, dtype) group), not just a style variant of this one, so
-    forcing them through this same helper would be the wrong kind of
-    reuse."""
+    SimpleLoopStrategy's per-parameter loop, ShapeGroupedBatchStrategy's
+    own per-member apply, and ComposedFusedOptimizerHandle's per-parameter
+    backward hook (composed_fused.py) all call this rather than each
+    writing the same three lines. ChunkedScratchBufferStrategy doesn't --
+    its apply step is genuinely different (in-place scratch reuse), not
+    just a style variant of this one. ForeachApplyStrategy/
+    ShapeGroupedForeachStrategy don't either -- see apply_updates_batched()
+    right below, their own shared batched equivalent."""
     if decay is not None:
         param.data.mul_(decay)
     param.data.sub_(delta.to(dtype=param.dtype))
+
+
+def apply_updates_batched(entries: list[tuple]) -> None:
+    """Same net effect as calling apply_update(param, delta, decay) once
+    per (param, delta, decay) in entries, but batched via
+    torch._foreach_*, grouped by (device, dtype) -- entries can span
+    multiple groups freely, the grouping happens here.
+
+    Extracted from ForeachApplyStrategy's own step() (foreach.py) once
+    ShapeGroupedForeachStrategy (shape_grouped_foreach.py) needed the
+    identical batched-apply logic too, rather than a second copy of it --
+    see foreach.py's own docstring for the real finding this depends on:
+    passing each `decay` as a 0-dim float32 tensor, not a plain Python
+    float (the ScalarList overload `torch._foreach_mul_` would otherwise
+    take), is load-bearing for bf16 correctness, confirmed by direct
+    testing (diverged in ~94% of random trials with the ScalarList form,
+    matched exactly with this one) -- not a style choice preserved here
+    by accident."""
+    import torch
+
+    groups: dict[tuple, list] = {}
+    for p, delta, decay in entries:
+        groups.setdefault((p.device, p.dtype), []).append((p, delta, decay))
+
+    for (_device, dtype), group_entries in groups.items():
+        decayed = [(p, decay) for p, _delta, decay in group_entries if decay is not None]
+        if decayed:
+            torch._foreach_mul_(
+                [p.data for p, _decay in decayed],
+                [torch.tensor(decay, dtype=torch.float32) for _p, decay in decayed],
+            )
+        targets = [p.data for p, _delta, _decay in group_entries]
+        deltas = [delta.to(dtype=dtype) for _p, delta, _decay in group_entries]
+        torch._foreach_sub_(targets, deltas)
 
 
 class ExecutionStrategy(ABC):

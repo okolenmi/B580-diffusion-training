@@ -38,6 +38,7 @@ from __future__ import annotations
 from .strategies.chunked import ChunkedScratchBufferStrategy
 from .strategies.foreach import ForeachApplyStrategy
 from .strategies.shape_grouped import ShapeGroupedBatchStrategy
+from .strategies.shape_grouped_foreach import ShapeGroupedForeachStrategy
 from .strategies.simple import SimpleLoopStrategy
 
 STRATEGIES = {
@@ -45,6 +46,7 @@ STRATEGIES = {
     "chunked": ChunkedScratchBufferStrategy,
     "foreach": ForeachApplyStrategy,
     "shape_grouped": ShapeGroupedBatchStrategy,
+    "shape_grouped_foreach": ShapeGroupedForeachStrategy,
 }
 
 # Generated from STRATEGIES itself, not hand-written -- cannot list a name

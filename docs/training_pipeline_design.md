@@ -1422,3 +1422,204 @@ solve hasn't materialized). **Deliberately deferred or rejected, for the
 reasons section 7 gives in full:** `AutoResourcePolicy`, automatic
 eviction inside `MemoryManager`, layer-wise base offload, flow matching,
 GaLore, 8-bit optimizer moments.
+
+## 11. Node surface and precision control (planning)
+
+Real, user-reported ground for this section, not a self-directed
+exercise: real-hardware testing found individual optimizer nodes
+(`AdafactorOptimizerNode`, `CAMEOptimizerNode`, etc.) performing within
+~10% of their `Composed*` equivalents -- "legacy LoRA handling should be
+replaced with new one for sure" -- plus no coherent way to control
+compute/storage/optimizer-state precision, plus (found live, mid-session,
+the hard way) a real duplication bug: `strategy="shape_grouped"` was
+registered on `ComposedCAMEOptimizerNode` but not on
+`ComposedAdafactorOptimizerNode`/`ComposedAdamWOptimizerNode`, because
+each of the three composed nodes carried its own byte-identical copy of
+the same dict, dispatch logic, and doc string. The first fix (registering
+the missing entry in the two other copies) reintroduced the identical bug
+class in the process -- the doc strings went stale in exactly the same
+way. Every proposal below is written with that lesson applied on purpose:
+shared structure first, no per-node/per-algorithm copies of the same
+thing -- see `nodes/optimizer/strategy_registry.py` for the real fix, and
+`docs/suspicious_findings.md`'s matching entry for the full account.
+
+### 11.1 Optimizer node consolidation
+
+Grounded in actually reading every node file, not assumed from naming
+alone -- the picture is real but uneven, not a blanket "delete the old
+ones":
+
+**Safe to retire once real-hardware-confirmed equivalent:**
+`AdafactorOptimizerNode`, `CAMEOptimizerNode`, `ForeachAdafactorOptimizerNode`,
+`ForeachCAMEOptimizerNode` -- each is a thin pass-through wrapper around
+a legacy `core.optimizers` class, and the matching `Composed*OptimizerNode`
++ `strategy=` choice already covers the same ground (equivalence-tested
+in `nodes/smoke_tests/`).
+
+**Not yet safe to consolidate, a real gap, not caution for its own
+sake:** `FusedAdafactorOptimizerNode` vs.
+`ComposedFusedAdafactorOptimizerNode` -- the legacy `FusedXPUAdafactor`
+has a `TINY_NUMEL` special case for small parameters (full elementwise
+second-moment tracking instead of the row/col factored approximation)
+that `AdafactorAlgorithm` doesn't replicate. Replicating it is real,
+separate algorithm work, not a wiring change.
+
+**Not redundant at all, despite the naming pattern:**
+`AdamWOptimizerNode` wraps `CPUAdamW` -- CPU-resident optimizer state
+for full fine-tunes where Adam state can't fit on-device, a genuinely
+different design point, unrelated to which execution strategy runs
+where. Stays regardless of anything else in this section.
+
+**A real, two-directional capability difference, not one-directional
+redundancy:** `SimpleAdamWOptimizerNode` (`torch.optim.AdamW(foreach=True)`,
+PyTorch's own first-party kernel) vs. `ComposedAdamWOptimizerNode`
+(this project's own `AdamWAlgorithm`, which supports
+`group_policy=LoRAPlusGroups(...)` and, as of this session, `strategy=
+"shape_grouped"` -- neither of which `SimpleAdamWOptimizerNode` can do
+at all). Both stay: one is "trust PyTorch's own AdamW, nothing fancier,"
+the other is "AdamW plus this project's own composable pieces."
+
+**Net-new, nothing to consolidate:** `ComposedFusedAdamWOptimizerNode`/
+`ComposedFusedCAMEOptimizerNode` have no legacy equivalent at all.
+
+**Deprecation approach:** mark the four safe-to-retire nodes as legacy
+in their own Port/module docstrings, pointing at the `Composed*`
+equivalent and matching `strategy=`, rather than deleting the classes.
+Real graphs may already reference them by name, and removing a
+registered `Node` class is a one-way door for anyone's saved graph --
+not a cost worth paying before the `Composed*` path has been trusted on
+real hardware for a while, not just equivalence-tested on CPU.
+
+### 11.2 `ExecutionStrategy` is up to three orthogonal axes, not one flat enum
+
+Directly answers a real question raised this session -- "why is
+`shape_grouped` a completely different strategy if in theory it can be
+combined with other things" -- by actually reading every strategy's
+`step()`, not by guessing at the answer:
+
+1. **Is the per-parameter algorithm math batched across same-shape
+   parameters?** None (`SimpleLoopStrategy`/`ChunkedScratchBufferStrategy`/
+   `ForeachApplyStrategy` all call `Algorithm.compute_update()` in a
+   plain per-parameter loop) vs. `ShapeGroupedBatchStrategy`'s
+   `compute_update_batched()`, one call per same-shape group.
+2. **Is the final apply step (`decay`/`delta` onto `param.data`)
+   batched?** A per-parameter Python loop (`apply_update()`, used by
+   `SimpleLoopStrategy` and `ShapeGroupedBatchStrategy` alike -- confirmed
+   directly: `ShapeGroupedBatchStrategy` batches the *math* but still
+   applies each group member's result one at a time) vs.
+   `ForeachApplyStrategy`'s `torch._foreach_*` calls across `(device,
+   dtype)` groups.
+3. **Does `compute_update()` get a `MemoryManager`-backed scratch buffer
+   for its own internal intermediates?** None (fresh allocation every
+   call) vs. `ChunkedScratchBufferStrategy`'s reused buffer.
+
+Today's four strategies explore three of the many combinations:
+`simple` = (none, none, none), `chunked` = (none, none, scratch),
+`foreach` = (none, foreach, none), `shape_grouped` = (math, none, none).
+**The valuable, unexplored combination was (math, foreach, none)** --
+batching the core math *and* the apply step compounds the two
+strategies' separate overhead reductions.
+
+**Implemented**: `ShapeGroupedForeachStrategy`
+(`nodes/optimizer/strategies/shape_grouped_foreach.py`) -- built from
+two already-proven pieces, not re-derived: the grouping/batched-compute
+logic (`compute_update_batched()`) was extracted out of
+`ShapeGroupedBatchStrategy` itself into `strategies/shape_grouping.py`
+once this strategy needed the identical logic too, and the batched-apply
+logic (including the bf16 rounding fix) was extracted out of
+`ForeachApplyStrategy` into `base.py`'s `apply_updates_batched()` the
+same way. Both original strategies were refactored to call the
+extracted, shared versions rather than keeping their own copies --
+applying section 11.0's lesson to this section's own proposal, not just
+citing it. **Not** a general N-axis composable-strategy framework for
+two boolean-ish axes and one missing combination -- that would have been
+over-engineering ahead of actual need, against this project's own "don't
+overcomplicate" rule (section 0). If a third or fourth genuinely
+independent axis shows up later, that's the trigger to actually
+decompose `ExecutionStrategy` into composable pieces, not before.
+
+**A real, latent correctness bug found while building and testing this,
+not specific to the new strategy:** `Algorithm.compute_update_batched()`'s
+default fallback (`algorithms/base.py`, used by any Algorithm without
+its own batched override, and by `AdafactorAlgorithm.compute_update_batched()`'s
+own `scale_parameter=True` fallback) silently kept only the *last* group
+member's `decay` when `decay` genuinely varied across the group --
+exactly `AdafactorAlgorithm`'s `scale_parameter=True` case, since
+`alpha_t` depends on each parameter's own norm. An earlier equivalence
+test of this exact fallback path happened to use `weight_decay=0.0`,
+where `decay` is always `None` regardless of `alpha_t` -- silently
+avoiding the bug rather than proving its absence. Found by a real
+equivalence-test failure once `weight_decay != 0` was actually exercised
+through a batched strategy, not by inspection. Fixed to raise a clear,
+specific `RuntimeError` instead of silently applying the wrong decay --
+see `docs/suspicious_findings.md`'s matching entry.
+
+**Fused execution is a fourth thing, but not a fourth axis of
+`ExecutionStrategy` at all.** `ComposedFusedOptimizerHandle`
+(`composed_fused.py`) applies each parameter's update the instant *its
+own* gradient is ready, from inside a backward hook, before `backward()`
+has even returned -- confirmed directly from that module's own
+docstring, which explains exactly why this couldn't be "one more
+strategy" (`step()` is never meaningfully called at all). Combining
+shape-grouped/foreach batching with fused execution is a genuinely
+harder problem, flagged honestly rather than glossed over: batching
+needs to *wait* for a whole group's gradients to arrive; fused wants to
+act on each parameter the moment it's ready, which is in tension with
+waiting for anything. Not proposed here -- a real, separate, harder
+question if it's ever worth pursuing.
+
+### 11.3 Precision and storage control
+
+Three currently real, currently under-exposed, and currently *separate*
+dtype decisions -- kept as independent choices rather than one bundled
+"precision mode," matching section 2.2's own precedent
+(`adapter_strategy`/`frozen_weight_store` were deliberately kept out of
+`ResourcePolicy` rather than absorbed into one object):
+
+1. **`frozen_weight_store`** -- `NF4WeightStore` (3.3) is real and
+   equivalence-tested, but nothing selects it: `adapter_strategy_scope`'s
+   patched construction hardcodes `BF16WeightStore(original.weight)`
+   directly (`nodes/model/adapter_injection.py`). A real port on
+   `ComfyUNetLoRANode`, mirroring `adapter_strategy`'s own pattern
+   exactly (default `None` -> `BF16WeightStore`), is what's missing --
+   this is section 10's already-tracked remaining construction item, not
+   new scope.
+2. **`state_dtype`** -- every `Algorithm.init_state(param_shape, dtype,
+   device)` already accepts a `dtype` argument and every one of the
+   three (`AdamWAlgorithm`/`AdafactorAlgorithm`/`CAMEAlgorithm`)
+   explicitly ignores it, hardcoding float32 for numerical stability,
+   matching legacy-verified behavior. A real port on the `Composed*`
+   optimizer nodes needs **one shared implementation** (given 11.0/11.1's
+   lesson -- not three separate copies), and real quality validation
+   before defaulting to anything but float32: bf16 momentum for LoRA's
+   tiny per-layer parameter count is a real numerical question, not
+   "does it run."
+3. **compute dtype** -- already real (`ComfyUNetLoRANode.dtype`), no new
+   work needed, just clearer documentation that this *is* the
+   compute-dtype axis. True autocast-based mixed precision (fp32 master
+   weights, bf16 compute) is a separate, larger, not-yet-designed item --
+   explicitly not claimed as covered by anything above.
+
+**No preset bundle proposed** (e.g. one `"qlora"` flag setting several
+of the above at once) -- matches `ResourcePolicy`'s own precedent of
+staying orthogonal rather than pre-bundling choices nobody's asked to
+have bundled. Worth adding later if real, explicit demand shows up, not
+speculatively now.
+
+### 11.4 Port UX: string fields for closed-choice values
+
+A real, valid complaint from this session, not specific to optimizers:
+`strategy`, `device`, and similar `Port`s are typed as bare `str`, with
+the valid choices only discoverable by reading a doc string, guessing,
+or hitting a runtime `ValueError`. This is a `Port`/graph-editor-level
+gap, not a per-node one -- fixing it for `strategy` alone would just be
+another single-node patch of a structural problem, the exact mistake
+section 11.0 is about. A `Port` needs a way to declare a closed set of
+valid choices (e.g. an optional `choices: list[str] | None` field,
+`None` for genuinely open-ended strings) that server/graph-editor code
+could render as a dropdown and validate before a graph even runs, not
+just at `build()` time. Real, worth doing, but touches `core.py`'s
+`Port` dataclass and the server's node-introspection/UI code -- a larger
+item than anything else in this section, flagged honestly as its own
+piece of work, not bundled into the optimizer-specific items above.
+

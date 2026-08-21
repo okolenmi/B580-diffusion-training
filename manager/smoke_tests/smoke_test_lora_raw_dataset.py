@@ -88,12 +88,88 @@ def check_fresh_resampling_each_iteration(tmpdir: Path):
     print("    PASS: two epochs got different (x_t, t), and both recover the exact same x0")
 
 
+def _make_one_sample_dataset(tmpdir: Path) -> Path:
+    """A dataset with exactly one real sample -- shared setup for both the
+    regression check below and (implicitly) the resampling check above's
+    same shape, factored out since a second test needs the identical
+    one-sample setup."""
+    dataset_root = tmpdir / "dataset_single"
+    dataset_root.mkdir()
+    db_path = dataset_root / "metadata.db"
+    init_local_db(db_path)
+
+    x0 = torch.randn(1, 4, 8, 8)
+    shard_file = dataset_root / "staging" / "shard.safetensors"
+    writer = ShardWriter(shard_file)
+    idx = writer.add_image_latent(x0)
+    count, size = writer.write()
+
+    source_id = add_source(db_path, "test_source", "real")
+    shard_id = add_shard(db_path, str(shard_file.relative_to(dataset_root)), count, size)
+
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, metadata) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (source_id, shard_id, idx, 1, 1, "a cat",
+         json.dumps({"neg": "", "format": "lora_raw", "model_type": "eps"})),
+    )
+    conn.commit()
+    conn.close()
+    return dataset_root
+
+
+def check_undersized_dataset_raises_not_silently_empty(tmpdir: Path):
+    """Regression check for a real, reported bug, not a hypothesis: a
+    1-sample dataset with batch_size=2 and shuffle=True (the default)
+    used to make __iter__() silently yield zero batches, every epoch,
+    forever -- the incomplete last chunk of every bucket gets dropped
+    when shuffling (correct, intentional, in general), but when a
+    bucket's samples are *entirely* one incomplete chunk, dropping it
+    drops everything. That surfaced several frames away in real training
+    (nodes/train/step_pipeline.py's FetchBatchPhase: one caught
+    StopIteration to wrap to a new epoch, then an uncaught second one
+    immediately after, crashing the run with a bare "StopIteration" and
+    no indication why) -- reproduced directly against the real class
+    here instead, checking the fix at its actual source."""
+    print("[ManagedDatasetLoader: undersized dataset raises clearly, doesn't silently "
+          "yield zero batches forever]")
+    dataset_root = _make_one_sample_dataset(tmpdir)
+
+    loader = ManagedDatasetLoader(dataset_root, shuffle=True, batch_size=2)
+    try:
+        list(loader)
+        raise AssertionError("expected ValueError, got no error -- fix regressed")
+    except ValueError as e:
+        assert "no batch can ever be formed" in str(e), f"wrong error message: {e}"
+        print(f"    PASS: raised a clear ValueError instead of silently yielding "
+              f"zero batches: {str(e)[:80]}...")
+
+    # A real dataset genuinely having zero samples must still just yield
+    # nothing, unchanged -- this fix only fires when there WAS data that
+    # got entirely dropped, not for a truly empty dataset.
+    loader2 = ManagedDatasetLoader(dataset_root, shuffle=True, batch_size=2)
+    loader2._samples = []
+    assert list(loader2) == [], "a genuinely empty dataset should still just yield nothing"
+    print("    PASS: a genuinely empty dataset (0 samples) still yields nothing, "
+          "not an error -- unchanged")
+
+    # The same 1-sample dataset with a batch_size it CAN satisfy must be
+    # completely unaffected by this fix.
+    loader3 = ManagedDatasetLoader(dataset_root, shuffle=True, batch_size=1)
+    batches = list(loader3)
+    assert len(batches) == 1, f"expected 1 batch, got {len(batches)}"
+    print("    PASS: the same dataset with batch_size=1 (satisfiable) is unaffected")
+
+
 def main():
     _no_gpu_pin_memory_workaround()
     with tempfile.TemporaryDirectory() as td:
         tmpdir = Path(td)
         check_shard_round_trip(tmpdir)
         check_fresh_resampling_each_iteration(tmpdir)
+        check_undersized_dataset_raises_not_silently_empty(tmpdir)
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

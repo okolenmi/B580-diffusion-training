@@ -60,6 +60,42 @@ are confirmed but not urgent) so they don't get lost. Newest first.
 
 ## Resolved
 
+- **[2026-08] A dataset smaller than `batch_size` (real user report: 1
+  image, `batch_size=2`) silently produced zero batches forever, then
+  crashed training several frames away with a bare, unexplained
+  `StopIteration`.** `manager/loader.py`'s `ManagedDatasetLoader.__iter__()`
+  correctly drops each bucket's incomplete last chunk when
+  `shuffle=True` (intentional, common practice) -- but when a bucket's
+  samples are *entirely* one incomplete chunk (the whole dataset, or
+  every per-(prompt, size) bucket, is smaller than `batch_size`),
+  dropping "the last incomplete chunk" drops everything, silently,
+  every epoch. Reproduced directly against the real class with a real
+  1-row sqlite dataset (`shuffle=True, batch_size=2`): `len(loader)`
+  reported `1` (misleading), `list(loader)` yielded zero batches. Traced
+  the actual crash it causes: `nodes/train/step_pipeline.py`'s
+  `FetchBatchPhase` catches exactly one `StopIteration` to wrap to a new
+  epoch, then hits an uncaught second `StopIteration` immediately after
+  (the fresh epoch is just as empty) -- that's what actually reaches the
+  user, several frames removed from the real cause and with no
+  indication why. Fixed by raising a clear, specific `ValueError` at the
+  actual source (`__iter__()`) instead of silently returning an empty
+  generator -- a genuinely empty dataset (0 samples) is unaffected,
+  still yields nothing, not an error; only the "had samples, all of them
+  got dropped" case now raises. Regression-tested against the real
+  class via the same real sqlite+safetensors harness
+  `smoke_test_lora_raw_dataset.py` already established (no mocks).
+
+  **The identical bug pattern exists in `core/cache_utils.py`'s
+  `shuffle_and_rebatch_cache()`** (same "drop an incomplete last chunk,
+  no check for the whole batch ending up empty" shape, confirmed by
+  reading it directly) -- not fixed, on purpose: that file is
+  `core/`-tier, reference-only, unreachable from `nodes/` (confirmed --
+  only `core/cache_trajectory.py`/`core/cache_random.py` call it, both
+  part of the legacy caching flow `core/trainer.py` uses, not anything
+  `SupervisedLoRATrainerNode` touches). Flagged here so it isn't
+  forgotten, not silently left for someone to rediscover the hard way if
+  that legacy path's own small-dataset case ever gets hit for real.
+
 - **[2026-08] `Algorithm.compute_update_batched()`'s default fallback
   silently applied the wrong `decay` to some group members when `decay`
   genuinely varied across a group -- found while building

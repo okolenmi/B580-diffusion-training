@@ -278,6 +278,38 @@ class ManagedDatasetLoader:
                 all_batches.append(self._merge_samples(chunk))
 
         if not all_batches:
+            if self._samples:
+                # Real bug this used to be, not a defensive rewrite:
+                # dropping every bucket's incomplete last chunk when
+                # shuffling (the branch just above) is correct and
+                # intentional in general -- but if EVERY bucket's samples
+                # fit in one incomplete chunk (the whole dataset is
+                # smaller than batch_size, or every per-(prompt,size)
+                # bucket is), dropping "the last incomplete chunk" drops
+                # *all* of it, every single epoch, forever. __iter__()
+                # used to just silently `return` here -- an empty
+                # generator, not an error -- which surfaces several
+                # frames away and looking unrelated: FetchBatchPhase
+                # (nodes/train/step_pipeline.py) catches exactly one
+                # StopIteration to wrap to a new epoch, gets a second,
+                # uncaught StopIteration immediately after (the fresh
+                # epoch is just as empty), and that crashes the whole
+                # training run with a bare "StopIteration" and no
+                # indication why. Reproduced directly with a real 1-row
+                # sqlite dataset (shuffle=True, batch_size=2): len(loader)
+                # reports 1 (misleading -- see __len__'s own note below),
+                # list(loader) yields zero batches. Raising here instead
+                # turns that into an immediate, specific, first-step
+                # error instead of a confusing crash one retry later.
+                raise ValueError(
+                    f"This dataset has {len(self._samples)} sample(s) after bucketing "
+                    f"by (prompt, neg_prompt, size), but batch_size={self.batch_size} "
+                    f"and shuffle=True -- every bucket's samples fit in one incomplete "
+                    f"chunk, and an incomplete chunk is dropped when shuffling (common "
+                    f"training practice, see this method's own comment above), so no "
+                    f"batch can ever be formed. Reduce batch_size, add more samples to "
+                    f"this dataset, or set shuffle=False."
+                )
             return
 
         if not self.shuffle:

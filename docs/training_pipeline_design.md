@@ -1442,6 +1442,10 @@ way. Every proposal below is written with that lesson applied on purpose:
 shared structure first, no per-node/per-algorithm copies of the same
 thing -- see `nodes/optimizer/strategy_registry.py` for the real fix, and
 `docs/suspicious_findings.md`'s matching entry for the full account.
+11.4/11.5 add two further real, user-reported points from the same
+conversation: `strategy`/`device`-style ports being free-text strings
+with no discoverable set of choices, and every node's Python class name
+also doubling as its palette display text, "...Node" suffix included.
 
 ### 11.1 Optimizer node consolidation
 
@@ -1622,4 +1626,41 @@ just at `build()` time. Real, worth doing, but touches `core.py`'s
 `Port` dataclass and the server's node-introspection/UI code -- a larger
 item than anything else in this section, flagged honestly as its own
 piece of work, not bundled into the optimizer-specific items above.
+
+### 11.5 Node naming: one string is doing two jobs
+
+A second real UX point, raised alongside 11.4: every node's Python class
+name (`ComfyUNetLoRANode`, `ComposedAdafactorOptimizerNode`, ...) is used
+as *both* the stable identifier a saved graph's `class_name` references
+and resolves against (`server/nodegraph_registry.py`'s `get_registry()`
+returns `{cls.__name__: cls for cls in classes}`, one dict, deliberately
+"so those two things can never silently disagree" -- but that's *only*
+true because there's just the one string) *and* what a person sees in
+the palette -- including the "...Node" suffix on every single entry,
+which carries no information (everything in the palette is a node) and
+reads exactly as "dumb" as it was called.
+
+These two jobs have different, real constraints: the registry key needs
+to be stable (renaming it breaks every already-saved graph referencing
+the old name) and needs to be a valid Python identifier; a display label
+has neither constraint and should read well to a person scanning a
+palette. Collapsing them into one string means neither job is served
+well -- `class_name` can't be prettied up without breaking saved graphs,
+and there's no way to *ever* improve the palette's wording without that
+same breakage.
+
+**Concrete, low-risk proposal, matching this module's own stated
+principle** (`server/nodegraph_introspect.py`: "UI metadata is *derived*
+from the real Python class... never hand-duplicated in a separate
+file"): add an optional `display_name` to `NodeInfo`
+(`nodegraph_introspect.py`), derived automatically (strip a trailing
+`"Node"` suffix, split on capitals -- `ComfyUNetLoRANode` ->
+`"Comfy UNet LoRA"`) with a class-level override available (e.g. a
+`DISPLAY_NAME: ClassVar[str] | None` on `Node` itself, `core.py`) for the
+cases an auto-derived name reads badly. `class_name` stays exactly what
+it is today -- the registry key, `__name__`, untouched, so nothing about
+serialization or graph resolution changes at all. Purely additive: every
+existing saved graph keeps working unchanged; only the palette's own
+rendering gets a second, friendlier string to show instead of the raw
+class name.
 

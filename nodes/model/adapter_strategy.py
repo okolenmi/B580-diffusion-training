@@ -12,16 +12,18 @@ source nn.Linear/nn.Conv2d), since LoRALinear/LoRAConv2d's constructors
 need bias, in/out features, and conv stride/padding/dilation/groups --
 not just a weight tensor.
 
-PlainLoRAAdapter only honors BF16WeightStore, and checks that at wrap()
-time rather than silently ignoring `frozen`. LoRALinear/LoRAConv2d's
-forward() reads its own stored base_weight/base_bias buffers directly --
-it never calls frozen.materialize(). For BF16WeightStore this is
-behavior-identical to calling materialize() every forward pass
-(materialize() is a no-op passthrough there), so wrapping the class
-unchanged is correct. It would not be correct for a weight store whose
-materialize() actually does work (e.g. dequantizing on the fly) --
-honoring that needs a forward pass that actually calls materialize(),
-which PlainLoRAAdapter's wrapped legacy class does not do.
+PlainLoRAAdapter honors both BF16WeightStore and NF4WeightStore, checked
+at wrap() time rather than silently ignoring `frozen`. For
+BF16WeightStore, core.lora.LoRALinear/LoRAConv2d's forward() reads its
+own stored base_weight/base_bias buffers directly -- it never calls
+frozen.materialize(). This is behavior-identical to calling
+materialize() every forward pass (materialize() is a no-op passthrough
+for BF16WeightStore), so wrapping the class unchanged is correct there.
+For NF4WeightStore, wrap() instead constructs
+nodes/model/nf4_lora_layer.py's NF4LoRALinear/NF4LoRAConv2d, which do
+call frozen.materialize() every forward -- see that module's own
+docstring for why this couldn't be done via composition over
+core.lora.LoRALinear the way DoRAAdapter's layers are.
 """
 
 from __future__ import annotations
@@ -68,34 +70,53 @@ class AdapterStrategy(ABC):
 
 
 class PlainLoRAAdapter(AdapterStrategy):
-    """core.lora.LoRALinear/LoRAConv2d math, wrapped unchanged. See this
-    module's docstring for the real limits this honors (BF16WeightStore
-    only)."""
+    """core.lora.LoRALinear/LoRAConv2d math for BF16WeightStore;
+    nf4_lora_layer.py's NF4LoRALinear/NF4LoRAConv2d for NF4WeightStore.
+    See this module's docstring for the real difference between the two
+    paths (only one of them actually calls frozen.materialize())."""
 
     def wrap(self, original, frozen: FrozenWeightStore, rank: int, alpha: float,
               scaling_policy: LoRAScalingPolicy, dropout: float = 0.0,
               weight: float = 1.0) -> AdaptedLayer:
-        if not isinstance(frozen, BF16WeightStore):
-            raise NotImplementedError(
-                f"PlainLoRAAdapter only honors BF16WeightStore today, got "
-                f"{type(frozen).__name__} -- see this class's own docstring, and "
-                f"nodes/model/adapter_strategy.py's module docstring, for exactly why."
-            )
         import torch.nn as nn
 
-        LoRALinear, LoRAConv2d = _real_lora_classes()
+        from .nf4_weight_store import NF4WeightStore
 
-        _register_legacy_adapted_layers()
         effective_alpha = _effective_alpha(alpha=alpha, rank=rank, policy=scaling_policy)
-        if isinstance(original, nn.Linear):
-            return LoRALinear(original, rank=rank, alpha=effective_alpha,
-                               dropout=dropout, weight=weight)
-        if isinstance(original, nn.Conv2d):
-            return LoRAConv2d(original, rank=rank, alpha=effective_alpha,
-                               dropout=dropout, weight=weight)
-        raise TypeError(
-            f"PlainLoRAAdapter.wrap(): original must be nn.Linear or nn.Conv2d, "
-            f"got {type(original).__name__}."
+
+        if isinstance(frozen, BF16WeightStore):
+            LoRALinear, LoRAConv2d = _real_lora_classes()
+            _register_legacy_adapted_layers()
+            if isinstance(original, nn.Linear):
+                return LoRALinear(original, rank=rank, alpha=effective_alpha,
+                                   dropout=dropout, weight=weight)
+            if isinstance(original, nn.Conv2d):
+                return LoRAConv2d(original, rank=rank, alpha=effective_alpha,
+                                   dropout=dropout, weight=weight)
+            raise TypeError(
+                f"PlainLoRAAdapter.wrap(): original must be nn.Linear or nn.Conv2d, "
+                f"got {type(original).__name__}."
+            )
+
+        if isinstance(frozen, NF4WeightStore):
+            from .nf4_lora_layer import NF4LoRAConv2d, NF4LoRALinear
+
+            _register_nf4_adapted_layers()
+            if isinstance(original, nn.Linear):
+                return NF4LoRALinear(original, frozen, rank=rank, alpha=effective_alpha,
+                                      dropout=dropout, weight=weight)
+            if isinstance(original, nn.Conv2d):
+                return NF4LoRAConv2d(original, frozen, rank=rank, alpha=effective_alpha,
+                                      dropout=dropout, weight=weight)
+            raise TypeError(
+                f"PlainLoRAAdapter.wrap(): original must be nn.Linear or nn.Conv2d, "
+                f"got {type(original).__name__}."
+            )
+
+        raise NotImplementedError(
+            f"PlainLoRAAdapter only honors BF16WeightStore/NF4WeightStore today, got "
+            f"{type(frozen).__name__} -- see this class's own docstring, and "
+            f"nodes/model/adapter_strategy.py's module docstring, for exactly why."
         )
 
 
@@ -105,9 +126,12 @@ class DoRAAdapter(AdapterStrategy):
     DoRALinear/DoRAConv2d, built via composition over a real
     core.lora.LoRALinear/LoRAConv2d (see dora_layer.py's module
     docstring for the full derivation, grounded directly in
-    HuggingFace PEFT's real implementation). Same real limit as
-    PlainLoRAAdapter today: only BF16WeightStore, for the same reason
-    (see this module's docstring)."""
+    HuggingFace PEFT's real implementation). Only BF16WeightStore today
+    -- unlike PlainLoRAAdapter, not yet extended to NF4WeightStore
+    (published work confirms DoRA and quantized bases compose, "QDoRA",
+    but DoRALinear's composition-over-LoRALinear approach doesn't carry
+    over the same way NF4LoRALinear's direct implementation did -- real,
+    separate follow-up, not done here)."""
 
     def wrap(self, original, frozen: FrozenWeightStore, rank: int, alpha: float,
               scaling_policy: LoRAScalingPolicy, dropout: float = 0.0,
@@ -115,8 +139,8 @@ class DoRAAdapter(AdapterStrategy):
         if not isinstance(frozen, BF16WeightStore):
             raise NotImplementedError(
                 f"DoRAAdapter only honors BF16WeightStore today, got "
-                f"{type(frozen).__name__} -- see this class's own docstring, and "
-                f"nodes/model/adapter_strategy.py's module docstring, for exactly why."
+                f"{type(frozen).__name__} -- see this class's own docstring for why "
+                f"NF4WeightStore (which PlainLoRAAdapter now honors) isn't supported yet."
             )
         import torch.nn as nn
 
@@ -151,6 +175,14 @@ def _register_legacy_adapted_layers():
     LoRALinear, LoRAConv2d = _real_lora_classes()
     AdaptedLayer.register(LoRALinear)
     AdaptedLayer.register(LoRAConv2d)
+
+
+def _register_nf4_adapted_layers():
+    """AdaptedLayer.register(NF4LoRALinear/NF4LoRAConv2d) -- same
+    reasoning as _register_dora_adapted_layers() below."""
+    from .nf4_lora_layer import NF4LoRAConv2d, NF4LoRALinear
+    AdaptedLayer.register(NF4LoRALinear)
+    AdaptedLayer.register(NF4LoRAConv2d)
 
 
 def _register_dora_adapted_layers():

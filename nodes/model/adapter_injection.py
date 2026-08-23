@@ -32,19 +32,36 @@ restoration happens on every exit, including via an exception, and
 scopes to exactly the one ComfyUNetWrapper(...) construction call that
 needs it.
 
-**Why PlainLoRAAdapter installs no patch at all.** PlainLoRAAdapter.wrap()
-(adapter_strategy.py) itself constructs LoRALinear/LoRAConv2d by
-importing them fresh from core.lora inside its own wrap() body -- if
-this module patched those same names and then routed PlainLoRAAdapter
-through the patched path, PlainLoRAAdapter.wrap()'s own import would
-resolve to the patch it's currently running inside of, recursing
-forever. There's a real, structural reason this never comes up:
-PlainLoRAAdapter *is* core.lora's own unmodified behavior by
-definition, so there is nothing to intercept when it's selected --
-skipping the patch entirely for this one case is not an optimization
+**Why PlainLoRAAdapter installs no patch at all -- but only when it
+really would be a no-op.** PlainLoRAAdapter.wrap() (adapter_strategy.py)
+itself constructs LoRALinear/LoRAConv2d by importing them fresh from
+core.lora inside its own wrap() body -- if this module patched those
+same names and then routed PlainLoRAAdapter through the patched path,
+PlainLoRAAdapter.wrap()'s own import would resolve to the patch it's
+currently running inside of, recursing forever. There's a real,
+structural reason this never comes up when `frozen_weight_store_factory`
+is BF16WeightStore (the default): PlainLoRAAdapter *is* core.lora's own
+unmodified behavior for that case, by definition, so there is nothing to
+intercept -- skipping the patch entirely is not an optimization
 shortcut, it's the only correct behavior, and it happens to also be the
-default (adapter_strategy=None -> PlainLoRAAdapter()), so nothing
-wired to ComfyUNetLoRANode today changes at all.
+default (adapter_strategy=None -> PlainLoRAAdapter(),
+frozen_weight_store_factory=None -> BF16WeightStore), so nothing wired to
+ComfyUNetLoRANode today changes at all.
+
+**This stopped being universally true once PlainLoRAAdapter also learned
+to honor NF4WeightStore** (adapter_strategy.py). Selecting
+`adapter_strategy=None` (PlainLoRAAdapter) with
+`frozen_weight_store_factory=NF4WeightStore` is a real, deliberate
+combination -- NF4-quantized base, plain LoRA on top -- and skipping the
+patch for it would silently do nothing: core.lora's own real
+LoRALinear/LoRAConv2d always capture a bf16 base_weight buffer directly
+from `original.weight`, with no NF4 concept at all. The skip condition
+below is precise about this: PlainLoRAAdapter *and* the BF16WeightStore
+factory, both, not PlainLoRAAdapter alone. No recursion risk either way
+NF4WeightStore is selected while patched: PlainLoRAAdapter.wrap()'s
+NF4WeightStore branch constructs nf4_lora_layer.py's NF4LoRALinear/
+NF4LoRAConv2d directly, never touching core.lora.LoRALinear/LoRAConv2d
+at all -- there's nothing for it to recurse through.
 
 **The alpha double-application this module has to avoid.**
 ComfyUNetLoRANode.build() already resolves scaling_policy into a single
@@ -101,7 +118,7 @@ from .lora_class_cache import _real_lora_classes_cache
 from .lora_scaling import ClassicLoRAScaling
 
 
-def _make_adapter_patched_class(adapter_strategy: AdapterStrategy):
+def _make_adapter_patched_class(adapter_strategy: AdapterStrategy, frozen_weight_store_factory):
     """A class whose __new__ never returns an instance of itself --
     per the language's own data model, that means __init__ never runs
     on the result, so what callers actually get back is exactly
@@ -116,12 +133,17 @@ def _make_adapter_patched_class(adapter_strategy: AdapterStrategy):
     AdapterStrategy.wrap() already dispatches on isinstance(original,
     nn.Linear) vs. nn.Conv2d internally (see PlainLoRAAdapter.wrap()),
     so there is nothing this factory needs to decide that wrap() isn't
-    already deciding correctly."""
+    already deciding correctly.
+
+    frozen_weight_store_factory: a real FrozenWeightStore class (or any
+    (tensor) -> FrozenWeightStore callable) -- called fresh per target
+    layer, since each layer's frozen weight is its own separate tensor,
+    not something to share a single FrozenWeightStore instance across."""
 
     class _AdapterPatchedLayer:
         def __new__(cls, original, rank: int = 64, alpha: float = 1.0,
                     dropout: float = 0.0, weight: float = 1.0):
-            frozen = BF16WeightStore(original.weight)
+            frozen = frozen_weight_store_factory(original.weight)
             # ClassicLoRAScaling(), always -- see this module's docstring
             # for exactly why the real scaling_policy must not be passed
             # here.
@@ -132,15 +154,23 @@ def _make_adapter_patched_class(adapter_strategy: AdapterStrategy):
 
 
 @contextlib.contextmanager
-def adapter_strategy_scope(adapter_strategy: AdapterStrategy):
+def adapter_strategy_scope(adapter_strategy: AdapterStrategy, frozen_weight_store_factory=None):
     """Everything core.lora._inject_lora constructs inside this `with`
     block goes through adapter_strategy instead of core.lora's own
     LoRALinear/LoRAConv2d -- unless adapter_strategy is a
-    PlainLoRAAdapter, in which case nothing is patched at all (see this
-    module's docstring for why that's correct, not a shortcut).
-    Restores core.lora's real classes on every exit, exception or not.
-    """
-    if isinstance(adapter_strategy, PlainLoRAAdapter):
+    PlainLoRAAdapter *and* frozen_weight_store_factory is BF16WeightStore
+    (the default for both), in which case nothing is patched at all (see
+    this module's docstring for why that specific combination, and only
+    that one, is a real no-op). Restores core.lora's real classes on
+    every exit, exception or not.
+
+    frozen_weight_store_factory: a FrozenWeightStore class (or (tensor)
+    -> FrozenWeightStore callable), or None for the default
+    (BF16WeightStore, today's exact behavior)."""
+    if frozen_weight_store_factory is None:
+        frozen_weight_store_factory = BF16WeightStore
+
+    if isinstance(adapter_strategy, PlainLoRAAdapter) and frozen_weight_store_factory is BF16WeightStore:
         yield
         return
 
@@ -153,7 +183,7 @@ def adapter_strategy_scope(adapter_strategy: AdapterStrategy):
     # PlainLoRAAdapter.wrap() needs this rather than a live import.
     _real_lora_classes_cache["LoRALinear"] = original_linear
     _real_lora_classes_cache["LoRAConv2d"] = original_conv2d
-    patched = _make_adapter_patched_class(adapter_strategy)
+    patched = _make_adapter_patched_class(adapter_strategy, frozen_weight_store_factory)
     core_lora.LoRALinear = patched
     core_lora.LoRAConv2d = patched
     try:

@@ -203,12 +203,26 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         "adapter_strategy": Port(
             name="adapter_strategy", type=AdapterStrategy, required=False, default=None,
             doc="None = PlainLoRAAdapter (today's exact core.lora.LoRALinear/LoRAConv2d "
-                "behavior, byte-identical -- nothing patched at all, see "
-                "nodes/model/adapter_injection.py for why that's correct, not a shortcut). "
-                "Any other AdapterStrategy (nodes/model/adapter_strategy.py) is live-wired "
+                "behavior when frozen_weight_store is also its own default -- see that "
+                "port's own doc for the one case this stops being a no-op). Any other "
+                "AdapterStrategy (nodes/model/adapter_strategy.py) is live-wired "
                 "into core.lora's real, unmodified injection tree-walk via a scoped, "
                 "restored-on-exit patch -- see adapter_injection.py's module docstring for "
                 "the full mechanism and the alpha-double-application pitfall it avoids.",
+        ),
+        "frozen_weight_store": Port(
+            name="frozen_weight_store", type=type, required=False, default=None,
+            doc="A FrozenWeightStore CLASS (or any (tensor) -> FrozenWeightStore "
+                "callable), not an instance -- a fresh one is constructed per target "
+                "layer, since each layer's frozen weight is its own tensor. None = "
+                "BF16WeightStore (today's exact behavior, byte-identical). "
+                "NF4WeightStore (nodes/model/nf4_weight_store.py) quantizes the frozen "
+                "base to ~4 bits/parameter -- real VRAM savings, real quantization "
+                "error (~9% relative RMSE on realistic weight-like data, see that "
+                "module's own docstring), genuinely lossy even before any LoRA "
+                "training happens. Works with adapter_strategy=None (PlainLoRAAdapter) "
+                "-- DoRAAdapter doesn't honor NF4WeightStore yet, see "
+                "adapter_strategy.py's DoRAAdapter docstring for why not.",
         ),
     }
 
@@ -223,6 +237,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
 
         weights: ModelWeights = inputs["weights"]
         adapter_strategy = inputs.get("adapter_strategy") or PlainLoRAAdapter()
+        frozen_weight_store_factory = inputs.get("frozen_weight_store")
         resource_policy = inputs.get("resource_policy")
         if resource_policy is not None:
             checkpointing_strategy = resource_policy.checkpointing_strategy()
@@ -244,7 +259,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),
         )
-        with adapter_strategy_scope(adapter_strategy):
+        with adapter_strategy_scope(adapter_strategy, frozen_weight_store_factory):
             wrapper = ComfyUNetWrapper(
                 weights.unet_sd,
                 device=inputs.get("device", self.INPUTS["device"].default),

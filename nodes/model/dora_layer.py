@@ -47,7 +47,9 @@ inside it. mag_norm_scale itself carries trainable state (magnitude),
 and it has to vanish outside the trained t-range for the same reason the
 LoRA delta does, or DoRA's magnitude parameter would keep influencing
 generation at timesteps this training run never supervised -- exactly
-the failure mode the gate exists to prevent for plain LoRA.
+the failure mode the gate exists to prevent for plain LoRA. The actual
+gate application (`apply_lora_gate()`) lives in `lora_gate.py` now --
+extracted once `nf4_lora_layer.py` needed the identical logic too.
 
 **Built via composition over a real core.lora.LoRALinear/LoRAConv2d**
 (accessed through lora_class_cache.py's _real_lora_classes(), the same
@@ -84,6 +86,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .lora_class_cache import _real_lora_classes
+from .lora_gate import apply_lora_gate
 
 
 def _weight_norm_linear(base_weight: torch.Tensor, lora_A: torch.Tensor,
@@ -113,17 +116,7 @@ def _weight_norm_conv2d(base_weight: torch.Tensor, lora_A: torch.Tensor, lora_B:
     return merged.norm(p=2, dim=dims)
 
 
-def _apply_gate(delta: torch.Tensor) -> torch.Tensor:
-    """Same _current_gate mechanism core.lora.LoRALinear.forward() reads
-    -- see this module's docstring for why DoRA gates the entire delta,
-    not just the raw LoRA term inside it."""
-    from core.lora import _current_gate
-    gate = _current_gate
-    if gate is None:
-        return delta
-    g = gate.to(device=delta.device, dtype=delta.dtype)
-    g = g.view(-1, *([1] * (delta.dim() - 1)))
-    return delta * g
+
 
 
 class DoRALinear(nn.Module):
@@ -167,7 +160,7 @@ class DoRALinear(nn.Module):
 
         result_dora = ((mag_norm_scale - 1) * base_result_no_bias
                         + mag_norm_scale * lora_raw.to(base_result.dtype) * self.scaling)
-        result_dora = _apply_gate(result_dora)
+        result_dora = apply_lora_gate(result_dora)
         return base_result + result_dora
 
     def merge(self):
@@ -251,7 +244,7 @@ class DoRAConv2d(nn.Module):
 
         result_dora = ((mag_norm_scale - 1) * base_result_no_bias
                         + mag_norm_scale * lora_raw.to(base_result.dtype) * self.scaling)
-        result_dora = _apply_gate(result_dora)
+        result_dora = apply_lora_gate(result_dora)
         return base_result + result_dora
 
     def merge(self):

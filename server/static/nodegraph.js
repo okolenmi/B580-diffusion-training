@@ -399,8 +399,14 @@
         for (const classInfo of this.model.registry[domain]) {
           const item = document.createElement("button");
           item.className = "ng-palette-item";
-          item.textContent = classInfo.class_name;
-          item.title = classInfo.doc || "";
+          // display_name is a friendlier label ("Comfy UNet LoRA"); class_name
+          // (the real, stable identifier) stays discoverable via the tooltip
+          // rather than disappearing, since it's still what saved-graph JSON
+          // and error messages elsewhere in this file refer to a node by.
+          item.textContent = classInfo.display_name || classInfo.class_name;
+          item.title = classInfo.doc
+            ? `${classInfo.class_name} \u2014 ${classInfo.doc}`
+            : classInfo.class_name;
           item.addEventListener("click", () => this.spawn(classInfo));
           group.appendChild(item);
         }

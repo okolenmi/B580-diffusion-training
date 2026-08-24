@@ -19,6 +19,7 @@ path in any way. Safe to import, safe to iterate on, safe to delete.
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,6 +46,70 @@ class NodeInfo:
     inputs: list[PortInfo]  # derived from __init__'s parameters (minus self)
     outputs: list[PortInfo] # see introspect_class()'s docstring for how these are derived
     bases: list[str] | None = None  # real inheritance chain (Node subclasses only) -- None for legacy-class introspection, where there's no such formal chain to report
+    display_name: str = ""  # palette label -- Node.DISPLAY_NAME if the class set one,
+    # else auto-derived by _auto_display_name() below. Always non-empty for any real
+    # NodeInfo (see introspect_node_class()/introspect_legacy_class()); the "" default
+    # here exists only so callers constructing a NodeInfo by hand in a test aren't
+    # forced to pass it. class_name (above) is untouched by any of this -- it stays the
+    # literal __name__ that saved graphs resolve against. See design doc section 11.5.
+
+
+# Domain vocabulary this project's own class names actually use that a generic
+# capital-letter split gets wrong -- "ComfyUNetLoRA" split purely on capital
+# boundaries gives "Comfy U Net Lo R A", not "Comfy UNet LoRA". Checked
+# case-sensitively, longest-first, at each position before falling back to a
+# plain [A-Z][a-z0-9]* word. This is deliberately a closed, curated list
+# grounded in real class names in nodes/ today (see server/nodegraph_registry.py's
+# _load() for the full set this was derived against) -- not an attempt at general
+# PascalCase/acronym parsing. A future class whose name introduces a new token
+# this list doesn't know about will still get *a* label (each of its capitals
+# split into its own word, same as any generic splitter's fallback) -- reads
+# awkwardly rather than crashing, and is exactly what Node.DISPLAY_NAME exists
+# to override.
+_KNOWN_DISPLAY_TOKENS = sorted(
+    ["UNet", "LoRA", "DoRA", "QDoRA", "CAME", "AdamW", "SDXL", "SNR", "NF4",
+     "BF16", "XPU", "VRAM", "LR", "P2"],
+    key=len, reverse=True,
+)
+
+_WORD_RE = re.compile(r"[A-Z][a-z0-9]*")
+
+
+def _auto_display_name(class_name: str) -> str:
+    """Auto-derive a palette label: "ComfyUNetLoRANode" -> "Comfy UNet LoRA".
+    Strips a trailing "Node" suffix (present on every real Node subclass,
+    carries no information --
+    everything in the palette is a node), then splits what's left into
+    words: a known domain token (_KNOWN_DISPLAY_TOKENS) if one matches at
+    the current position, else one capital letter followed by any run of
+    lowercase letters/digits. Never raises -- worst case for an unrecognized
+    run of capitals is one word per capital, not a crash."""
+    stem = class_name[:-4] if class_name.endswith("Node") and len(class_name) > 4 else class_name
+    words: list[str] = []
+    i = 0
+    while i < len(stem):
+        for token in _KNOWN_DISPLAY_TOKENS:
+            if stem.startswith(token, i):
+                words.append(token)
+                i += len(token)
+                break
+        else:
+            m = _WORD_RE.match(stem, i)
+            if m:
+                words.append(m.group())
+                i = m.end()
+            else:
+                # Not a capital-start position (shouldn't happen for real
+                # PascalCase class names) -- consume one char rather than
+                # loop forever, still produces *a* label.
+                words.append(stem[i])
+                i += 1
+    return " ".join(words) if words else class_name
+
+
+def _display_name_for(cls: type) -> str:
+    override = getattr(cls, "DISPLAY_NAME", None)
+    return override if override else _auto_display_name(cls.__name__)
 
 
 def _type_str(annotation: Any) -> str:
@@ -123,6 +188,7 @@ def introspect_legacy_class(cls: type, category: str | None = None) -> NodeInfo:
         inputs=ports,
         outputs=outputs,
         bases=None,  # no formal Node inheritance chain to report for a guessed class
+        display_name=_display_name_for(cls),
     )
 
 
@@ -185,6 +251,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
         inputs=inputs,
         outputs=outputs,
         bases=bases,
+        display_name=_display_name_for(cls),
     )
 
 
@@ -219,6 +286,7 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         ]
     return {
         "class_name": info.class_name,
+        "display_name": info.display_name,
         "module": info.module,
         "doc": info.doc,
         "bases": info.bases,

@@ -1639,6 +1639,35 @@ piece of work, not bundled into the optimizer-specific items above.
 
 ### 11.5 Node naming: one string is doing two jobs
 
+**Implemented.** `Node.DISPLAY_NAME` (`nodes/core.py`, default `None`) and
+`NodeInfo.display_name` (`server/nodegraph_introspect.py`, computed by the
+new `_auto_display_name()`/`_display_name_for()`) exist and are wired into
+`/nodegraph/registry`'s response and the palette (`server/static/nodegraph.js`),
+exactly matching the proposal below -- `class_name` is untouched, every
+saved graph keeps resolving the same way it always did. One real
+discrepancy between the proposal and what actually shipped, found while
+implementing it, not glossed over: the proposal's own worked example
+(`"ComfyUNetLoRANode"` -> `"Comfy UNet LoRA"`) is **not** achievable by
+literally "split on capitals" as written below -- a plain capital-boundary
+split turns that same input into `"Comfy U Net Lo R A"`, since `"UNet"`
+and `"LoRA"` are each two capitals-then-lowercase runs, not one. What's
+actually implemented is a curated, closed list of this project's own
+domain tokens (`UNet`, `LoRA`, `DoRA`, `CAME`, `AdamW`, `SDXL`, `SNR`, `NF4`,
+`BF16`, `XPU`, `VRAM`, `LR`, `P2`, ...), checked longest-match-first at each
+position before falling back to a generic capital-then-lowercase word --
+see `_auto_display_name()`'s own docstring in `nodegraph_introspect.py`.
+Verified against every one of the 36 classes actually in
+`nodegraph_registry.get_registry()` today, not just the doc's one example
+(`server/smoke_tests/smoke_test_nodegraph_introspect.py`), plus the
+`DISPLAY_NAME` override path itself, via synthetic classes so the override
+check doesn't depend on any real node happening to set one yet -- none do.
+
+The original planning text below is kept as the rationale for *why*, per
+this document's own top-of-file rule for implemented sections; the
+illustrative naming detail (checked and refined during landing, per the
+paragraph above) says exactly what shipped now, not what was speculated
+before.
+
 A second real UX point, raised alongside 11.4: every node's Python class
 name (`ComfyUNetLoRANode`, `ComposedAdafactorOptimizerNode`, ...) is used
 as *both* the stable identifier a saved graph's `class_name` references

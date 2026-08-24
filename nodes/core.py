@@ -93,6 +93,22 @@ class Node(ABC):
     INPUTS: ClassVar[dict[str, Port]] = {}
     OUTPUTS: ClassVar[dict[str, Port]] = {}
 
+    # Palette label override. __name__ (e.g. "ComposedCAMEOptimizerNode")
+    # is the STABLE identifier -- a saved graph's class_name resolves
+    # against it (server/nodegraph_registry.py's get_registry()), so it
+    # can never be renamed without breaking every already-saved graph.
+    # DISPLAY_NAME is a second, independent string with none of that
+    # constraint: what a person sees in the graph-editor palette instead
+    # of the raw class name. None (the default) means "derive one
+    # automatically" -- see server/nodegraph_introspect.py's
+    # _auto_display_name(), which strips the trailing "Node" suffix and
+    # splits the rest into words. Set this explicitly only for a class
+    # whose auto-derived name reads badly; leaving it None is the common
+    # case and does not need touching for a new node to get a reasonable
+    # palette label for free. See docs/training_pipeline_design.md
+    # section 11.5 for the full rationale.
+    DISPLAY_NAME: ClassVar[str | None] = None
+
     def __init__(self, context: ExecutionContext | None = None):
         self.context = context or ExecutionContext()
 

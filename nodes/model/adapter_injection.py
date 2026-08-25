@@ -3,6 +3,15 @@ the real thing ComfyUNetLoRANode builds, not just an equivalence-tested
 seam sitting next to the actual construction path.
 See docs/training_pipeline_design.md section 3.1/10 for the rationale.
 
+Also home to reenable_dora_requires_grad() -- a second, independent
+real gap in the same underlying territory (core/'s frozen assumption
+that a LoRA layer's lora_A/lora_B are its own direct attributes, not
+true for a DoRALinear/DoRAConv2d), found and closed while wiring in
+DoRA's checkpoint round-trip (design doc section 3.1). See that
+function's own docstring for the real, previously-silent bug this
+closes: without it, a DoRAAdapter-built model trains nothing in its
+adapted layers at all.
+
 **The constraint this works around.** core.lora._inject_lora's tree-walk
 (which nn.Linear/nn.Conv2d gets adapted -- to_q/to_k/to_v/to_out.0,
 time_embed/label_emb segment matches, block_weights) is real, delicate,
@@ -191,3 +200,110 @@ def adapter_strategy_scope(adapter_strategy: AdapterStrategy, frozen_weight_stor
     finally:
         core_lora.LoRALinear = original_linear
         core_lora.LoRAConv2d = original_conv2d
+
+
+def reenable_dora_requires_grad(registry) -> None:
+    """core.unet_wrapper.ComfyUNetWrapper._init_lora() (frozen legacy
+    code, runs inside adapter_strategy_scope's `with` block above)
+    does exactly two things after real injection: freeze every model
+    parameter (`for p in self.model.parameters(): p.requires_grad_(False)`),
+    then re-enable requires_grad on each LoRA layer's own lora_A/lora_B,
+    gated by `hasattr(layer, "lora_A")`. That gate is False for a
+    DoRALinear/DoRAConv2d (dora_layer.py) -- that pair lives nested one
+    level down (self._lora.lora_A), built via composition, not
+    inheritance (see dora_layer.py's own module docstring for why; the
+    same attribute-layout assumption separately broke
+    lora_phases.py's split_into_new_generation -- see that function's
+    own docstring for the sibling bug). So the blanket freeze runs, and
+    the supposed-to-undo-it-for-LoRA-params step silently does nothing
+    for a DoRA layer: lora_A, lora_B, AND magnitude (which _init_lora
+    doesn't even know exists -- it predates DoRA entirely, DoRA's own
+    trainable parameter isn't lora_A/lora_B at all) all end up
+    requires_grad=False.
+
+    core/unet_wrapper.py is frozen (this project's standing rule), so
+    this corrects it from the outside instead -- called once, right
+    after ComfyUNetWrapper's construction finishes (still inside
+    ComfyUNetLoRANode.build(), before the model is handed back), for
+    every DoRA layer currently in the registry. Same overall approach
+    this module's own adapter_strategy_scope already takes for a
+    different core/ assumption it can't change directly: work around
+    it from nodes/, don't touch core/.
+
+    A real, previously-silent bug this closes, found while wiring in
+    DoRA's checkpoint round-trip (design doc section 3.1) and unrelated
+    to it -- this is about training, not saving: without this call, a
+    DoRAAdapter-built model has ZERO trainable parameters in every DoRA
+    layer. A real training run through
+    ComfyUNetLoRANode(adapter_strategy=DoRAAdapter()) would train
+    nothing in the adapted layers at all -- no crash, no error,
+    gradients for those parameters are simply never computed; loss
+    would still move from whatever else is trainable (e.g. an unrelated
+    text-encoder LoRA), with nothing about the run visibly signaling
+    the problem short of checking requires_grad directly, or noticing
+    the printed trainable-parameter count is far smaller than
+    core.lora.lora_param_count()'s own report for the same registry.
+    """
+    from .dora_layer import DoRAConv2d, DoRALinear
+
+    for _full_name, _parent, _attr, layer in registry:
+        if isinstance(layer, (DoRALinear, DoRAConv2d)):
+            A, B = layer.get_lora_weights()
+            A.requires_grad_(True)
+            B.requires_grad_(True)
+            layer.magnitude.requires_grad_(True)
+
+
+def dora_trainable_parameters(registry) -> list:
+    """The other half of the same gap reenable_dora_requires_grad()
+    closes (see that function's own docstring for the full derivation)
+    -- core.unet_wrapper.ComfyUNetWrapper.lora_parameters() (frozen
+    legacy code) has the identical `hasattr(layer, "lora_A")` gate, so
+    it returns an EMPTY pair for a bare, top-of-stack DoRALinear/
+    DoRAConv2d (composition, not inheritance -- lora_A/lora_B live at
+    self._lora.lora_A) and never returns `magnitude` at all -- it
+    predates DoRA, magnitude isn't a concept it knows to look for.
+
+    This matters even with requires_grad correctly set:
+    ComfyUNetTrainableModel.trainable_parameters() (nodes/model/
+    lora_injector.py, this project's own code -- see it for where this
+    gets combined with lora_parameters()'s own output) is what actually
+    builds the list handed to an optimizer. An optimizer only ever
+    steps on parameters explicitly given to it; requires_grad controls
+    whether autograd computes a .grad for a tensor at all, not whether
+    an optimizer that never received it will use one anyway. So
+    reenable_dora_requires_grad() alone was necessary but not
+    sufficient -- without this too, a real training run through
+    ComfyUNetLoRANode(adapter_strategy=DoRAAdapter()) would have
+    computed real gradients for every DoRA parameter (thanks to that
+    fix) and then handed an optimizer a parameter list that silently
+    doesn't include a single one of them, so none would ever actually
+    move. Also fixes a second, smaller consequence of the same root
+    gap: ComfyUNetTrainableModel.footprint_bytes() uses
+    lora_parameters() (via data_ptr()) to decide which tensors are
+    "the trainable adapter" versus "the frozen base" for memory
+    reporting -- without this, every DoRA layer's lora_A/lora_B/
+    magnitude would be miscounted as part of the frozen base's own
+    footprint.
+
+    Only a bare, top-of-stack DoRALinear/DoRAConv2d needs anything
+    added here -- a DoRA layer wrapped in a later LoRAGeneration (this
+    project's own nodes/model/lora_phases.py, after a phase split) has
+    its OWN direct lora_A/lora_B that lora_parameters()'s hasattr check
+    already matches correctly (LoRAGeneration doesn't use composition),
+    and that frozen DoRA layer's own magnitude is correctly excluded
+    here too -- split_into_new_generation() already explicitly froze it
+    (requires_grad=False; see that function's own docstring for why),
+    so it has no business being handed to a fresh phase's optimizer
+    even if it were somehow reachable.
+    """
+    from .dora_layer import DoRAConv2d, DoRALinear
+
+    params = []
+    for _full_name, _parent, _attr, layer in registry:
+        if isinstance(layer, (DoRALinear, DoRAConv2d)):
+            A, B = layer.get_lora_weights()
+            params.append(A)
+            params.append(B)
+            params.append(layer.magnitude)
+    return params

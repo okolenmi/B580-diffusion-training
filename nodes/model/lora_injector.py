@@ -69,7 +69,14 @@ class ComfyUNetTrainableModel(TrainableModel):
         return self._wrapper.forward(x_t, timestep, context, y)
 
     def trainable_parameters(self) -> list:
-        return self._wrapper.lora_parameters()
+        # dora_trainable_parameters() covers exactly what
+        # lora_parameters() (frozen legacy code) can't -- see that
+        # function's own docstring (nodes/model/adapter_injection.py)
+        # for the real "optimizer silently never updates DoRA at all"
+        # bug this closes. A no-op list for anything that isn't a bare,
+        # top-of-stack DoRA layer, so this is safe to always call.
+        from .adapter_injection import dora_trainable_parameters
+        return self._wrapper.lora_parameters() + dora_trainable_parameters(self._wrapper.lora_registry)
 
     def train(self) -> "ComfyUNetTrainableModel":
         self._wrapper.train()
@@ -121,10 +128,20 @@ class ComfyUNetTrainableModel(TrainableModel):
         already-frozen weight from the frozen count. data_ptr() against
         lora_parameters() -- which already correctly returns only the
         top-of-stack, currently-trainable pair per layer -- gets this
-        right in both the split and non-split case for free."""
+        right in both the split and non-split case for free. Combined
+        with dora_trainable_parameters() for the same reason
+        trainable_parameters() above is -- lora_parameters() alone
+        can't see a bare DoRALinear/DoRAConv2d's lora_A/lora_B/
+        magnitude (see that function's own docstring), so without this
+        those tensors would be wrongly counted as part of the frozen
+        base's own footprint instead of excluded as the trainable
+        adapter they actually are."""
         if self._wrapper is None:
             return 0
-        trainable_ptrs = {p.data_ptr() for p in self._wrapper.lora_parameters()}
+        from .adapter_injection import dora_trainable_parameters
+        trainable_ptrs = {p.data_ptr() for p in
+                           self._wrapper.lora_parameters() +
+                           dora_trainable_parameters(self._wrapper.lora_registry)}
         return sum(
             BF16WeightStore(tensor).footprint_bytes()
             for tensor in self._wrapper.state_dict().values()
@@ -232,7 +249,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         from core.lora import LoRAConfig
         from core.unet_wrapper import ComfyUNetWrapper
 
-        from .adapter_injection import adapter_strategy_scope
+        from .adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
         from .adapter_strategy import PlainLoRAAdapter
 
         weights: ModelWeights = inputs["weights"]
@@ -267,6 +284,13 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 use_checkpoint=use_checkpoint,
                 lora_config=lora_config,
             )
+        # core.unet_wrapper.ComfyUNetWrapper._init_lora() (frozen legacy
+        # code, ran just above) doesn't know a DoRALinear/DoRAConv2d's
+        # trainable parameters exist -- see reenable_dora_requires_grad's
+        # own docstring for the real, previously-silent "trains nothing"
+        # bug this closes. A no-op for any other adapter_strategy (the
+        # isinstance check inside only ever matches a DoRA layer).
+        reenable_dora_requires_grad(wrapper.lora_registry)
         result = {"model": ComfyUNetTrainableModel(wrapper)}
         self.validate_outputs(result)
         return result

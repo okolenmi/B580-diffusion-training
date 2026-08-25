@@ -74,11 +74,28 @@ doc's own rule) -- `nodes/` is where new work lands.
   of the checkpoint question; fixed by freezing through
   `get_lora_weights()` instead, plus explicitly freezing `magnitude`
   (not reachable through that call), verified with a real
-  gradient-isolation check. One real gap left, narrower and honestly
-  open: a phase-split DoRA layer's magnitude still can't be folded into
-  a *combined* checkpoint -- `extract_combined_weights` raises a clear
-  error for that case rather than silently dropping the trained
-  magnitude. See `docs/training_pipeline_design.md` sections 3.1/9.2.
+  gradient-isolation check. **A second pass, deliberately looking for
+  more instances of the same "composition, not inheritance" pattern,
+  found the most severe one yet: a real DoRA training run trained
+  nothing at all.** `core.unet_wrapper.ComfyUNetWrapper._init_lora()`
+  freezes every parameter then re-enables `requires_grad` only where
+  `hasattr(layer, "lora_A")` -- False for a bare DoRA layer, so
+  `lora_A`/`lora_B`/`magnitude` all stayed frozen silently. Fixed by
+  `adapter_injection.py`'s new `reenable_dora_requires_grad()`. Not
+  sufficient alone: `ComfyUNetWrapper.lora_parameters()` (what
+  `ComfyUNetTrainableModel.trainable_parameters()` hands to the
+  optimizer) has the identical gate, so the optimizer would never have
+  received a single DoRA parameter regardless of `requires_grad`. Fixed
+  by the new `dora_trainable_parameters()`, combined into
+  `trainable_parameters()`/`footprint_bytes()` (the latter was also
+  silently miscounting DoRA's own tensors as part of the frozen base).
+  Verified with a real two-step optimizer loop that provably moves
+  every DoRA parameter, not just `requires_grad` reading `True`. One
+  real gap left, narrower and honestly open: a phase-split DoRA layer's
+  magnitude still can't be folded into a *combined* checkpoint --
+  `extract_combined_weights` raises a clear error for that case rather
+  than silently dropping the trained magnitude. See
+  `docs/training_pipeline_design.md` sections 3.1/9.2.
 - `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` --
   `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`,
   `nodes/model/nf4_lora_layer.py` (3.3). NF4 quantization grounded
@@ -158,4 +175,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`487ec02` (2026-08-25).
+`2c1f0ff` (2026-08-25).

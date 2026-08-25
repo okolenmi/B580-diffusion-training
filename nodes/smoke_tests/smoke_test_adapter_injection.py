@@ -24,9 +24,11 @@ import torch.nn as nn
 
 import core.lora as core_lora
 from core.lora import LoRAConfig, inject_lora_into_unet
-from nodes.model.adapter_injection import adapter_strategy_scope
-from nodes.model.adapter_strategy import AdapterStrategy, PlainLoRAAdapter
+from nodes.model.adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
+from nodes.model.adapter_strategy import AdapterStrategy, DoRAAdapter, PlainLoRAAdapter
+from nodes.model.dora_layer import DoRAConv2d, DoRALinear
 from nodes.model.frozen_weight_store import BF16WeightStore
+from nodes.model.lora_injector import ComfyUNetTrainableModel
 from nodes.model.lora_scaling import ClassicLoRAScaling, RankStabilizedScaling, _effective_alpha
 
 failures = []
@@ -301,6 +303,171 @@ def check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse():
            detail=str(len(registry)))
 
 
+def check_dora_layers_end_up_trainable_after_the_real_injection_path():
+    print("\n=== a real gap found while wiring in DoRA's checkpoint round-trip, "
+          "unrelated to checkpointing itself: core.unet_wrapper.ComfyUNetWrapper."
+          "_init_lora() freezes every DoRA parameter and never re-enables any of "
+          "them -- reenable_dora_requires_grad() fixes it ===")
+    model = _MiniUNetLike(dim=8)
+    config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
+    with adapter_strategy_scope(DoRAAdapter()):
+        registry = inject_lora_into_unet(model, config)
+    record(len(registry) == 10 and all(isinstance(layer, (DoRALinear, DoRAConv2d))
+                                        for *_, layer in registry),
+           "real DoRALinear/DoRAConv2d layers actually got injected",
+           detail=str(len(registry)))
+
+    # Exactly core.unet_wrapper.ComfyUNetWrapper._init_lora()'s own two
+    # lines (frozen legacy code -- reproduced verbatim here rather than
+    # constructed for real, since that needs ComfyUI's real SDXL UNet,
+    # not installed in this environment -- see this file's own module
+    # docstring for why a synthetic fixture is used throughout instead).
+    for p in model.parameters():
+        p.requires_grad_(False)
+    for _, _, _, layer in registry:
+        if hasattr(layer, "lora_A"):
+            layer.lora_A.requires_grad_(True)
+            layer.lora_B.requires_grad_(True)
+
+    still_frozen = [full_name for full_name, _, _, layer in registry
+                    if not layer.get_lora_weights()[0].requires_grad
+                    or not layer.get_lora_weights()[1].requires_grad
+                    or not layer.magnitude.requires_grad]
+    record(len(still_frozen) == len(registry),
+           "confirms the bug: _init_lora()'s own logic leaves every DoRA layer's "
+           "lora_A/lora_B/magnitude frozen (0 of 3 trainable in any of them)",
+           detail=f"{len(still_frozen)}/{len(registry)} layers still fully frozen")
+
+    reenable_dora_requires_grad(registry)
+    fixed = all(layer.get_lora_weights()[0].requires_grad
+                and layer.get_lora_weights()[1].requires_grad
+                and layer.magnitude.requires_grad
+                for _, _, _, layer in registry)
+    record(fixed, "reenable_dora_requires_grad() restores all three on every DoRA layer")
+
+    # A real backward() pass actually populating .grad, not just the flag
+    # being set -- the thing that would have made a real training run
+    # silently do nothing before this fix.
+    for _, _, _, layer in registry:
+        A, B = layer.get_lora_weights()
+        A.grad = None
+        B.grad = None
+        layer.magnitude.grad = None
+    x = torch.randn(2, 8)
+    model(x).pow(2).mean().backward()
+    got_gradient = all(layer.get_lora_weights()[0].grad is not None
+                        and layer.get_lora_weights()[1].grad is not None
+                        and layer.magnitude.grad is not None
+                        for _, _, _, layer in registry)
+    record(got_gradient, "backward() now actually populates .grad for lora_A, "
+           "lora_B, and magnitude on every DoRA layer")
+
+
+def check_reenable_dora_requires_grad_is_a_no_op_for_plain_lora():
+    print("\n=== reenable_dora_requires_grad() touches nothing for a "
+          "PlainLoRAAdapter registry -- only ever matches a DoRA layer ===")
+    model = _MiniUNetLike(dim=8)
+    config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
+    with adapter_strategy_scope(PlainLoRAAdapter()):
+        registry = inject_lora_into_unet(model, config)
+    for _, _, _, layer in registry:
+        layer.lora_A.requires_grad_(False)
+        layer.lora_B.requires_grad_(False)
+    reenable_dora_requires_grad(registry)
+    stayed_false = all(not layer.lora_A.requires_grad and not layer.lora_B.requires_grad
+                        for _, _, _, layer in registry)
+    record(stayed_false, "correctly leaves plain LoRALinear/LoRAConv2d layers alone -- "
+           "not a general-purpose 'fix requires_grad' hammer")
+
+
+class _FakeWrapperWithLoraParameters:
+    """Minimal stand-in for core.unet_wrapper.ComfyUNetWrapper --
+    ComfyUNetTrainableModel only ever calls .lora_registry,
+    .lora_parameters(), and .state_dict() on it. lora_parameters()
+    below is that real class's own real logic, reproduced verbatim
+    (frozen legacy code -- can't import and construct the real class
+    without ComfyUI's real SDXL UNet, not installed in this environment
+    -- see this file's own module docstring) -- this test is about that
+    real, broken-for-DoRA logic, not an approximation of it."""
+
+    def __init__(self, model, registry):
+        self._model = model
+        self.lora_registry = registry
+
+    def lora_parameters(self):
+        if not self.lora_registry:
+            return []
+        params = []
+        for _, _, _, layer in self.lora_registry:
+            if hasattr(layer, "lora_A") and isinstance(layer.lora_A, torch.nn.Parameter):
+                params.append(layer.lora_A)
+                params.append(layer.lora_B)
+        return params
+
+    def state_dict(self):
+        return self._model.state_dict()
+
+
+def check_dora_trainable_parameters_and_footprint_bytes():
+    print("\n=== the other half of the same gap: core.unet_wrapper.ComfyUNetWrapper's "
+          "own lora_parameters() also excludes a bare DoRA layer's params from what "
+          "an optimizer actually receives -- dora_trainable_parameters() plus "
+          "ComfyUNetTrainableModel closes it ===")
+    model = _MiniUNetLike(dim=8)
+    config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
+    with adapter_strategy_scope(DoRAAdapter()):
+        registry = inject_lora_into_unet(model, config)
+    reenable_dora_requires_grad(registry)
+
+    wrapper = _FakeWrapperWithLoraParameters(model, registry)
+    trainable_model = ComfyUNetTrainableModel(wrapper)
+
+    bare_call = wrapper.lora_parameters()
+    record(len(bare_call) == 0,
+           "confirms the bug: core.unet_wrapper.ComfyUNetWrapper's own "
+           "lora_parameters() logic returns nothing at all for a bare DoRA registry",
+           detail=str(len(bare_call)))
+
+    full_list = trainable_model.trainable_parameters()
+    expected_count = len(registry) * 3  # lora_A, lora_B, magnitude per layer
+    record(len(full_list) == expected_count,
+           "ComfyUNetTrainableModel.trainable_parameters() includes all three "
+           "per DoRA layer (lora_A, lora_B, magnitude)",
+           detail=f"{len(full_list)} vs expected {expected_count}")
+    record(all(p.requires_grad for p in full_list),
+           "every parameter handed back is actually trainable")
+
+    # The real proof: real optimizer steps, built exactly the way a real
+    # training run builds them (straight off trainable_parameters()),
+    # move every one of these parameters. Two steps, not one: lora_B is
+    # zero-initialized (standard LoRA convention), so on step 1 alone
+    # lora_A's own gradient is exactly zero (multiplied through B=0) --
+    # a real, well-known LoRA-init property, not a bug in this fix. By
+    # step 2, B has moved off zero and A's gradient is genuinely nonzero
+    # too, matching what an actual multi-step training run looks like.
+    before = [p.detach().clone() for p in full_list]
+    opt = torch.optim.SGD(full_list, lr=0.5)
+    for _ in range(2):
+        x = torch.randn(2, 8)
+        opt.zero_grad()
+        model(x).pow(2).mean().backward()
+        opt.step()
+    moved = all(not torch.equal(b, a) for b, a in zip(before, full_list))
+    record(moved, "real optimizer.step()s actually move every DoRA parameter -- "
+           "not just present in the list, genuinely updated")
+
+    # footprint_bytes(): DoRA's own trainable tensors must be excluded
+    # from the frozen-base footprint, not double-counted into it.
+    footprint = trainable_model.footprint_bytes()
+    total_model_bytes = sum(t.numel() * t.element_size() for t in model.state_dict().values())
+    dora_param_bytes = sum(p.numel() * p.element_size() for p in full_list)
+    record(footprint == total_model_bytes - dora_param_bytes,
+           "footprint_bytes() excludes exactly DoRA's own trainable parameters "
+           "from the frozen-base footprint count, no more and no less",
+           detail=f"footprint={footprint}, model_total={total_model_bytes}, "
+                  f"dora_params={dora_param_bytes}")
+
+
 def main():
     check_patched_mechanism_matches_reference_exactly()
     check_plain_lora_adapter_installs_no_patch_at_all()
@@ -309,6 +476,9 @@ def main():
     check_block_weights_and_target_all_flow_through_correctly()
     check_exception_inside_scope_still_restores()
     check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse()
+    check_dora_layers_end_up_trainable_after_the_real_injection_path()
+    check_reenable_dora_requires_grad_is_a_no_op_for_plain_lora()
+    check_dora_trainable_parameters_and_footprint_bytes()
 
     print("\n" + "=" * 60)
     if failures:

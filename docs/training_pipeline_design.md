@@ -653,18 +653,26 @@ not a second implementation of parameter setup -- only the forward math
 is genuinely new. Same real limit `PlainLoRAAdapter` has today: only
 `BF16WeightStore` honored (`NF4WeightStore`, 3.3, doesn't exist yet).
 
-**A real, honestly-flagged gap, not yet closed:** checkpoint save/load
-doesn't know about `magnitude` yet. `DoRALinear.load_lora_weights()`
-loads the directional component and recomputes `magnitude` fresh from
+**Checkpoint save/load: now a real round-trip for the common case, one
+honestly-scoped gap left for phase-splitting.** `DoRALinear.load_lora_weights()`
+still loads the directional component and recomputes `magnitude` fresh from
 it (useful for starting DoRA training from an existing plain-LoRA
-checkpoint's direction, but not a full round-trip);
-`load_dora_weights()` is the real round-trip, but neither
-`nodes/model/lora_saver.py` nor `LoRACheckpointSaverNode`/
-`LoRACheckpointLoaderNode` call it -- saving/loading a DoRA-trained
-checkpoint correctly is real, separate, unimplemented follow-up work.
-`DoRAAdapter` is trainable in a real run today (live-wired via 3.1's
-`adapter_strategy_scope`, same as `PlainLoRAAdapter`); saving that
-training's real result correctly is not yet wired.
+checkpoint's direction, but not a full round-trip); `load_dora_weights()`
+is the real round-trip, and `restore_alpha()` keeps alpha/scaling
+consistent with a checkpoint-restored value. `nodes/model/lora_saver.py`
+(via `nodes/model/lora_phases.py`'s `extract_combined_weights`/
+`extract_own_generation_weights`) and `LoRACheckpointLoaderNode` (via its
+own `_load_dora_layers()`) both know about a `.dora_scale` key now --
+name matches ComfyUI's own `comfy/lora.py` convention (`{key}.dora_scale`,
+read alongside `.alpha`), not invented here. `DoRAAdapter` is trainable in
+a real run today (live-wired via 3.1's `adapter_strategy_scope`, same as
+`PlainLoRAAdapter`); saving and loading that training's real result
+(direction + magnitude + alpha) correctly is now wired for an unsplit
+DoRA layer, the overwhelmingly common case. See 9.1 for the one real edge
+case still open by design (a phase-split DoRA layer's magnitude can't be
+folded into a combined checkpoint) and for a second, deeper bug this
+landing found and closed along the way: phase-splitting a DoRA layer had
+never actually worked at all, independent of the checkpoint question.
 
 The seam this needed (`AdapterStrategy` existing at all, with a real
 second conformance checked against it) exists, **and is now live-wired
@@ -1245,7 +1253,7 @@ matter anymore -- both are equally done.
 | `BlockProfileCollector`/`ProfilingCheckpointing` (2.3) | `nodes/model/block_profiler.py` | Backlog item 1 (instrumentation half -- the actual blocker). Only `ResBlock` instances ever reach it in this ComfyUI version -- see 2.3. Not wired into `ComfyUNetLoRANode`'s real construction path -- see 9.2. |
 | Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
 | `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
-| `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5, and formerly item 1. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` grounded directly in HuggingFace PEFT's real source. Checkpoint save/load doesn't know about `magnitude` yet -- see 3.1. |
+| `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5, and formerly item 1. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` grounded directly in HuggingFace PEFT's real source. Checkpoint save/load (direction + `.dora_scale` magnitude + alpha) now real for an unsplit DoRA layer -- see 3.1 and 9.2 for the one edge case still open. |
 | `adapter_strategy_scope` (3.1) | `nodes/model/adapter_injection.py` | Live-wires `AdapterStrategy` into `core.lora._inject_lora`'s real, unmodified targeting logic without modifying `core/lora.py`. See 3.1 for the mechanism and the recursion hazard it fixes. |
 | `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` (3.3) | `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`, `nodes/model/nf4_lora_layer.py` | Backlog item 9 (part 1), and formerly item 1. Wired into a real forward path via `NF4LoRALinear`/`NF4LoRAConv2d` and a `frozen_weight_store` port on `ComfyUNetLoRANode` -- see 9.2 for the remaining real-run quality check. |
 | `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
@@ -1276,14 +1284,53 @@ a `MemoryManager`-backed scratch buffer for the dequantized tensor
 allocation per forward call is already correct, just not maximally
 efficient).
 
-**A real gap DoRAAdapter's landing left, honestly flagged rather than
-hidden (3.1).** Checkpoint save/load doesn't know about DoRA's
-`magnitude` parameter -- `DoRALinear.load_lora_weights()` recomputes it
-fresh from a loaded direction rather than restoring a trained value;
-`load_dora_weights()` is the real round-trip, but nothing in
-`nodes/model/lora_saver.py` or `LoRACheckpointSaverNode`/
-`LoRACheckpointLoaderNode` calls it. `DoRAAdapter` is trainable in a
-real run today; saving that training's real result correctly is not.
+**Two real gaps found and closed while wiring in DoRA's checkpoint
+round-trip, one real gap narrowed and left honestly open (3.1).**
+
+The checkpoint gap itself is closed for the common case: `.dora_scale`
+(direction, magnitude, and alpha) now round-trips exactly through
+`LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` for a DoRA layer
+that's never been phase-split -- see 3.1 and 9.1's table.
+
+Found in the process, and *not* the gap that was being looked for:
+`nodes/model/lora_phases.py`'s `split_into_new_generation` (the function
+`LoRAPhaseSplitNode` calls) reached for `layer.lora_A`/`layer.lora_B` as
+direct attributes when freezing the previous generation -- true for a
+plain `core.lora.LoRALinear`/`LoRAConv2d` and for an earlier
+`LoRAGeneration`, but a `DoRALinear`/`DoRAConv2d` holds that pair nested
+one level down (`self._lora.lora_A`, composition not inheritance -- see
+`dora_layer.py`'s own module docstring), so phase-splitting a DoRA layer
+raised a plain `AttributeError` the instant anyone actually wired
+`DoRAAdapter` into `LoRAPhaseSplitNode` -- a combination the graph
+editor's own type contracts have accepted as legal this whole time, with
+nothing about it hinting the combination had never actually been
+exercised. Fixed by freezing through `get_lora_weights()` (every layer
+kind already implements it) instead of assuming the attribute layout
+underneath -- `LinearLoRAGeneration`/`Conv2dLoRAGeneration._build_params()`
+had the identical assumption one level up and needed the same fix. A
+second, genuinely silent issue the same fix would have missed on its
+own: `get_lora_weights()` returns direction only, so `magnitude` needed
+freezing explicitly too, or a fresh phase-2 optimizer (built over
+`trainable_parameters()`, which walks `nn.Module.parameters()` recursion
+straight through the new generation's `inner`) would have kept a
+"frozen" phase's magnitude receiving real gradient updates for as long
+as phase 2 trained. Both fixed; verified with an actual gradient-
+isolation check (magnitude provably untouched, bit-for-bit, after
+training the new generation), not just that it no longer crashes.
+
+What's still real and honestly left open, narrower than before: a
+phase-split DoRA layer's magnitude still can't be folded into a
+*combined*, multi-generation checkpoint. `extract_combined_weights` now
+raises a clear, explanatory error for this case instead of silently
+emitting a checkpoint that quietly drops the trained magnitude's effect
+-- magnitude scales the *entire* frozen-base-plus-delta result, not
+expressible as "one more rank-stacked generation" the way a plain
+generation's own delta is. `extract_own_generation_weights` (the "just
+this phase" snapshot `LoRAPhaseSplitNode.completed_generation` actually
+uses) has no such limitation and round-trips a DoRA phase's magnitude
+fine either way, since it never combines. How phase-splitting and a DoRA
+base's magnitude should even combine, if at all, is a real, separate
+design question -- not attempted here.
 
 **`GreedyRatioPlacement` real validation (2.3).** The class, and the
 `BlockProfileCollector`/`ProfilingCheckpointing` instrumentation that
@@ -1415,12 +1462,10 @@ missing is a real run:**
   against an independent reference implementation and identity-at-init,
   but not yet run on this project's own data to confirm the quality
   improvement DoRA reports in its own published benchmarks (LLaMA/LLaVA/
-  VL-BART, not diffusion UNets) actually shows up here too. Separately,
-  a real gap, not validation: checkpoint save/load doesn't know about
-  `magnitude` yet (`nodes/model/lora_saver.py`,
-  `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode`) -- `DoRAAdapter`
-  is trainable in a real run today, but saving that training's real
-  result correctly needs this wired first.
+  VL-BART, not diffusion UNets) actually shows up here too. Checkpoint
+  save/load (direction + `.dora_scale` magnitude + alpha) is real now
+  for the common, unsplit case -- see 9.1/9.2 -- so this item is
+  validation-only, same as the others in this list.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

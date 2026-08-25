@@ -29,6 +29,7 @@ import torch
 import torch.nn as nn
 
 from core.lora import LoRAConv2d, LoRALinear, extract_lora_weights, load_lora_into_model
+from nodes.model.dora_layer import DoRALinear
 from nodes.model.handle import TrainableModel, TrainedWeightsExportable
 from nodes.model.lora_injector import ComfyUNetLoRANode, ComfyUNetTrainableModel
 from nodes.model.lora_phases import (
@@ -254,6 +255,77 @@ def check_three_generation_chain():
     print("    PASS: a 3-generation chain still combines exactly into one portable adapter")
 
 
+def check_dora_phase_split_extraction():
+    print("[a phase-split DoRA layer: extract_combined_weights refuses loudly "
+          "(no way to fold magnitude into a combined adapter); "
+          "extract_own_generation_weights on the frozen phase still works fine, "
+          ".dora_scale included, since it never combines]")
+    torch.manual_seed(5)
+    base = nn.Linear(5, 4)
+    gen0 = DoRALinear(base, rank=2, alpha=4.0)
+    opt0 = torch.optim.SGD([gen0._lora.lora_A, gen0._lora.lora_B, gen0.magnitude], lr=0.5)
+    for _ in range(3):
+        x = torch.randn(3, 5)
+        loss = gen0(x).pow(2).mean()
+        opt0.zero_grad()
+        loss.backward()
+        opt0.step()
+    trained_magnitude = gen0.magnitude.detach().clone()
+
+    parent = nn.Module()
+    parent.proj = gen0
+    wrapper = _FakeWrapper([("root.proj", parent, "proj", gen0)])
+
+    # The "just this phase" snapshot, taken before the split -- no
+    # combination involved at all, so DoRA's magnitude round-trips fine
+    # regardless of what happens after.
+    frozen_snapshot = split_into_new_generation(wrapper, rank=2, alpha=2.0)
+    assert gen0.magnitude.requires_grad is False, (
+        "a phase-split DoRA layer's magnitude must be frozen too -- get_lora_weights() "
+        "alone (direction only) isn't enough, see split_into_new_generation's docstring"
+    )
+    # requires_grad_(False) doesn't clear an already-set .grad from phase 1's
+    # own last backward() -- same subtlety check_linear_phase_split's own
+    # comment flags for lora_A/lora_B above. Clear it explicitly so the
+    # check below is actually about phase 2's training, not stale state.
+    gen0.magnitude.grad = None
+
+    # Real gradient-isolation check, same spirit as check_linear_phase_split's
+    # own (lora_A stays bit-for-bit unchanged while phase 2 trains) -- proves
+    # the freeze above isn't just requires_grad flipped with nothing behind
+    # it: phase 2's own optimizer walks straight through gen1.inner (== gen0)
+    # via ordinary nn.Module.parameters() recursion, so if magnitude weren't
+    # actually frozen this training loop is exactly what would keep moving it.
+    gen1 = parent.proj
+    opt1 = torch.optim.SGD([gen1.lora_A, gen1.lora_B], lr=0.5)
+    for _ in range(3):
+        x = torch.randn(3, 5)
+        loss = gen1(x).pow(2).mean()
+        opt1.zero_grad()
+        loss.backward()
+        opt1.step()
+    assert gen0.magnitude.grad is None, "frozen magnitude should never accumulate a gradient"
+    torch.testing.assert_close(gen0.magnitude, trained_magnitude)
+    print("    PASS: phase 2 training leaves the frozen DoRA phase's magnitude "
+          "bit-for-bit unchanged, no gradient -- not just requires_grad flipped")
+
+    own_weights = extract_own_generation_weights(frozen_snapshot)
+    assert "lora_unet_root_proj.dora_scale" in own_weights
+    torch.testing.assert_close(own_weights["lora_unet_root_proj.dora_scale"], trained_magnitude)
+    print("    PASS: extract_own_generation_weights captures the frozen DoRA "
+          "phase's real trained magnitude, unaffected by the split that just happened")
+
+    # Now the live, post-split registry -- gen1 (plain LoRAGeneration) stacked
+    # on the frozen DoRA gen0. Combining these into one flat adapter is
+    # exactly the case that isn't implemented.
+    try:
+        extract_combined_weights(wrapper.lora_registry)
+        raise AssertionError("expected NotImplementedError combining a phase-split DoRA root")
+    except NotImplementedError as e:
+        assert "DoRA" in str(e) and "magnitude" in str(e)
+        print(f"    PASS (raises instead of silently dropping magnitude): {e}")
+
+
 def check_never_split_is_byte_identical_to_core_lora():
     print("[never split: extract_combined_weights must match core.lora.extract_lora_weights exactly]")
     torch.manual_seed(3)
@@ -308,6 +380,7 @@ def main():
     check_linear_phase_split()
     check_conv2d_phase_split()
     check_three_generation_chain()
+    check_dora_phase_split_extraction()
     check_never_split_is_byte_identical_to_core_lora()
     check_end_to_end_node()
     print()

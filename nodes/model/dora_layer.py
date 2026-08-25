@@ -64,19 +64,41 @@ nn.Module recursion, plus this class's own new magnitude parameter --
 and correctly excludes base_weight/base_bias (LoRALinear's own buffers,
 not parameters), no extra bookkeeping needed for either.
 
-**A real, honestly-flagged gap: checkpoint save/load.** DoRALinear's
-load_lora_weights(lora_A, lora_B) loads the directional component and
-recomputes magnitude fresh from it -- a real, useful thing to do (start
-DoRA training from an existing plain-LoRA checkpoint's direction), but
-NOT a full DoRA checkpoint round-trip, since a trained magnitude is
+**Checkpoint save/load: now a real round-trip for the common case,
+honestly-scoped gap for one real edge case.** load_lora_weights(lora_A,
+lora_B) still loads the directional component only and recomputes
+magnitude fresh from it -- a real, useful thing to do (start DoRA
+training from an existing plain-LoRA checkpoint's direction), but NOT a
+full DoRA checkpoint round-trip, since a trained magnitude is
 independent state a freshly-recomputed value can't recover.
-load_dora_weights(lora_A, lora_B, magnitude) is the real round-trip.
-Neither nodes/model/lora_saver.py nor LoRACheckpointSaverNode/
-LoRACheckpointLoaderNode know about `magnitude` yet -- saving/loading a
-DoRA-trained checkpoint correctly (magnitude included) is real,
-unimplemented, separate follow-up work. DoRAAdapter is trainable in a
-real run today; saving that training's real result correctly is not
-yet wired.
+load_dora_weights(lora_A, lora_B, magnitude) is the real round-trip, and
+restore_alpha(alpha) keeps alpha/scaling consistent with a
+checkpoint-restored value the same way core.lora.load_lora_into_model
+does for a plain layer. nodes/model/lora_saver.py (via
+nodes/model/lora_phases.py's extract_combined_weights/
+extract_own_generation_weights) and LoRACheckpointLoaderNode (via its
+own _load_dora_layers()) both know about `.dora_scale` now -- key name
+matches ComfyUI's own comfy/lora.py convention (`{key}.dora_scale`,
+read alongside `.alpha`), not invented here. DoRAAdapter is trainable in
+a real run today, and saving/loading that training's real result
+(direction + magnitude + alpha) correctly is now wired for an unsplit
+DoRA layer, the overwhelmingly common case.
+
+The one real edge case still open, by design rather than oversight: a
+DoRA layer that's been phase-split (nodes/model/lora_phases.py's
+LoRAPhaseSplitNode) can't have its magnitude folded into a combined,
+multi-generation checkpoint -- magnitude scales the *entire*
+frozen-base-plus-delta result (see this docstring's efficient-forward
+section above), not expressible as "one more rank-stacked generation"
+the way a plain LoRAGeneration's own delta is. extract_combined_weights
+raises a clear error for this case rather than silently emitting a
+checkpoint that quietly drops the trained magnitude's effect -- see
+that function's own docstring. extract_own_generation_weights (the
+"just this phase" snapshot LoRAPhaseSplitNode's completed_generation
+output actually uses) has no such limitation and round-trips magnitude
+fine either way, since it never combines. How phase-splitting and a
+DoRA base's magnitude should even combine, if at all, is a real,
+separate design question -- not attempted here.
 """
 
 from __future__ import annotations
@@ -193,6 +215,18 @@ class DoRALinear(nn.Module):
             self.magnitude.copy_(magnitude.to(device=self.magnitude.device,
                                                dtype=self.magnitude.dtype))
 
+    def restore_alpha(self, alpha: float) -> None:
+        """Update alpha/scaling to a checkpoint-restored value -- same
+        formula core.lora.load_lora_into_model uses for a plain
+        LoRALinear/LoRAConv2d, kept as this class's own method rather
+        than something outside it recomputing the formula itself, since
+        it needs self._lora.training_weight and has to land in
+        self.scaling specifically: forward() reads self.scaling, not
+        self._lora.scaling (this class's own copy, set once at __init__
+        -- see this module's docstring)."""
+        self.alpha = alpha
+        self.scaling = (alpha / self.rank) * self._lora.training_weight
+
 
 class DoRAConv2d(nn.Module):
     """See this module's docstring for the full derivation and grounding."""
@@ -274,3 +308,9 @@ class DoRAConv2d(nn.Module):
         with torch.no_grad():
             self.magnitude.copy_(magnitude.to(device=self.magnitude.device,
                                                dtype=self.magnitude.dtype))
+
+    def restore_alpha(self, alpha: float) -> None:
+        """See DoRALinear.restore_alpha's docstring -- identical
+        reasoning."""
+        self.alpha = alpha
+        self.scaling = (alpha / self.rank) * self._lora.training_weight

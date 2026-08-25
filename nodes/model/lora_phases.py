@@ -85,9 +85,20 @@ def _generation_classes():
         @abstractmethod
         def _build_params(self) -> None:
             """Create self.lora_A / self.lora_B at this generation's own
-            shape, inferred from self.inner's own lora_A/lora_B (works
-            whether inner is a core.lora layer or an earlier generation --
-            both expose that pair the same way)."""
+            shape, inferred from self.inner's own direction via
+            self.inner.get_lora_weights() -- not direct attribute access,
+            since that pair lives at a different place on each of the
+            three kinds `inner` can actually be: a plain core.lora
+            layer's own self.lora_A/self.lora_B, an earlier generation's
+            same (LoRAGeneration also implements get_lora_weights()), or
+            a DoRALinear/DoRAConv2d's self._lora.lora_A/self._lora.lora_B
+            (composition, not inheritance -- see dora_layer.py's module
+            docstring). get_lora_weights() is the one contract all three
+            actually share; assuming a specific attribute layout
+            underneath it is exactly the bug this docstring used to
+            describe without also protecting against (see
+            split_into_new_generation's own docstring for the real
+            AttributeError this caused before this was fixed)."""
 
         @abstractmethod
         def _delta(self, x):
@@ -107,9 +118,10 @@ def _generation_classes():
     class LinearLoRAGeneration(LoRAGeneration):
 
         def _build_params(self) -> None:
-            in_features = self.inner.lora_A.shape[1]
-            out_features = self.inner.lora_B.shape[0]
-            device = self.inner.lora_A.device
+            inner_A, inner_B = self.inner.get_lora_weights()
+            in_features = inner_A.shape[1]
+            out_features = inner_B.shape[0]
+            device = inner_A.device
             # fp32 regardless of the frozen chain's dtype -- same bf16
             # rounding-to-a-standstill reasoning as core.lora.LoRALinear.
             self.lora_A = nn.Parameter(torch.empty(self.rank, in_features,
@@ -127,13 +139,17 @@ def _generation_classes():
     class Conv2dLoRAGeneration(LoRAGeneration):
 
         def _build_params(self) -> None:
-            rank, in_ch_per_group, kh, kw = self.inner.lora_A.shape
-            out_channels = self.inner.lora_B.shape[0]
-            device = self.inner.lora_A.device
+            inner_A, inner_B = self.inner.get_lora_weights()
+            rank, in_ch_per_group, kh, kw = inner_A.shape
+            out_channels = inner_B.shape[0]
+            device = inner_A.device
             # Propagated from inner (present on both a core.lora.LoRAConv2d
-            # and an earlier Conv2dLoRAGeneration) so an arbitrary-depth
-            # stack always convolves with the same geometry as the
-            # original layer.
+            # and an earlier Conv2dLoRAGeneration, and -- see this class's
+            # own _build_params note above -- a DoRAConv2d, which copies
+            # these onto itself directly at __init__ rather than nesting
+            # them under self._lora the way lora_A/lora_B are) so an
+            # arbitrary-depth stack always convolves with the same
+            # geometry as the original layer.
             self.stride = self.inner.stride
             self.padding = self.inner.padding
             self.dilation = self.inner.dilation
@@ -183,7 +199,11 @@ def lora_key(full_module_name: str) -> str:
 
 def _generation_chain(layer):
     """Oldest-first [(A, B, scaling), ...] for `layer` and everything it's
-    stacked on top of, down to the original core.lora layer."""
+    stacked on top of, down to the original core.lora layer. Returns
+    (chain, root) -- root is whatever's at the bottom of the stack: a
+    plain core.lora.LoRALinear/LoRAConv2d, or a DoRALinear/DoRAConv2d if
+    this layer was built under DoRAAdapter (see extract_combined_weights'
+    use of `root` for exactly why that distinction matters)."""
     LoRAGeneration, _, _ = _generation_classes()
     chain = []
     node = layer
@@ -194,7 +214,7 @@ def _generation_chain(layer):
     A, B = node.get_lora_weights()
     chain.append((A, B, node.scaling))
     chain.reverse()
-    return chain
+    return chain, node
 
 
 def _combine_conv_generations(chain, groups: int):
@@ -254,18 +274,63 @@ def extract_combined_weights(registry) -> dict:
     only this codebase understands. Conv2d layers go through
     _combine_conv_generations instead of a plain cat() -- see its
     docstring for why grouped convs need that.
+
+    DoRA (a chain whose root is a DoRALinear/DoRAConv2d, see
+    _generation_chain): an unsplit DoRA layer (len(chain) == 1, the
+    common case -- DoRAAdapter today, phase-splitting is orthogonal to
+    it) gets a `.dora_scale` key alongside the usual three, so
+    LoRACheckpointLoaderNode can restore the trained magnitude exactly
+    rather than recomputing it from direction alone. Key name matches
+    ComfyUI's own comfy/weight_adapter/lora.py and comfy/lora.py
+    (`{key}.dora_scale`, read alongside `.alpha` in their load_lora()) --
+    the real, external convention this project's own `.lora_down.weight`/
+    `.lora_up.weight`/`.alpha` triple already follows, not one invented
+    here. A DoRA root that HAS been phase-split (len(chain) > 1) raises
+    below instead of silently combining: DoRA's magnitude scales the
+    *entire* frozen-base-plus-delta result (see dora_layer.py's module
+    docstring), which isn't expressible as "one more rank-stacked LoRA
+    generation" the way a plain generation's delta is -- there is no
+    single combined (A, B) pair a fresh core.lora.LoRALinear could load
+    that reproduces a DoRA base's magnitude-scaled contribution, so
+    silently emitting one here would ship a checkpoint that quietly
+    drops the trained magnitude's effect entirely, indistinguishable
+    from a correct file until someone loads it and the results are off.
+    Real, unimplemented, separate follow-up (how phase-splitting and a
+    DoRA base should even combine is its own design question, not an
+    extraction-code gap) -- see docs/training_pipeline_design.md section
+    9.2. extract_own_generation_weights below has no such limitation: it
+    never combines, so a DoRA layer's own `.dora_scale` round-trips
+    through it regardless of how many later generations sit on top.
     """
     import torch
+
+    from .dora_layer import DoRAConv2d, DoRALinear
+
     weights = {}
     for full_name, _parent, _attr, layer in registry:
-        chain = _generation_chain(layer)
+        chain, root = _generation_chain(layer)
         key = lora_key(full_name)
+        is_dora = isinstance(root, (DoRALinear, DoRAConv2d))
         if len(chain) == 1:
             A, B, _scaling = chain[0]
             weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
             weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
             weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
+            if is_dora:
+                weights[f"{key}.dora_scale"] = root.magnitude.detach().cpu().contiguous()
             continue
+        if is_dora:
+            raise NotImplementedError(
+                f"extract_combined_weights: {full_name} was built via DoRAAdapter and has "
+                f"since been phase-split ({len(chain)} generations stacked on it). Combining "
+                f"a DoRA base's magnitude-scaled contribution with later plain-LoRA "
+                f"generations into one flat adapter isn't implemented -- see this function's "
+                f"own docstring for why that's a real design question, not just a missing "
+                f"line of code. Save this phase's own weights via "
+                f"extract_own_generation_weights() (no combining, magnitude included) before "
+                f"splitting instead of trying to combine across a DoRA phase boundary, or "
+                f"phase-split from a plain (PlainLoRAAdapter) base."
+            )
         if chain[0][0].dim() == 4:
             A_cat, B_scaled_cat = _combine_conv_generations(chain, layer.groups)
         else:
@@ -281,8 +346,19 @@ def extract_own_generation_weights(registry) -> dict:
     """Just the given registry's own layers' weights -- no inner chain
     walked. Called on a *snapshot* taken before a split swaps each
     layer's top-of-stack reference, so "own" means "the phase that just
-    finished," not whatever's currently on top."""
+    finished," not whatever's currently on top.
+
+    A layer that's a DoRALinear/DoRAConv2d (DoRAAdapter, not yet
+    phase-split at all -- this function never walks a chain, so it
+    doesn't matter whether something gets stacked on it *later*) also
+    gets a `.dora_scale` key -- see extract_combined_weights' docstring
+    for the key-naming grounding. Unlike that function, there's no
+    combination happening here to make magnitude ill-defined: this is
+    always exactly one real layer's own weights."""
     import torch
+
+    from .dora_layer import DoRAConv2d, DoRALinear
+
     weights = {}
     for full_name, _parent, _attr, layer in registry:
         A, B = layer.get_lora_weights()
@@ -290,6 +366,8 @@ def extract_own_generation_weights(registry) -> dict:
         weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
         weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
         weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
+        if isinstance(layer, (DoRALinear, DoRAConv2d)):
+            weights[f"{key}.dora_scale"] = layer.magnitude.detach().cpu().contiguous()
     return weights
 
 
@@ -304,18 +382,52 @@ def split_into_new_generation(wrapper, rank: int, alpha: float, dropout: float =
     Returns the pre-split registry (the layers that just got frozen) --
     pass it to extract_own_generation_weights for a "just this phase"
     checkpoint before it goes out of scope.
+
+    Real, previously-broken case, fixed here rather than left for later:
+    freezing used to reach for `layer.lora_A`/`layer.lora_B` directly,
+    which only exist on a plain core.lora.LoRALinear/LoRAConv2d -- a
+    DoRALinear/DoRAConv2d (nodes/model/dora_layer.py) holds its A/B
+    nested one level down (`self._lora.lora_A`), built via composition,
+    not inheritance (see that module's docstring for why), so this
+    raised a plain AttributeError the instant anyone actually wired
+    DoRAAdapter into LoRAPhaseSplitNode -- a combination the graph
+    editor's own type contracts (TrainableModel in, TrainableModel out)
+    have accepted as a legal wire this whole time, with nothing about it
+    hinting the combination had never actually been exercised. Fixed by
+    freezing through get_lora_weights() (every layer kind already
+    implements it) instead of assuming the attribute layout underneath.
+
+    Second real thing that same fix would have silently missed on its
+    own: get_lora_weights() only returns direction (A, B) -- a DoRA
+    layer's `magnitude` is a separate nn.Parameter get_lora_weights()
+    doesn't touch, so freezing had to be extended to it explicitly too.
+    Without that, phase 2's optimizer (built over
+    trainable_parameters(), which walks nn.Module.parameters()
+    recursion straight through the new generation's `inner`) would have
+    kept a "frozen" phase's magnitude receiving real gradient updates
+    for as long as phase 2 trained -- silent, exactly the kind of
+    cross-generation leakage this function exists to prevent for
+    lora_A/lora_B in the first place (see this function's docstring
+    above and dora_layer.py's own gate-semantics reasoning for the same
+    underlying principle: an earlier generation must produce *exactly*
+    its frozen output, nothing still moving underneath it).
     """
     if not wrapper.has_lora():
         raise ValueError("split_into_new_generation: model has no LoRA layers to split.")
+
+    from .dora_layer import DoRAConv2d, DoRALinear
 
     _, LinearLoRAGeneration, Conv2dLoRAGeneration = _generation_classes()
 
     frozen_snapshot = list(wrapper.lora_registry)
     new_registry = []
     for full_name, parent, attr_name, layer in wrapper.lora_registry:
-        layer.lora_A.requires_grad_(False)
-        layer.lora_B.requires_grad_(False)
-        is_conv = layer.get_lora_weights()[0].dim() == 4
+        A, B = layer.get_lora_weights()
+        A.requires_grad_(False)
+        B.requires_grad_(False)
+        if isinstance(layer, (DoRALinear, DoRAConv2d)):
+            layer.magnitude.requires_grad_(False)
+        is_conv = A.dim() == 4
         generation_cls = Conv2dLoRAGeneration if is_conv else LinearLoRAGeneration
         new_layer = generation_cls(inner=layer, rank=rank, alpha=alpha, dropout=dropout)
         setattr(parent, attr_name, new_layer)

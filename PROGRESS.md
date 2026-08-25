@@ -56,8 +56,29 @@ doc's own rule) -- `nodes/` is where new work lands.
   behavior change). `DoRAAdapter` grounded directly in HuggingFace
   PEFT's real source (fetched and read, not recalled). Fixed a real
   recursion hazard along the way (see `lora_class_cache.py`'s
-  `_real_lora_classes()`). Real gap, not yet closed: checkpoint
-  save/load doesn't know about DoRA's `magnitude` parameter.
+  `_real_lora_classes()`). Checkpoint save/load (direction +
+  `.dora_scale` magnitude + alpha, key name matching ComfyUI's own
+  `comfy/lora.py` convention) now real for an unsplit DoRA layer, via
+  `nodes/model/lora_phases.py`'s `extract_combined_weights`/
+  `extract_own_generation_weights` and `LoRACheckpointLoaderNode`'s new
+  `_load_dora_layers()`. That loader fix closed a deeper pre-existing
+  bug found in the process: `core.lora.load_lora_into_model`'s
+  isinstance gate silently skipped every DoRA layer entirely (not just
+  its magnitude -- direction and alpha too), since `DoRALinear`/
+  `DoRAConv2d` are built via composition, not inheritance, over
+  `core.lora.LoRALinear`/`LoRAConv2d`. Also found and fixed:
+  `split_into_new_generation` (and `LinearLoRAGeneration`/
+  `Conv2dLoRAGeneration._build_params()`) assumed that same attribute
+  layout when freezing a generation, so phase-splitting a DoRA layer had
+  never actually worked at all -- raised `AttributeError` -- independent
+  of the checkpoint question; fixed by freezing through
+  `get_lora_weights()` instead, plus explicitly freezing `magnitude`
+  (not reachable through that call), verified with a real
+  gradient-isolation check. One real gap left, narrower and honestly
+  open: a phase-split DoRA layer's magnitude still can't be folded into
+  a *combined* checkpoint -- `extract_combined_weights` raises a clear
+  error for that case rather than silently dropping the trained
+  magnitude. See `docs/training_pipeline_design.md` sections 3.1/9.2.
 - `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` --
   `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`,
   `nodes/model/nf4_lora_layer.py` (3.3). NF4 quantization grounded
@@ -98,8 +119,8 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 47 smoke tests under `nodes/smoke_tests/` (runnable via
-  `nodes/smoke_tests/run_all.py`), plus 3 more under `manager/`/`server/`
+- 51 smoke tests under `nodes/smoke_tests/` (runnable via
+  `nodes/smoke_tests/run_all.py`), plus 5 more under `manager/`/`server/`
   -- all CPU-only, no ComfyUI/XPU needed.
 
 ## Still open, in priority order
@@ -115,15 +136,16 @@ behind this order.
    improvement shows up here too (3.1); `NF4WeightStore`'s
    diffusion-specific quality check against this project's real UNet
    (3.3)
-2. Real gap, not validation: wire DoRA's `magnitude` into checkpoint
-   save/load (`nodes/model/lora_saver.py`,
-   `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode`) -- trainable
-   today, not correctly saveable yet
 
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
 `memory_manager_stats` is ever populated in a real run -- see
-`nodes/memory/profile.py`'s module docstring.
+`nodes/memory/profile.py`'s module docstring. Also: a phase-split DoRA
+layer's magnitude can't be folded into a *combined* checkpoint --
+`extract_combined_weights` raises a clear error rather than silently
+dropping it (see `docs/training_pipeline_design.md` section 9.2) --
+real, but nothing currently in this project's own recommended workflows
+actually needs a phase-split DoRA layer combined this way.
 
 **Not recommended near-term:** `ComponentRegistry`/`TrainingRecipe`/
 `PipelineFactory` (5.3, 5.4) -- nothing built through
@@ -136,4 +158,4 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit
-`7d84c54` (2026-08-17).
+`487ec02` (2026-08-25).

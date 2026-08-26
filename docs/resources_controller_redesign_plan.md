@@ -1,6 +1,8 @@
 # Resources Controller & precision redesign -- step-by-step plan
 
-**Status: Phase 1 + Phase 2 done, Phase 3 next.** This tracks a real,
+**Status: Phase 1 + Phase 2 done, Phase 3 audited (no implementation
+yet -- see that section for what's actually needed and the one open
+question blocking it).** This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
 the rest of this project.
@@ -220,34 +222,68 @@ existing `server/smoke_tests/` files still pass.
 
 ### Phase 3 -- Interactive node support (editor + core.py + introspection)
 
-**Goal:** the actual mechanism letting one node's displayed inputs/
-outputs change live as the user configures it in the editor, settling
-into a concrete, static shape by the time Run is pressed -- not a
-value carried by a wire at Run time (see "ground truth" above for why
-that distinction matters to `graph_executor.py`).
+**Status: audit done, no implementation yet -- reporting back before
+any design commitment, per this phase's own gate.**
 
-**This phase starts with an audit, not a design.**
-`server/static/nodegraph.js` has not been read in full in this
-conversation, and no implementation approach should be committed to
-before it has been -- today's editor model (drag a class from the
-palette, get its fixed socket set) may or may not tolerate a node
-whose sockets change after placement without a more invasive rewrite
-than the rest of this plan assumes. First real step of this phase is
-reading that file end to end and reporting back what it would actually
-take, before writing any of it.
+Read `server/static/nodegraph.js` end to end (1327 lines). Real
+findings, not estimates:
 
-Known real touchpoints once that audit is done: `nodes/core.py` (some
-way for a node class to report "resolve my shape from these params"
-rather than a fixed `INPUTS`/`OUTPUTS`, additive -- every existing node
-keeps working unchanged), `server/nodegraph_introspect.py` (extend
-introspection to resolve shape given partial params, not just a bare
-class), `server/graph_executor.py`'s `_is_compatible()` (resolve the
-concrete shape from `spec.params` before checking edge types, for
-nodes opting into this -- backward compatible with every static node
-already in the registry).
+**The wire protocol to `/run` doesn't need to change.** `toRunPayload()`
+already sends opaque `{id, class_name, params}` per node, and
+`graph_executor.py` already resolves everything fresh from
+`class_name` + `params` at Run time. Since a Phase-3 node settles into
+a concrete shape before Run is pressed (this phase's whole premise),
+nothing about what's actually transmitted needs to change.
 
-**Dependency:** Phase 2 (needs something real to query as the user
-configures the node).
+**But `classInfo.inputs`/`classInfo.outputs` -- static, one shared
+object per class, fetched once at page load -- are read directly in at
+least 10 separate places across `GraphModel`/`GraphView`, not one:**
+`GraphNode`'s constructor (default param values), node rendering (all
+three display modes), `validate()`, `toRunPayload()` itself (misses
+serializing a dynamically-resolved input's value entirely if not
+fixed), connection drag/hit-testing (four separate spots), and
+`suggestNodesForDroppedWire()` (the "drop a wire on empty space, see
+compatible node suggestions" feature). Every one of these needs to read
+a node's *resolved current* shape instead of the shared static one for
+an interactive node to work correctly everywhere, not just in whichever
+spot gets tested first.
+
+**One genuinely hard case, not just a long list of mechanical
+changes:** `suggestNodesForDroppedWire()` iterates the *entire
+registry's* static `classInfo.inputs/outputs` to find compatible
+matches. A class whose shape depends on params can't be cheaply
+enumerated that way -- there's no single "the inputs" to check against
+for the whole class. Realistic options: exclude interactive nodes from
+this suggestion feature, or suggest based on their default/initial
+configuration only and accept that it may be incomplete. Not decided.
+
+**Nothing like "resolve shape given params" exists in the introspection
+layer at all today.** `nodegraph_introspect.py`'s `introspect_node_class(cls)`
+takes a bare class, no params -- confirmed while doing the section 11.5
+and DoRA work earlier, not newly discovered here, but worth restating
+as a concrete gap this phase has to fill, not something to extend.
+
+**Real touch points, once a design is chosen (not committed to yet):**
+`nodes/core.py` (some way for a class to declare "my shape is a
+function of these params" instead of a fixed `INPUTS`/`OUTPUTS`
+`ClassVar`, additive -- every existing static node keeps working
+unchanged), `server/nodegraph_introspect.py` (a params-aware resolver),
+`server/graph_executor.py`'s `_is_compatible()` (resolve shape from
+`spec.params` before checking edge types -- server-side validation at
+`/run` time needs this regardless of what the client already checked,
+same "don't trust the client" posture `resolve_safe_model_path`
+already takes elsewhere), and the ~10 call sites above in
+`nodegraph.js`.
+
+**One small, unrelated loose thread found while reading this file, not
+blocking anything:** its own top-of-file comment cites
+`docs/node_architecture_refactor_plan.md` as "the node-graph design the
+project's OOP rule is about." That file doesn't exist anywhere in this
+repo -- either stale or never written. Flagging, not fixing --
+out of scope for this audit.
+
+**Dependency:** Phase 2 (done). Not started pending direction on the
+suggestion-menu question and the overall shape decision above.
 
 ### Phase 4 -- `ResourcePreset` abstraction
 

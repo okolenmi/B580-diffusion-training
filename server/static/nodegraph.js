@@ -539,15 +539,13 @@
       const header = document.createElement("div");
       header.className = "ng-node-header";
       header.innerHTML = `
-        <div class="ng-node-header-row">
-          <div class="ng-node-title" title="${escapeHtml(ci.class_name)}">${escapeHtml(ci.class_name)}</div>
-          <div class="ng-node-modes">
-            <button class="ng-mode-btn" data-mode="minimized" title="Minimized: name + required/connected dots only">\u2022</button>
-            <button class="ng-mode-btn" data-mode="compact" title="Compact: all ports, no widgets or descriptions">\u25b2</button>
-            <button class="ng-mode-btn" data-mode="full" title="Full detail">\u25cf</button>
-          </div>
+        <div class="ng-node-toolbar">
+          <button class="ng-mode-btn" data-mode="minimized" title="Minimized: name + required/connected dots only">\u2022</button>
+          <button class="ng-mode-btn" data-mode="compact" title="Compact: all ports, no widgets or descriptions">\u25b2</button>
+          <button class="ng-mode-btn" data-mode="full" title="Full detail">\u25cf</button>
           <button class="ng-node-del" title="Delete node">\u00d7</button>
         </div>
+        <div class="ng-node-title" title="${escapeHtml(ci.class_name)}">${escapeHtml(ci.class_name)}</div>
         ${mode !== "minimized" ? `<div class="ng-node-module">${escapeHtml(ci.module)}</div>` : ""}
       `;
       header.querySelector(".ng-node-del").addEventListener("click", (e) => {

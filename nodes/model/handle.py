@@ -8,12 +8,104 @@ from ..memory.handle import DeviceResident
 
 
 class ModelWeights:
-    """A loaded checkpoint's UNet state dict, separated from everything else
-    (CLIP/VAE) in the same file. Plain data -- no behavior."""
+    """A checkpoint's UNet state dict, separated from everything else
+    (CLIP/VAE) in the same file.
 
-    def __init__(self, unet_sd: dict, non_unet_sd: dict):
-        self.unet_sd = unet_sd
-        self.non_unet_sd = non_unet_sd
+    Lazy by default (Phase 1 of the resources-controller redesign,
+    docs/resources_controller_redesign_plan.md): constructed from a
+    resolved path, not materialized tensors. unet_sd/non_unet_sd stay
+    plain @property attribute access -- every existing consumer
+    (ComfyUNetLoRANode, the SDXL text encoder node) reads them exactly
+    as it always has; the laziness is invisible to them by design, not
+    something they need to opt into. The actual safetensors load only
+    happens the first time either property is touched, and is cached
+    after that -- so a checkpoint attached to a graph but never built
+    from, or only ever asked about via inspect_dtypes() below, never
+    pays for a full multi-GB load at all.
+
+    See from_state_dicts() for the eager alternative -- already-
+    materialized dicts, no file involved. That's what this class
+    unconditionally was before Phase 1; still real and still needed,
+    e.g. for a test fixture built directly from synthetic tensors with
+    no safetensors file backing it at all.
+    """
+
+    def __init__(self, path):
+        self._path = path
+        self._unet_sd: dict | None = None
+        self._non_unet_sd: dict | None = None
+        self._loaded = False
+
+    @classmethod
+    def from_state_dicts(cls, unet_sd: dict, non_unet_sd: dict) -> "ModelWeights":
+        """Already-materialized data, no lazy loading and no path --
+        what this class's only constructor did before Phase 1. Real
+        use: a test building a fixture directly, not a safetensors
+        file being loaded."""
+        weights = cls.__new__(cls)
+        weights._path = None
+        weights._unet_sd = unet_sd
+        weights._non_unet_sd = non_unet_sd
+        weights._loaded = True
+        return weights
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        if self._path is None:
+            # Unreachable through either public constructor as written
+            # today -- from_state_dicts() always sets _loaded=True, and
+            # __init__ always sets a real path. Guarded explicitly
+            # anyway: a silent "loads an empty dict" here would be a
+            # far worse failure mode than a clear error the moment it
+            # actually happens, e.g. if a future refactor adds a third
+            # construction path that forgets to set one of the two.
+            raise RuntimeError(
+                "ModelWeights: no path to load from and not already loaded -- "
+                "this should be unreachable through this class's own public "
+                "constructors; something constructed an instance in an "
+                "inconsistent state."
+            )
+        from safetensors.torch import load_file
+        from .resource_inspection import _is_unet_key
+
+        sd = load_file(str(self._path))
+        self._unet_sd = {k: v for k, v in sd.items() if _is_unet_key(k)}
+        self._non_unet_sd = {k: v for k, v in sd.items() if not _is_unet_key(k)}
+        self._loaded = True
+
+    @property
+    def unet_sd(self) -> dict:
+        self._ensure_loaded()
+        return self._unet_sd
+
+    @property
+    def non_unet_sd(self) -> dict:
+        self._ensure_loaded()
+        return self._non_unet_sd
+
+    def inspect_dtypes(self):
+        """Per-component (unet/clip/vae) detected dtype -- see
+        nodes/model/resource_inspection.py's inspect_checkpoint_dtypes()
+        for the real mechanics (safetensors header only, no tensor data
+        touched, and independent of/doesn't affect the lazy full-load
+        cache above -- calling this never triggers unet_sd/non_unet_sd
+        to materialize, and materializing them never invalidates an
+        already-computed inspection).
+
+        Only meaningful for a path-backed instance. A from_state_dicts()
+        instance already has real, materialized tensors -- their dtype
+        is directly on each tensor (t.dtype), there's nothing left to
+        cheaply inspect instead of just reading."""
+        if self._path is None:
+            raise RuntimeError(
+                "ModelWeights.inspect_dtypes(): this instance was built via "
+                "from_state_dicts(), not a real file -- there's no header to "
+                "peek. Read dtype directly off the tensors you already have "
+                "(e.g. next(iter(weights.unet_sd.values())).dtype) instead."
+            )
+        from .resource_inspection import inspect_checkpoint_dtypes
+        return inspect_checkpoint_dtypes(self._path)
 
 
 class ParameterList(list):

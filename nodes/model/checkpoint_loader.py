@@ -1,4 +1,15 @@
-"""SafetensorsCheckpointNode: loads a checkpoint, splits UNet from the rest."""
+"""SafetensorsCheckpointNode: resolves and validates a checkpoint path,
+splits UNet from the rest. Lazy since Phase 1 of the resources-
+controller redesign (docs/resources_controller_redesign_plan.md) --
+this no longer loads the file itself; ModelWeights (nodes/model/
+handle.py) does that on first real access, or not at all if nothing
+downstream ever touches unet_sd/non_unet_sd. build() still does real,
+useful work up front: resolving+sandboxing the path (unchanged from
+before) and a cheap existence/format check (safe_open() opening the
+file and reading its header) that turns a bad path into a clear error
+right here, at graph-construction time, rather than a confusing one
+buried inside whatever node first happens to trigger the real load.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +20,6 @@ from ..core import Port
 from ..components.layout import ProjectLayout
 from .handle import ModelWeights
 from .node import ModelProviderNode
-
-
-def _is_unet_key(key: str) -> bool:
-    return key.startswith("model.diffusion_model.")
 
 
 class SafetensorsCheckpointNode(ModelProviderNode):
@@ -33,13 +40,22 @@ class SafetensorsCheckpointNode(ModelProviderNode):
 
     def build(self, **inputs) -> dict[str, ModelWeights]:
         self.validate_inputs(inputs)
-        from safetensors.torch import load_file
+        from safetensors import safe_open
 
         layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
         resolved = layout.resolve_safe_model_path(str(inputs["path"]), "checkpoint")
-        sd = load_file(str(resolved))
-        unet_sd = {k: v for k, v in sd.items() if _is_unet_key(k)}
-        non_unet_sd = {k: v for k, v in sd.items() if not _is_unet_key(k)}
-        result = {"weights": ModelWeights(unet_sd, non_unet_sd)}
+        # Cheap (header-only, see resource_inspection.py's own docstring
+        # for why this doesn't touch tensor data) existence/format check
+        # -- fails loudly here, not the first time something downstream
+        # happens to access .unet_sd and triggers the real load.
+        try:
+            with safe_open(str(resolved), framework="pt") as f:
+                next(iter(f.keys()), None)
+        except Exception as e:
+            raise ValueError(
+                f"SafetensorsCheckpointNode: {resolved} doesn't look like a valid "
+                f"safetensors file ({e})."
+            ) from e
+        result = {"weights": ModelWeights(resolved)}
         self.validate_outputs(result)
         return result

@@ -95,8 +95,29 @@ def check_xpu_context_matches_legacy():
 
     new_stats = ctx.memory_stats()
     ref_stats = xpu_memory_stats()
-    record(new_stats == ref_stats, "memory_stats() == xpu_memory_stats()",
-           detail=f"new={new_stats!r} ref={ref_stats!r}")
+    # _XPUDeviceContext.memory_stats() (nodes/components/device.py) is a
+    # deliberate superset of legacy xpu_memory_stats() -- see
+    # _torch_memory_snapshot's own docstring: peak/active/requested/
+    # segments/retries were added on purpose, reading more of the same
+    # underlying torch.xpu.memory_stats() call rather than several
+    # separate ones. So this was never meant to be (and per this file's
+    # own module docstring at the top, isn't supposed to be) a literal
+    # whole-dict equality check -- it's the same "guard behavior
+    # identical" check as empty_cache()/synchronize() above: both None
+    # together, or both real with the two keys the legacy function
+    # actually reports matching in value.
+    if new_stats is None or ref_stats is None:
+        record(new_stats is None and ref_stats is None,
+               "memory_stats() availability matches xpu_memory_stats()",
+               detail=f"new={new_stats!r} ref={ref_stats!r}")
+    else:
+        record(
+            all(new_stats.get(k) == v for k, v in ref_stats.items()),
+            "memory_stats()'s legacy-known keys (allocated_mb, reserved_mb) match "
+            "xpu_memory_stats() exactly -- new_stats is a deliberate superset "
+            "(peak/active/requested/segments/retries), not required to be identical",
+            detail=f"new={new_stats!r} ref={ref_stats!r}",
+        )
     if not xpu_actually_available:
         record(new_stats is None, "memory_stats() is None when XPU unavailable")
 

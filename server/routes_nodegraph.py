@@ -208,6 +208,19 @@ async def browse_assets(kind: str, path: str = ""):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/assets/{kind}/inspect")
+async def inspect_asset(kind: str, path: str):
+    """Per-component dtype for a resource, read cheaply from its file
+    header -- see server/asset_paths.py.inspect(). Powers the Resources
+    Controller's per-input dtype readouts
+    (docs/resources_controller_redesign_plan.md, Phase 2) without
+    loading the resource itself."""
+    try:
+        return asset_paths.inspect(kind, path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 class MkdirRequest(BaseModel):
     relative_path: str
 

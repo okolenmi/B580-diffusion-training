@@ -1,6 +1,6 @@
 # Resources Controller & precision redesign -- step-by-step plan
 
-**Status: Phase 1 done, Phase 2 next.** This tracks a real,
+**Status: Phase 1 + Phase 2 done, Phase 3 next.** This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
 the rest of this project.
@@ -184,29 +184,39 @@ fails clearly at `build()` time. All 52 `nodes/smoke_tests` files pass
 
 ### Phase 2 -- Server query endpoint
 
-**Goal:** expose Phase 1's inspection capability over HTTP, scoped and
-provably unable to leak anything beyond the specific fields requested.
+**Status: done.**
 
-- New endpoint in the existing `/assets/{kind}/...` family in
-  `server/routes_nodegraph.py`, e.g. `GET /assets/{kind}/inspect?path=...`,
-  built directly on `asset_paths._safe_resolve()` -- same sandboxing
-  `browse()`/`upload()` already use, not reinvented.
-- Response is exactly the detected fields (dtype per component,
-  validity), nothing else -- no raw header dump, no full key list
-  unless that's specifically one of the requested fields. This is what
-  "protected" means in practice: the response shape is a fixed,
-  narrow contract, not a passthrough of whatever safetensors' header
-  happens to contain.
+- `GET /nodegraph/assets/{kind}/inspect?path=...` (`server/routes_nodegraph.py`),
+  a thin wrapper -- same convention as `browse_assets`/`list_assets` --
+  around the real logic in `server/asset_paths.py`'s new `inspect()`,
+  built directly on the existing `_safe_resolve()` (same sandboxing
+  `browse()`/`upload()` already use).
+- Response contract, deliberately narrow: `{kind, path, components:
+  {unet|clip|vae: {dtype, key_count}}}` -- nothing else. `dtype` is a
+  plain string (`nodes/model/resource_inspection.py`'s new
+  `dtype_to_str()`, shared rather than reimplemented -- also what a
+  future validator's human-readable text line would use), not a raw
+  `torch.dtype`.
+- Only `kind="checkpoint"` is supported -- LoRA-file inspection needs
+  its own function (different key format, different meaningful fields
+  like rank) and is explicitly left as real, separate follow-up rather
+  than silently folded in here.
 
-**Definition of done:** a new `server/smoke_tests/` file (matching
-`smoke_test_graph_executor.py`'s style) covering the real answer *and*
-the adversarial cases explicitly: a path-traversal attempt is rejected
-the same way `resolve_safe_model_path` already rejects one elsewhere in
-this project, a request for a kind/path combination that doesn't exist
-fails cleanly, and the response body is checked field-by-field against
-an allowlist rather than just checked for "does it look about right."
+**Verified**, `server/smoke_tests/smoke_test_asset_inspect.py` (targets
+`asset_paths.inspect()` directly -- same "test the function the route
+delegates to" convention as `smoke_test_execution_registry.py`, not the
+HTTP layer): the real answer checked field-by-field against an explicit
+allowlist; the response is provably narrow (no key beyond the
+documented contract, top level and per-component); path traversal /
+absolute / empty path rejected the same way `resolve_safe_model_path`
+already rejects them elsewhere in this project; a nonexistent file, a
+directory instead of a file, a corrupt/non-safetensors file, and an
+unsupported `kind` all fail with a clear message rather than a crash or
+a silent wrong answer. Router wiring confirmed (`/nodegraph/assets/
+{kind}/inspect` present alongside the existing asset routes); the three
+existing `server/smoke_tests/` files still pass.
 
-**Dependency:** Phase 1.
+**Dependency:** Phase 1 (done).
 
 ### Phase 3 -- Interactive node support (editor + core.py + introspection)
 

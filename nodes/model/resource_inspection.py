@@ -72,6 +72,19 @@ def classify_key(key: str) -> str:
     return "clip"
 
 
+def dtype_to_str(dtype: torch.dtype | None) -> str | None:
+    """torch.bfloat16 -> "bfloat16", None -> None. The one place this
+    project turns a torch.dtype into a plain, JSON/UI-friendly string
+    -- str(torch.bfloat16) itself returns "torch.bfloat16", correct but
+    not what an HTTP response or a person reading a dtype readout in
+    the editor wants to see. Shared rather than reimplemented wherever
+    a dtype needs to be shown or serialized -- server/asset_paths.py's
+    inspect() uses this for exactly that."""
+    if dtype is None:
+        return None
+    return str(dtype).removeprefix("torch.")
+
+
 @dataclass
 class ComponentDtype:
     dtype: torch.dtype | None  # None when key_count == 0 (absent) OR

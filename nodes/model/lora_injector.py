@@ -56,7 +56,7 @@ from .node import LoRAInjectorNode
 
 __all__ = [
     "ClassicLoRAScaling", "LoRAScalingPolicy", "RankStabilizedScaling",
-    "ComfyUNetTrainableModel", "ComfyUNetLoRANode",
+    "ComfyUNetTrainableModel", "ComfyUNetLoRANode", "build_lora_injected_unet",
 ]
 
 
@@ -180,6 +180,83 @@ class ComfyUNetTrainableModel(TrainableModel):
         gc.collect()
 
 
+def build_lora_injected_unet(
+    weights: ModelWeights,
+    *,
+    device: str = "xpu",
+    dtype=None,
+    rank: int = 64,
+    alpha: float = 1.0,
+    scaling_policy: LoRAScalingPolicy | None = None,
+    dropout: float = 0.0,
+    target_modules=None,
+    use_checkpoint: bool = True,
+    resource_policy: ResourcePolicy | None = None,
+    adapter_strategy: AdapterStrategy | None = None,
+    frozen_weight_store_factory=None,
+) -> ComfyUNetTrainableModel:
+    """The real construction logic `ComfyUNetLoRANode.build()` runs --
+    extracted so there's exactly one implementation, not one now and a
+    second, subtly-different one whenever Phase 5 of
+    docs/resources_controller_redesign_plan.md needs the same
+    construction (that plan's own "Consolidation" section flags this
+    by name: building it twice is exactly the kind of drift this
+    project's DoRA composition-over-inheritance choice, and the
+    `_is_unet_key()`/`get_lora_weights()` bugs fixed two DoRA patches
+    ago, both trace back to -- two things secretly needing to stay in
+    sync, with nothing enforcing that they do).
+
+    Every parameter here mirrors `ComfyUNetLoRANode`'s own `Port`
+    defaults exactly -- same values, same "`None` means use the
+    sensible default" semantics -- so the node and any future caller
+    (the Resources Controller's own processor method, per that plan)
+    share one real source of truth for what "the default LoRA
+    injection" actually means, not two copies that can silently drift
+    apart. Returns a plain `ComfyUNetTrainableModel` -- no `Port`/
+    `Node` packaging riding along, callable from anywhere, not just
+    from inside a `build()`.
+    """
+    import torch
+    from core.lora import LoRAConfig
+    from core.unet_wrapper import ComfyUNetWrapper
+
+    from .adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
+    from .adapter_strategy import PlainLoRAAdapter
+
+    adapter_strategy = adapter_strategy or PlainLoRAAdapter()
+    if resource_policy is not None:
+        checkpointing_strategy = resource_policy.checkpointing_strategy()
+        resolved_scaling_policy = resource_policy.lora_scaling_policy()
+        use_checkpoint = not isinstance(checkpointing_strategy, NoCheckpointing)
+    else:
+        checkpointing_strategy = (
+            FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
+        resolved_scaling_policy = scaling_policy or ClassicLoRAScaling()
+    checkpointing_strategy.apply()
+    lora_config = LoRAConfig(
+        rank=rank,
+        alpha=_effective_alpha(alpha=alpha, rank=rank, policy=resolved_scaling_policy),
+        dropout=dropout,
+        target_modules=target_modules,
+    )
+    with adapter_strategy_scope(adapter_strategy, frozen_weight_store_factory):
+        wrapper = ComfyUNetWrapper(
+            weights.unet_sd,
+            device=device,
+            dtype=dtype or torch.bfloat16,
+            use_checkpoint=use_checkpoint,
+            lora_config=lora_config,
+        )
+    # core.unet_wrapper.ComfyUNetWrapper._init_lora() (frozen legacy
+    # code, ran just above) doesn't know a DoRALinear/DoRAConv2d's
+    # trainable parameters exist -- see reenable_dora_requires_grad's
+    # own docstring for the real, previously-silent "trains nothing"
+    # bug this closes. A no-op for any other adapter_strategy (the
+    # isinstance check inside only ever matches a DoRA layer).
+    reenable_dora_requires_grad(wrapper.lora_registry)
+    return ComfyUNetTrainableModel(wrapper)
+
+
 class ComfyUNetLoRANode(LoRAInjectorNode):
 
     INPUTS: ClassVar[dict[str, Port]] = {
@@ -245,52 +322,20 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
         self.validate_inputs(inputs)
-        import torch
-        from core.lora import LoRAConfig
-        from core.unet_wrapper import ComfyUNetWrapper
-
-        from .adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
-        from .adapter_strategy import PlainLoRAAdapter
-
-        weights: ModelWeights = inputs["weights"]
-        adapter_strategy = inputs.get("adapter_strategy") or PlainLoRAAdapter()
-        frozen_weight_store_factory = inputs.get("frozen_weight_store")
-        resource_policy = inputs.get("resource_policy")
-        if resource_policy is not None:
-            checkpointing_strategy = resource_policy.checkpointing_strategy()
-            scaling_policy = resource_policy.lora_scaling_policy()
-            use_checkpoint = not isinstance(checkpointing_strategy, NoCheckpointing)
-        else:
-            use_checkpoint = inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default)
-            checkpointing_strategy = (
-                FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
-            scaling_policy = inputs.get("scaling_policy") or ClassicLoRAScaling()
-        checkpointing_strategy.apply()
-        lora_config = LoRAConfig(
+        model = build_lora_injected_unet(
+            weights=inputs["weights"],
+            device=inputs.get("device", self.INPUTS["device"].default),
+            dtype=inputs.get("dtype"),
             rank=inputs.get("rank", self.INPUTS["rank"].default),
-            alpha=_effective_alpha(
-                alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
-                rank=inputs.get("rank", self.INPUTS["rank"].default),
-                policy=scaling_policy,
-            ),
+            alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
+            scaling_policy=inputs.get("scaling_policy"),
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),
+            use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
+            resource_policy=inputs.get("resource_policy"),
+            adapter_strategy=inputs.get("adapter_strategy"),
+            frozen_weight_store_factory=inputs.get("frozen_weight_store"),
         )
-        with adapter_strategy_scope(adapter_strategy, frozen_weight_store_factory):
-            wrapper = ComfyUNetWrapper(
-                weights.unet_sd,
-                device=inputs.get("device", self.INPUTS["device"].default),
-                dtype=inputs.get("dtype") or torch.bfloat16,
-                use_checkpoint=use_checkpoint,
-                lora_config=lora_config,
-            )
-        # core.unet_wrapper.ComfyUNetWrapper._init_lora() (frozen legacy
-        # code, ran just above) doesn't know a DoRALinear/DoRAConv2d's
-        # trainable parameters exist -- see reenable_dora_requires_grad's
-        # own docstring for the real, previously-silent "trains nothing"
-        # bug this closes. A no-op for any other adapter_strategy (the
-        # isinstance check inside only ever matches a DoRA layer).
-        reenable_dora_requires_grad(wrapper.lora_registry)
-        result = {"model": ComfyUNetTrainableModel(wrapper)}
+        result = {"model": model}
         self.validate_outputs(result)
         return result

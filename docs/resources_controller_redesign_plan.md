@@ -441,7 +441,28 @@ once Phase 5 ships, it becomes the manual/advanced path for someone who
 wants fine-grained control without a preset -- same "mark deprecated in
 the docstring, point at the replacement, don't delete" pattern section
 11.1 already established for the optimizer nodes, reused here rather
-than inventing a second deprecation story. Not started.
+than inventing a second deprecation story.
+
+**Status: done.** `build_lora_injected_unet()`
+(`nodes/model/lora_injector.py`) now holds the real construction
+logic; `ComfyUNetLoRANode.build()` is a thin wrapper resolving its own
+`Port` defaults into it -- `weights`/`device`/`dtype`/`rank`/`alpha`/
+`scaling_policy`/`dropout`/`target_modules`/`use_checkpoint`/
+`resource_policy`/`adapter_strategy`/`frozen_weight_store_factory`, one
+real signature, one real source of truth for what "the default LoRA
+injection" means. Verified,
+`nodes/smoke_tests/smoke_test_lora_injector_extraction.py` (patches
+`ComfyUNetWrapper`/`adapter_strategy_scope` to record their real call
+args -- a full end-to-end run needs ComfyUI's actual SDXL UNet class,
+not installed here): defaults match exactly what the pre-extraction
+inline code computed, `resource_policy` correctly overrides
+`use_checkpoint`/`scaling_policy`, and the node's own Port-default
+resolution into the extracted function is correct for both defaults
+and explicit overrides -- a real behavior-preservation proof, not just
+"doesn't crash." Adjacent tests
+(`smoke_test_gradient_checkpointing.py`, `smoke_test_adapter_injection.py`,
+`smoke_test_dataset_model_contracts.py`, `smoke_test_resource_policy.py`)
+still pass.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit

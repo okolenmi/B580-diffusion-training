@@ -39,6 +39,16 @@ class PortInfo:
 
 
 @dataclass
+class PresetInfo:
+    """Introspected form of nodes.core.NodePreset -- see that class's
+    own docstring. Only ever appears on a NodeInfo whose node_kind is
+    "dynamic"."""
+    name: str
+    required_inputs: list[PortInfo]
+    required_outputs: list[PortInfo]
+
+
+@dataclass
 class NodeInfo:
     class_name: str
     module: str
@@ -52,6 +62,14 @@ class NodeInfo:
     # here exists only so callers constructing a NodeInfo by hand in a test aren't
     # forced to pass it. class_name (above) is untouched by any of this -- it stays the
     # literal __name__ that saved graphs resolve against. See design doc section 11.5.
+    node_kind: str = "static"  # nodes.core.Node.NODE_KIND, verbatim -- "static" for every
+    # node in this project today, legacy-guessed classes included (introspect_legacy_class()
+    # has no NODE_KIND concept to read, so it's always "static" there, correctly: nothing
+    # legacy-introspected has presets).
+    presets: list[PresetInfo] | None = None  # only non-None when node_kind == "dynamic" --
+    # see docs/resources_controller_redesign_plan.md Phase 3 for what this is for
+    # (the editor's suggestion-menu search) and nodes.core.NodePreset for why it's
+    # required-ports-only, not a full shape resolution.
 
 
 # Domain vocabulary this project's own class names actually use that a generic
@@ -205,6 +223,22 @@ def _port_type_str(t: Any) -> str:
     return str(t)
 
 
+def _port_info(p, *, is_output: bool = False) -> PortInfo:
+    """Shared by introspect_node_class()'s own inputs/outputs below and
+    by its new preset resolution -- one real implementation of "how do
+    we turn a nodes.core.Port into a PortInfo", not the inputs/outputs
+    version copy-pasted a third time for presets."""
+    return PortInfo(
+        name=p.name,
+        type_str=_port_type_str(p.type),
+        default=(repr(p.default) if not is_output and not p.required else None),
+        required=p.required,
+        type_mro=_type_mro(p.type),
+        doc=p.doc,
+        path_kind=(p.path_kind if not is_output else None),
+    )
+
+
 def introspect_node_class(cls: type) -> NodeInfo:
     """Read DECLARED metadata directly off a real nodes.core.Node subclass
     -- INPUTS/OUTPUTS are real Port objects the class author wrote down,
@@ -218,32 +252,32 @@ def introspect_node_class(cls: type) -> NodeInfo:
     dataclass-y ABC noise), so e.g. CAMEOptimizerNode correctly reports
     extending OptimizerNode extending Node -- an actual fact about the
     class, not something inferred or guessed after the fact.
+
+    node_kind/presets are Node.NODE_KIND/list_presets(), verbatim for
+    node_kind and resolved-to-PortInfo for presets -- see
+    nodes.core.NodePreset's own docstring and
+    docs/resources_controller_redesign_plan.md's Phase 3. presets stays
+    None for every node_kind == "static" class (the default, true for
+    every node in this project today) -- calling list_presets() on a
+    static node isn't just unnecessary, nodes.core.Node's own base
+    implementation would raise if reached, so this deliberately never
+    calls it unless node_kind == "dynamic" says to.
     """
     doc = (inspect.getdoc(cls) or "").strip().split("\n")[0]
     bases = [b.__name__ for b in cls.__mro__[1:] if b.__name__ not in ("object", "ABC")]
-    inputs = [
-        PortInfo(
-            name=p.name,
-            type_str=_port_type_str(p.type),
-            default=repr(p.default) if not p.required else None,
-            required=p.required,
-            type_mro=_type_mro(p.type),
-            doc=p.doc,
-            path_kind=p.path_kind,
-        )
-        for p in cls.INPUTS.values()
-    ]
-    outputs = [
-        PortInfo(
-            name=p.name,
-            type_str=_port_type_str(p.type),
-            default=None,
-            required=p.required,
-            type_mro=_type_mro(p.type),
-            doc=p.doc,
-        )
-        for p in cls.OUTPUTS.values()
-    ]
+    inputs = [_port_info(p) for p in cls.INPUTS.values()]
+    outputs = [_port_info(p, is_output=True) for p in cls.OUTPUTS.values()]
+    presets = None
+    if cls.NODE_KIND == "dynamic":
+        presets = [
+            PresetInfo(
+                name=preset.name,
+                required_inputs=[_port_info(p) for p in preset.required_inputs.values()],
+                required_outputs=[_port_info(p, is_output=True)
+                                   for p in preset.required_outputs.values()],
+            )
+            for preset in cls.list_presets()
+        ]
     return NodeInfo(
         class_name=cls.__name__,
         module=cls.__module__,
@@ -252,6 +286,8 @@ def introspect_node_class(cls: type) -> NodeInfo:
         outputs=outputs,
         bases=bases,
         display_name=_display_name_for(cls),
+        node_kind=cls.NODE_KIND,
+        presets=presets,
     )
 
 
@@ -292,6 +328,12 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         "bases": info.bases,
         "inputs": _ports(info.inputs),
         "outputs": _ports(info.outputs),
+        "node_kind": info.node_kind,
+        "presets": (
+            [{"name": p.name, "required_inputs": _ports(p.required_inputs),
+              "required_outputs": _ports(p.required_outputs)} for p in info.presets]
+            if info.presets is not None else None
+        ),
     }
 
 

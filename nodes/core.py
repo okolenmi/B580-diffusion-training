@@ -35,6 +35,44 @@ class Port:
     # widget. Purely a UI hint; build() never reads this.
 
 
+@dataclass(frozen=True)
+class NodePreset:
+    """One named configuration of a dynamic node (Node.NODE_KIND ==
+    "dynamic") -- just enough to search/suggest against
+    (docs/resources_controller_redesign_plan.md's Phase 3 suggestion-
+    menu resolution): a name plus this preset's own REQUIRED-only
+    inputs/outputs, pre-resolved. Optional ports are deliberately
+    excluded -- they're "just helpers" for suggestion purposes, per
+    that plan's own reasoning, and carry no signal either way about
+    whether this preset is a relevant match for a dropped wire.
+
+    Deliberately narrower than the eventual ResourcePreset interface
+    (Phase 4 of the same plan): validators, the parameter-value
+    dictionary, and the processor method are that richer, separate
+    concern -- this is only what a dynamic node declares about itself
+    for the purpose of being found and suggested in the editor, not how
+    it actually gets built or configured."""
+    name: str
+    required_inputs: dict[str, Port]
+    required_outputs: dict[str, Port]
+
+    def __post_init__(self):
+        for label, ports in (("required_inputs", self.required_inputs),
+                              ("required_outputs", self.required_outputs)):
+            for key, port in ports.items():
+                if not port.required:
+                    raise ValueError(
+                        f"NodePreset {self.name!r}: {label}[{key!r}] is a Port with "
+                        f"required=False -- self-contradictory, since this dict is "
+                        f"specifically the required-only subset (see this class's "
+                        f"own docstring). An optional, preset-specific port doesn't "
+                        f"belong in required_inputs/required_outputs at all -- full "
+                        f"shape resolution including optional ports is Phase 4/5's "
+                        f"job (the real ResourcePreset/processor mechanism), out of "
+                        f"scope for this class (search/suggestion only)."
+                    )
+
+
 class ExecutionContext:
     """Infrastructure a Node's build() may need beyond its declared Ports
     -- e.g. MonitorNode's live-data bus. Constructed once per graph run
@@ -109,6 +147,39 @@ class Node(ABC):
     # section 11.5 for the full rationale.
     DISPLAY_NAME: ClassVar[str | None] = None
 
+    # "static" (the default) means INPUTS/OUTPUTS above are the real,
+    # complete, final port set -- true for every node in this project
+    # today. "dynamic" means this class also has presets (see
+    # NodePreset above) -- INPUTS/OUTPUTS still exist and still matter
+    # (a dynamic node's *common* ports, present no matter which preset
+    # is chosen), but list_presets() below is what a dynamic node
+    # actually needs implemented for the editor's suggestion-menu
+    # search to find it. See docs/resources_controller_redesign_plan.md
+    # Phase 3 for the full rationale -- this exists specifically
+    # because that search can't cheaply enumerate "every possible shape
+    # a params-dependent node could have," but can cheaply enumerate
+    # "every declared preset's own fixed, required-only shape."
+    NODE_KIND: ClassVar[str] = "static"
+
+    @classmethod
+    def list_presets(cls) -> list[NodePreset]:
+        """Only meaningful when NODE_KIND == "dynamic" -- see
+        NodePreset's own docstring for what a preset actually needs to
+        report and why it's narrower than the full ResourcePreset
+        interface. A static node (the overwhelming default) never
+        calls this. Raises rather than returning an empty list because
+        __init_subclass__ below already refuses to define a concrete
+        dynamic-kind class that hasn't overridden this -- reaching this
+        base implementation at all means something bypassed that check
+        (e.g. calling it directly on an abstract intermediate class),
+        which should fail loudly here too, not return a silently empty,
+        misleadingly-valid-looking preset list."""
+        raise NotImplementedError(
+            f"{cls.__name__}.list_presets() was not overridden. "
+            f"NODE_KIND == 'dynamic' requires a real implementation -- "
+            f"see NodePreset's docstring in this module."
+        )
+
     def __init__(self, context: ExecutionContext | None = None):
         self.context = context or ExecutionContext()
 
@@ -126,6 +197,29 @@ class Node(ABC):
                 f"implemented) but declares no OUTPUTS. A node that produces "
                 f"nothing can't be used in a graph -- if this is intentional, "
                 f"the class should stay abstract instead."
+            )
+        if cls.NODE_KIND not in ("static", "dynamic"):
+            raise TypeError(
+                f"{cls.__name__}.NODE_KIND must be 'static' or 'dynamic', "
+                f"got {cls.NODE_KIND!r}."
+            )
+        if cls.NODE_KIND == "dynamic" and cls.list_presets.__func__ is Node.list_presets.__func__:
+            # Compares the underlying function, not the bound classmethod
+            # (two separately-bound classmethod objects for the exact same
+            # inherited function are never `is`-equal to each other, so
+            # that comparison would always look like "overridden" even
+            # when it isn't) -- and walks the real MRO correctly for a
+            # multi-level hierarchy: an intermediate class overriding this
+            # correctly satisfies a further concrete subclass that doesn't
+            # re-override it, since cls.list_presets.__func__ then resolves
+            # to that intermediate override, not Node's own base version.
+            raise TypeError(
+                f"{cls.__name__}: NODE_KIND == 'dynamic' but list_presets() "
+                f"wasn't overridden -- a dynamic node must declare its own "
+                f"presets, or it can never be found by the editor's "
+                f"suggestion-menu search (docs/resources_controller_redesign_plan.md, "
+                f"Phase 3). If this class doesn't have real presets yet, use "
+                f"NODE_KIND = 'static' until it does."
             )
 
     @abstractmethod

@@ -317,10 +317,47 @@ project's OOP rule is about." That file doesn't exist anywhere in this
 repo -- either stale or never written. Flagging, not fixing --
 out of scope for this audit.
 
-**Dependency:** Phase 2 (done). Not started -- next real step once
-picked back up is designing the actual `node_kind`/`presets` shape in
-`nodes/core.py` and `NodeInfo`, now that the suggestion-menu question
-has a concrete answer rather than being an open blocker.
+**Dependency:** Phase 2 (done). **Metadata infrastructure done:**
+`nodes/core.py` gained `Node.NODE_KIND` ("static"/"dynamic", default
+"static" -- purely additive, every existing node unchanged),
+`NodePreset` (a preset's own name + required-only inputs/outputs,
+deliberately narrower than the full Phase 4 `ResourcePreset`), and
+`list_presets()`, enforced by `__init_subclass__` at class-definition
+time (a `NODE_KIND == "dynamic"` class that doesn't override
+`list_presets()`, or declares an invalid `NODE_KIND`, fails loudly the
+moment it's defined, not the first time something calls it).
+`NodePreset` itself rejects a `required=False` `Port` inside
+`required_inputs`/`required_outputs` at construction -- self-
+contradictory, since those dicts are specifically the required-only
+subset. `server/nodegraph_introspect.py`'s `NodeInfo` gained matching
+`node_kind`/`presets` fields, resolved in `introspect_node_class()` and
+serialized in `node_info_to_dict()`.
+
+Verified, `server/smoke_tests/smoke_test_node_presets.py`: both
+`__init_subclass__` enforcement paths raise at definition time with a
+clear message; the `required=False`-inside-`required_inputs` rejection;
+a synthetic two-preset dynamic node introspects correctly end to end
+(names, required inputs/outputs, per preset) including through
+`node_info_to_dict()`; a genuine multi-level-inheritance edge case (an
+abstract intermediate class provides `list_presets()`, a concrete
+subclass doesn't re-override it) is correctly satisfied -- the override
+check resolves through the real MRO via `__func__` identity, not a
+naive `cls.__dict__` check that would wrongly flag this legitimate
+case; and every one of the 36 real nodes already in the registry is
+still `node_kind == "static"` with `presets is None` -- confirming this
+is purely additive, nothing about the real, already-shipped nodes
+changed. Adjacent server smoke tests (`smoke_test_nodegraph_introspect`,
+`smoke_test_graph_executor`, `smoke_test_execution_registry`,
+`smoke_test_asset_inspect`) and two `nodes/smoke_tests/` files that
+exercise `Node` directly still pass.
+
+**Not yet done:** the `nodegraph.js` suggestion-search itself doesn't
+consume this metadata yet (still iterates static `classInfo` only,
+unaware `node_kind`/`presets` now exist) -- next real step, once
+picked back up. Also still open, unaffected by this: `graph_executor.py`'s
+`_is_compatible()` resolving live shape from `spec.params` for the
+actual interactive-editing case (a separate, heavier operation than the
+required-only preset enumeration this phase just built).
 
 ### Phase 4 -- `ResourcePreset` abstraction
 

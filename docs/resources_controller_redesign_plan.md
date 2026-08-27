@@ -351,13 +351,47 @@ changed. Adjacent server smoke tests (`smoke_test_nodegraph_introspect`,
 `smoke_test_asset_inspect`) and two `nodes/smoke_tests/` files that
 exercise `Node` directly still pass.
 
-**Not yet done:** the `nodegraph.js` suggestion-search itself doesn't
-consume this metadata yet (still iterates static `classInfo` only,
-unaware `node_kind`/`presets` now exist) -- next real step, once
-picked back up. Also still open, unaffected by this: `graph_executor.py`'s
+**`nodegraph.js`'s suggestion-search: done.** `suggestNodesForDroppedWire()`
+now searches every class's own common shape (unchanged for a static
+class) *plus*, for a `node_kind === "dynamic"` class, one additional
+search target per declared preset (required-only ports). Real bug
+caught before landing, not just reasoned about: the first version
+treated "search the common shape" and "search per-preset" as mutually
+exclusive for a dynamic node -- silently dropping matches against its
+own common ports (which stay present no matter which preset is chosen,
+per `NODE_KIND`'s own docstring). Caught by a standalone check of the
+exact algorithm against mock registry data before it landed (see
+below), not assumed correct by inspection. The suggestion menu shows
+`ClassName (preset_name)` for a preset match, distinct from a plain
+class-name match. `spawnAndConnect()` handles the real, honest
+limitation this exposes: a preset match's port doesn't exist on the
+freshly-spawned node yet (it still renders its default/common shape --
+sockets reshaping to match a chosen preset is the separate,
+not-yet-built "actual interactive editing" piece below), and
+`addConnection()` does no validation of its own -- so rather than
+silently create a dangling connection, spawning stops and tells the
+person what's left to do by hand.
+
+**Verified without a browser, honestly scoped.** This project has no
+JS test infrastructure (no `module.exports` anywhere in `nodegraph.js`,
+never tested before this session) -- adding that is a real structural
+decision, not made unilaterally here. Instead: the exact matching
+algorithm (checked line-for-line against the committed source) was run
+standalone against mock registry data shaped like a real
+`node_info_to_dict()` response, covering a dynamic node's preset-only
+match, its common-shape match, and a static node's match, each checked
+for the right count and the right `preset`/port identity -- this is
+what actually caught the bug above. Syntax and CSS brace-balance
+checked directly on the real file. **Not independently confirmed in an
+actual browser** -- worth a real look before calling this done, same
+caveat as the earlier node-header CSS change.
+
+**Still open, unaffected by this:** `graph_executor.py`'s
 `_is_compatible()` resolving live shape from `spec.params` for the
-actual interactive-editing case (a separate, heavier operation than the
-required-only preset enumeration this phase just built).
+actual interactive-editing case -- a separate, heavier operation than
+the required-only preset enumeration this phase built, and what's
+needed before a spawned node's sockets can actually reshape to match a
+selected preset (closing the `spawnAndConnect()` limitation above).
 
 ### Phase 4 -- `ResourcePreset` abstraction
 

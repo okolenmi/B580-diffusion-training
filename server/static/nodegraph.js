@@ -1080,12 +1080,44 @@
       const matches = [];
       for (const domain of Object.keys(this.model.registry)) {
         for (const classInfo of this.model.registry[domain]) {
-          const candidates = wire.isOutput ? classInfo.inputs : classInfo.outputs;
-          for (const candidate of candidates) {
-            const compatible = wire.isOutput
-              ? this.model.typesCompatible(port.type_mro, candidate.type, candidate.type_mro)
-              : this.model.typesCompatible(candidate.type_mro, port.type, port.type_mro);
-            if (compatible) { matches.push({ classInfo, port: candidate }); break; }
+          // Every class always contributes its own common shape (preset:
+          // null) -- for a static class that's the whole story, exactly
+          // as before. A dynamic class ADDITIONALLY contributes one entry
+          // PER declared preset: its common INPUTS/OUTPUTS are still
+          // present no matter which preset is chosen (see
+          // nodes.core.Node.NODE_KIND's own docstring), so a preset-only
+          // search here would silently miss real matches against those
+          // common ports -- caught by an actual standalone check of this
+          // exact logic against mock registry data before this landed,
+          // not just reasoned about. Matched on required ports only for
+          // presets -- optional ones are "just helpers", no suggestion-
+          // worthy signal either way. See
+          // docs/resources_controller_redesign_plan.md's Phase 3 for the
+          // full reasoning; nodes.core.NodePreset for what
+          // required_inputs/required_outputs actually guarantee.
+          const searchTargets = [
+            { classInfo, preset: null, inputs: classInfo.inputs, outputs: classInfo.outputs },
+          ];
+          if (classInfo.node_kind === "dynamic") {
+            for (const preset of classInfo.presets) {
+              searchTargets.push({
+                classInfo, preset,
+                inputs: preset.required_inputs, outputs: preset.required_outputs,
+              });
+            }
+          }
+
+          for (const target of searchTargets) {
+            const candidates = wire.isOutput ? target.inputs : target.outputs;
+            for (const candidate of candidates) {
+              const compatible = wire.isOutput
+                ? this.model.typesCompatible(port.type_mro, candidate.type, candidate.type_mro)
+                : this.model.typesCompatible(candidate.type_mro, port.type, port.type_mro);
+              if (compatible) {
+                matches.push({ classInfo: target.classInfo, preset: target.preset, port: candidate });
+                break;
+              }
+            }
           }
         }
       }
@@ -1113,9 +1145,11 @@
         for (const m of matches) {
           const item = document.createElement("div");
           item.className = "ng-suggest-item";
-          item.innerHTML = `${escapeHtml(m.classInfo.class_name)}<div class="ng-suggest-item-port">${wire.isOutput ? "\u2192" : "\u2190"} ${escapeHtml(m.port.name)}</div>`;
+          const presetLabel = m.preset
+            ? ` <span class="ng-suggest-preset">(${escapeHtml(m.preset.name)})</span>` : "";
+          item.innerHTML = `${escapeHtml(m.classInfo.class_name)}${presetLabel}<div class="ng-suggest-item-port">${wire.isOutput ? "\u2192" : "\u2190"} ${escapeHtml(m.port.name)}</div>`;
           item.addEventListener("click", () => {
-            this.spawnAndConnect(m.classInfo, m.port, wire, screenX, screenY);
+            this.spawnAndConnect(m.classInfo, m.port, wire, screenX, screenY, m.preset);
             this.closeSuggestionMenu();
           });
           menu.appendChild(item);
@@ -1141,9 +1175,30 @@
       }
     }
 
-    spawnAndConnect(classInfo, matchedPort, wire, screenX, screenY) {
+    spawnAndConnect(classInfo, matchedPort, wire, screenX, screenY, preset) {
       const pos = this.canvasMousePos({ clientX: screenX, clientY: screenY });
       const newNode = this.model.addNode(classInfo, pos.x - NODE_WIDTH / 2, pos.y - 20);
+      if (preset) {
+        // matchedPort came from this preset's own required_inputs/outputs,
+        // not from classInfo's common ports -- the freshly-spawned node
+        // still renders its default/common shape, since a node's sockets
+        // actually reshaping to match a chosen preset is separate,
+        // not-yet-built work (docs/resources_controller_redesign_plan.md
+        // Phase 3's own "not yet done" note -- this metadata is wired
+        // into search/suggestion only so far). addConnection() does no
+        // validation of its own (see GraphModel.addConnection), so wiring
+        // straight to a port name that doesn't exist yet on this node
+        // would silently create a dangling connection with nothing to
+        // render it against, not a visible error. Spawn the right node
+        // and stop there instead, telling the person what's left to do
+        // by hand, rather than pretending this is fully wired.
+        alert(`Added ${classInfo.display_name || classInfo.class_name} -- select the ` +
+              `"${preset.name}" preset on it, then connect "${matchedPort.name}" by hand. ` +
+              `Presets don't reshape a node's sockets automatically yet.`);
+        this.renderAll();
+        this.persist();
+        return;
+      }
       if (wire.isOutput) {
         this.model.addConnection(wire.nodeId, wire.portName, newNode.id, matchedPort.name);
       } else {

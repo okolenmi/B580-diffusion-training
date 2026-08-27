@@ -1685,7 +1685,12 @@ dtype decisions -- kept as independent choices rather than one bundled
    lesson -- not three separate copies), and real quality validation
    before defaulting to anything but float32: bf16 momentum for LoRA's
    tiny per-layer parameter count is a real numerical question, not
-   "does it run."
+   "does it run." **Update:** likely belongs inside the Resources
+   Controller redesign's own precision handling rather than as an
+   isolated port on each optimizer node -- see
+   `docs/resources_controller_redesign_plan.md`'s "Consolidation"
+   section for the reasoning. Not decided; flagged there so this
+   doesn't get implemented in isolation before that's settled.
 3. **compute dtype** -- already real (`ComfyUNetLoRANode.dtype`), no new
    work needed, just clearer documentation that this *is* the
    compute-dtype axis. True autocast-based mixed precision (fp32 master
@@ -1714,6 +1719,14 @@ just at `build()` time. Real, worth doing, but touches `core.py`'s
 `Port` dataclass and the server's node-introspection/UI code -- a larger
 item than anything else in this section, flagged honestly as its own
 piece of work, not bundled into the optimizer-specific items above.
+
+**Update:** this and the Resources Controller redesign's
+`ResourcePreset` "parameter-value dictionary" are the same mechanism
+underneath the different names -- a `Port` with a closed set of
+choices, rendered as a dropdown, resolved to one value by build time.
+Recommend building this once as part of that redesign's Phase 3/4
+rather than as a separate, disconnected item -- see
+`docs/resources_controller_redesign_plan.md`'s "Consolidation" section.
 
 ### 11.5 Node naming: one string is doing two jobs
 

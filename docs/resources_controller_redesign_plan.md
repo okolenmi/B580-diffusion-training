@@ -1,11 +1,24 @@
 # Resources Controller & precision redesign -- step-by-step plan
 
-**Status: Phase 1 + Phase 2 done, Phase 3 audited (no implementation
-yet -- see that section for what's actually needed and the one open
-question blocking it).** This tracks a real,
+**Status: Phase 1 + Phase 2 done, Phase 3's suggestion-menu question
+resolved (node_kind/presets metadata), a consolidation pass done
+connecting this to `docs/training_pipeline_design.md`'s remaining open
+items -- no new node/server/frontend code yet beyond Phases 1-2.**
+This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
 the rest of this project.
+
+**Priority rule, made explicit rather than left implicit:** where this
+plan and `docs/training_pipeline_design.md` conflict, this plan wins --
+it reflects the more recently decided direction. Section 11's older
+items get updated or superseded as needed (see "Consolidation" below
+for the concrete cases found so far), not treated as equally
+authoritative history that both documents have to be reconciled around
+forever. `training_pipeline_design.md` stays the record of what
+actually shipped and why for everything outside this redesign's scope;
+it isn't frozen, just not the tie-breaker for anything this plan
+touches.
 
 ## Why this exists
 
@@ -249,13 +262,35 @@ an interactive node to work correctly everywhere, not just in whichever
 spot gets tested first.
 
 **One genuinely hard case, not just a long list of mechanical
-changes:** `suggestNodesForDroppedWire()` iterates the *entire
-registry's* static `classInfo.inputs/outputs` to find compatible
-matches. A class whose shape depends on params can't be cheaply
-enumerated that way -- there's no single "the inputs" to check against
-for the whole class. Realistic options: exclude interactive nodes from
-this suggestion feature, or suggest based on their default/initial
-configuration only and accept that it may be incomplete. Not decided.
+changes -- resolved.** `suggestNodesForDroppedWire()` iterates the
+*entire registry's* static `classInfo.inputs/outputs` to find
+compatible matches; a class whose shape depends on params can't be
+cheaply enumerated that way in general. Resolution: for suggestion
+purposes, **each preset of a dynamic node counts as its own separate
+searchable entry**, contributing only its *required* inputs/outputs
+(optional ports are "just helpers" and don't carry suggestion-worthy
+signal either way). This turns "enumerate all possible shapes" (hard,
+open-ended) into "enumerate `(class, preset)` pairs, each with its own
+fixed required-port list" (exactly as cheap and enumerable as today's
+one-shape-per-class search, just with one more dimension). Concretely:
+`NodeInfo` (`server/nodegraph_introspect.py`) gains a `node_kind:
+"static" | "dynamic"` field -- **real, requested metadata dividing
+default nodes from dynamic-with-presets ones, built to scale past the
+one dynamic node that exists today** -- and, for a dynamic node, a
+`presets: [{name, required_inputs, required_outputs}]` list, each
+entry pre-resolved (that preset's own default configuration, not
+requiring a live params round-trip just to enumerate it). The
+suggestion search in `nodegraph.js` then iterates static classes and
+`(class, preset)` pairs uniformly, over required ports only.
+
+This also gives `nodes/core.py` and Phase 4's `ResourcePreset`
+something concrete to satisfy: a dynamic node class needs to be able to
+enumerate its own presets and each preset's required-only shape
+*without* being asked to fully resolve or construct anything -- a
+lighter, separate query than "resolve my current shape given these
+live params" (still needed for the interactive-editing case itself),
+but related, and worth designing together rather than as two
+disconnected asks on the same class.
 
 **Nothing like "resolve shape given params" exists in the introspection
 layer at all today.** `nodegraph_introspect.py`'s `introspect_node_class(cls)`
@@ -282,8 +317,10 @@ project's OOP rule is about." That file doesn't exist anywhere in this
 repo -- either stale or never written. Flagging, not fixing --
 out of scope for this audit.
 
-**Dependency:** Phase 2 (done). Not started pending direction on the
-suggestion-menu question and the overall shape decision above.
+**Dependency:** Phase 2 (done). Not started -- next real step once
+picked back up is designing the actual `node_kind`/`presets` shape in
+`nodes/core.py` and `NodeInfo`, now that the suggestion-menu question
+has a concrete answer rather than being an open blocker.
 
 ### Phase 4 -- `ResourcePreset` abstraction
 
@@ -317,6 +354,94 @@ output as undecided ("not sure what should be output, so there is
 nothing currently").
 
 **Dependency:** Phase 5.
+
+## Consolidation -- resolving low-synergy items instead of leaving them
+to drift
+
+Explicit instruction behind this section: don't let this redesign
+become one more thing sitting next to the rest of the project's design
+rather than actually reconciled with it. Went back through
+`docs/training_pipeline_design.md`'s remaining open section-11 items and
+the already-shipped `ComfyUNetLoRANode`/`LoRAPhaseSplitNode` against
+this plan specifically looking for redundancy, not just letting them
+coexist.
+
+**Checked, genuinely independent, no action needed:** section 11.1
+(optimizer node consolidation -- which legacy optimizer nodes are safe
+to mark deprecated). Pure optimizer-construction concern, nothing to do
+with resource loading/dtype. No overlap.
+
+**Checked, genuinely independent, no action needed:** `LoRAPhaseSplitNode`
+vs. the sketch's own "Continue training" checkbox. These looked like
+they might be the same idea told twice -- they're not. Continue
+training (Resources Controller) is "start this run from an existing
+saved LoRA's weights." Phase-splitting is "freeze what's been trained
+*during this run* and grow a new, independently-trainable generation on
+top of it, mid-pipeline." Different points in time, different real
+mechanics (`nodes/model/lora_phases.py`'s generation-chain machinery
+has no equivalent in "load a checkpoint at the start"). Stays a
+separate node.
+
+**Real synergy found, recommend unifying rather than building twice:**
+section 11.4 (`Port.choices` -- a generic closed-choice-dropdown
+mechanism for *any* `Port`, not resource-specific) and the
+`ResourcePreset` interface's own "parameter-value dictionary (multiple
+choices in node, single choice for processor)" from the open design
+question above are, underneath the different names, **the same
+mechanism**: a `Port` that declares a closed set of valid choices,
+rendered as a dropdown, resolved to one concrete value by build time.
+11.4 was scoped as "a larger item... its own piece of work" back when
+nothing concrete needed it yet; it now has a real, immediate consumer.
+Building it generically at the `core.py`/`Port` level, once, serves
+both 11.4's original standalone case (`strategy`, `device`, and similar
+plain string ports elsewhere in the graph) *and* Phase 4/5's dtype
+dropdowns -- rather than the Resources Controller inventing its own
+bespoke choice-rendering path that 11.4 would later duplicate, or 11.4
+shipping first in a shape Phase 4 then has to work around. Practical
+consequence: **`Port.choices` (11.4) should likely be built as part of
+this redesign's own Phase 3/4 work, not as a separate, later,
+disconnected item.** Not started -- flagging the connection now so
+whoever picks up either piece next doesn't build it twice.
+
+**Real synergy found, recommend folding in:** section 11.3's item 2
+(`state_dtype` on the `Composed*` optimizer nodes, "needs one shared
+implementation") is a third precision axis that predates this whole
+redesign's starting motivation -- and the redesign's entire premise is
+*one place* for precision decisions, not scattered ports. Recommend
+`state_dtype` become part of the Resources Controller's own
+parameter-value dictionary once that exists (Phase 4/5), rather than a
+separate port added directly to each optimizer node in isolation.
+Concretely unresolved and worth a real decision when Phase 4/5 gets
+designed in detail: does the Resources Controller's own scope extend to
+optimizer-adjacent config at all, or does it stay model-resource-only
+(UNet/CLIP/VAE/LoRA) with `state_dtype` reading from it via a separate,
+smaller wire? Not decided -- but implementing `state_dtype` as an
+isolated `Composed*`-node port *before* that's settled risks building
+exactly the kind of thing this section exists to avoid.
+
+**Real redundancy risk found, recommend a concrete action now, not just
+noting it:** `ComfyUNetLoRANode`'s own `dtype`/`frozen_weight_store`/
+`adapter_strategy` ports and its `build()` method are -- once Phase 5
+ships -- doing a subset of exactly what the Resources Controller's
+processor method needs to do internally (resolve dtype, construct the
+injected model). Left alone, Phase 5 either duplicates that
+construction logic (two copies to keep in sync, the exact failure mode
+`dora_layer.py`'s own composition-over-inheritance choice and the
+`_is_unet_key`/`get_lora_weights()` bugs from the last two DoRA patches
+both trace back to -- two things secretly needing to stay in sync,
+nothing enforcing that they do) or Phase 5 has nothing to build on and
+reinvents it. **Recommend extracting `ComfyUNetLoRANode.build()`'s real
+construction logic (the `adapter_strategy_scope` + `ComfyUNetWrapper` +
+`reenable_dora_requires_grad` sequence) into a standalone, reusable
+function now** -- independent of Phase 3/4/5's timeline, low-risk, and
+exactly the kind of thing worth doing *before* Phase 5 needs it rather
+than as part of Phase 5 under time pressure. `ComfyUNetLoRANode` itself
+keeps working unchanged (thin wrapper around the extracted function);
+once Phase 5 ships, it becomes the manual/advanced path for someone who
+wants fine-grained control without a preset -- same "mark deprecated in
+the docstring, point at the replacement, don't delete" pattern section
+11.1 already established for the optimizer nodes, reused here rather
+than inventing a second deprecation story. Not started.
 
 ---
 Last synced against `docs/training_pipeline_design.md` at commit

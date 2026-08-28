@@ -57,15 +57,25 @@ def _make_sdxl_checkpoint_sd():
 
 class _FakeClipEncoder:
     """Stands in for core.clip_encode.SDXLClipEncoder -- records its own
-    construction args, exposes just enough (.clip_model, ._embedder)
-    for SDXLTextEncoder.footprint_bytes()'s real, unpatched logic to
-    work against it for real, not mocked."""
+    construction args, exposes just enough (.clip_model, ._embedder,
+    .device, .dtype, .unload()) for SDXLTextEncoder's real, unpatched
+    offload()/reload()/release()/footprint_bytes() to work against it
+    for real, not further mocked -- mirrors the real class's own
+    unload() exactly (core/clip_encode.py's SDXLClipEncoder.unload():
+    move clip_model to CPU, set self.device = "cpu")."""
 
     def __init__(self, clip_sd, device):
         self.clip_sd = clip_sd
         self.device = device
-        self.clip_model = nn.Linear(4, 4)  # a real nn.Module, real .parameters()/.buffers()
+        self.dtype = torch.float16  # matches the real class's own hardcoded dtype
+        self.clip_model = nn.Linear(4, 4)  # a real nn.Module, real .parameters()/.buffers()/.to()
         self._embedder = None
+
+    def unload(self):
+        self.clip_model = self.clip_model.cpu()
+        if self._embedder:
+            self._embedder = self._embedder.cpu()
+        self.device = "cpu"
 
 
 def check_split_checkpoint():
@@ -155,6 +165,62 @@ def check_sdxl_lora_trainer_full_construction():
     check(trainer.footprint_bytes() == expected,
           f"footprint_bytes()={trainer.footprint_bytes()}, expected {expected}")
     print("    PASS")
+    return trainer
+
+
+def check_device_resident_offload_reload_release():
+    print("[SDXL_LoraTrainer is a real DeviceResident -- offload()/reload()/"
+          "release() genuinely move/drop unet, clip, AND vae_sd, not just "
+          "the ones with an obvious object to delegate to]")
+    from nodes.memory.handle import DeviceResident
+
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8, alpha=1.0)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+
+    check(isinstance(trainer, DeviceResident), type(trainer).__mro__)
+
+    # No non-CPU device is available in this sandbox (no real XPU/CUDA),
+    # so this can't prove an actual cross-device tensor move -- it proves
+    # the real mechanics run correctly (the right calls happen, the right
+    # attributes end up set), not that data crosses a real device
+    # boundary. offload() -> reload(device="cpu") explicitly (not the
+    # no-arg fallback) so both code paths through reload() get exercised.
+    trainer.offload()
+    check(trainer.unet._wrapper.device == "cpu", trainer.unet._wrapper.device)
+    check(trainer.clip._legacy.device == "cpu", trainer.clip._legacy.device)
+    check(all(t.device.type == "cpu" for t in trainer.vae_sd.values()),
+          "vae_sd's own tensors must move too -- they aren't registered with the "
+          "coordinator (not a DeviceResident), so offload() has to move them by hand")
+
+    trainer.reload(device="cpu")
+    check(trainer.unet._wrapper.device == "cpu", trainer.unet._wrapper.device)
+    check(trainer.clip._legacy.device == "cpu", trainer.clip._legacy.device)
+    check(all(t.device.type == "cpu" for t in trainer.vae_sd.values()), "still cpu")
+
+    # reload() with no device given falls back to self._device (the
+    # construction-time device) -- exercise that path explicitly too,
+    # not just the explicit-device one above.
+    trainer.offload()
+    trainer.reload()
+    check(trainer.unet._wrapper.device == "cpu", "no-arg reload() should fall back to self._device")
+
+    # release(): unet/clip genuinely drop (not just move), vae_sd emptied,
+    # not left holding stale tensors.
+    trainer.release()
+    check(trainer.unet._wrapper is None, "unet should be genuinely released, not just offloaded")
+    check(trainer.clip._legacy is None, "clip should be genuinely released, not just offloaded")
+    check(trainer.vae_sd == {}, trainer.vae_sd)
+    check(trainer.footprint_bytes() == 0,
+          f"a released trainer should report 0 footprint, got {trainer.footprint_bytes()}")
+    print("    PASS")
 
 
 def check_wrong_base_order_fails_to_instantiate():
@@ -190,6 +256,7 @@ def main():
     check_build_text_encoder_delegates_correctly()
     check_inject_lora_delegates_to_build_lora_injected_unet()
     check_sdxl_lora_trainer_full_construction()
+    check_device_resident_offload_reload_release()
     check_wrong_base_order_fails_to_instantiate()
     print()
     print("=" * 60)

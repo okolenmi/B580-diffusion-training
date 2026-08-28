@@ -78,6 +78,17 @@ class _RecordingWrapper:
     def state_dict(self):
         return self.model.state_dict()
 
+    def to(self, device=None, **kwargs):
+        # Mirrors core.unet_wrapper.ComfyUNetWrapper.to()'s own real
+        # behavior exactly (self.model.to(...), then update self.device
+        # only if a device was actually given) -- needed for
+        # ComfyUNetTrainableModel.offload()/reload()/release(), all of
+        # which call self._wrapper.to(device=...) directly.
+        self.model.to(device=device, **kwargs)
+        if device is not None:
+            self.device = str(device)
+        return self
+
 
 class _Recorder:
     def __init__(self):

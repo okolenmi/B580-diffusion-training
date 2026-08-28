@@ -420,10 +420,27 @@ that class's own docstring for the exact MRO reasoning). Construction
 the real pipeline (split → inject LoRA → mask CLIP) and the resulting
 instance has real `.unet`/`.clip`/`.vae_sd`/`.lora` attributes with no
 construction machinery riding along, matching "the beauty of this
-method" from that conversation exactly. Grew a `footprint_bytes()`
-matching the already-established `ComfyUNetTrainableModel`/
-`FrozenWeightStore` pattern, per that same conversation's explicit
-ask, not a new pattern invented for it.
+method" from that conversation exactly.
+
+**Real memory/objects management inside, per the explicit follow-up
+ask -- and a real, reassuring answer to "not sure we have a good base
+for it": there already was one, already real and already
+production-used, just not yet connected here.**
+`nodes/memory/coordinator.py`'s `ResourceCoordinator` is the same
+thing `nodes/train/supervised.py`'s `SupervisedLoRATrainerNode` already
+registers its own `model`/`optimizer`/`text_encoder` against in a real,
+shipping node. `LoRATrainingSkeleton` is now a real `DeviceResident`
+itself (`nodes/memory/handle.py`) -- registers its own `.unet`/`.clip`
+against an internal coordinator at construction time, so
+`footprint_bytes()`/`offload()`/`reload()`/`release()` delegate to
+real, already-tested machinery (each already implements
+`DeviceResident` itself) instead of a second, hand-rolled, parallel
+implementation -- replaced the hand-summed `footprint_bytes()` from the
+first pass of this phase. `vae_sd` (real tensor state, not yet wrapped
+in any object -- see the deferred item below) is moved/dropped by hand
+alongside the coordinator's own work in all three lifecycle methods,
+not silently left out of them just because there's no resident object
+to register it with yet.
 
 **Two things deliberately, honestly deferred, not silently left
 half-built:** "continue training" (loading an existing saved LoRA into
@@ -442,16 +459,28 @@ unused by anything in `nodes/` today).
 delegate (real call-arg recording, not assumed); a full end-to-end
 `SDXL_LoraTrainer` construction from a synthetic checkpoint, checking
 real `.unet`/`.clip`/`.vae_sd`/`.lora` and a correctly-summed
-`footprint_bytes()`; and, the one that actually matters most for this
-phase's central decision -- **the negative case**: a version with the
-bases listed in the wrong order genuinely fails to instantiate with
+`footprint_bytes()`; the `DeviceResident` implementation genuinely
+moves/drops all three of `.unet`/`.clip`/`.vae_sd` through
+`offload()`/`reload()`/`release()` -- not just the two with an obvious
+resident object to delegate to, `vae_sd`'s own raw tensors checked by
+their real `.device` too, both the explicit-device and no-arg
+`reload()` paths exercised, and a released trainer correctly reports 0
+footprint; and, the one that actually matters most for this phase's
+central decision -- **the negative case**: a version with the bases
+listed in the wrong order genuinely fails to instantiate with
 `TypeError`, proving the shipped order is load-bearing and not just
-happening to work. Extended (not forked) the existing `_RecordingWrapper`
-test fixture from `smoke_test_lora_injector_extraction.py` with
-`lora_parameters()`/`state_dict()` it was missing, rather than a second,
-subtly-different copy. Adjacent tests (`smoke_test_resource_inspection`,
+happening to work. Extended (not forked) the existing `_RecordingWrapper`/
+`_FakeClipEncoder` test fixtures with `.to()`/`.unload()`/`.dtype` they
+were missing once `offload()`/`reload()`/`release()` needed to
+genuinely exercise them, rather than a second, subtly-different copy.
+Adjacent tests (`smoke_test_resource_coordinator`,
+`smoke_test_resource_policy`, `smoke_test_resource_inspection`,
 `smoke_test_gradient_checkpointing`, `smoke_test_dataset_model_contracts`,
-and the extraction test itself after being extended) still pass.
+and the extraction test itself after being extended) still pass. No
+non-CPU device is available in this sandbox, so the offload/reload
+checks prove the real mechanics run correctly, not an actual
+cross-device tensor move -- worth a real check on real hardware before
+fully trusting the device-transition behavior specifically.
 
 **Not yet built:** validators (per-input human-readable detection text,
 using the already-real `resource_inspection.inspect_checkpoint_dtypes()`

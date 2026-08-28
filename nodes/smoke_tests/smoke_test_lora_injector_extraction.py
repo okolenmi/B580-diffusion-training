@@ -23,6 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import torch
+
 import core.unet_wrapper as unet_wrapper_module
 from core.lora import LoRAConfig
 from nodes.model import adapter_injection
@@ -49,9 +51,12 @@ def check(condition: bool, message: str):
 
 class _RecordingWrapper:
     """Stands in for core.unet_wrapper.ComfyUNetWrapper -- records its
-    own construction args, exposes just enough (.lora_registry) for
-    reenable_dora_requires_grad() and ComfyUNetTrainableModel to work
-    against it for real."""
+    own construction args, exposes just enough (.lora_registry,
+    .lora_parameters(), .model/.state_dict()) for
+    reenable_dora_requires_grad(), ComfyUNetTrainableModel's
+    trainable_parameters()/footprint_bytes(), and anything else that
+    only needs a registry/state-dict-shaped object (not a real UNet
+    forward pass) to work against it for real, not further mocked."""
 
     def __init__(self, unet_sd, device, dtype, use_checkpoint, lora_config):
         self.unet_sd = unet_sd
@@ -60,6 +65,18 @@ class _RecordingWrapper:
         self.use_checkpoint = use_checkpoint
         self.lora_config = lora_config
         self.lora_registry = []
+        self.model = torch.nn.Linear(4, 4)  # real nn.Module -- real .state_dict()
+
+    def lora_parameters(self):
+        # Mirrors core.unet_wrapper.ComfyUNetWrapper.lora_parameters()'s
+        # own real early-return for an empty registry -- this fixture's
+        # lora_registry is always [] (no real LoRA layers get injected
+        # against a fake unet_sd), so this is that same real code path,
+        # not a separate guess at its behavior.
+        return []
+
+    def state_dict(self):
+        return self.model.state_dict()
 
 
 class _Recorder:

@@ -395,13 +395,76 @@ selected preset (closing the `spawnAndConnect()` limitation above).
 
 ### Phase 4 -- `ResourcePreset` abstraction
 
-**Goal:** formalize the Task x Architecture composition from the open
-design question above, once it's actually settled. Concrete classes
-not written here yet -- see that section.
+**Status: the core object-construction mechanics are done.** Composition
+vs. inheritance decided -- inheritance, concrete-mixin-first ordering.
 
-**Dependency:** none technically (pure abstraction design, can proceed
-in parallel with Phases 1-3), but Phase 5's concrete preset needs it
-finished first.
+`nodes/model/sdxl_architecture.py`'s `SDXLArchitecture`: pure SDXL
+mechanics, no dtype awareness at all, exactly as specified.
+`split_checkpoint()`/`build_text_encoder()`/`inject_lora()` all
+delegate to already-real, already-tested code (`resource_inspection.classify_key()`,
+`text_encoder.py`'s existing CLIP masking, `build_lora_injected_unet()`)
+rather than reimplementing anything -- this class is assembly, not new
+logic. `build_text_encoder()` masks SDXL's real two text encoders
+(CLIP-L, OpenCLIP-G) behind one simple `TextEncoder` object, per the
+explicit design requirement -- but honestly flags a real, current
+limitation found while building it: `core.clip_encode.SDXLClipEncoder`
+(frozen legacy code) hardcodes its own dtype, no parameter exists yet
+to make it configurable.
+
+`nodes/model/lora_training_resources.py`'s `LoRATrainingSkeleton`
+(abstract, declares the three architecture-specific methods above) and
+`SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton)` (the
+concrete combination -- base order load-bearing, not stylistic, see
+that class's own docstring for the exact MRO reasoning). Construction
+*is* processing, per the original design conversation: `__init__` runs
+the real pipeline (split → inject LoRA → mask CLIP) and the resulting
+instance has real `.unet`/`.clip`/`.vae_sd`/`.lora` attributes with no
+construction machinery riding along, matching "the beauty of this
+method" from that conversation exactly. Grew a `footprint_bytes()`
+matching the already-established `ComfyUNetTrainableModel`/
+`FrozenWeightStore` pattern, per that same conversation's explicit
+ask, not a new pattern invented for it.
+
+**Two things deliberately, honestly deferred, not silently left
+half-built:** "continue training" (loading an existing saved LoRA into
+the freshly-injected model, per the original sketch's own checkbox) --
+`.lora` stays `None` unconditionally; the real loading mechanics
+already exist (`LoRACheckpointLoaderNode`, DoRA-aware) and this class's
+`.unet` is exactly what that loader operates on, but wiring them
+together is a real, separate next increment. No VAE object either --
+`.vae_sd` stays the raw split-out state dict, since nothing in `nodes/`
+builds a VAE wrapper anywhere yet (only legacy `core.vae_decode.VAEDecoder`,
+unused by anything in `nodes/` today).
+
+**Verified**, `nodes/smoke_tests/smoke_test_lora_training_resources.py`:
+`split_checkpoint()` correctness (every key in exactly one bucket);
+`build_text_encoder()`/`inject_lora()` each proven to genuinely
+delegate (real call-arg recording, not assumed); a full end-to-end
+`SDXL_LoraTrainer` construction from a synthetic checkpoint, checking
+real `.unet`/`.clip`/`.vae_sd`/`.lora` and a correctly-summed
+`footprint_bytes()`; and, the one that actually matters most for this
+phase's central decision -- **the negative case**: a version with the
+bases listed in the wrong order genuinely fails to instantiate with
+`TypeError`, proving the shipped order is load-bearing and not just
+happening to work. Extended (not forked) the existing `_RecordingWrapper`
+test fixture from `smoke_test_lora_injector_extraction.py` with
+`lora_parameters()`/`state_dict()` it was missing, rather than a second,
+subtly-different copy. Adjacent tests (`smoke_test_resource_inspection`,
+`smoke_test_gradient_checkpointing`, `smoke_test_dataset_model_contracts`,
+and the extraction test itself after being extended) still pass.
+
+**Not yet built:** validators (per-input human-readable detection text,
+using the already-real `resource_inspection.inspect_checkpoint_dtypes()`
+for the base-model input; nothing yet for a LoRA input's own dtype/rank,
+a real, separately-flagged gap since Phase 2's `asset_paths.inspect()`),
+the parameter-value dictionary (dtype choices), and list-of-inputs --
+the actual `ResourcePreset`/`NodePreset`-satisfying interface pieces
+that make this usable *as a node*. Those, plus wiring this whole thing
+into an actual `Node` subclass, are Phase 5.
+
+**Dependency:** none technically (pure abstraction design, could
+proceed in parallel with Phases 1-3), but Phase 5's concrete preset
+needs it finished first -- it now is, for the core construction path.
 
 ### Phase 5 -- The Resources Controller node itself
 

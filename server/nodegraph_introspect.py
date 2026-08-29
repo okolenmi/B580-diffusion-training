@@ -3,12 +3,11 @@
 Deliberately mirrors config_schema.py's core principle: UI metadata is
 *derived* from the real Python class at import time, never hand-duplicated
 in a separate file. That's a structural choice, not a style preference --
-the student_mix visibility bug this session existed specifically because
-config_ui.py's hand-authored extra_visible_when conditions could (and did)
-drift out of sync with what the underlying schema actually supports. A node
-graph whose port list comes from inspect.signature() on the real class
-cannot drift the same way: change the class, the graph's rendering changes
-with it, automatically, with no second file to remember to update.
+hand-authored, separately-maintained UI metadata can drift out of sync
+with what the underlying schema actually supports. A node graph whose
+port list comes from inspect.signature() on the real class cannot drift
+the same way: change the class, the graph's rendering changes with it,
+automatically, with no second file to remember to update.
 
 This module has ZERO side effects and ZERO coupling to the rest of the
 codebase beyond importing classes to introspect. It doesn't execute

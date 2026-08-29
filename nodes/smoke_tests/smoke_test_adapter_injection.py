@@ -304,9 +304,8 @@ def check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse():
 
 
 def check_dora_layers_end_up_trainable_after_the_real_injection_path():
-    print("\n=== a real gap found while wiring in DoRA's checkpoint round-trip, "
-          "unrelated to checkpointing itself: core.unet_wrapper.ComfyUNetWrapper."
-          "_init_lora() freezes every DoRA parameter and never re-enables any of "
+    print("\n=== core.unet_wrapper.ComfyUNetWrapper._init_lora() freezes every "
+          "DoRA parameter and never re-enables any of "
           "them -- reenable_dora_requires_grad() fixes it ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)

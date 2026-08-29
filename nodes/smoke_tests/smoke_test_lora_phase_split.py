@@ -77,8 +77,8 @@ def check_contracts():
     _is_compatible(LoRAPhaseSplitNode, "model", SupervisedLoRATrainerNode, "model")
     _is_compatible(SupervisedLoRATrainerNode, "model", LoRACheckpointSaverNode, "model")
     _is_compatible(LoRAPhaseSplitNode, "completed_generation", LoRACheckpointSaverNode, "model")
-    print("    PASS: every phase-split graph wire (including the one this session's "
-          "TrainedWeightsExportable generalization exists for) passes the real "
+    print("    PASS: every phase-split graph wire (including the one "
+          "TrainedWeightsExportable's generalization exists for) passes the real "
           "graph-editor type check")
 
 

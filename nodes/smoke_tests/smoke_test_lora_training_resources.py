@@ -311,6 +311,134 @@ def check_frozen_lora_none_is_a_true_no_op():
     print("    PASS")
 
 
+def check_continue_lora_sd_loads_into_the_injected_registry():
+    print("[continue_lora_sd calls load_lora_into_registry() against self.unet's own "
+          "registry, after injection, and self.lora holds the exact dict given]")
+    calls = []
+
+    def fake_load_lora_into_registry(registry, state_dict, source_description="source"):
+        calls.append(dict(registry=registry, state_dict=state_dict,
+                           source_description=source_description))
+
+    import nodes.model.lora_checkpoint_loader as loader_module
+    real_fn = loader_module.load_lora_into_registry
+    loader_module.load_lora_into_registry = fake_load_lora_into_registry
+
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        continue_sd = {"lora_unet_out.lora_down.weight": torch.randn(2, 2)}
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8, continue_lora_sd=continue_sd)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+        loader_module.load_lora_into_registry = real_fn
+
+    check(len(calls) == 1, f"expected exactly 1 call, got {len(calls)}")
+    check(calls[0]["registry"] is trainer.unet.raw.lora_registry,
+          "should load into self.unet's own registry, after it was constructed")
+    check(calls[0]["state_dict"] is continue_sd, "should pass continue_lora_sd through exactly")
+    check(calls[0]["source_description"] == "continue_lora_sd", calls[0]["source_description"])
+    check(trainer.lora is continue_sd, "self.lora should be the exact dict given, not a copy")
+    print("    PASS")
+
+
+def check_continue_lora_sd_none_is_a_true_no_op():
+    print("[continue_lora_sd=None (the default) -- self.lora stays None, "
+          "load_lora_into_registry never called]")
+    import nodes.model.lora_checkpoint_loader as loader_module
+
+    calls = []
+    real_fn = loader_module.load_lora_into_registry
+    loader_module.load_lora_into_registry = lambda *a, **kw: calls.append(1)
+
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+        loader_module.load_lora_into_registry = real_fn
+
+    check(len(calls) == 0, "load_lora_into_registry should never be called")
+    check(trainer.lora is None, trainer.lora)
+    print("    PASS")
+
+
+def check_continue_lora_sd_validation_errors_propagate():
+    print("[a real validation error from load_lora_into_registry propagates out of "
+          "construction -- not swallowed]")
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        # _RecordingWrapper's lora_registry is always [] -- load_lora_into_registry's
+        # own real validation loop simply finds nothing to check against an empty
+        # registry, so it wouldn't raise here. Proving propagation instead by
+        # patching the function to raise directly, matching how construction should
+        # behave if the real function ever does.
+        import nodes.model.lora_checkpoint_loader as loader_module
+        real_fn = loader_module.load_lora_into_registry
+
+        def raising_fn(*a, **kw):
+            raise ValueError("simulated: rank mismatch")
+        loader_module.load_lora_into_registry = raising_fn
+        try:
+            SDXL_LoraTrainer(sd, device="cpu", rank=8, continue_lora_sd={"x": torch.zeros(1)})
+            raise AssertionError("expected the ValueError to propagate")
+        except ValueError as e:
+            check("simulated" in str(e), str(e))
+        finally:
+            loader_module.load_lora_into_registry = real_fn
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+    print("    PASS")
+
+
+def check_frozen_and_continue_lora_both_apply_independently():
+    print("[frozen_lora_sd and continue_lora_sd given together -- both apply, "
+          "neither interferes with the other]")
+    import nodes.model.lora_checkpoint_loader as loader_module
+
+    calls = []
+    real_fn = loader_module.load_lora_into_registry
+    loader_module.load_lora_into_registry = lambda *a, **kw: calls.append(1)
+
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        frozen_sd = {
+            "lora_unet_out.lora_down.weight": torch.randn(2, 2, dtype=torch.bfloat16),
+            "lora_unet_out.lora_up.weight": torch.randn(2, 2, dtype=torch.bfloat16),
+            "lora_unet_out.alpha": torch.tensor([2.0]),
+        }
+        continue_sd = {"lora_unet_x.lora_down.weight": torch.randn(2, 2)}
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8,
+                                    frozen_lora_sd=frozen_sd, continue_lora_sd=continue_sd)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+        loader_module.load_lora_into_registry = real_fn
+
+    check(trainer.frozen_lora_merged_count == 1, trainer.frozen_lora_merged_count)
+    check(len(calls) == 1, "continue_lora_sd's loader should still have been called")
+    check(trainer.lora is continue_sd, trainer.lora)
+    print("    PASS")
+
+
 def main():
     check_split_checkpoint()
     check_build_text_encoder_delegates_correctly()
@@ -318,6 +446,10 @@ def main():
     check_sdxl_lora_trainer_full_construction()
     check_frozen_lora_merges_before_injection()
     check_frozen_lora_none_is_a_true_no_op()
+    check_continue_lora_sd_loads_into_the_injected_registry()
+    check_continue_lora_sd_none_is_a_true_no_op()
+    check_continue_lora_sd_validation_errors_propagate()
+    check_frozen_and_continue_lora_both_apply_independently()
     check_device_resident_offload_reload_release()
     check_wrong_base_order_fails_to_instantiate()
     print()

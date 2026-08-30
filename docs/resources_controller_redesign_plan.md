@@ -500,16 +500,37 @@ on top of the already-merged weights. `frozen_lora_sd=None` (the
 default) is a true no-op, checked directly: the wrapper receives the
 checkpoint's own unmodified weights.
 
+**Continue training -- done.** `nodes/model/lora_checkpoint_loader.py`'s
+`LoRACheckpointLoaderNode.build()` was extracted the same way
+`ComfyUNetLoRANode.build()` was in the earlier extraction patch --
+`load_lora_into_registry(registry, state_dict, source_description)`
+now holds the real validation (missing keys, rank mismatches, both
+raising with specifics rather than silently loading a partial LoRA)
+and loading (plain layers via `core.lora.load_lora_into_model`, DoRA
+layers via the existing `_load_dora_layers()`), reused by both the
+node and `LoRATrainingSkeleton.__init__`'s new `continue_lora_sd`
+parameter. A different feature from frozen-LoRA merging -- this one
+loads into `self.unet`'s own trainable adapter, after injection, so
+training continues from these weights rather than starting fresh, and
+stays trainable afterward (frozen-LoRA merging doesn't). `self.lora`
+holds `continue_lora_sd` itself when given, `None` otherwise -- a
+plain reference, matching `self.vae_sd`'s own raw-dict pattern, not
+the weights themselves (those live inside `self.unet`'s registry once
+loaded). Checked to coexist correctly with `frozen_lora_sd` given
+together -- both apply, neither interferes with the other, since they
+operate on genuinely different things (base weights vs. the trainable
+adapter). A validation error from `load_lora_into_registry` (a real
+rank mismatch, say) propagates straight out of construction rather
+than being swallowed.
+
 **Not yet built:** validators (per-input human-readable detection text,
 using the already-real `resource_inspection.inspect_checkpoint_dtypes()`
 for the base-model input; nothing yet for a LoRA input's own dtype/rank,
 a real, separately-flagged gap since Phase 2's `asset_paths.inspect()`),
 the parameter-value dictionary (dtype choices), and list-of-inputs --
 the actual `ResourcePreset`/`NodePreset`-satisfying interface pieces
-that make this usable *as a node*. Continuing to train an existing
-saved LoRA (a separate feature from frozen-LoRA merging, which is
-permanent and untrainable by design) also isn't built yet. Those, plus
-wiring this whole thing into an actual `Node` subclass, are Phase 5.
+that make this usable *as a node*. Those, plus wiring this whole thing
+into an actual `Node` subclass, are Phase 5.
 
 **A working-approach note, not a technical one, worth recording
 because it changes how the rest of this redesign should be built:**

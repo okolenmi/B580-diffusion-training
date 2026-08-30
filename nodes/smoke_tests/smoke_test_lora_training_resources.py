@@ -251,11 +251,73 @@ def check_wrong_base_order_fails_to_instantiate():
     print("    PASS: SDXL_LoraTrainer itself has no unsatisfied abstract methods")
 
 
+def check_frozen_lora_merges_before_injection():
+    print("[frozen_lora_sd merges into the unet's raw weights BEFORE injection -- "
+          "the wrapper receives already-merged weights, not the original checkpoint's]")
+    from nodes.model.lora_merge import merge_lora_into_state_dict
+
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        original_out_weight = sd["model.diffusion_model.out.weight"].clone()
+        frozen_lora_sd = {
+            "lora_unet_out.lora_down.weight": torch.randn(2, 2, dtype=torch.bfloat16),
+            "lora_unet_out.lora_up.weight": torch.randn(2, 2, dtype=torch.bfloat16),
+            "lora_unet_out.alpha": torch.tensor([2.0]),
+        }
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8,
+                                    frozen_lora_sd=frozen_lora_sd, frozen_lora_strength=1.0)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+
+    check(trainer.frozen_lora_merged_count == 1, trainer.frozen_lora_merged_count)
+    received_weight = rec.wrapper_calls[0]["unet_sd"]["model.diffusion_model.out.weight"]
+    check(not torch.equal(received_weight, original_out_weight),
+          "the wrapper should have received the merged weight, not the original")
+
+    expected_sd, _ = merge_lora_into_state_dict(
+        {"model.diffusion_model.out.weight": original_out_weight.clone()},
+        frozen_lora_sd, strength=1.0)
+    torch.testing.assert_close(received_weight, expected_sd["model.diffusion_model.out.weight"])
+
+    # No object holds the frozen LoRA afterward -- its effect is baked
+    # into the weights, nothing else about it survives construction.
+    check(not hasattr(trainer, "frozen_lora_sd"), "should not be stored as an attribute")
+    print("    PASS")
+
+
+def check_frozen_lora_none_is_a_true_no_op():
+    print("[frozen_lora_sd=None (the default) behaves exactly as before -- "
+          "the wrapper receives the checkpoint's own weights, unmerged]")
+    real_clip_encoder = clip_encode_module.SDXLClipEncoder
+    clip_encode_module.SDXLClipEncoder = _FakeClipEncoder
+    rec = _Recorder()
+    rec.install()
+    try:
+        sd = _make_sdxl_checkpoint_sd()
+        original_out_weight = sd["model.diffusion_model.out.weight"].clone()
+        trainer = SDXL_LoraTrainer(sd, device="cpu", rank=8)
+    finally:
+        rec.uninstall()
+        clip_encode_module.SDXLClipEncoder = real_clip_encoder
+
+    check(trainer.frozen_lora_merged_count == 0, trainer.frozen_lora_merged_count)
+    received_weight = rec.wrapper_calls[0]["unet_sd"]["model.diffusion_model.out.weight"]
+    torch.testing.assert_close(received_weight, original_out_weight)
+    print("    PASS")
+
+
 def main():
     check_split_checkpoint()
     check_build_text_encoder_delegates_correctly()
     check_inject_lora_delegates_to_build_lora_injected_unet()
     check_sdxl_lora_trainer_full_construction()
+    check_frozen_lora_merges_before_injection()
+    check_frozen_lora_none_is_a_true_no_op()
     check_device_resident_offload_reload_release()
     check_wrong_base_order_fails_to_instantiate()
     print()

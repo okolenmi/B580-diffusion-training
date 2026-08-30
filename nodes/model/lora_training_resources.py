@@ -7,9 +7,10 @@ SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton), base order
 required, see that class's own docstring.
 
 Construction does the real work: __init__ runs the actual pipeline
-(split checkpoint, inject LoRA, build the text encoder) and the
-resulting object already has real .unet/.clip/.vae_sd/.lora attributes
--- no separate build step.
+(merge an optional frozen LoRA into the base weights, split checkpoint,
+inject LoRA, build the text encoder) and the resulting object already
+has real .unet/.clip/.vae_sd/.lora attributes -- no separate build
+step.
 
 Three methods below are abstract because they're architecture-specific:
 an architecture class (SDXLArchitecture) has to provide them.
@@ -52,22 +53,41 @@ class LoRATrainingSkeleton(DeviceResident, ABC):
         SDXLArchitecture.inject_lora."""
 
     def __init__(self, base_model_sd: dict, *, device: str = "xpu", dtype=None,
-                 rank: int = 64, alpha: float = 1.0, **inject_kwargs):
+                 rank: int = 64, alpha: float = 1.0,
+                 frozen_lora_sd: dict | None = None, frozen_lora_strength: float = 1.0,
+                 **inject_kwargs):
         """dtype/rank/alpha/**inject_kwargs are resolved values this is
         handed, not detected here -- whatever calls this decides them.
 
-        self.lora is always None: loading an existing saved LoRA into
-        the freshly-injected model isn't implemented yet. The loading
-        mechanics already exist (lora_checkpoint_loader.py's
-        LoRACheckpointLoaderNode, DoRA-aware) and self.unet is exactly
-        the kind of freshly-injected model that loader operates on, but
-        wiring the two together hasn't been done.
+        frozen_lora_sd: a saved LoRA (lora_unet_*.lora_down.weight/
+        lora_up.weight/alpha format -- lora_merge.py) merged directly
+        into the UNet's base weights before injection. Permanent,
+        untrainable: the merged LoRA has no separate identity
+        afterward, no object holds it, only its effect on the weights
+        remains. frozen_lora_strength scales the merge -- see
+        lora_merge.merge_lora_into_state_dict() for exactly what it
+        does to the math.
+
+        self.lora is always None: loading an existing saved LoRA as a
+        separate, still-trainable adapter (continuing to train it
+        further) isn't implemented yet -- a different feature from
+        frozen_lora_sd above, which is permanent and untrainable by
+        design. The loading mechanics already exist
+        (lora_checkpoint_loader.py's LoRACheckpointLoaderNode,
+        DoRA-aware) and self.unet is exactly the kind of freshly-
+        injected model that loader operates on, but wiring the two
+        together hasn't been done.
 
         self.vae_sd stays the raw split-out state dict, not a VAE
         object -- nothing in nodes/ builds one yet (only legacy
         core.vae_decode.VAEDecoder, unused elsewhere in nodes/).
         """
         components = self.split_checkpoint(base_model_sd)
+        self.frozen_lora_merged_count = 0
+        if frozen_lora_sd is not None:
+            from .lora_merge import merge_lora_into_state_dict
+            components["unet"], self.frozen_lora_merged_count = merge_lora_into_state_dict(
+                components["unet"], frozen_lora_sd, strength=frozen_lora_strength)
         self.unet = self.inject_lora(components["unet"], device=device, dtype=dtype,
                                       rank=rank, alpha=alpha, **inject_kwargs)
         self.clip = self.build_text_encoder(components["clip"], device=device)

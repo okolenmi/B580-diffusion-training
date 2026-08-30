@@ -482,14 +482,51 @@ checks prove the real mechanics run correctly, not an actual
 cross-device tensor move -- worth a real check on real hardware before
 fully trusting the device-transition behavior specifically.
 
+**Frozen LoRA -- done.** `nodes/model/lora_merge.py`'s
+`merge_lora_into_state_dict(base_sd, lora_sd, strength)`: merges a
+saved LoRA directly into a checkpoint's raw weights before injection --
+`W_merged = W + strength * (alpha/rank) * (B @ A)`, matching
+`core.lora.LoRALinear.merge()`/`LoRAConv2d.merge()`'s own formula
+exactly (checked against them directly, not an independent
+reimplementation trusted on its own). No frozen-LoRA object exists
+after construction -- its effect is baked into the weight tensors,
+nothing else about it survives. `strength` corresponds to
+`core.lora.LoRALinear`'s own `weight` constructor argument (also a
+scaling multiplier), applied here at merge time instead of injection
+time. `LoRATrainingSkeleton.__init__` gained `frozen_lora_sd`/
+`frozen_lora_strength` parameters -- the merge runs on the UNet
+component before `inject_lora()`, so the trainable LoRA gets injected
+on top of the already-merged weights. `frozen_lora_sd=None` (the
+default) is a true no-op, checked directly: the wrapper receives the
+checkpoint's own unmodified weights.
+
 **Not yet built:** validators (per-input human-readable detection text,
 using the already-real `resource_inspection.inspect_checkpoint_dtypes()`
 for the base-model input; nothing yet for a LoRA input's own dtype/rank,
 a real, separately-flagged gap since Phase 2's `asset_paths.inspect()`),
 the parameter-value dictionary (dtype choices), and list-of-inputs --
 the actual `ResourcePreset`/`NodePreset`-satisfying interface pieces
-that make this usable *as a node*. Those, plus wiring this whole thing
-into an actual `Node` subclass, are Phase 5.
+that make this usable *as a node*. Continuing to train an existing
+saved LoRA (a separate feature from frozen-LoRA merging, which is
+permanent and untrainable by design) also isn't built yet. Those, plus
+wiring this whole thing into an actual `Node` subclass, are Phase 5.
+
+**A working-approach note, not a technical one, worth recording
+because it changes how the rest of this redesign should be built:**
+earlier framing in this document leaned toward declaring an input only
+once its full implementation was ready, to avoid a `Node` contract that
+advertises something not yet functional. That instinct is wrong for
+this project specifically -- the redesign's whole point is a complete,
+correct foundation, even where some of it goes temporarily unused, and
+retrofitting a contract after the fact costs more than building it
+right the first time. Phase 5's `NodePreset`/`ResourcePreset`
+interface should declare the full intended shape of the Resources
+Controller now, not grow it incrementally as each piece happens to be
+implemented -- and each independent unit (this merge function, the
+inspection functions, the construction classes) should be designed
+from its own inputs and outputs first, not from how it currently fits
+into what already exists; existing code changes to match a better
+design when the two conflict, not the other way around.
 
 **Dependency:** none technically (pure abstraction design, could
 proceed in parallel with Phases 1-3), but Phase 5's concrete preset

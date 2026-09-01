@@ -26,7 +26,9 @@ from safetensors.torch import save_file
 import paths
 from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
 from nodes.model.handle import ModelWeights
-from nodes.model.resource_inspection import ComponentDtype, classify_key, inspect_checkpoint_dtypes
+from nodes.model.resource_inspection import (
+    ComponentDtype, LoRAInspection, classify_key, inspect_checkpoint_dtypes, inspect_lora,
+)
 
 
 def check(condition: bool, message: str):
@@ -193,6 +195,43 @@ def check_bad_checkpoint_path_fails_clearly_at_build_time(tmpdir):
         print(f"    PASS: {e}")
 
 
+def check_inspect_lora_uniform_case(tmpdir):
+    print("[inspect_lora(): correct dtype and rank for a real, uniform saved LoRA]")
+    path = tmpdir / "test_lora.safetensors"
+    tensors = {
+        "lora_unet_input_blocks_0.lora_down.weight": torch.randn(16, 8, dtype=torch.float32),
+        "lora_unet_input_blocks_0.lora_up.weight": torch.randn(4, 16, dtype=torch.float32),
+        "lora_unet_input_blocks_0.alpha": torch.tensor([16.0]),
+        "lora_unet_out.lora_down.weight": torch.randn(16, 4, dtype=torch.float32),
+        "lora_unet_out.lora_up.weight": torch.randn(2, 16, dtype=torch.float32),
+        "lora_unet_out.alpha": torch.tensor([16.0]),
+    }
+    save_file(tensors, str(path))
+    result = inspect_lora(path)
+    check(result == LoRAInspection(dtype=torch.float32, rank=16, key_count=2), result)
+    print("    PASS")
+
+
+def check_inspect_lora_mixed_and_absent(tmpdir):
+    print("[inspect_lora(): mixed rank/dtype reported as None with a real key_count, "
+          "not silently resolved to a majority; a non-LoRA file is key_count=0]")
+    mixed_path = tmpdir / "mixed_rank.safetensors"
+    save_file({
+        "lora_unet_a.lora_down.weight": torch.randn(8, 4, dtype=torch.float32),
+        "lora_unet_a.lora_up.weight": torch.randn(2, 8, dtype=torch.float32),
+        "lora_unet_b.lora_down.weight": torch.randn(16, 4, dtype=torch.float16),
+        "lora_unet_b.lora_up.weight": torch.randn(2, 16, dtype=torch.float16),
+    }, str(mixed_path))
+    result = inspect_lora(mixed_path)
+    check(result.dtype is None and result.rank is None and result.key_count == 2, result)
+
+    not_a_lora_path = tmpdir / "not_a_lora.safetensors"
+    save_file({"model.diffusion_model.x.weight": torch.randn(2, 2)}, str(not_a_lora_path))
+    result2 = inspect_lora(not_a_lora_path)
+    check(result2 == LoRAInspection(dtype=None, rank=None, key_count=0), result2)
+    print("    PASS")
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
@@ -205,6 +244,8 @@ def main():
             check_model_weights_inspect_dtypes_matches_real_load(tmpdir)
             check_from_state_dicts_still_works_for_the_eager_case()
             check_bad_checkpoint_path_fails_clearly_at_build_time(tmpdir)
+            check_inspect_lora_uniform_case(tmpdir)
+            check_inspect_lora_mixed_and_absent(tmpdir)
         finally:
             paths.set_checkpoints_dir(None)
 

@@ -1,21 +1,27 @@
-"""Cheap, header-only inspection of a safetensors checkpoint -- dtype
-per component (unet/clip/vae), without loading any tensor data.
+"""Cheap, header-only inspection of safetensors files -- checkpoint
+dtype per component (unet/clip/vae), and saved-LoRA dtype/rank --
+without loading any tensor data.
 
 safetensors stores a JSON header (tensor name -> {dtype, shape,
-offsets}) before the actual weight bytes. safe_open()'s
-get_slice(name).get_dtype() reads only that header entry and returns a
-string ("BF16", "F32", ...), not a torch.dtype, without materializing
-any tensor data -- this is why dtype detection here is cheap even for
-a multi-GB checkpoint.
+offsets}) before the actual weight bytes. safe_open()'s get_slice(name)
+reads only that header entry -- get_dtype() returns a string ("BF16",
+"F32", ...), not a torch.dtype, get_shape() returns the tensor's shape
+-- without materializing any tensor data. This is why inspection here
+is cheap even for a multi-GB checkpoint.
 
-Key prefixes are SDXL-specific, the only architecture this project
-currently supports: UNet lives under "model.diffusion_model.", VAE
-under "first_stage_model.", and everything else is treated as CLIP.
-SDXL actually has two text encoders (conditioner.embedders.0./.1.,
-CLIP-L and OpenCLIP-G); they're deliberately not split apart here --
-core.clip_encode.SDXLClipEncoder already extracts both from this same
-"everything else" bucket internally, so downstream code only ever
-needs to deal with one "clip" component.
+Checkpoint key prefixes are SDXL-specific, the only architecture this
+project currently supports: UNet lives under "model.diffusion_model.",
+VAE under "first_stage_model.", and everything else is treated as
+CLIP. SDXL actually has two text encoders
+(conditioner.embedders.0./.1., CLIP-L and OpenCLIP-G); they're
+deliberately not split apart here -- core.clip_encode.SDXLClipEncoder
+already extracts both from this same "everything else" bucket
+internally, so downstream code only ever needs to deal with one "clip"
+component.
+
+Saved-LoRA files use lora_unet_<module>.lora_down.weight/lora_up.weight/
+alpha keys (lora_phases.py's lora_key()) -- architecture-independent,
+not SDXL-specific.
 """
 
 from __future__ import annotations
@@ -90,3 +96,40 @@ def inspect_checkpoint_dtypes(path) -> dict[str, ComponentDtype]:
         resolved_dtype = next(iter(dtypes)) if len(dtypes) == 1 else None
         result[component] = ComponentDtype(dtype=resolved_dtype, key_count=count)
     return result
+
+
+@dataclass
+class LoRAInspection:
+    dtype: torch.dtype | None  # None when key_count == 0 (not a LoRA file, or
+                                # empty) or when key_count > 0 with disagreeing
+                                # dtypes across the file's own lora_down.weight
+                                # tensors -- same absent-vs-mixed distinction as
+                                # ComponentDtype, via key_count
+    rank: int | None           # None under the same two conditions as dtype
+    key_count: int              # number of lora_down.weight keys found
+
+
+def inspect_lora(path) -> LoRAInspection:
+    """dtype and rank for a saved LoRA file, read from the header only
+    -- rank is each lora_down.weight tensor's own shape[0], which
+    safe_open()'s get_shape() reads from the header the same way
+    get_dtype() does."""
+    from safetensors import safe_open
+
+    dtypes: set = set()
+    ranks: set = set()
+    count = 0
+    with safe_open(str(path), framework="pt") as f:
+        for key in f.keys():
+            if not key.endswith(".lora_down.weight"):
+                continue
+            slice_ = f.get_slice(key)
+            dtypes.add(_SAFETENSORS_DTYPE_TO_TORCH.get(slice_.get_dtype()))
+            ranks.add(slice_.get_shape()[0])
+            count += 1
+
+    return LoRAInspection(
+        dtype=next(iter(dtypes)) if len(dtypes) == 1 else None,
+        rank=next(iter(ranks)) if len(ranks) == 1 else None,
+        key_count=count,
+    )

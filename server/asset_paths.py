@@ -104,38 +104,29 @@ def save_upload(kind: str, relative_path: str, content: bytes) -> str:
 
 
 def inspect(kind: str, relative_path: str) -> dict:
-    """Per-component (unet/clip/vae) dtype for a checkpoint, read
-    cheaply from the file's own header -- see
-    nodes/model/resource_inspection.py's own docstring for the real
-    mechanics (safetensors' header-only read, no tensor data touched)
-    and why this is cheap even for a multi-GB file. Powers the
-    Resources Controller's per-input dtype readouts
-    (docs/resources_controller_redesign_plan.md, Phase 2) without
+    """Per-component (unet/clip/vae) dtype for a checkpoint, or dtype +
+    rank for a saved LoRA, read cheaply from the file's own header --
+    see nodes/model/resource_inspection.py's own docstring for the
+    real mechanics (safetensors' header-only read, no tensor data
+    touched) and why this is cheap even for a multi-GB file. Powers
+    the Resources Controller's per-input detection readouts
+    (docs/resources_controller_redesign_plan.md, Phase 2/4) without
     loading the resource itself.
 
-    Only 'checkpoint' is supported today. A LoRA file's own meaningful
-    fields (its own dtype, its rank) are real, separate, not-yet-built
-    follow-up work -- a LoRA file's key format
-    (lora_unet_X.lora_down.weight) isn't the raw SDXL prefix format
-    checkpoint inspection is grounded in, so it needs its own
-    inspection function, not a silent expansion of this one. Same
-    reasoning as this project's own preference throughout for building
-    the one real thing before generalizing past it -- see
-    resource_inspection.py's module docstring.
-
-    Response is deliberately narrow: exactly the detected fields per
-    component, nothing else -- no raw header dump, no full key list.
-    This is what "protected" means for this endpoint specifically: what
-    comes back is a fixed, small contract, not a passthrough of
-    whatever the file's header happens to contain. Same sandboxing as
-    every other function in this module (_safe_resolve) -- this field
-    is reachable from the graph editor over the network, same posture
-    as browse()/save_upload() above.
+    Response is deliberately narrow and shaped per kind: exactly the
+    detected fields, nothing else -- no raw header dump, no full key
+    list. This is what "protected" means for this endpoint
+    specifically: what comes back is a fixed, small contract per kind,
+    not a passthrough of whatever the file's header happens to
+    contain. Same sandboxing as every other function in this module
+    (_safe_resolve) -- this field is reachable from the graph editor
+    over the network, same posture as browse()/save_upload() above.
     """
-    if kind != "checkpoint":
+    if kind not in ("checkpoint", "lora"):
         raise ValueError(
-            f"Resource inspection currently only supports kind='checkpoint', not {kind!r} -- "
-            f"LoRA/dataset inspection is real, separate, not-yet-built follow-up work."
+            f"Resource inspection currently only supports kind='checkpoint' or "
+            f"kind='lora', not {kind!r} -- dataset inspection is real, separate, "
+            f"not-yet-built follow-up work."
         )
     resolved = _safe_resolve(kind, relative_path)
     if not resolved.exists():
@@ -143,18 +134,32 @@ def inspect(kind: str, relative_path: str) -> dict:
     if not resolved.is_file():
         raise ValueError(f"Not a file: {relative_path!r}")
 
-    from nodes.model.resource_inspection import dtype_to_str, inspect_checkpoint_dtypes
+    from nodes.model.resource_inspection import dtype_to_str, inspect_checkpoint_dtypes, inspect_lora
+
+    if kind == "checkpoint":
+        try:
+            per_component = inspect_checkpoint_dtypes(resolved)
+        except Exception as e:
+            raise ValueError(
+                f"{relative_path!r} doesn't look like a valid safetensors file ({e})."
+            ) from e
+        return {
+            "kind": kind,
+            "path": relative_path,
+            "components": {
+                name: {"dtype": dtype_to_str(info.dtype), "key_count": info.key_count}
+                for name, info in per_component.items()
+            },
+        }
 
     try:
-        per_component = inspect_checkpoint_dtypes(resolved)
+        info = inspect_lora(resolved)
     except Exception as e:
         raise ValueError(f"{relative_path!r} doesn't look like a valid safetensors file ({e}).") from e
-
     return {
         "kind": kind,
         "path": relative_path,
-        "components": {
-            name: {"dtype": dtype_to_str(info.dtype), "key_count": info.key_count}
-            for name, info in per_component.items()
-        },
+        "dtype": dtype_to_str(info.dtype),
+        "rank": info.rank,
+        "key_count": info.key_count,
     }

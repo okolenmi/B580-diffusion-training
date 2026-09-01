@@ -523,14 +523,24 @@ adapter). A validation error from `load_lora_into_registry` (a real
 rank mismatch, say) propagates straight out of construction rather
 than being swallowed.
 
-**Not yet built:** validators (per-input human-readable detection text,
-using the already-real `resource_inspection.inspect_checkpoint_dtypes()`
-for the base-model input; nothing yet for a LoRA input's own dtype/rank,
-a real, separately-flagged gap since Phase 2's `asset_paths.inspect()`),
-the parameter-value dictionary (dtype choices), and list-of-inputs --
-the actual `ResourcePreset`/`NodePreset`-satisfying interface pieces
-that make this usable *as a node*. Those, plus wiring this whole thing
-into an actual `Node` subclass, are Phase 5.
+**LoRA-file inspection -- done, closing the gap flagged since Phase 2.**
+`resource_inspection.py`'s new `inspect_lora(path)`: dtype and rank for
+a saved LoRA, read from the header only (`get_shape()` alongside
+`get_dtype()`, same header-only mechanics as checkpoint inspection).
+`asset_paths.inspect()` now accepts `kind="lora"` too -- response shape
+`{kind, path, dtype, rank, key_count}`, distinct from `kind="checkpoint"`'s
+per-component shape. `kind="dataset"` is still the one real remaining
+gap. Verified the same way as checkpoint inspection: real answer
+against an explicit allowlist, response provably narrow, path
+traversal rejected, plus the absent/mixed distinction for both dtype
+and rank.
+
+**Not yet built:** validators (per-input human-readable detection text
+-- both the checkpoint and LoRA inspection functions this needs now
+exist), the parameter-value dictionary (dtype choices), and
+list-of-inputs -- the actual `ResourcePreset`/`NodePreset`-satisfying
+interface pieces that make this usable *as a node*. Those, plus wiring
+this whole thing into an actual `Node` subclass, are Phase 5.
 
 **A working-approach note, not a technical one, worth recording
 because it changes how the rest of this redesign should be built:**

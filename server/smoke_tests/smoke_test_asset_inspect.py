@@ -6,15 +6,16 @@ smoke_test_execution_registry.py), for Phase 2 of
 docs/resources_controller_redesign_plan.md.
 
 Three things checked, deliberately kept separate: (1) the real answer
-is right, checked field-by-field against an explicit allowlist -- not
-just "the response looks about right"; (2) the adversarial cases this
-endpoint has to get right *because* it's reachable from the graph
-editor over the network, not despite it -- path traversal, a
-nonexistent file, a non-checkpoint kind, a file that isn't really a
-safetensors file; (3) the response is provably narrow -- no key beyond
-the documented contract, which is what "protected" means for this
-endpoint in practice (the person's own explicit requirement: the
-server must never hand back "out of scope" information).
+is right for both supported kinds (checkpoint, lora), checked
+field-by-field against an explicit allowlist -- not just "the response
+looks about right"; (2) the adversarial cases this endpoint has to get
+right *because* it's reachable from the graph editor over the network,
+not despite it -- path traversal, a nonexistent file, an unsupported
+kind, a file that isn't really a safetensors file; (3) the response is
+provably narrow -- no key beyond the documented contract, which is
+what "protected" means for this endpoint in practice (the explicit
+requirement behind it: the server must never hand back "out of scope"
+information).
 """
 
 import sys
@@ -122,22 +123,60 @@ def check_corrupt_file_fails_clearly(tmpdir):
         print(f"    PASS: {e}")
 
 
-def check_non_checkpoint_kind_is_rejected():
-    print("[kind='lora'/'dataset' -- explicitly unsupported today, clear message, "
-          "not a silent attempt at SDXL-shaped inspection on the wrong file format]")
-    for kind in ("lora", "dataset"):
+def check_dataset_kind_is_rejected():
+    print("[kind='dataset' -- explicitly unsupported (only checkpoint/lora "
+          "inspection exist), clear message]")
+    try:
+        asset_paths.inspect("dataset", "whatever.safetensors")
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        check("checkpoint" in str(e) and "lora" in str(e), str(e))
+        print(f"    PASS: {e}")
+
+
+def check_lora_inspection_real_answer(tmpdir):
+    print("[kind='lora': the real answer -- dtype and rank, checked against an "
+          "explicit allowlist]")
+    path = tmpdir / "test.safetensors"
+    tensors = {
+        "lora_unet_input_blocks_0.lora_down.weight": torch.randn(16, 8, dtype=torch.float32),
+        "lora_unet_input_blocks_0.lora_up.weight": torch.randn(4, 16, dtype=torch.float32),
+        "lora_unet_input_blocks_0.alpha": torch.tensor([16.0]),
+    }
+    save_file(tensors, str(path))
+    result = asset_paths.inspect("lora", "test.safetensors")
+    check(result == {"kind": "lora", "path": "test.safetensors", "dtype": "float32",
+                      "rank": 16, "key_count": 1}, result)
+    print("    PASS")
+
+
+def check_lora_inspection_response_is_narrow(tmpdir):
+    print("[kind='lora' response never carries more than its documented contract]")
+    path = tmpdir / "test2.safetensors"
+    save_file({"lora_unet_x.lora_down.weight": torch.randn(4, 4)}, str(path))
+    result = asset_paths.inspect("lora", "test2.safetensors")
+    check(set(result.keys()) == {"kind", "path", "dtype", "rank", "key_count"},
+          f"unexpected keys: {set(result.keys())}")
+    print("    PASS")
+
+
+def check_lora_path_traversal_rejected(loras_dir):
+    print("[kind='lora' path traversal -- rejected the same way as kind='checkpoint']")
+    for bad in ("../escape.safetensors", "/etc/passwd", ""):
         try:
-            asset_paths.inspect(kind, "whatever.safetensors")
-            raise AssertionError(f"expected ValueError for kind={kind!r}")
+            asset_paths.inspect("lora", bad)
+            raise AssertionError(f"expected ValueError for {bad!r}")
         except ValueError as e:
-            check("checkpoint" in str(e), str(e))
-            print(f"    PASS (kind={kind!r}): {e}")
+            print(f"    PASS ({bad!r}): {e}")
 
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
+        loras_dir = tmpdir / "loras"
+        loras_dir.mkdir()
         paths.set_checkpoints_dir(tmpdir)
+        paths.set_loras_dir(loras_dir)
         try:
             check_real_answer_matches_an_explicit_allowlist(tmpdir)
             check_response_is_provably_narrow(tmpdir)
@@ -145,9 +184,13 @@ def main():
             check_nonexistent_file_fails_clearly()
             check_directory_is_rejected(tmpdir)
             check_corrupt_file_fails_clearly(tmpdir)
-            check_non_checkpoint_kind_is_rejected()
+            check_dataset_kind_is_rejected()
+            check_lora_inspection_real_answer(loras_dir)
+            check_lora_inspection_response_is_narrow(loras_dir)
+            check_lora_path_traversal_rejected(loras_dir)
         finally:
             paths.set_checkpoints_dir(None)
+            paths.set_loras_dir(None)
 
     print()
     print("=" * 60)

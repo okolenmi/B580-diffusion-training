@@ -73,6 +73,7 @@ from typing import ClassVar, Iterator, Optional
 from ..core import Port
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
+from .timestep_modes import T_MODES
 
 
 class RenoiseBatchSource(TrainingBatchSource):
@@ -166,8 +167,9 @@ class RenoiseBatchSourceNode(DataSourceNode):
         "t_high": Port(name="t_high", type=int, required=False, default=999,
                        doc="Upper bound of the resampled timestep range (inclusive)."),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
-                       doc="uniform / low / mid / high / logit -- same distributions "
-                           "core.noise_schedule.sample_timestep already implements."),
+                       choices=T_MODES,
+                       doc="Same distributions core.noise_schedule.sample_timestep "
+                           "already implements."),
         "seed": Port(name="seed", type=int, required=False, default=None,
                      doc="None = nondeterministic (fresh draws every run)."),
     }

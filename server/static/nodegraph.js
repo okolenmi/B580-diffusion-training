@@ -45,7 +45,7 @@
   }
 
   /* One spawned node instance on the canvas. Port *declarations* (name,
-     type, required, default, doc, path_kind) live on classInfo -- this only
+     type, required, default, doc, path_kind, choices) live on classInfo -- this only
      holds per-instance state: position, and widget values for unconnected
      primitive inputs. */
   class GraphNode {
@@ -757,6 +757,10 @@
         wrapper.appendChild(this.buildPickerWidget(node, port));
         return wrapper;
       }
+      if (port.choices) {
+        wrapper.appendChild(this.buildChoicesWidget(node, port));
+        return wrapper;
+      }
 
       const row = document.createElement("div");
       row.className = "ng-widget-row";
@@ -794,6 +798,38 @@
       }
       wrapper.appendChild(row);
       return wrapper;
+    }
+
+    buildChoicesWidget(node, port) {
+      // Closed-set string port (Port.choices) -- a plain dropdown, no
+      // asset cache/upload involved, unlike buildPickerWidget below.
+      const row = document.createElement("div");
+      row.className = "ng-widget-row";
+      const select = document.createElement("select");
+      if (port.doc) select.title = port.doc;
+      const current = node.paramValues[port.name];
+      if (current === undefined || current === null) {
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = port.required ? "required" : "default: " + (port.default || "\u2014");
+        placeholder.disabled = port.required;
+        select.appendChild(placeholder);
+      }
+      for (const choice of port.choices) {
+        const opt = document.createElement("option");
+        opt.value = choice;
+        opt.textContent = choice;
+        select.appendChild(opt);
+      }
+      select.value = current === undefined || current === null ? "" : current;
+      select.addEventListener("change", (e) => {
+        node.paramValues[port.name] = e.target.value || undefined;
+        this.updatePortDotState(node.id, port.name);
+        this.updateRunButton();
+        this.persist();
+      });
+      row.appendChild(select);
+      return row;
     }
 
     buildPickerWidget(node, port) {

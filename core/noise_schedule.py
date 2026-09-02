@@ -49,9 +49,17 @@ def get_alpha_sigma(t):
     return a, s
 
 
+# Single source of truth for sample_timestep()'s valid `mode` values --
+# shared with nodes/dataset/renoise.py and nodes/dataset/managed.py's own
+# `t_mode` Ports (Port.choices), so the two node doc strings and this
+# function can't drift the same way nodes/optimizer/strategy_registry.py's
+# own docstring explains STRATEGIES was built to prevent for `strategy`.
+T_MODES = ("uniform", "low", "mid", "high", "logit")
+
+
 def sample_timestep(rng, mode: str, t_low: int, t_high: int) -> int:
     """
-    Sample a timestep in [t_low, t_high] according to mode:
+    Sample a timestep in [t_low, t_high] according to mode (T_MODES above):
       uniform -- equal probability across the range (default)
       low     -- Beta(1, 3): biased toward low t (fine details, late denoising)
       mid     -- Beta(2, 2): biased toward middle t

@@ -35,6 +35,11 @@ class PortInfo:
                              # (a real OptimizerHandle subclass) connecting into an OptimizerHandle input.
     doc: str = ""            # Port.doc, the tooltip text -- empty for legacy-guessed ports (no such field to read)
     path_kind: str | None = None  # Port.path_kind -- tells the UI to render a file/folder picker
+    choices: list[str] | None = None  # Port.choices -- tells the UI to render a dropdown
+    # instead of freeform text; None for a legacy-guessed port (no Port object to read) or
+    # any real Port that didn't declare one. list, not Port's own tuple: this dataclass's
+    # fields are JSON-serialized (node_info_to_dict() below), and type_mro already sets the
+    # precedent of "list" for this same kind of value here.
 
 
 @dataclass
@@ -235,6 +240,7 @@ def _port_info(p, *, is_output: bool = False) -> PortInfo:
         type_mro=_type_mro(p.type),
         doc=p.doc,
         path_kind=(p.path_kind if not is_output else None),
+        choices=(list(p.choices) if p.choices is not None and not is_output else None),
     )
 
 
@@ -316,7 +322,7 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         return [
             {"name": p.name, "type": p.type_str, "default": p.default,
              "required": p.required, "type_mro": p.type_mro,
-             "doc": p.doc, "path_kind": p.path_kind}
+             "doc": p.doc, "path_kind": p.path_kind, "choices": p.choices}
             for p in ports
         ]
     return {

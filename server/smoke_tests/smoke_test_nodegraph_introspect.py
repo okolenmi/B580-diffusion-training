@@ -138,6 +138,25 @@ def check_every_real_registered_node_gets_a_sane_display_name():
     print(f"    PASS ({len(registry)} registered nodes checked)")
 
 
+def check_port_choices_propagate_and_stay_none_elsewhere():
+    print("[introspect_node_class()/node_info_to_dict() carry Port.choices through "
+          "as a JSON-friendly list, and stay None on a Port that never declared one]")
+    from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
+    d = node_info_to_dict(introspect_node_class(ComposedAdamWOptimizerNode))
+    by_name = {p["name"]: p for p in d["inputs"]}
+    check(isinstance(by_name["strategy"]["choices"], list),
+          f"choices should serialize as a list, got {type(by_name['strategy']['choices'])}")
+    check(set(by_name["strategy"]["choices"]) ==
+          {"simple", "chunked", "foreach", "shape_grouped", "shape_grouped_foreach"},
+          f"unexpected strategy choices: {by_name['strategy']['choices']!r}")
+    check(by_name["device"]["choices"] is None,
+          "device is deliberately open-ended (torch.device-parseable, e.g. 'xpu:0') "
+          "-- should introspect with choices=None, not an invented closed list")
+    check(by_name["betas"]["choices"] is None,
+          "a Port that never set choices= should introspect with choices=None")
+    print("    PASS")
+
+
 def main():
     check_auto_display_name_matches_expected_examples()
     check_display_name_override_wins_over_auto_derivation()
@@ -145,6 +164,7 @@ def main():
     check_legacy_class_without_display_name_attr_does_not_crash()
     check_node_info_to_dict_includes_display_name()
     check_every_real_registered_node_gets_a_sane_display_name()
+    check_port_choices_propagate_and_stay_none_elsewhere()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

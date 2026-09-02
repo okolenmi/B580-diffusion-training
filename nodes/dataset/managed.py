@@ -14,6 +14,7 @@ from ..core import Port
 from ..components.layout import ProjectLayout
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
+from .timestep_modes import T_MODES
 
 
 class ManagedDatasetBatchSource(TrainingBatchSource):
@@ -49,7 +50,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                           "run_lora_ingestion_task) -- every other format has its own t baked in."),
         "t_high": Port(name="t_high", type=int, required=False, default=999),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
-                       doc="uniform / low / mid / high / logit."),
+                       choices=T_MODES,
+                       doc="Same distributions core.noise_schedule.sample_timestep implements."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",

@@ -33,6 +33,40 @@ class Port:
     # editor this string/Path input should be a picker against a server-configured
     # directory (see server/asset_paths.py) instead of freeform text. None = ordinary
     # widget. Purely a UI hint; build() never reads this.
+    choices: tuple[str, ...] | None = None
+    # Closed set of valid values for a str Port -- e.g. an optimizer's
+    # "strategy" or a dataset's "t_mode" -- rendered as a dropdown by the
+    # graph editor instead of freeform text, and checked by
+    # Node.validate_inputs() below instead of only ever surfacing as a
+    # runtime ValueError from whatever build() happens to do with a typo'd
+    # string. None (the default) means genuinely open-ended -- e.g.
+    # "device", which accepts torch.device-parseable strings including
+    # indexed variants ("xpu:0") that no closed list could enumerate; not
+    # every str Port belongs here. See docs/training_pipeline_design.md
+    # section 11.4 and docs/resources_controller_redesign_plan.md's
+    # Consolidation section for why this is generic rather than
+    # Resources-Controller-specific. A tuple, not a list, matching this
+    # (frozen, hashable) dataclass's other fields.
+
+    def __post_init__(self):
+        if self.choices is None:
+            return
+        if self.type is not str:
+            raise TypeError(
+                f"Port {self.name!r}: choices is only meaningful on a str-typed "
+                f"Port, got type={self.type!r}."
+            )
+        if not isinstance(self.choices, tuple) or not self.choices:
+            raise TypeError(
+                f"Port {self.name!r}: choices must be a non-empty tuple, got {self.choices!r}."
+            )
+        if not all(isinstance(c, str) for c in self.choices):
+            raise TypeError(f"Port {self.name!r}: every choices entry must be a str.")
+        if self.default is not None and self.default not in self.choices:
+            raise ValueError(
+                f"Port {self.name!r}: default={self.default!r} is not one of "
+                f"choices={self.choices!r}."
+            )
 
 
 @dataclass(frozen=True)
@@ -238,6 +272,19 @@ class Node(ABC):
                 raise ValueError(
                     f"{type(self).__name__}.build() missing required input "
                     f"'{name}' ({port.type.__name__ if hasattr(port.type, '__name__') else port.type})"
+                )
+            # An explicit value outside a declared choices set fails here,
+            # at the same validate_inputs() call sites already trusted to
+            # catch a missing required input -- server-side, "don't trust
+            # the client" (graph_executor.py takes the same posture at
+            # /run time regardless of what the editor's dropdown already
+            # restricted). None is never checked against choices: it's
+            # "not provided"/"use the default", not a candidate value.
+            if port.choices is not None and inputs.get(name) is not None \
+                    and inputs[name] not in port.choices:
+                raise ValueError(
+                    f"{type(self).__name__}.build(): '{name}'={inputs[name]!r} is not "
+                    f"one of {port.choices}."
                 )
 
     def validate_outputs(self, outputs: dict) -> None:

@@ -1705,6 +1705,16 @@ speculatively now.
 
 ### 11.4 Port UX: string fields for closed-choice values
 
+**Implemented**, as part of `docs/resources_controller_redesign_plan.md`'s
+Consolidation section, exactly as this section's own "Update" below
+anticipated -- `Port.choices` (`nodes/core.py`), not per-node. See that
+plan for what shipped, what it's wired into today (`strategy` on the
+`Composed*OptimizerNode` classes, `t_mode` on the two real dataset
+nodes), and why `device` deliberately stays open-ended rather than
+getting a closed list. The original planning text below is kept as the
+rationale for *why*, per this document's own top-of-file rule for
+implemented sections.
+
 A real, valid complaint from this session, not specific to optimizers:
 `strategy`, `device`, and similar `Port`s are typed as bare `str`, with
 the valid choices only discoverable by reading a doc string, guessing,

@@ -29,7 +29,7 @@ from .algorithms.adafactor import AdafactorAlgorithm
 from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
-from .strategy_registry import STRATEGY_DOC, resolve_strategy
+from .strategy_registry import STRATEGIES, STRATEGY_DOC, resolve_strategy
 
 
 class ComposedAdafactorOptimizerNode(OptimizerNode):
@@ -58,7 +58,7 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                                   "conservatively instead."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "strategy": Port(name="strategy", type=str, required=False, default="simple",
-                          doc=STRATEGY_DOC),
+                          choices=tuple(STRATEGIES), doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,
             doc="None = UniformGroups (every parameter at the base lr). "

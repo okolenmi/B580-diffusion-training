@@ -6,7 +6,10 @@ construction mechanics done, a consolidation pass done connecting this
 to `docs/training_pipeline_design.md`'s remaining open items --
 including `Port.choices` (11.4), now built and landed as part of that
 consolidation, with real frontend code (`server/static/nodegraph.js`)
-beyond Phases 1-2's backend-only scope.**
+beyond Phases 1-2's backend-only scope. Phase 5's backend now real too
+(`ResourcesControllerNode` + `ResourcePreset`/`LoRASDXLPreset`,
+registered and introspecting correctly) -- its live editor UX
+deliberately deferred, see that phase's own status.**
 This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
@@ -573,7 +576,116 @@ per-resource dtype detection/override with validity indicators, using
 Phases 1-4. One concrete preset at first -- LoRA training on SDXL --
 matching "only one available for start" from the original description.
 
-**Dependency:** Phases 1-4.
+**Status: backend done; the live editor UX (validity indicators as you
+attach a file) deliberately deferred, not built here.**
+`nodes/model/resources_controller.py` (new): `ResourcePreset`, an ABC
+matching this document's own settled interface contract table above --
+three of that table's four rows turned out to need no new machinery at
+all once `Port.choices` actually existed (this same redesign's
+Consolidation section, landed immediately before this phase): "list of
+inputs" is `Port` itself, "parameter-value dictionary" is `Port.choices`
+directly (node-facing multi-choice *is* `.choices`, processor-facing
+single-choice *is* `build()`'s own already-validated `inputs[name]`),
+"processor method" is `Node.build()`'s real logic one level down
+(`ResourcePreset.process()`, so more than one preset can share one Node
+class). Only "validators" (`dict[str, Callable[[Any], list[str]]]`,
+per-input diagnostic text -- distinct from `Port.choices`' binary
+valid/invalid, for things no closed list can check: does this file
+actually look like SDXL, what dtype does it already have) was
+genuinely new. `ResourcePreset.__init_subclass__` mirrors `Node`'s own
+fail-at-definition-time posture (`name`/`inputs`/`outputs` must be
+real, `outputs` non-empty), same reasoning applied to a structurally
+analogous new class rather than left unenforced because it's new.
+
+`LoRASDXLPreset`: the one concrete preset, wrapping `SDXL_LoraTrainer`
+(Phase 4, unmodified, not reimplemented) rather than every knob it
+accepts -- `scaling_policy`/`resource_policy`/`adapter_strategy`/
+`target_modules` all stay at real defaults, matching a preset's whole
+point (sensible defaults, not exposing everything; the manual path
+stays available for anyone who needs those, unaffected). Two real dtype
+axes, both wired all the way through to code that actually consumes
+them: `unet_dtype` (compute, `choices=("bfloat16","float16","float32")`)
+and `unet_weight_store` (frozen-weight storage,
+`choices=("bf16","nf4")`, section 11.3 item 1) -- **CLIP and VAE dtype
+are diagnostics-only, deliberately not override `Port`s**: checked
+directly against `SDXLArchitecture.build_text_encoder()`'s own
+docstring (`SDXLClipEncoder` hardcodes its dtype, no parameter exists)
+and against `nodes/` as a whole (nothing converts `vae_sd`'s dtype
+anywhere) -- an override with nothing downstream to honor it would be a
+dishonest no-op, not a real knob. `state_dtype` (section 11.3 item 2)
+is absent too, matching this same document's own Consolidation section:
+"concretely unresolved," not implemented in isolation before that's
+settled. `resource_inspection.py` gained `str_to_dtype()`, the precise
+inverse of its own `dtype_to_str()` (`getattr(torch, s)`, not a second
+hand-maintained mapping) for turning a chosen `unet_dtype` string back
+into a real `torch.dtype`.
+
+`ResourcesControllerNode(Node)`: `NODE_KIND = "dynamic"`, a real
+`preset` `Port` (`choices=tuple(_PRESETS)`) satisfying "preset
+selector" from this phase's own goal line -- genuinely a dropdown, even
+with only one valid value today, via the same `Port.choices` mechanism
+above, not bespoke UI. `INPUTS`/`OUTPUTS` are today's one preset's own
+shape directly (`NODE_KIND`'s own docstring: "a dynamic node's *common*
+ports, present no matter which preset is chosen" -- with exactly one
+preset, its shape simply *is* the common shape); a second preset with a
+genuinely different shape needs real reconciliation here, honestly
+flagged in that class's own docstring rather than pretended-solved,
+deferred until a second preset actually exists. `list_presets()`
+delegates to each registered preset's own `node_preset()`, satisfying
+Phase 3's already-built, already-tested suggestion-menu machinery with
+zero changes needed there. `diagnostics(inputs)` exposes each attached
+resource's validator output (`{"checkpoint_path": ["UNET dtype: bf16
+(1234 tensors)", ...]}`) -- real and callable today, directly or by a
+future endpoint, but **not yet wired to anything the editor calls
+live** -- see "Not built" below. Registered in
+`server/nodegraph_registry.py`; auto-derives the display name "Resources
+Controller" for free, matching the sketch's own name exactly.
+
+**Not built, deliberately deferred rather than silently missing:** a
+live query endpoint (mirroring Phase 2's own existing
+`/nodegraph/assets/{kind}/inspect`) for the editor to call
+`diagnostics()` as the user attaches a checkpoint/LoRA, and the
+`nodegraph.js` wiring to display its result inline under that Port's
+widget -- the sketch's actual "validity indicators" UX. Sequenced this
+way deliberately, same as every phase before this one: backend proven
+before the frontend built on top of it, not the other way around.
+
+**Verified, without the smoke-test suite this time** (that files list
+its own budget, a huge amount of real code checked by direct read and
+targeted manual runs before this document gets updated with a plan for
+a real, deferred, consolidated test-writing/running pass, rather than a
+smoke-test file re-run after every small change): the whole module
+class-defines and imports cleanly (`ResourcePreset.__init_subclass__`'s
+and `Node.__init_subclass__`'s own definition-time checks both pass for
+real, not synthetic, classes); `ResourcesControllerNode`'s real
+`INPUTS`/`OUTPUTS`/`list_presets()` introspect correctly end to end
+through `node_info_to_dict()` (`node_kind`, `presets`, `path_kind`,
+`choices` all present and correct for this genuinely more complex real
+case, not just Phase 3's synthetic test fixture); `diagnostics()`
+against a real, synthetic-but-genuine safetensors checkpoint (real SDXL-
+shaped keys, real per-component dtypes, `save_file`/`load_file`, a temp
+`paths.set_checkpoints_dir()`) reports the right per-component dtype
+lines; the same against a checkpoint with no UNet-prefixed keys at all
+correctly reports an `"ERROR: ..."` diagnostic line rather than
+crashing; a saved-LoRA file's `diagnostics()` reports the right
+dtype/rank line; the `frozen_lora_strength`-without-`frozen_lora_path`
+guard correctly raises from `process()`; a path-traversal attempt is
+rejected by both `diagnostics()` (as an `"ERROR: ..."` line, not
+crashing the whole call) and `process()` (raised, not swallowed --
+`build()`'s real path needs the loud failure, `diagnostics()`'s display
+path doesn't). **Not exercised**: `process()`/`build()`'s actual
+`SDXL_LoraTrainer(...)` construction past the checkpoint-loading step --
+needs ComfyUI's real SDXL UNet class, not installed in this sandbox,
+same limitation already noted for Phase 4's own extraction work
+(`smoke_test_lora_injector_extraction.py`). A real smoke test file for
+this module (`nodes/smoke_tests/smoke_test_resources_controller.py`,
+following this project's established fixture-mocking pattern for
+exactly this ComfyUI-shaped gap) is real, queued follow-up, not written
+in this same pass -- deliberately, per this session's own working
+approach: write the real code first, verify it in one deferred,
+consolidated pass rather than after each small piece.
+
+**Dependency:** Phases 1-4 (done).
 
 ### Phase 6 -- Downstream integration (`TrainerNode` and friends)
 

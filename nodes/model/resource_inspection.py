@@ -66,6 +66,20 @@ def dtype_to_str(dtype: torch.dtype | None) -> str | None:
     return str(dtype).removeprefix("torch.")
 
 
+def str_to_dtype(s: str) -> torch.dtype:
+    """Inverse of dtype_to_str() above -- "bfloat16" -> torch.bfloat16.
+    getattr(torch, s), not a second hand-maintained name->dtype mapping:
+    dtype_to_str() is exactly str(dtype).removeprefix("torch."), so this
+    is its precise inverse for any name torch actually exposes, nothing
+    to keep in sync by hand. Raises AttributeError (torch's own, not a
+    custom one) for a name torch doesn't have -- a Port using this as
+    its choices= source (docs/resources_controller_redesign_plan.md
+    Phase 5) already restricts input to real names before this is ever
+    called, so that path never reaches here; a direct caller bypassing
+    that gets torch's own clear error instead of a silently wrong dtype."""
+    return getattr(torch, s)
+
+
 @dataclass
 class ComponentDtype:
     dtype: torch.dtype | None  # None when key_count == 0 (component absent) or

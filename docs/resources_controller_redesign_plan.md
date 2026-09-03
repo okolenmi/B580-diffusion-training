@@ -576,7 +576,10 @@ per-resource dtype detection/override with validity indicators, using
 Phases 1-4. One concrete preset at first -- LoRA training on SDXL --
 matching "only one available for start" from the original description.
 
-**Status: backend done; the live editor UX (validity indicators as you
+**Status: backend done, corrected once against the actual hand-drawn
+sketch (not just this document's own prose description of it, which
+had drifted from it in two real ways -- see below); the live editor UX
+(validity indicators as you
 attach a file) deliberately deferred, not built here.**
 `nodes/model/resources_controller.py` (new): `ResourcePreset`, an ABC
 matching this document's own settled interface contract table above --
@@ -634,12 +637,53 @@ deferred until a second preset actually exists. `list_presets()`
 delegates to each registered preset's own `node_preset()`, satisfying
 Phase 3's already-built, already-tested suggestion-menu machinery with
 zero changes needed there. `diagnostics(inputs)` exposes each attached
-resource's validator output (`{"checkpoint_path": ["UNET dtype: bf16
+resource's validator output (`{"base_model": ["UNET dtype: bf16
 (1234 tensors)", ...]}`) -- real and callable today, directly or by a
 future endpoint, but **not yet wired to anything the editor calls
 live** -- see "Not built" below. Registered in
 `server/nodegraph_registry.py`; auto-derives the display name "Resources
 Controller" for free, matching the sketch's own name exactly.
+
+**Corrected against the actual sketch (a hand-drawn image, provided
+after the first pass above was already written from this document's own
+prose description of it -- two real drifts, not style preferences):**
+(1) "Base model" is a wired socket in the sketch (a circle with a wire
+drawn into it from off-canvas), not a path field owned by this node --
+the first pass had `checkpoint_path` as a `path_kind="checkpoint"`
+widget, resolving and loading the file itself, duplicating exactly what
+`SafetensorsCheckpointNode` already does. Now `base_model:
+Port(type=ModelWeights)`, a real wired input; `_checkpoint_validator`
+is now `weights.inspect_dtypes()` (Phase 1, already real) instead of a
+second path-resolving implementation of the same header read -- this
+also means live checkpoint-dtype inspection as a path is typed belongs
+to `SafetensorsCheckpointNode`'s own `path_kind="checkpoint"` Port
+generically, not to this node specifically, once that frontend piece
+gets built. (2) The sketch draws "Continue training" and "Frozen LoRA"
+as checkboxes; the first pass inferred "enabled" from whether the
+corresponding path was non-`None`, exactly the kind of implicit state a
+checkbox exists to make explicit. Now real `continue_training`/
+`frozen_lora` `bool` Ports gate `continue_lora_path`/
+`frozen_lora_path`(+`frozen_lora_strength`) in `process()`, checked
+both directions (checked-without-a-path, and a-path-without-being-
+checked both raise a clear error) rather than one direction inferred
+from a float comparison as before.
+
+Also found while reading the sketch closely: its own bottom summary
+table names a fourth axis, "LoRA (training)" dtype -- the trainable
+adapter's own parameter dtype, distinct from unet_dtype/
+unet_weight_store above. Checked directly against `core/lora.py`:
+`LoRALinear`/`LoRAConv2d` hardcode `param_dtype = torch.float32` for
+`lora_A`/`lora_B` regardless of the frozen base's own dtype, with a
+detailed, load-bearing numerical justification in that file's own
+comment (bf16's mantissa silently rounds away realistic Adafactor
+updates at LoRA-adapter magnitudes -- that comment verifies "bit-for-
+bit unchanged after 2000 steps" at a realistic lr; "every mainstream
+LoRA implementation" keeps this in fp32 for exactly that reason).
+Correctly absent from `LoRASDXLPreset.inputs` -- an override Port here
+wouldn't be a mere no-op like CLIP/VAE dtype above, it would be a real,
+easy-to-reach footgun, so the sketch's own `<fp32>` row for this one is
+better read as "detected/fixed," not "editable," once its own drawn
+arrows are checked against what the code underneath actually allows.
 
 **Not built, deliberately deferred rather than silently missing:** a
 live query endpoint (mirroring Phase 2's own existing
@@ -684,6 +728,17 @@ exactly this ComfyUI-shaped gap) is real, queued follow-up, not written
 in this same pass -- deliberately, per this session's own working
 approach: write the real code first, verify it in one deferred,
 consolidated pass rather than after each small piece.
+
+Re-verified after the sketch-driven correction above, same manual-not-
+suite approach: `diagnostics()` against a real wired `ModelWeights`
+(not a path) reports the same correct per-component dtype lines;
+`continue_training`/`frozen_lora` each raise `process()`'s new
+both-directions guard correctly (checked-without-a-path, and a-path-
+given-while-unchecked); clearing every one of this session's own new
+guards and reaching real `SDXL_LoraTrainer(...)` construction correctly
+hits the same known `ModuleNotFoundError: comfy` boundary as before,
+confirming the guards run in the intended order and none of them
+silently swallow a real failure.
 
 **Dependency:** Phases 1-4 (done).
 

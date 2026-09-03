@@ -53,6 +53,23 @@ sketch description. A second (a different architecture, or a different
 task like distillation) is a second ResourcePreset instance registered
 alongside it in _PRESETS below, not a rewrite of any of this.
 
+Revised once against the actual hand-drawn sketch (not just this
+document's prose description of it), two real corrections from the
+first pass: `base_model` is a wired `ModelWeights` socket
+(`SafetensorsCheckpointNode`'s own output), the same "o" input the
+sketch draws with a wire running into it -- not a `path_kind`
+picker widget owned by this node. That node already resolves and
+sandboxes the checkpoint path; re-resolving it a second time here would
+have been exactly the kind of duplication this redesign's Consolidation
+section exists to flag, and it means checkpoint dtype detection below
+is just `ModelWeights.inspect_dtypes()` (Phase 1, already real) instead
+of a second implementation of the same header read. And
+`continue_training`/`frozen_lora` are real `bool` checkbox Ports gating
+their own path (and, for frozen, strength) inputs, matching the
+sketch's two checkboxes -- not inferred from whether a path happens to
+be None, which is what the first pass did and is exactly the kind of
+implicit, easy-to-misread state a checkbox exists to avoid.
+
 Not built here, honestly deferred rather than silently missing: a live
 query path (mirroring Phase 2's own existing
 `/nodegraph/assets/{kind}/inspect`) for the editor to call
@@ -61,7 +78,15 @@ and the frontend display for it -- the sketch's actual "validity
 indicators" UX. diagnostics() itself is real and callable today
 (directly, or by a future such endpoint); what's missing is only the
 route and the nodegraph.js wiring, matching how every phase before this
-one sequenced backend-before-frontend.
+one sequenced backend-before-frontend. Note that with base_model now a
+wired socket rather than a path Port on this node, live checkpoint-dtype
+inspection as the user types a path is really a generic
+path_kind="checkpoint" editor feature belonging to
+SafetensorsCheckpointNode, not something specific to this node --
+diagnostics()'s own base_model entry only has something to report once
+a real ModelWeights exists, i.e. once the graph has actually resolved
+that far. The continue_lora_path/frozen_lora_path entries stay
+path-string-based and don't have that limitation.
 """
 
 from __future__ import annotations
@@ -72,8 +97,9 @@ from typing import Any, Callable, ClassVar
 
 from ..core import Node, NodePreset, Port
 from ..components.layout import ProjectLayout
+from .handle import ModelWeights
 from .lora_training_resources import LoRATrainingSkeleton, SDXL_LoraTrainer
-from .resource_inspection import dtype_to_str, inspect_checkpoint_dtypes, inspect_lora, str_to_dtype
+from .resource_inspection import dtype_to_str, inspect_lora, str_to_dtype
 
 
 class ResourcePreset(ABC):
@@ -151,23 +177,24 @@ class ResourcePreset(ABC):
         keys."""
 
 
-def _checkpoint_validator(relative_path: str) -> list[str]:
+def _checkpoint_validator(weights: ModelWeights) -> list[str]:
     """UNET/CLIP/VAE dtype, one line each, matching the sketch's own
-    "UNET dtype: bf16" row shape. Resolves the same sandboxed way
-    process() below does (ProjectLayout.resolve_safe_model_path,
-    "checkpoint") -- this is reachable from the graph editor over the
-    network the same as any path_kind Port, "don't trust the client"
-    applies here too, not just inside build(). Raises (not just a
-    diagnostic line -- see ResourcePreset.diagnostics() for how a
-    caller there turns this into one) when this doesn't look like an
-    SDXL checkpoint at all: unet component entirely absent."""
-    layout = ProjectLayout.from_paths_module()
-    resolved = layout.resolve_safe_model_path(relative_path, "checkpoint")
-    dtypes = inspect_checkpoint_dtypes(resolved)
+    "UNET dtype: bf16" row shape -- weights.inspect_dtypes() (Phase 1,
+    header-only, doesn't trigger the lazy full load) rather than a
+    second, path-resolving implementation of the same check: base_model
+    is a wired ModelWeights socket (SafetensorsCheckpointNode's own
+    output) here, not a path Port -- that node already owns resolving
+    and sandboxing the path; doing it again here would be exactly the
+    kind of duplication this redesign's Consolidation section exists to
+    flag. Raises (not just a diagnostic line -- see
+    ResourcePreset.diagnostics() for how a caller there turns this into
+    one) when this doesn't look like an SDXL checkpoint at all: unet
+    component entirely absent."""
+    dtypes = weights.inspect_dtypes()
     if dtypes["unet"].key_count == 0:
         raise ValueError(
-            f"{resolved}: no keys classified as UNet (expected a "
-            f"'model.diffusion_model.' prefix) -- doesn't look like an SDXL checkpoint."
+            "no keys classified as UNet (expected a 'model.diffusion_model.' "
+            "prefix) -- doesn't look like an SDXL checkpoint."
         )
     lines = []
     for component in ("unet", "clip", "vae"):
@@ -213,15 +240,14 @@ class LoRASDXLPreset(ResourcePreset):
     this -- same "advanced path stays available" story this redesign's
     own Consolidation section already settled for that node.
 
-    project_layout stays internal (ProjectLayout.from_paths_module()),
-    not an exposed override Port here: every real path input's own
-    validator needs the exact same resolution process() itself uses,
-    and threading a per-call override through the settled
-    single-argument validate(value) signature isn't a natural fit --
-    worth revisiting if a real need for it shows up specifically here,
-    not speculatively now (SafetensorsCheckpointNode's own
-    project_layout Port exists mainly for deterministic testing, not
-    because end users routinely override it).
+    base_model is a wired ModelWeights socket (SafetensorsCheckpointNode's
+    own output), not a path Port this node resolves itself -- see this
+    module's own docstring for why. project_layout still stays internal
+    (ProjectLayout.from_paths_module()) for the two LoRA paths that are
+    still path Ports here, for the same reason as before: every real
+    path input's own validator needs the exact same resolution process()
+    itself uses, and threading a per-call override through the settled
+    single-argument validate(value) signature isn't a natural fit.
 
     Two dtype axes exposed, both wired all the way through to real code
     today (Phase 4's inject_lora()/build_lora_injected_unet()):
@@ -236,15 +262,33 @@ class LoRASDXLPreset(ResourcePreset):
     11.3 item 2, optimizer momentum) is deliberately absent too --
     Consolidation section: "concretely unresolved," flagged for a real
     decision later, not implemented in isolation before that's settled.
+
+    A fourth axis the original sketch's own bottom summary table also
+    named -- "LoRA (training)" dtype, i.e. the trainable adapter's own
+    parameter dtype, distinct from all of the above -- is real today but
+    checked directly against core/lora.py and found NOT to be a knob at
+    all: LoRALinear/LoRAConv2d hardcode `param_dtype = torch.float32`
+    for lora_A/lora_B regardless of the frozen base's own dtype, with a
+    detailed, load-bearing numerical justification in that file's own
+    comment (bf16's ~7-8 bit mantissa silently rounds away small
+    Adafactor updates at realistic LoRA-adapter magnitudes -- verified
+    there down to "bit-for-bit unchanged after 2000 steps" at a
+    realistic lr -- "every mainstream LoRA implementation" keeps this in
+    fp32 for exactly that reason). Exposing this as an override Port
+    would be worse than a no-op: a real, easy-to-reach footgun. It's
+    correctly absent from inputs/validators/choices below, not an
+    oversight.
     """
 
     name = "lora_sdxl"
 
     inputs: ClassVar[dict[str, Port]] = {
-        "checkpoint_path": Port(
-            name="checkpoint_path", type=str, required=True, path_kind="checkpoint",
-            doc="Base SDXL checkpoint to train from. Relative to the configured "
-                "checkpoints directory -- absolute paths and '..' are rejected.",
+        "base_model": Port(
+            name="base_model", type=ModelWeights, required=True,
+            doc="A loaded SDXL checkpoint (lazy -- Phase 1), wired from "
+                "SafetensorsCheckpointNode. This node doesn't resolve or load a "
+                "checkpoint path itself -- that node already does, reusing its "
+                "output here instead of a second implementation.",
         ),
         "device": Port(name="device", type=str, required=False, default="xpu"),
         "unet_dtype": Port(
@@ -262,23 +306,33 @@ class LoRASDXLPreset(ResourcePreset):
         ),
         "rank": Port(name="rank", type=int, required=False, default=64),
         "alpha": Port(name="alpha", type=float, required=False, default=1.0),
-        "frozen_lora_path": Port(
-            name="frozen_lora_path", type=str, required=False, default=None, path_kind="lora",
-            doc="Optional saved LoRA merged directly into the base weights before "
-                "injection -- permanent, untrainable afterward. None = no frozen LoRA "
-                "(the common case).",
-        ),
-        "frozen_lora_strength": Port(
-            name="frozen_lora_strength", type=float, required=False, default=1.0,
-            doc="Only meaningful with frozen_lora_path set -- process() below flags the "
-                "likely-mistake case of one given without the other.",
+        "continue_training": Port(
+            name="continue_training", type=bool, required=False, default=False,
+            doc="Load an existing saved LoRA into the freshly-injected trainable "
+                "adapter and continue training from it, instead of starting fresh. "
+                "Gates continue_lora_path below -- checked, that path is required; "
+                "unchecked, it's ignored (and must be empty).",
         ),
         "continue_lora_path": Port(
             name="continue_lora_path", type=str, required=False, default=None, path_kind="lora",
-            doc="Optional saved LoRA loaded into the freshly-injected trainable adapter, "
-                "continuing training from these weights rather than starting fresh. "
-                "None = fresh start (the common case). Different from frozen_lora_path -- "
-                "see LoRATrainingSkeleton.__init__'s own docstring for the distinction.",
+            doc="Only used when continue_training is checked. Different from "
+                "frozen_lora_path below -- see LoRATrainingSkeleton.__init__'s own "
+                "docstring for the distinction (this one stays trainable).",
+        ),
+        "frozen_lora": Port(
+            name="frozen_lora", type=bool, required=False, default=False,
+            doc="Merge an existing saved LoRA directly into the base weights before "
+                "injection -- permanent, untrainable afterward. Gates "
+                "frozen_lora_path/frozen_lora_strength below the same way "
+                "continue_training gates continue_lora_path.",
+        ),
+        "frozen_lora_path": Port(
+            name="frozen_lora_path", type=str, required=False, default=None, path_kind="lora",
+            doc="Only used when frozen_lora is checked.",
+        ),
+        "frozen_lora_strength": Port(
+            name="frozen_lora_strength", type=float, required=False, default=1.0,
+            doc="Only used when frozen_lora is checked.",
         ),
     }
 
@@ -292,40 +346,52 @@ class LoRASDXLPreset(ResourcePreset):
     }
 
     validators: ClassVar[dict[str, Callable[[Any], list[str]]]] = {
-        "checkpoint_path": _checkpoint_validator,
+        "base_model": _checkpoint_validator,
         "frozen_lora_path": _lora_validator,
         "continue_lora_path": _lora_validator,
     }
 
     def process(self, inputs: dict) -> dict[str, Any]:
-        frozen_lora_path = inputs.get("frozen_lora_path")
-        frozen_lora_strength = inputs.get(
-            "frozen_lora_strength", self.inputs["frozen_lora_strength"].default)
-        if frozen_lora_path is None and frozen_lora_strength != self.inputs["frozen_lora_strength"].default:
+        weights: ModelWeights = inputs["base_model"]
+        # Cheap, header-only check before weights.unet_sd/.non_unet_sd below trigger
+        # Phase 1's lazy full load -- same "fail fast, before the expensive part"
+        # ordering SafetensorsCheckpointNode.build() already established.
+        _checkpoint_validator(weights)
+
+        continue_training = inputs.get(
+            "continue_training", self.inputs["continue_training"].default)
+        continue_lora_path = inputs.get("continue_lora_path")
+        if continue_training and continue_lora_path is None:
+            raise ValueError("continue_training is checked but continue_lora_path wasn't given.")
+        if not continue_training and continue_lora_path is not None:
             raise ValueError(
-                "frozen_lora_strength was given but frozen_lora_path wasn't -- strength "
-                "only means something for a frozen LoRA actually being merged, likely a "
-                "forgotten path rather than an intentional no-op value."
+                "continue_lora_path was given but continue_training isn't checked -- "
+                "check it, or clear the path."
             )
 
-        # Cheap, header-only check before the real (potentially multi-GB) load below --
-        # same ordering SafetensorsCheckpointNode.build() already established, and the
-        # only place this dtype info is used twice (also drives diagnostics() for the
-        # editor); doesn't cost a second full load, only a second header read.
-        _checkpoint_validator(inputs["checkpoint_path"])
+        frozen_lora = inputs.get("frozen_lora", self.inputs["frozen_lora"].default)
+        frozen_lora_path = inputs.get("frozen_lora_path")
+        if frozen_lora and frozen_lora_path is None:
+            raise ValueError("frozen_lora is checked but frozen_lora_path wasn't given.")
+        if not frozen_lora and frozen_lora_path is not None:
+            raise ValueError(
+                "frozen_lora_path was given but frozen_lora isn't checked -- "
+                "check it, or clear the path."
+            )
 
         from safetensors.torch import load_file
 
         layout = ProjectLayout.from_paths_module()
-        checkpoint_sd = load_file(str(layout.resolve_safe_model_path(
-            inputs["checkpoint_path"], "checkpoint")))
+
         frozen_lora_sd = None
-        if frozen_lora_path is not None:
+        frozen_lora_strength = inputs.get(
+            "frozen_lora_strength", self.inputs["frozen_lora_strength"].default)
+        if frozen_lora:
             _lora_validator(frozen_lora_path)
             frozen_lora_sd = load_file(str(layout.resolve_safe_model_path(frozen_lora_path, "lora")))
-        continue_lora_path = inputs.get("continue_lora_path")
+
         continue_lora_sd = None
-        if continue_lora_path is not None:
+        if continue_training:
             _lora_validator(continue_lora_path)
             continue_lora_sd = load_file(str(layout.resolve_safe_model_path(continue_lora_path, "lora")))
 
@@ -336,6 +402,11 @@ class LoRASDXLPreset(ResourcePreset):
             weight_store_factory = NF4WeightStore
         else:
             weight_store_factory = None  # build_lora_injected_unet()'s own default: BF16WeightStore
+
+        # weights.unet_sd/.non_unet_sd: Phase 1's lazy load, only actually touching the
+        # file here (SDXLArchitecture.split_checkpoint() re-classifies from one combined
+        # dict, so the two get merged back -- cheap, tensors are references, not copies).
+        checkpoint_sd = {**weights.unet_sd, **weights.non_unet_sd}
 
         trainer = SDXL_LoraTrainer(
             checkpoint_sd,

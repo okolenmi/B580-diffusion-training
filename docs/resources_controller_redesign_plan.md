@@ -6,10 +6,12 @@ construction mechanics done, a consolidation pass done connecting this
 to `docs/training_pipeline_design.md`'s remaining open items --
 including `Port.choices` (11.4), now built and landed as part of that
 consolidation, with real frontend code (`server/static/nodegraph.js`)
-beyond Phases 1-2's backend-only scope. Phase 5's backend now real too
+beyond Phases 1-2's backend-only scope. Phase 5's node is real now too
 (`ResourcesControllerNode` + `ResourcePreset`/`LoRASDXLPreset`,
-registered and introspecting correctly) -- its live editor UX
-deliberately deferred, see that phase's own status.**
+registered and introspecting correctly), including real editor
+mechanics for it (`Port.visible_when`, a live `Node.diagnostics()`
+endpoint) generic enough that any future node can use them too -- see
+that phase's own status for what's still browser-unverified.**
 This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
@@ -576,11 +578,16 @@ per-resource dtype detection/override with validity indicators, using
 Phases 1-4. One concrete preset at first -- LoRA training on SDXL --
 matching "only one available for start" from the original description.
 
-**Status: backend done, corrected once against the actual hand-drawn
-sketch (not just this document's own prose description of it, which
-had drifted from it in two real ways -- see below); the live editor UX
-(validity indicators as you
-attach a file) deliberately deferred, not built here.**
+**Status: node + real editor mechanics done, corrected/rebuilt twice
+against the actual hand-drawn sketch and direct feedback on the first
+two passes (see the two dated corrections below for what changed and
+why) -- `Port.visible_when`, live `Node.diagnostics()` (server route +
+`nodegraph.js` rendering), and `LoRATrainingSkeleton.describe()` are
+all real now, not deferred. What's left: browser confirmation of the
+new `nodegraph.js` code (syntax-checked only, not run in a real
+browser -- see the second correction's own "Verified" section), and the
+harder, still-not-attempted case of a dropdown gaining a genuinely new
+choice from a live server response after a node's already spawned.**
 `nodes/model/resources_controller.py` (new): `ResourcePreset`, an ABC
 matching this document's own settled interface contract table above --
 three of that table's four rows turned out to need no new machinery at
@@ -685,14 +692,94 @@ easy-to-reach footgun, so the sketch's own `<fp32>` row for this one is
 better read as "detected/fixed," not "editable," once its own drawn
 arrows are checked against what the code underneath actually allows.
 
-**Not built, deliberately deferred rather than silently missing:** a
-live query endpoint (mirroring Phase 2's own existing
-`/nodegraph/assets/{kind}/inspect`) for the editor to call
-`diagnostics()` as the user attaches a checkpoint/LoRA, and the
-`nodegraph.js` wiring to display its result inline under that Port's
-widget -- the sketch's actual "validity indicators" UX. Sequenced this
-way deliberately, same as every phase before this one: backend proven
-before the frontend built on top of it, not the other way around.
+**Reworked again, this time to build the actual editor mechanics the
+sketch calls for, not just correct the two Port-shape mistakes above --
+raised directly: "the main fail is node itself... it should have a
+unique extended type," specifically checkbox-driven show/hide, live
+server-computed values appearing on the node, and a universal interface
+on the output container. Three real, generic mechanisms, not
+Resources-Controller-specific plumbing (same "build it once" posture
+`Port.choices` itself already established):**
+
+`Port.visible_when` (`nodes/core.py`) -- `(other_port_name, value)`; the
+graph editor hides a Port's own row unless the named sibling currently
+holds exactly that value. `continue_lora_path`/`frozen_lora_path`/
+`frozen_lora_strength` in `LoRASDXLPreset.inputs` each declare this
+against their own gating checkbox now, matching the sketch's own
+"Frozen LoRA" collapsed-when-unchecked row. Checked at class-definition
+time (`Node.__init_subclass__`): the referenced name has to actually be
+in that class's own `INPUTS`, so a typo fails loudly there rather than
+silently doing nothing in the browser. A UI hint only -- `build()`
+itself still enforces the real invariant (`process()`'s own
+both-directions checkbox/path check), since Port/Node never read this
+field. `nodegraph.js`: `buildInputBlock()` tags each row with
+`data-visible-when-*` and sets its initial `display` correctly at
+render time; `updatePortDotState()` (already the one real per-change
+choke point every widget handler already calls) now also calls a new
+`updateFieldVisibility()` that re-scans and re-hides/shows every tagged
+row in that node, so toggling a checkbox after the node's already on
+the canvas updates its siblings live, not just at spawn.
+
+`Node.diagnostics()` (`nodes/core.py`) -- promoted from a
+`ResourcesControllerNode`-only method to a real, generic, `{}`-default
+method any node can override; `NodeInfo.has_diagnostics`
+(`server/nodegraph_introspect.py`) reports whether a given class
+actually did, the same is-this-actually-overridden check `NODE_KIND ==
+"dynamic"` already needs for `list_presets()`. New endpoint,
+`POST /nodegraph/node/{class_name}/diagnostics` (`server/
+routes_nodegraph.py`) -- same registry lookup `/run` already uses, a
+fresh instance per call, `{params: {...}}` in (exactly `/run`'s own
+`GraphNodeIn.params` shape), the node's own `diagnostics()` result out;
+a bad/incomplete params dict (e.g. a half-typed path) is an ordinary
+400, not a 500, matching how mid-edit state is expected to be
+transiently invalid. `nodegraph.js`: `scheduleDiagnostics()` (also
+riding along on `updatePortDotState()`, debounced 400ms) calls it for
+any node whose `has_diagnostics` is true and renders the per-input
+result as small read-only text under that Port's own row
+(`fetchDiagnostics()`, new `.ng-diagnostics`/`.ng-diagnostic-line`
+styles in `nodegraph.html`) -- best-effort throughout: a failed call is
+silently ignored rather than disrupting editing, since `Run` still goes
+through the real `validate_inputs()`/`build()` contract regardless of
+whether this ever succeeded. This is the sketch's own "node works with
+the server, calculates values, shows extra things," and its own
+"UNET dtype: bf16 [valid]" rows, now real and live rather than only
+computed at `build()` time.
+
+`LoRATrainingSkeleton.describe()`
+(`nodes/model/lora_training_resources.py`) -- a new, real, universal,
+read-only summary (`{"unet": {"dtype": ..., "footprint_bytes": ...},
+"clip": {...}, "vae": {...}, "lora_adapter": {"dtype": ..., "rank":
+..., "param_count": ...}}`), the "some methods to get data from items...
+a universal interface other nodes may use later" ask. Built entirely
+out of methods that already existed on this class (`DeviceResident`'s
+own `per_resident_footprint_bytes()`, `TrainableModel`'s own
+`trainable_parameters()`) rather than a second introspection path --
+`nodes/memory/handle.py`'s `DeviceResident` (`footprint_bytes()`/
+`offload()`/`reload()`/`release()`) already covered "effective memory
+management" before this session started; `describe()` is the missing
+"preview vision on some things inside models" half, not a
+reimplementation of the other half.
+
+`unet_dtype` also gained a real `"inherited"` choice (default) --
+resolves to the attached checkpoint's own detected UNet dtype at
+`process()` time, reusing the exact same header read the "doesn't look
+like SDXL" check already does (`_inspect_checkpoint()`, extracted so
+neither `process()` nor `_checkpoint_validator()`'s own display text has
+to parse the other's output for structured data -- a real, if minor,
+bug caught while writing this the second way round, not shipped). This
+sidesteps the harder, still-not-built case the sketch's own "inherited"
+example technically asks for -- a dropdown gaining a *new* choice from a
+live server response after the node's already spawned -- by making
+"inherited" a real, always-present static choice instead; a genuinely
+dynamic per-instance choice-list extension is real, separate, larger
+frontend work, not attempted here.
+
+**Still not built, honestly deferred rather than silently missing:**
+the dynamic per-instance dropdown-choice-injection case just described.
+Everything else the sketch actually asked for -- self-contained
+checkpoint loading, real checkboxes gating hidden/shown fields, live
+server-computed values on the node itself, a universal describe()
+interface on the output -- is real now, not just planned.
 
 **Verified, without the smoke-test suite this time** (that files list
 its own budget, a huge amount of real code checked by direct read and
@@ -729,16 +816,39 @@ in this same pass -- deliberately, per this session's own working
 approach: write the real code first, verify it in one deferred,
 consolidated pass rather than after each small piece.
 
-Re-verified after the sketch-driven correction above, same manual-not-
-suite approach: `diagnostics()` against a real wired `ModelWeights`
-(not a path) reports the same correct per-component dtype lines;
-`continue_training`/`frozen_lora` each raise `process()`'s new
-both-directions guard correctly (checked-without-a-path, and a-path-
-given-while-unchecked); clearing every one of this session's own new
-guards and reaching real `SDXL_LoraTrainer(...)` construction correctly
-hits the same known `ModuleNotFoundError: comfy` boundary as before,
-confirming the guards run in the intended order and none of them
-silently swallow a real failure.
+Re-verified after reverting the wire (second correction), same manual-
+not-suite approach: `diagnostics()` against a real `checkpoint_path`
+string (not a wired object) reports the same correct per-component
+dtype lines; `continue_training`/`frozen_lora` each raise `process()`'s
+both-directions guard correctly; clearing every guard and reaching real
+`SDXL_LoraTrainer(...)` construction correctly hits the same known
+`ModuleNotFoundError: comfy` boundary as before.
+
+Re-verified once more after this pass's own additions:
+`unet_dtype="inherited"` correctly resolves against a real synthetic
+checkpoint and reaches the same `comfy` boundary (not a `KeyError` or a
+silently wrong dtype); `LoRATrainingSkeleton.describe()` checked in
+isolation against a minimal concrete fake subclass (a full
+`SDXL_LoraTrainer` needs ComfyUI to construct at all, so `describe()`
+itself can't be reached through real construction here) -- correct
+output for a normal case, an empty `vae_sd`, and an adapter with zero
+trainable parameters, all three read back the right `None`/`0` rather
+than raising. The new `/nodegraph/node/{class_name}/diagnostics`
+endpoint called directly (not over real HTTP, no server process running
+in this sandbox) against `ResourcesControllerNode`: a real checkpoint
+returns the right per-component lines, an unknown class name 404s, a
+path-traversal attempt in `params` comes back as an embedded
+`"ERROR: ..."` line rather than a 500 or a silent success (matching
+`diagnostics()`'s own per-input catch, not a second, different error
+path at the route level), and a node with no overridden `diagnostics()`
+(`ComposedAdamWOptimizerNode`) correctly returns `{}`. `nodegraph.js`
+itself: `node --check` only (a real syntax check, not a functional
+one) -- **not run in an actual browser**, same honest caveat every
+`nodegraph.js` change in this document has carried; the `visible_when`
+hide/show and the live diagnostics fetch/render are both new enough,
+and different enough in kind from the Port.choices dropdown the person
+already hand-tested, that they're worth a real look in the browser
+before calling this done.
 
 **Dependency:** Phases 1-4 (done).
 

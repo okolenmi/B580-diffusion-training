@@ -203,6 +203,13 @@
   .ng-checkbox-label input[type=checkbox] { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
   .ng-picker-row { display: flex; gap: 4px; }
   .ng-picker-row select { flex: 1; min-width: 0; }
+  /* Live server-computed info (nodes.core.Node.diagnostics(), Phase 5 of
+     docs/resources_controller_redesign_plan.md) -- read-only text under a
+     port's own widget, not another widget: no border/background of its own,
+     just indented and dimmed to read as "about the field above", matching
+     .ng-port-hint's own muted, non-interactive treatment above. */
+  .ng-diagnostics { padding: 0 12px 4px 28px; }
+  .ng-diagnostic-line { color: var(--text-dim); font-size: 10px; line-height: 1.5; }
   .ng-picker-upload {
     flex-shrink: 0; padding: 3px 8px; font-size: 11px; border-radius: 4px;
     border: 1px solid var(--border); background: var(--surface-alt); color: var(--text-dim); cursor: pointer;

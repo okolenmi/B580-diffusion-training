@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from nodes.core import ExecutionContext
 
-from . import asset_paths, graph_executor
+from . import asset_paths, graph_executor, nodegraph_registry
 from .nodegraph_introspect import introspect_optimizer_nodes, introspect_registry, node_info_to_dict
 
 router = APIRouter(prefix="/nodegraph")
@@ -219,6 +219,43 @@ async def inspect_asset(kind: str, path: str):
         return asset_paths.inspect(kind, path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class DiagnosticsRequest(BaseModel):
+    params: dict = {}
+
+
+@router.post("/node/{class_name}/diagnostics")
+async def node_diagnostics(class_name: str, request: DiagnosticsRequest):
+    """Live per-input diagnostic text for a node, called with its
+    current widget values before the graph is ever run --
+    nodes.core.Node.diagnostics(), the generic hook a node opts into by
+    overriding (node_info_to_dict()'s has_diagnostics reports which
+    classes actually did; the editor should skip calling this for any
+    class that didn't rather than getting {} back every time for
+    nothing). docs/resources_controller_redesign_plan.md Phase 5's "node
+    works with the server, calculates values, shows extra things" --
+    e.g. ResourcesControllerNode.diagnostics() delegating to whichever
+    preset is currently selected. Same registry lookup graph_executor.py's
+    own /run path uses (not a second one), a fresh instance per call
+    (matching /run's own per-execution construction -- Node.__init__ is
+    cheap, nothing meaningful is cached on self between calls). params
+    are exactly what /run's own GraphNodeIn.params already sends -- raw,
+    JSON-safe widget values, no wiring/edges involved, since diagnostics
+    only ever looks at this one node's own current inputs."""
+    registry = nodegraph_registry.get_registry()
+    cls = registry.get(class_name)
+    if cls is None:
+        raise HTTPException(status_code=404, detail=f"Unknown node class '{class_name}'.")
+    try:
+        return cls().diagnostics(request.params)
+    except Exception as e:
+        # Same posture as run_graph's own eventual error surfacing: a bad/incomplete
+        # params dict (e.g. a relative path that doesn't resolve) is an ordinary,
+        # expected outcome while someone's mid-edit in the editor, not a 500 -- but
+        # unlike /run, this is a synchronous call with an immediate response, so it
+        # reports as a normal 400 rather than through a later status poll.
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 
 
 class MkdirRequest(BaseModel):

@@ -47,6 +47,22 @@ class Port:
     # Consolidation section for why this is generic rather than
     # Resources-Controller-specific. A tuple, not a list, matching this
     # (frozen, hashable) dataclass's other fields.
+    visible_when: tuple[str, Any] | None = None
+    # (other_port_name, value) -- this Port's own widget is only shown by
+    # the graph editor while the *other*, sibling Port named here
+    # currently holds exactly `value` (e.g. a saved-LoRA path Port only
+    # shown while its own gating checkbox Port is True). Purely a UI
+    # hint, same posture as path_kind above -- build()/validate_inputs()
+    # never read this, so a hidden-but-still-populated value (a stale
+    # path left over from before its checkbox was unchecked, say) is
+    # each Node's own build()/process() concern to reject if it matters,
+    # not something Port or Node enforces generically. The referenced
+    # name is checked against the owning Node's own INPUTS by
+    # Node.__init_subclass__ below (a Port alone, in isolation, has no
+    # sibling to check this against yet) -- docs/resources_controller_
+    # redesign_plan.md Phase 5's own "changing checkbox state hides/shows
+    # extra fields" ask, built generic rather than specific to that one
+    # node, same reasoning as Port.choices above.
 
     def __post_init__(self):
         if self.choices is None:
@@ -225,6 +241,16 @@ class Node(ABC):
             raise TypeError(f"{cls.__name__}.OUTPUTS must be a dict, got {type(cls.OUTPUTS)!r}")
         if not isinstance(cls.INPUTS, dict):
             raise TypeError(f"{cls.__name__}.INPUTS must be a dict, got {type(cls.INPUTS)!r}")
+        for name, port in cls.INPUTS.items():
+            if port.visible_when is not None and port.visible_when[0] not in cls.INPUTS:
+                raise TypeError(
+                    f"{cls.__name__}.INPUTS[{name!r}].visible_when references "
+                    f"{port.visible_when[0]!r}, which isn't in this class's own "
+                    f"INPUTS -- a typo, almost certainly (Port alone can't check this "
+                    f"itself; a Port has no sibling to check against until it's "
+                    f"actually placed in a Node's INPUTS, which is why this lives "
+                    f"here rather than in Port.__post_init__)."
+                )
         if not cls.OUTPUTS:
             raise TypeError(
                 f"{cls.__name__} is a concrete Node (all abstract methods "
@@ -295,3 +321,23 @@ class Node(ABC):
                 f"output(s): {sorted(missing)}. This is a bug in the node's "
                 f"build() implementation, not a caller error."
             )
+
+    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
+        """{input_name: [human-readable diagnostic lines]} for whichever
+        of the given inputs this node has something to say about --
+        e.g. a resolved checkpoint's per-component dtype, a saved LoRA's
+        rank. Not part of build()'s own contract (a node with nothing to
+        report just returns {}, this base implementation) -- a strictly
+        optional, read-only side channel a server endpoint can call as
+        the person attaches/edits a resource in the editor, to show
+        real information *before* they hit Run, not just after (docs/
+        resources_controller_redesign_plan.md Phase 5's "works with the
+        server, calculates values, shows extra things" and its own
+        ResourcePreset.diagnostics(), which ResourcesControllerNode's
+        own override of this method below delegates to). Overriding
+        this is the whole opt-in: see has_diagnostics's own docstring in
+        server/nodegraph_introspect.py for how a caller checks whether a
+        given node class overrides this at all before ever calling it,
+        the same is-this-actually-overridden check NODE_KIND ==
+        "dynamic" already uses for list_presets() above."""
+        return {}

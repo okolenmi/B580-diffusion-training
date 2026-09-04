@@ -40,6 +40,10 @@ class PortInfo:
     # any real Port that didn't declare one. list, not Port's own tuple: this dataclass's
     # fields are JSON-serialized (node_info_to_dict() below), and type_mro already sets the
     # precedent of "list" for this same kind of value here.
+    visible_when: list | None = None  # Port.visible_when as [other_port_name, value] --
+    # tells the UI to hide this Port's own row unless the sibling input named here
+    # currently holds exactly `value`. list (JSON has no tuple), same reasoning as choices
+    # above; None for a legacy-guessed port or any real Port that didn't declare one.
 
 
 @dataclass
@@ -74,6 +78,12 @@ class NodeInfo:
     # see docs/resources_controller_redesign_plan.md Phase 3 for what this is for
     # (the editor's suggestion-menu search) and nodes.core.NodePreset for why it's
     # required-ports-only, not a full shape resolution.
+    has_diagnostics: bool = False  # nodes.core.Node.diagnostics() actually overridden,
+    # not just inherited -- lets a caller (a future live-inspection endpoint/the editor
+    # calling it) know whether this class has anything to say at all before ever
+    # bothering to call it, the same is-this-actually-overridden check node_kind ==
+    # "dynamic" already needs for list_presets(). Always False for a legacy-guessed
+    # class -- there's no real class body there to have overridden anything.
 
 
 # Domain vocabulary this project's own class names actually use that a generic
@@ -241,6 +251,7 @@ def _port_info(p, *, is_output: bool = False) -> PortInfo:
         doc=p.doc,
         path_kind=(p.path_kind if not is_output else None),
         choices=(list(p.choices) if p.choices is not None and not is_output else None),
+        visible_when=(list(p.visible_when) if p.visible_when is not None and not is_output else None),
     )
 
 
@@ -283,6 +294,14 @@ def introspect_node_class(cls: type) -> NodeInfo:
             )
             for preset in cls.list_presets()
         ]
+    from nodes.core import Node  # local: this module stays import-light at module
+    # level (see its own docstring) -- cheap and safe here regardless (nodes.core is
+    # plain dataclasses/ABC, none of core/__init__.py's ComfyUI-eager-import chain),
+    # just kept local to match every other function in this file never doing this.
+    # Plain function identity, not .__func__ (diagnostics() is a regular instance
+    # method, not a classmethod like list_presets() above -- ClassName.method is
+    # already the bare function in Python 3, no bound-classmethod wrapper to unwrap).
+    has_diagnostics = cls.diagnostics is not Node.diagnostics
     return NodeInfo(
         class_name=cls.__name__,
         module=cls.__module__,
@@ -293,6 +312,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
         display_name=_display_name_for(cls),
         node_kind=cls.NODE_KIND,
         presets=presets,
+        has_diagnostics=has_diagnostics,
     )
 
 
@@ -322,7 +342,8 @@ def node_info_to_dict(info: NodeInfo) -> dict:
         return [
             {"name": p.name, "type": p.type_str, "default": p.default,
              "required": p.required, "type_mro": p.type_mro,
-             "doc": p.doc, "path_kind": p.path_kind, "choices": p.choices}
+             "doc": p.doc, "path_kind": p.path_kind, "choices": p.choices,
+             "visible_when": p.visible_when}
             for p in ports
         ]
     return {
@@ -339,6 +360,7 @@ def node_info_to_dict(info: NodeInfo) -> dict:
               "required_outputs": _ports(p.required_outputs)} for p in info.presets]
             if info.presets is not None else None
         ),
+        "has_diagnostics": info.has_diagnostics,
     }
 
 

@@ -24,7 +24,11 @@ with an internal coordinator; footprint_bytes()/offload()/reload()/
 release() delegate to it and to .unet/.clip's own DeviceResident
 implementations. .vae_sd isn't a DeviceResident (see __init__), so it's
 moved/dropped directly alongside the coordinator's work rather than
-through it.
+through it. describe() (below) gives a read-only summary of the same
+information -- the "universal interface other nodes may use later"
+docs/resources_controller_redesign_plan.md's Phase 5 asks for -- built
+entirely out of those same existing methods, not a second parallel
+introspection path.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from abc import ABC, abstractmethod
 
 from ..memory.coordinator import ResourceCoordinator
 from ..memory.handle import DeviceResident, sum_tensor_bytes
+from .resource_inspection import dtype_to_str
 from .sdxl_architecture import SDXLArchitecture
 
 
@@ -96,6 +101,8 @@ class LoRATrainingSkeleton(DeviceResident, ABC):
             from .lora_merge import merge_lora_into_state_dict
             components["unet"], self.frozen_lora_merged_count = merge_lora_into_state_dict(
                 components["unet"], frozen_lora_sd, strength=frozen_lora_strength)
+        self._rank = rank
+        self._unet_dtype = dtype
         self.unet = self.inject_lora(components["unet"], device=device, dtype=dtype,
                                       rank=rank, alpha=alpha, **inject_kwargs)
         self.clip = self.build_text_encoder(components["clip"], device=device)
@@ -138,6 +145,52 @@ class LoRATrainingSkeleton(DeviceResident, ABC):
         self.unet.release()
         self.clip.release()
         self.vae_sd = {}
+
+    def describe(self) -> dict[str, dict]:
+        """Universal, read-only summary of what this container
+        currently holds -- for anything that wants to know what's
+        inside without knowing this is specifically a LoRA/SDXL
+        trainer: a graph-editor diagnostics call
+        (nodes/model/resources_controller.py's ResourcesControllerNode),
+        a future preview/monitoring node, a log line. One dict entry
+        per resource, {"dtype": str | None, "footprint_bytes": int,
+        ...a couple of resource-specific extras}. Built entirely from
+        this class's own existing methods (per_resident_footprint_bytes(),
+        trainable_parameters(), footprint_bytes()) plus the dtype/rank
+        __init__ already resolved and stored -- no new introspection
+        logic of its own, so it can't drift from what those already
+        report.
+
+        vae's dtype is read directly off one of its own tensors, not
+        stored at __init__ -- unlike unet_dtype/rank above, vae_sd's
+        dtype is whatever split_checkpoint() found in the source
+        checkpoint (this class never converts it, see __init__'s own
+        docstring), so there's no "resolved value this was handed" to
+        cache; reading it back from the tensors themselves is the only
+        source of truth and it's already fully materialized by the time
+        describe() could ever run.
+        """
+        footprints = self._coordinator.per_resident_footprint_bytes()
+        lora_params = self.unet.trainable_parameters()
+        vae_tensor = next(iter(self.vae_sd.values()), None)
+        return {
+            "unet": {
+                "dtype": dtype_to_str(self._unet_dtype),
+                "footprint_bytes": footprints["unet"],
+            },
+            "clip": {
+                "footprint_bytes": footprints["clip"],
+            },
+            "vae": {
+                "dtype": dtype_to_str(vae_tensor.dtype) if vae_tensor is not None else None,
+                "footprint_bytes": sum_tensor_bytes(self.vae_sd.values()),
+            },
+            "lora_adapter": {
+                "dtype": dtype_to_str(lora_params[0].dtype) if lora_params else None,
+                "rank": self._rank,
+                "param_count": sum(p.numel() for p in lora_params),
+            },
+        }
 
 
 class SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton):

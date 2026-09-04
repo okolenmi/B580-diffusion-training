@@ -732,6 +732,19 @@
 
     buildInputBlock(node, port) {
       const wrapper = document.createElement("div");
+      wrapper.dataset.portName = port.name;
+      // visible_when (nodes/core.py Port field, docs/resources_controller_redesign_plan.md
+      // Phase 5): this whole block hidden unless the named sibling port currently holds
+      // the given value -- e.g. a saved-LoRA path only shown while its own gating
+      // checkbox reads true. Set once here from *this render's* current paramValues
+      // (correct at initial spawn/re-render regardless of DOM-attachment timing, unlike
+      // querying the live canvas for it), tagged with data-* so updateFieldVisibility()
+      // below can re-evaluate it later, after a change, without a full re-render.
+      if (port.visible_when) {
+        wrapper.dataset.visibleWhenPort = port.visible_when[0];
+        wrapper.dataset.visibleWhenValue = JSON.stringify(port.visible_when[1]);
+        wrapper.style.display = this.portVisible(node, port) ? "" : "none";
+      }
       const connected = !!this.model.existingConnectionInto(node.id, port.name);
       wrapper.appendChild(this.buildPortRow(node, port, false));
 
@@ -936,6 +949,12 @@
 
     // ---- targeted (non-destructive) updates ----
 
+    portVisible(node, port) {
+      if (!port.visible_when) return true;
+      const [controllingPort, expected] = port.visible_when;
+      return node.paramValues[controllingPort] === expected;
+    }
+
     updatePortDotState(nodeId, portName) {
       const dot = this.els.canvas.querySelector(
         `.ng-port-dot[data-node-id="${nodeId}"][data-is-output="0"][data-port-name="${CSS.escape(portName)}"]`);
@@ -947,6 +966,84 @@
       const unmet = !!port.required && !connected && (v === undefined || v === null || v === "");
       dot.classList.toggle("required-unmet", unmet);
       dot.classList.toggle("connected", connected);
+      // Piggybacked here rather than added as a 7th call site alongside this function's
+      // own: every paramValue-changing handler in buildInputBlock already calls
+      // updatePortDotState right after touching node.paramValues, so it's already the
+      // one real per-change choke point -- any OTHER port's visibility can depend on
+      // the port that just changed (visible_when names a *different* port), and a live
+      // diagnostics re-check is the same "something changed, react" event, so both ride
+      // along here instead of a second set of calls scattered across those same handlers.
+      this.updateFieldVisibility(nodeId);
+      this.scheduleDiagnostics(nodeId);
+    }
+
+    updateFieldVisibility(nodeId) {
+      const el = this.els.canvas.querySelector(`.ng-node[data-node-id="${nodeId}"]`);
+      const node = this.model.nodes.get(nodeId);
+      if (!el || !node) return;
+      el.querySelectorAll("[data-visible-when-port]").forEach((wrapper) => {
+        const expected = JSON.parse(wrapper.dataset.visibleWhenValue);
+        const actual = node.paramValues[wrapper.dataset.visibleWhenPort];
+        wrapper.style.display = (actual === expected) ? "" : "none";
+      });
+    }
+
+    scheduleDiagnostics(nodeId) {
+      // docs/resources_controller_redesign_plan.md Phase 5's "node works with the
+      // server, calculates values, shows extra things" -- debounced (this fires on
+      // every keystroke in a freeform widget, not just picker selections) and
+      // best-effort: a node whose class never overrode diagnostics() (has_diagnostics)
+      // is skipped before ever making a network call, and any failure here (network,
+      // a half-typed path that doesn't resolve yet) is silently ignored rather than
+      // disrupting editing -- this is a live, optional enrichment, not something
+      // correctness depends on; Node.validate_inputs()/build() still enforce the real
+      // contract at Run time regardless of whether this ever succeeded.
+      const node = this.model.nodes.get(nodeId);
+      if (!node || !node.classInfo.has_diagnostics) return;
+      clearTimeout(node._diagnosticsTimer);
+      node._diagnosticsTimer = setTimeout(() => this.fetchDiagnostics(nodeId), 400);
+    }
+
+    async fetchDiagnostics(nodeId) {
+      const node = this.model.nodes.get(nodeId);
+      if (!node) return;
+      let result;
+      try {
+        const res = await fetch(
+          `/nodegraph/node/${encodeURIComponent(node.classInfo.class_name)}/diagnostics`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ params: node.paramValues }),
+          });
+        if (!res.ok) return;
+        result = await res.json();
+      } catch (e) {
+        return;
+      }
+      const el = this.els.canvas.querySelector(`.ng-node[data-node-id="${nodeId}"]`);
+      if (!el) return;
+      // Only ever touches wrappers the response actually named -- a port with nothing
+      // to report this round (dropped from the response, e.g. its own value's now
+      // empty) keeps whatever it last showed rather than being blanked, since a stale-
+      // but-still-relevant reading beats visibly flickering empty on every keystroke.
+      for (const [portName, lines] of Object.entries(result)) {
+        const wrapper = el.querySelector(`[data-port-name="${CSS.escape(portName)}"]`);
+        if (!wrapper) continue;
+        let box = wrapper.querySelector(".ng-diagnostics");
+        if (!box) {
+          box = document.createElement("div");
+          box.className = "ng-diagnostics";
+          wrapper.appendChild(box);
+        }
+        box.innerHTML = "";
+        for (const line of lines) {
+          const row = document.createElement("div");
+          row.className = "ng-diagnostic-line";
+          row.textContent = line;
+          box.appendChild(row);
+        }
+      }
     }
 
     // ---- ports / wires ----

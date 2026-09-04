@@ -6,12 +6,14 @@ construction mechanics done, a consolidation pass done connecting this
 to `docs/training_pipeline_design.md`'s remaining open items --
 including `Port.choices` (11.4), now built and landed as part of that
 consolidation, with real frontend code (`server/static/nodegraph.js`)
-beyond Phases 1-2's backend-only scope. Phase 5's node is real now too
-(`ResourcesControllerNode` + `ResourcePreset`/`LoRASDXLPreset`,
-registered and introspecting correctly), including real editor
-mechanics for it (`Port.visible_when`, a live `Node.diagnostics()`
-endpoint) generic enough that any future node can use them too -- see
-that phase's own status for what's still browser-unverified.**
+beyond Phases 1-2's backend-only scope. Phase 5 done: the Resources
+Controller node produces a verified, NOT-yet-LoRA-injected resource
+pack (`VerifiedResourcePack`) -- see that phase's own status for how
+its scope got corrected from an earlier, wider version that did
+injection itself, and for what's still browser-unverified. Phase 5
+also landed real, generic editor mechanics (`Port.visible_when`, a
+live `Node.diagnostics()` endpoint) any future node can use, not just
+this one.**
 This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way `PROGRESS.md` tracks
@@ -124,16 +126,19 @@ architecture layer.
 
 | Piece | Contract | Maps to (node-graph side) |
 |---|---|---|
-| list of inputs | Declared inputs, some required only conditionally (e.g. only if a checkbox is checked) | `INPUTS`, resolved dynamically per Phase 3 rather than fixed at class-definition time |
+| list of inputs | Declared inputs, some required only conditionally (e.g. only if a checkbox is checked) | `INPUTS`, always present structurally; `Port.visible_when` (built, real -- see Phase 5) hides a conditional one's own row in the editor rather than actually removing it from `INPUTS` per preset choice -- a UI hint, not the dynamic-shape-resolution Phase 3 originally left open (still open) |
 | validators | Per-input `validate(value) -> list[str]` -- human-readable diagnostic lines, not just pass/fail | Rendered under that socket, matching the sketch's "UNET dtype: bf16" / "[valid]" rows |
 | parameter-value dictionary | Node-facing: `{resource: [available dtype choices]}` (multi-choice, for the dropdown). Processor-facing: `{resource: chosen dtype}` (single, resolved) | The dtype override table at the bottom of the sketch |
 | processor method | Takes resolved inputs + the resolved (single-choice) dtype dict, returns the real object | `build()` |
 
 The object `processor()`/`build()` returns is a plain,
-undecorated domain object (e.g. `SDXL_LoraTrainer(unet=..., clip=...,
-vae=..., lora=None)`) -- none of the interface/preset machinery that
-built it rides along on the output. It should grow a
-`footprint_bytes()` method matching the pattern already established by
+undecorated domain object (e.g. `VerifiedResourcePack(unet_sd=...,
+clip=..., vae_sd=..., continue_lora_sd=None)` -- Phase 5's actual
+return shape, once its own scope got corrected to stop short of LoRA
+injection; see that phase's own section for why) -- none of the
+interface/preset machinery that built it rides along on the output. It
+should grow a `footprint_bytes()` method matching the pattern already
+established by
 `ComfyUNetTrainableModel.footprint_bytes()`/`FrozenWeightStore.footprint_bytes()`,
 not invent a new one, and should be shaped so it can later plug into
 `nodes/memory/manager.py`'s `MemoryManager`/`ResourceProfile` (built,
@@ -573,298 +578,182 @@ needs it finished first -- it now is, for the core construction path.
 
 ### Phase 5 -- The Resources Controller node itself
 
-**Goal:** the node from the sketch, built for real: preset selector,
-per-resource dtype detection/override with validity indicators, using
-Phases 1-4. One concrete preset at first -- LoRA training on SDXL --
-matching "only one available for start" from the original description.
+**Goal, as clarified directly (this section previously described a
+wider, wrong scope -- see "How this section's scope got corrected"
+at the end):** a node interface over the basic functions needed to
+turn a checkpoint (plus optional frozen/continue-training LoRAs) into
+a ready-to-use, **verified** pack of resources for LoRA training.
+Inputs and outputs are meant to be the same shape for any future
+(task, architecture) preset, so adding one later is additive, not a
+rewrite. For LoRA training specifically, a verified pack is exactly
+four things: base unet, clip, vae, and an optional continue-training
+LoRA. Frozen LoRA is not a fifth field -- it merges directly into the
+base unet at construction time and has no separate identity
+afterward. This node does **not** do LoRA injection (no rank, no
+alpha, no frozen-weight-storage choice) -- that's a separate, later
+node's job (Phase 6 below), which can then do its own real work, like
+sizing a continuing LoRA's adapter to that LoRA's own actual rank --
+a decision this node has no business making.
 
-**Status: node + real editor mechanics done, corrected/rebuilt twice
-against the actual hand-drawn sketch and direct feedback on the first
-two passes (see the two dated corrections below for what changed and
-why) -- `Port.visible_when`, live `Node.diagnostics()` (server route +
-`nodegraph.js` rendering), and `LoRATrainingSkeleton.describe()` are
-all real now, not deferred. What's left: browser confirmation of the
-new `nodegraph.js` code (syntax-checked only, not run in a real
-browser -- see the second correction's own "Verified" section), and the
-harder, still-not-attempted case of a dropdown gaining a genuinely new
-choice from a live server response after a node's already spawned.**
-`nodes/model/resources_controller.py` (new): `ResourcePreset`, an ABC
+**Status: done, including real editor mechanics.**
+`nodes/model/resources_controller.py`: `ResourcePreset`, an ABC
 matching this document's own settled interface contract table above --
-three of that table's four rows turned out to need no new machinery at
-all once `Port.choices` actually existed (this same redesign's
-Consolidation section, landed immediately before this phase): "list of
-inputs" is `Port` itself, "parameter-value dictionary" is `Port.choices`
-directly (node-facing multi-choice *is* `.choices`, processor-facing
-single-choice *is* `build()`'s own already-validated `inputs[name]`),
-"processor method" is `Node.build()`'s real logic one level down
-(`ResourcePreset.process()`, so more than one preset can share one Node
-class). Only "validators" (`dict[str, Callable[[Any], list[str]]]`,
-per-input diagnostic text -- distinct from `Port.choices`' binary
-valid/invalid, for things no closed list can check: does this file
-actually look like SDXL, what dtype does it already have) was
-genuinely new. `ResourcePreset.__init_subclass__` mirrors `Node`'s own
-fail-at-definition-time posture (`name`/`inputs`/`outputs` must be
-real, `outputs` non-empty), same reasoning applied to a structurally
-analogous new class rather than left unenforced because it's new.
-
-`LoRASDXLPreset`: the one concrete preset, wrapping `SDXL_LoraTrainer`
-(Phase 4, unmodified, not reimplemented) rather than every knob it
-accepts -- `scaling_policy`/`resource_policy`/`adapter_strategy`/
-`target_modules` all stay at real defaults, matching a preset's whole
-point (sensible defaults, not exposing everything; the manual path
-stays available for anyone who needs those, unaffected). Two real dtype
-axes, both wired all the way through to code that actually consumes
-them: `unet_dtype` (compute, `choices=("bfloat16","float16","float32")`)
-and `unet_weight_store` (frozen-weight storage,
-`choices=("bf16","nf4")`, section 11.3 item 1) -- **CLIP and VAE dtype
-are diagnostics-only, deliberately not override `Port`s**: checked
-directly against `SDXLArchitecture.build_text_encoder()`'s own
-docstring (`SDXLClipEncoder` hardcodes its dtype, no parameter exists)
-and against `nodes/` as a whole (nothing converts `vae_sd`'s dtype
-anywhere) -- an override with nothing downstream to honor it would be a
-dishonest no-op, not a real knob. `state_dtype` (section 11.3 item 2)
-is absent too, matching this same document's own Consolidation section:
-"concretely unresolved," not implemented in isolation before that's
-settled. `resource_inspection.py` gained `str_to_dtype()`, the precise
-inverse of its own `dtype_to_str()` (`getattr(torch, s)`, not a second
-hand-maintained mapping) for turning a chosen `unet_dtype` string back
-into a real `torch.dtype`.
+three of that table's four rows need no new machinery at all now that
+`Port.choices` exists (this document's own Consolidation section):
+"list of inputs" is `Port` itself, "parameter-value dictionary" is
+`Port.choices` directly, "processor method" is `Node.build()`'s real
+logic one level down (`ResourcePreset.process()`, so more than one
+preset can share one Node class). "Validators" (per-input diagnostic
+text, distinct from `Port.choices`' binary valid/invalid) was the one
+genuinely new piece. `LoRASDXLPreset`: the one concrete preset,
+producing `VerifiedResourcePack`
+(`nodes/model/lora_training_resources.py`, new) -- `unet_sd`, `clip`
+(a real, already-loaded `SDXLTextEncoder`, since
+`build_text_encoder()` does real work and isn't LoRA-specific at
+all), `vae_sd`, `continue_lora_sd` (`None` unless `continue_training`
+is checked). `SDXLVerifiedResourcePack(SDXLArchitecture,
+VerifiedResourcePack)` mirrors `SDXL_LoraTrainer`'s own
+multiple-inheritance shape exactly, reusing
+`SDXLArchitecture.split_checkpoint()`/`build_text_encoder()` rather
+than reimplementing either -- deliberately does **not** need
+`inject_lora()` at all, so the type system itself reflects the scope
+boundary above. `VerifiedResourcePack` is a real `DeviceResident`
+(`footprint_bytes()`/`offload()`/`reload()`/`release()`) and has its
+own `describe()` (dtype/footprint per component, `rank` for
+`continue_lora` if present) -- the same "universal interface other
+nodes may use later" ask this phase's goal already covers, answered
+for the pre-injection stage the same way `LoRATrainingSkeleton`
+(Phase 4, unmodified, now Phase 6's own tool) already answers it for
+the post-injection one.
 
 `ResourcesControllerNode(Node)`: `NODE_KIND = "dynamic"`, a real
-`preset` `Port` (`choices=tuple(_PRESETS)`) satisfying "preset
-selector" from this phase's own goal line -- genuinely a dropdown, even
-with only one valid value today, via the same `Port.choices` mechanism
-above, not bespoke UI. `INPUTS`/`OUTPUTS` are today's one preset's own
-shape directly (`NODE_KIND`'s own docstring: "a dynamic node's *common*
-ports, present no matter which preset is chosen" -- with exactly one
-preset, its shape simply *is* the common shape); a second preset with a
-genuinely different shape needs real reconciliation here, honestly
-flagged in that class's own docstring rather than pretended-solved,
-deferred until a second preset actually exists. `list_presets()`
-delegates to each registered preset's own `node_preset()`, satisfying
-Phase 3's already-built, already-tested suggestion-menu machinery with
-zero changes needed there. `diagnostics(inputs)` exposes each attached
-resource's validator output (`{"base_model": ["UNET dtype: bf16
-(1234 tensors)", ...]}`) -- real and callable today, directly or by a
-future endpoint, but **not yet wired to anything the editor calls
-live** -- see "Not built" below. Registered in
-`server/nodegraph_registry.py`; auto-derives the display name "Resources
-Controller" for free, matching the sketch's own name exactly.
+`preset` Port (`choices=tuple(_PRESETS)`) -- a dropdown even with only
+one valid value today, via `Port.choices`, not bespoke UI.
+`checkpoint_path` is a `path_kind="checkpoint"` Port this node
+resolves and loads itself -- self-contained, not a wire (a wire
+doesn't remove the string/path from the picture either way, it just
+moves it to a different node for no real gain here). `unet_dtype`
+includes a real `"inherited"` choice (the default), resolving to the
+attached checkpoint's own detected dtype at build time via a shared
+`_inspect_checkpoint()` helper (also used for the "doesn't look like
+SDXL" check) -- neither `process()` nor `_checkpoint_validator()`'s
+own display text parses the other's output for structured data.
+`continue_training`/`frozen_lora` are real `bool` Ports (checkboxes)
+gating `continue_lora_path`/`frozen_lora_path`(+`frozen_lora_strength`)
+both structurally (`Port.visible_when`, below) and semantically
+(`process()`'s own both-directions check: checked-without-a-path and
+a-path-without-being-checked both raise a clear error).
 
-**Corrected against the actual sketch (a hand-drawn image, provided
-after the first pass above was already written from this document's own
-prose description of it -- two real drifts, not style preferences):**
-(1) "Base model" is a wired socket in the sketch (a circle with a wire
-drawn into it from off-canvas), not a path field owned by this node --
-the first pass had `checkpoint_path` as a `path_kind="checkpoint"`
-widget, resolving and loading the file itself, duplicating exactly what
-`SafetensorsCheckpointNode` already does. Now `base_model:
-Port(type=ModelWeights)`, a real wired input; `_checkpoint_validator`
-is now `weights.inspect_dtypes()` (Phase 1, already real) instead of a
-second path-resolving implementation of the same header read -- this
-also means live checkpoint-dtype inspection as a path is typed belongs
-to `SafetensorsCheckpointNode`'s own `path_kind="checkpoint"` Port
-generically, not to this node specifically, once that frontend piece
-gets built. (2) The sketch draws "Continue training" and "Frozen LoRA"
-as checkboxes; the first pass inferred "enabled" from whether the
-corresponding path was non-`None`, exactly the kind of implicit state a
-checkbox exists to make explicit. Now real `continue_training`/
-`frozen_lora` `bool` Ports gate `continue_lora_path`/
-`frozen_lora_path`(+`frozen_lora_strength`) in `process()`, checked
-both directions (checked-without-a-path, and a-path-without-being-
-checked both raise a clear error) rather than one direction inferred
-from a float comparison as before.
-
-Also found while reading the sketch closely: its own bottom summary
-table names a fourth axis, "LoRA (training)" dtype -- the trainable
-adapter's own parameter dtype, distinct from unet_dtype/
-unet_weight_store above. Checked directly against `core/lora.py`:
-`LoRALinear`/`LoRAConv2d` hardcode `param_dtype = torch.float32` for
-`lora_A`/`lora_B` regardless of the frozen base's own dtype, with a
-detailed, load-bearing numerical justification in that file's own
-comment (bf16's mantissa silently rounds away realistic Adafactor
-updates at LoRA-adapter magnitudes -- that comment verifies "bit-for-
-bit unchanged after 2000 steps" at a realistic lr; "every mainstream
-LoRA implementation" keeps this in fp32 for exactly that reason).
-Correctly absent from `LoRASDXLPreset.inputs` -- an override Port here
-wouldn't be a mere no-op like CLIP/VAE dtype above, it would be a real,
-easy-to-reach footgun, so the sketch's own `<fp32>` row for this one is
-better read as "detected/fixed," not "editable," once its own drawn
-arrows are checked against what the code underneath actually allows.
-
-**Reworked again, this time to build the actual editor mechanics the
-sketch calls for, not just correct the two Port-shape mistakes above --
-raised directly: "the main fail is node itself... it should have a
-unique extended type," specifically checkbox-driven show/hide, live
-server-computed values appearing on the node, and a universal interface
-on the output container. Three real, generic mechanisms, not
-Resources-Controller-specific plumbing (same "build it once" posture
-`Port.choices` itself already established):**
-
-`Port.visible_when` (`nodes/core.py`) -- `(other_port_name, value)`; the
-graph editor hides a Port's own row unless the named sibling currently
-holds exactly that value. `continue_lora_path`/`frozen_lora_path`/
-`frozen_lora_strength` in `LoRASDXLPreset.inputs` each declare this
-against their own gating checkbox now, matching the sketch's own
-"Frozen LoRA" collapsed-when-unchecked row. Checked at class-definition
-time (`Node.__init_subclass__`): the referenced name has to actually be
-in that class's own `INPUTS`, so a typo fails loudly there rather than
-silently doing nothing in the browser. A UI hint only -- `build()`
-itself still enforces the real invariant (`process()`'s own
-both-directions checkbox/path check), since Port/Node never read this
-field. `nodegraph.js`: `buildInputBlock()` tags each row with
-`data-visible-when-*` and sets its initial `display` correctly at
-render time; `updatePortDotState()` (already the one real per-change
-choke point every widget handler already calls) now also calls a new
-`updateFieldVisibility()` that re-scans and re-hides/shows every tagged
-row in that node, so toggling a checkbox after the node's already on
-the canvas updates its siblings live, not just at spawn.
-
-`Node.diagnostics()` (`nodes/core.py`) -- promoted from a
-`ResourcesControllerNode`-only method to a real, generic, `{}`-default
-method any node can override; `NodeInfo.has_diagnostics`
-(`server/nodegraph_introspect.py`) reports whether a given class
-actually did, the same is-this-actually-overridden check `NODE_KIND ==
+Three mechanisms landed here that are real, generic (not
+Resources-Controller-specific) additions to `nodes/core.py`/the
+server/editor, not one-off plumbing: **`Port.visible_when`**
+(`nodes/core.py`) -- `(other_port_name, value)`; the graph editor
+hides a Port's own row unless the named sibling currently holds that
+value. Checked at class-definition time (`Node.__init_subclass__`):
+the referenced name has to actually be in that class's own `INPUTS`,
+so a typo fails loudly there. A UI hint only -- `Node`/`Port` never
+read it, so `process()` still enforces the real invariant.
+**`Node.diagnostics()`** (`nodes/core.py`) -- a real, generic,
+`{}`-default method any node can override; `NodeInfo.has_diagnostics`
+(`server/nodegraph_introspect.py`) reports whether a class actually
+did, the same is-this-actually-overridden check `NODE_KIND ==
 "dynamic"` already needs for `list_presets()`. New endpoint,
-`POST /nodegraph/node/{class_name}/diagnostics` (`server/
-routes_nodegraph.py`) -- same registry lookup `/run` already uses, a
-fresh instance per call, `{params: {...}}` in (exactly `/run`'s own
-`GraphNodeIn.params` shape), the node's own `diagnostics()` result out;
-a bad/incomplete params dict (e.g. a half-typed path) is an ordinary
-400, not a 500, matching how mid-edit state is expected to be
-transiently invalid. `nodegraph.js`: `scheduleDiagnostics()` (also
-riding along on `updatePortDotState()`, debounced 400ms) calls it for
-any node whose `has_diagnostics` is true and renders the per-input
-result as small read-only text under that Port's own row
-(`fetchDiagnostics()`, new `.ng-diagnostics`/`.ng-diagnostic-line`
-styles in `nodegraph.html`) -- best-effort throughout: a failed call is
-silently ignored rather than disrupting editing, since `Run` still goes
-through the real `validate_inputs()`/`build()` contract regardless of
-whether this ever succeeded. This is the sketch's own "node works with
-the server, calculates values, shows extra things," and its own
-"UNET dtype: bf16 [valid]" rows, now real and live rather than only
-computed at `build()` time.
+`POST /nodegraph/node/{class_name}/diagnostics`
+(`server/routes_nodegraph.py`) -- same registry lookup `/run` already
+uses, a fresh instance per call, `{params: {...}}` in (exactly `/run`'s
+own shape), the node's own `diagnostics()` result out; a
+bad/incomplete params dict is an ordinary 400, not a 500.
+`server/static/nodegraph.js`: `buildInputBlock()` tags each row with
+`data-visible-when-*`/`data-port-name`; `updatePortDotState()`
+(already the one real per-change choke point every widget handler
+calls) also calls `updateFieldVisibility()` (re-scans/re-hides/shows
+every tagged row live) and `scheduleDiagnostics()` (debounced 400ms,
+calls the new endpoint for any `has_diagnostics` node, renders the
+per-input result as read-only text under that Port's own row via
+`fetchDiagnostics()`, new `.ng-diagnostics`/`.ng-diagnostic-line`
+styles in `nodegraph.html`). Best-effort throughout: a failed
+diagnostics call is silently ignored, Run still goes through the real
+`validate_inputs()`/`build()` contract regardless.
 
-`LoRATrainingSkeleton.describe()`
-(`nodes/model/lora_training_resources.py`) -- a new, real, universal,
-read-only summary (`{"unet": {"dtype": ..., "footprint_bytes": ...},
-"clip": {...}, "vae": {...}, "lora_adapter": {"dtype": ..., "rank":
-..., "param_count": ...}}`), the "some methods to get data from items...
-a universal interface other nodes may use later" ask. Built entirely
-out of methods that already existed on this class (`DeviceResident`'s
-own `per_resident_footprint_bytes()`, `TrainableModel`'s own
-`trainable_parameters()`) rather than a second introspection path --
-`nodes/memory/handle.py`'s `DeviceResident` (`footprint_bytes()`/
-`offload()`/`reload()`/`release()`) already covered "effective memory
-management" before this session started; `describe()` is the missing
-"preview vision on some things inside models" half, not a
-reimplementation of the other half.
+**Verified without the smoke-test suite** (a deferred, consolidated
+testing pass is still the plan -- see below): every method above
+checked by direct read plus targeted manual runs against real
+synthetic safetensors files -- `diagnostics()`/`process()` against a
+real checkpoint and a real saved LoRA (correct per-component dtype
+lines, correct rank/dtype detection); both checkbox-guard directions
+raise correctly; `unet_dtype="inherited"` resolves correctly and
+`process()` reaches the real (ComfyUI-gated) construction boundary
+with no `rank`/`alpha` involved at all, confirming the injection code
+path is genuinely gone, not just hidden; `VerifiedResourcePack`
+checked in isolation against a minimal concrete fake subclass (a real
+`SDXLVerifiedResourcePack` needs ComfyUI to construct at all) --
+`describe()`, `footprint_bytes()`, `offload()`/`reload()`/`release()`,
+dtype conversion, and the frozen-LoRA-merge code path all run
+correctly; the new `/diagnostics` endpoint called directly (success,
+404, path-traversal-as-embedded-error, `{}` for a node with no
+overridden `diagnostics()`). `nodegraph.js`: `node --check` only (a
+real syntax check, not a functional one) -- **not run in an actual
+browser**. The person did hand-test the `Port.choices` dropdown and
+the `visible_when` hide/show behavior directly and confirmed both
+work; the live diagnostics fetch/render specifically has not been
+separately confirmed in a browser yet.
 
-`unet_dtype` also gained a real `"inherited"` choice (default) --
-resolves to the attached checkpoint's own detected UNet dtype at
-`process()` time, reusing the exact same header read the "doesn't look
-like SDXL" check already does (`_inspect_checkpoint()`, extracted so
-neither `process()` nor `_checkpoint_validator()`'s own display text has
-to parse the other's output for structured data -- a real, if minor,
-bug caught while writing this the second way round, not shipped). This
-sidesteps the harder, still-not-built case the sketch's own "inherited"
-example technically asks for -- a dropdown gaining a *new* choice from a
-live server response after the node's already spawned -- by making
-"inherited" a real, always-present static choice instead; a genuinely
-dynamic per-instance choice-list extension is real, separate, larger
-frontend work, not attempted here.
+**Not built, honestly deferred:** a second preset (needs the Task x
+Architecture matrix to actually grow past one entry, and real
+reconciliation of `ResourcesControllerNode.INPUTS`/`OUTPUTS` once a
+second preset's shape genuinely differs from the first); a
+genuinely dynamic dropdown gaining a *new* choice from a live server
+response after a node's already spawned (the still-open, harder
+version of what `"inherited"` sidesteps by being a static choice
+instead).
 
-**Still not built, honestly deferred rather than silently missing:**
-the dynamic per-instance dropdown-choice-injection case just described.
-Everything else the sketch actually asked for -- self-contained
-checkpoint loading, real checkboxes gating hidden/shown fields, live
-server-computed values on the node itself, a universal describe()
-interface on the output -- is real now, not just planned.
-
-**Verified, without the smoke-test suite this time** (that files list
-its own budget, a huge amount of real code checked by direct read and
-targeted manual runs before this document gets updated with a plan for
-a real, deferred, consolidated test-writing/running pass, rather than a
-smoke-test file re-run after every small change): the whole module
-class-defines and imports cleanly (`ResourcePreset.__init_subclass__`'s
-and `Node.__init_subclass__`'s own definition-time checks both pass for
-real, not synthetic, classes); `ResourcesControllerNode`'s real
-`INPUTS`/`OUTPUTS`/`list_presets()` introspect correctly end to end
-through `node_info_to_dict()` (`node_kind`, `presets`, `path_kind`,
-`choices` all present and correct for this genuinely more complex real
-case, not just Phase 3's synthetic test fixture); `diagnostics()`
-against a real, synthetic-but-genuine safetensors checkpoint (real SDXL-
-shaped keys, real per-component dtypes, `save_file`/`load_file`, a temp
-`paths.set_checkpoints_dir()`) reports the right per-component dtype
-lines; the same against a checkpoint with no UNet-prefixed keys at all
-correctly reports an `"ERROR: ..."` diagnostic line rather than
-crashing; a saved-LoRA file's `diagnostics()` reports the right
-dtype/rank line; the `frozen_lora_strength`-without-`frozen_lora_path`
-guard correctly raises from `process()`; a path-traversal attempt is
-rejected by both `diagnostics()` (as an `"ERROR: ..."` line, not
-crashing the whole call) and `process()` (raised, not swallowed --
-`build()`'s real path needs the loud failure, `diagnostics()`'s display
-path doesn't). **Not exercised**: `process()`/`build()`'s actual
-`SDXL_LoraTrainer(...)` construction past the checkpoint-loading step --
-needs ComfyUI's real SDXL UNet class, not installed in this sandbox,
-same limitation already noted for Phase 4's own extraction work
-(`smoke_test_lora_injector_extraction.py`). A real smoke test file for
-this module (`nodes/smoke_tests/smoke_test_resources_controller.py`,
-following this project's established fixture-mocking pattern for
-exactly this ComfyUI-shaped gap) is real, queued follow-up, not written
-in this same pass -- deliberately, per this session's own working
-approach: write the real code first, verify it in one deferred,
-consolidated pass rather than after each small piece.
-
-Re-verified after reverting the wire (second correction), same manual-
-not-suite approach: `diagnostics()` against a real `checkpoint_path`
-string (not a wired object) reports the same correct per-component
-dtype lines; `continue_training`/`frozen_lora` each raise `process()`'s
-both-directions guard correctly; clearing every guard and reaching real
-`SDXL_LoraTrainer(...)` construction correctly hits the same known
-`ModuleNotFoundError: comfy` boundary as before.
-
-Re-verified once more after this pass's own additions:
-`unet_dtype="inherited"` correctly resolves against a real synthetic
-checkpoint and reaches the same `comfy` boundary (not a `KeyError` or a
-silently wrong dtype); `LoRATrainingSkeleton.describe()` checked in
-isolation against a minimal concrete fake subclass (a full
-`SDXL_LoraTrainer` needs ComfyUI to construct at all, so `describe()`
-itself can't be reached through real construction here) -- correct
-output for a normal case, an empty `vae_sd`, and an adapter with zero
-trainable parameters, all three read back the right `None`/`0` rather
-than raising. The new `/nodegraph/node/{class_name}/diagnostics`
-endpoint called directly (not over real HTTP, no server process running
-in this sandbox) against `ResourcesControllerNode`: a real checkpoint
-returns the right per-component lines, an unknown class name 404s, a
-path-traversal attempt in `params` comes back as an embedded
-`"ERROR: ..."` line rather than a 500 or a silent success (matching
-`diagnostics()`'s own per-input catch, not a second, different error
-path at the route level), and a node with no overridden `diagnostics()`
-(`ComposedAdamWOptimizerNode`) correctly returns `{}`. `nodegraph.js`
-itself: `node --check` only (a real syntax check, not a functional
-one) -- **not run in an actual browser**, same honest caveat every
-`nodegraph.js` change in this document has carried; the `visible_when`
-hide/show and the live diagnostics fetch/render are both new enough,
-and different enough in kind from the Port.choices dropdown the person
-already hand-tested, that they're worth a real look in the browser
-before calling this done.
+**How this section's scope got corrected:** the first two working
+passes had this node calling LoRA injection directly (`rank`/`alpha`/
+frozen-weight-storage as its own inputs, constructing
+`SDXL_LoraTrainer` in `process()`) -- reasonable given
+`docs/training_pipeline_design.md`'s own Phase 4 work already built
+that exact pipeline, but wrong: rank/alpha/frozen-weight-storage are
+properties of a LoRA *injection*, not of a verified *resource*, and
+conflating the two put a decision that belongs on the training node
+(Phase 6) onto this one instead. Corrected directly, not discovered
+independently -- `VerifiedResourcePack` and this node's current,
+narrower shape are the result. Earlier drafts of this section walked
+through that correction and two earlier, smaller ones (a wired-socket
+detour for `checkpoint_path`, correcting checkbox inference to real
+`bool` Ports) in full blow-by-blow; removed from here on the same
+direct feedback that the accumulated correction history had itself
+become the confusing part of this document. The reasoning for each
+individual decision above (why a wire was rejected, why `"inherited"`
+is static, why `VerifiedResourcePack` doesn't do injection) still
+lives in the code's own docstrings, not just here.
 
 **Dependency:** Phases 1-4 (done).
 
+
 ### Phase 6 -- Downstream integration (`TrainerNode` and friends)
 
-**Goal:** resolve the still-open question from earlier in this same
-conversation -- does this node's output replace `TrainerNode`'s
-separate `model`/`optimizer`/`text_encoder` ports with one bundled
-port, or does it feed into the existing `ComfyUNetLoRANode`-style
-construction path instead, with those ports staying as they are today?
-Explicitly deferred until Phase 5 exists and its actual output shape
-is settled -- the original sketch's own annotation already flagged the
-output as undecided ("not sure what should be output, so there is
-nothing currently").
+**Goal, now more concrete than "still open" (Phase 5's own correction
+settled real parts of this):** a node (or nodes) that takes Phase 5's
+`VerifiedResourcePack` -- `unet_sd`/`clip`/`vae_sd`/`continue_lora_sd`,
+not yet LoRA-injected -- and actually creates the trainable adapter:
+decides `rank`/`alpha`/frozen-weight-storage, calls
+`inject_lora()`/`build_lora_injected_unet()` (Phase 4, already real,
+unmodified -- `LoRATrainingSkeleton`/`SDXL_LoraTrainer`
+(`nodes/model/lora_training_resources.py`) already implement exactly
+this pipeline and are this phase's own obvious starting point, not
+something to rebuild), and produces something `TrainerNode` can use.
+Real, concrete jobs that belong here specifically because they don't
+belong on Phase 5: sizing a continuing LoRA's adapter to
+`continue_lora_sd`'s own actual detected rank rather than requiring
+the person to already know and re-type it (this is where the "should
+rank be locked when continuing" question from mid-Phase-5-development
+actually belongs -- correctly redirected here rather than bolted onto
+Phase 5's own, narrower scope). Still open, same as before: whether
+this replaces `TrainerNode`'s separate `model`/`optimizer`/
+`text_encoder` ports with one bundled port, or feeds the existing
+`ComfyUNetLoRANode`-style construction path instead. Not started.
 
-**Dependency:** Phase 5.
+**Dependency:** Phase 5 (done).
 
 ## Consolidation -- resolving low-synergy items instead of leaving them
 to drift

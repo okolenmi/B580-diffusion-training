@@ -44,6 +44,11 @@ class PortInfo:
     # tells the UI to hide this Port's own row unless the sibling input named here
     # currently holds exactly `value`. list (JSON has no tuple), same reasoning as choices
     # above; None for a legacy-guessed port or any real Port that didn't declare one.
+    widget_only: bool = False  # Port.widget_only -- tells the UI to draw only this
+    # Port's own widget, no wire socket at all. False for a legacy-guessed port (no
+    # Port object to read, and the safer default: showing a wire socket that turns out
+    # unneeded is a minor visual redundancy, hiding one that was actually needed is a
+    # real capability loss) or any real Port that didn't set it.
 
 
 @dataclass
@@ -252,6 +257,7 @@ def _port_info(p, *, is_output: bool = False) -> PortInfo:
         path_kind=(p.path_kind if not is_output else None),
         choices=(list(p.choices) if p.choices is not None and not is_output else None),
         visible_when=(list(p.visible_when) if p.visible_when is not None and not is_output else None),
+        widget_only=(p.widget_only if not is_output else False),
     )
 
 
@@ -343,7 +349,7 @@ def node_info_to_dict(info: NodeInfo) -> dict:
             {"name": p.name, "type": p.type_str, "default": p.default,
              "required": p.required, "type_mro": p.type_mro,
              "doc": p.doc, "path_kind": p.path_kind, "choices": p.choices,
-             "visible_when": p.visible_when}
+             "visible_when": p.visible_when, "widget_only": p.widget_only}
             for p in ports
         ]
     return {

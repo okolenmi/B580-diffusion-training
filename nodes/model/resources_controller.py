@@ -267,6 +267,7 @@ class LoRASDXLPreset(ResourcePreset):
         ),
         "continue_training": Port(
             name="continue_training", type=bool, required=False, default=False,
+            widget_only=True,
             doc="Carry an existing saved LoRA through as this pack's own continue_lora "
                 "resource, for whatever node injects LoRA later to load into its "
                 "freshly-created adapter instead of starting fresh. Gates "
@@ -281,6 +282,7 @@ class LoRASDXLPreset(ResourcePreset):
         ),
         "frozen_lora": Port(
             name="frozen_lora", type=bool, required=False, default=False,
+            widget_only=True,
             doc="Merge an existing saved LoRA directly into the base UNet weights -- "
                 "permanent, no separate identity afterward, which is why it isn't one "
                 "of this pack's own four output resources. Gates "

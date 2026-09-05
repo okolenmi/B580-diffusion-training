@@ -63,6 +63,23 @@ class Port:
     # redesign_plan.md Phase 5's own "changing checkbox state hides/shows
     # extra fields" ask, built generic rather than specific to that one
     # node, same reasoning as Port.choices above.
+    widget_only: bool = False
+    # True = this Port never gets a wire socket in the graph editor, only
+    # its own widget -- e.g. a checkbox like "continue_training", where a
+    # wire-in from another node's output was never a real use case and the
+    # socket dot plus a widget showing the literal word "true" next to it
+    # ("(o) continue_training" / "[ ] true" as two separate, redundant
+    # rows) was just confusing, not a genuine extra capability worth the
+    # visual noise. False (the default) is every ordinary primitive Port,
+    # which keeps its wire socket alongside its widget as today -- both
+    # are still real uses (someone wiring a computed float into a numeric
+    # Port instead of typing one, say). Purely a UI hint, same posture as
+    # path_kind/choices/visible_when above: build() never reads this, and
+    # nothing stops a value from arriving some other way (a saved graph
+    # from before a Port became widget_only, for instance) -- Node.build()
+    # itself is what actually decides the input is well-formed or not,
+    # same as every other Port here, this only ever shapes what the editor
+    # draws.
 
     def __post_init__(self):
         if self.choices is None:

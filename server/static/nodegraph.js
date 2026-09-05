@@ -31,6 +31,16 @@
     return d.innerHTML;
   }
 
+  function humanizePortName(name) {
+    // "continue_training" -> "Continue training" -- only used for a widget_only
+    // checkbox's own inline label (nodes.core.Port.widget_only): that label is the
+    // *only* place a port's own name is shown at all once its wire-point row (which
+    // shows the raw name everywhere else in the editor) is gone, so it's worth
+    // reading like a sentence rather than a Python identifier.
+    const s = name.replace(/_/g, " ");
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
   function isTypingTarget(el) {
     return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
@@ -45,9 +55,9 @@
   }
 
   /* One spawned node instance on the canvas. Port *declarations* (name,
-     type, required, default, doc, path_kind, choices) live on classInfo -- this only
-     holds per-instance state: position, and widget values for unconnected
-     primitive inputs. */
+     type, required, default, doc, path_kind, choices, visible_when, widget_only)
+     live on classInfo -- this only holds per-instance state: position, and widget
+     values for unconnected primitive inputs. */
   class GraphNode {
     constructor(id, classInfo, x, y) {
       this.id = id;
@@ -745,22 +755,24 @@
         wrapper.dataset.visibleWhenValue = JSON.stringify(port.visible_when[1]);
         wrapper.style.display = this.portVisible(node, port) ? "" : "none";
       }
-      const connected = !!this.model.existingConnectionInto(node.id, port.name);
-      wrapper.appendChild(this.buildPortRow(node, port, false));
+      const connected = !port.widget_only && !!this.model.existingConnectionInto(node.id, port.name);
+      if (!port.widget_only) {
+        wrapper.appendChild(this.buildPortRow(node, port, false));
 
-      if (this.model.isHandleType(port.type)) {
-        if (connected) {
-          const conn = this.model.existingConnectionInto(node.id, port.name);
-          const fromNode = this.model.nodes.get(conn.fromNode);
-          const hint = document.createElement("div");
-          hint.className = "ng-widget-row";
-          hint.innerHTML = `<span class="ng-port-hint">\u2190 ${escapeHtml(fromNode ? fromNode.classInfo.class_name : "?")}.${escapeHtml(conn.fromPort)}</span>`;
-          wrapper.appendChild(hint);
+        if (this.model.isHandleType(port.type)) {
+          if (connected) {
+            const conn = this.model.existingConnectionInto(node.id, port.name);
+            const fromNode = this.model.nodes.get(conn.fromNode);
+            const hint = document.createElement("div");
+            hint.className = "ng-widget-row";
+            hint.innerHTML = `<span class="ng-port-hint">\u2190 ${escapeHtml(fromNode ? fromNode.classInfo.class_name : "?")}.${escapeHtml(conn.fromPort)}</span>`;
+            wrapper.appendChild(hint);
+          }
+          return wrapper; // handle types are wire-only, no widget either way
         }
-        return wrapper; // handle types are wire-only, no widget either way
-      }
 
-      if (connected) return wrapper; // has a value via wire, no widget needed
+        if (connected) return wrapper; // has a value via wire, no widget needed
+      }
 
       if (port.path_kind === "lora_output") {
         wrapper.appendChild(this.buildSaveAsWidget(node, port));
@@ -779,7 +791,14 @@
       row.className = "ng-widget-row";
       const current = node.paramValues[port.name];
       if (port.type === "bool") {
-        row.innerHTML = `<label class="ng-checkbox-label"><input type="checkbox" ${current ? "checked" : ""}> true</label>`;
+        // humanizePortName(), not the raw "true"/"false" the widget's own value would
+        // otherwise be the only thing shown next to it: a checkbox's own state already
+        // *is* its value, so the label needs to say what field this is instead. This
+        // is now the only place a widget_only port's own name appears anywhere in the
+        // node at all (its wire-point row -- the only other place -- is gone), so a
+        // readable label matters here more than it would for an ordinary port.
+        row.innerHTML = `<label class="ng-checkbox-label"><input type="checkbox" ${current ? "checked" : ""}> ${escapeHtml(humanizePortName(port.name))}</label>`;
+        if (port.doc) row.title = port.doc;
         row.querySelector("input").addEventListener("change", (e) => {
           node.paramValues[port.name] = e.target.checked;
           this.updatePortDotState(node.id, port.name);
@@ -956,16 +975,25 @@
     }
 
     updatePortDotState(nodeId, portName) {
+      // No early return on a missing dot: a widget_only port (nodes.core.Port,
+      // e.g. a checkbox) never has one at all, but updateFieldVisibility()/
+      // scheduleDiagnostics() below still need to run for it -- toggling
+      // continue_training is exactly the kind of change visible_when/diagnostics
+      // exist to react to. A caught-before-shipping bug: the original version of
+      // this function returned here whenever there was no dot, which silently
+      // broke both of those for every widget_only port the moment it stopped
+      // rendering a dot to find.
       const dot = this.els.canvas.querySelector(
         `.ng-port-dot[data-node-id="${nodeId}"][data-is-output="0"][data-port-name="${CSS.escape(portName)}"]`);
-      if (!dot) return;
-      const node = this.model.nodes.get(nodeId);
-      const port = node.classInfo.inputs.find(p => p.name === portName);
-      const connected = !!this.model.existingConnectionInto(nodeId, portName);
-      const v = node.paramValues[portName];
-      const unmet = !!port.required && !connected && (v === undefined || v === null || v === "");
-      dot.classList.toggle("required-unmet", unmet);
-      dot.classList.toggle("connected", connected);
+      if (dot) {
+        const node = this.model.nodes.get(nodeId);
+        const port = node.classInfo.inputs.find(p => p.name === portName);
+        const connected = !!this.model.existingConnectionInto(nodeId, portName);
+        const v = node.paramValues[portName];
+        const unmet = !!port.required && !connected && (v === undefined || v === null || v === "");
+        dot.classList.toggle("required-unmet", unmet);
+        dot.classList.toggle("connected", connected);
+      }
       // Piggybacked here rather than added as a 7th call site alongside this function's
       // own: every paramValue-changing handler in buildInputBlock already calls
       // updatePortDotState right after touching node.paramValues, so it's already the

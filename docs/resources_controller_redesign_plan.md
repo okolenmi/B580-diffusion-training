@@ -675,6 +675,24 @@ styles in `nodegraph.html`). Best-effort throughout: a failed
 diagnostics call is silently ignored, Run still goes through the real
 `validate_inputs()`/`build()` contract regardless.
 
+A fourth, smaller mechanism, same generic-not-specific posture:
+**`Port.widget_only`** (`nodes/core.py`) -- a Port with this set never
+gets a wire socket at all, only its own widget; direct feedback that a
+checkbox with a redundant wire-point row above it, plus a widget
+literally labeled "true", was confusing rather than a real extra
+capability. `continue_training`/`frozen_lora` set it now; a
+`humanizePortName()` in `nodegraph.js` gives the checkbox's own label
+a readable "Continue training" instead of the value it already
+represents. Building this exposed a real bug before it shipped:
+`updatePortDotState()` (the same per-change choke point
+`updateFieldVisibility()`/`scheduleDiagnostics()` above ride on)
+returned early whenever a port had no dot to update -- true for every
+ordinary port with a connection problem worth flagging, but now also
+true for every `widget_only` port, silently breaking both of those for
+exactly the two checkboxes this was meant to fix. Fixed: the dot
+update and the visibility/diagnostics refresh are independent now: the
+one only runs if a dot exists, the other always does.
+
 **Verified without the smoke-test suite** (a deferred, consolidated
 testing pass is still the plan -- see below): every method above
 checked by direct read plus targeted manual runs against real

@@ -66,6 +66,18 @@ from .resource_inspection import dtype_to_str
 from .sdxl_architecture import SDXLArchitecture
 
 
+def _lora_rank(lora_sd: dict) -> int | None:
+    """The rank a saved LoRA's own lora_down.weight tensors actually
+    have -- shared by LoRATrainingResources.describe() below (detected
+    information) and nodes/model/lora_training_config.py's own rank-
+    locking (Phase 6: a continuing LoRA's shape isn't a free choice,
+    nothing here resizes it). None when the modules don't agree on one
+    single rank -- a genuinely malformed/mixed file, not a value to
+    silently pick one of."""
+    ranks = {int(t.shape[0]) for k, t in lora_sd.items() if k.endswith("lora_down.weight")}
+    return ranks.pop() if len(ranks) == 1 else None
+
+
 class LoRATrainingSkeleton(DeviceResident, ABC):
 
     @abstractmethod
@@ -119,19 +131,68 @@ class LoRATrainingSkeleton(DeviceResident, ABC):
         self.vae_sd stays the raw split-out state dict, not a VAE
         object -- nothing in nodes/ builds one yet (only legacy
         core.vae_decode.VAEDecoder, unused elsewhere in nodes/).
+
+        Starts from a raw checkpoint and does the whole pipeline itself
+        -- split, merge, inject, build the text encoder, all in one
+        call. from_resources() below is the other entry point, for
+        nodes/model/resources_controller.py's own
+        LoRATrainingResources, which already did everything except
+        injection -- the two share _inject() (below) rather than this
+        method and that one each having their own copy of "inject, load
+        continue_lora, set up the coordinator."
         """
         components = self.split_checkpoint(base_model_sd)
-        self.frozen_lora_merged_count = 0
+        frozen_lora_merged_count = 0
         if frozen_lora_sd is not None:
             from .lora_merge import merge_lora_into_state_dict
-            components["unet"], self.frozen_lora_merged_count = merge_lora_into_state_dict(
+            components["unet"], frozen_lora_merged_count = merge_lora_into_state_dict(
                 components["unet"], frozen_lora_sd, strength=frozen_lora_strength)
+        clip = self.build_text_encoder(components["clip"], device=device)
+        self._inject(components["unet"], clip, components["vae"],
+                     device=device, dtype=dtype, rank=rank, alpha=alpha,
+                     continue_lora_sd=continue_lora_sd, **inject_kwargs)
+        self.frozen_lora_merged_count = frozen_lora_merged_count
+
+    @classmethod
+    def from_resources(cls, resources: "LoRATrainingResources", *,
+                        rank: int = 64, alpha: float = 1.0, **inject_kwargs):
+        """The other entry point -- skips split/frozen-merge/dtype-
+        convert/build_text_encoder entirely, because `resources`
+        (nodes/model/resources_controller.py's own output, Phase 5)
+        already did every one of those. Re-deriving any of them here a
+        second time from a raw checkpoint resources itself no longer
+        even exposes would be exactly the duplication this whole
+        redesign's Consolidation section exists to flag -- this is the
+        real reason ResourcesControllerNode and this class stayed two
+        separate things rather than one node doing both stages.
+        frozen_lora_merged_count is 0 here always -- whatever frozen
+        LoRA was merged already happened inside `resources`, this
+        object has no visibility into that count, only into its
+        already-applied effect on unet_sd."""
+        self = cls.__new__(cls)
+        self._inject(resources.unet_sd, resources.clip, resources.vae_sd,
+                     device=resources._device, dtype=None, rank=rank, alpha=alpha,
+                     continue_lora_sd=resources.continue_lora_sd, **inject_kwargs)
+        self.frozen_lora_merged_count = 0
+        return self
+
+    def _inject(self, unet_sd: dict, clip, vae_sd: dict, *, device: str, dtype,
+                continue_lora_sd: dict | None, rank: int, alpha: float, **inject_kwargs):
+        """The one real implementation of "inject LoRA into this UNet,
+        attach the already-built clip/vae, load an optional continue-
+        from LoRA into the freshly-injected adapter, set up device-
+        residency" -- __init__ and from_resources() above both end
+        here rather than each having their own copy. dtype is None from
+        from_resources() (resources.unet_sd is already whatever dtype
+        ResourcesControllerNode resolved it to -- converting it again
+        here would be a second, redundant conversion, not a correction
+        of anything)."""
         self._rank = rank
         self._unet_dtype = dtype
-        self.unet = self.inject_lora(components["unet"], device=device, dtype=dtype,
+        self.unet = self.inject_lora(unet_sd, device=device, dtype=dtype,
                                       rank=rank, alpha=alpha, **inject_kwargs)
-        self.clip = self.build_text_encoder(components["clip"], device=device)
-        self.vae_sd = components["vae"]
+        self.clip = clip
+        self.vae_sd = vae_sd
 
         self.lora = continue_lora_sd
         if continue_lora_sd is not None:
@@ -144,6 +205,7 @@ class LoRATrainingSkeleton(DeviceResident, ABC):
         self._coordinator = ResourceCoordinator()
         self._coordinator.register("unet", self.unet)
         self._coordinator.register("clip", self.clip)
+
 
     def footprint_bytes(self) -> int:
         """Coordinator's total (unet + clip) plus vae_sd's raw tensors,
@@ -311,6 +373,9 @@ class LoRATrainingResources(DeviceResident, ABC):
         self.vae_sd = components["vae"]
         self.continue_lora_sd = continue_lora_sd
         self.clip = self.build_text_encoder(components["clip"], device=device)
+        self._device = device  # LoRATrainingSkeleton.from_resources()'s own default
+        # injection device (nodes/model/lora_training_config.py, Phase 6) -- also
+        # reload()'s own fallback below, same pattern LoRATrainingSkeleton uses.
         self._coordinator = ResourceCoordinator()
         self._coordinator.register("clip", self.clip)
 
@@ -329,8 +394,13 @@ class LoRATrainingResources(DeviceResident, ABC):
             self.continue_lora_sd = {k: v.cpu() for k, v in self.continue_lora_sd.items()}
 
     def reload(self, device: str | None = None) -> None:
-        self.clip.reload(device)
-        target = device or "xpu"
+        """None reloads to the device this was constructed for -- was
+        hardcoded "xpu" regardless of that, a real bug fixed here rather
+        than shipped: reload(None) after offload() on anything built for
+        "cpu" (a sandbox with no XPU, say) would have silently moved
+        everything to a device that was never actually asked for."""
+        target = device or self._device
+        self.clip.reload(target)
         self.unet_sd = {k: v.to(target) for k, v in self.unet_sd.items()}
         self.vae_sd = {k: v.to(target) for k, v in self.vae_sd.items()}
         if self.continue_lora_sd is not None:
@@ -365,11 +435,9 @@ class LoRATrainingResources(DeviceResident, ABC):
             "vae": _component(self.vae_sd),
         }
         if self.continue_lora_sd is not None:
-            ranks = {int(t.shape[0]) for k, t in self.continue_lora_sd.items()
-                     if k.endswith("lora_down.weight")}
             result["continue_lora"] = {
                 **_component(self.continue_lora_sd),
-                "rank": ranks.pop() if len(ranks) == 1 else None,
+                "rank": _lora_rank(self.continue_lora_sd),
             }
         return result
 

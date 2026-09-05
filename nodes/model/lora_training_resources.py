@@ -4,21 +4,28 @@ state dict, for the not-yet-built training node
 (docs/resources_controller_redesign_plan.md's Phase 6) that actually
 decides rank/alpha and creates the adapter.
 
-VerifiedResourcePack + SDXLVerifiedResourcePack: the earlier stage --
+LoRATrainingResources + SDXL_LoRATrainingResources: the earlier stage --
 loaded, verified, NOT yet injected -- ResourcesControllerNode
 (nodes/model/resources_controller.py, Phase 5) actually produces today.
 Two separate classes rather than one doing both stages, direct
 correction on an earlier version of this codebase's Resources
 Controller node, which had blurred that line by calling inject_lora()
-itself: see VerifiedResourcePack's own docstring below for the full
-reasoning.
+itself: see LoRATrainingResources's own docstring below for the full
+reasoning. Named to standardize the two stages' output types under one
+family ("...Resources" for the verified-but-uninjected pack Phase 5
+produces, "...Skeleton" for the injected, trainable object Phase 6 will
+produce from it) rather than leaving Phase 5's own output type
+generically named ("VerifiedResourcePack", what it was called before
+this naming pass) -- direct feedback that a consistent, LoRA-training-
+specific type name here sets up how the next node's own input should
+be typed, not just how this one's output happens to be named.
 
 LoRATrainingSkeleton owns everything about LoRA training that doesn't
 depend on architecture; SDXLArchitecture (sdxl_architecture.py) owns
 the SDXL-specific mechanics. The two combine via inheritance --
 SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton), base order
-required, see that class's own docstring. VerifiedResourcePack/
-SDXLVerifiedResourcePack below mirror this exact same pattern for the
+required, see that class's own docstring. LoRATrainingResources/
+SDXL_LoRATrainingResources below mirror this exact same pattern for the
 earlier stage, reusing SDXLArchitecture's own split_checkpoint()/
 build_text_encoder() rather than a second implementation of either.
 
@@ -44,7 +51,7 @@ through it. describe() (below) gives a read-only summary of the same
 information -- the "universal interface other nodes may use later"
 docs/resources_controller_redesign_plan.md's Phase 5 asks for -- built
 entirely out of those same existing methods, not a second parallel
-introspection path. VerifiedResourcePack implements the same
+introspection path. LoRATrainingResources implements the same
 DeviceResident contract + describe() shape for its own, earlier-stage
 fields.
 """
@@ -227,7 +234,7 @@ class SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton):
     pass
 
 
-class VerifiedResourcePack(DeviceResident, ABC):
+class LoRATrainingResources(DeviceResident, ABC):
     """Ready-to-use, verified base resources for LoRA training -- NOT
     yet LoRA-injected. That's deliberately a separate, later node's job
     (docs/resources_controller_redesign_plan.md's own Phase 6, not
@@ -254,7 +261,7 @@ class VerifiedResourcePack(DeviceResident, ABC):
     Same split_checkpoint()/build_text_encoder() architecture-specific
     methods LoRATrainingSkeleton above needs, reused (not
     reimplemented) by whichever concrete class mixes in an Architecture
-    class -- see SDXLVerifiedResourcePack below for how, the same
+    class -- see SDXL_LoRATrainingResources below for how, the same
     SDXLArchitecture(...) combines with either ABC via multiple
     inheritance in the same shape. Deliberately does NOT need
     inject_lora() at all -- the type system itself reflects the scope
@@ -367,9 +374,9 @@ class VerifiedResourcePack(DeviceResident, ABC):
         return result
 
 
-class SDXLVerifiedResourcePack(SDXLArchitecture, VerifiedResourcePack):
-    """VerifiedResourcePack for SDXL -- same base-order requirement and
+class SDXL_LoRATrainingResources(SDXLArchitecture, LoRATrainingResources):
+    """LoRATrainingResources for SDXL -- same base-order requirement and
     reasoning as SDXL_LoraTrainer above (SDXLArchitecture first, or
-    split_checkpoint/build_text_encoder resolve to VerifiedResourcePack's
+    split_checkpoint/build_text_encoder resolve to LoRATrainingResources's
     own @abstractmethod stubs instead of SDXLArchitecture's real ones)."""
     pass

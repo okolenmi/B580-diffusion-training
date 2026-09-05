@@ -4,7 +4,7 @@ checkpoint (plus optional frozen/continue-training LoRAs) into a
 ready-to-use, verified pack of resources for LoRA training -- and
 nothing past that: not LoRA injection, not rank/alpha, not training
 setup. Those are a separate, later node's job (Phase 6, not built yet)
--- see VerifiedResourcePack's own docstring in
+-- see LoRATrainingResources's own docstring in
 nodes/model/lora_training_resources.py for the full reasoning, and this
 file's own revision history at the bottom for how an earlier version of
 this node got that boundary wrong.
@@ -74,7 +74,7 @@ from typing import Any, Callable, ClassVar
 from ..core import Node, NodePreset, Port
 from ..components.layout import ProjectLayout
 from .handle import ModelWeights
-from .lora_training_resources import SDXLVerifiedResourcePack, VerifiedResourcePack
+from .lora_training_resources import LoRATrainingResources, SDXL_LoRATrainingResources
 from .resource_inspection import dtype_to_str, inspect_lora, str_to_dtype
 
 
@@ -210,14 +210,14 @@ _UNET_DTYPE_CHOICES = ("inherited", "bfloat16", "float16", "float32")
 
 class LoRASDXLPreset(ResourcePreset):
     """LoRA training on SDXL -- the one concrete preset that exists
-    today. Wraps SDXLVerifiedResourcePack
+    today. Wraps SDXL_LoRATrainingResources
     (nodes/model/lora_training_resources.py) rather than reimplementing
     any of its construction pipeline (merge frozen LoRA -> split ->
     dtype-convert -> build text encoder).
 
     Deliberately does NOT do LoRA injection, and so deliberately has no
     rank/alpha/frozen-weight-storage inputs at all -- see this module's
-    own top docstring and VerifiedResourcePack's own docstring for why
+    own top docstring and LoRATrainingResources's own docstring for why
     that's a real scope boundary, not an oversight. checkpoint_path is a
     path_kind="checkpoint" Port this node resolves and loads itself --
     a self-contained node, not one that pushes checkpoint loading out to
@@ -302,10 +302,10 @@ class LoRASDXLPreset(ResourcePreset):
 
     outputs: ClassVar[dict[str, Port]] = {
         "resources": Port(
-            name="resources", type=VerifiedResourcePack, required=True,
+            name="resources", type=LoRATrainingResources, required=True,
             doc="Exactly four things: .unet_sd, .clip, .vae_sd, .continue_lora_sd "
                 "(None if continue_training wasn't checked) -- see "
-                "VerifiedResourcePack's own docstring. NOT LoRA-injected -- that's a "
+                "LoRATrainingResources's own docstring. NOT LoRA-injected -- that's a "
                 "separate, later node's job (Phase 6 of "
                 "docs/resources_controller_redesign_plan.md, not built yet).",
         ),
@@ -376,7 +376,7 @@ class LoRASDXLPreset(ResourcePreset):
         else:
             resolved_dtype = str_to_dtype(unet_dtype)
 
-        pack = SDXLVerifiedResourcePack(
+        pack = SDXL_LoRATrainingResources(
             checkpoint_sd,
             device=inputs.get("device", self.inputs["device"].default),
             dtype=resolved_dtype,
@@ -473,7 +473,7 @@ class ResourcesControllerNode(Node):
 #    a continuing LoRA's adapter to that LoRA's own real rank, a decision
 #    this node has no business making. Removed rank/alpha/unet_weight_store
 #    and the SDXL_LoraTrainer(...)/injection call entirely; this node now
-#    produces VerifiedResourcePack (nodes/model/lora_training_resources.py,
+#    produces LoRATrainingResources (nodes/model/lora_training_resources.py,
 #    new), not LoRATrainingSkeleton -- four verified-but-uninjected
 #    resources, matching "for LoRA training specification there are only 4
 #    objects: base unet, clip, vae, continue LoRA (optional)."

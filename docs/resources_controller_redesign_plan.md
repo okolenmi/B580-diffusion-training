@@ -8,7 +8,7 @@ including `Port.choices` (11.4), now built and landed as part of that
 consolidation, with real frontend code (`server/static/nodegraph.js`)
 beyond Phases 1-2's backend-only scope. Phase 5 done: the Resources
 Controller node produces a verified, NOT-yet-LoRA-injected resource
-pack (`VerifiedResourcePack`) -- see that phase's own status for how
+pack (`LoRATrainingResources`) -- see that phase's own status for how
 its scope got corrected from an earlier, wider version that did
 injection itself, and for what's still browser-unverified. Phase 5
 also landed real, generic editor mechanics (`Port.visible_when`, a
@@ -132,7 +132,7 @@ architecture layer.
 | processor method | Takes resolved inputs + the resolved (single-choice) dtype dict, returns the real object | `build()` |
 
 The object `processor()`/`build()` returns is a plain,
-undecorated domain object (e.g. `VerifiedResourcePack(unet_sd=...,
+undecorated domain object (e.g. `LoRATrainingResources(unet_sd=...,
 clip=..., vae_sd=..., continue_lora_sd=None)` -- Phase 5's actual
 return shape, once its own scope got corrected to stop short of LoRA
 injection; see that phase's own section for why) -- none of the
@@ -606,18 +606,26 @@ logic one level down (`ResourcePreset.process()`, so more than one
 preset can share one Node class). "Validators" (per-input diagnostic
 text, distinct from `Port.choices`' binary valid/invalid) was the one
 genuinely new piece. `LoRASDXLPreset`: the one concrete preset,
-producing `VerifiedResourcePack`
+producing `LoRATrainingResources` -- renamed from this class's first
+name, `VerifiedResourcePack`, on direct feedback: a standardized,
+LoRA-training-specific output type here (rather than a generic
+"verified resource pack" name) is what lets Phase 6's own node type
+its input against this specific name, the same way `SDXL_LoraTrainer`/
+`LoRATrainingSkeleton`'s own naming already anchors the *post*-injection
+stage -- "...Resources" (this one, verified/uninjected) vs.
+"...Skeleton" (that one, injected/trainable) is the actual
+standardization, not just a cosmetic rename
 (`nodes/model/lora_training_resources.py`, new) -- `unet_sd`, `clip`
 (a real, already-loaded `SDXLTextEncoder`, since
 `build_text_encoder()` does real work and isn't LoRA-specific at
 all), `vae_sd`, `continue_lora_sd` (`None` unless `continue_training`
-is checked). `SDXLVerifiedResourcePack(SDXLArchitecture,
-VerifiedResourcePack)` mirrors `SDXL_LoraTrainer`'s own
+is checked). `SDXL_LoRATrainingResources(SDXLArchitecture,
+LoRATrainingResources)` mirrors `SDXL_LoraTrainer`'s own
 multiple-inheritance shape exactly, reusing
 `SDXLArchitecture.split_checkpoint()`/`build_text_encoder()` rather
 than reimplementing either -- deliberately does **not** need
 `inject_lora()` at all, so the type system itself reflects the scope
-boundary above. `VerifiedResourcePack` is a real `DeviceResident`
+boundary above. `LoRATrainingResources` is a real `DeviceResident`
 (`footprint_bytes()`/`offload()`/`reload()`/`release()`) and has its
 own `describe()` (dtype/footprint per component, `rank` for
 `continue_lora` if present) -- the same "universal interface other
@@ -702,9 +710,9 @@ lines, correct rank/dtype detection); both checkbox-guard directions
 raise correctly; `unet_dtype="inherited"` resolves correctly and
 `process()` reaches the real (ComfyUI-gated) construction boundary
 with no `rank`/`alpha` involved at all, confirming the injection code
-path is genuinely gone, not just hidden; `VerifiedResourcePack`
+path is genuinely gone, not just hidden; `LoRATrainingResources`
 checked in isolation against a minimal concrete fake subclass (a real
-`SDXLVerifiedResourcePack` needs ComfyUI to construct at all) --
+`SDXL_LoRATrainingResources` needs ComfyUI to construct at all) --
 `describe()`, `footprint_bytes()`, `offload()`/`reload()`/`release()`,
 dtype conversion, and the frozen-LoRA-merge code path all run
 correctly; the new `/diagnostics` endpoint called directly (success,
@@ -734,7 +742,7 @@ that exact pipeline, but wrong: rank/alpha/frozen-weight-storage are
 properties of a LoRA *injection*, not of a verified *resource*, and
 conflating the two put a decision that belongs on the training node
 (Phase 6) onto this one instead. Corrected directly, not discovered
-independently -- `VerifiedResourcePack` and this node's current,
+independently -- `LoRATrainingResources` and this node's current,
 narrower shape are the result. Earlier drafts of this section walked
 through that correction and two earlier, smaller ones (a wired-socket
 detour for `checkpoint_path`, correcting checkbox inference to real
@@ -742,7 +750,7 @@ detour for `checkpoint_path`, correcting checkbox inference to real
 direct feedback that the accumulated correction history had itself
 become the confusing part of this document. The reasoning for each
 individual decision above (why a wire was rejected, why `"inherited"`
-is static, why `VerifiedResourcePack` doesn't do injection) still
+is static, why `LoRATrainingResources` doesn't do injection) still
 lives in the code's own docstrings, not just here.
 
 **Dependency:** Phases 1-4 (done).
@@ -752,7 +760,7 @@ lives in the code's own docstrings, not just here.
 
 **Goal, now more concrete than "still open" (Phase 5's own correction
 settled real parts of this):** a node (or nodes) that takes Phase 5's
-`VerifiedResourcePack` -- `unet_sd`/`clip`/`vae_sd`/`continue_lora_sd`,
+`LoRATrainingResources` -- `unet_sd`/`clip`/`vae_sd`/`continue_lora_sd`,
 not yet LoRA-injected -- and actually creates the trainable adapter:
 decides `rank`/`alpha`/frozen-weight-storage, calls
 `inject_lora()`/`build_lora_injected_unet()` (Phase 4, already real,

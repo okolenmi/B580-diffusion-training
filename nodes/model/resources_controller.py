@@ -304,10 +304,8 @@ class LoRASDXLPreset(ResourcePreset):
         "resources": Port(
             name="resources", type=LoRATrainingResources, required=True,
             doc="Exactly four things: .unet_sd, .clip, .vae_sd, .continue_lora_sd "
-                "(None if continue_training wasn't checked) -- see "
-                "LoRATrainingResources's own docstring. NOT LoRA-injected -- that's a "
-                "separate, later node's job (Phase 6 of "
-                "docs/resources_controller_redesign_plan.md, not built yet).",
+                "(None if continue_training wasn't checked). Not yet LoRA-injected -- "
+                "pair with a LoRA Training Config node to create a trainable adapter.",
         ),
     }
 
@@ -421,7 +419,7 @@ class ResourcesControllerNode(Node):
             name="preset", type=str, required=False, default=_DEFAULT_PRESET,
             choices=tuple(_PRESETS),
             doc="Which (task, architecture) combination to build. Only one exists "
-                "today -- see this class's own docstring.",
+                "today: LoRA training on SDXL.",
         ),
         **_PRESETS[_DEFAULT_PRESET].inputs,
     }

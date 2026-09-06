@@ -90,30 +90,39 @@ class LoRATrainingConfigNode(Node):
     INPUTS: ClassVar[dict[str, Port]] = {
         "resources": Port(
             name="resources", type=LoRATrainingResources, required=True,
-            doc="Phase 5's own output (ResourcesControllerNode) -- verified, "
-                "not yet LoRA-injected.",
+            doc="Verified base resources from a Resources Controller node -- unet, "
+                "clip, vae, plus an optional continue-training LoRA. Not yet "
+                "LoRA-injected.",
         ),
         "rank": Port(
             name="rank", type=int, required=False, default=64,
-            doc="Ignored when resources.continue_lora_sd is set -- see this "
-                "module's own top docstring. Free choice otherwise.",
+            doc="How many extra parameters per layer the LoRA adapter gets -- higher "
+                "rank means more capacity to learn, more VRAM, slower training. "
+                "Ignored when continuing training from an existing LoRA: that LoRA's "
+                "own saved rank is used instead, since its structure can't be resized.",
         ),
-        "alpha": Port(name="alpha", type=float, required=False, default=1.0),
+        "alpha": Port(
+            name="alpha", type=float, required=False, default=64.0,
+            doc="Scales the LoRA's effect -- the actual multiplier applied is "
+                "alpha/rank, not alpha alone. Defaulting to 64 (matching rank's own "
+                "default) gives a scale of 1.0 out of the box, a common starting "
+                "point ('alpha equal to rank'). Changing rank without also changing "
+                "alpha changes the effective strength proportionally -- e.g. lowering "
+                "rank to 32 while leaving alpha at 64 doubles the scale to 2.0.",
+        ),
         "unet_weight_store": Port(
             name="unet_weight_store", type=str, required=False, default="bf16",
             choices=_UNET_WEIGHT_STORE_CHOICES,
-            doc="Frozen UNet base-weight storage. 'nf4' quantizes to ~4 bits/parameter "
-                "(nodes/model/nf4_weight_store.py) -- real VRAM savings, real "
-                "quantization error, genuinely lossy before any training happens.",
+            doc="Frozen UNet base-weight storage. 'nf4' quantizes to ~4 bits/parameter -- "
+                "real VRAM savings, real quantization error, genuinely lossy before "
+                "any training happens.",
         ),
     }
 
     OUTPUTS: ClassVar[dict[str, Port]] = {
         "trainer": Port(
             name="trainer", type=LoRATrainingSkeleton, required=True,
-            doc="Real, LoRA-injected .unet/.clip/.vae_sd/.lora attributes, ready to "
-                "train. What consumes this (TrainerNode and friends) is still open -- "
-                "see docs/resources_controller_redesign_plan.md's own Phase 6 section.",
+            doc="Real, LoRA-injected UNet/CLIP/VAE, ready to train.",
         ),
     }
 

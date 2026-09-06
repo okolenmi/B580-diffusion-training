@@ -1014,6 +1014,18 @@
         const actual = node.paramValues[wrapper.dataset.visibleWhenPort];
         wrapper.style.display = (actual === expected) ? "" : "none";
       });
+      // Hiding/showing a row changes this node's own height, which moves every port
+      // dot below it -- measurePorts()'s cached offsets (node.portOffsets, used by
+      // redrawWires() below) go stale the instant that happens. A real, visible bug
+      // caught after shipping, not before: a wire into/out of this node stayed drawn
+      // at its pre-toggle position until some unrelated action (moving the node, say)
+      // happened to trigger a fresh measurement.
+      this.remeasureAndRedraw(node);
+    }
+
+    remeasureAndRedraw(node) {
+      this.measurePorts(node);
+      this.redrawWires();
     }
 
     scheduleDiagnostics(nodeId) {
@@ -1038,7 +1050,7 @@
       let result;
       try {
         const res = await fetch(
-          `/nodegraph/node/${encodeURIComponent(node.classInfo.class_name)}/diagnostics`,
+          `/api/nodegraph/node/${encodeURIComponent(node.classInfo.class_name)}/diagnostics`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1072,6 +1084,11 @@
           box.appendChild(row);
         }
       }
+      // Same reasoning as updateFieldVisibility()'s own tail: adding/changing
+      // diagnostic text changes this node's height too, and every port dot below
+      // whichever row just grew or shrank needs its cached offset refreshed before
+      // any wire touching this node draws in the right place again.
+      this.remeasureAndRedraw(node);
     }
 
     // ---- ports / wires ----

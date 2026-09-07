@@ -48,6 +48,18 @@ class ResourceCoordinator:
             if name not in keep:
                 resident.offload()
 
+    def offload(self, name: str) -> None:
+        """Single-resident counterpart to offload_all_except() above --
+        added alongside ResourceControlHandle (nodes/memory/control_handle.py),
+        which needs to offload one specific resident it's decided is
+        eligible, not "everything except a keep set." Mirrors reload()'s
+        own single-name shape immediately below rather than leaving a
+        caller to either reach into self._residents directly (the exact
+        private-attribute leak per_resident_footprint_bytes() above
+        already exists to close for the read-only case) or route a
+        single offload through offload_all_except()'s all-but-N shape."""
+        self._residents[name].offload()
+
     def reload(self, name: str, device: Optional[str] = None) -> None:
         self._residents[name].reload(device)
 

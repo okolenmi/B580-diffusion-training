@@ -1398,6 +1398,40 @@ registration problem these solve still hasn't materialized).
 `ResourceProfile` (5.5), the fourth item this paragraph used to list, is
 done -- see 9.1.
 
+**A live, per-step VRAM budget enforcer, new since the list above --
+genuinely different from `OffloadOrchestrator` (5.2), not a rename of
+it.** `OffloadOrchestrator` is still exactly as un-wired as this
+document already said: event-driven, for three specific, rare moments
+(cache rebuild, preview generation, checkpoint save), and nothing in
+the real training loop publishes those events yet. `ResourceControlHandle`/
+`BudgetedResourceControlHandle` (`nodes/memory/control_handle.py`) is a
+different, complementary shape for a different problem: not "react to
+a named, rare event," but "check real measured usage before every
+single step, offload whatever's marked safe to if over a stated
+`ResourceBudget` (5.5's own type, reused as-is), reload it right before
+whatever needs it next actually needs it." Built as a handle one node
+constructs (`VRAMBudgetControllerNode`) and another (the trainer) calls
+into during its own `build()`, the same shape `MonitorHandle`/
+`LiveMonitorHandle` already established for a different cross-cutting
+concern -- deliberately not a second graph node running "alongside" the
+trainer, since `server/graph_executor.py` runs nodes in topological
+order, one at a time; there's no mechanism for two nodes to run
+concurrently and exchange live signals mid-execution, so a callback
+object one node hands to another is what makes "continuous" possible at
+all here. Wired into `SupervisedLoRATrainerNode` (a new
+`resource_control` input) -- real measurement happens every step when
+one is connected. Honestly incomplete in one specific way: nothing
+registered with it (`model`/`optimizer`/`text_encoder`) is currently
+marked offloadable by default, because none of them has a genuine idle
+window in this pipeline's own current, always-synchronous design (text
+encoding, for instance, runs unconditionally every step -- see
+`EncodeConditioningPhase`, section 4). This is groundwork with a real,
+tested mechanism underneath it more than a today-provides-relief
+feature: offloading something for real needs that something to have an
+actual idle window first (a caching text encoder that can skip live
+encoding some steps is the most concrete candidate), which is separate,
+not-yet-attempted work.
+
 ### 9.3 What's explicitly out of scope
 
 `core/trainer.py` and the rest of `core/`/`manager/` are the production

@@ -29,6 +29,7 @@ def _load() -> dict[str, type]:
     from nodes.model.text_encoder_cache import CachingTextEncoderNode
     from nodes.model.text_encoder_prewarm import PrewarmedTextEncoderNode
     from nodes.monitor.training_progress import TrainingProgressMonitorNode
+    from nodes.memory.vram_budget_controller import VRAMBudgetControllerNode
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.adamw import AdamWOptimizerNode, SimpleAdamWOptimizerNode
     from nodes.optimizer.came import CAMEOptimizerNode
@@ -54,7 +55,7 @@ def _load() -> dict[str, type]:
         CachingTextEncoderNode, PrewarmedTextEncoderNode,
         ModelParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,
         ResourcesControllerNode, LoRATrainingConfigNode,
-        TrainingProgressMonitorNode,
+        TrainingProgressMonitorNode, VRAMBudgetControllerNode,
         AdamWOptimizerNode, SimpleAdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
         ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,

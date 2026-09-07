@@ -23,6 +23,7 @@ from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedul
                                      EpsParameterization, KarrasInputScaler)
 from ..core import Port
 from ..dataset.handle import TrainingBatchSource
+from ..memory.control_handle import ResourceControlHandle
 from ..memory.coordinator import ResourceCoordinator
 from ..model.handle import TrainableModel
 from ..optimizer.handle import FusedOptimizerHandle, describe_optimizer
@@ -139,6 +140,19 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "memory_stats() call per phase, 8x instead of 1x) -- for a short, targeted "
                 "run chasing exactly this question, not for real training.",
         ),
+        "resource_control": Port(
+            name="resource_control", type=ResourceControlHandle, required=False, default=None,
+            doc="Wire a VRAM Budget Controller node's own output here to enforce a live "
+                "VRAM ceiling. None (the default) -- current behavior, no enforcement. "
+                "When given: model/optimizer/text_encoder are all registered with it so "
+                "usage is measured every step, but none are currently marked offloadable "
+                "-- every one of them is needed unconditionally every single step in this "
+                "pipeline today, so there's no genuine idle window yet for any of them to "
+                "actually be offloaded into. Wiring this in today gets live budget "
+                "measurement every step for free either way; it starts actually offloading "
+                "something the day a resource here first has a real idle window (e.g. a "
+                "caching text encoder that can skip live encoding some steps).",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -152,6 +166,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
         profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
         profile_memory_per_phase: bool = inputs.get(
             "profile_memory_per_phase", self.INPUTS["profile_memory_per_phase"].default)
+        resource_control: ResourceControlHandle | None = inputs.get("resource_control")
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
@@ -183,6 +198,15 @@ class SupervisedLoRATrainerNode(TrainerNode):
         coordinator.register("model", model)
         coordinator.register("optimizer", optimizer)
         coordinator.register("text_encoder", inputs["text_encoder"])
+
+        if resource_control is not None:
+            # offloadable=False for all three -- see this Port's own doc for why none of
+            # them has a genuine idle window in this pipeline today. Registering them
+            # anyway means before_step() below still measures real usage against budget
+            # every step even before there's anything it can actually do about it.
+            resource_control.register("model", model, offloadable=False)
+            resource_control.register("optimizer", optimizer, offloadable=False)
+            resource_control.register("text_encoder", inputs["text_encoder"], offloadable=False)
 
         phases = [
             FetchBatchPhase(batches),
@@ -219,6 +243,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 self.validate_outputs(result)
                 return result
             state = StepState(step=step, batch=None, model=model, device=device)
+            if resource_control is not None:
+                resource_control.before_step(step)
             pipeline.run_step(state)
             step += 1
             if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:

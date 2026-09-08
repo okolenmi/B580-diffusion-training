@@ -1425,12 +1425,35 @@ registered with it (`model`/`optimizer`/`text_encoder`) is currently
 marked offloadable by default, because none of them has a genuine idle
 window in this pipeline's own current, always-synchronous design (text
 encoding, for instance, runs unconditionally every step -- see
-`EncodeConditioningPhase`, section 4). This is groundwork with a real,
+`EncodeConditioningPhase`, section 4). This was groundwork with a real,
 tested mechanism underneath it more than a today-provides-relief
-feature: offloading something for real needs that something to have an
-actual idle window first (a caching text encoder that can skip live
-encoding some steps is the most concrete candidate), which is separate,
-not-yet-attempted work.
+feature -- true for one revision, resolved the next: offloading
+something for real needs that something to have an actual idle window
+first, and `CachingTextEncoder` (`nodes/model/text_encoder_cache.py`,
+already existed, predating this specific addition) is exactly that --
+an LRU cache in front of any `TextEncoder`, skipping the inner
+model entirely on a hit. Wired together directly: `CachingTextEncoder`
+takes an optional `resource_control`; on a cache miss it calls
+`ensure_loaded()` before falling through to the inner encoder, so it's
+always safe to have been offloaded between hits. `ensure_loaded()`
+itself grew a second responsibility to make this actually safe under
+real pressure, not just a happy-path reload: it now shares a
+`_make_room()` helper with `before_step()`, so reloading one resident
+that would push measured usage over budget offloads *other* offloadable
+residents first to make room -- direct feedback describing the exact
+case this needs to handle (model/optimizer already near budget when a
+cache miss needs the text encoder loaded). `SupervisedLoRATrainerNode`
+marks `text_encoder` offloadable exactly when it's actually a
+`CachingTextEncoder` (checked via `isinstance`, matching this file's
+own existing `FusedOptimizerHandle` check, not assumed) -- a plain,
+non-caching encoder has no such self-healing and stays
+`offloadable=False`, unchanged. `model`/`optimizer` also stay
+`offloadable=False` still -- both are needed unconditionally every
+step's compute, and nothing yet calls `ensure_loaded("model")`/
+`ensure_loaded("optimizer")` at the right point in the step pipeline to
+make offloading either of them safe. `_make_room()` would already
+handle that side of a swap correctly if it existed; the wiring to
+trigger it doesn't yet.
 
 ### 9.3 What's explicitly out of scope
 

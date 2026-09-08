@@ -17,20 +17,33 @@ one, the trainer calls .report() on it during its own loop) -- this
 follows the same shape rather than inventing a new one.
 
 register()'s own offloadable flag, not a priority number or a separate
-policy object: a first, honest version. before_step() offloads
-eligible residents in registration order once actual measured usage
+policy object: a first, honest version. before_step() and
+ensure_loaded() both funnel through one shared _make_room() (below):
+offload eligible, currently-loaded residents (registration order,
+skipping whatever's excluded) once actual measured usage
 (DeviceContext.memory_stats()'s own "reserved_mb" -- ResourceBudget's
 own docstring: measure against reserved, not allocated) exceeds the
-budget; ensure_loaded() reloads one specific resident right before
-whatever's about to use it needs it resident again. Whether there's
-anything to offload in the current step pipeline
+budget. before_step() calls it with nothing excluded (a general check
+between steps); ensure_loaded(name) reloads name first, then calls it
+excluding name (so reloading X, if that alone pushed usage over
+budget, can free room by offloading something else currently loaded --
+"offload everything else until X is done," direct feedback on a real
+case this needs to handle: encoding a prompt on a cache miss when
+model+optimizer are already near the budget shouldn't just silently
+blow past it).
+
+Whether there's anything to offload in the current step pipeline
 (nodes/train/step_pipeline.py, nodes/train/supervised.py) depends on
 whether anything registered offloadable is genuinely idle for part of
-a run -- text_encoder is the obvious candidate once/if a caching
-TextEncoder wrapper makes live encoding skippable, but that's the
-wrapper's own concern, transparent to this handle either way: it just
-offloads/reloads whatever it was told is offloadable, on measured
-pressure, regardless of why a given step didn't end up needing it.
+a run and calls ensure_loaded() before it needs itself resident again
+-- CachingTextEncoder (nodes/model/text_encoder_cache.py) does exactly
+this on a cache miss, which is what makes text_encoder safe to mark
+offloadable now. model/optimizer are NOT marked offloadable yet
+(nodes/train/supervised.py) even though this module's own machinery
+would now handle the reverse direction (offloading them to make room
+for text_encoder, then bringing them back) -- nothing yet calls
+ensure_loaded("model")/ensure_loaded("optimizer") at the right points
+in the step pipeline to make that safe. Real, disclosed, not yet done.
 """
 
 from __future__ import annotations
@@ -50,10 +63,13 @@ class ResourceControlHandle(ABC):
         """Called by the trainer once each of its own residents (model,
         optimizer, text_encoder, ...) is actually constructed --
         nothing exists to register before that. offloadable=True marks
-        this resident as a candidate before_step() may offload under
-        pressure; False (the default) means never touched here, the
-        same posture a resident this handle was never told about would
-        get -- explicit opt-in, not an inferred default."""
+        this resident as a candidate before_step()/ensure_loaded() may
+        offload under pressure; False (the default) means never
+        touched here, the same posture a resident this handle was
+        never told about would get -- explicit opt-in, not an inferred
+        default. Only mark a resident offloadable if something calls
+        ensure_loaded() on it before it's actually needed again --
+        otherwise it can be offloaded here and never brought back."""
 
     @abstractmethod
     def before_step(self, step: int) -> None:
@@ -69,7 +85,11 @@ class ResourceControlHandle(ABC):
     @abstractmethod
     def ensure_loaded(self, name: str) -> None:
         """Call right before using a specific registered resident --
-        reloads it if before_step() offloaded it, a no-op otherwise.
+        reloads it if it was offloaded, a no-op otherwise. If reloading
+        it pushes measured usage over budget, offloads other
+        offloadable, currently-loaded residents (registration order)
+        to make room, the same as before_step() would between steps --
+        "offload everything else until this one's done its work."
         Safe to call unconditionally before every use regardless of
         whether that resident was ever actually offloaded (the common
         case, absent real pressure) -- the check inside is cheap, and
@@ -104,17 +124,31 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             self._offloadable.append(name)
 
     def before_step(self, step: int) -> None:
+        self._make_room(exclude=())
+
+    def ensure_loaded(self, name: str) -> None:
+        if name in self._offloaded:
+            self._coordinator.reload(name)
+            self._offloaded.discard(name)
+        self._make_room(exclude=(name,))
+
+    def _make_room(self, exclude: tuple[str, ...]) -> None:
+        """Shared by before_step() (exclude=() -- a general check
+        between steps) and ensure_loaded() (exclude=(name,) -- whatever
+        was just reloaded is off-limits, it's needed right now, that's
+        the whole reason ensure_loaded() was called). Re-measures after
+        each individual offload rather than estimating from
+        footprint_bytes() and offloading everything that adds up to
+        enough up front: one real number from the allocator beats a
+        predicted one, and stopping the moment it's enough avoids
+        offloading (and later having to reload) more than the pressure
+        actually required."""
         stats = self._device_ctx.memory_stats()
         if stats is None:
             return
         usable_mb = self._budget.vram_budget_mb - self._budget.vram_reserve_mb
-        # Re-measures after each individual offload rather than estimating from
-        # footprint_bytes() and offloading everything that adds up to enough up
-        # front: one real number from the allocator beats a predicted one, and
-        # stopping the moment it's enough avoids offloading (and later having to
-        # reload) more than the pressure actually required.
         for name in self._offloadable:
-            if name in self._offloaded:
+            if name in exclude or name in self._offloaded:
                 continue
             if stats["reserved_mb"] <= usable_mb:
                 return
@@ -122,7 +156,3 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             self._offloaded.add(name)
             stats = self._device_ctx.memory_stats()
 
-    def ensure_loaded(self, name: str) -> None:
-        if name in self._offloaded:
-            self._coordinator.reload(name)
-            self._offloaded.discard(name)

@@ -26,6 +26,7 @@ from ..dataset.handle import TrainingBatchSource
 from ..memory.control_handle import ResourceControlHandle
 from ..memory.coordinator import ResourceCoordinator
 from ..model.handle import TrainableModel
+from ..model.text_encoder_cache import CachingTextEncoder
 from ..optimizer.handle import FusedOptimizerHandle, describe_optimizer
 from .loss import UniformLossWeighting
 from .node import TrainerNode
@@ -145,13 +146,13 @@ class SupervisedLoRATrainerNode(TrainerNode):
             doc="Wire a VRAM Budget Controller node's own output here to enforce a live "
                 "VRAM ceiling. None (the default) -- current behavior, no enforcement. "
                 "When given: model/optimizer/text_encoder are all registered with it so "
-                "usage is measured every step, but none are currently marked offloadable "
-                "-- every one of them is needed unconditionally every single step in this "
-                "pipeline today, so there's no genuine idle window yet for any of them to "
-                "actually be offloaded into. Wiring this in today gets live budget "
-                "measurement every step for free either way; it starts actually offloading "
-                "something the day a resource here first has a real idle window (e.g. a "
-                "caching text encoder that can skip live encoding some steps).",
+                "usage is measured every step. model/optimizer aren't offloadable -- both "
+                "are needed every step, nothing here can safely offload and later reload "
+                "either mid-run yet. text_encoder is offloadable when it's wired from a "
+                "caching text encoder (one that keeps its own results in RAM and only "
+                "calls back into the underlying model on a cache miss) -- once its cache "
+                "is warm, most steps genuinely don't need it resident, and it reloads "
+                "itself automatically the moment a miss actually needs it.",
         ),
     }
 
@@ -200,13 +201,26 @@ class SupervisedLoRATrainerNode(TrainerNode):
         coordinator.register("text_encoder", inputs["text_encoder"])
 
         if resource_control is not None:
-            # offloadable=False for all three -- see this Port's own doc for why none of
-            # them has a genuine idle window in this pipeline today. Registering them
-            # anyway means before_step() below still measures real usage against budget
-            # every step even before there's anything it can actually do about it.
+            # model/optimizer stay offloadable=False -- both are needed unconditionally
+            # every step's forward/backward/optimizer-step, and nothing here calls
+            # ensure_loaded() on either before that compute runs, so marking them
+            # offloadable would let before_step() offload one and never bring it back --
+            # a real crash, not just a missed optimization. Making that safe needs
+            # ensure_loaded("model")/ensure_loaded("optimizer") wired into the step
+            # pipeline's own compute phase, not done yet.
+            #
+            # text_encoder is different: offloadable exactly when it's a
+            # CachingTextEncoder, which calls ensure_loaded() on its own resource_name
+            # before any cache-miss encode -- self-healing by construction, checked
+            # directly rather than assumed (isinstance, not duck-typing, matching this
+            # file's own existing FusedOptimizerHandle check below). A plain,
+            # non-caching TextEncoder has no such safety net (EncodeConditioningPhase
+            # calls .encode() unconditionally every step), so it stays offloadable=False.
             resource_control.register("model", model, offloadable=False)
             resource_control.register("optimizer", optimizer, offloadable=False)
-            resource_control.register("text_encoder", inputs["text_encoder"], offloadable=False)
+            resource_control.register(
+                "text_encoder", inputs["text_encoder"],
+                offloadable=isinstance(inputs["text_encoder"], CachingTextEncoder))
 
         phases = [
             FetchBatchPhase(batches),

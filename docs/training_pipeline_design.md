@@ -1733,21 +1733,43 @@ dtype decisions -- kept as independent choices rather than one bundled
    would have silently done nothing under the old rule. The skip
    condition now checks both `PlainLoRAAdapter` *and* the `BF16WeightStore`
    factory, not `PlainLoRAAdapter` alone.
-2. **`state_dtype`** -- every `Algorithm.init_state(param_shape, dtype,
-   device)` already accepts a `dtype` argument and every one of the
-   three (`AdamWAlgorithm`/`AdafactorAlgorithm`/`CAMEAlgorithm`)
-   explicitly ignores it, hardcoding float32 for numerical stability,
-   matching legacy-verified behavior. A real port on the `Composed*`
-   optimizer nodes needs **one shared implementation** (given 11.0/11.1's
-   lesson -- not three separate copies), and real quality validation
-   before defaulting to anything but float32: bf16 momentum for LoRA's
-   tiny per-layer parameter count is a real numerical question, not
-   "does it run." **Update:** likely belongs inside the Resources
-   Controller redesign's own precision handling rather than as an
-   isolated port on each optimizer node -- see
-   `docs/resources_controller_redesign_plan.md`'s "Consolidation"
-   section for the reasoning. Not decided; flagged there so this
-   doesn't get implemented in isolation before that's settled.
+2. **`state_dtype`, now done -- as block-wise 8-bit quantization, not
+   the plain dtype cast this item originally described.** Every
+   `Algorithm.init_state(param_shape, dtype, device)` still ignores
+   its own `dtype` argument, hardcoding float32 internally -- unchanged,
+   still correct for the same numerical-stability reason (a raw bf16
+   cast of momentum/variance was and still is a real, unvalidated
+   numerical risk, not "does it run," exactly as this item originally
+   flagged). What shipped instead answers the same underlying need
+   (configurable optimizer-state memory) a different, better-validated
+   way: `OptimizerStateStore`/`Int8BlockStateStore`
+   (`nodes/optimizer/state_store.py`) block-wise quantizes `m`/`v` to
+   8 bits between steps (dequantize to real fp32 -> `Algorithm.
+   compute_update()` runs completely unchanged, unaware this exists ->
+   requantize the result), ~4x smaller than the bf16 idea's 2x, and
+   verified end to end: a real 20-step AdamW training comparison
+   (`Float32StateStore` vs `Int8BlockStateStore`, same seed, same
+   gradients) converges to within 0.0025 max per-parameter difference,
+   not just "produces finite numbers." **One shared implementation**
+   (11.0/11.1's own lesson, applied here too): `state_precision`'s
+   choices/doc/resolver live once in `state_store.py`, the same
+   `STRATEGIES`/`resolve_strategy()` shape `strategy_registry.py`
+   already established for a different Port on the same three nodes.
+   The earlier "Update" below (superseded, kept only so this entry's
+   own history stays visible) guessed this would end up inside the
+   Resources Controller redesign's own precision handling -- it didn't:
+   that redesign's own Phase 5 settled on `ResourcesControllerNode`
+   never touching LoRA injection or optimizer construction at all (see
+   `docs/resources_controller_redesign_plan.md`'s Phase 5 section), so
+   optimizer state precision stayed exactly where `strategy`/`device`
+   already lived, on the `Composed*` optimizer nodes themselves --
+   consistent with, not a special case of, everything else on those
+   nodes. ~~**Update:** likely belongs inside the Resources Controller
+   redesign's own precision handling rather than as an isolated port on
+   each optimizer node -- see `docs/resources_controller_redesign_plan.md`'s
+   "Consolidation" section for the reasoning. Not decided; flagged
+   there so this doesn't get implemented in isolation before that's
+   settled.~~
 3. **compute dtype** -- already real (`ComfyUNetLoRANode.dtype`), no new
    work needed, just clearer documentation that this *is* the
    compute-dtype axis. True autocast-based mixed precision (fp32 master

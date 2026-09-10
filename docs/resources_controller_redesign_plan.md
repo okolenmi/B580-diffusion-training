@@ -1017,21 +1017,30 @@ about them untested -- with that in place, the full existing
 `nodes/smoke_tests/` suite (56 files, including the new one) and all 5
 `server/smoke_tests/` files pass, not just the two touched here.
 
-**Real synergy found, recommend folding in:** section 11.3's item 2
+**Real synergy found when this was written; resolved since, by how
+Phase 5 itself actually turned out -- kept here as the historical
+record, not still an open question:** section 11.3's item 2
 (`state_dtype` on the `Composed*` optimizer nodes, "needs one shared
-implementation") is a third precision axis that predates this whole
-redesign's starting motivation -- and the redesign's entire premise is
-*one place* for precision decisions, not scattered ports. Recommend
-`state_dtype` become part of the Resources Controller's own
-parameter-value dictionary once that exists (Phase 4/5), rather than a
-separate port added directly to each optimizer node in isolation.
-Concretely unresolved and worth a real decision when Phase 4/5 gets
-designed in detail: does the Resources Controller's own scope extend to
-optimizer-adjacent config at all, or does it stay model-resource-only
-(UNet/CLIP/VAE/LoRA) with `state_dtype` reading from it via a separate,
-smaller wire? Not decided -- but implementing `state_dtype` as an
-isolated `Composed*`-node port *before* that's settled risks building
-exactly the kind of thing this section exists to avoid.
+implementation") looked at the time like a third precision axis that
+might belong folded into the Resources Controller's own eventual
+parameter-value dictionary rather than living as an isolated port on
+each optimizer node. It doesn't, as it turned out: Phase 5's actual
+scope correction settled `ResourcesControllerNode` as strictly
+model-resource-only (`unet_sd`/`clip`/`vae_sd`/`continue_lora_sd`,
+nothing optimizer-adjacent at all -- see that phase's own section) --
+optimizer construction happens entirely downstream of it, on the
+`Composed*` optimizer nodes, which is exactly where `state_dtype`
+(shipped as `state_precision`, block-wise 8-bit quantization rather
+than a plain dtype cast -- see `docs/training_pipeline_design.md`
+section 11.3 item 2 for what actually shipped) ended up living, right
+alongside `strategy`/`device` on those same nodes, via the exact
+`STRATEGIES`/`resolve_strategy()` shape `strategy_registry.py` already
+used for a different Port there. Not the redundant, isolated-before-
+the-fact addition this section originally worried about: the "one
+place for precision decisions" this whole redesign cares about turned
+out to be "the node that actually owns the thing being configured," not
+literally one single node for every precision decision regardless of
+which resource it concerns.
 
 **Real redundancy risk found, recommend a concrete action now, not just
 noting it:** `ComfyUNetLoRANode`'s own `dtype`/`frozen_weight_store`/

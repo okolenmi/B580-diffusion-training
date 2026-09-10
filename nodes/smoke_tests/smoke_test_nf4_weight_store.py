@@ -21,9 +21,9 @@ import torch
 
 from nodes.model.frozen_weight_store import FrozenWeightStore
 from nodes.model.nf4_weight_store import (
-    NF4WeightStore, _linear_dequantize_u8, _linear_quantize_u8, _nf4_codebook,
-    _pack_nibbles, _quantize_blockwise_nearest, _unpack_nibbles,
+    NF4WeightStore, _nf4_codebook, _pack_nibbles, _quantize_blockwise_nearest, _unpack_nibbles,
 )
+from nodes.quantization import dequantize_blockwise_linear_u8, quantize_blockwise_linear_u8
 
 failures = []
 
@@ -74,12 +74,15 @@ def check_pack_unpack_nibbles_round_trip():
 
 
 def check_linear_u8_round_trip_error_is_small():
-    print("\n=== linear 8-bit (de)quantization -- double-quant's own scheme -- "
-          "has small, bounded error ===")
+    print("\n=== linear 8-bit (de)quantization -- double-quant's own scheme, now "
+          "shared via nodes/quantization.py -- has small, bounded error ===")
     torch.manual_seed(1)
     x = torch.randn(300) * 5
-    q, lo, scale = _linear_quantize_u8(x)
-    recon = _linear_dequantize_u8(q, lo, scale)
+    # blocksize == len(x): exactly one block, matching this check's own single-block
+    # intent (the real double-quantization call site uses many smaller blocks --
+    # covered separately by NF4WeightStore's own reconstruction-error checks below).
+    q, lo, scale = quantize_blockwise_linear_u8(x, blocksize=300)
+    recon = dequantize_blockwise_linear_u8(q, lo, scale, n=300)
     max_err = (recon - x).abs().max().item()
     # 256 levels over the real [min,max] range -- worst case is half a
     # quantization step, i.e. (max-min)/255/2.

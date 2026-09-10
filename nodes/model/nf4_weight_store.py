@@ -72,6 +72,7 @@ from __future__ import annotations
 import torch
 
 from .frozen_weight_store import FrozenWeightStore
+from ..quantization import dequantize_blockwise_linear_u8, quantize_blockwise_linear_u8
 
 _NF4_CODEBOOK_CACHE: dict = {}
 
@@ -142,19 +143,6 @@ def _unpack_nibbles(packed: torch.Tensor, n: int) -> torch.Tensor:
     return interleaved[:n]
 
 
-def _linear_quantize_u8(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Plain min-max linear 8-bit quantization -- this module's real,
-    deliberately simplified stand-in for bitsandbytes' own dynamic-map
-    second level. See this module's docstring for why."""
-    lo, hi = x.min(), x.max()
-    scale = (hi - lo).clamp_min(1e-12) / 255.0
-    q = ((x - lo) / scale).round().clamp(0, 255).to(torch.uint8)
-    return q, lo.to(torch.float32), scale.to(torch.float32)
-
-
-def _linear_dequantize_u8(q: torch.Tensor, lo: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    return q.to(torch.float32) * scale + lo
-
 
 class NF4WeightStore(FrozenWeightStore):
     """See this module's docstring for the full quantization scheme."""
@@ -179,24 +167,14 @@ class NF4WeightStore(FrozenWeightStore):
 
         # Double quantization: center the per-block absmax values, then
         # quantize *them* with a simple linear 8-bit scheme, in their own
-        # (larger) blocks -- see this module's docstring.
+        # (larger) blocks -- see this module's docstring. Shared
+        # nodes/quantization.py utility now, not a private per-block loop --
+        # same math, vectorized across all double-quant blocks at once.
         self._dq_blocksize = double_quant_blocksize
         self._offset = absmax.mean()
         centered = absmax - self._offset
-        dq_num_blocks = -(-centered.numel() // double_quant_blocksize)
-        dq_padded_n = dq_num_blocks * double_quant_blocksize
-        padded_centered = centered.new_zeros(dq_padded_n)
-        padded_centered[:centered.numel()] = centered
-        blocks = padded_centered.view(dq_num_blocks, double_quant_blocksize)
-        q_list, lo_list, scale_list = [], [], []
-        for block in blocks:
-            q, lo, scale = _linear_quantize_u8(block)
-            q_list.append(q)
-            lo_list.append(lo)
-            scale_list.append(scale)
-        self._absmax_q = torch.stack(q_list)          # [dq_num_blocks, double_quant_blocksize]
-        self._absmax_lo = torch.stack(lo_list)         # [dq_num_blocks]
-        self._absmax_scale = torch.stack(scale_list)   # [dq_num_blocks]
+        self._absmax_q, self._absmax_lo, self._absmax_scale = quantize_blockwise_linear_u8(
+            centered, double_quant_blocksize)
 
     def footprint_bytes(self) -> int:
         """Real compressed size: packed 4-bit codes + double-quantized
@@ -218,9 +196,8 @@ class NF4WeightStore(FrozenWeightStore):
     def materialize(self) -> torch.Tensor:
         """Re-dequantizes fresh every call -- see this module's docstring
         for why nothing is cached."""
-        absmax = _linear_dequantize_u8(
-            self._absmax_q, self._absmax_lo.unsqueeze(1), self._absmax_scale.unsqueeze(1)
-        ).view(-1)[:self._num_blocks]
+        absmax = dequantize_blockwise_linear_u8(
+            self._absmax_q, self._absmax_lo, self._absmax_scale, self._num_blocks)
         absmax = absmax + self._offset
 
         codebook = _nf4_codebook(self._packed.device, torch.float32)

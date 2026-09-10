@@ -29,6 +29,7 @@ from .algorithms.adafactor import AdafactorAlgorithm
 from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
+from .state_store import STATE_PRECISIONS, STATE_PRECISION_DOC, resolve_state_store
 from .strategy_registry import STRATEGIES, STRATEGY_DOC, resolve_strategy
 
 
@@ -65,6 +66,9 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                 "LoRAPlusGroups(...) trains LoRA's B matrices at a higher rate than A -- "
                 "see nodes/optimizer/composed.py.",
         ),
+        "state_precision": Port(name="state_precision", type=str, required=False,
+                                 default="float32", choices=tuple(STATE_PRECISIONS),
+                                 doc=STATE_PRECISION_DOC),
     }
 
     def build(self, **inputs) -> dict[str, OptimizerHandle]:
@@ -78,6 +82,8 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
         )
         strategy_name = inputs.get("strategy", self.INPUTS["strategy"].default)
         strategy = resolve_strategy(strategy_name)
+        state_store = resolve_state_store(
+            inputs.get("state_precision", self.INPUTS["state_precision"].default))
         handle = ComposedOptimizerHandle(
             algorithm=algorithm,
             strategy=strategy,
@@ -85,6 +91,7 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
             lr=inputs.get("lr", self.INPUTS["lr"].default),
             device=inputs.get("device", self.INPUTS["device"].default),
             group_policy=inputs.get("group_policy"),
+            state_store=state_store,
         )
         result = {"optimizer": handle}
         self.validate_outputs(result)

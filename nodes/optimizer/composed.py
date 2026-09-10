@@ -23,6 +23,7 @@ from typing import Any, Callable
 
 from .algorithms.base import Algorithm
 from .handle import OptimizerHandle
+from .state_store import Float32StateStore, OptimizerStateStore
 from .strategies.base import ExecutionStrategy
 
 
@@ -69,13 +70,23 @@ class ComposedOptimizerHandle(OptimizerHandle):
 
     def __init__(self, algorithm: Algorithm, strategy: ExecutionStrategy,
                  params, lr: float, device,
-                 group_policy: ParameterGroupPolicy | None = None):
+                 group_policy: ParameterGroupPolicy | None = None,
+                 state_store: OptimizerStateStore | None = None):
         self.algorithm = algorithm
         self.strategy = strategy
         self.params = list(params)
         self.device = device
+        # Float32StateStore() -- the identity, no compression -- unless a real one is
+        # given: see nodes/optimizer/state_store.py's own docstring for the full
+        # reasoning (Int8BlockStateStore etc.). self.states below always holds
+        # whatever this store's own wrap() returns, never raw Algorithm.init_state()
+        # dicts directly -- checkout()/commit() in step()/decay_states()/
+        # reset_states() below are what get real, mutable fp32 tensors to
+        # Algorithm/ExecutionStrategy, which never see or need to know this exists.
+        self._state_store = state_store or Float32StateStore()
         self.states = [
-            algorithm.init_state(p.shape, p.dtype, device) for p in self.params
+            self._state_store.wrap(algorithm.init_state(p.shape, p.dtype, device))
+            for p in self.params
         ]
         self._group_ratios = (group_policy or UniformGroups()).group_ratios(self.params)
         self.update_lr(lr)  # single place param_lr gets computed, see below
@@ -89,31 +100,40 @@ class ComposedOptimizerHandle(OptimizerHandle):
         self.param_lr = [new_lr * r for r in self._group_ratios]
 
     def step(self, n_steps: int = 1) -> None:
-        self.strategy.step(self.algorithm, self.params, self.states, self.param_lr, n_steps)
+        # Checkout every state to real fp32 tensors, hand those (not self.states'
+        # own handles) to the strategy -- Algorithm.compute_update() never sees
+        # self._state_store's own representation, by construction -- then commit
+        # whatever compute_update() mutated in place back into self.states.
+        checked_out = [self._state_store.checkout(s) for s in self.states]
+        self.strategy.step(self.algorithm, self.params, checked_out, self.param_lr, n_steps)
+        for handle, state in zip(self.states, checked_out):
+            self._state_store.commit(handle, state)
 
     def zero_grad(self) -> None:
         self.strategy.zero_grad(self.params)
 
     def offload_states_to_cpu(self) -> None:
-        for state in self.states:
-            for name, t in state.items():
-                state[name] = t.to("cpu", non_blocking=False)
+        self.states = [self._state_store.to(s, "cpu") for s in self.states]
         self.strategy.offload_extra()
 
     def reload_states_to_device(self, device: str | None = None) -> None:
         dev = device if device is not None else self.device
-        for state in self.states:
-            for name, t in state.items():
-                state[name] = t.to(dev, non_blocking=False)
+        self.states = [self._state_store.to(s, dev) for s in self.states]
         self.strategy.reload_extra(dev)
 
     def decay_states(self, factor: float) -> None:
-        for state in self.states:
+        # Infrequent (not per-step), so a checkout/commit round trip here -- rather
+        # than a separate decay-aware store method -- costs nothing worth avoiding.
+        for handle in self.states:
+            state = self._state_store.checkout(handle)
             self.algorithm.decay_state(state, factor)
+            self._state_store.commit(handle, state)
 
     def reset_states(self) -> None:
-        for state in self.states:
+        for handle in self.states:
+            state = self._state_store.checkout(handle)
             self.algorithm.reset_state(state)
+            self._state_store.commit(handle, state)
 
     def free_states(self) -> None:
         self.states = []
@@ -123,9 +143,8 @@ class ComposedOptimizerHandle(OptimizerHandle):
 
     def footprint_bytes(self) -> int:
         """Generic over self.states' real shape (list of per-parameter
-        state dicts) -- same reason every other lifecycle method here is
+        state handles) -- same reason every other lifecycle method here is
         written once: correct for ComposedFusedOptimizerHandle and any
-        future Algorithm/ExecutionStrategy pair for free, by construction,
-        without writing this again."""
-        return sum(t.numel() * t.element_size()
-                   for state in self.states for t in state.values())
+        future Algorithm/ExecutionStrategy/OptimizerStateStore combination
+        for free, by construction, without writing this again."""
+        return sum(self._state_store.footprint_bytes(handle) for handle in self.states)

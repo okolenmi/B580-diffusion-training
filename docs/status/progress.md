@@ -1,11 +1,29 @@
 # Progress
 
+> **This file is known to be stale as of this note** (added during a
+> docs-restructuring pass, not a resync of the content below). It was
+> last synced against commit `2c1f0ff` (2026-08-25); the repository has
+> moved well past that since, including the entire Resources Controller
+> / precision redesign (`docs/design/resources-controller/`,
+> Phases 3-6), a new live per-step VRAM budget enforcer
+> (`ResourceControlHandle`), and 8-bit optimizer-state quantization --
+> none of which appear below. See `docs/review_notes.md` item 1 for the
+> specifics and a concrete, checkable symptom (smoke-test counts no
+> longer match). Treat `docs/design/resources-controller/README.md`'s
+> own status banner as more current for anything it covers until this
+> file gets a real resync.
+
 Fast-read summary of what's actually implemented in `nodes/` -- the
 design-doc-driven rewrite of the training pipeline. For the rationale
-behind any of this, see `docs/training_pipeline_design.md` (section
-numbers below point there). For known bugs, see
-`docs/suspicious_findings.md` -- an informal list, not authoritative,
-mostly about the legacy `core/` pipeline unless a `nodes/` path is named.
+behind any of this, see [`docs/design/`](../design/README.md) (that
+doc was split into one file per top-level section during this docs
+restructuring; the section numbers cited below, e.g. "(1.1)",
+"(3.1)", still refer to the same section numbers, just look at
+`docs/design/README.md`'s table to find which file a given number now
+lives in). For known bugs, see
+[`docs/known-issues/`](../known-issues/README.md) -- an informal
+collection, not authoritative, mostly about the legacy `core/`
+pipeline unless a `nodes/` path is named.
 
 `core/` and `manager/` are the current production path and are
 deliberately untouched by this rewrite (wrap-don't-copy, per the design
@@ -95,7 +113,9 @@ doc's own rule) -- `nodes/` is where new work lands.
   magnitude still can't be folded into a *combined* checkpoint --
   `extract_combined_weights` raises a clear error for that case rather
   than silently dropping the trained magnitude. See
-  `docs/training_pipeline_design.md` sections 3.1/9.2.
+  `docs/design/04-lora-adapter-mechanics-and-loss-weighting.md`
+  (section 3.1) and
+  `docs/design/08-validation-and-implementation-status.md` (section 9.2).
 - `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` --
   `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`,
   `nodes/model/nf4_lora_layer.py` (3.3). NF4 quantization grounded
@@ -115,7 +135,7 @@ doc's own rule) -- `nodes/` is where new work lands.
 - LoRA timestep gate (`gate_enabled`/`gate_train_low`/`gate_train_high`/
   `gate_width`) wired into `PrepareDiffusionInputsPhase` -- candidate fix
   for a real deformation report, **not yet run** on real data (see
-  `docs/suspicious_findings.md`, "Pending user testing")
+  `docs/known-issues/pending-testing.md`)
 
 **Memory / offload**
 - `ResourceCoordinator`/`OffloadOrchestrator` --
@@ -142,8 +162,8 @@ doc's own rule) -- `nodes/` is where new work lands.
 
 ## Still open, in priority order
 
-See `docs/training_pipeline_design.md` section 10 for the full reasoning
-behind this order.
+See `docs/design/09-prioritized-backlog.md` (section 10) for the full
+reasoning behind this order.
 
 1. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
@@ -160,19 +180,21 @@ behind this order.
 `nodes/memory/profile.py`'s module docstring. Also: a phase-split DoRA
 layer's magnitude can't be folded into a *combined* checkpoint --
 `extract_combined_weights` raises a clear error rather than silently
-dropping it (see `docs/training_pipeline_design.md` section 9.2) --
-real, but nothing currently in this project's own recommended workflows
-actually needs a phase-split DoRA layer combined this way.
+dropping it (see `docs/design/08-validation-and-implementation-status.md`
+section 9.2) -- real, but nothing currently in this project's own
+recommended workflows actually needs a phase-split DoRA layer combined
+this way.
 
 **Not recommended near-term:** `ComponentRegistry`/`TrainingRecipe`/
 `PipelineFactory` (5.3, 5.4) -- nothing built through
 `nodes/components/` so far is graph-editor-selectable, so the problem
 these solve hasn't materialized.
 
-**Deferred or rejected**, reasoning in full in section 7:
+**Deferred or rejected**, reasoning in full in
+`docs/design/07-deferred-or-rejected.md` (section 7):
 `AutoResourcePolicy`, automatic eviction inside `MemoryManager`,
 layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
-Last synced against `docs/training_pipeline_design.md` at commit
-`2c1f0ff` (2026-08-25).
+Last synced against `docs/design/` (formerly the single file
+`docs/training_pipeline_design.md`) at commit `2c1f0ff` (2026-08-25).

@@ -1,0 +1,242 @@
+# Review notes -- flagged during the docs restructuring pass
+
+Written by a first-time reader of this repository while reorganizing
+`docs/` from four large, mixed-topic files
+(`PROGRESS.md`, `docs/training_pipeline_design.md`,
+`docs/resources_controller_redesign_plan.md`,
+`docs/suspicious_findings.md`) into the topic-separated folder
+structure under `docs/` today. Two kinds of entries below: things that
+read as **confusing or internally inconsistent** (worth fixing for
+clarity, not necessarily bugs), and things that look **potentially
+outdated** (worth someone who knows the current real state confirming,
+then updating or deleting). Nothing here has been fixed as part of
+this pass unless explicitly marked "**Fixed in this pass**" -- this
+file is a to-do list, not a changelog of everything that already
+happened.
+
+This file should shrink over time, not grow -- once an item below is
+checked and resolved, delete it rather than marking it "done" and
+leaving it here.
+
+## Follow-up work this restructuring deliberately created
+
+**Source-code comments and docstrings throughout the codebase
+reference the old flat file paths by exact string, and none of them
+were updated as part of this pass.** This was a deliberate scoping
+choice, not an oversight -- getting the docs into a good, logical
+structure first and fixing the (mostly already-broken -- see item 6
+below) references to them afterward, rather than letting reference-
+preservation constrain the structure. The exact scope of that
+follow-up, so it doesn't have to be rediscovered:
+
+| Old path | Now split into | Referenced by (exact-string match) |
+|---|---|---|
+| `docs/training_pipeline_design.md` | `docs/design/*.md` (see that folder's `README.md` for the section-number-to-file mapping) | 30 source files |
+| `docs/resources_controller_redesign_plan.md` | `docs/design/resources-controller/*.md` | 17 source files |
+| `docs/suspicious_findings.md` | `docs/known-issues/*.md` | 4 source files |
+| `PROGRESS.md` | `docs/status/progress.md` | 1 source file |
+
+Most of these references cite a specific section number (e.g. "design
+3.1," "section 11.3") rather than just the bare filename -- the
+mapping tables in `docs/design/README.md` and
+`docs/design/resources-controller/README.md` give the section-number
+-> file lookup needed to fix each one correctly rather than guessing.
+The doc-to-doc references (docs linking to other docs) were updated as
+part of this pass; only source-code comments/docstrings remain.
+
+## Likely outdated -- worth verifying against real current state
+
+1. **`docs/status/progress.md` is significantly behind real work and
+   should be resynced, not lightly edited.** Its own trailer claims
+   "Last synced against `docs/design/` (formerly
+   `docs/training_pipeline_design.md`) at commit `2c1f0ff`
+   (2026-08-25)." The repository has ~20 more commits after that
+   (through `2991618`, 2026-09-10), including work
+   `docs/status/progress.md` doesn't mention *at all*:
+   - The entire Resources Controller / precision redesign, Phases 3
+     through 6 (`docs/design/resources-controller/`) --
+     `ResourcesControllerNode`, `LoRATrainingConfigNode`,
+     `LoRATrainingResources`/`LoRATrainingSkeleton`, frozen-LoRA
+     merging, continue-training support, LoRA-file inspection.
+   - New generic editor mechanics: `Port.choices`, `Port.visible_when`,
+     `Port.widget_only`, `Node.diagnostics()`, `Node.NODE_KIND`/
+     `NodePreset`/`Node.DISPLAY_NAME`.
+   - `ResourceControlHandle`/`BudgetedResourceControlHandle` -- a live,
+     per-step VRAM budget enforcer, genuinely different from (and newer
+     than) the `OffloadOrchestrator` that `docs/status/progress.md`
+     does mention.
+   - `state_precision` -- block-wise 8-bit optimizer-state quantization
+     (`OptimizerStateStore`/`Int8BlockStateStore`).
+
+   A concrete, checkable symptom of the drift:
+   `docs/status/progress.md` says "51 smoke tests under
+   `nodes/smoke_tests/`... plus 5 more under `manager/`/`server/`."
+   The real counts today are 56 (`nodes/`), 5 (`server/`), 1
+   (`manager/`) -- 62 total, not 56.
+   `docs/design/resources-controller/08-consolidation.md`'s own count
+   ("the full existing `nodes/smoke_tests/` suite (56 files...)")
+   matches reality exactly, which is itself evidence that doc has been
+   kept current while `docs/status/progress.md` hasn't.
+
+   **Recommendation:** don't patch `docs/status/progress.md`
+   piecemeal -- do a full pass reading every commit since `2c1f0ff` (or
+   since whatever commit a future resync starts from) the same way the
+   original file was built, and update its own trailer to the new sync
+   point.
+
+2. **`docs/known-issues/`'s newest dated entry is 2026-08-21, before
+   the Resources Controller Phases 4-6 landed (2026-08-28 through
+   2026-09-05) and before the post-Phase-6 bug-fix session
+   (2026-09-06).** `docs/design/resources-controller/07-post-phase-6-bugfixes.md`
+   lists four real bugs found by using the editor (a missing `/api`
+   URL prefix, wires not redrawing after a node resize, a too-weak
+   default LoRA `alpha`, leaked planning-note text in tooltips) --
+   structurally exactly the kind of thing `docs/known-issues/`
+   otherwise tracks, but none of them appear there. Worth checking
+   with whoever did that work whether this was a deliberate scoping
+   choice (bugs fixed same-session, in the same doc that found them,
+   don't also get a `docs/known-issues/` entry) or just something that
+   fell through -- if the former, it'd be worth stating that scoping
+   rule explicitly in `docs/known-issues/README.md`, since right now a
+   reader has no way to tell the difference between "not logged
+   because it didn't need to be" and "not logged because it was
+   missed."
+
+3. **Several entries in `docs/known-issues/open.md` and
+   `docs/known-issues/pending-testing.md` may have been resolved by
+   later work without being updated to say so.** Specifically worth a
+   second look given how much memory/resource-control work has landed
+   since:
+   - The `DeviceResident.footprint_bytes()` device-placement entry in
+     `open.md` (dated 2026-08).
+   - The VRAM-pressure hang/device-lost report in `open.md` (dated
+     2026-07) --
+     `docs/design/08-validation-and-implementation-status.md` section
+     9.3 already says explicitly this is out of scope for `nodes/` and
+     lives in `core/trainer.py`, so it may still be genuinely open;
+     just worth confirming that's still true rather than assuming.
+   - Everything in `pending-testing.md` (LoRA timestep gate, VRAM
+     ratchet fix) and the several "Not run"/"awaiting confirmation on
+     real hardware" items in `resolved.md` (CAME/Adafactor
+     `shape_grouped` speedup, non-square dataset re-ingestion cap) --
+     these all read as "code is fixed, real-hardware confirmation
+     still pending" as of 2026-07/2026-08. It's been roughly a month of
+     further work since; worth asking whoever has the hardware whether
+     any of these got confirmed in the meantime.
+
+4. **`convert-cfg.toml` (repo root) contains what looks like one
+   specific person's real setup, not an anonymized template**: a
+   literal filesystem path (`comfy_dir = "/home/okolenmi/comfy/ComfyUI/"`),
+   a dataset named `"test"`, and what looks like a real trigger word
+   (`"ttw001"`) in the preview prompts. If this is meant as a
+   copy-and-edit example for new users, it'd be worth genericizing the
+   path and calling that out in a comment; if it's someone's actual
+   working config that ended up committed, it's worth confirming
+   whether it should be gitignored instead. Not changed here since
+   it's a judgment call for whoever owns that file, not a docs
+   question.
+
+5. **This project's Intel Arc B580 / XPU focus is stated in the docs
+   (root `README.md`, `docs/setup.md`) as an inference, not a
+   confirmed fact from an authoritative source.** It's a reasonable
+   inference (the repo's own name, `device = "xpu"` throughout example
+   configs, and a `docs/known-issues/` entry that references "the same
+   B580 hardware" when comparing against another project's discussion)
+   -- but nothing in the repo states this as a design constraint
+   directly. Worth a maintainer confirming the wording in those two
+   docs is accurate, and correcting it if there's more nuance (e.g.
+   whether other hardware is also actively supported/tested).
+
+## Confusing / internally inconsistent -- worth fixing for clarity
+
+6. **Dangling references to two deleted design docs,
+   `docs/nodes_package_design.md` and
+   `docs/optimizer_execution_redesign_plan.md`.**
+   `docs/known-issues/README.md` (formerly
+   `docs/suspicious_findings.md`'s header note) says both files were
+   deleted and that dangling pointers to them were "cleaned up" -- but
+   that cleanup only touched that one doc. Real, remaining references
+   (by exact path) still exist in: `server/routes_nodegraph.py`,
+   `server/main.py`, `server/nodegraph_introspect.py`,
+   `nodes/model/lora_phases.py`, `nodes/model/lora_saver.py`,
+   `nodes/components/README.md`, and `manager/builder.py`. A reader
+   who follows any of these hits a file that doesn't exist. Worth
+   either restoring a minimal stub explaining what absorbed that
+   content, or editing each reference to point at wherever that
+   information actually lives now (likely somewhere under
+   `docs/design/`, based on context) -- not changed here since it
+   touches source code, not docs, and is really the same class of work
+   as the bigger "Follow-up work" table at the top of this file.
+
+7. **`docs/design/resources-controller/01-context-and-ground-truth.md`'s
+   "Open design question blocking Phase 4" section contradicted the
+   rest of the same document** (back when it was still one file,
+   `docs/resources_controller_redesign_plan.md`). Near the top, that
+   section said the composition-vs-inheritance mechanism was "Not yet
+   decided which one this project uses" -- but the Phase 4 section
+   (now `docs/design/resources-controller/04-phase-4-resource-preset-abstraction.md`)
+   and the file's own top-of-file status banner said this was already
+   decided in favor of multiple inheritance, concrete-mixin-first. A
+   reader going top-to-bottom hit the "still open" framing before ever
+   reaching the resolution, with nothing in that section itself
+   pointing forward to where it got resolved. **Fixed in this pass**:
+   added a one-line forward-pointer at the top of that section noting
+   it was resolved in Phase 4, without deleting the original reasoning
+   (it's still useful context for *why* inheritance was chosen). Worth
+   a maintainer double-checking that edit reads correctly in place.
+
+8. **The "Last synced against `docs/training_pipeline_design.md` at
+   commit `2c1f0ff` (2026-08-25)" trailer used to be identical,
+   word-for-word, at the bottom of both `PROGRESS.md` and
+   `docs/resources_controller_redesign_plan.md`** (now
+   `docs/status/progress.md` and
+   `docs/design/resources-controller/08-consolidation.md`
+   respectively, both updated in this pass to point at `docs/design/`
+   instead of the old single filename). This was confusing on its face
+   even before the restructuring: the resources-controller file's own
+   content (Phases 5, 6, and the post-Phase-6 bug fixes) was dated well
+   after 2026-08-25, so either "last synced" means something narrower
+   than "last edited" (e.g. "last time this file's claims were
+   cross-checked against the main design docs specifically, independent
+   of this file's own unrelated edits") or the trailer itself was
+   stale. Worth a maintainer clarifying what this trailer is actually
+   supposed to mean, now that it lives in two places, before it gets
+   copied into a third.
+
+9. **No single command runs this project's entire test suite.**
+   `nodes/smoke_tests/run_all.py` is a convenience runner, but it only
+   covers `nodes/smoke_tests/` -- `server/smoke_tests/` (5 files) and
+   `manager/smoke_tests/` (1 file) each need to be run individually, as
+   noted in `docs/setup.md`. Small enough that it's probably not worth
+   much design thought, but worth a one-line top-level runner if this
+   becomes annoying enough to notice again.
+
+10. **Cross-document section-number references are structurally
+    fragile, and this restructuring pass made that fragility real
+    rather than hypothetical.** Source-code docstrings reference
+    `docs/training_pipeline_design.md` by section number (e.g. "design
+    3.1," "section 11.3") -- those numbers are still meaningful (the
+    split preserved them), but now also need a file lookup, which nothing
+    automates; `docs/design/README.md`'s table is a manual, by-hand
+    mapping that itself needs to stay in sync if sections ever move
+    again. Doc-to-doc references were updated as part of this pass;
+    source-code references were deliberately left for the follow-up
+    pass described at the top of this file. Not something this
+    restructuring attempts to solve structurally (e.g. with stable
+    per-section anchor IDs instead of numbers) -- flagged as a real
+    design trade-off for whoever picks up the follow-up work, not an
+    invisible one.
+
+11. **`docs/known-issues/` undersells its own reliability.** Its
+    header describes it as "an informal, unaudited collection, not a
+    spec," and `docs/status/progress.md` echoes that ("an informal
+    collection, not authoritative"). In practice, most entries are
+    dated, carefully traced to a real root cause (often "confirmed by
+    reading X directly, not assumed"), and organized into
+    `open.md`/`resolved.md`/`deferred.md`/`pending-testing.md` with
+    real specificity -- closer to a lightweight issue tracker than an
+    "informal list" in the way that phrase usually implies (hearsay,
+    unconfirmed hunches). Not miscalibrated enough to be worth
+    rewriting the framing, but worth knowing this collection is more
+    trustworthy than its own disclaimer suggests, once an entry is
+    actually read rather than skimmed.

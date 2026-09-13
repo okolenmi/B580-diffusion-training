@@ -2,7 +2,11 @@
 No mocking framework needed -- a tiny FakeEncoder that counts real calls
 is enough to prove caching actually skips them, and real (small) torch
 tensors make the "hands back a usable (ctx, y) pair" check meaningful
-rather than trivially true.
+rather than trivially true. A tiny _RecordingResourceControl fake, same
+reasoning, covers the optional resource_control wiring: ensure_loaded()
+called on a miss (and only a miss), with the right resource_name, both
+directly on CachingTextEncoder and threaded through
+CachingTextEncoderNode.build().
 """
 
 import sys
@@ -12,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
+from nodes.memory.control_handle import ResourceControlHandle
 from nodes.model.text_encoder import TextEncoder, TextEncoderNode
 from nodes.model.text_encoder_cache import CachingTextEncoder, CachingTextEncoderNode
 
@@ -46,10 +51,33 @@ class _CountingEncoder(TextEncoder):
         pass
 
 
+class _RecordingResourceControl(ResourceControlHandle):
+    """Records every ensure_loaded() call's name, in order -- enough to
+    prove CachingTextEncoder calls it on a miss and not on a hit, without
+    needing a mocking framework, same reasoning as _CountingEncoder above.
+    register()/before_step() are real no-ops here: CachingTextEncoder never
+    calls either itself (see text_encoder_cache.py's own docstring -- it
+    only ever calls ensure_loaded()), so nothing exercises them via this
+    class, but ResourceControlHandle is an ABC and both are abstract.
+    """
+
+    def __init__(self):
+        self.ensure_loaded_calls: list[str] = []
+
+    def register(self, name: str, resident, offloadable: bool = False) -> None:
+        pass
+
+    def before_step(self, step: int) -> None:
+        pass
+
+    def ensure_loaded(self, name: str) -> None:
+        self.ensure_loaded_calls.append(name)
+
+
 def check_contracts():
     print("[contracts]")
     assert not getattr(CachingTextEncoderNode, "__abstractmethods__", None)
-    assert set(CachingTextEncoderNode.INPUTS) == {"encoder", "max_entries"}
+    assert set(CachingTextEncoderNode.INPUTS) == {"encoder", "max_entries", "resource_control"}
     assert CachingTextEncoderNode.OUTPUTS == TextEncoderNode.OUTPUTS
     print("    PASS")
 
@@ -72,6 +100,44 @@ def check_hit_skips_the_real_call():
     cache.encode("a dog", batch_size=2, height=512, width=512)
     assert inner.calls == 3
     print("    PASS: any differing key element forces a real call")
+
+
+def check_resource_control_called_only_on_miss():
+    print("[resource_control.ensure_loaded() called on a miss, not on a hit]")
+    inner = _CountingEncoder()
+    control = _RecordingResourceControl()
+    cache = CachingTextEncoder(inner, max_entries=8, resource_control=control)
+
+    cache.encode("a cat", batch_size=2, height=512, width=512)
+    assert control.ensure_loaded_calls == ["text_encoder"], (
+        "a miss must call ensure_loaded() exactly once, with the default "
+        "resource_name, before the real encode()")
+
+    cache.encode("a cat", batch_size=2, height=512, width=512)
+    assert control.ensure_loaded_calls == ["text_encoder"], (
+        "a hit must not call ensure_loaded() again -- the whole point is "
+        "that the inner encoder (and whatever backs it) isn't touched")
+
+    cache.encode("a dog", batch_size=2, height=512, width=512)
+    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
+        "a second, different miss must call ensure_loaded() again")
+    print("    PASS")
+
+    print("[resource_name override is threaded through to ensure_loaded()]")
+    inner2 = _CountingEncoder()
+    control2 = _RecordingResourceControl()
+    cache2 = CachingTextEncoder(inner2, resource_control=control2,
+                                 resource_name="text_encoder_2")
+    cache2.encode("a cat", batch_size=2, height=512, width=512)
+    assert control2.ensure_loaded_calls == ["text_encoder_2"]
+    print("    PASS")
+
+    print("[no resource_control -> encode() still works, nothing to call]")
+    inner3 = _CountingEncoder()
+    cache3 = CachingTextEncoder(inner3)  # resource_control defaults to None
+    cache3.encode("a cat", batch_size=2, height=512, width=512)
+    assert inner3.calls == 1
+    print("    PASS")
 
 
 def check_eviction():
@@ -127,10 +193,22 @@ def check_node_build():
     assert inner.calls == 1
     print("    PASS")
 
+    print("[CachingTextEncoderNode.build() threads resource_control through]")
+    inner2 = _CountingEncoder()
+    control = _RecordingResourceControl()
+    result2 = node.build(encoder=inner2, max_entries=4, resource_control=control)
+    wrapped2 = result2["encoder"]
+    wrapped2.encode("p", 1, 64, 64)
+    assert control.ensure_loaded_calls == ["text_encoder"], (
+        "build()'s resource_control must reach the constructed "
+        "CachingTextEncoder, not be silently dropped")
+    print("    PASS")
+
 
 def main():
     check_contracts()
     check_hit_skips_the_real_call()
+    check_resource_control_called_only_on_miss()
     check_eviction()
     check_move_to_end_on_hit()
     check_unload_and_clear_delegate()

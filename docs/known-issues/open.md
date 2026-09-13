@@ -3,15 +3,7 @@
 # Open
 
 - **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
-  device placement anywhere.** Surfaced while investigating a VRAM
-  report later found to have a different, unrelated root cause (see
-  "Pending user testing" below): `tracked_footprint_mb` was consistently
-  reported *higher* than `vram_allocated_mb` in real profiling output,
-  backwards from what static-weight-only accounting vs. real
-  allocated-including-activations should show. Not traced further --
-  still open, independent of the VRAM-ratchet finding below (that one's
-  fully explained by the allocator's `reserved` behavior on an uncapped
-  image long side, doesn't touch `footprint_bytes()` at all).
+  device placement anywhere.**
 
 - **[2026-07] "Device lost" errors and silent training hangs after
   VRAM-pressure events, reported from real ComfyUI use (legacy `core/`

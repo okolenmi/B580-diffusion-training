@@ -5,9 +5,11 @@ Written by a first-time reader of this repository while reorganizing
 (`PROGRESS.md`, `docs/training_pipeline_design.md`,
 `docs/resources_controller_redesign_plan.md`,
 `docs/suspicious_findings.md`) into the topic-separated folder
-structure under `docs/` today. Two kinds of entries below: things that
-read as **confusing or internally inconsistent** (worth fixing for
-clarity, not necessarily bugs), and things that look **potentially
+structure under `docs/` today, then extended by a follow-up
+verification pass that checked specific claims in the restructured
+docs against the actual codebase. Two kinds of entries below: things
+that read as **confusing or internally inconsistent** (worth fixing
+for clarity, not necessarily bugs), and things that look **potentially
 outdated** (worth someone who knows the current real state confirming,
 then updating or deleting). Nothing here has been fixed as part of
 this pass unless explicitly marked "**Fixed in this pass**" -- this
@@ -18,16 +20,98 @@ This file should shrink over time, not grow -- once an item below is
 checked and resolved, delete it rather than marking it "done" and
 leaving it here.
 
+## What the verification pass actually checked, and found
+
+A follow-up pass read every claim in `docs/status/progress.md`'s
+"Implemented" section against the real code (file exists, class/method
+named as claimed, behavior matches the description) rather than
+trusting the prose, then did the same for every entry in
+`docs/known-issues/`. Most claims checked out exactly as written --
+listed here for completeness, not because the outcome was doubtful:
+
+- Every class/file named in `docs/status/progress.md`'s "Implemented"
+  section exists as described, with one exception (below).
+- The newer Resources Controller / precision work
+  `docs/status/progress.md` is missing (item 1 below) is confirmed real
+  in code, not just claimed in commit messages: `ResourcesControllerNode`,
+  `LoRATrainingConfigNode`, `ResourceControlHandle`/
+  `BudgetedResourceControlHandle`, `Port.choices`/`visible_when`/
+  `widget_only`, `Node.diagnostics()`, `Int8BlockStateStore` all exist
+  and do what's claimed.
+- `docs/known-issues/resolved.md`'s entries were spot-checked against
+  the actual fix code (the `_STRATEGIES`-duplication consolidation into
+  `nodes/optimizer/strategy_registry.py`, the `ZeroDivisionError`
+  tensor-space-clamp fix in `AdafactorAlgorithm.compute_update()`, the
+  dataset-loader `ValueError` fix, the missing-node-registration fix) --
+  all confirmed present and matching their description.
+- `docs/design/resources-controller/07-post-phase-6-bugfixes.md`'s four
+  bugfix claims (the `/api` URL prefix, `remeasureAndRedraw()`, the
+  `alpha=64.0` default, and the "no leaked `Port.doc` planning-note
+  text" claim -- checked with an actual AST-style scan of every
+  `Port(...)` call in the two affected files, not a guess) are all
+  confirmed accurate in the real code.
+- `docs/known-issues/open.md`'s `DeviceResident.footprint_bytes()`
+  entry is **confirmed, not just suspected**: every concrete
+  `footprint_bytes()` implementation in `nodes/` (14 checked) computes
+  a size from tensor shape/dtype alone (`numel() * element_size()`);
+  none check `.device` to confirm the tensors are actually where the
+  object claims. Still genuinely open.
+
+Three real problems were found and fixed:
+
+1. **`docs/status/progress.md` said `Builder`/`Port` live in
+   `nodes/core.py`.** There is no class named `Builder` anywhere in the
+   codebase -- the real class is `Node`. The design doc's own
+   implementation-status table (`docs/design/08-validation-and-implementation-status.md`)
+   already gets this right ("`Builder`/`Port` (1.1) | `nodes/core.py`'s
+   `Node`/`Port`"); `docs/status/progress.md` just didn't carry that
+   distinction over. **Fixed in this pass**: corrected to `Node`/`Port`
+   with a note explaining `Builder` was the design doc's illustrative
+   name for the same concept.
+
+2. **`docs/known-issues/deferred.md` claimed DoRA's `magnitude`
+   parameter wasn't wired into checkpoint save/load -- confirmed false
+   by reading the actual load and save paths.** Load:
+   `nodes/model/lora_checkpoint_loader.py`'s `_load_dora_layers()` calls
+   `layer.load_dora_weights(A, B, state_dict[magnitude_key])`. Save:
+   `ComfyUNetTrainableModel.trained_state_dict()`
+   (`nodes/model/lora_injector.py`) calls
+   `nodes/model/lora_phases.py`'s `extract_combined_weights()`, which
+   includes magnitude for an unsplit DoRA layer -- both wired, matching
+   what `docs/status/progress.md`'s own "Model / LoRA" section already
+   said. This was true when the entry was written and got resolved by
+   later work without the entry being updated. **Fixed in this pass**:
+   moved to `docs/known-issues/resolved.md` with an explanation, rather
+   than silently deleted, so nobody re-diagnoses it from an old clone
+   or an old `docs/status/progress.md` snapshot.
+
+3. **A real editing defect in what's now `docs/known-issues/pending-testing.md`,
+   found by git archaeology, predating this docs restructuring
+   entirely.** Commit `2e0ca29` (2026-08-18, "adafactor:
+   AdafactorAlgorithm.compute_update_batched()...") replaced an entry's
+   header line ("- **[2026-07] Persistent ~500MB VRAM growth after
+   preview generation.**") with a new, unrelated entry's header, but
+   left the original entry's body paragraph in place underneath --
+   orphaning it, silently, under the wrong heading. A reader hit a
+   paragraph about VRAM growth after preview generation sitting inside
+   what looked like the CAME/Adafactor optimizer-speed entry, with no
+   way to tell it was actually a separate, once-independent finding.
+   **Fixed in this pass**: restored the missing header line at the
+   correct location. (Confirmed via `git log --all -S "..." --
+   docs/suspicious_findings.md` that this predates the restructuring --
+   not something introduced by the file split.)
+
 ## Follow-up work this restructuring deliberately created
 
 **Source-code comments and docstrings throughout the codebase
 reference the old flat file paths by exact string, and none of them
 were updated as part of this pass.** This was a deliberate scoping
 choice, not an oversight -- getting the docs into a good, logical
-structure first and fixing the (mostly already-broken -- see item 6
-below) references to them afterward, rather than letting reference-
-preservation constrain the structure. The exact scope of that
-follow-up, so it doesn't have to be rediscovered:
+structure and internally consistent first (see below), and fixing the
+(mostly already-broken -- see item 6 below) references to them from
+source code afterward, rather than letting reference-preservation
+constrain the structure. The exact scope of that follow-up, so it
+doesn't have to be rediscovered:
 
 | Old path | Now split into | Referenced by (exact-string match) |
 |---|---|---|
@@ -41,8 +125,15 @@ Most of these references cite a specific section number (e.g. "design
 mapping tables in `docs/design/README.md` and
 `docs/design/resources-controller/README.md` give the section-number
 -> file lookup needed to fix each one correctly rather than guessing.
-The doc-to-doc references (docs linking to other docs) were updated as
-part of this pass; only source-code comments/docstrings remain.
+**All doc-to-doc references (docs linking to other docs) are now
+updated** -- the initial restructuring pass updated the top-level
+navigation docs, but missed several references *within* the split
+design docs themselves (e.g. `docs/design/10-node-surface-and-precision-control.md`
+pointing at the old `docs/suspicious_findings.md`/
+`docs/resources_controller_redesign_plan.md` paths); a full
+`grep -rn` sweep of `docs/` for the four old filenames during the
+verification pass found and fixed the remainder. Only source-code
+comments/docstrings remain unreferenced.
 
 ## Likely outdated -- worth verifying against real current state
 
@@ -52,7 +143,8 @@ part of this pass; only source-code comments/docstrings remain.
    `docs/training_pipeline_design.md`) at commit `2c1f0ff`
    (2026-08-25)." The repository has ~20 more commits after that
    (through `2991618`, 2026-09-10), including work
-   `docs/status/progress.md` doesn't mention *at all*:
+   `docs/status/progress.md` doesn't mention *at all* (confirmed real
+   in code, see above):
    - The entire Resources Controller / precision redesign, Phases 3
      through 6 (`docs/design/resources-controller/`) --
      `ResourcesControllerNode`, `LoRATrainingConfigNode`,
@@ -82,7 +174,9 @@ part of this pass; only source-code comments/docstrings remain.
    piecemeal -- do a full pass reading every commit since `2c1f0ff` (or
    since whatever commit a future resync starts from) the same way the
    original file was built, and update its own trailer to the new sync
-   point.
+   point. The verification pass corrected one specific inaccuracy found
+   along the way (the `Builder`/`Node` naming, item 1 above) but did
+   not attempt the full resync -- that's real, separate work.
 
 2. **`docs/known-issues/`'s newest dated entry is 2026-08-21, before
    the Resources Controller Phases 4-6 landed (2026-08-28 through
@@ -102,27 +196,21 @@ part of this pass; only source-code comments/docstrings remain.
    because it didn't need to be" and "not logged because it was
    missed."
 
-3. **Several entries in `docs/known-issues/open.md` and
-   `docs/known-issues/pending-testing.md` may have been resolved by
-   later work without being updated to say so.** Specifically worth a
-   second look given how much memory/resource-control work has landed
-   since:
-   - The `DeviceResident.footprint_bytes()` device-placement entry in
-     `open.md` (dated 2026-08).
-   - The VRAM-pressure hang/device-lost report in `open.md` (dated
-     2026-07) --
-     `docs/design/08-validation-and-implementation-status.md` section
-     9.3 already says explicitly this is out of scope for `nodes/` and
-     lives in `core/trainer.py`, so it may still be genuinely open;
-     just worth confirming that's still true rather than assuming.
-   - Everything in `pending-testing.md` (LoRA timestep gate, VRAM
-     ratchet fix) and the several "Not run"/"awaiting confirmation on
-     real hardware" items in `resolved.md` (CAME/Adafactor
-     `shape_grouped` speedup, non-square dataset re-ingestion cap) --
-     these all read as "code is fixed, real-hardware confirmation
-     still pending" as of 2026-07/2026-08. It's been roughly a month of
-     further work since; worth asking whoever has the hardware whether
-     any of these got confirmed in the meantime.
+3. **Several entries in `docs/known-issues/pending-testing.md` and the
+   "not yet confirmed on real hardware" items in `resolved.md` are
+   still waiting on real-hardware confirmation that may have happened
+   since without the doc being updated.** Not checkable from the repo
+   alone -- these need whoever has the actual B580 hardware. Specific
+   items: the LoRA timestep gate and VRAM-ratchet fix in
+   `pending-testing.md`; the CAME/Adafactor `shape_grouped` speedup and
+   non-square dataset re-ingestion cap in `resolved.md`. All dated
+   2026-07/2026-08; it's been roughly a month of further work since.
+   (The `footprint_bytes()` and VRAM-pressure-hang entries in `open.md`
+   that used to be listed alongside these are now resolved as
+   verification items -- see "What the verification pass actually
+   checked" above: `footprint_bytes()` is confirmed still genuinely
+   open, and the VRAM-pressure hang is confirmed still out of scope for
+   `nodes/`, both by reading code rather than by assumption.)
 
 4. **`convert-cfg.toml` (repo root) contains what looks like one
    specific person's real setup, not an anonymized template**: a
@@ -166,7 +254,7 @@ part of this pass; only source-code comments/docstrings remain.
    information actually lives now (likely somewhere under
    `docs/design/`, based on context) -- not changed here since it
    touches source code, not docs, and is really the same class of work
-   as the bigger "Follow-up work" table at the top of this file.
+   as the bigger "Follow-up work" table above.
 
 7. **`docs/design/resources-controller/01-context-and-ground-truth.md`'s
    "Open design question blocking Phase 4" section contradicted the
@@ -182,8 +270,7 @@ part of this pass; only source-code comments/docstrings remain.
    pointing forward to where it got resolved. **Fixed in this pass**:
    added a one-line forward-pointer at the top of that section noting
    it was resolved in Phase 4, without deleting the original reasoning
-   (it's still useful context for *why* inheritance was chosen). Worth
-   a maintainer double-checking that edit reads correctly in place.
+   (it's still useful context for *why* inheritance was chosen).
 
 8. **The "Last synced against `docs/training_pipeline_design.md` at
    commit `2c1f0ff` (2026-08-25)" trailer used to be identical,
@@ -191,17 +278,18 @@ part of this pass; only source-code comments/docstrings remain.
    `docs/resources_controller_redesign_plan.md`** (now
    `docs/status/progress.md` and
    `docs/design/resources-controller/08-consolidation.md`
-   respectively, both updated in this pass to point at `docs/design/`
-   instead of the old single filename). This was confusing on its face
-   even before the restructuring: the resources-controller file's own
-   content (Phases 5, 6, and the post-Phase-6 bug fixes) was dated well
-   after 2026-08-25, so either "last synced" means something narrower
-   than "last edited" (e.g. "last time this file's claims were
-   cross-checked against the main design docs specifically, independent
-   of this file's own unrelated edits") or the trailer itself was
-   stale. Worth a maintainer clarifying what this trailer is actually
-   supposed to mean, now that it lives in two places, before it gets
-   copied into a third.
+   respectively; both trailers were updated across the two docs passes
+   to point at `docs/design/` instead of the old single filename, but
+   the underlying ambiguity below is still unresolved). This was
+   confusing on its face even before the restructuring: the
+   resources-controller file's own content (Phases 5, 6, and the
+   post-Phase-6 bug fixes) was dated well after 2026-08-25, so either
+   "last synced" means something narrower than "last edited" (e.g.
+   "last time this file's claims were cross-checked against the main
+   design docs specifically, independent of this file's own unrelated
+   edits") or the trailer itself was stale. Worth a maintainer
+   clarifying what this trailer is actually supposed to mean, now that
+   it lives in two places, before it gets copied into a third.
 
 9. **No single command runs this project's entire test suite.**
    `nodes/smoke_tests/run_all.py` is a convenience runner, but it only
@@ -212,20 +300,18 @@ part of this pass; only source-code comments/docstrings remain.
    becomes annoying enough to notice again.
 
 10. **Cross-document section-number references are structurally
-    fragile, and this restructuring pass made that fragility real
-    rather than hypothetical.** Source-code docstrings reference
+    fragile.** Source-code docstrings reference the old
     `docs/training_pipeline_design.md` by section number (e.g. "design
     3.1," "section 11.3") -- those numbers are still meaningful (the
-    split preserved them), but now also need a file lookup, which nothing
-    automates; `docs/design/README.md`'s table is a manual, by-hand
-    mapping that itself needs to stay in sync if sections ever move
-    again. Doc-to-doc references were updated as part of this pass;
-    source-code references were deliberately left for the follow-up
-    pass described at the top of this file. Not something this
-    restructuring attempts to solve structurally (e.g. with stable
-    per-section anchor IDs instead of numbers) -- flagged as a real
-    design trade-off for whoever picks up the follow-up work, not an
-    invisible one.
+    split preserved them), but now also need a file lookup, which
+    nothing automates; `docs/design/README.md`'s table is a manual,
+    by-hand mapping that itself needs to stay in sync if sections ever
+    move again. Doc-to-doc references are now fully updated (see
+    "Follow-up work" above); source-code references were deliberately
+    left for the follow-up pass. Not something this restructuring
+    attempts to solve structurally (e.g. with stable per-section anchor
+    IDs instead of numbers) -- flagged as a real design trade-off for
+    whoever picks up the follow-up work, not an invisible one.
 
 11. **`docs/known-issues/` undersells its own reliability.** Its
     header describes it as "an informal, unaudited collection, not a
@@ -236,7 +322,9 @@ part of this pass; only source-code comments/docstrings remain.
     `open.md`/`resolved.md`/`deferred.md`/`pending-testing.md` with
     real specificity -- closer to a lightweight issue tracker than an
     "informal list" in the way that phrase usually implies (hearsay,
-    unconfirmed hunches). Not miscalibrated enough to be worth
-    rewriting the framing, but worth knowing this collection is more
-    trustworthy than its own disclaimer suggests, once an entry is
-    actually read rather than skimmed.
+    unconfirmed hunches). The verification pass's own experience
+    supports this: every substantive, code-level claim checked (not
+    just the ones already known to be current) turned out accurate
+    except the one DoRA entry now fixed above. Not miscalibrated enough
+    to be worth rewriting the framing, but worth knowing this
+    collection is more trustworthy than its own disclaimer suggests.

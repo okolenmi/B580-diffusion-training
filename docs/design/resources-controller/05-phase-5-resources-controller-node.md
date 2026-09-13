@@ -161,7 +161,8 @@ instead).
 passes had this node calling LoRA injection directly (`rank`/`alpha`/
 frozen-weight-storage as its own inputs, constructing
 `SDXL_LoraTrainer` in `process()`) -- reasonable given
-`docs/training_pipeline_design.md`'s own Phase 4 work already built
+this redesign's own
+[Phase 4](04-phase-4-resource-preset-abstraction.md) work already built
 that exact pipeline, but wrong: rank/alpha/frozen-weight-storage are
 properties of a LoRA *injection*, not of a verified *resource*, and
 conflating the two put a decision that belongs on the training node

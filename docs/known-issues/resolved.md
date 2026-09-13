@@ -2,6 +2,31 @@
 
 # Resolved
 
+- **[Verified during a later docs pass, original entry dated 2026-08]
+  DoRA's `magnitude` parameter is wired into checkpoint save/load --
+  this entry used to say it wasn't; that's no longer true.** Originally
+  filed as a "Deferred" gap: `nodes/model/dora_layer.py`'s
+  `DoRALinear`/`DoRAConv2d` were real and trainable, but
+  `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` only knew about
+  `lora_A`/`lora_B`, and `DoRALinear.load_dora_weights()` existed with
+  nothing calling it. Checked directly while verifying this docs pass:
+  both sides are wired now.
+  `nodes/model/lora_checkpoint_loader.py`'s `_load_dora_layers()` calls
+  `layer.load_dora_weights(A, B, state_dict[magnitude_key])` on load;
+  on save, `ComfyUNetTrainableModel.trained_state_dict()`
+  (`nodes/model/lora_injector.py`) calls
+  `nodes/model/lora_phases.py`'s `extract_combined_weights()`, which
+  includes direction, `.dora_scale` magnitude, and alpha for an
+  unsplit DoRA layer (see `docs/status/progress.md`'s "Model / LoRA"
+  section for the fuller account of that work). One real, narrower gap
+  is still open, unrelated to this one: a *phase-split* DoRA layer's
+  magnitude still can't be folded into a combined checkpoint -- see
+  `docs/design/08-validation-and-implementation-status.md` section 9.2.
+  This entry is kept, corrected in place, rather than deleted, so
+  anyone who remembers the old "not wired" claim (e.g. from an older
+  clone, or from `docs/status/progress.md`'s own history) doesn't
+  waste time re-diagnosing something already fixed.
+
 - **[2026-08] A dataset smaller than `batch_size` (real user report: 1
   image, `batch_size=2`) silently produced zero batches forever, then
   crashed training several frames away with a bare, unexplained

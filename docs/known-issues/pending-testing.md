@@ -152,7 +152,7 @@
   shrinks to something like that inherent-complexity difference, not
   whether it disappears entirely.
 
-
+- **[2026-07] Persistent ~500MB VRAM growth after preview generation.**
   Reported as compounding slowly (not just a one-time jump), first appeared
   sometime after an earlier preview-VRAM fix (exact point unknown). Ruled
   out two candidates by reading the code: CAME's own memory pool (only

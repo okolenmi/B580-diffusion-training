@@ -32,7 +32,11 @@ doc's own rule) -- `nodes/` is where new work lands.
 ## Implemented
 
 **Foundational**
-- `Builder`/`Port` construction-time contract -- `nodes/core.py` (1.1)
+- `Node`/`Port` construction-time contract -- `nodes/core.py` (1.1).
+  The design doc's own illustrative name for this concept was
+  `Builder`; the real, pre-existing class is `Node` -- see
+  `docs/design/08-validation-and-implementation-status.md`'s table,
+  which gets this right.
 - `DeviceResident` ABC (offload/reload/footprint), conformed to by
   `OptimizerHandle`, `TrainableModel`, `TextEncoder` --
   `nodes/memory/handle.py` (1.2)

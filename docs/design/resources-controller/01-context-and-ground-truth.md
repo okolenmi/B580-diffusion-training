@@ -4,7 +4,8 @@
 
 ## Why this exists
 
-`docs/training_pipeline_design.md` section 11.3 identified three
+`docs/design/10-node-surface-and-precision-control.md` section 11.3
+identified three
 separate, scattered precision decisions (frozen weight storage dtype,
 optimizer state dtype, compute dtype) and deliberately recommended
 *against* bundling them, matching `ResourcePolicy`'s own precedent of
@@ -91,8 +92,8 @@ masked behind a single, simple "clip" surface at this layer, not
 exposed as a pluggable N-encoder abstraction. Generalizing past SDXL
 happens later, when a second real architecture actually needs it, not
 speculatively now -- matches this project's own established preference
-throughout `docs/training_pipeline_design.md` for building the one
-real thing before extracting an abstraction from it.
+throughout `docs/design/` for building the one real thing before
+extracting an abstraction from it.
 
 `SDXLArchitecture`'s own job is purely mechanical -- checkpoint
 splitting/parsing, the CLIP-masking above, adapter-injection targets --

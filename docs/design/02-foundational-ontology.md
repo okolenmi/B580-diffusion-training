@@ -89,7 +89,7 @@ contribution -- see `nodes/model/frozen_weight_store.py`.
 This closed the *coordination* gap -- nothing generic could drive
 offload/reload order across domains before this existed (5.1, 5.2 build
 on it directly). It's still not, by itself, a fix for the still-open
-"hang after VRAM pressure" report in `docs/suspicious_findings.md` --
+"hang after VRAM pressure" report in `docs/known-issues/open.md` --
 that report's own leading hypothesis is a missing synchronize() on an
 async offload path in `core/trainer.py`, a correctness bug this
 lifecycle contract doesn't touch (see 5.2 and section 9.3 for why that's

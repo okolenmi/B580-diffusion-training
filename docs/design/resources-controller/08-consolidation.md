@@ -6,7 +6,8 @@ to drift
 Explicit instruction behind this section: don't let this redesign
 become one more thing sitting next to the rest of the project's design
 rather than actually reconciled with it. Went back through
-`docs/training_pipeline_design.md`'s remaining open section-11 items and
+`docs/design/10-node-surface-and-precision-control.md`'s remaining open
+section-11 items and
 the already-shipped `ComfyUNetLoRANode`/`LoRAPhaseSplitNode` against
 this plan specifically looking for redundancy, not just letting them
 coexist.
@@ -127,8 +128,9 @@ nothing optimizer-adjacent at all -- see that phase's own section) --
 optimizer construction happens entirely downstream of it, on the
 `Composed*` optimizer nodes, which is exactly where `state_dtype`
 (shipped as `state_precision`, block-wise 8-bit quantization rather
-than a plain dtype cast -- see `docs/training_pipeline_design.md`
-section 11.3 item 2 for what actually shipped) ended up living, right
+than a plain dtype cast -- see
+`docs/design/10-node-surface-and-precision-control.md` section 11.3
+item 2 for what actually shipped) ended up living, right
 alongside `strategy`/`device` on those same nodes, via the exact
 `STRATEGIES`/`resolve_strategy()` shape `strategy_registry.py` already
 used for a different Port there. Not the redundant, isolated-before-

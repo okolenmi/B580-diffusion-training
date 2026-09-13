@@ -33,7 +33,7 @@ principled version of what `core/trainer.py`'s hand-written offload calls
 still do today, ad hoc, per call site -- for `nodes/`, not a claim that
 it retroactively fixes `core/trainer.py`. It's also explicitly not, by
 itself, a fix for the still-open "device lost"/hang-after-VRAM-pressure
-report in `docs/suspicious_findings.md` -- that report's own leading
+report in `docs/known-issues/open.md` -- that report's own leading
 hypothesis is a missing explicit `synchronize()` on an async offload
 path, a correctness bug this orchestrator's *existence* doesn't fix. It
 fixes the *coordination* problem, which is necessary but not sufficient
@@ -137,7 +137,8 @@ reserved MB) into a per-component breakdown -- "how much of my VRAM is
 the text encoder cache vs. optimizer scratch vs. the model itself," which
 the current single allocator-level number can't answer. Real, standing
 diagnostic value for the still-open VRAM-pressure investigation in
-`docs/suspicious_findings.md` -- see the backlog, section 10.
+`docs/known-issues/open.md` -- see the backlog,
+`docs/design/09-prioritized-backlog.md` section 10.
 
 ## 5.6 Concurrency contract, stated explicitly
 

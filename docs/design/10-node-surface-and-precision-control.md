@@ -18,7 +18,7 @@ class in the process -- the doc strings went stale in exactly the same
 way. Every proposal below is written with that lesson applied on purpose:
 shared structure first, no per-node/per-algorithm copies of the same
 thing -- see `nodes/optimizer/strategy_registry.py` for the real fix, and
-`docs/suspicious_findings.md`'s matching entry for the full account.
+`docs/known-issues/resolved.md`'s matching entry for the full account.
 11.4/11.5 add two further real, user-reported points from the same
 conversation: `strategy`/`device`-style ports being free-text strings
 with no discoverable set of choices, and every node's Python class name
@@ -133,7 +133,7 @@ avoiding the bug rather than proving its absence. Found by a real
 equivalence-test failure once `weight_decay != 0` was actually exercised
 through a batched strategy, not by inspection. Fixed to raise a clear,
 specific `RuntimeError` instead of silently applying the wrong decay --
-see `docs/suspicious_findings.md`'s matching entry.
+see `docs/known-issues/resolved.md`'s matching entry.
 
 **Fused execution is a fourth thing, but not a fourth axis of
 `ExecutionStrategy` at all.** `ComposedFusedOptimizerHandle`
@@ -194,14 +194,15 @@ dtype decisions -- kept as independent choices rather than one bundled
    Resources Controller redesign's own precision handling -- it didn't:
    that redesign's own Phase 5 settled on `ResourcesControllerNode`
    never touching LoRA injection or optimizer construction at all (see
-   `docs/resources_controller_redesign_plan.md`'s Phase 5 section), so
+   `docs/design/resources-controller/05-phase-5-resources-controller-node.md`), so
    optimizer state precision stayed exactly where `strategy`/`device`
    already lived, on the `Composed*` optimizer nodes themselves --
    consistent with, not a special case of, everything else on those
    nodes. ~~**Update:** likely belongs inside the Resources Controller
    redesign's own precision handling rather than as an isolated port on
-   each optimizer node -- see `docs/resources_controller_redesign_plan.md`'s
-   "Consolidation" section for the reasoning. Not decided; flagged
+   each optimizer node -- see
+   `docs/design/resources-controller/08-consolidation.md` for the
+   reasoning. Not decided; flagged
    there so this doesn't get implemented in isolation before that's
    settled.~~
 3. **compute dtype** -- already real (`ComfyUNetLoRANode.dtype`), no new
@@ -218,8 +219,9 @@ speculatively now.
 
 ## 11.4 Port UX: string fields for closed-choice values
 
-**Implemented**, as part of `docs/resources_controller_redesign_plan.md`'s
-Consolidation section, exactly as this section's own "Update" below
+**Implemented**, as part of
+`docs/design/resources-controller/08-consolidation.md`, exactly as this
+section's own "Update" below
 anticipated -- `Port.choices` (`nodes/core.py`), not per-node. See that
 plan for what shipped, what it's wired into today (`strategy` on the
 `Composed*OptimizerNode` classes, `t_mode` on the two real dataset
@@ -249,7 +251,7 @@ underneath the different names -- a `Port` with a closed set of
 choices, rendered as a dropdown, resolved to one value by build time.
 Recommend building this once as part of that redesign's Phase 3/4
 rather than as a separate, disconnected item -- see
-`docs/resources_controller_redesign_plan.md`'s "Consolidation" section.
+`docs/design/resources-controller/08-consolidation.md`.
 
 ## 11.5 Node naming: one string is doing two jobs
 

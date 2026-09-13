@@ -258,7 +258,7 @@ trigger it doesn't yet.
 `core/trainer.py` and the rest of `core/`/`manager/` are the production
 path, reference material only, untouched by this design -- exactly the
 existing project rule. The VRAM-pressure hang/device-lost report in
-`docs/suspicious_findings.md` lives there today; this design's
+`docs/known-issues/open.md` lives there today; this design's
 `OffloadOrchestrator` is the *eventual*, principled home for that class
 of coordination problem once `nodes/` is the production path, not a
 claim that building it retroactively fixes `core/trainer.py`'s current

@@ -64,8 +64,9 @@
   single instance to hand `ResourceProfile.capture()` --
   `memory_manager_stats` is `None` in every real run today. Harmless
   right now (each strategy's private manager is internally consistent on
-  its own), not fixed here -- see `docs/training_pipeline_design.md`
-  section 10's note on this for when it'd actually start to matter.
+  its own), not fixed here -- see
+  `docs/design/09-prioritized-backlog.md` section 10's note on this for
+  when it'd actually start to matter.
 
 - **[2026-08] Only `ResBlock` instances ever route through this
   project's checkpoint patch -- attention blocks don't, in this pinned
@@ -83,17 +84,6 @@
   ResBlocks, and `use_checkpoint=True`'s real VRAM savings today only
   ever come from ResBlocks, never attention blocks, regardless of what
   the constructor parameter's name suggests.
-
-- **[2026-08] DoRA's `magnitude` parameter isn't wired into checkpoint
-  save/load.** `nodes/model/dora_layer.py`'s `DoRALinear`/`DoRAConv2d`
-  are real and trainable (via `DoRAAdapter`, live-wired through
-  `adapter_strategy_scope`), but `nodes/model/lora_saver.py` and
-  `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` only know about
-  `lora_A`/`lora_B` -- a DoRA-trained `magnitude` (independently trained
-  state, not derivable from `lora_A`/`lora_B` alone) would silently not
-  get saved. `DoRALinear.load_dora_weights()` exists for the real
-  round-trip once save-side wiring exists; nothing currently calls it.
-  Not fixed here -- see `docs/training_pipeline_design.md` section 10.
 
 - **`config_model.py` doesn't yet warn about grad_accum's real-update math
   anywhere in the UI/docs.** The step-counting refactor fixed the mechanism,

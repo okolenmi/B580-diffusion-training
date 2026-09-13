@@ -187,4 +187,10 @@ still pass.
 
 ---
 Last synced against `docs/design/` (formerly the single file
-`docs/training_pipeline_design.md`) at commit `2c1f0ff` (2026-08-25).
+`docs/training_pipeline_design.md`) at commit `2c1f0ff` (2026-08-25) --
+note (added during a later docs pass): this commit no longer resolves
+to a real object in this repository's history; see
+`docs/review_notes.md` item 8 for the same issue found in
+`docs/status/progress.md`'s matching trailer, not independently
+re-investigated here since this file's own content was separately
+confirmed current (not stale) by reading it directly during that pass.

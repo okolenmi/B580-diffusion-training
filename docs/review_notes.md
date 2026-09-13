@@ -139,46 +139,23 @@ were found via a full `grep -rn` sweep and fixed at that time.
 
 ## Likely outdated -- worth verifying against real current state
 
-1. **`docs/status/progress.md` is significantly behind real work and
-   should be resynced, not lightly edited.** Its own trailer claims
-   "Last synced against `docs/design/` (formerly
-   `docs/training_pipeline_design.md`) at commit `2c1f0ff`
-   (2026-08-25)." The repository has ~20 more commits after that
-   (through `2991618`, 2026-09-10), including work
-   `docs/status/progress.md` doesn't mention *at all* (confirmed real
-   in code, see above):
-   - The entire Resources Controller / precision redesign, Phases 3
-     through 6 (`docs/design/resources-controller/`) --
-     `ResourcesControllerNode`, `LoRATrainingConfigNode`,
-     `LoRATrainingResources`/`LoRATrainingSkeleton`, frozen-LoRA
-     merging, continue-training support, LoRA-file inspection.
-   - New generic editor mechanics: `Port.choices`, `Port.visible_when`,
-     `Port.widget_only`, `Node.diagnostics()`, `Node.NODE_KIND`/
-     `NodePreset`/`Node.DISPLAY_NAME`.
-   - `ResourceControlHandle`/`BudgetedResourceControlHandle` -- a live,
-     per-step VRAM budget enforcer, genuinely different from (and newer
-     than) the `OffloadOrchestrator` that `docs/status/progress.md`
-     does mention.
-   - `state_precision` -- block-wise 8-bit optimizer-state quantization
-     (`OptimizerStateStore`/`Int8BlockStateStore`).
-
-   A concrete, checkable symptom of the drift:
-   `docs/status/progress.md` says "51 smoke tests under
-   `nodes/smoke_tests/`... plus 5 more under `manager/`/`server/`."
-   The real counts today are 56 (`nodes/`), 5 (`server/`), 1
-   (`manager/`) -- 62 total, not 56.
-   `docs/design/resources-controller/08-consolidation.md`'s own count
-   ("the full existing `nodes/smoke_tests/` suite (56 files...)")
-   matches reality exactly, which is itself evidence that doc has been
-   kept current while `docs/status/progress.md` hasn't.
-
-   **Recommendation:** don't patch `docs/status/progress.md`
-   piecemeal -- do a full pass reading every commit since `2c1f0ff` (or
-   since whatever commit a future resync starts from) the same way the
-   original file was built, and update its own trailer to the new sync
-   point. The verification pass corrected one specific inaccuracy found
-   along the way (the `Builder`/`Node` naming, item 1 above) but did
-   not attempt the full resync -- that's real, separate work.
+1. **`docs/status/progress.md` was significantly behind real work.
+   Fixed in a follow-up pass** with a full resync, not a light edit --
+   read every commit from the previous (unresolvable, see below) sync
+   point through the last substantive feature commit before the docs
+   work (`2991618`, 2026-09-10), the same way the original file was
+   built, cross-checked against `docs/design/08-validation-and-implementation-status.md`
+   and `docs/design/10-node-surface-and-precision-control.md` (both of
+   which turned out to already be current -- individual feature commits
+   had been updating them inline all along, it was specifically
+   `progress.md` that fell behind). Added: the entire Resources
+   Controller / precision redesign section (Phases 1-6, condensed), the
+   `ResourceControlHandle`/`CachingTextEncoder` wiring, `state_precision`
+   quantization, and two new "Still open" items (`TrainerNode`
+   integration, extending offloadable defaults beyond `text_encoder`).
+   Also fixed the stale smoke-test count (56/5/1, not 51/5) and the
+   trailer's sync commit, which no longer resolved to a real object
+   (see item 8 below for the same issue in a second document).
 
 2. **`docs/known-issues/`'s newest dated entry is 2026-08-21, before
    the Resources Controller Phases 4-6 landed (2026-08-28 through
@@ -288,18 +265,28 @@ were found via a full `grep -rn` sweep and fixed at that time.
    `docs/resources_controller_redesign_plan.md`** (now
    `docs/status/progress.md` and
    `docs/design/resources-controller/08-consolidation.md`
-   respectively; both trailers were updated across the two docs passes
-   to point at `docs/design/` instead of the old single filename, but
-   the underlying ambiguity below is still unresolved). This was
-   confusing on its face even before the restructuring: the
-   resources-controller file's own content (Phases 5, 6, and the
-   post-Phase-6 bug fixes) was dated well after 2026-08-25, so either
-   "last synced" means something narrower than "last edited" (e.g.
-   "last time this file's claims were cross-checked against the main
-   design docs specifically, independent of this file's own unrelated
-   edits") or the trailer itself was stale. Worth a maintainer
-   clarifying what this trailer is actually supposed to mean, now that
-   it lives in two places, before it gets copied into a third.
+   respectively). This was confusing on its face even before the
+   restructuring: the resources-controller file's own content (Phases
+   5, 6, and the post-Phase-6 bug fixes) was dated well after
+   2026-08-25, so either "last synced" means something narrower than
+   "last edited" (e.g. "last time this file's claims were cross-checked
+   against the main design docs specifically, independent of this
+   file's own unrelated edits") or the trailer itself was stale.
+   **Partly resolved during the `docs/status/progress.md` resync**: that
+   trailer now points at a real, resolvable commit (`2991618`,
+   2026-09-10) instead. Along the way, a second, sharper problem turned
+   up: `2c1f0ff` **doesn't resolve to a real commit object in this
+   repository's history at all** -- not just stale, actually
+   unfindable, likely from a rewritten/rebased history predating
+   whatever was originally cloned. `docs/design/resources-controller/08-consolidation.md`'s
+   own copy of this trailer was left with the same unresolvable hash
+   but annotated with that finding, rather than guessing at a
+   replacement commit -- fixing it properly would mean actually
+   re-cross-checking that file against `docs/design/` as of a new
+   commit, which is separate work from confirming (already done, during
+   the verification pass) that the file's own content happens to still
+   be accurate. Still worth a maintainer clarifying what this trailer
+   is actually supposed to mean, and where `2c1f0ff` really pointed.
 
 9. **No single command runs this project's entire test suite.**
    `nodes/smoke_tests/run_all.py` is a convenience runner, but it only

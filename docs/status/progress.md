@@ -1,18 +1,5 @@
 # Progress
 
-> **This file is known to be stale as of this note** (added during a
-> docs-restructuring pass, not a resync of the content below). It was
-> last synced against commit `2c1f0ff` (2026-08-25); the repository has
-> moved well past that since, including the entire Resources Controller
-> / precision redesign (`docs/design/resources-controller/`,
-> Phases 3-6), a new live per-step VRAM budget enforcer
-> (`ResourceControlHandle`), and 8-bit optimizer-state quantization --
-> none of which appear below. See `docs/review_notes.md` item 1 for the
-> specifics and a concrete, checkable symptom (smoke-test counts no
-> longer match). Treat `docs/design/resources-controller/README.md`'s
-> own status banner as more current for anything it covers until this
-> file gets a real resync.
-
 Fast-read summary of what's actually implemented in `nodes/` -- the
 design-doc-driven rewrite of the training pipeline. For the rationale
 behind any of this, see [`docs/design/`](../design/README.md) (that
@@ -144,13 +131,104 @@ doc's own rule) -- `nodes/` is where new work lands.
 **Memory / offload**
 - `ResourceCoordinator`/`OffloadOrchestrator` --
   `nodes/memory/coordinator.py` (5.1, 5.2). Doesn't by itself fix the
-  open VRAM-hang report against `core/trainer.py`.
+  open VRAM-hang report against `core/trainer.py`. Still exactly as
+  un-wired as ever -- event-driven for three specific, rare moments
+  (cache rebuild, preview generation, checkpoint save), nothing in the
+  real training loop publishes those events yet.
 - `ResourceProfile` -- `nodes/memory/profile.py` (5.5). Per-`DeviceResident`
   VRAM breakdown, wired into `profile=True`'s existing report
   (`resident_<name>_mb` alongside `tracked_footprint_mb`). Real gap
   found while landing this, not yet fixed: no shared `MemoryManager`
   reachable from the trainer node, so `memory_manager_stats` is always
   `None` in a real run today -- see the module docstring.
+- **`ResourceControlHandle`/`BudgetedResourceControlHandle` -- a live,
+  per-step VRAM budget enforcer, new since the list above and
+  genuinely different from `OffloadOrchestrator`, not a rename of it.**
+  `nodes/memory/control_handle.py`. Not "react to a named, rare
+  event" (that's what `OffloadOrchestrator` already does, unwired) but
+  "check real measured usage before every step, offload whatever's
+  marked safe to if over budget, reload it right before whatever needs
+  it next actually needs it." A handle one node constructs
+  (`VRAMBudgetControllerNode`) and another (the trainer) calls into
+  during its own `build()` -- same shape `MonitorHandle`/
+  `LiveMonitorHandle` already established, not a second graph node
+  running "alongside" the trainer (`server/graph_executor.py` runs
+  nodes one at a time; there's no mechanism for two to exchange live
+  signals mid-execution). Wired into `SupervisedLoRATrainerNode` via a
+  new `resource_control` input. Honestly incomplete in one specific
+  way: `model`/`optimizer` are never marked offloadable, since neither
+  has a genuine idle window in this pipeline's always-synchronous
+  design, and nothing yet calls `ensure_loaded("model")`/
+  `ensure_loaded("optimizer")` at the right point to make offloading
+  either safe. What *is* wired end to end: `CachingTextEncoder`
+  (`nodes/model/text_encoder_cache.py`) takes an optional
+  `resource_control` -- on a cache miss it calls `ensure_loaded()`
+  before falling through to the inner encoder, so it's always safe for
+  the inner encoder to have been offloaded between hits.
+  `SupervisedLoRATrainerNode` marks `text_encoder` offloadable exactly
+  when it's actually a `CachingTextEncoder` (checked via `isinstance`).
+  `ensure_loaded()` itself shares a `_make_room()` helper with
+  `before_step()`, so reloading something that would push usage over
+  budget offloads other offloadable residents first -- direct handling
+  of "model/optimizer already near budget when a cache miss needs the
+  text encoder back."
+- **8-bit optimizer-state quantization, `state_precision`** (design
+  section 11.3, this item was originally scoped as a plain bf16 cast --
+  shipped instead as something better-validated). `OptimizerStateStore`/
+  `Int8BlockStateStore` (`nodes/optimizer/state_store.py`) block-wise
+  quantizes `m`/`v` to 8 bits between steps (dequantize to real fp32 ->
+  `Algorithm.compute_update()` runs completely unchanged, unaware this
+  exists -> requantize the result) -- ~4x smaller than a bf16 cast's 2x,
+  and actually verified end to end (a real 20-step AdamW comparison,
+  `Float32StateStore` vs `Int8BlockStateStore`, same seed/gradients,
+  converges within 0.0025 max per-parameter difference), where the
+  original bf16-cast idea was flagged as an unvalidated numerical risk
+  and never shipped. One shared implementation: `state_precision`'s
+  choices/doc/resolver live once in `state_store.py`, reusing
+  `strategy_registry.py`'s `STRATEGIES`/`resolve_strategy()` shape for
+  a different Port on the same three optimizer nodes. Lives on the
+  `Composed*` optimizer nodes themselves, same place `strategy`/`device`
+  already did -- the Resources Controller redesign (below) considered
+  and explicitly decided against absorbing this into its own precision
+  handling (see `docs/design/resources-controller/08-consolidation.md`).
+
+**Resources Controller / precision redesign** -- the most recently
+active work in the repo; full detail and current status in
+[`docs/design/resources-controller/`](../design/resources-controller/README.md),
+condensed here. Phases 1 and 2 (lazy `ModelWeights`/
+`SafetensorsCheckpointNode` header-only inspection; a server query
+endpoint for checkpoint dtype) and Phase 3 (`Node.NODE_KIND`/
+`NodePreset`/`list_presets()` -- generic infrastructure any node can
+use to be found by the editor's suggestion-menu search) are done.
+Phase 4's `ResourcePreset` construction mechanics are done:
+`SDXLArchitecture`+`LoRATrainingSkeleton` compose (multiple
+inheritance, concrete-mixin-first) into `SDXL_LoraTrainer`, a real
+`DeviceResident` built on the existing `ResourceCoordinator`. Phase 5's
+`ResourcesControllerNode` is done, scope-corrected along the way (an
+earlier version did LoRA injection itself; corrected to produce only a
+verified, NOT-yet-injected `LoRATrainingResources` pack -- injection is
+a property of a training config, not a verified resource). Phase 5 also
+landed generic editor mechanics any node can use, not just this one:
+`Port.choices` (closed-choice dropdown, e.g. `strategy`/`device`
+fields that used to be free-text strings), `Port.visible_when`
+(conditional port visibility), `Port.widget_only` (a checkbox that
+doesn't need its own wire socket), and a live `Node.diagnostics()`
+endpoint. Phase 6's `LoRATrainingConfigNode` is done: takes Phase 5's
+resource pack and actually injects LoRA (rank/alpha/frozen-weight-
+storage), including locking rank when continuing training from an
+existing LoRA file. `SDXL_LoraTrainer` (Phase 4) also supports two
+distinct LoRA-file inputs, not just one: `frozen_lora_sd` merges a saved
+LoRA directly into the base weights at load time before injection
+(`nodes/model/lora_merge.py`'s `merge_lora_into_state_dict`, no separate
+object -- it has no identity afterward, just changed base weights), while
+`continue_lora_sd` loads a saved LoRA into the new trainable adapter
+itself, to actually resume training it (reuses
+`load_lora_into_registry()`, extracted from `LoRACheckpointLoaderNode`
+for this). **`TrainerNode` integration is the one piece still
+open** -- nothing under `nodes/train/` references
+`LoRATrainingConfigNode`/`LoRATrainingResources` yet (checked
+directly), so the config node's output has nowhere to actually plug in
+today.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility
@@ -160,14 +238,15 @@ doc's own rule) -- `nodes/` is where new work lands.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 51 smoke tests under `nodes/smoke_tests/` (runnable via
-  `nodes/smoke_tests/run_all.py`), plus 5 more under `manager/`/`server/`
-  -- all CPU-only, no ComfyUI/XPU needed.
+- 56 smoke tests under `nodes/smoke_tests/` (runnable via
+  `nodes/smoke_tests/run_all.py`), plus 5 more under `server/` and 1
+  under `manager/` -- all CPU-only, no ComfyUI/XPU needed.
 
 ## Still open, in priority order
 
 See `docs/design/09-prioritized-backlog.md` (section 10) for the full
-reasoning behind this order.
+reasoning behind this order. Two items below are newer than that
+backlog and not yet folded into its own ordering:
 
 1. Validation only, code already exists: `RescaledZeroTerminalSNRSchedule`
    end-to-end training run (1.4); `LoRAPlusGroups` actually tuned against
@@ -177,6 +256,15 @@ reasoning behind this order.
    improvement shows up here too (3.1); `NF4WeightStore`'s
    diffusion-specific quality check against this project's real UNet
    (3.3)
+
+**Newest, not yet prioritized against the list above:**
+`LoRATrainingConfigNode`/`LoRATrainingResources` (Resources Controller
+Phase 6) have nothing under `nodes/train/` to plug into yet -- wiring
+them into `TrainerNode` is real, scoped work, not started. Also:
+`ResourceControlHandle` only ever marks `text_encoder` offloadable
+today -- extending that to `model`/`optimizer` needs somewhere in the
+step pipeline to call `ensure_loaded("model")`/`ensure_loaded("optimizer")`
+at the right point first, which doesn't exist yet either.
 
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
@@ -201,4 +289,13 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/design/` (formerly the single file
-`docs/training_pipeline_design.md`) at commit `2c1f0ff` (2026-08-25).
+`docs/training_pipeline_design.md`) at commit `2991618` (2026-09-10,
+"optimizer: state_precision -- block-wise 8-bit quantized optimizer
+state") -- the last substantive feature commit before the docs
+restructuring. Resynced from the previous sync point, which claimed
+commit `2c1f0ff` (2026-08-25) but no longer resolves to a real object
+in this repository's history as of this resync -- likely a rewritten
+commit from before this clone's history; not investigated further
+since the content gap it left (everything from the Resources
+Controller redesign's Phase 1, 2026-08-26, onward) was fully
+recoverable by date instead.

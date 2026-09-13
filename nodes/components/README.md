@@ -6,8 +6,9 @@ Destination for rewritten, non-legacy versions of the technical pieces
 UNet/LoRA construction (`core.unet_wrapper`, `core.lora`), noise-schedule
 math (`core.noise_schedule`), model I/O parameterization
 (`core.model_io`), directory configuration (`paths.py`), and similar. See
-`docs/nodes_package_design.md` for the full picture of which subpackage
-currently depends on what.
+`docs/architecture.md` for the current directory map (this doc's own
+list above is the more granular, `nodes/components/`-specific version
+of the same picture).
 
 `diffusion.py` (`NoiseSchedule`/`Parameterization`/`ModelInputTransform`/
 `DiffusionProcess`) and `device.py` (`DeviceContext`) have landed --
@@ -39,10 +40,10 @@ mechanisms read the same underlying state, so they stay correct and in
 sync until server/manager get migrated too, later, separately.
 
 Everything else in the "destination for" list above is still to move.
-See `docs/training_pipeline_design.md`'s "Prioritized backlog" (section
-10) for the current ordered plan of what lands here next and why the
-bigger items (a full step-pipeline refactor, cross-component offload
-orchestration) are sequenced later.
+See `docs/design/09-prioritized-backlog.md` (section 10) for the current
+ordered plan of what lands here next and why the bigger items (a full
+step-pipeline refactor, cross-component offload orchestration) are
+sequenced later.
 
 When something does move here: equivalence-test it against the
 `core`/`manager` code it replaces before anything switches over to it,

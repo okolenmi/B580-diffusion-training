@@ -1,13 +1,13 @@
 """ResourceProfile: one aggregate, per-component VRAM snapshot.
 
-See docs/training_pipeline_design.md section 5.5 for the rationale.
+See docs/design/05-coordination-registry-observability.md section 5.5 for the rationale.
 profile=True's existing report (nodes/train/step_pipeline.py's
 MonitoringPhase) already has vram_allocated_mb/vram_reserved_mb (the
 driver's own numbers, no per-component breakdown) and
 tracked_footprint_mb (ResourceCoordinator.total_footprint_bytes(), a
 single rolled-up total) -- neither answers "how much of my VRAM is the
 text encoder cache vs. optimizer scratch vs. the model itself," which is
-exactly the question docs/suspicious_findings.md's open
+exactly the question docs/known-issues/open.md's
 DeviceResident.footprint_bytes()/VRAM-pressure entries need answered.
 This is that: a plain snapshot combining ResourceCoordinator's
 per-resident breakdown, MemoryManager's per-tag pool stats, and

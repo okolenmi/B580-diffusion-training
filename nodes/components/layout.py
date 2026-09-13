@@ -3,7 +3,7 @@ server/process lifetime -- replaces paths.py's module-global override
 pattern (_comfy_dir_override/_checkpoints_dir_override/_loras_dir_override,
 mutated via set_*(), read from anywhere via get_*()) with one constructed
 value object, explicitly threaded through instead of reached into from
-arbitrary call sites. See docs/training_pipeline_design.md section 1.6.
+arbitrary call sites. See docs/design/02-foundational-ontology.md section 1.6.
 
 Bridging period, not a clean swap -- paths.py is genuinely used
 process-wide (server/*, manager/*, core/* all depend on its module
@@ -39,8 +39,8 @@ Deliberately not included yet: get_run_dir/get_log_path/get_progress_path/
 get_dataset_db_path/get_resume_dir/list_model_files. Nothing in nodes/
 calls those today (server/core do) -- adding them here now would be
 speculative, not demand-driven, the same reasoning
-docs/training_pipeline_design.md gives for sequencing PrefetchingBatchSource
-after something actually needs it.
+docs/design/03-training-step-orchestration.md section 2.5 gives for
+sequencing PrefetchingBatchSource after something actually needs it.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 ShapeGroupedBatchStrategy's batched core-algorithm math
 (Algorithm.compute_update_batched(), grouped by exact shape) and
 ForeachApplyStrategy's batched apply step (torch._foreach_*, grouped by
-device/dtype). See docs/training_pipeline_design.md section 11.2 for why
+device/dtype). See docs/design/10-node-surface-and-precision-control.md section 11.2 for why
 these were previously two separate, seemingly non-combinable strategies
 (a real question raised directly this session) and what the actual axes
 turned out to be once every strategy's step() was read directly rather

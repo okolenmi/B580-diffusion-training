@@ -1,6 +1,6 @@
 """Patches comfy.ldm.modules.diffusionmodules.util.CheckpointFunction so
 activation checkpointing works with a frozen base + LoRA model.
-See docs/training_pipeline_design.md section 2.3 for design rationale.
+See docs/design/03-training-step-orchestration.md section 2.3 for design rationale.
 
 Root cause (confirmed by reading ComfyUI's real source, not guessed): the
 stock CheckpointFunction.backward() calls

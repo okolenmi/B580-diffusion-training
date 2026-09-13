@@ -1,6 +1,6 @@
 """LoRAScalingPolicy/ClassicLoRAScaling/RankStabilizedScaling/_effective_alpha.
 
-See docs/training_pipeline_design.md section 3.2 for the design
+See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.2 for the design
 rationale (Kalajdzievski, arXiv:2312.03732, 2023) and lora_injector.py's
 module docstring for the effective-alpha derivation -- unchanged by this
 move, just relocated.

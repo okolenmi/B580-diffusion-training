@@ -1,5 +1,5 @@
 """AdapterStrategy: how a trainable delta composes with a frozen weight.
-See docs/training_pipeline_design.md section 3.1 for design rationale.
+See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.1 for design rationale.
 
 Plain LoRA -- a low-rank pair of matrices added to a frozen weight -- is
 one way to parameterize a trainable delta, not the only one.

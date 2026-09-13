@@ -144,17 +144,26 @@ size. `docs/status/progress.md` is supposed to work the same way but
 has drifted (see [`docs/review_notes.md`](docs/review_notes.md)) -- a
 reminder that this pattern only works if it's actually kept up.
 
-This folder structure is new as of the most recent docs-restructuring
-pass -- the content that used to live in four large files
-(`PROGRESS.md`, `docs/training_pipeline_design.md`,
+This folder structure is new as of a recent docs-restructuring pass --
+the content that used to live in four large files (`PROGRESS.md`,
+`docs/training_pipeline_design.md`,
 `docs/resources_controller_redesign_plan.md`,
 `docs/suspicious_findings.md`, all at the repo/`docs/` top level) has
 been split by topic into the folders above, with the content itself
 preserved (verified line-for-line during the split) and only
-reorganized. **Source-code comments and docstrings throughout the
-codebase still reference the old flat paths** (`docs/PROGRESS.md`,
-`docs/training_pipeline_design.md` section N, etc.) -- fixing those is
-deliberately left for a later, separate pass rather than bundled into
-this docs-only restructuring; see
-[`docs/review_notes.md`](docs/review_notes.md) for the full scope of
-what that follow-up needs to touch.
+reorganized. A follow-up pass then updated every source-code comment
+and docstring that referenced the old flat paths (52 files across
+`nodes/`, `server/`, `manager/`) to point at the correct split file --
+most citations named a specific section/phase number, which had to be
+looked up against the section-number-to-file mapping in
+`docs/design/README.md` and `docs/design/resources-controller/README.md`
+rather than mechanically renamed, since one old path now maps to up to
+eleven different files. A handful of citations pointed at content from
+two now-deleted docs (`docs/nodes_package_design.md`,
+`docs/optimizer_execution_redesign_plan.md`) that predated this
+restructuring entirely; where the cited content still exists somewhere
+current it's now pointed there, and where it doesn't survive anywhere,
+the comment was reworded to state the fact directly rather than cite a
+source that isn't there. See
+[`docs/review_notes.md`](docs/review_notes.md) for the full accounting
+of what was found and fixed.

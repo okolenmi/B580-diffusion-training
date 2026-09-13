@@ -18,7 +18,7 @@ too, differing only in how the resulting (param, delta, decay) triples
 get applied (this strategy: a per-member loop via base.py's
 apply_update(); shape_grouped_foreach.py: base.py's batched
 apply_updates_batched()). See shape_grouping.py's own docstring for why
-that extraction happened, and docs/training_pipeline_design.md section
+that extraction happened, and docs/design/10-node-surface-and-precision-control.md section
 11.2 for the axis decomposition this is built around.
 """
 

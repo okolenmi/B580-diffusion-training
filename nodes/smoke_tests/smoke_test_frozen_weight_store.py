@@ -1,7 +1,8 @@
 """Correctness check for nodes/model/frozen_weight_store.py
 (FrozenWeightStore/BF16WeightStore) and the DeviceResident conformance it
 enables on TrainableModel/ComfyUNetTrainableModel
-(docs/training_pipeline_design.md sections 1.2, 3.3).
+(docs/design/02-foundational-ontology.md section 1.2,
+docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.3).
 
 Built around real torch, real core.lora.LoRALinear, and a minimal fake
 wrapper exposing only the surface ComfyUNetTrainableModel's new methods

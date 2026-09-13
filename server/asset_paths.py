@@ -110,7 +110,9 @@ def inspect(kind: str, relative_path: str) -> dict:
     real mechanics (safetensors' header-only read, no tensor data
     touched) and why this is cheap even for a multi-GB file. Powers
     the Resources Controller's per-input detection readouts
-    (docs/resources_controller_redesign_plan.md, Phase 2/4) without
+    (docs/design/resources-controller/02-phase-1-and-2.md and
+    docs/design/resources-controller/04-phase-4-resource-preset-abstraction.md,
+    Phase 2/4) without
     loading the resource itself.
 
     Response is deliberately narrow and shaped per kind: exactly the

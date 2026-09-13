@@ -3,7 +3,7 @@ server/asset_paths.py's inspect() directly (the real logic
 /nodegraph/assets/{kind}/inspect thinly wraps, same "test the function
 the route delegates to, not the HTTP layer" convention as
 smoke_test_execution_registry.py), for Phase 2 of
-docs/resources_controller_redesign_plan.md.
+docs/design/resources-controller/02-phase-1-and-2.md.
 
 Three things checked, deliberately kept separate: (1) the real answer
 is right for both supported kinds (checkpoint, lora), checked

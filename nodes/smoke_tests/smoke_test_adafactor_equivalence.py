@@ -26,7 +26,7 @@ importantly:
     real training usage, not float32 -- float32 params trigger a real,
     separate, previously-undocumented aliasing quirk in the legacy
     reference's momentum handling (see algorithms/adafactor.py's
-    docstring and docs/suspicious_findings.md) that has nothing to do
+    docstring and docs/known-issues/deferred.md) that has nothing to do
     with whether this port is correct, and would make an otherwise
     apples-to-apples comparison misleading.
 """

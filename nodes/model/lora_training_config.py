@@ -1,4 +1,4 @@
-"""LoRATrainingConfigNode: docs/resources_controller_redesign_plan.md's
+"""LoRATrainingConfigNode: docs/design/resources-controller/06-phase-6-lora-training-config.md's
 Phase 6. Takes Phase 5's `LoRATrainingResources` (verified, NOT yet
 LoRA-injected) and actually creates the trainable adapter: rank, alpha,
 frozen-weight-storage -- the things Phase 5 deliberately excluded, see

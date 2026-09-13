@@ -2,7 +2,7 @@
 activation/recompute measurement, on real hardware, during a real
 training step -- the actual blocker CheckpointPlacementPolicy
 (checkpoint_placement.py) was waiting on, per
-docs/training_pipeline_design.md section 2.3's own words: "the actual
+docs/design/03-training-step-orchestration.md section 2.3's own words: "the actual
 blocker is the per-block profiling instrumentation, not the policy class
 itself."
 

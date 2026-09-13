@@ -7,8 +7,8 @@ apply each group's already-computed (delta, decay) results, not in how
 those results get computed. Extracted here once both needed the
 identical grouping/computation logic, rather than the second copy of it
 that used to be the plan -- see
-docs/training_pipeline_design.md section 11.2 for the axis this
-decomposition is built around, and docs/suspicious_findings.md's
+docs/design/10-node-surface-and-precision-control.md section 11.2 for the axis this
+decomposition is built around, and docs/known-issues/resolved.md's
 `strategy_registry.py` entry for the real duplication bug (three copies
 of a dict, one of which went stale) this project already paid for once
 by not extracting shared structure proactively.

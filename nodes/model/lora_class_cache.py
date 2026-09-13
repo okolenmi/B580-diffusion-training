@@ -4,7 +4,7 @@ nodes/model/adapter_injection.py's adapter_strategy_scope has
 core.lora.LoRALinear/LoRAConv2d patched to something else.
 
 See adapter_injection.py's module docstring for the full recursion
-hazard this exists to prevent, and docs/training_pipeline_design.md
+hazard this exists to prevent, and docs/design/04-lora-adapter-mechanics-and-loss-weighting.md
 section 3.1 for the design rationale. Originally lived in
 adapter_strategy.py; moved here once nodes/model/dora_layer.py needed
 it too and importing from adapter_strategy.py directly would have

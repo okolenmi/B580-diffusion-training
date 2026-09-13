@@ -1,6 +1,6 @@
 """PrefetchingBatchSource: decorates any TrainingBatchSource, overlapping
 the *next* batch's host-side preparation with the *current* step's device
-compute. docs/training_pipeline_design.md section 2.5.
+compute. docs/design/03-training-step-orchestration.md section 2.5.
 
 Same pattern nodes/dataset/renoise.py's RenoiseBatchSource already
 establishes for this domain (wrap, don't reimplement iteration) -- a
@@ -37,7 +37,8 @@ torn down when that particular pass ends -- normally (the dataset
 exhausts) or early (the caller stops consuming, e.g. FetchBatchPhase
 never actually does this today, but a future caller might).
 
-See docs/training_pipeline_design.md section 5.6 for the concurrency
+See docs/design/05-coordination-registry-observability.md section 5.6
+for the concurrency
 contract this worker thread has to honor: the queue is the *only* thing
 crossing the thread boundary, exactly as documented there.
 """

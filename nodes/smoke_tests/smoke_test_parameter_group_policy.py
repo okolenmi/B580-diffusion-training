@@ -1,5 +1,5 @@
 """Correctness check for ComposedOptimizerHandle's ParameterGroupPolicy
-fix (docs/training_pipeline_design.md section 3.4).
+fix (docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.4).
 
 The bug being fixed: update_lr() used to unconditionally do
 `self.param_lr = [new_lr] * len(self.params)`, silently erasing any

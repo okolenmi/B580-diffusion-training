@@ -1,5 +1,6 @@
 """Node-graph routes -- editor tab, isolated from the production
-config/training path (see docs/nodes_package_design.md).
+config/training path (see docs/architecture.md for how the legacy
+core/manager pipeline and this nodes/server rewrite relate).
 
 /optimizers and /registry are pure introspection: read declared metadata,
 build nothing, run nothing. /run is different in kind -- it actually
@@ -132,7 +133,9 @@ _registry = _ExecutionRegistry()
 async def list_optimizer_nodes():
     """Reads declared contracts directly off nodes/optimizer/'s real Node
     classes -- see nodegraph_introspect.py's introspect_optimizer_nodes()
-    and docs/nodes_package_design.md. This replaced an earlier version that
+    and docs/design/02-foundational-ontology.md section 1.1 for why a
+    declared Node/Port contract, not a guessed constructor signature, is
+    the thing to introspect. This replaced an earlier version that
     guessed ports from core.optimizers.py's constructor signatures; that
     approach is still available (introspect_legacy_class(), same module)
     for any future domain not yet migrated into nodes/.
@@ -213,7 +216,7 @@ async def inspect_asset(kind: str, path: str):
     """Per-component dtype for a resource, read cheaply from its file
     header -- see server/asset_paths.py.inspect(). Powers the Resources
     Controller's per-input dtype readouts
-    (docs/resources_controller_redesign_plan.md, Phase 2) without
+    (docs/design/resources-controller/02-phase-1-and-2.md, Phase 2) without
     loading the resource itself."""
     try:
         return asset_paths.inspect(kind, path)
@@ -233,7 +236,7 @@ async def node_diagnostics(class_name: str, request: DiagnosticsRequest):
     overriding (node_info_to_dict()'s has_diagnostics reports which
     classes actually did; the editor should skip calling this for any
     class that didn't rather than getting {} back every time for
-    nothing). docs/resources_controller_redesign_plan.md Phase 5's "node
+    nothing). docs/design/resources-controller/05-phase-5-resources-controller-node.md Phase 5's "node
     works with the server, calculates values, shows extra things" --
     e.g. ResourcesControllerNode.diagnostics() delegating to whichever
     preset is currently selected. Same registry lookup graph_executor.py's

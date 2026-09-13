@@ -1,7 +1,7 @@
 """LoRATrainingSkeleton + SDXL_LoraTrainer: builds a real, LoRA-injected
 unet + clip + vae + lora resources object from a base checkpoint's
 state dict, for the not-yet-built training node
-(docs/resources_controller_redesign_plan.md's Phase 6) that actually
+(docs/design/resources-controller/06-phase-6-lora-training-config.md) that actually
 decides rank/alpha and creates the adapter.
 
 LoRATrainingResources + SDXL_LoRATrainingResources: the earlier stage --
@@ -49,7 +49,7 @@ implementations. .vae_sd isn't a DeviceResident (see __init__), so it's
 moved/dropped directly alongside the coordinator's work rather than
 through it. describe() (below) gives a read-only summary of the same
 information -- the "universal interface other nodes may use later"
-docs/resources_controller_redesign_plan.md's Phase 5 asks for -- built
+docs/design/resources-controller/05-phase-5-resources-controller-node.md's Phase 5 asks for -- built
 entirely out of those same existing methods, not a second parallel
 introspection path. LoRATrainingResources implements the same
 DeviceResident contract + describe() shape for its own, earlier-stage
@@ -299,7 +299,7 @@ class SDXL_LoraTrainer(SDXLArchitecture, LoRATrainingSkeleton):
 class LoRATrainingResources(DeviceResident, ABC):
     """Ready-to-use, verified base resources for LoRA training -- NOT
     yet LoRA-injected. That's deliberately a separate, later node's job
-    (docs/resources_controller_redesign_plan.md's own Phase 6, not
+    (docs/design/resources-controller/06-phase-6-lora-training-config.md's own Phase 6, not
     built yet) -- direct correction on an earlier version of this
     codebase's Resources Controller node, which called inject_lora()
     itself: rank/alpha/frozen-weight-storage are LoRA-injection

@@ -1,6 +1,6 @@
 """Correctness check for nodes/memory/coordinator.py's ResourceCoordinator
 and OffloadOrchestrator (backlog item 12,
-docs/training_pipeline_design.md sections 5.1, 5.2).
+docs/design/05-coordination-registry-observability.md sections 5.1, 5.2).
 
 Run this directly: `python nodes/smoke_tests/smoke_test_resource_coordinator.py`
 """

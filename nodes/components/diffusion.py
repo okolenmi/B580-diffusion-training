@@ -4,7 +4,7 @@ ALPHA_T/SIGMA_T globals and core.model_io's free-function I/O convention
 with constructed, injectable objects; same math, verified by
 smoke_test_diffusion_equivalence.py. A continuous-time process (flow
 matching) would be a separate, smaller Interpolant contract, not a subtype
-of NoiseSchedule. See docs/training_pipeline_design.md section 1.4.
+of NoiseSchedule. See docs/design/02-foundational-ontology.md section 1.4.
 """
 
 from __future__ import annotations

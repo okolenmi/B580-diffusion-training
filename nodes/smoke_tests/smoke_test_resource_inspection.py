@@ -1,6 +1,6 @@
 """Real torch, real safetensors I/O against a temp directory
 (paths.set_checkpoints_dir) -- verifies Phase 1 of
-docs/resources_controller_redesign_plan.md: SafetensorsCheckpointNode
+docs/design/resources-controller/02-phase-1-and-2.md: SafetensorsCheckpointNode
 no longer eagerly loads a checkpoint's tensor data, ModelWeights
 (nodes/model/handle.py) lazily materializes on first real access and
 caches after that, and nodes/model/resource_inspection.py's header-only

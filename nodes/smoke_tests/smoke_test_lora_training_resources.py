@@ -1,7 +1,7 @@
 """Checks nodes/model/sdxl_architecture.py's SDXLArchitecture and
 nodes/model/lora_training_resources.py's LoRATrainingSkeleton/
 SDXL_LoraTrainer -- Phase 4 of
-docs/resources_controller_redesign_plan.md.
+docs/design/resources-controller/04-phase-4-resource-preset-abstraction.md.
 
 The central thing under test isn't any one method -- it's the
 composition decision itself: SDXL_LoraTrainer(SDXLArchitecture,

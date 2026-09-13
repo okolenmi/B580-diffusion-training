@@ -1,6 +1,6 @@
 """NF4WeightStore: QLoRA-style blockwise NF4 quantization + double
 quantization of the per-block scale factors.
-See docs/training_pipeline_design.md section 3.3 for design rationale.
+See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.3 for design rationale.
 
 **The codebook is grounded directly in bitsandbytes' real, current
 source** (bitsandbytes/functional.py's create_normal_map(), fetched and

@@ -1,5 +1,5 @@
 """Correctness check for nodes/memory/profile.py's ResourceProfile
-(backlog item 1, docs/training_pipeline_design.md section 5.5).
+(backlog item 1, docs/design/05-coordination-registry-observability.md section 5.5).
 
 Run this directly: `python nodes/smoke_tests/smoke_test_resource_profile.py`
 """

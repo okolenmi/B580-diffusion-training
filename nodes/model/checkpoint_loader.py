@@ -1,6 +1,6 @@
 """SafetensorsCheckpointNode: resolves and validates a checkpoint path,
 splits UNet from the rest. Lazy since Phase 1 of the resources-
-controller redesign (docs/resources_controller_redesign_plan.md) --
+controller redesign (docs/design/resources-controller/02-phase-1-and-2.md) --
 this no longer loads the file itself; ModelWeights (nodes/model/
 handle.py) does that on first real access, or not at all if nothing
 downstream ever touches unet_sd/non_unet_sd. build() still does real,

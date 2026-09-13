@@ -1,6 +1,6 @@
 """Checks nodes.core.Node.NODE_KIND/NodePreset/list_presets() and their
 introspection into server.nodegraph_introspect.NodeInfo.node_kind/presets
--- Phase 3 of docs/resources_controller_redesign_plan.md: the
+-- Phase 3 of docs/design/resources-controller/03-phase-3-interactive-node-support.md: the
 suggestion-menu search resolution ("each preset counts as its own
 searchable entry, matched on required inputs/outputs only").
 

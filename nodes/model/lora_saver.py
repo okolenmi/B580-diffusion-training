@@ -23,12 +23,12 @@ core.save.save_lora_checkpoint also temporarily removes a FusedXPUAdafactor's
 backward hooks during the read, to avoid a hook firing mid-save. That
 race needs a *live, still-training* model and a save happening while
 training is paused mid-loop -- not reachable today since no nodes/
-orchestration node calls LoRACheckpointSaverNode from inside a TrainerNode's
-step loop (see nodes_package_design.md's TrainerNode scope-reduction
-list: "no such orchestration node exists yet"). Worth revisiting
-together whenever that node gets built, not before -- and this node's
-previous version, also never passed an optimizer through here either, so
-this isn't a regression.
+orchestration node calls LoRACheckpointSaverNode from inside a
+TrainerNode's step loop (checked directly: nothing under nodes/train/
+references LoRACheckpointSaverNode as of this writing). Worth
+revisiting together whenever that node gets built, not before -- and
+this node's previous version, also never passed an optimizer through
+here either, so this isn't a regression.
 """
 
 from __future__ import annotations

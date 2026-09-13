@@ -1,5 +1,5 @@
 """Correctness check for ActivationCheckpointingStrategy/NoCheckpointing/
-FrozenParamSafeCheckpointing (docs/training_pipeline_design.md section
+FrozenParamSafeCheckpointing (docs/design/03-training-step-orchestration.md section
 2.3, nodes/model/gradient_checkpointing.py).
 
 The underlying patch's actual gradient-correctness is already covered by

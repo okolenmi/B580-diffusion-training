@@ -80,7 +80,7 @@ class NodeInfo:
     # has no NODE_KIND concept to read, so it's always "static" there, correctly: nothing
     # legacy-introspected has presets).
     presets: list[PresetInfo] | None = None  # only non-None when node_kind == "dynamic" --
-    # see docs/resources_controller_redesign_plan.md Phase 3 for what this is for
+    # see docs/design/resources-controller/03-phase-3-interactive-node-support.md Phase 3 for what this is for
     # (the editor's suggestion-menu search) and nodes.core.NodePreset for why it's
     # required-ports-only, not a full shape resolution.
     has_diagnostics: bool = False  # nodes.core.Node.diagnostics() actually overridden,
@@ -264,11 +264,12 @@ def _port_info(p, *, is_output: bool = False) -> PortInfo:
 def introspect_node_class(cls: type) -> NodeInfo:
     """Read DECLARED metadata directly off a real nodes.core.Node subclass
     -- INPUTS/OUTPUTS are real Port objects the class author wrote down,
-    not guessed from a constructor signature. This is what
-    docs/nodes_package_design.md means by "strictly better, since there's
-    now an actual contract to read rather than a signature to
-    reverse-engineer" -- use this for anything under nodes/, and
-    introspect_legacy_class() above for anything not yet migrated there.
+    not guessed from a constructor signature. This is exactly the
+    Node/Port construction-time contract described in
+    docs/design/02-foundational-ontology.md section 1.1 -- an actual
+    contract to read rather than a signature to reverse-engineer -- use
+    this for anything under nodes/, and introspect_legacy_class() above
+    for anything not yet migrated there.
 
     bases is the real Python inheritance chain (excluding object/ABC/the
     dataclass-y ABC noise), so e.g. CAMEOptimizerNode correctly reports
@@ -278,7 +279,7 @@ def introspect_node_class(cls: type) -> NodeInfo:
     node_kind/presets are Node.NODE_KIND/list_presets(), verbatim for
     node_kind and resolved-to-PortInfo for presets -- see
     nodes.core.NodePreset's own docstring and
-    docs/resources_controller_redesign_plan.md's Phase 3. presets stays
+    docs/design/resources-controller/03-phase-3-interactive-node-support.md's Phase 3. presets stays
     None for every node_kind == "static" class (the default, true for
     every node in this project today) -- calling list_presets() on a
     static node isn't just unnecessary, nodes.core.Node's own base
@@ -330,7 +331,8 @@ def introspect_optimizer_nodes() -> list[NodeInfo]:
     correctly shows a FusedOptimizerHandle output type, not just a generic
     OptimizerHandle, because that's what it actually declares (see
     nodes/optimizer/fused_adafactor.py and
-    docs/nodes_package_design.md's "fused optimizer family" section).
+    docs/design/10-node-surface-and-precision-control.md section 11.2,
+    "fused execution is a fourth thing").
     """
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
     from nodes.optimizer.came import CAMEOptimizerNode

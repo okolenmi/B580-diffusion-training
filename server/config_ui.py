@@ -377,7 +377,7 @@ EXTRAS: dict[str, ExtraDef] = {
 # Per-launch options -- NOT real TrainingConfig fields (well, start_from and
 # reset_optimizer technically exist as persisted fields too, but that's a
 # *different*, launch-transient concept -- see server/routes_training.py's
-# docstring and PROGRESS.md for the full story). Deliberately excluded from
+# docstring and docs/status/progress.md for the full story). Deliberately excluded from
 # config_schema.py's auto-generated output in options.py so only this
 # per-launch version is ever shown.
 SYNTHETIC_OPTIONS: list[ExtraDef] = [

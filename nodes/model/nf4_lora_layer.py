@@ -1,7 +1,8 @@
 """NF4LoRALinear/NF4LoRAConv2d: the real forward-path wiring
 NF4WeightStore (nf4_weight_store.py) has been missing since it landed --
 see that module's own docstring, "Not yet wired into a real forward
-pass." See docs/training_pipeline_design.md section 3.3/10 for the
+pass." See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md
+section 3.3 and docs/design/09-prioritized-backlog.md section 10 for the
 design rationale (this was the single remaining construction item in
 the original backlog).
 

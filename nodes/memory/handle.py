@@ -1,7 +1,7 @@
 """DeviceResident: the runtime lifecycle contract shared by anything that
 holds device memory as part of its normal operation (optimizer, model,
 text encoder, dataset prefetch buffer), regardless of domain. See
-docs/training_pipeline_design.md section 1.2.
+docs/design/02-foundational-ontology.md section 1.2.
 
 Lives next to MemoryManager (nodes/memory/manager.py), not under any one
 domain package, for the same reason MemoryManager itself does: nothing
@@ -14,7 +14,7 @@ allocation for reuse -- the cheap, reversible one; MemoryManager's free()/
 free_all() is the actual-drop operation). A DeviceResident implementation
 that owns pooled buffers acquired from a MemoryManager calls that
 manager's free()/free_all() from inside its own release(), not the
-manager's release() -- see docs/training_pipeline_design.md section 1.3.
+manager's release() -- see docs/design/02-foundational-ontology.md section 1.3.
 """
 
 from __future__ import annotations

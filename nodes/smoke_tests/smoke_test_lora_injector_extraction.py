@@ -2,7 +2,7 @@
 build_lora_injected_unet() (nodes/model/lora_injector.py) -- extracted
 so the Resources Controller redesign's Phase 5 has a real function to
 call rather than duplicating this construction logic later (see
-docs/resources_controller_redesign_plan.md's "Consolidation" section
+docs/design/resources-controller/08-consolidation.md
 for why that matters).
 
 Can't exercise this fully end to end -- core.unet_wrapper.ComfyUNetWrapper

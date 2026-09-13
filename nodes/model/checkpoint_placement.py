@@ -1,6 +1,6 @@
 """BlockCost/CheckpointPlacementPolicy/EveryBlockPlacement/GreedyRatioPlacement.
 
-See docs/training_pipeline_design.md section 2.3 for the full rationale
+See docs/design/03-training-step-orchestration.md section 2.3 for the full rationale
 (Chen et al. 2016 arXiv:1604.06174's sqrt(N)-uniform result, generalized
 by Korthikanti et al. 2022's cost-ratio ranking, which this is a direct,
 simplified reading of). The design doc's own illustrative code is
@@ -70,7 +70,7 @@ class GreedyRatioPlacement(CheckpointPlacementPolicy):
     block to recompute, not just whole-block on/off.
 
     Unvalidated against a real training run -- see
-    docs/training_pipeline_design.md section 9.2. Not wired into
+    docs/design/08-validation-and-implementation-status.md section 9.2. Not wired into
     ComfyUNetLoRANode's real construction path (still EveryBlockPlacement's
     unconditional behavior, via use_checkpoint's existing bool) -- that's
     real, separate follow-up work, once real BlockCost numbers from an

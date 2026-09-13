@@ -40,9 +40,10 @@ just against itself.
 The LoRAGeneration classes are built lazily (_generation_classes(), first
 call only) rather than at module import time, purely so importing this
 module -- e.g. for LoRAPhaseSplitNode's INPUTS/OUTPUTS during graph
-introspection -- never requires torch to be installed. Matches every
-other nodes/ file's rule (see nodes_package_design.md: "the endpoint no
-longer needs torch importable at all").
+introspection -- never requires torch to be installed. Same rule every
+other nodes/ file follows for exactly this reason: introspection (the
+graph editor listing a node's ports) has to work in an environment
+where torch may not even be importable yet.
 """
 
 from __future__ import annotations
@@ -297,7 +298,7 @@ def extract_combined_weights(registry) -> dict:
     from a correct file until someone loads it and the results are off.
     Real, unimplemented, separate follow-up (how phase-splitting and a
     DoRA base should even combine is its own design question, not an
-    extraction-code gap) -- see docs/training_pipeline_design.md section
+    extraction-code gap) -- see docs/design/08-validation-and-implementation-status.md section
     9.2. extract_own_generation_weights below has no such limitation: it
     never combines, so a DoRA layer's own `.dora_scale` round-trips
     through it regardless of how many later generations sit on top.

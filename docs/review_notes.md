@@ -101,39 +101,41 @@ Three real problems were found and fixed:
    docs/suspicious_findings.md` that this predates the restructuring --
    not something introduced by the file split.)
 
-## Follow-up work this restructuring deliberately created
+## Source-code references to the old flat paths -- now fixed
 
-**Source-code comments and docstrings throughout the codebase
-reference the old flat file paths by exact string, and none of them
-were updated as part of this pass.** This was a deliberate scoping
-choice, not an oversight -- getting the docs into a good, logical
-structure and internally consistent first (see below), and fixing the
-(mostly already-broken -- see item 6 below) references to them from
-source code afterward, rather than letting reference-preservation
-constrain the structure. The exact scope of that follow-up, so it
-doesn't have to be rediscovered:
+**All 52 source-code comments/docstrings that referenced the old flat
+file paths by exact string have been updated to point at the correct
+split file.** This was deliberately deferred out of the original
+restructuring pass (getting the docs into a good, logical structure
+first, fixing references to them from source code afterward, rather
+than letting reference-preservation constrain the structure) and
+completed in a follow-up pass. What was fixed, so the work doesn't
+need rediscovering if something was missed:
 
-| Old path | Now split into | Referenced by (exact-string match) |
+| Old path | Split into | Fixed in source (was: referenced by) |
 |---|---|---|
 | `docs/training_pipeline_design.md` | `docs/design/*.md` (see that folder's `README.md` for the section-number-to-file mapping) | 30 source files |
 | `docs/resources_controller_redesign_plan.md` | `docs/design/resources-controller/*.md` | 17 source files |
 | `docs/suspicious_findings.md` | `docs/known-issues/*.md` | 4 source files |
 | `PROGRESS.md` | `docs/status/progress.md` | 1 source file |
 
-Most of these references cite a specific section number (e.g. "design
-3.1," "section 11.3") rather than just the bare filename -- the
-mapping tables in `docs/design/README.md` and
-`docs/design/resources-controller/README.md` give the section-number
--> file lookup needed to fix each one correctly rather than guessing.
-**All doc-to-doc references (docs linking to other docs) are now
-updated** -- the initial restructuring pass updated the top-level
-navigation docs, but missed several references *within* the split
-design docs themselves (e.g. `docs/design/10-node-surface-and-precision-control.md`
-pointing at the old `docs/suspicious_findings.md`/
-`docs/resources_controller_redesign_plan.md` paths); a full
-`grep -rn` sweep of `docs/` for the four old filenames during the
-verification pass found and fixed the remainder. Only source-code
-comments/docstrings remain unreferenced.
+Most of these references cited a specific section or phase number
+(e.g. "design 3.1," "Phase 5," "section 11.3") rather than just the
+bare filename, so each one was resolved individually against the
+section-number-to-file mapping in `docs/design/README.md` and
+`docs/design/resources-controller/README.md` rather than mechanically
+renamed -- a handful of citations spanned two different target files
+in one breath (e.g. "section 3.3/10", "Phase 2/4") and needed
+splitting into two separate pointers rather than picking one. All
+50 changed `.py` files were re-parsed with `ast.parse()` after editing
+to confirm no syntax errors were introduced; all 81 doc-to-doc links
+across `docs/` were re-verified to resolve.
+
+**All doc-to-doc references (docs linking to other docs) were already
+fixed in the verification pass** that preceded this one -- the initial
+restructuring pass updated the top-level navigation docs, but missed
+several references *within* the split design docs themselves; those
+were found via a full `grep -rn` sweep and fixed at that time.
 
 ## Likely outdated -- worth verifying against real current state
 
@@ -243,18 +245,26 @@ comments/docstrings remain unreferenced.
    `docs/known-issues/README.md` (formerly
    `docs/suspicious_findings.md`'s header note) says both files were
    deleted and that dangling pointers to them were "cleaned up" -- but
-   that cleanup only touched that one doc. Real, remaining references
-   (by exact path) still exist in: `server/routes_nodegraph.py`,
+   that cleanup only touched that one doc. **Fixed in a follow-up
+   pass**: the 9 remaining references across `server/routes_nodegraph.py`,
    `server/main.py`, `server/nodegraph_introspect.py`,
    `nodes/model/lora_phases.py`, `nodes/model/lora_saver.py`,
-   `nodes/components/README.md`, and `manager/builder.py`. A reader
-   who follows any of these hits a file that doesn't exist. Worth
-   either restoring a minimal stub explaining what absorbed that
-   content, or editing each reference to point at wherever that
-   information actually lives now (likely somewhere under
-   `docs/design/`, based on context) -- not changed here since it
-   touches source code, not docs, and is really the same class of work
-   as the bigger "Follow-up work" table above.
+   `nodes/components/README.md`, and `manager/builder.py` were each
+   checked individually. Where the cited content has a clear current
+   home (e.g. the "fused optimizer family" citation ->
+   `docs/design/10-node-surface-and-precision-control.md` section 11.2;
+   the VRAM-findings citation in `manager/builder.py` -> confirmed by
+   matching the exact "+560MB in one step" figure to
+   `docs/known-issues/pending-testing.md`'s ratchet entry), the
+   reference now points there. Where the exact original content
+   doesn't survive anywhere findable (a few specific quoted phrases --
+   "strictly better, since there's now an actual contract to read", "no
+   longer needs torch importable at all", the "TrainerNode
+   scope-reduction list"), the comment was reworded to state the
+   underlying fact in its own words instead of citing a source that no
+   longer exists -- and in each such case, the underlying factual claim
+   was re-verified against current code first, not just carried over
+   from the old (possibly also-stale) comment.
 
 7. **`docs/design/resources-controller/01-context-and-ground-truth.md`'s
    "Open design question blocking Phase 4" section contradicted the
@@ -300,18 +310,20 @@ comments/docstrings remain unreferenced.
    becomes annoying enough to notice again.
 
 10. **Cross-document section-number references are structurally
-    fragile.** Source-code docstrings reference the old
-    `docs/training_pipeline_design.md` by section number (e.g. "design
-    3.1," "section 11.3") -- those numbers are still meaningful (the
-    split preserved them), but now also need a file lookup, which
-    nothing automates; `docs/design/README.md`'s table is a manual,
-    by-hand mapping that itself needs to stay in sync if sections ever
-    move again. Doc-to-doc references are now fully updated (see
-    "Follow-up work" above); source-code references were deliberately
-    left for the follow-up pass. Not something this restructuring
-    attempts to solve structurally (e.g. with stable per-section anchor
-    IDs instead of numbers) -- flagged as a real design trade-off for
-    whoever picks up the follow-up work, not an invisible one.
+    fragile -- a real, ongoing risk, not a one-time cleanup item.**
+    Both docs and source-code comments reference `docs/design/`'s
+    files by section number (e.g. "design 3.1," "section 11.3") --
+    those numbers stayed meaningful through the split and every
+    reference (doc-to-doc and source-to-doc) is now correct as of this
+    pass, but nothing *automates* that correctness. If a section ever
+    gets renumbered, inserted, or moved to a different file in the
+    future, every citation of its old number -- across `docs/design/`
+    itself, `docs/review_notes.md`'s own examples, and dozens of source
+    files -- silently goes stale again with no mechanism to catch it.
+    Not something this restructuring (or its follow-up) attempts to
+    solve structurally (e.g. with stable per-section anchor IDs instead
+    of numbers) -- flagged as a standing design trade-off, not a task
+    with an end state.
 
 11. **`docs/known-issues/` undersells its own reliability.** Its
     header describes it as "an informal, unaudited collection, not a

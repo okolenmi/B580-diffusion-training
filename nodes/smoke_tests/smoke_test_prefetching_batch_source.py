@@ -1,7 +1,7 @@
 """Correctness check for nodes/dataset/prefetch.py's PrefetchingBatchSource.
 
 Ordinary iteration correctness matters less here than the concurrency
-risks a background-thread decorator actually has (docs/training_pipeline_design.md
+risks a background-thread decorator actually has (docs/design/05-coordination-registry-observability.md
 section 5.6): a consumer that stops early must not deadlock a worker
 blocked inside queue.Queue.put(), and an exception from the wrapped
 source must actually reach the consumer, not vanish into a dead daemon

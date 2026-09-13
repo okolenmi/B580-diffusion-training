@@ -1,6 +1,6 @@
 """DoRALinear/DoRAConv2d: Liu et al., "DoRA: Weight-Decomposed Low-Rank
 Adaptation" (arXiv:2402.09353, ICML 2024 Oral). See
-docs/training_pipeline_design.md section 3.1 for the design rationale.
+docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.1 for the design rationale.
 
 Grounded directly in HuggingFace PEFT's real implementation
 (peft/src/peft/tuners/lora/dora.py, fetched and read directly, not
@@ -35,8 +35,8 @@ rather than recomputed.
 
 **Real, deliberate extension beyond PEFT, needed for this project
 specifically: the LoRA timestep gate** (core.lora.py's
-set_lora_gate()/compute_lora_gate(), docs/suspicious_findings.md's
-"Pending user testing" entry). PEFT has no such concept -- LLM
+set_lora_gate()/compute_lora_gate(), docs/known-issues/pending-testing.md's
+matching entry). PEFT has no such concept -- LLM
 fine-tuning has no analogous "only some timesteps were in the training
 data" idea. Applied here to the *entire* DoRA delta (both the
 magnitude-reweighted base contribution and the magnitude-reweighted LoRA
@@ -189,7 +189,7 @@ class DoRALinear(nn.Module):
         raise NotImplementedError(
             "DoRALinear.merge() -- merging magnitude+direction back into a single "
             "weight for inference isn't implemented yet. Train unmerged; see "
-            "docs/training_pipeline_design.md section 3.1."
+            "docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.1."
         )
 
     def get_lora_weights(self):
@@ -285,7 +285,7 @@ class DoRAConv2d(nn.Module):
         raise NotImplementedError(
             "DoRAConv2d.merge() -- merging magnitude+direction back into a single "
             "weight for inference isn't implemented yet. Train unmerged; see "
-            "docs/training_pipeline_design.md section 3.1."
+            "docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.1."
         )
 
     def get_lora_weights(self):

@@ -353,16 +353,17 @@ class DataTaskRunner:
             raise e
 
     def _fit_crop_boxes(self, w: int, h: int, px: int, max_aspect_ratio: float):
-        """docs/optimizer_execution_redesign_plan.md's VRAM findings: a
-        "fit"-mode image whose long side is unbounded (only the short
-        side is pinned to px) is exactly what produced the confirmed
-        ratchet effect -- a genuinely bigger forward-pass tensor forcing
-        the allocator to hold a bigger reserved block afterward,
-        permanently, once encountered (measured directly: +560MB in one
-        step, attributed to the forward phase specifically via per-phase
-        VRAM capture). This bounds it at ingestion time instead: when the
-        "fit" result's long side would exceed max_aspect_ratio * px,
-        split it into multiple crops along the long axis instead of
+        """docs/known-issues/pending-testing.md's "VRAM ratchet on
+        non-square datasets" entry: a "fit"-mode image whose long side is
+        unbounded (only the short side is pinned to px) is exactly what
+        produced the confirmed ratchet effect -- a genuinely bigger
+        forward-pass tensor forcing the allocator to hold a bigger
+        reserved block afterward, permanently, once encountered (measured
+        directly: +560MB in one step, attributed to the forward phase
+        specifically via per-phase VRAM capture). This bounds it at
+        ingestion time instead: when the "fit" result's long side would
+        exceed max_aspect_ratio * px, split it into multiple crops along
+        the long axis instead of
         letting one oversized sample through. Each crop becomes its own
         independent dataset sample (own x0, own shard entry) -- full
         resolution preserved per crop, no downsampling quality loss,

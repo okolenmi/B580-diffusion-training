@@ -1,6 +1,6 @@
 """FrozenWeightStore: how a frozen weight is actually kept in memory,
 decoupled from the model code that uses it.
-See docs/training_pipeline_design.md section 3.3 for design rationale.
+See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.3 for design rationale.
 
 BF16WeightStore keeps the frozen base exactly as loaded, no change to any
 existing forward path. It exists so TrainableModel.footprint_bytes()

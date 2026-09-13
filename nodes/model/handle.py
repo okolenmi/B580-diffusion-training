@@ -12,7 +12,7 @@ class ModelWeights:
     (CLIP/VAE) in the same file.
 
     Lazy by default (Phase 1 of the resources-controller redesign,
-    docs/resources_controller_redesign_plan.md): constructed from a
+    docs/design/resources-controller/02-phase-1-and-2.md): constructed from a
     resolved path, not materialized tensors. unet_sd/non_unet_sd stay
     plain @property attribute access -- every existing consumer
     (ComfyUNetLoRANode, the SDXL text encoder node) reads them exactly

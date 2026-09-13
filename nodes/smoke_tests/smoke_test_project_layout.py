@@ -1,4 +1,4 @@
-"""Correctness check for ProjectLayout (docs/training_pipeline_design.md
+"""Correctness check for ProjectLayout (docs/design/02-foundational-ontology.md
 section 1.6, nodes/components/layout.py).
 
 The crux is check_frozen_snapshot_does_not_drift() -- the entire point of

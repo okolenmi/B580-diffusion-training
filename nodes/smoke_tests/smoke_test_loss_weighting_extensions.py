@@ -1,5 +1,5 @@
 """Correctness check for nodes/train/loss.py's Min-SNR v-prediction
-completion and the new P2LossWeighting (docs/training_pipeline_design.md
+completion and the new P2LossWeighting (docs/design/04-lora-adapter-mechanics-and-loss-weighting.md
 section 4).
 
 No legacy implementation exists for either (this is new math, not a

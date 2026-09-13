@@ -1,6 +1,6 @@
 """Checks nodes.core.Port's new `choices` field and Node.validate_inputs()'s
-enforcement of it -- docs/resources_controller_redesign_plan.md's
-Consolidation section (11.4 / the ResourcePreset "parameter-value
+enforcement of it -- docs/design/resources-controller/08-consolidation.md
+(Consolidation section, 11.4 / the ResourcePreset "parameter-value
 dictionary", built as one generic Port mechanism rather than twice).
 
 Four kinds of check: (1) Port.__post_init__ rejects every malformed

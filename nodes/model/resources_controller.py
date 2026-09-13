@@ -1,4 +1,4 @@
-"""ResourcesController: docs/resources_controller_redesign_plan.md's
+"""ResourcesController: docs/design/resources-controller/05-phase-5-resources-controller-node.md's
 Phase 5. A node interface over the basic functions needed to turn a
 checkpoint (plus optional frozen/continue-training LoRAs) into a
 ready-to-use, verified pack of resources for LoRA training -- and
@@ -395,7 +395,7 @@ class ResourcesControllerNode(Node):
     (_PRESETS above), but the whole point of the Node/ResourcePreset
     split is more than one sharing this same class later (a different
     architecture, or a different task) without a rewrite -- see
-    docs/resources_controller_redesign_plan.md's "Open design question"
+    docs/design/resources-controller/01-context-and-ground-truth.md's "Open design question"
     section for the Task x Architecture matrix this is built for.
 
     A real `preset` Port (choices=tuple(_PRESETS)) -- a dropdown, even

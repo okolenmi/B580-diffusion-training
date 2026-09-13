@@ -1,5 +1,5 @@
 """Correctness check for LoRAScalingPolicy's effective-alpha seam
-(docs/training_pipeline_design.md section 3.2,
+(docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.2,
 nodes/model/lora_injector.py's module docstring for the derivation).
 
 The crux: _effective_alpha() is checked against the REAL

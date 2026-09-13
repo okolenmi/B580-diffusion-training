@@ -42,10 +42,11 @@ class Port:
     # string. None (the default) means genuinely open-ended -- e.g.
     # "device", which accepts torch.device-parseable strings including
     # indexed variants ("xpu:0") that no closed list could enumerate; not
-    # every str Port belongs here. See docs/training_pipeline_design.md
-    # section 11.4 and docs/resources_controller_redesign_plan.md's
-    # Consolidation section for why this is generic rather than
-    # Resources-Controller-specific. A tuple, not a list, matching this
+    # every str Port belongs here. See
+    # docs/design/10-node-surface-and-precision-control.md section 11.4
+    # and docs/design/resources-controller/08-consolidation.md for why
+    # this is generic rather than Resources-Controller-specific. A
+    # tuple, not a list, matching this
     # (frozen, hashable) dataclass's other fields.
     visible_when: tuple[str, Any] | None = None
     # (other_port_name, value) -- this Port's own widget is only shown by
@@ -106,7 +107,7 @@ class Port:
 class NodePreset:
     """One named configuration of a dynamic node (Node.NODE_KIND ==
     "dynamic") -- just enough to search/suggest against
-    (docs/resources_controller_redesign_plan.md's Phase 3 suggestion-
+    (docs/design/resources-controller/03-phase-3-interactive-node-support.md's Phase 3 suggestion-
     menu resolution): a name plus this preset's own REQUIRED-only
     inputs/outputs, pre-resolved. Optional ports are deliberately
     excluded -- they're "just helpers" for suggestion purposes, per
@@ -210,7 +211,8 @@ class Node(ABC):
     # splits the rest into words. Set this explicitly only for a class
     # whose auto-derived name reads badly; leaving it None is the common
     # case and does not need touching for a new node to get a reasonable
-    # palette label for free. See docs/training_pipeline_design.md
+    # palette label for free. See
+    # docs/design/10-node-surface-and-precision-control.md
     # section 11.5 for the full rationale.
     DISPLAY_NAME: ClassVar[str | None] = None
 
@@ -221,7 +223,7 @@ class Node(ABC):
     # (a dynamic node's *common* ports, present no matter which preset
     # is chosen), but list_presets() below is what a dynamic node
     # actually needs implemented for the editor's suggestion-menu
-    # search to find it. See docs/resources_controller_redesign_plan.md
+    # search to find it. See docs/design/resources-controller/03-phase-3-interactive-node-support.md
     # Phase 3 for the full rationale -- this exists specifically
     # because that search can't cheaply enumerate "every possible shape
     # a params-dependent node could have," but can cheaply enumerate
@@ -294,7 +296,7 @@ class Node(ABC):
                 f"{cls.__name__}: NODE_KIND == 'dynamic' but list_presets() "
                 f"wasn't overridden -- a dynamic node must declare its own "
                 f"presets, or it can never be found by the editor's "
-                f"suggestion-menu search (docs/resources_controller_redesign_plan.md, "
+                f"suggestion-menu search (docs/design/resources-controller/03-phase-3-interactive-node-support.md, "
                 f"Phase 3). If this class doesn't have real presets yet, use "
                 f"NODE_KIND = 'static' until it does."
             )

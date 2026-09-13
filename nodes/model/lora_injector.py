@@ -4,7 +4,7 @@ Adapter only -- core.unet_wrapper.ComfyUNetWrapper and core.lora already do
 the real work (UNet construction, LoRA layer injection); this wraps them
 behind the TrainableModel/LoRAInjectorNode contracts.
 
-LoRAScalingPolicy (docs/training_pipeline_design.md section 3.2): standard
+LoRAScalingPolicy (docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.2): standard
 LoRA scales its output by alpha/rank, which Kalajdzievski (arXiv:2312.03732,
 2023) proves collapses adapter output/gradient magnitude as rank grows --
 the reason LoRA is usually kept at low rank in practice, since higher ranks
@@ -198,8 +198,8 @@ def build_lora_injected_unet(
     """The real construction logic `ComfyUNetLoRANode.build()` runs --
     extracted so there's exactly one implementation, not one now and a
     second, subtly-different one whenever Phase 5 of
-    docs/resources_controller_redesign_plan.md needs the same
-    construction (that plan's own "Consolidation" section flags this
+    docs/design/resources-controller/05-phase-5-resources-controller-node.md needs the same
+    construction (docs/design/resources-controller/08-consolidation.md flags this
     by name: building it twice is exactly the kind of drift this
     project's DoRA composition-over-inheritance choice, and the
     `_is_unet_key()`/`get_lora_weights()` bugs fixed two DoRA patches

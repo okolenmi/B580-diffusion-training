@@ -73,7 +73,7 @@ def str_to_dtype(s: str) -> torch.dtype:
     is its precise inverse for any name torch actually exposes, nothing
     to keep in sync by hand. Raises AttributeError (torch's own, not a
     custom one) for a name torch doesn't have -- a Port using this as
-    its choices= source (docs/resources_controller_redesign_plan.md
+    its choices= source (docs/design/resources-controller/05-phase-5-resources-controller-node.md
     Phase 5) already restricts input to real names before this is ever
     called, so that path never reaches here; a direct caller bypassing
     that gets torch's own clear error instead of a silently wrong dtype."""

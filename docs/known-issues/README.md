@@ -27,8 +27,9 @@ removed rather than carried forward. Two dangling pointers to
 `docs/nodes_package_design.md` (both deleted) were also cleaned up here
 previously -- the substantive content they pointed from is kept, just
 not the broken link. (Other dangling pointers to those same two deleted
-files still exist elsewhere in the codebase, outside this doc --
-flagged in [`docs/review_notes.md`](../review_notes.md) item 6.)
+files existed elsewhere in the codebase, outside this doc -- fixed in
+a later pass; see [`docs/review_notes.md`](../review_notes.md) item 6
+for the account of what those were and how each was resolved.)
 
 ## The four categories
 

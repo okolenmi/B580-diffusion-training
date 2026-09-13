@@ -157,23 +157,27 @@ were found via a full `grep -rn` sweep and fixed at that time.
    trailer's sync commit, which no longer resolved to a real object
    (see item 8 below for the same issue in a second document).
 
-2. **`docs/known-issues/`'s newest dated entry is 2026-08-21, before
-   the Resources Controller Phases 4-6 landed (2026-08-28 through
-   2026-09-05) and before the post-Phase-6 bug-fix session
-   (2026-09-06).** `docs/design/resources-controller/07-post-phase-6-bugfixes.md`
-   lists four real bugs found by using the editor (a missing `/api`
-   URL prefix, wires not redrawing after a node resize, a too-weak
-   default LoRA `alpha`, leaked planning-note text in tooltips) --
-   structurally exactly the kind of thing `docs/known-issues/`
-   otherwise tracks, but none of them appear there. Worth checking
-   with whoever did that work whether this was a deliberate scoping
-   choice (bugs fixed same-session, in the same doc that found them,
-   don't also get a `docs/known-issues/` entry) or just something that
-   fell through -- if the former, it'd be worth stating that scoping
-   rule explicitly in `docs/known-issues/README.md`, since right now a
-   reader has no way to tell the difference between "not logged
-   because it didn't need to be" and "not logged because it was
-   missed."
+2. **`docs/known-issues/`'s newest entry was 2026-08-21, before the
+   Resources Controller Phases 4-6 landed and before the post-Phase-6
+   bug-fix session -- fixed in a follow-up pass.** Investigated rather
+   than assumed: checked every commit in the gap for anything shaped
+   like a real, fixed bug (not routine iteration on a not-yet-shipped
+   feature, which the `docs/design/resources-controller/` phase docs
+   already narrate well on their own). Found two genuine gaps, both
+   added to `docs/known-issues/resolved.md`: the four post-Phase-6 bugs
+   (`docs/design/resources-controller/07-post-phase-6-bugfixes.md`'s
+   account, adapted into this file's own voice, with a pointer back to
+   the fuller original) and a separate, unrelated one from the same
+   general period --
+   `smoke_test_device_context_equivalence.py`'s stale whole-dict
+   equality check, a real hardware-confirmed bug that had never been
+   logged here at all. Also added, from later still: the
+   `CachingTextEncoderNode` contract-assertion/missing-coverage fix
+   from this same session. `docs/known-issues/README.md`'s note about
+   dangling references to the two deleted docs was also updated --
+   it said those references "still exist elsewhere in the codebase,"
+   which stopped being true once the source-code-reference follow-up
+   pass fixed them.
 
 3. **Several entries in `docs/known-issues/pending-testing.md` and the
    "not yet confirmed on real hardware" items in `resolved.md` are

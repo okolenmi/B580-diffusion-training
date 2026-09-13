@@ -2,6 +2,35 @@
 
 # Resolved
 
+- **[2026-09] `smoke_test_text_encoder_cache.py`'s `check_contracts()`
+  still asserted `CachingTextEncoderNode.INPUTS == {"encoder",
+  "max_entries"}` -- stale since a `resource_control` port was added
+  to wire `CachingTextEncoder` into `ResourceControlHandle`'s
+  budget-aware offload, real user report (a from-scratch test run
+  failed this exact assertion).** That same commit added zero test
+  coverage for the actual new behavior, not just the stale assertion --
+  nothing else in the file mentioned `resource_control` or
+  `ResourceControlHandle` at all. Fixed the assertion, and wrote the
+  missing coverage rather than just flag the gap: a
+  `_RecordingResourceControl` fake (same no-mocking-framework style
+  this file already uses for the wrapped encoder itself) proving
+  `ensure_loaded()` fires on a real cache miss and *not* again on a
+  subsequent hit for the same key -- the actual contract
+  `text_encoder_cache.py`'s own docstring claims (a warm cache should
+  let the inner encoder be safely offloaded between hits, since a hit
+  never touches it) -- plus the `resource_name` override, the
+  no-`resource_control`-at-all path, and that
+  `CachingTextEncoderNode.build()` actually threads `resource_control`
+  through to the constructed instance rather than silently dropping
+  it. Verified by running the new logic against the real
+  `CachingTextEncoder`/`CachingTextEncoderNode`/`ResourceControlHandle`
+  classes (torch itself wasn't available in the environment this fix
+  was written in; a minimal tensor stand-in covered the two real torch
+  calls this file actually makes, `.detach()`/`.cpu()`) -- all checks
+  pass against the real classes. Confirmed unrelated to any of the
+  concurrent docs restructuring work: neither this file nor
+  `text_encoder_cache.py` appear in any of those commits' diffs.
+
 - **[Verified during a later docs pass, original entry dated 2026-08]
   DoRA's `magnitude` parameter is wired into checkpoint save/load --
   this entry used to say it wasn't; that's no longer true.** Originally
@@ -26,6 +55,68 @@
   anyone who remembers the old "not wired" claim (e.g. from an older
   clone, or from `docs/status/progress.md`'s own history) doesn't
   waste time re-diagnosing something already fixed.
+
+- **[2026-09] `LoRATrainingConfigNode`'s `alpha` defaulted to `1.0`
+  against a `rank` default of `64`, four real bugs found together by
+  actually using the graph editor rather than by review.** Under
+  `ClassicLoRAScaling` (this project's own current default policy) the
+  applied multiplier is `alpha/rank`, so the shipped defaults gave a
+  scale of `1/64 ≈ 0.016` -- a very weak LoRA by the standards of the
+  wider ecosystem, not something a person new to what `alpha` even
+  means should be expected to already know to correct. Fixed to
+  `64.0`, matching `rank`'s own default (scale `1.0` out of the box,
+  the common "alpha equal to rank" starting point), and documented the
+  actual formula directly in both Ports' own `doc` text. Found
+  alongside it in the same session:
+  - `server/static/nodegraph.js`'s `fetchDiagnostics()` called
+    `/nodegraph/node/{class_name}/diagnostics`, missing the `/api`
+    prefix every other endpoint in that file already uses --
+    404ing the live-diagnostics call from Phase 5 on every request.
+    Fixed to `/api/nodegraph/node/{class_name}/diagnostics`.
+  - Toggling a `Port.visible_when`-gated checkbox, or a live
+    diagnostics response changing what text is shown, both change a
+    node's own height -- but neither the visibility toggle nor the
+    diagnostics fetch told the canvas to re-measure that node's port
+    positions or redraw its wires afterward, so a connected wire stayed
+    drawn at its pre-toggle position until some unrelated action (e.g.
+    moving the node) happened to trigger a fresh measurement. Fixed:
+    both now call a new `remeasureAndRedraw(node)` after mutating the
+    DOM.
+  - Several `Port.doc` strings had leaked planning-note text
+    (a design-doc's own file path, "Phase N," "see this class's own
+    docstring") into what the graph editor shows as a hover tooltip --
+    meaningless to a real user with no access to that document or this
+    codebase's source. Every `Port.doc` across
+    `resources_controller.py`/`lora_training_config.py` audited (an AST
+    walk over every `Port(...)` call's own `doc=` value, not a
+    string-literal guess) and rewritten to stand on its own.
+
+  Full original account, written closer to the fix:
+  `docs/design/resources-controller/07-post-phase-6-bugfixes.md`. Added
+  here (during a later docs pass, filling a real gap: this file's
+  newest entry otherwise predated all four of these) so `known-issues/`
+  stays the one place to check for *any* fixed bug, not just ones found
+  outside active feature work.
+
+- **[2026-08] `smoke_test_device_context_equivalence.py`'s
+  `memory_stats()` check did a literal whole-dict equality comparison
+  against the legacy reference -- reported failing on a real
+  environment where XPU reports available, never reproducible in this
+  sandbox (CPU-only, XPU never available here).** `_XPUDeviceContext.memory_stats()`
+  (`nodes/components/device.py`) is a deliberate 9-key superset of the
+  legacy 2-key dict, per that function's own docstring -- this file's
+  own module docstring already said the check should be guard behavior
+  (same `hasattr`/`is_available` gating), not numeric dict equality,
+  but the actual assertion contradicted its own file's stated purpose,
+  and only ever passed by accident on a machine where XPU isn't
+  available (both sides `None`, trivially equal). Confirmed the real
+  cause, not just inspected for a plausible one: simulated an available
+  `torch.xpu` with the exact reported shape (new: 9 keys all `0.0`,
+  ref: 2 keys all `0.0`) and checked both the old assertion (fails,
+  confirming this really was it) and the new one (passes) against it
+  directly. Fixed assertion: both `None` together, or -- when real --
+  every key the legacy function actually reports must match in value;
+  `new_stats` having additional keys is expected and not penalized.
 
 - **[2026-08] A dataset smaller than `batch_size` (real user report: 1
   image, `batch_size=2`) silently produced zero batches forever, then

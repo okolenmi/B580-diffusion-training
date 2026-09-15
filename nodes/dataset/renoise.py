@@ -32,27 +32,38 @@ Fixing this at the source means re-ingesting (expensive: full VAE
 re-encode of every image). This node avoids that: x0 (the clean latent)
 is exactly recoverable from what's already stored, because ingestion's
 own forward process is invertible and this project already has the
-inverse functions for it (core/noise_schedule.py's eps_to_x0/vpred_to_x0
--- reused via composition, not reimplemented):
+inverse functions for it (EpsParameterization.to_x0/VPredParameterization.to_x0,
+nodes/components/diffusion.py -- same formulas as core.noise_schedule.py's
+eps_to_x0/vpred_to_x0, reused via composition, not reimplemented):
 
-    ingestion:  x_t = x0 + sigma * eps,  target = eps (or eps_to_vpred(eps, ...))
-    recovery:   x0 = eps_to_x0(target, x_t, alpha, sigma)   [eps models]
-                x0 = vpred_to_x0(target, x_t, alpha, sigma) [vpred models]
+    ingestion:  x_t = x0 + sigma * eps,  target = eps (or converted to vpred)
+    recovery:   x0 = EpsParameterization().to_x0(target, x_t, alpha, sigma)   [eps models]
+                x0 = VPredParameterization().to_x0(target, x_t, alpha, sigma) [vpred models]
 
-alpha/sigma for the *stored* t comes from core.noise_schedule.get_alpha_sigma(t)
--- the exact same function manager/builder.py's ingestion itself calls to
-build at_f/st_f, so this is an exact inversion, not an approximation
-(verified against ingestion's real formula, not assumed). model_type
-comes from the batch's own "metadata" JSON string (same field, same
-json.loads(...)["model_type"] convention manager/loader.py already uses,
-defaulting to "eps" the same way it does).
+alpha/sigma for the *stored* t comes from a DiscreteLinearNoiseSchedule
+(nodes/components/diffusion.py) -- the same math as ingestion's own
+core.noise_schedule.get_alpha_sigma(t) (verified equivalent,
+smoke_test_diffusion_equivalence.py; same default n/beta_start/beta_end
+as core.noise_schedule.make_schedule(), confirmed directly), moved into
+a constructed object instead of a module-level global so this file
+doesn't need to import core.noise_schedule's globals at all -- see
+components/diffusion.py's own module docstring for why that split
+exists. model_type comes from the batch's own "metadata" JSON string
+(same field, same json.loads(...)["model_type"] convention
+manager/loader.py already uses, defaulting to "eps" the same way it
+does).
 
 Once x0 is recovered, a fresh continuous timestep and fresh noise are
 drawn independently per sample in the batch (not one shared draw for the
 whole batch), and the forward process is reapplied at the new timestep --
 same formula ingestion used, so the resulting (x_t, target) pair is
 exactly as valid as one ingestion would have produced at that timestep,
-just never actually baked into a file.
+just never actually baked into a file. Timestep sampling itself
+(core.noise_schedule.sample_timestep) is the one piece still imported
+from core/ directly -- it's a random-draw strategy, not diffusion-process
+math, and components/diffusion.py doesn't have (or need) an equivalent;
+see timestep_modes.py's own docstring for why this and that stay
+function-local, deferred imports rather than module-level ones.
 
 Limitation, stated plainly: target_p/target_n (the dual-CFG-pass fields)
 are only regenerated correctly for the real-image ingestion path, where
@@ -70,6 +81,7 @@ import json
 import random
 from typing import ClassVar, Iterator, Optional
 
+from ..components.diffusion import DiscreteLinearNoiseSchedule
 from ..core import Port
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
@@ -85,6 +97,7 @@ class RenoiseBatchSource(TrainingBatchSource):
         self._t_high = t_high
         self._t_mode = t_mode
         self._rng = random.Random(seed)
+        self._schedule = DiscreteLinearNoiseSchedule()
         import torch
         self._torch_gen = torch.Generator()
         if seed is not None:
@@ -103,7 +116,9 @@ class RenoiseBatchSource(TrainingBatchSource):
     def _renoise(self, batch: dict) -> dict:
         import torch
 
-        from core.noise_schedule import eps_to_vpred, eps_to_x0, get_alpha_sigma, sample_timestep, vpred_to_x0
+        from core.noise_schedule import sample_timestep
+
+        from ..components.diffusion import EpsParameterization, VPredParameterization
 
         x_t = batch["x_t"]
         target = batch["target"]
@@ -114,28 +129,34 @@ class RenoiseBatchSource(TrainingBatchSource):
             model_type = json.loads(batch.get("metadata") or "{}").get("model_type", "eps")
         except (json.JSONDecodeError, TypeError):
             model_type = "eps"
+        parameterization = (
+            VPredParameterization() if model_type == "vpred" else EpsParameterization())
 
-        at_orig, st_orig = get_alpha_sigma(t_orig)
+        at_orig, st_orig = self._schedule.alpha_sigma(t_orig)
         at_orig = at_orig.view(-1, 1, 1, 1).float()
         st_orig = st_orig.view(-1, 1, 1, 1).float()
-        if model_type == "vpred":
-            x0 = vpred_to_x0(target.float(), x_t.float(), at_orig, st_orig)
-        else:
-            x0 = eps_to_x0(target.float(), x_t.float(), at_orig, st_orig)
+        x0 = parameterization.to_x0(target.float(), x_t.float(), at_orig, st_orig)
 
         t_new = torch.tensor(
             [sample_timestep(self._rng, self._t_mode, self._t_low, self._t_high)
              for _ in range(batch_size)],
             dtype=torch.long,
         )
-        at_new, st_new = get_alpha_sigma(t_new)
+        at_new, st_new = self._schedule.alpha_sigma(t_new)
         at_new_b = at_new.view(-1, 1, 1, 1).float()
         st_new_b = st_new.view(-1, 1, 1, 1).float()
 
         eps_new = torch.randn(x0.shape, generator=self._torch_gen, dtype=torch.float32)
         x_t_new = (x0 + st_new_b * eps_new).to(x_t.dtype)
         if model_type == "vpred":
-            target_new = eps_to_vpred(eps_new, x_t_new.float(), at_new_b, st_new_b).to(target.dtype)
+            # eps -> vpred: EpsParameterization.convert_to(..., target=VPredParameterization())
+            # matches core.noise_schedule.eps_to_vpred exactly (verified,
+            # smoke_test_diffusion_equivalence.py) -- eps_new/x_t_new are
+            # always eps-parameterized regardless of model_type, since
+            # they're drawn/reconstructed via x0 + sigma*eps above.
+            target_new = EpsParameterization().convert_to(
+                eps_new, x_t_new.float(), at_new_b, st_new_b, VPredParameterization(),
+            ).to(target.dtype)
         else:
             target_new = eps_new.to(target.dtype)
 

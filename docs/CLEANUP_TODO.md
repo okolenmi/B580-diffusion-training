@@ -168,13 +168,44 @@ Update this file as work happens. Each item: status, what it is, why.
       methods got cut" reasoning) kept, not deleted -- it's still
       accurate about *why* the current Ports are shaped the way they
       are, just no longer describes a `ResourcePolicy` that exists.
-- [ ] General pass per the stated criteria (hard-to-derive-from-code
-      info, specific design-decision rationale, resources, actively-
-      updated issues/plan -- not narrative duplicating what code
-      docstrings already say). Do this after the code changes above
-      settle and the `ResourcePolicy` rewrite above is done, not before.
+- [x] Trimmed `docs/review_notes.md` from 333 to ~80 lines per its own
+      stated rule ("delete resolved items rather than leaving them as a
+      changelog") -- most of it was resolved items marked "Fixed in
+      this/a follow-up pass," directly contradicting that rule. Kept
+      only the 6 genuinely still-open items, renumbered, each
+      independently re-verified against the actual current repo state
+      before being kept (not just carried forward from the old text --
+      one claim in my own first draft turned out to be wrong on
+      inspection, about `known-issues/pending-testing.md`/`resolved.md`
+      contents, corrected before committing). Also fixed `README.md`'s
+      "Current status" section, which claimed `docs/status/progress.md`
+      "predates" the Resources Controller/VRAM-budget/state_precision
+      work -- checked, and it doesn't; `progress.md` already covers all
+      of that. That claim (and a matching "has drifted" claim further
+      down) was itself stale, independent of anything in this cleanup.
+      **Side effect, not fixed:** two files in the off-limits
+      `docs/design/resources-controller/` route cite the old
+      `review_notes.md` list by item number (`README.md` line 13 "item
+      7", line 40 "item 1"; `08-consolidation.md` line 193 "item 8") --
+      those numbers no longer point at the same content after the trim.
+      Not fixed here since fixing them means editing files in the
+      protected route. `README.md`'s line 40 citation ("progress.md has
+      drifted -- see item 1") is now doubly wrong: the item it cites
+      doesn't exist at the new numbering, *and* the claim itself
+      (progress.md has drifted) is no longer true either, per the fix
+      above. Whoever next touches that route should know both things.
 - [ ] `docs/design/resources-controller/*` — left alone, same as the
       code (off-limits route).
+- [ ] **Residual, smaller scope than originally listed:** the general
+      docs/design/*.md trim (per the stated criteria -- keep only
+      hard-to-derive-from-code info, specific design rationale,
+      resources, actively-updated plan) hasn't had a full line-by-line
+      pass beyond the specific inaccuracies fixed above. Files not yet
+      read closely for this: `01-foundational-ontology.md` (name
+      uncertain, check `docs/design/README.md`'s index), `02-...`,
+      `04-...`, `05-...`. Lower priority than everything above -- these
+      weren't flagged as *wrong*, just not yet checked for redundant-
+      with-code narrative bulk.
 
 ### Still to check (broader sweep, not yet done)
 - [ ] `nodes/model/` (LoRA/UNet injection), `nodes/model/text_encoder.py`,

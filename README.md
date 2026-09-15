@@ -126,12 +126,13 @@ redesign
 ([`docs/design/resources-controller/`](docs/design/resources-controller/README.md))
 that is itself now well past its "Phase 6" milestone, plus a live
 per-step VRAM budget enforcer and 8-bit optimizer-state quantization.
-**[`docs/status/progress.md`](docs/status/progress.md) predates all of
-that** -- see [`docs/review_notes.md`](docs/review_notes.md) for
-specifics. Treat
+[`docs/status/progress.md`](docs/status/progress.md) covers all of
+that as of this writing. Treat
 [`docs/design/resources-controller/README.md`](docs/design/resources-controller/README.md)'s
 own status banner (top of that file) as the most current single source
-of truth for what's actually landed recently.
+of truth for what's actually landed recently -- `progress.md` is a
+fast-read summary, not the primary record, and summaries drift if
+nobody keeps them updated as work lands.
 
 ## A note on how these docs are meant to be maintained
 
@@ -140,9 +141,10 @@ planning documents, not archives -- they're written to be edited in
 place as work lands (status banners at the top, sections marked
 "done"/"still open" inline) rather than superseded by a new file each
 time. Keep doing that: it's why they're still trustworthy despite their
-size. `docs/status/progress.md` is supposed to work the same way but
-has drifted (see [`docs/review_notes.md`](docs/review_notes.md)) -- a
-reminder that this pattern only works if it's actually kept up.
+size. `docs/status/progress.md` is supposed to work the same way --
+keeping it updated as things land (rather than letting it silently
+predate reality, the way it once did) is what keeps it worth reading
+at all.
 
 This folder structure is new as of a recent docs-restructuring pass --
 the content that used to live in four large files (`PROGRESS.md`,
@@ -164,6 +166,8 @@ two now-deleted docs (`docs/nodes_package_design.md`,
 restructuring entirely; where the cited content still exists somewhere
 current it's now pointed there, and where it doesn't survive anywhere,
 the comment was reworded to state the fact directly rather than cite a
-source that isn't there. See
-[`docs/review_notes.md`](docs/review_notes.md) for the full accounting
-of what was found and fixed.
+source that isn't there. See [`docs/review_notes.md`](docs/review_notes.md)
+for anything from that pass still open -- most of it, including this
+paragraph's own details, has since been resolved and isn't repeated
+there as a historical record; check `git log -- docs/review_notes.md`
+if the specifics matter.

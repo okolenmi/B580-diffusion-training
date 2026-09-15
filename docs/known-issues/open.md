@@ -2,6 +2,33 @@
 
 # Open
 
+- **[2026-09] `core.optimizers.FusedXPUAdafactor` silently corrupts its
+  own momentum buffer for float32 parameters with `beta1` (momentum)
+  set.** `g = self.exp_avg[i]` aliases the momentum buffer (no copy);
+  the following `p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))` calls
+  `.to(dtype=p.dtype)`, which for a float32 parameter (state is already
+  float32) returns the *same object*, not a copy -- so the subsequent
+  `.mul_(alpha_t)` mutates the momentum buffer in place. Net effect:
+  every step, right after using the momentum buffer to compute that
+  step's update, the buffer gets permanently shrunk by `alpha_t` (~lr)
+  as an unintended side effect. Confirmed directly, not theorized --
+  see `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py`'s
+  `check_legacy_float32_momentum_bug()`. bf16 parameters don't trigger
+  this (`.to(dtype=p.dtype)` performs a real cast there, producing a
+  genuine copy). `nodes/optimizer/algorithms/adafactor.py`'s
+  `AdafactorAlgorithm` (used by `ComposedFusedAdafactorOptimizerNode`)
+  does not have this bug. Affects anyone choosing
+  `FusedAdafactorOptimizerNode`/`ForeachAdafactorOptimizerNode`/
+  `AdafactorOptimizerNode` (`nodes/optimizer/{fused_,foreach_,}adafactor.py`)
+  with float32 parameters and momentum enabled -- `core/` is untouched
+  by the `nodes/` rewrite (see `docs/architecture.md`), so this doesn't
+  get fixed here, but it's real and live in the current production path.
+  Separately: these same three legacy nodes have a real, unreplicated
+  small-parameter (< 10,000 element) fast path that
+  `AdafactorAlgorithm`'s row/col factored approximation doesn't cover
+  either -- see `docs/CLEANUP_TODO.md` for the plan to close that gap
+  and retire the three legacy nodes once it's done.
+
 - **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
   device placement anywhere.**
 

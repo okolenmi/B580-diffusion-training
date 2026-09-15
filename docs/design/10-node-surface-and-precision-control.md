@@ -155,7 +155,8 @@ Three currently real, currently under-exposed, and currently *separate*
 dtype decisions -- kept as independent choices rather than one bundled
 "precision mode," matching section 2.2's own precedent
 (`adapter_strategy`/`frozen_weight_store` were deliberately kept out of
-`ResourcePolicy` rather than absorbed into one object):
+`ResourcePolicy` rather than absorbed into one object, back when
+`ResourcePolicy` still existed -- see 2.2 for why it was removed since):
 
 1. **`frozen_weight_store`** -- implemented: a real port on
    `ComfyUNetLoRANode`, mirroring `adapter_strategy`'s own pattern
@@ -212,10 +213,10 @@ dtype decisions -- kept as independent choices rather than one bundled
    explicitly not claimed as covered by anything above.
 
 **No preset bundle proposed** (e.g. one `"qlora"` flag setting several
-of the above at once) -- matches `ResourcePolicy`'s own precedent of
-staying orthogonal rather than pre-bundling choices nobody's asked to
-have bundled. Worth adding later if real, explicit demand shows up, not
-speculatively now.
+of the above at once) -- matches the same orthogonality precedent
+`ResourcePolicy` set while it existed (2.2): stay orthogonal rather than
+pre-bundling choices nobody's asked to have bundled. Worth adding later
+if real, explicit demand shows up, not speculatively now.
 
 ## 11.4 Port UX: string fields for closed-choice values
 

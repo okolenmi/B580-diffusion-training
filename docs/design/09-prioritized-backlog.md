@@ -12,15 +12,17 @@ Min-SNR's v-prediction branch + `P2LossWeighting`,
 `ComfyUNetLoRANode`'s real construction path -- see 3.1),
 `TrainingStepPipeline`/`StepPhase`, `PrefetchingBatchSource`,
 `ResourceCoordinator`/`OffloadOrchestrator`, `ResourceBudget`/
-`ResourcePolicy`/`ManualResourcePolicy`, `ResourceProfile`,
+`ResourcePolicy`/`ManualResourcePolicy` (the latter two later removed --
+see 2.2), `ResourceProfile`,
 `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/
 `GreedyRatioPlacement`/`BlockProfileCollector`/`ProfilingCheckpointing`,
 `DoRAAdapter`, `NF4WeightStore`'s quantization itself, and now
 `NF4WeightStore`'s forward-path wiring (`NF4LoRALinear`/`NF4LoRAConv2d`,
 a real `frozen_weight_store` port on `ComfyUNetLoRANode`) are all real,
 tested code -- see section 9.1 for exactly where each one lives, and 2.2
-for two real deviations `ResourcePolicy`'s implementation took from this
-document's own illustration once it was actually built. What follows is
+for the real deviations `ResourcePolicy`'s implementation took from this
+document's own illustration once it was actually built, and for why it
+was removed again afterward. What follows is
 a fresh list: only what's actually still open, ordered by what unblocks
 what, sized to be independently landable slices, each one
 equivalence-tested against whatever it replaces (or, for the

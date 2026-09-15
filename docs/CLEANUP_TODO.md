@@ -148,33 +148,26 @@ Update this file as work happens. Each item: status, what it is, why.
       describe the actual current rule -- `core/`/`manager/` stay
       unmodified, but `nodes/` retires a wrapper once it has a proven
       independent replacement, and points at `docs/CLEANUP_TODO.md`.
-- [ ] **Bigger, not started: `ResourcePolicy`/`ManualResourcePolicy` is
-      used as a worked example/case-study across six design docs**, not
-      just mentioned in passing -- rewriting these needs actual editorial
-      attention, not a find-replace:
-      - `docs/design/03-training-step-orchestration.md` -- lines ~47-113
-        build a whole section around it (why it's scoped to 3 of 7
-        methods, the `group_policy`-is-separate reasoning, a "foreseen
-        in the design" pathology writeup) and line ~194 has the same
-        stale `resource_policy` port mention `block_profiler.py`'s
-        docstring already had fixed.
-      - `docs/design/06-composition-walkthrough.md` -- lines ~12-28, a
-        code walkthrough that literally constructs a `ManualResourcePolicy`.
-      - `docs/design/07-deferred-or-rejected.md` line 8-9,
-        `docs/design/09-prioritized-backlog.md` lines 15/22/53/97,
-        `docs/design/10-node-surface-and-precision-control.md` lines
-        158/215 -- shorter precedent/citation mentions.
-      - `docs/design/08-validation-and-implementation-status.md` line 58
-        -- the status table row itself (also the source of the
-        "wired... via group_policy" overstatement `progress.md` copied).
-      Direction once this gets picked up: these sections were a
-      genuinely useful worked example of the "cross-domain-typed object,
-      forward-reference string type hints" pattern -- that pattern
-      itself is still real and used elsewhere (`nodes/resource_budget.py`,
-      `nodes/memory/profile.py`'s `DeviceContext` example). Rewrite to
-      use a still-live example instead of deleting the teaching content
-      outright, and correct the `group_policy` mischaracterization
-      everywhere it appears rather than just in `progress.md`.
+- [x] **`ResourcePolicy`/`ManualResourcePolicy` design-doc rewrite done**
+      across all six files: `03-training-step-orchestration.md` (the
+      full 2.2 section -- kept all the real "why 3 of 7 methods, why
+      each cut method still has its real home" reasoning, reframed to
+      past tense, added the actual removal reasoning, fixed the stale
+      `resource_policy` port mention at the old line ~194 too),
+      `06-composition-walkthrough.md` (the code walkthrough no longer
+      constructs a `ManualResourcePolicy` -- uses the three real,
+      current direct Ports instead), `07-deferred-or-rejected.md`
+      (`AutoResourcePolicy` entry no longer implies `ResourcePolicy`
+      still exists), `08-validation-and-implementation-status.md` (the
+      status table row rewritten -- also fixes the `group_policy`
+      mischaracterization at its source), `09-prioritized-backlog.md`
+      (one-line note added to the completed-items list),
+      `10-node-surface-and-precision-control.md` (two precedent
+      citations, tense-adjusted). Teaching content (the forward-
+      reference-type-hint pattern, the "why each of the 7 sketched
+      methods got cut" reasoning) kept, not deleted -- it's still
+      accurate about *why* the current Ports are shaped the way they
+      are, just no longer describes a `ResourcePolicy` that exists.
 - [ ] General pass per the stated criteria (hard-to-derive-from-code
       info, specific design-decision rationale, resources, actively-
       updated issues/plan -- not narrative duplicating what code
@@ -193,8 +186,12 @@ Update this file as work happens. Each item: status, what it is, why.
       still `core`-coupled — so it's real future work, not cleanup, per
       "don't remove/replace not-yet-duplicated features." Flagged for
       awareness, not scheduled.
-- [ ] Have not yet done a from-scratch competing-implementation sweep of
-      `nodes/memory/`, `nodes/train/`, `nodes/primitive/`, `nodes/monitor/`
-      beyond spot checks (checked `memory/manager.py` vs
-      `memory/coordinator.py` — distinct concerns, not duplicates; no
-      further evidence found yet either way for the rest).
+- [x] Swept `nodes/memory/`, `nodes/train/`, `nodes/primitive/`,
+      `nodes/monitor/` for competing implementations of the same job
+      (the pattern optimizer/ and dataset/ both had). Nothing found:
+      `memory/`'s pieces (`MemoryManager`, `ResourceCoordinator`/
+      `OffloadOrchestrator`, `ResourceControlHandle`, `ResourceProfile`,
+      `VRAMBudgetControllerNode`) are each a distinct, complementary
+      concern, not duplicate jobs. `train/`, `primitive/`, `monitor/`
+      are all small and single-purpose by class-name inspection -- no
+      wrap-vs-independent split like optimizer/ had anywhere in them.

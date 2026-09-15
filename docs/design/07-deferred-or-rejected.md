@@ -6,15 +6,20 @@ Considered, left out on purpose -- listed with the actual reasoning, not
 just "future work":
 
 - **`AutoResourcePolicy` (inspect available VRAM, decide strategies
-  automatically).** `ResourcePolicy` (2.2) is designed so this is
-  *possible* to add later without touching anything else -- but designing
-  it *now*, in detail, would mean guessing at a real, hard ML-systems
-  heuristic problem (predicting a training step's peak VRAM from param
-  counts + batch shape + checkpointing granularity, ahead of actually
-  running it) with no real-hardware data to validate against. `nodes/`'s
-  own existing rule -- equivalence-test before switching over -- can't be
-  followed for a heuristic with nothing to compare it against yet. Left
-  as an interface-shaped placeholder, not a designed algorithm.
+  automatically).** Sketched as something `ResourcePolicy` (2.2) would
+  have made *possible* to add later without touching anything else --
+  moot now that `ResourcePolicy` itself was removed (2.2), but the
+  actual reason this was never designed further stands on its own:
+  designing it *now*, in detail, would mean guessing at a real, hard
+  ML-systems heuristic problem (predicting a training step's peak VRAM
+  from param counts + batch shape + checkpointing granularity, ahead of
+  actually running it) with no real-hardware data to validate against.
+  `nodes/`'s own existing rule -- equivalence-test before switching over
+  -- can't be followed for a heuristic with nothing to compare it
+  against yet. Left as an interface-shaped placeholder, not a designed
+  algorithm -- and if it gets picked up later, whatever Port(s) it reads
+  from should be whatever `checkpointing_strategy`/`scaling_policy` grew
+  into by then, not a `ResourcePolicy` revival.
 - **Automatic eviction inside `MemoryManager`.** Already considered and
   rejected once, correctly, in the existing module docstring ("no
   automatic eviction under memory pressure... behavior stays predictable

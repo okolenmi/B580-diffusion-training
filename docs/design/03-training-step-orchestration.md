@@ -42,82 +42,101 @@ independently once actually needed.
 
 ## 2.2 Resource budget as a first-class value, resource policy as a Strategy
 
-**Implemented**, but scoped down from the illustration this section used
-to show, for reasons found while actually building it rather than
-assumed in advance: `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy`
-(`nodes/resource_policy.py`) cover exactly three choices --
-`checkpointing_strategy()`, `lora_scaling_policy()`, and
-`parameter_group_policy()` -- not the seven this section originally
-sketched. `adapter_strategy()` was cut, and stays cut even now that
-`AdapterStrategy` is reachable from `ComfyUNetLoRANode`'s real
+**Implemented, then later removed -- the record of both is worth
+keeping, since the reasoning that shaped it is still the reasoning
+behind the Ports that replaced it.** `ResourceBudget`/`ResourcePolicy`/
+`ManualResourcePolicy` (originally `nodes/resource_policy.py`; only
+`ResourceBudget` survives, in `nodes/resource_budget.py`) covered
+exactly three choices -- `checkpointing_strategy()`, `lora_scaling_policy()`,
+and `parameter_group_policy()` -- not the seven this section originally
+sketched. `adapter_strategy()` was cut, and stayed cut even once
+`AdapterStrategy` became reachable from `ComfyUNetLoRANode`'s real
 construction path (3.1): it's wired as its own standalone
 `adapter_strategy` port instead, the same way `checkpointing_strategy`
-is a real choice made independently of (and overridden by)
+was a real choice made independently of (and overridden by)
 `resource_policy` rather than routed only through it -- a `ResourcePolicy`
-method for this would duplicate a choice that already has a real,
-working home, not fill a gap. `frozen_weight_store()` was cut because a
-chosen `FrozenWeightStore` still isn't reachable from
-`ComfyUNetLoRANode`'s real construction path (3.3) -- a policy method for
-a choice nothing can act on would be scaffolding, not a feature.
-`optimizer_execution_strategy()` was cut
+method for this would have duplicated a choice that already had a real,
+working home, not filled a gap. `frozen_weight_store()` was cut because a
+chosen `FrozenWeightStore` still wasn't reachable from
+`ComfyUNetLoRANode`'s real construction path (3.3) at the time -- a
+policy method for a choice nothing could act on would have been
+scaffolding, not a feature. `optimizer_execution_strategy()` was cut
 because `ExecutionStrategy` selection is already a real Port (`strategy`)
 on each `Composed*OptimizerNode`, but which *Algorithm* to use (CAME/
 Adafactor/AdamW) is a choice of *Node class*, not a Port value -- there's
 no single generic "the" optimizer node a `ResourcePolicy` method could
-hand this to. `enable_text_encoder_cache()` was cut because whether
-caching happens is decided by *which Node* is wired into the graph
-(`CachingTextEncoderNode` vs. a plain `TextEncoderNode`), not a flag any
-single Node's `build()` could read and act on after the fact -- graph
-topology, not a constructor-time choice.
+have handed this to. `enable_text_encoder_cache()` was cut because
+whether caching happens is decided by *which Node* is wired into the
+graph (`CachingTextEncoderNode` vs. a plain `TextEncoderNode`), not a
+flag any single Node's `build()` could read and act on after the fact --
+graph topology, not a constructor-time choice.
 
 **A real architectural correction, found by building this rather than
 foreseen in the design:** a `ResourcePolicy` returning
 `ActivationCheckpointingStrategy`/`LoRAScalingPolicy` (both `model/`) and
-`ParameterGroupPolicy` (`optimizer/`) needs those types in its method
+`ParameterGroupPolicy` (`optimizer/`) needed those types in its method
 signatures -- but a module living outside any one domain package can't
 `import` from two domain packages at once without violating the Acyclic
 Domain Dependency Rule (5.7). Resolved the same way `DiffusionProcess`
-(1.4) already resolves an analogous problem: every method uses a
+(1.4) already resolves an analogous problem: every method used a
 forward-reference string type hint only (structural, via `from __future__
-import annotations`, not a per-method style choice), so the module needs
-zero real cross-domain imports. The concrete cost of this fix:
-`ManualResourcePolicy` doesn't compute its own sensible defaults the way
-this section's original illustration had it do (`adapter_strategy or
-PlainLoRAAdapter()`-style fallbacks) -- doing that would need exactly the
-imports being avoided. Instead `ManualResourcePolicy` is a pure carrier
-(every field required, nothing defaulted internally), and each consuming
-Node builds its own default instance from classes it already imports --
-the same pattern `diffusion_process` (1.4) already uses for its `None ->
+import annotations`, not a per-method style choice), so the module
+needed zero real cross-domain imports. That pattern is still real and
+still in use -- `nodes/resource_budget.py`'s own docstring and
+`nodes/memory/profile.py`'s `DeviceContext` example both point back to
+it. The concrete cost of the fix at the time: `ManualResourcePolicy`
+didn't compute its own sensible defaults the way this section's
+original illustration had it do (`adapter_strategy or PlainLoRAAdapter()`-
+style fallbacks) -- doing that would have needed exactly the imports
+being avoided. Instead `ManualResourcePolicy` was a pure carrier (every
+field required, nothing defaulted internally), and each consuming Node
+built its own default instance from classes it already imported -- the
+same pattern `diffusion_process` (1.4) still uses for its `None ->
 locally-constructed default` ports.
 
-**Wiring, and a second deliberate deviation from the original
-illustration:** `ComfyUNetLoRANode` gets an optional `resource_policy`
-port that, when given, fully replaces its existing `use_checkpoint`/
-`scaling_policy` ports (both of which still work unchanged when
-`resource_policy` is `None` -- the default). The three
-`Composed*OptimizerNode` classes get a direct `group_policy` port
+**Wiring, at the time, and a second deliberate deviation from the
+original illustration:** `ComfyUNetLoRANode` had an optional
+`resource_policy` port that, when given, fully replaced its
+`use_checkpoint`/`scaling_policy` ports (both of which still worked
+unchanged when `resource_policy` was `None` -- the default). The three
+`Composed*OptimizerNode` classes got a direct `group_policy` port
 instead of a `resource_policy` one -- deliberately: routing
 `parameter_group_policy()` selection through a full `ResourcePolicy`
-there would force an optimizer node to also supply a
-`checkpointing_strategy`/`lora_scaling_policy` it has no use for, just to
-pick a parameter-group policy, which is worse ergonomics than the
-scattered-flags problem this item exists to fix. So this isn't "one
-`ResourcePolicy` object, four identical consumers" -- it's
-`ResourcePolicy` where two of its three choices naturally co-locate
+there would have forced an optimizer node to also supply a
+`checkpointing_strategy`/`lora_scaling_policy` it had no use for, just to
+pick a parameter-group policy, which would have been worse ergonomics
+than the scattered-flags problem this item existed to fix. So this was
+never "one `ResourcePolicy` object, four identical consumers" -- it was
+`ResourcePolicy` where two of its three choices naturally co-located
 (`ComfyUNetLoRANode`), and a simpler, direct port where the third one
-doesn't. A real, previously-undocumented gap closed as a side effect:
-`LoRAPlusGroups` (3.4) has existed since the `ParameterGroupPolicy` fix
-landed, but no Node ever exposed a way to actually select it from the
-graph until this port existed.
+didn't. `group_policy` was never routed through `ResourcePolicy` at
+all, in fact -- it's `ParameterGroupPolicy` on its own, a fully separate
+mechanism from the start; an earlier version of this doc (and, copying
+it, `docs/status/progress.md`) said otherwise, which was simply wrong,
+not something that changed later. A real, previously-undocumented gap
+was closed as a side effect regardless: `LoRAPlusGroups` (3.4) had
+existed since the `ParameterGroupPolicy` fix landed, but no Node ever
+exposed a way to actually select it from the graph until `group_policy`
+existed.
 
-See `nodes/smoke_tests/smoke_test_resource_policy.py` for the
-contract-level verification and the end-to-end `group_policy` checks
-against real `ComposedOptimizerHandle` instances.
+**Why it was removed.** No `Node` in the registry ever produced a
+`ResourcePolicy` value -- `ManualResourcePolicy` was constructible only
+by hand, in Python, and the only thing that ever did was its own smoke
+test's contract check. `ComfyUNetLoRANode`'s `resource_policy` port was
+therefore real, tested, and permanently unreachable from the actual
+graph editor: nothing a person building a graph in the browser could
+ever wire into it. `use_checkpoint`/`scaling_policy` already covered the
+two concerns that were ever exercised in practice (`checkpointing_strategy`,
+`lora_scaling_policy`); `parameter_group_policy()` was never called by
+anything outside that same smoke test either, `group_policy` being
+separate as described above. Removed along with its smoke test; see
+`docs/CLEANUP_TODO.md` for the change.
 
-`ResourceBudget` itself is implemented but inert -- nothing constructs
-or consumes one yet. `CheckpointPlacementPolicy` (2.3) is its first
-designed consumer, still blocked on the per-block profiling
-instrumentation described there, not on `ResourceBudget` itself.
+`ResourceBudget` itself is implemented but still inert -- nothing
+constructs or consumes one in a live path yet. `CheckpointPlacementPolicy`
+(2.3) is its first designed consumer, still blocked on the per-block
+profiling instrumentation described there, not on `ResourceBudget`
+itself.
 
 ## 2.3 Activation checkpointing: strategy and placement
 
@@ -191,8 +210,9 @@ call.
 **Not wired into `ComfyUNetLoRANode`'s real construction path** (unlike
 `AdapterStrategy`'s seam, now live-wired -- see 3.1): real, tested,
 reachable by any caller that constructs a `ProfilingCheckpointing`
-directly, but `use_checkpoint`/`resource_policy` don't yet have a way to
-select it, and `GreedyRatioPlacement` isn't wired in as a real choice
+directly, but `use_checkpoint` doesn't yet have a way to select it (its
+former `resource_policy` sibling port, which could have, was removed --
+see 2.2), and `GreedyRatioPlacement` isn't wired in as a real choice
 either -- `EveryBlockPlacement`'s unconditional behavior stays what
 `use_checkpoint=True` actually does. Real, separate follow-up, once a
 first real profiled run's `BlockCost` numbers exist to validate a real

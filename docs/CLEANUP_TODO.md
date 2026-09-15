@@ -122,44 +122,64 @@ Update this file as work happens. Each item: status, what it is, why.
       class no longer exists. Not fixed here (`core/` untouched by this
       cleanup), flagging for whoever next touches that file.
 
-### Dataset domain — second "bad competitor" found, not yet acted on
-- [ ] **`nodes/dataset/renoise.py` still calls `core.noise_schedule`
-      directly** (`eps_to_vpred`, `eps_to_x0`, `get_alpha_sigma`,
-      `vpred_to_x0`, deferred-imported inside `_renoise()`) for math that
-      `nodes/components/diffusion.py`'s `NoiseSchedule`/
-      `EpsParameterization`/`VPredParameterization` already reimplements
-      independently, with zero `core`/ComfyUI coupling, proven equivalent
-      (`smoke_test_diffusion_equivalence.py`), and already adopted by the
-      live production route (`train/step_pipeline.py`, `train/supervised.py`,
-      `train/loss.py` all use `components/diffusion.py` already — `renoise.py`
-      is the one holdout). `components/diffusion.py` has no `sample_timestep`
-      equivalent, so that one legacy import stays either way — that's a
-      gap, not a competing implementation, out of scope here per the
-      "don't remove not-yet-duplicated features" rule.
-      Plan: in `_renoise()`, replace the `get_alpha_sigma`/`eps_to_x0`/
-      `eps_to_vpred`/`vpred_to_x0` calls with `NoiseSchedule.alpha_sigma()`
-      + `EpsParameterization()`/`VPredParameterization()` instantiated
-      per the existing per-batch `model_type` branch (cheap, stateless —
-      no need to thread a full `DiffusionProcess` through). Needs care:
-      confirm the `timestep_modes.py` deferred-import discipline (module
-      load must stay ComfyUI-free) still holds — it does, `components/
-      diffusion.py` imports nothing from `core/`, checked.
+### Dataset domain — second "bad competitor" found, done
+- [x] **`nodes/dataset/renoise.py` migrated off `core.noise_schedule`
+      onto `components/diffusion.py`.** `_renoise()` now uses
+      `DiscreteLinearNoiseSchedule`/`EpsParameterization`/
+      `VPredParameterization` (constructed once in `__init__`, reused
+      per batch) instead of importing `get_alpha_sigma`/`eps_to_x0`/
+      `eps_to_vpred`/`vpred_to_x0` from `core.noise_schedule`. Matches
+      what `train/step_pipeline.py`/`train/supervised.py`/`train/loss.py`
+      already used. `sample_timestep` stays a deferred `core.noise_schedule`
+      import -- random-draw strategy, not diffusion-process math, no
+      `components/` equivalent exists, not a competing implementation.
+      `smoke_test_renoise.py` needed no changes (black-box, builds its
+      own independent reference via `core.noise_schedule` directly).
 
 ### Docs
-- [ ] `docs/status/progress.md` still says `core/`/`manager/` are
-      "deliberately untouched by this rewrite (wrap-don't-copy, per the
-      design doc's own rule)" — that rule changed; update.
-- [ ] `docs/architecture.md` states the same "wrap `core/`, don't
-      rewrite it" rule as settled policy — update to reflect: converge
-      to one implementation where a proven alternative exists, wrapping
-      `core/` is the fallback for domains not yet migrated, not a
-      permanent rule.
-- [ ] General pass per the stated criteria: docs should hold only what's
-      hard to get from code alone, specific design-decision rationale,
-      resources, and an actively-updated issue/plan list — not narrative
-      that duplicates what the code's own (already very thorough)
-      docstrings already say. Do this *after* the code settles, not
-      before, so it's written once against the final state.
+- [x] `docs/status/progress.md`: fixed the "wrap-don't-copy... deliberately
+      untouched" framing, and its now-inaccurate `ResourcePolicy` entry
+      (rewrote to describe `ResourceBudget` alone, note the removal and
+      why, and correct the pre-existing overstatement that `group_policy`
+      routed through `ResourcePolicy` -- it never did, separate
+      mechanism, `ParameterGroupPolicy`).
+- [x] `docs/architecture.md`: fixed the same "wrap `core/`, don't
+      rewrite it" framing (the pipelines table + the prose under it) to
+      describe the actual current rule -- `core/`/`manager/` stay
+      unmodified, but `nodes/` retires a wrapper once it has a proven
+      independent replacement, and points at `docs/CLEANUP_TODO.md`.
+- [ ] **Bigger, not started: `ResourcePolicy`/`ManualResourcePolicy` is
+      used as a worked example/case-study across six design docs**, not
+      just mentioned in passing -- rewriting these needs actual editorial
+      attention, not a find-replace:
+      - `docs/design/03-training-step-orchestration.md` -- lines ~47-113
+        build a whole section around it (why it's scoped to 3 of 7
+        methods, the `group_policy`-is-separate reasoning, a "foreseen
+        in the design" pathology writeup) and line ~194 has the same
+        stale `resource_policy` port mention `block_profiler.py`'s
+        docstring already had fixed.
+      - `docs/design/06-composition-walkthrough.md` -- lines ~12-28, a
+        code walkthrough that literally constructs a `ManualResourcePolicy`.
+      - `docs/design/07-deferred-or-rejected.md` line 8-9,
+        `docs/design/09-prioritized-backlog.md` lines 15/22/53/97,
+        `docs/design/10-node-surface-and-precision-control.md` lines
+        158/215 -- shorter precedent/citation mentions.
+      - `docs/design/08-validation-and-implementation-status.md` line 58
+        -- the status table row itself (also the source of the
+        "wired... via group_policy" overstatement `progress.md` copied).
+      Direction once this gets picked up: these sections were a
+      genuinely useful worked example of the "cross-domain-typed object,
+      forward-reference string type hints" pattern -- that pattern
+      itself is still real and used elsewhere (`nodes/resource_budget.py`,
+      `nodes/memory/profile.py`'s `DeviceContext` example). Rewrite to
+      use a still-live example instead of deleting the teaching content
+      outright, and correct the `group_policy` mischaracterization
+      everywhere it appears rather than just in `progress.md`.
+- [ ] General pass per the stated criteria (hard-to-derive-from-code
+      info, specific design-decision rationale, resources, actively-
+      updated issues/plan -- not narrative duplicating what code
+      docstrings already say). Do this after the code changes above
+      settle and the `ResourcePolicy` rewrite above is done, not before.
 - [ ] `docs/design/resources-controller/*` — left alone, same as the
       code (off-limits route).
 

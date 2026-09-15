@@ -12,9 +12,17 @@ lives in). For known bugs, see
 collection, not authoritative, mostly about the legacy `core/`
 pipeline unless a `nodes/` path is named.
 
-`core/` and `manager/` are the current production path and are
-deliberately untouched by this rewrite (wrap-don't-copy, per the design
-doc's own rule) -- `nodes/` is where new work lands.
+`core/` and `manager/` themselves are not modified by this rewrite --
+they're the current production path, and stay that way. `nodes/` no
+longer treats wrapping them as a permanent rule, though: where `nodes/`
+has since built its own independent, verified-equivalent replacement
+(the `optimizer/` domain, `components/`), that replacement is canonical
+and the old wrapper gets retired -- see
+[`docs/CLEANUP_TODO.md`](../CLEANUP_TODO.md) for what's been unified,
+what's still mid-migration, and what hasn't started. Most of `nodes/`
+still wraps `core/`/`manager/` directly (LoRA/UNet injection, text
+encoding, dataset ingestion) simply because nobody's built an
+independent version yet -- that's where new work lands.
 
 ## Implemented
 
@@ -36,10 +44,18 @@ doc's own rule) -- `nodes/` is where new work lands.
   (1.6)
 
 **Resource policy**
-- `ResourceBudget`/`ResourcePolicy`/`ManualResourcePolicy` --
-  `nodes/resource_policy.py` (2.2). Wired into `ComfyUNetLoRANode`
-  (`resource_policy` port) and all three `Composed*OptimizerNode`
-  classes (`group_policy` port).
+- `ResourceBudget` -- `nodes/resource_budget.py` (2.2), used by
+  `checkpoint_placement.py` and `nodes/memory/`.
+  `ResourcePolicy`/`ManualResourcePolicy` (same section, formerly the
+  same file) were removed: no `Node` ever produced a `ResourcePolicy`,
+  so `ComfyUNetLoRANode`'s `resource_policy` port was unreachable from
+  the graph editor -- only ever constructible by hand, in Python. The
+  concerns it bundled (checkpointing strategy, LoRA scaling policy) are
+  each still independently settable on `ComfyUNetLoRANode` directly.
+  `Composed*OptimizerNode`'s `group_policy` port is a separate
+  mechanism (`ParameterGroupPolicy`, `nodes/optimizer/composed.py`) and
+  was never actually routed through `ResourcePolicy` despite this
+  section once implying otherwise.
 - `ActivationCheckpointingStrategy` --
   `nodes/model/gradient_checkpointing.py` (2.3)
 - `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/

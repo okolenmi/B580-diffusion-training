@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from ..core import Node, Port
-from ..resource_policy import ResourceBudget
+from ..resource_budget import ResourceBudget
 from .control_handle import BudgetedResourceControlHandle, ResourceControlHandle
 
 

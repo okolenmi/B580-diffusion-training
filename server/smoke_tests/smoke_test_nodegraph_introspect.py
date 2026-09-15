@@ -40,7 +40,7 @@ def check(condition: bool, message: str):
 _EXPECTED = {
     "ComfyUNetLoRANode": "Comfy UNet LoRA",
     "ComposedCAMEOptimizerNode": "Composed CAME Optimizer",
-    "SimpleAdamWOptimizerNode": "Simple AdamW Optimizer",
+    "ComposedAdamWOptimizerNode": "Composed AdamW Optimizer",
     "SDXLTextEncoderNode": "SDXL Text Encoder",
     "LoRACheckpointLoaderNode": "LoRA Checkpoint Loader",
     "MinSNRLossWeightingNode": "Min SNR Loss Weighting",

@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from nodes.core import ExecutionContext
 
 from . import asset_paths, graph_executor, nodegraph_registry
-from .nodegraph_introspect import introspect_optimizer_nodes, introspect_registry, node_info_to_dict
+from .nodegraph_introspect import introspect_registry, node_info_to_dict
 
 router = APIRouter(prefix="/nodegraph")
 
@@ -127,27 +127,6 @@ class _ExecutionRegistry:
 
 
 _registry = _ExecutionRegistry()
-
-
-@router.get("/optimizers")
-async def list_optimizer_nodes():
-    """Reads declared contracts directly off nodes/optimizer/'s real Node
-    classes -- see nodegraph_introspect.py's introspect_optimizer_nodes()
-    and docs/design/02-foundational-ontology.md section 1.1 for why a
-    declared Node/Port contract, not a guessed constructor signature, is
-    the thing to introspect. This replaced an earlier version that
-    guessed ports from core.optimizers.py's constructor signatures; that
-    approach is still available (introspect_legacy_class(), same module)
-    for any future domain not yet migrated into nodes/.
-    """
-    try:
-        infos = introspect_optimizer_nodes()
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not introspect nodes/optimizer/ ({type(e).__name__}: {e}).",
-        )
-    return {"nodes": [node_info_to_dict(i) for i in infos]}
 
 
 @router.get("/registry")

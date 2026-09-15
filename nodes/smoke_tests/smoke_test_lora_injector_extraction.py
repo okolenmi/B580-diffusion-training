@@ -28,11 +28,9 @@ import torch
 import core.unet_wrapper as unet_wrapper_module
 from core.lora import LoRAConfig
 from nodes.model import adapter_injection
-from nodes.model.gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
 from nodes.model.handle import ModelWeights
 from nodes.model.lora_injector import ComfyUNetLoRANode, build_lora_injected_unet
-from nodes.model.lora_scaling import ClassicLoRAScaling, RankStabilizedScaling
-from nodes.resource_policy import ResourcePolicy
+from nodes.model.lora_scaling import ClassicLoRAScaling
 from nodes.smoke_tests.smoke_test_gradient_checkpointing import _install_stub_comfy_checkpoint_module
 
 # checkpointing_strategy.apply() (called inside build_lora_injected_unet,
@@ -152,41 +150,6 @@ def check_defaults_match_the_old_inline_logic():
     print("    PASS")
 
 
-def check_resource_policy_overrides_use_checkpoint_and_scaling():
-    print("[resource_policy given -> overrides use_checkpoint/scaling_policy, "
-          "exactly like the old inline if/else did]")
-
-    class _FakeResourcePolicy(ResourcePolicy):
-        def checkpointing_strategy(self):
-            return NoCheckpointing()
-
-        def lora_scaling_policy(self):
-            return RankStabilizedScaling()
-
-        def parameter_group_policy(self):
-            # Not read by build_lora_injected_unet() at all (it only calls
-            # checkpointing_strategy()/lora_scaling_policy()) -- implemented
-            # only because ResourcePolicy is an ABC requiring all three.
-            raise NotImplementedError("not exercised by this test")
-
-    rec = _Recorder()
-    rec.install()
-    try:
-        weights = ModelWeights.from_state_dicts({}, {})
-        build_lora_injected_unet(weights, rank=100, alpha=8.0, resource_policy=_FakeResourcePolicy(),
-                                  use_checkpoint=True)  # deliberately contradicted by the policy
-    finally:
-        rec.uninstall()
-
-    call = rec.wrapper_calls[0]
-    check(call["use_checkpoint"] is False,
-          "resource_policy's NoCheckpointing should win over the explicit use_checkpoint=True argument")
-    expected_alpha = RankStabilizedScaling().scaling(8.0, 100) * 100
-    check(abs(call["lora_config"].alpha - expected_alpha) < 1e-6,
-          f"expected effective alpha {expected_alpha}, got {call['lora_config'].alpha}")
-    print("    PASS")
-
-
 def check_node_thin_wrapper_resolves_port_defaults_correctly():
     print("[ComfyUNetLoRANode.build() itself -- the thin wrapper -- resolves its own "
           "Port defaults into build_lora_injected_unet() correctly]")
@@ -220,7 +183,6 @@ def check_node_thin_wrapper_resolves_port_defaults_correctly():
 
 def main():
     check_defaults_match_the_old_inline_logic()
-    check_resource_policy_overrides_use_checkpoint_and_scaling()
     check_node_thin_wrapper_resolves_port_defaults_correctly()
     print()
     print("=" * 60)

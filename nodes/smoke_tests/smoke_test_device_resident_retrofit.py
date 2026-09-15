@@ -2,10 +2,19 @@
 concrete OptimizerHandle -- this is new behavior with no legacy equivalent
 to compare against (not an equivalence test), so what's checked is: sane
 values, and specifically the release()-then-footprint_bytes() round trip,
-since several wrapped legacy classes (ChunkedXPUAdafactor/ChunkedXPUCAME/
-ForeachXPUAdafactor/ForeachXPUCAME/FusedXPUAdafactor/CPUAdamW) `del` their
-state attributes entirely in free_states() rather than clearing them --
-confirmed by reading core/optimizers.py directly, not assumed.
+since several wrapped legacy classes (ChunkedXPUAdafactor/
+ForeachXPUAdafactor/FusedXPUAdafactor) `del` their state attributes
+entirely in free_states() rather than clearing them -- confirmed by
+reading core/optimizers.py directly, not assumed.
+
+AdamWOptimizerHandle/SimpleAdamWOptimizerHandle/CAMEOptimizerHandle/
+ForeachCAMEOptimizerHandle used to be covered here too -- removed along
+with adamw.py/came.py/foreach_came.py once ComposedAdamWOptimizerNode/
+ComposedCAMEOptimizerNode were proven equivalent replacements (see
+docs/CLEANUP_TODO.md). AdafactorOptimizerHandle/ForeachAdafactorOptimizerHandle/
+FusedAdafactorOptimizerHandle stay: they still have real, unreplicated
+tiny-parameter behavior Composed's AdafactorAlgorithm doesn't implement
+yet (same doc).
 
 Run this directly: `python nodes/smoke_tests/smoke_test_device_resident_retrofit.py`
 """
@@ -17,16 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import (ChunkedXPUAdafactor, ChunkedXPUCAME, CPUAdamW,
-                              ForeachXPUAdafactor, ForeachXPUCAME, FusedXPUAdafactor)
+from core.optimizers import ChunkedXPUAdafactor, ForeachXPUAdafactor, FusedXPUAdafactor
 from nodes.memory.handle import DeviceResident
-from nodes.optimizer.adamw import AdamWOptimizerHandle, SimpleAdamWOptimizerHandle
 from nodes.optimizer.adafactor import AdafactorOptimizerHandle
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
-from nodes.optimizer.came import CAMEOptimizerHandle
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerHandle
-from nodes.optimizer.foreach_came import ForeachCAMEOptimizerHandle
 from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy
 
@@ -71,19 +76,12 @@ def _step(handle, params):
 
 
 def check_eager_family():
-    """Composed/AdamW/SimpleAdamW: state exists from construction --
-    footprint_bytes() should be exactly right immediately, no step needed."""
+    """Composed: state exists from construction -- footprint_bytes()
+    should be exactly right immediately, no step needed."""
     print("\n=== Eagerly-allocated state: exact byte count from construction ===")
 
     params = _params()
     expected = sum(p.numel() * p.element_size() for p in params) * 2  # m + v, same dtype/shape
-    legacy = CPUAdamW(params, lr=1e-3)  # CPU-resident by design, no device kwarg
-    handle = AdamWOptimizerHandle(legacy)
-    record(isinstance(handle, DeviceResident), "AdamWOptimizerHandle is a DeviceResident")
-    record(handle.footprint_bytes() == expected, "AdamWOptimizerHandle.footprint_bytes() exact",
-           detail=f"got {handle.footprint_bytes()}, expected {expected}")
-
-    params = _params()
     algorithm = AdamWAlgorithm(betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2)
     strategy = SimpleLoopStrategy()
     handle = ComposedOptimizerHandle(algorithm=algorithm, strategy=strategy,
@@ -98,7 +96,7 @@ def check_eager_family():
 
 
 def check_lazy_family():
-    """Adafactor/CAME (+ foreach/fused variants): state is None until the
+    """Adafactor (+ foreach/fused variants): state is None until the
     first step() lazily allocates it, and free_states() `del`s the
     attributes entirely -- footprint_bytes() must handle both."""
     print("\n=== Lazily-allocated state: 0 before step(), >0 after, 0 again after release() ===")
@@ -106,13 +104,9 @@ def check_lazy_family():
     cases = [
         ("AdafactorOptimizerHandle",
          lambda p: AdafactorOptimizerHandle(ChunkedXPUAdafactor(p, lr=1e-3, device=DEVICE))),
-        ("CAMEOptimizerHandle",
-         lambda p: CAMEOptimizerHandle(ChunkedXPUCAME(p, lr=1e-3, device=DEVICE))),
         ("ForeachAdafactorOptimizerHandle",
          lambda p: ForeachAdafactorOptimizerHandle(
              ForeachXPUAdafactor(p, lr=1e-3, device=DEVICE))),
-        ("ForeachCAMEOptimizerHandle",
-         lambda p: ForeachCAMEOptimizerHandle(ForeachXPUCAME(p, lr=1e-3, device=DEVICE))),
         ("FusedAdafactorOptimizerHandle",
          lambda p: FusedAdafactorOptimizerHandle(_fused_legacy(p))),
     ]
@@ -137,22 +131,6 @@ def check_lazy_family():
                detail=str(fp_after_release))
 
 
-def check_simple_adamw():
-    print("\n=== SimpleAdamWOptimizerHandle (torch.optim.AdamW-backed) ===")
-    params = _params()
-    legacy = torch.optim.AdamW(params, lr=1e-3)
-    handle = SimpleAdamWOptimizerHandle(legacy, DEVICE)
-    record(isinstance(handle, DeviceResident), "SimpleAdamWOptimizerHandle is a DeviceResident")
-    record(handle.footprint_bytes() == 0, "footprint_bytes() == 0 before any step() "
-           "(torch.optim.AdamW's state dict is empty until the first step())",
-           detail=f"got {handle.footprint_bytes()}")
-    _step(handle, params)
-    fp = handle.footprint_bytes()
-    record(fp > 0, "footprint_bytes() > 0 after step()", detail=f"got {fp}")
-    handle.release()
-    record(handle.footprint_bytes() == 0, "footprint_bytes() == 0 after release()")
-
-
 def check_offload_reload_alias_delegates():
     """offload()/reload() are new aliases onto offload_states_to_cpu()/
     reload_states_to_device() -- confirm they actually call through (no
@@ -160,8 +138,10 @@ def check_offload_reload_alias_delegates():
     delegation itself, and that it doesn't raise, is)."""
     print("\n=== offload()/reload() alias delegation doesn't raise, footprint unchanged (cpu->cpu) ===")
     params = _params()
-    legacy = CPUAdamW(params, lr=1e-3)  # CPU-resident by design, no device kwarg
-    handle = AdamWOptimizerHandle(legacy)
+    algorithm = AdamWAlgorithm(betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2)
+    strategy = SimpleLoopStrategy()
+    handle = ComposedOptimizerHandle(algorithm=algorithm, strategy=strategy,
+                                      params=params, lr=1e-3, device=DEVICE)
     fp_before = handle.footprint_bytes()
     try:
         handle.offload()
@@ -178,7 +158,6 @@ def main():
     print("Device: cpu")
     check_eager_family()
     check_lazy_family()
-    check_simple_adamw()
     check_offload_reload_alias_delegates()
 
     print("\n" + "=" * 60)

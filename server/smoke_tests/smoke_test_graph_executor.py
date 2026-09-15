@@ -67,12 +67,12 @@ def test_model_output_rejected_into_optimizer_params():
     from server.graph_executor import GraphError, _is_compatible
     reg = nodegraph_registry.get_registry()
     try:
-        _is_compatible(reg["ComfyUNetLoRANode"], "model", reg["AdamWOptimizerNode"], "params")
+        _is_compatible(reg["ComfyUNetLoRANode"], "model", reg["ComposedAdamWOptimizerNode"], "params")
         raise AssertionError("model -> params should be rejected")
     except GraphError:
         pass
     _is_compatible(reg["ComfyUNetLoRANode"], "model", reg["ModelParametersNode"], "model")
-    _is_compatible(reg["ModelParametersNode"], "params", reg["AdamWOptimizerNode"], "params")
+    _is_compatible(reg["ModelParametersNode"], "params", reg["ComposedAdamWOptimizerNode"], "params")
 
 
 class _HandleA:

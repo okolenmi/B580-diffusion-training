@@ -1,17 +1,31 @@
 """ComposedAdafactorOptimizerNode: AdafactorAlgorithm + a selectable
 ExecutionStrategy.
 
-Same relationship to AdafactorOptimizerNode (adafactor.py, which wraps
-the legacy core.optimizers.ChunkedXPUAdafactor) as ComposedCAMEOptimizerNode
-has to CAMEOptimizerNode.
+Device-resident, built entirely from this package's own Algorithm/
+ExecutionStrategy pieces, no core.optimizers import -- but NOT (yet) a
+full replacement for adafactor.py's AdafactorOptimizerNode (wraps the
+legacy core.optimizers.ChunkedXPUAdafactor), unlike CAME's equivalent
+pair. Real, structural gap, not a rounding difference: ChunkedXPUAdafactor
+(and ForeachXPUAdafactor/FusedXPUAdafactor) route any parameter under
+10,000 elements through their own tiny-parameter fast path -- a plain
+elementwise second-moment EMA, not the row/col factored approximation --
+and AdafactorAlgorithm doesn't implement that branch at all, always
+using the factored/1D math regardless of parameter size (see
+nodes/smoke_tests/smoke_test_adafactor_equivalence.py, which deliberately
+tests only parameters >= 10,000 elements for exactly this reason). Many
+individual LoRA matrices are smaller than that, so this is a real,
+common-case gap, not an edge case -- adafactor.py's node stays registered
+until AdafactorAlgorithm grows that branch (tracked in
+docs/CLEANUP_TODO.md), at which point it becomes redundant the same way
+CAMEOptimizerNode already did.
 
 `INPUTS` below default to the conservative, predictable values
-(`scale_parameter=False, weight_decay=0.0`) rather than
-`AdafactorOptimizerNode`'s own legacy defaults (`scale_parameter=True,
+(`scale_parameter=False, weight_decay=0.0`) rather than the removed
+AdafactorOptimizerNode's own legacy defaults (`scale_parameter=True,
 weight_decay=1.0`): those legacy defaults are unusual (full weight decay
 of 1.0 shrinks any parameter by ~5% per step at a typical lr, dominating
 training over enough steps unless that's actually intended). Pass
-`scale_parameter=True, weight_decay=1.0` explicitly to match the legacy
+`scale_parameter=True, weight_decay=1.0` explicitly to match the old
 wrapper's defaults.
 
 See each strategy's own module docstring and nodes/smoke_tests/ for what

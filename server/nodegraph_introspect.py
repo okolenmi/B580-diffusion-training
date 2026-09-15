@@ -272,9 +272,9 @@ def introspect_node_class(cls: type) -> NodeInfo:
     for anything not yet migrated there.
 
     bases is the real Python inheritance chain (excluding object/ABC/the
-    dataclass-y ABC noise), so e.g. CAMEOptimizerNode correctly reports
-    extending OptimizerNode extending Node -- an actual fact about the
-    class, not something inferred or guessed after the fact.
+    dataclass-y ABC noise), so e.g. ComposedCAMEOptimizerNode correctly
+    reports extending OptimizerNode extending Node -- an actual fact
+    about the class, not something inferred or guessed after the fact.
 
     node_kind/presets are Node.NODE_KIND/list_presets(), verbatim for
     node_kind and resolved-to-PortInfo for presets -- see
@@ -323,28 +323,6 @@ def introspect_node_class(cls: type) -> NodeInfo:
     )
 
 
-def introspect_optimizer_nodes() -> list[NodeInfo]:
-    """The real thing, superseding introspect_optimizers()'s old
-    guess-from-core.optimizers approach: reads declared contracts directly
-    off the nodes/optimizer/ package's classes. All five optimizers are
-    represented now, including FusedAdafactorOptimizerNode -- which
-    correctly shows a FusedOptimizerHandle output type, not just a generic
-    OptimizerHandle, because that's what it actually declares (see
-    nodes/optimizer/fused_adafactor.py and
-    docs/design/10-node-surface-and-precision-control.md section 11.2,
-    "fused execution is a fourth thing").
-    """
-    from nodes.optimizer.adafactor import AdafactorOptimizerNode
-    from nodes.optimizer.came import CAMEOptimizerNode
-    from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerNode
-    from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
-    from nodes.optimizer.adamw import AdamWOptimizerNode
-    return [introspect_node_class(c) for c in (
-        AdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
-        ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
-    )]
-
-
 def node_info_to_dict(info: NodeInfo) -> dict:
     def _ports(ports):
         return [
@@ -375,9 +353,13 @@ def node_info_to_dict(info: NodeInfo) -> dict:
 def introspect_registry() -> dict[str, list[NodeInfo]]:
     """Every node in server.nodegraph_registry, grouped by domain (derived
     from module path -- see nodegraph_registry.domain_of). This is what the
-    interactive graph editor's palette is built from; introspect_optimizer_nodes()
-    above predates it and stays only because /nodegraph/optimizers is still
-    a valid, narrower endpoint, not because this duplicates it by hand."""
+    interactive graph editor's palette is built from. Used to have a
+    narrower, hand-maintained sibling, introspect_optimizer_nodes() +
+    the /nodegraph/optimizers route -- removed once it drifted out of
+    sync with the real registry (missing ForeachCAMEOptimizerNode and
+    every Composed* node at the time it was found) while this function
+    already covered every domain, optimizers included, generically and
+    correctly by construction. This is the one place to look now."""
     from . import nodegraph_registry
 
     groups: dict[str, list[NodeInfo]] = {}

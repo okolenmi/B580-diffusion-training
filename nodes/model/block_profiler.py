@@ -50,8 +50,8 @@ proves not enough to act on -- not bundled into this change.
 AdapterStrategy's seam, live-wired as of nodes/model/adapter_injection.py
 -- see design doc section 3.1). Real, tested, composable via the existing ActivationCheckpointingStrategy interface,
 reachable by any caller that constructs a ProfilingCheckpointing
-directly, but ComfyUNetLoRANode's use_checkpoint/resource_policy ports
-don't yet have a way to select it. Exposing it as a real Node input is
+directly, but ComfyUNetLoRANode's use_checkpoint port doesn't yet have
+a way to select it. Exposing it as a real Node input is
 its own scoped follow-up, once this is proven correct.
 """
 

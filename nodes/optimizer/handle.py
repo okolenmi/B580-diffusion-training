@@ -146,15 +146,14 @@ def describe_optimizer(handle: OptimizerHandle) -> str:
     construction-time console print someone has to have kept scrollback
     for.
 
-    Generic over both families: legacy (core.optimizers-backed) handles
-    already have a distinct class per concrete implementation --
-    CAMEOptimizerHandle vs. ForeachCAMEOptimizerHandle -- so the class
-    name alone is descriptive there. ComposedOptimizerHandle
-    (composed.py) is one class for every Algorithm+ExecutionStrategy
-    pair, so the class name alone says nothing useful -- this reads
-    .algorithm/.strategy directly (real, existing attributes -- see
-    ComposedOptimizerHandle.__init__) to disambiguate exactly which
-    combination this run is actually using."""
+    ComposedOptimizerHandle/ComposedFusedOptimizerHandle (composed.py,
+    composed_fused.py) are each one class for every Algorithm+
+    ExecutionStrategy pair, so the class name alone says nothing useful
+    -- this reads .algorithm/.strategy directly (real, existing
+    attributes -- see ComposedOptimizerHandle.__init__) to disambiguate
+    exactly which combination this run is actually using. Falls back to
+    the plain class name for any OptimizerHandle that doesn't carry
+    those attributes, which is enough on its own to identify it."""
     name = type(handle).__name__
     algorithm = getattr(handle, "algorithm", None)
     strategy = getattr(handle, "strategy", None)

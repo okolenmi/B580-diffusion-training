@@ -51,7 +51,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from ..components.device import DeviceContext
-from ..resource_policy import ResourceBudget
+from ..resource_budget import ResourceBudget
 from .coordinator import ResourceCoordinator
 from .handle import DeviceResident
 

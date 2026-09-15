@@ -1,7 +1,13 @@
 """ComposedCAMEOptimizerNode: CAMEAlgorithm + a selectable ExecutionStrategy.
 
-A separate class from CAMEOptimizerNode (came.py, which wraps the legacy
-core.optimizers.ChunkedXPUCAME) rather than a replacement for it.
+The only CAME node in nodes/optimizer/ -- device-resident, built
+entirely from this package's own Algorithm/ExecutionStrategy pieces, no
+core.optimizers import. came.py's CAMEOptimizerNode (wrapped the legacy
+core.optimizers.ChunkedXPUCAME) was removed once this Node was proven
+equivalent to it -- see nodes/smoke_tests/smoke_test_came_equivalence.py,
+which still constructs core.optimizers.ChunkedXPUCAME itself as the
+correctness reference (core.optimizers is untouched legacy math, not a
+Node this project exposes).
 
 The `strategy` input is where the Algorithm/ExecutionStrategy split
 becomes usable: switching between strategies changes nothing about
@@ -40,7 +46,7 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
         "betas": Port(name="betas", type=tuple, required=False, default=(0.9, 0.999, 0.9999)),
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=0.0,
                               doc="Decoupled weight decay -- p *= 1 - wd*lr, matching the "
-                                  "legacy CAMEOptimizerNode's own default and formula "
+                                  "removed legacy CAMEOptimizerNode's own default and formula "
                                   "exactly. Added along with algorithms/base.py's lr/param "
                                   "contract extension (built for AdafactorAlgorithm's "
                                   "scale_parameter -- CAME's own weight decay came from the "

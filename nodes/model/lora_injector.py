@@ -46,7 +46,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from ..core import Port
-from ..resource_policy import ResourcePolicy
+
 from .frozen_weight_store import BF16WeightStore
 from .adapter_strategy import AdapterStrategy
 from .gradient_checkpointing import FrozenParamSafeCheckpointing, NoCheckpointing
@@ -191,7 +191,6 @@ def build_lora_injected_unet(
     dropout: float = 0.0,
     target_modules=None,
     use_checkpoint: bool = True,
-    resource_policy: ResourcePolicy | None = None,
     adapter_strategy: AdapterStrategy | None = None,
     frozen_weight_store_factory=None,
 ) -> ComfyUNetTrainableModel:
@@ -224,14 +223,9 @@ def build_lora_injected_unet(
     from .adapter_strategy import PlainLoRAAdapter
 
     adapter_strategy = adapter_strategy or PlainLoRAAdapter()
-    if resource_policy is not None:
-        checkpointing_strategy = resource_policy.checkpointing_strategy()
-        resolved_scaling_policy = resource_policy.lora_scaling_policy()
-        use_checkpoint = not isinstance(checkpointing_strategy, NoCheckpointing)
-    else:
-        checkpointing_strategy = (
-            FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
-        resolved_scaling_policy = scaling_policy or ClassicLoRAScaling()
+    checkpointing_strategy = (
+        FrozenParamSafeCheckpointing() if use_checkpoint else NoCheckpointing())
+    resolved_scaling_policy = scaling_policy or ClassicLoRAScaling()
     checkpointing_strategy.apply()
     lora_config = LoRAConfig(
         rank=rank,
@@ -284,15 +278,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "cut in peak VRAM (dominant cost is activations, not the frozen base weights "
                 "or the tiny LoRA adapters). Defaults to True. Set False to trade back for "
                 "faster steps. Mapped internally to FrozenParamSafeCheckpointing (True) or "
-                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py. "
-                "Ignored if resource_policy is given.",
-        ),
-        "resource_policy": Port(
-            name="resource_policy", type=ResourcePolicy, required=False, default=None,
-            doc="None = use_checkpoint and scaling_policy above, independently. When given, "
-                "fully replaces both -- its checkpointing_strategy() and "
-                "lora_scaling_policy() are used instead, and use_checkpoint/scaling_policy "
-                "are ignored.",
+                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py.",
         ),
         "adapter_strategy": Port(
             name="adapter_strategy", type=AdapterStrategy, required=False, default=None,
@@ -332,7 +318,6 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
             target_modules=inputs.get("target_modules"),
             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
-            resource_policy=inputs.get("resource_policy"),
             adapter_strategy=inputs.get("adapter_strategy"),
             frozen_weight_store_factory=inputs.get("frozen_weight_store"),
         )

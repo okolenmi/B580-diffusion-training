@@ -1,19 +1,24 @@
 """ComposedAdamWOptimizerNode: AdamWAlgorithm + a selectable ExecutionStrategy.
 
-Same relationship to adamw.py's AdamWOptimizerNode/SimpleAdamWOptimizerNode
-as ComposedCAMEOptimizerNode has to CAMEOptimizerNode. Unlike CAME/
-Adafactor's composed nodes, this one has no legacy core.optimizers class
-it's meant to eventually replace end-to-end for the CPU path: CPUAdamW's
-own CPU-resident design is a real, different tradeoff (see adamw.py's
-module docstring), not something this Node's device-resident math is
-trying to reproduce. What it does replace is *AdamWOptimizerNode's need
-to import core.optimizers at all* for anyone who wants a device-resident,
-strategy-selectable AdamW built entirely from this package's own
-Algorithm/ExecutionStrategy pieces.
+The only AdamW node in nodes/optimizer/ -- device-resident, built
+entirely from this package's own Algorithm/ExecutionStrategy pieces, no
+core.optimizers import. adamw.py's AdamWOptimizerNode (wrapped
+core.optimizers.CPUAdamW) and SimpleAdamWOptimizerNode (wrapped
+torch.optim.AdamW directly) were removed: CPUAdamW's CPU-resident
+optimizer state exists for a full-parameter fine-tune's Adam state,
+which genuinely can't fit on the device -- a scenario this project has
+no way to produce (every TrainableModel here is LoRA-injected; see
+nodes/model/handle.py), so the tradeoff it was built for never
+actually applies. SimpleAdamWOptimizerNode's plain device-resident
+torch.optim.AdamW is exactly what this Node already does, with more
+options (strategy, state_precision, group_policy) on top.
 
 Verified against CPUAdamW's own formula directly (same bias-corrected-lr
 AdamW variant, same decoupled-decay-at-base-lr convention) --
-see nodes/smoke_tests/smoke_test_adamw_equivalence.py.
+see nodes/smoke_tests/smoke_test_adamw_equivalence.py, which still
+constructs core.optimizers.CPUAdamW itself as the correctness reference
+(core.optimizers is untouched legacy math, not a Node this project
+exposes).
 
 `strategy="foreach"` is `ForeachApplyStrategy` -- included here (and in
 composed_came.py/composed_adafactor.py) because it's algorithm-agnostic

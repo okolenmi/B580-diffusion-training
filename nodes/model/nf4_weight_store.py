@@ -39,16 +39,15 @@ real implementation complexity for a small share of this class's total
 value, nearly all of which comes from the primary 4-bit quantization
 above.
 
-**Not yet wired into a real forward pass.** materialize() exists
-specifically so a real AdapterStrategy could call it each forward to get
-a fresh dequantized tensor -- PlainLoRAAdapter/DoRAAdapter both still
-only honor BF16WeightStore (see adapter_strategy.py's module docstring)
-and read core.lora.LoRALinear/LoRAConv2d's own base_weight buffer
-directly, never calling materialize() at all. Wiring NF4WeightStore into
-a real dequant-then-matmul forward path (a new layer class, threading a
-MemoryManager-backed scratch buffer through construction, and its own
-equivalence-testing pass against a live forward) is real, separate,
-unimplemented follow-up work -- this module is the storage/
+**Wired into a real forward pass.** materialize() exists specifically so
+a real AdapterStrategy could call it each forward to get a fresh
+dequantized tensor -- PlainLoRAAdapter now does exactly that: it honors
+both BF16WeightStore and NF4WeightStore, checked at wrap() time (see
+adapter_strategy.py's module docstring), constructing
+nodes/model/nf4_lora_layer.py's NF4LoRALinear/NF4LoRAConv2d for the
+NF4 case, which call frozen.materialize() every forward. DoRAAdapter
+still only honors BF16WeightStore -- see adapter_strategy.py's
+DoRAAdapter docstring for why not. This module remains the storage/
 (de)quantization piece on its own, tested against round-trip
 reconstruction error, not against a trained model's real quality (the
 diffusion-specific caveat in design doc section 3.3 needs an actual

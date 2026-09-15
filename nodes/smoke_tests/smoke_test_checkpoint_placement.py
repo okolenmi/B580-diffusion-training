@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from nodes.model.checkpoint_placement import (
     BlockCost, CheckpointPlacementPolicy, EveryBlockPlacement, GreedyRatioPlacement,
 )
-from nodes.resource_policy import ResourceBudget
+from nodes.resource_budget import ResourceBudget
 
 failures = []
 

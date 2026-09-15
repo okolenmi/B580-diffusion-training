@@ -12,7 +12,7 @@ use) was.
 One real correction from the design doc's own sketch: GreedyRatioPlacement
 below subtracts ResourceBudget.vram_reserve_mb from vram_budget_mb before
 comparing -- the doc's illustrative `remaining <= budget.vram_budget_mb`
-predates vram_reserve_mb existing as a field (nodes/resource_policy.py),
+predates vram_reserve_mb existing as a field (nodes/resource_budget.py),
 and ResourceBudget's own docstring is explicit that vram_budget_mb is a
 ceiling *before* the safety margin, not the usable amount. Fitting
 against the full ceiling would silently eat into that margin.
@@ -23,7 +23,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..resource_policy import ResourceBudget
+from ..resource_budget import ResourceBudget
 
 
 @dataclass(frozen=True)

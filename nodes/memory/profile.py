@@ -15,9 +15,9 @@ DeviceContext's own allocator stats into one object, so a caller (or a
 person reading a profile=True report) sees all three side by side
 instead of piecing them together from three separate call sites by hand.
 
-Domain-independent by construction, the same discipline
-nodes/resource_policy.py already established for a cross-domain-typed
-object: DeviceContext (nodes/components/device.py, a domain package per
+Domain-independent by construction, the same discipline nodes/core.py
+already established for a cross-domain-typed object: DeviceContext
+(nodes/components/device.py, a domain package per
 section 5.7) is referenced by forward-reference string type hint only
 in capture()'s signature, so this module needs no real import from
 components/ and stays a valid downward dependency for every domain

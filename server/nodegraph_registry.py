@@ -31,15 +31,12 @@ def _load() -> dict[str, type]:
     from nodes.monitor.training_progress import TrainingProgressMonitorNode
     from nodes.memory.vram_budget_controller import VRAMBudgetControllerNode
     from nodes.optimizer.adafactor import AdafactorOptimizerNode
-    from nodes.optimizer.adamw import AdamWOptimizerNode, SimpleAdamWOptimizerNode
-    from nodes.optimizer.came import CAMEOptimizerNode
     from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode
     from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
     from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode
     from nodes.optimizer.composed_fused_adafactor import ComposedFusedAdafactorOptimizerNode
     from nodes.optimizer.composed_fused_adamw import ComposedFusedAdamWOptimizerNode
     from nodes.optimizer.composed_fused_came import ComposedFusedCAMEOptimizerNode
-    from nodes.optimizer.foreach_came import ForeachCAMEOptimizerNode
     from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerNode
     from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
     from nodes.primitive.values import (BoolConstantNode, FloatConstantNode,
@@ -56,10 +53,9 @@ def _load() -> dict[str, type]:
         ModelParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,
         ResourcesControllerNode, LoRATrainingConfigNode,
         TrainingProgressMonitorNode, VRAMBudgetControllerNode,
-        AdamWOptimizerNode, SimpleAdamWOptimizerNode, AdafactorOptimizerNode, CAMEOptimizerNode,
+        AdafactorOptimizerNode,
         ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
-        ForeachCAMEOptimizerNode,
         ForeachAdafactorOptimizerNode, FusedAdafactorOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,

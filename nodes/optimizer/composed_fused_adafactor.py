@@ -22,7 +22,12 @@ consequence: for parameters under 10,000 elements (most individual LoRA
 matrices), this Node's math differs from FusedXPUAdafactor's; for larger
 parameters, both branches already agree (see algorithms/adafactor.py),
 and that's exactly the regime smoke_test_fused_adafactor_equivalence.py
-checks.
+checks. The actual size of this gap, run against real torch, is in
+nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py (see
+docs/CLEANUP_TODO.md for results once available) -- separately, that
+same legacy class has a real, confirmed momentum-corruption bug for
+float32 parameters (docs/known-issues/open.md) that this Node does not
+reproduce.
 """
 
 from __future__ import annotations

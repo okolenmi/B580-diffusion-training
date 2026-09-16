@@ -64,20 +64,27 @@ Update this file as work happens. Each item: status, what it is, why.
 
 - Initially planned to also delete `adafactor.py`, `foreach_adafactor.py`,
   `fused_adafactor.py` as "proven redundant" the same way as CAME.
-  **Wrong — caught before deleting.** `ChunkedXPUAdafactor`/
-  `ForeachXPUAdafactor`/`FusedXPUAdafactor` all route parameters under
-  10,000 elements through a real, structurally different tiny-parameter
-  fast path (plain elementwise second-moment EMA, not the row/col
-  factored approximation) — confirmed directly in `core/optimizers.py`
-  (`TINY_NUMEL`/`_tiny_vs`/`_tiny_vs_map`), and confirmed as a real,
-  deliberate scope exclusion in the equivalence tests themselves
-  (`smoke_test_adafactor_equivalence.py`, `smoke_test_fused_adafactor_equivalence.py`
-  both deliberately test only parameters >= 10,000 elements, for this
-  exact reason). `AdafactorAlgorithm` doesn't implement that branch at
-  all. Many individual LoRA matrices are smaller than 10,000 elements,
-  so this isn't an edge case — it's common-case behavior these three
-  Nodes still uniquely provide. **All three legacy Adafactor nodes stay
-  registered for now.** See "Not yet done" below for the real fix.
+  **Wrong — caught before deleting**, though it took two more rounds of
+  correction to get the actual picture right (recorded here in full
+  since it's a good example of why "read the summary" isn't enough):
+  first pass, wrongly assumed all three legacy classes share one
+  tiny-parameter (< 10,000 element) mechanism, based on
+  `smoke_test_adafactor_equivalence.py`'s scoping comment. Reading
+  `core/optimizers.py` directly instead shows three *different* things:
+  `ChunkedXPUAdafactor` ties every tiny parameter in the whole optimizer
+  together into one shared clip/EMA state (cross-parameter batching, not
+  a per-parameter algorithm concern); `FusedXPUAdafactor` has a real but
+  *different*, genuinely per-parameter elementwise EMA; `ForeachXPUAdafactor`
+  has no tiny-parameter special case at all — its factored/unfactored
+  paths use the same math `AdafactorAlgorithm` already implements,
+  for every parameter size. So `ForeachAdafactorOptimizerNode` may
+  already be safe to delete with zero algorithm changes — a script now
+  exists to confirm this (see below) rather than assuming it from
+  reading the source alone, given the track record in this section.
+  Separately, reading the exact lines around the tiny-parameter code
+  also surfaced a real, unrelated momentum-corruption bug in both
+  `ChunkedXPUAdafactor` and `FusedXPUAdafactor` (not `ForeachXPUAdafactor`)
+  — see `docs/known-issues/open.md`.
 - Also caught deleting `nodes/resource_policy.py` wholesale without
   first checking whether anything else in that file was still live —
   `ResourceBudget` was, and got recovered into its own file rather than
@@ -86,37 +93,39 @@ Update this file as work happens. Each item: status, what it is, why.
 ## Not yet done
 
 ### Optimizer domain
-- [ ] **Implement the tiny-parameter (`< 10,000` element) branch in
-      `AdafactorAlgorithm`** (`nodes/optimizer/algorithms/adafactor.py`):
-      a plain elementwise second-moment EMA (see `core/optimizers.py`
-      lines ~1239-1249 for `FusedXPUAdafactor`'s version, ~180-250 for
-      `ChunkedXPUAdafactor`'s batched version) in place of the row/col
-      factored approximation, gated on total element count rather than
-      dimensionality (the legacy classes check `TINY_NUMEL` *before*
-      checking factored-vs-not). Touches `init_state()` (different state
-      shape below the threshold) and both `compute_update()` paths
-      (safe + in-place). **Needs a real torch environment to verify** —
-      not attempted blind in this sandbox (no torch available, and
-      getting per-parameter numerical code wrong silently is a real
-      training-correctness risk, not a style issue). Once done and
-      verified equivalent (same rigor as the CAME check), `adafactor.py`,
-      `foreach_adafactor.py`, and `fused_adafactor.py` become safe to
-      delete the same way `came.py`/`foreach_came.py` already were.
-- [ ] **Surface `FusedXPUAdafactor`'s float32+momentum bug.** Found
-      while reading `smoke_test_fused_adafactor_equivalence.py`: for a
-      float32 parameter with `beta1` (momentum) set, `core.optimizers.
-      FusedXPUAdafactor`'s momentum buffer gets silently corrupted every
-      step (`g = self.exp_avg[i]` aliases the buffer; the following
-      `.to(dtype=p.dtype)` is a no-op for float32, so the buffer gets
-      mutated in place by the next line instead of a copy). Confirmed
-      directly, not theorized (`check_legacy_float32_momentum_bug()` in
-      that smoke test). `AdafactorAlgorithm` does not have this bug.
-      `core/` is out of scope for this cleanup (untouched legacy math,
-      not part of the `nodes/` rewrite), so this doesn't get fixed here
-      — but anyone choosing `AdafactorOptimizerNode`/
-      `ForeachAdafactorOptimizerNode` with float32 + momentum should
-      know. Add to `docs/known-issues/open.md` (real, live, currently
-      unflagged there) and/or a warning on the relevant Port docs.
+- [ ] **Run `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
+      and report the output back.** Written 2026-09-16, not yet run (no
+      torch in this sandbox). Tests three things separately, since the
+      three legacy classes don't share one mechanism (see above):
+      (A) the hypothesis that `ForeachXPUAdafactor` has no gap at all —
+      if confirmed, `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode`
+      can be deleted immediately, the same way `came.py` was, no
+      algorithm work needed; (B) the actual size of `FusedXPUAdafactor`'s
+      real per-parameter gap; (C) the actual size of `ChunkedXPUAdafactor`'s
+      cross-parameter-batching gap, for reference. Next steps depend on
+      what comes back:
+      - If (A) confirms no gap: delete `foreach_adafactor.py` +
+        `ForeachAdafactorOptimizerNode` right away.
+      - (B) is self-contained (a per-parameter `AdafactorAlgorithm`
+        branch) and could be implemented once the script confirms the
+        exact numbers to match — but doing this *unconditionally* would
+        make `ComposedAdafactorOptimizerNode(strategy="foreach")` start
+        diverging from `ForeachXPUAdafactor` (which currently matches
+        *because* neither side special-cases tiny parameters) — so this
+        needs the Algorithm to know which family it's being used in, or
+        a separate Fused-only override, not a blanket change. Needs a
+        real design decision, not just an implementation.
+      - (C) needs new `ExecutionStrategy`-level machinery (something
+        like `ShapeGroupedBatchStrategy`, but grouping "under a size
+        threshold" instead of "same shape") — real, separate feature
+        work, bigger than a formula fix. Not attempted; `AdafactorOptimizerNode`
+        stays registered regardless of what (A)/(B) show.
+- [x] **Surfaced the momentum-corruption bug precisely** — turned out to
+      affect `ChunkedXPUAdafactor` (main/large-parameter path only) and
+      `FusedXPUAdafactor` (all parameter sizes), not `ForeachXPUAdafactor`
+      at all (confirmed by reading the exact in-place-vs-copy pattern in
+      each, not assumed to be shared). Full writeup in
+      `docs/known-issues/open.md`.
 - [ ] Minor: `core/optimizers.py:470` has a runtime message that still
       recommends switching to `ForeachCAMEOptimizerNode` by name — that
       class no longer exists. Not fixed here (`core/` untouched by this

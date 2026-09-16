@@ -6,18 +6,26 @@ ExecutionStrategy pieces, no core.optimizers import -- but NOT (yet) a
 full replacement for adafactor.py's AdafactorOptimizerNode (wraps the
 legacy core.optimizers.ChunkedXPUAdafactor), unlike CAME's equivalent
 pair. Real, structural gap, not a rounding difference: ChunkedXPUAdafactor
-(and ForeachXPUAdafactor/FusedXPUAdafactor) route any parameter under
-10,000 elements through their own tiny-parameter fast path -- a plain
-elementwise second-moment EMA, not the row/col factored approximation --
-and AdafactorAlgorithm doesn't implement that branch at all, always
-using the factored/1D math regardless of parameter size (see
+routes any parameter under 10,000 elements through its own
+cross-parameter tiny-parameter fast path (every tiny parameter in the
+whole optimizer concatenated into one shared clip/EMA state -- a
+batching-strategy concern, not a per-parameter algorithm one) and
+AdafactorAlgorithm doesn't implement anything like it, always using the
+factored/1D math regardless of parameter size (see
 nodes/smoke_tests/smoke_test_adafactor_equivalence.py, which deliberately
 tests only parameters >= 10,000 elements for exactly this reason). Many
 individual LoRA matrices are smaller than that, so this is a real,
 common-case gap, not an edge case -- adafactor.py's node stays registered
-until AdafactorAlgorithm grows that branch (tracked in
-docs/CLEANUP_TODO.md), at which point it becomes redundant the same way
-CAMEOptimizerNode already did.
+until this gets addressed (tracked in docs/CLEANUP_TODO.md), at which
+point it becomes redundant the same way CAMEOptimizerNode already did.
+
+FusedXPUAdafactor (composed_fused_adafactor.py's equivalent concern) has
+its own, *different* tiny-parameter mechanism -- genuinely per-parameter,
+not cross-parameter -- see that module's docstring. ForeachXPUAdafactor
+(foreach_adafactor.py) has no tiny-parameter special case at all, as far
+as reading its source shows -- unlike this one, it may already be fully
+redundant with ComposedAdafactorOptimizerNode(strategy="foreach"),
+pending confirmation (see docs/CLEANUP_TODO.md).
 
 `INPUTS` below default to the conservative, predictable values
 (`scale_parameter=False, weight_decay=0.0`) rather than the removed

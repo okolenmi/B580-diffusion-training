@@ -2,19 +2,21 @@
 concrete OptimizerHandle -- this is new behavior with no legacy equivalent
 to compare against (not an equivalence test), so what's checked is: sane
 values, and specifically the release()-then-footprint_bytes() round trip,
-since several wrapped legacy classes (ChunkedXPUAdafactor/
-ForeachXPUAdafactor/FusedXPUAdafactor) `del` their state attributes
-entirely in free_states() rather than clearing them -- confirmed by
-reading core/optimizers.py directly, not assumed.
+since the wrapped legacy classes tested here (ChunkedXPUAdafactor/
+FusedXPUAdafactor) `del` their state attributes entirely in
+free_states() rather than clearing them -- confirmed by reading
+core/optimizers.py directly, not assumed.
 
 AdamWOptimizerHandle/SimpleAdamWOptimizerHandle/CAMEOptimizerHandle/
-ForeachCAMEOptimizerHandle used to be covered here too -- removed along
-with adamw.py/came.py/foreach_came.py once ComposedAdamWOptimizerNode/
-ComposedCAMEOptimizerNode were proven equivalent replacements (see
-docs/CLEANUP_TODO.md). AdafactorOptimizerHandle/ForeachAdafactorOptimizerHandle/
+ForeachCAMEOptimizerHandle/ForeachAdafactorOptimizerHandle used to be
+covered here too -- removed along with adamw.py/came.py/foreach_came.py/
+foreach_adafactor.py once each was proven equivalent to its
+ComposedXOptimizerNode replacement (see docs/CLEANUP_TODO.md;
+ForeachAdafactorOptimizerHandle's removal is the one backed by an actual
+torch run rather than static reading, see
+smoke_test_adafactor_tiny_parameter_gap.py). AdafactorOptimizerHandle/
 FusedAdafactorOptimizerHandle stay: they still have real, unreplicated
-tiny-parameter behavior Composed's AdafactorAlgorithm doesn't implement
-yet (same doc).
+tiny-parameter behavior, confirmed the same way (same script).
 
 Run this directly: `python nodes/smoke_tests/smoke_test_device_resident_retrofit.py`
 """
@@ -26,12 +28,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import ChunkedXPUAdafactor, ForeachXPUAdafactor, FusedXPUAdafactor
+from core.optimizers import ChunkedXPUAdafactor, FusedXPUAdafactor
 from nodes.memory.handle import DeviceResident
 from nodes.optimizer.adafactor import AdafactorOptimizerHandle
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
-from nodes.optimizer.foreach_adafactor import ForeachAdafactorOptimizerHandle
 from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy
 
@@ -96,17 +97,14 @@ def check_eager_family():
 
 
 def check_lazy_family():
-    """Adafactor (+ foreach/fused variants): state is None until the
-    first step() lazily allocates it, and free_states() `del`s the
-    attributes entirely -- footprint_bytes() must handle both."""
+    """Adafactor (+ fused variant): state is None until the first
+    step() lazily allocates it, and free_states() `del`s the attributes
+    entirely -- footprint_bytes() must handle both."""
     print("\n=== Lazily-allocated state: 0 before step(), >0 after, 0 again after release() ===")
 
     cases = [
         ("AdafactorOptimizerHandle",
          lambda p: AdafactorOptimizerHandle(ChunkedXPUAdafactor(p, lr=1e-3, device=DEVICE))),
-        ("ForeachAdafactorOptimizerHandle",
-         lambda p: ForeachAdafactorOptimizerHandle(
-             ForeachXPUAdafactor(p, lr=1e-3, device=DEVICE))),
         ("FusedAdafactorOptimizerHandle",
          lambda p: FusedAdafactorOptimizerHandle(_fused_legacy(p))),
     ]

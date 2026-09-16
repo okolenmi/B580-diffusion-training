@@ -2,10 +2,47 @@
 parameters under 10,000 elements against each of the three legacy
 Adafactor classes -- written because reading the source revealed the
 three don't actually agree with each other on tiny-parameter handling,
-which changes what "close the gap" even means. Not a pass/fail smoke
-test in the usual sense -- prints findings for each class separately so
-a human can read the actual numbers, run this directly and send the
-output back rather than trusting a summary.
+which changes what "close the gap" even means.
+
+**Run 2026-09-16, results in, acted on:**
+
+  - Part A confirmed the hypothesis: all four (dtype x momentum)
+    configurations came back at floating-point-noise magnitude
+    (float32: 1.2e-07 to 4.8e-07, a few ULPs of accumulated rounding
+    over 5 steps; bf16: 0 to 2.4e-04, consistent with bf16's ~3-decimal-
+    digit precision applied to values at this scale) -- no systematic
+    divergence. `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode`
+    has been deleted as a result, the same way `came.py`/`foreach_came.py`
+    were once their equivalence was established -- see `docs/CLEANUP_TODO.md`.
+
+  - Part B confirmed a real gap, but only for the *factored* (2D+)
+    parameter: 9.8e-04 to 7.8e-03, an order of magnitude-plus above the
+    Part A noise floor. The *unfactored* (1D) parameter came back at
+    noise level too (2.4e-07 to 2.4e-04, momentum=True/float32's
+    8.0e-04 being the one borderline case, plausibly momentum
+    compounding a small pre-existing constant difference -- see "the
+    `n**-0.5` vs `n**0.5+1e-8` denominator" note in ForeachXPUAdafactor's
+    read-through below -- over 5 steps rather than a new divergence).
+    This makes structural sense on reflection, not just empirically: for
+    a 1D parameter, AdafactorAlgorithm's *regular* path (`init_state()`'s
+    `else` branch) is already a plain elementwise EMA -- row/col
+    factoring only exists for 2D+ tensors in the first place, so there's
+    no "regular vs tiny" formula difference to find for 1D parameters
+    either way. The real gap is specifically: for a 2D+ (factored)
+    parameter under 10,000 elements, `FusedXPUAdafactor` uses the plain
+    elementwise EMA (its tiny path) while `AdafactorAlgorithm` still uses
+    row/col factoring (its only path) -- two genuinely different
+    formulas, not the same formula computed two ways.
+    `fused_adafactor.py`/`FusedAdafactorOptimizerNode` stays registered.
+
+  - Part C confirmed a real gap in both factored and unfactored cases
+    (3.6e-03/1.8e-04 float32, 7.8e-03/2.0e-03 bf16) -- the cross-parameter
+    batching contaminates even the 1D parameter's result, since
+    `ChunkedXPUAdafactor` concatenates every tiny parameter (regardless
+    of shape) into one shared clip/state, unlike Fused's genuinely
+    independent per-parameter hooks. `adafactor.py`/`AdafactorOptimizerNode`
+    stays registered; closing this one needs new ExecutionStrategy-level
+    machinery, not an algorithm change (see module docstring below).
 
 Three genuinely different mechanisms found by reading core/optimizers.py
 directly (not assumed from any docstring or comment):
@@ -13,10 +50,8 @@ directly (not assumed from any docstring or comment):
   - ForeachXPUAdafactor (core/optimizers.py ~923-1143): NO tiny-parameter
     special case at all -- `_step_factored`/`_step_unfactored` use the
     same row/col factored / 1D EMA formula AdafactorAlgorithm already
-    implements, for every parameter regardless of size. Hypothesis this
-    script tests: ForeachAdafactorOptimizerNode might already be fully
-    equivalent to ComposedAdafactorOptimizerNode(strategy="foreach"),
-    with no algorithm change needed at all.
+    implements, for every parameter regardless of size. Confirmed above,
+    not just hypothesized.
 
   - FusedXPUAdafactor (core/optimizers.py ~1149-1389, TINY_NUMEL=10_000):
     a real per-parameter special case -- plain elementwise second-moment
@@ -58,6 +93,10 @@ numbers so that decision can be made with real information instead of
 a guess.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
+-- Part A now also serves as a real regression check for
+ComposedAdafactorOptimizerNode(strategy="foreach")'s continued
+equivalence to ForeachXPUAdafactor, now that foreach_adafactor.py itself
+is gone and can't be compared against directly any other way.
 """
 
 import sys
@@ -234,8 +273,11 @@ def main():
     for dtype in (torch.float32, torch.bfloat16):
         check_chunked_tiny_gap(dtype)
 
-    print("\nDone. Please send back this full output -- the actual numbers "
-          "decide what happens next, not just pass/fail.")
+    print("\nDone. Part A (Foreach) is now a permanent regression check --\n"
+          "a real divergence here would mean ComposedAdafactorOptimizerNode's\n"
+          "foreach strategy stopped matching ForeachXPUAdafactor. Parts B/C\n"
+          "are expected to keep showing their real, known gaps (see module\n"
+          "docstring) until/unless that scoped-out work happens.")
 
 
 if __name__ == "__main__":

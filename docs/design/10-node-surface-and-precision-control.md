@@ -26,50 +26,96 @@ also doubling as its palette display text, "...Node" suffix included.
 
 ## 11.1 Optimizer node consolidation
 
+**Update, 2026-09-16: mostly executed, not just planned any more** --
+see `docs/CLEANUP_TODO.md` for the full account, including two real
+corrections made along the way that this section's original version
+got wrong. What follows is the current, actual state, not the original
+plan -- kept in one place rather than split into "the plan" and "what
+actually happened" as two separate write-ups.
+
 Grounded in actually reading every node file, not assumed from naming
 alone -- the picture is real but uneven, not a blanket "delete the old
 ones":
 
-**Safe to retire once real-hardware-confirmed equivalent:**
-`AdafactorOptimizerNode`, `CAMEOptimizerNode`, `ForeachAdafactorOptimizerNode`,
-`ForeachCAMEOptimizerNode` -- each is a thin pass-through wrapper around
-a legacy `core.optimizers` class, and the matching `Composed*OptimizerNode`
-+ `strategy=` choice already covers the same ground (equivalence-tested
-in `nodes/smoke_tests/`).
+**Retired, confirmed equivalent:** `AdamWOptimizerNode` (wrapped
+`CPUAdamW`), `CAMEOptimizerNode`, `ForeachCAMEOptimizerNode`,
+`ForeachAdafactorOptimizerNode` -- each was a thin pass-through wrapper
+around a legacy `core.optimizers` class, and the matching
+`Composed*OptimizerNode` + `strategy=` choice covers the same ground.
+CAME/ForeachCAME were already equivalence-tested in `nodes/smoke_tests/`
+before this pass; Foreach-Adafactor needed a new, dedicated real-torch
+run first (see `smoke_test_adafactor_tiny_parameter_gap.py`) -- this
+section's own original version grouped it with `AdafactorOptimizerNode`
+below as though they shared one mechanism, which running the actual
+numbers disproved (see next entry). `AdamWOptimizerNode` retired for a
+different reason than "proven numerically equivalent": `CPUAdamW`'s
+CPU-resident state solves a full-fine-tune-parameter-count problem this
+project has no way to produce at all (see
+`nodes/optimizer/composed_adamw.py`) -- the design point this section's
+original version called "genuinely different... stays regardless" turned
+out to have no actual consumer anywhere in the codebase to be different
+*for*.
 
-**Not yet safe to consolidate, a real gap, not caution for its own
-sake:** `FusedAdafactorOptimizerNode` vs.
-`ComposedFusedAdafactorOptimizerNode` -- the legacy `FusedXPUAdafactor`
-has a `TINY_NUMEL` special case for small parameters (full elementwise
-second-moment tracking instead of the row/col factored approximation)
-that `AdafactorAlgorithm` doesn't replicate. Replicating it is real,
-separate algorithm work, not a wiring change.
-
-**Not redundant at all, despite the naming pattern:**
-`AdamWOptimizerNode` wraps `CPUAdamW` -- CPU-resident optimizer state
-for full fine-tunes where Adam state can't fit on-device, a genuinely
-different design point, unrelated to which execution strategy runs
-where. Stays regardless of anything else in this section.
+**Not retired, a real gap, confirmed on an actual torch run (not just
+static reading):** `AdafactorOptimizerNode` and `FusedAdafactorOptimizerNode`
+each still differ from their `Composed*` equivalent for small (< 10,000
+element) parameters -- but not for the same reason as each other, and
+not the reason this section's original version gave (a single, uniform
+`TINY_NUMEL` special case). `ChunkedXPUAdafactor` (backing
+`AdafactorOptimizerNode`) batches every tiny parameter across the whole
+optimizer into one shared clip/EMA state -- a cross-parameter, execution-
+strategy-level concern, not a per-parameter algorithm one; closing it
+needs new `ExecutionStrategy` machinery (something like
+`ShapeGroupedBatchStrategy`, but grouping "under a size threshold"
+instead of "same shape"), not an `AdafactorAlgorithm` change.
+`FusedXPUAdafactor` (backing `FusedAdafactorOptimizerNode`) has a
+*different*, genuinely per-parameter elementwise formula -- real gap,
+confirmed at 1e-3 to 8e-3 magnitude for factored parameters (`float32`/
+`bf16`, with/without momentum), well above the ~1e-7/1e-4 floating-point
+noise floor the Foreach case above came back at. Both nodes stay
+registered.
 
 **A real, two-directional capability difference, not one-directional
-redundancy:** `SimpleAdamWOptimizerNode` (`torch.optim.AdamW(foreach=True)`,
-PyTorch's own first-party kernel) vs. `ComposedAdamWOptimizerNode`
-(this project's own `AdamWAlgorithm`, which supports
-`group_policy=LoRAPlusGroups(...)` and, as of this session, `strategy=
-"shape_grouped"` -- neither of which `SimpleAdamWOptimizerNode` can do
-at all). Both stay: one is "trust PyTorch's own AdamW, nothing fancier,"
-the other is "AdamW plus this project's own composable pieces."
+redundancy -- flagged, not yet acted on:** `SimpleAdamWOptimizerNode`
+(`torch.optim.AdamW`, PyTorch's own first-party kernel, no custom code
+at all) vs. `ComposedAdamWOptimizerNode` (this project's own
+`AdamWAlgorithm`, which supports `group_policy=LoRAPlusGroups(...)` and
+`strategy="shape_grouped"`, neither of which `SimpleAdamWOptimizerNode`
+can do). This section's original argument for keeping both was: one is
+"trust PyTorch's own AdamW, nothing fancier, minimal maintenance
+surface," the other is "AdamW plus this project's own composable
+pieces" -- a legitimate, real distinction distinct from
+`AdamWOptimizerNode`'s case above (which had no real consumer;
+"minimal trust surface" has one, in principle, regardless of consumer
+count). **`SimpleAdamWOptimizerNode` was deleted anyway, in this same
+pass** (see `docs/CLEANUP_TODO.md`, first commit) -- decided at the time
+without weighing this specific argument (this section wasn't found
+until several commits later). Worth a maintainer decision, not
+silently re-added or silently left deleted: this project's established
+direction is its own verified implementation over wrapping (see
+`docs/architecture.md`), which argues for staying deleted -- but "trust
+the standard library's own kernel for something this fundamental" is a
+real, different kind of argument than the ones already weighed
+elsewhere in this cleanup, and deserves an explicit answer rather than
+inheriting one by default.
 
 **Net-new, nothing to consolidate:** `ComposedFusedAdamWOptimizerNode`/
 `ComposedFusedCAMEOptimizerNode` have no legacy equivalent at all.
 
-**Deprecation approach:** mark the four safe-to-retire nodes as legacy
-in their own Port/module docstrings, pointing at the `Composed*`
-equivalent and matching `strategy=`, rather than deleting the classes.
-Real graphs may already reference them by name, and removing a
-registered `Node` class is a one-way door for anyone's saved graph --
-not a cost worth paying before the `Composed*` path has been trusted on
-real hardware for a while, not just equivalence-tested on CPU.
+**Deprecation approach -- changed from the original plan, on explicit
+direction:** the original version of this section argued for marking
+retired nodes as legacy in their own docstrings rather than deleting
+the classes outright, specifically because "real graphs may already
+reference them by name, and removing a registered `Node` class is a
+one-way door for anyone's saved graph." That's a real concern in
+general, but not the direction actually taken here: the four "retired"
+nodes above were deleted outright, not soft-deprecated, on the project
+owner's explicit instruction to converge on one concrete implementation
+per concern rather than carry parallel options indefinitely, with git
+history (not a deprecated-but-present class) as the safety net for
+anyone who needs the old behavior back. Recorded here so the tradeoff
+this section originally weighed, and the different call actually made,
+are both visible -- not just the outcome.
 
 ## 11.2 `ExecutionStrategy` is up to three orthogonal axes, not one flat enum
 

@@ -93,33 +93,64 @@ Update this file as work happens. Each item: status, what it is, why.
 ## Not yet done
 
 ### Optimizer domain
-- [ ] **Run `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
-      and report the output back.** Written 2026-09-16, not yet run (no
-      torch in this sandbox). Tests three things separately, since the
-      three legacy classes don't share one mechanism (see above):
-      (A) the hypothesis that `ForeachXPUAdafactor` has no gap at all —
-      if confirmed, `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode`
-      can be deleted immediately, the same way `came.py` was, no
-      algorithm work needed; (B) the actual size of `FusedXPUAdafactor`'s
-      real per-parameter gap; (C) the actual size of `ChunkedXPUAdafactor`'s
-      cross-parameter-batching gap, for reference. Next steps depend on
-      what comes back:
-      - If (A) confirms no gap: delete `foreach_adafactor.py` +
-        `ForeachAdafactorOptimizerNode` right away.
-      - (B) is self-contained (a per-parameter `AdafactorAlgorithm`
-        branch) and could be implemented once the script confirms the
-        exact numbers to match — but doing this *unconditionally* would
-        make `ComposedAdafactorOptimizerNode(strategy="foreach")` start
-        diverging from `ForeachXPUAdafactor` (which currently matches
-        *because* neither side special-cases tiny parameters) — so this
-        needs the Algorithm to know which family it's being used in, or
-        a separate Fused-only override, not a blanket change. Needs a
-        real design decision, not just an implementation.
-      - (C) needs new `ExecutionStrategy`-level machinery (something
-        like `ShapeGroupedBatchStrategy`, but grouping "under a size
-        threshold" instead of "same shape") — real, separate feature
-        work, bigger than a formula fix. Not attempted; `AdafactorOptimizerNode`
-        stays registered regardless of what (A)/(B) show.
+- [x] **Ran `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
+      on real torch (2026-09-16, user-run, results reported back).**
+      (A) confirmed: all four (dtype × momentum) configurations came
+      back at floating-point-noise magnitude (float32 1.2e-07–4.8e-07;
+      bf16 0–2.4e-04) — no systematic divergence.
+      `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode` deleted as
+      a result, cross-references fixed (`server/nodegraph_registry.py`,
+      `smoke_test_device_resident_retrofit.py`,
+      `composed_adafactor.py`, `docs/design/10-node-surface-and-precision-control.md`).
+      (B) confirmed a real gap, but specifically for *factored* (2D+)
+      parameters (9.8e-04–7.8e-03, an order of magnitude+ above the (A)
+      noise floor) — the *unfactored* (1D) case came back at noise
+      level too, which makes structural sense on reflection:
+      `AdafactorAlgorithm`'s regular path for a 1D parameter is already
+      a plain elementwise EMA, same as the tiny path would be, since
+      row/col factoring only exists for 2D+ tensors in the first place.
+      `FusedAdafactorOptimizerNode` stays registered.
+      (C) confirmed a real gap in both factored and unfactored cases
+      (3.6e-03/1.8e-04 float32, 7.8e-03/2.0e-03 bf16) — the
+      cross-parameter batching contaminates the 1D result too, unlike
+      Fused's independent per-parameter hooks. `AdafactorOptimizerNode`
+      stays registered; closing it needs new `ExecutionStrategy`-level
+      machinery (something like `ShapeGroupedBatchStrategy`, but
+      grouping "under a size threshold" instead of "same shape"), not
+      an algorithm change — real, separate feature work, not attempted.
+      Full numbers preserved permanently in the script's own docstring
+      rather than just here, since it's the more durable home for them.
+- [x] **Found and fixed a related but separate issue while investigating:**
+      the float32+momentum corruption bug doesn't affect all three
+      legacy classes the way it was first written up — only
+      `ChunkedXPUAdafactor` (large-parameter path only) and
+      `FusedXPUAdafactor` (all sizes); `ForeachXPUAdafactor` uses a
+      non-in-place `.mul()` and is unaffected. `docs/known-issues/open.md`
+      corrected.
+- [x] **Found a pre-existing planning doc for this exact work while
+      fixing cross-references:** `docs/design/10-node-surface-and-precision-control.md`
+      section 11.1 ("Optimizer node consolidation") turned out to
+      already sketch this whole consolidation, written earlier and
+      never executed. Two things worth knowing about it: it also
+      wrongly grouped `AdafactorOptimizerNode` with the "safe to
+      retire" set (same over-generalization corrected above, now fixed
+      in that doc too) — and it argued for *soft-deprecating* nodes
+      (docstring warnings, keep the class) rather than deleting them
+      outright, specifically because saved graphs might reference them
+      by name. That's not the approach actually taken (outright
+      deletion, per explicit direction, git history as the safety net)
+      — recorded in that section now, not silently overridden.
+      **Real open question surfaced by the same doc, not yet decided:**
+      it separately argued `SimpleAdamWOptimizerNode` (bare
+      `torch.optim.AdamW`, no custom code) vs.
+      `ComposedAdamWOptimizerNode` (this project's own implementation,
+      more features) was a genuine "trust the standard library" vs.
+      "our own code" choice, not redundancy — a real, different kind of
+      argument than `AdamWOptimizerNode`'s (which had no actual
+      consumer). `SimpleAdamWOptimizerNode` was already deleted in the
+      first commit of this pass, before this doc was found, without
+      weighing that argument. Flagged for the project owner to confirm
+      or overturn, not decided here either way.
 - [x] **Surfaced the momentum-corruption bug precisely** — turned out to
       affect `ChunkedXPUAdafactor` (main/large-parameter path only) and
       `FusedXPUAdafactor` (all parameter sizes), not `ForeachXPUAdafactor`

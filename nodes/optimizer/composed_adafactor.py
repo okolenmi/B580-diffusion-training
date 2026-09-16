@@ -21,11 +21,14 @@ point it becomes redundant the same way CAMEOptimizerNode already did.
 
 FusedXPUAdafactor (composed_fused_adafactor.py's equivalent concern) has
 its own, *different* tiny-parameter mechanism -- genuinely per-parameter,
-not cross-parameter -- see that module's docstring. ForeachXPUAdafactor
-(foreach_adafactor.py) has no tiny-parameter special case at all, as far
-as reading its source shows -- unlike this one, it may already be fully
-redundant with ComposedAdafactorOptimizerNode(strategy="foreach"),
-pending confirmation (see docs/CLEANUP_TODO.md).
+not cross-parameter -- see that module's docstring; a real gap for
+factored parameters, confirmed by an actual torch run (not noise) --
+see nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py.
+ForeachXPUAdafactor (formerly foreach_adafactor.py) had no
+tiny-parameter special case at all, confirmed the same way -- deleted
+2026-09-16, the same way CAMEOptimizerNode was once its own equivalence
+was established; ComposedAdafactorOptimizerNode(strategy="foreach") is
+now the only way to get foreach-strategy Adafactor.
 
 `INPUTS` below default to the conservative, predictable values
 (`scale_parameter=False, weight_decay=0.0`) rather than the removed

@@ -4,7 +4,8 @@ Adafactor classes -- written because reading the source revealed the
 three don't actually agree with each other on tiny-parameter handling,
 which changes what "close the gap" even means.
 
-**Run 2026-09-16, results in, acted on:**
+**Run 2026-09-16, results in, acted on. Part D added 2026-09-17,
+not yet run.**
 
   - Part A confirmed the hypothesis: all four (dtype x momentum)
     configurations came back at floating-point-noise magnitude
@@ -32,8 +33,8 @@ which changes what "close the gap" even means.
     parameter under 10,000 elements, `FusedXPUAdafactor` uses the plain
     elementwise EMA (its tiny path) while `AdafactorAlgorithm` still uses
     row/col factoring (its only path) -- two genuinely different
-    formulas, not the same formula computed two ways.
-    `fused_adafactor.py`/`FusedAdafactorOptimizerNode` stays registered.
+    formulas, not the same formula computed two ways. This is exactly
+    the gap Part D below closes.
 
   - Part C confirmed a real gap in both factored and unfactored cases
     (3.6e-03/1.8e-04 float32, 7.8e-03/2.0e-03 bf16) -- the cross-parameter
@@ -41,8 +42,27 @@ which changes what "close the gap" even means.
     `ChunkedXPUAdafactor` concatenates every tiny parameter (regardless
     of shape) into one shared clip/state, unlike Fused's genuinely
     independent per-parameter hooks. `adafactor.py`/`AdafactorOptimizerNode`
-    stays registered; closing this one needs new ExecutionStrategy-level
-    machinery, not an algorithm change (see module docstring below).
+    stays registered regardless of Part D's outcome; closing this one
+    needs new ExecutionStrategy-level machinery, not an algorithm
+    change -- see `docs/design/09-prioritized-backlog.md`.
+
+  - **Part D: `AdafactorAlgorithm` grew an opt-in
+    `tiny_parameter_threshold` (see its `_is_factored()` docstring),
+    and `ComposedFusedAdafactorOptimizerNode` now passes `10_000` --
+    exactly what Part B showed FusedXPUAdafactor needs, deliberately
+    *not* passed by `ComposedAdafactorOptimizerNode` (which would break
+    Part A's now-confirmed Foreach match). Expected result: the
+    factored-parameter diff collapses to Part A's noise-floor
+    magnitude; the unfactored one, already at noise level, stays there.
+    One small, documented, deliberate simplification this does NOT
+    chase: `FusedXPUAdafactor`'s lazy first-update initialization
+    (skips the EMA-against-zero step on a tiny parameter's very first
+    update) -- estimated at ~1e-4 relative, three orders of magnitude
+    below the gap being closed, and not compounding over later steps.
+    If Part D's actual numbers don't bear that out, this estimate was
+    wrong and needs a real fix, not a bigger tolerance.** If Part D
+    confirms, `fused_adafactor.py`/`FusedAdafactorOptimizerNode` becomes
+    safe to delete the same way `foreach_adafactor.py` was.
 
 Three genuinely different mechanisms found by reading core/optimizers.py
 directly (not assumed from any docstring or comment):
@@ -57,11 +77,10 @@ directly (not assumed from any docstring or comment):
     a real per-parameter special case -- plain elementwise second-moment
     EMA (self._tiny_vs_map[i]) instead of the row/col factored
     approximation, computed independently per parameter (each backward
-    hook only ever sees its own parameter's gradient). Self-contained --
-    could become an AdafactorAlgorithm.compute_update() branch on its
-    own, IF nothing else needed to match Foreach's behavior of not
-    special-casing at all (see "why this can't just be added
-    universally" below).
+    hook only ever sees its own parameter's gradient). Self-contained,
+    and NOW implemented as an opt-in AdafactorAlgorithm.compute_update()
+    branch (Part D) -- opt-in specifically so it doesn't break Foreach's
+    match (see "why this can't just be added universally" below).
 
   - ChunkedXPUAdafactor (core/optimizers.py ~101-397, hardcoded 10_000):
     a DIFFERENT mechanism -- every tiny parameter across the WHOLE
@@ -77,26 +96,30 @@ directly (not assumed from any docstring or comment):
     "under the size threshold" instead of "same shape" -- a real,
     separate feature, not a formula fix). Not attempted here.
 
-Why this script doesn't just add the FusedXPUAdafactor-style branch to
-AdafactorAlgorithm directly: that Algorithm is shared across every
-strategy (chunked/foreach/simple/shape_grouped/fused). Adding a
-universal per-parameter tiny branch would fix ComposedFusedAdafactorOptimizerNode's
-match against FusedXPUAdafactor -- but would then make
+Why this couldn't just be a universal branch in AdafactorAlgorithm,
+added unconditionally: that Algorithm is shared across every strategy
+(chunked/foreach/simple/shape_grouped/fused). A universal per-parameter
+tiny branch would fix ComposedFusedAdafactorOptimizerNode's match
+against FusedXPUAdafactor -- but would then make
 ComposedAdafactorOptimizerNode(strategy="foreach") start DIVERGING from
-ForeachXPUAdafactor, which currently matches specifically because
-neither side special-cases tiny parameters. The three legacy references
-disagree with each other, so one shared Algorithm literally cannot
-match all three for tiny parameters at once without becoming
-strategy-aware about it, which is a real design decision, not
-implemented here -- this script's job is only to pin down the actual
-numbers so that decision can be made with real information instead of
-a guess.
+ForeachXPUAdafactor, which matches specifically because neither side
+special-cases tiny parameters (confirmed, Part A). Resolved by making
+it opt-in (`tiny_parameter_threshold`, defaulting to `None` --
+unchanged behavior everywhere except composed_fused_adafactor.py, which
+now passes `10_000` explicitly) rather than a strategy-aware branch
+inside the Algorithm itself -- simpler, and the Algorithm still doesn't
+need to know which strategy it's running under, just what its own
+caller told it to do. See AdafactorAlgorithm._is_factored()'s own
+docstring for the implementation and its one small, documented,
+deliberate simplification (Part D above).
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
 -- Part A now also serves as a real regression check for
 ComposedAdafactorOptimizerNode(strategy="foreach")'s continued
 equivalence to ForeachXPUAdafactor, now that foreach_adafactor.py itself
-is gone and can't be compared against directly any other way.
+is gone and can't be compared against directly any other way. Part D
+will serve the same role for ComposedFusedAdafactorOptimizerNode once
+its own results confirm the fix, the same way Part A already does.
 """
 
 import sys
@@ -257,13 +280,54 @@ def check_chunked_tiny_gap(dtype, n_steps=5, seed=0):
     return diff_f, diff_u
 
 
+def check_fused_tiny_gap_fixed(dtype, momentum, n_steps=5, seed=0):
+    """Part D: confirms the fix. Same setup as check_fused_tiny_gap()
+    above, except the Composed side now passes
+    tiny_parameter_threshold=10_000 -- expect the factored-parameter gap
+    to collapse to noise-floor level (matching Part A's magnitude),
+    the unfactored one to stay at noise level like it already was."""
+    torch.manual_seed(seed)
+    p0_f, p0_u = _small_params(seed)
+    beta1 = 0.9 if momentum else None
+
+    legacy_f = torch.nn.Parameter(p0_f.clone().to(dtype))
+    legacy_u = torch.nn.Parameter(p0_u.clone().to(dtype))
+    legacy = FusedXPUAdafactor([legacy_f, legacy_u], lr=1e-3, beta1=beta1,
+                                weight_decay=0.0, scale_parameter=False, device=DEVICE)
+    legacy.register_hooks()
+
+    new_f = torch.nn.Parameter(p0_f.clone().to(dtype))
+    new_u = torch.nn.Parameter(p0_u.clone().to(dtype))
+    algorithm = AdafactorAlgorithm(beta1=beta1, weight_decay=0.0, scale_parameter=False,
+                                    tiny_parameter_threshold=10_000)
+    handle = ComposedFusedOptimizerHandle(algorithm=algorithm, params=[new_f, new_u],
+                                           lr=1e-3, device=DEVICE)
+
+    torch.manual_seed(seed + 1)
+    for step in range(n_steps):
+        g_f = torch.randn_like(p0_f).to(dtype)
+        g_u = torch.randn_like(p0_u).to(dtype)
+
+        legacy.begin_step(1)
+        (legacy_f * g_f).sum().add((legacy_u * g_u).sum()).backward()
+        handle.begin_step(1)
+        (new_f * g_f).sum().add((new_u * g_u).sum()).backward()
+
+    diff_f = _max_abs_diff(legacy_f.data, new_f.data)
+    diff_u = _max_abs_diff(legacy_u.data, new_u.data)
+    print(f"    dtype={dtype} momentum={momentum}: "
+          f"factored max_abs_diff={diff_f:.3e}, unfactored max_abs_diff={diff_u:.3e}")
+    return diff_f, diff_u
+
+
 def main():
     print("=== A: ForeachXPUAdafactor hypothesis (expected: near-zero diff, no gap) ===")
     for dtype in (torch.float32, torch.bfloat16):
         for momentum in (False, True):
             check_foreach_hypothesis(dtype, momentum)
 
-    print("\n=== B: FusedXPUAdafactor tiny-path gap (expected: real, nonzero diff) ===")
+    print("\n=== B: FusedXPUAdafactor tiny-path gap, tiny_parameter_threshold unset "
+          "(expected: real, nonzero diff for the factored case) ===")
     for dtype in (torch.float32, torch.bfloat16):
         for momentum in (False, True):
             check_fused_tiny_gap(dtype, momentum)
@@ -273,11 +337,20 @@ def main():
     for dtype in (torch.float32, torch.bfloat16):
         check_chunked_tiny_gap(dtype)
 
-    print("\nDone. Part A (Foreach) is now a permanent regression check --\n"
-          "a real divergence here would mean ComposedAdafactorOptimizerNode's\n"
-          "foreach strategy stopped matching ForeachXPUAdafactor. Parts B/C\n"
-          "are expected to keep showing their real, known gaps (see module\n"
-          "docstring) until/unless that scoped-out work happens.")
+    print("\n=== D: FusedXPUAdafactor tiny-path gap, tiny_parameter_threshold=10_000 "
+          "(expected: gap closed, back to noise-floor level like Part A) ===")
+    for dtype in (torch.float32, torch.bfloat16):
+        for momentum in (False, True):
+            check_fused_tiny_gap_fixed(dtype, momentum)
+
+    print("\nDone. Part A (Foreach) and Part D (Fused, fixed) are now permanent\n"
+          "regression checks -- a real divergence in either would mean\n"
+          "ComposedAdafactorOptimizerNode's foreach strategy, or\n"
+          "ComposedFusedAdafactorOptimizerNode's tiny_parameter_threshold fix,\n"
+          "stopped matching its legacy reference. Part C is expected to keep\n"
+          "showing its real, known gap (see module docstring) until/unless that\n"
+          "scoped-out ExecutionStrategy work happens. Part B is kept as-is for\n"
+          "contrast with Part D, both run with identical seeds/params.")
 
 
 if __name__ == "__main__":

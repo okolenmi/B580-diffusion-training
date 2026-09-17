@@ -90,6 +90,35 @@ missing is a real run:**
   save/load (direction + `.dora_scale` magnitude + alpha) is real now
   for the common, unsplit case -- see 9.1/9.2 -- so this item is
   validation-only, same as the others in this list.
+- **A tiny-parameter (`< 10,000` element) `ExecutionStrategy` for
+  Adafactor's cross-parameter batching case** (11.1). Found while
+  retiring the redundant legacy Adafactor nodes: `ChunkedXPUAdafactor`
+  ties every tiny parameter in the whole optimizer together into one
+  shared clip/EMA state, which is a batching-strategy concern, not a
+  per-parameter algorithm one -- `AdafactorAlgorithm` has no way to see
+  other parameters in the same optimizer by design (see
+  `algorithms/base.py`). Would need something like
+  `ShapeGroupedBatchStrategy`, but grouping "every parameter under a
+  size threshold, any shape" instead of "same shape" -- real, separate
+  feature work, not a formula fix. `AdafactorOptimizerNode` stays
+  registered until this lands (see `docs/known-issues/open.md` and
+  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py` for
+  the confirmed, measured gap this would close).
+- **`core`/`manager` coupling in the model and dataset domains** (new
+  section, not yet numbered above -- see `docs/architecture.md`). The
+  `optimizer/` domain's `Algorithm`/`ExecutionStrategy` split proved a
+  domain can be fully separated from `core/`'s legacy implementation,
+  verified equivalent, and the old wrapper retired -- `nodes/model/`
+  (LoRA/UNet injection: `core.lora`, `core.unet_wrapper`),
+  `nodes/model/text_encoder.py` (`core.clip_encode`), and
+  `nodes/dataset/managed.py` (`manager.loader`) haven't had that done at
+  all yet: single implementation, still wrapping `core`/`manager`
+  directly, no competing alternative to retire. Real future work, not
+  cleanup debt -- sized much bigger than the optimizer domain was (UNet
+  forward passes and LoRA injection are substantially more surface than
+  three optimizer formulas), or bigger than dataset ingestion, and not
+  scoped further here. Whoever picks this up should decide which
+  sub-piece (model vs. dataset) goes first.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

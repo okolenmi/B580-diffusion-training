@@ -6,28 +6,29 @@ which wraps the legacy core.optimizers.FusedXPUAdafactor) as
 ComposedAdafactorOptimizerNode has to AdafactorOptimizerNode -- adds a
 non-legacy alternative, doesn't touch or retire the legacy wrapper.
 
-**Not bit-exact with FusedXPUAdafactor for every parameter, and that's a
-deliberate, documented scope decision, not an oversight:** FusedXPUAdafactor
-has a TINY_NUMEL (10,000-element) special case that swaps in a full
-elementwise second-moment buffer instead of the row/col factored
-approximation for small parameters -- confirmed by reading
-FusedXPUAdafactor._update_param directly to be a real formula change, not
-just a storage-layout optimization (see composed_fused.py's module
-docstring, which also corrects an earlier, less precise characterization
-of this same trick in algorithms/base.py's docstring). AdafactorAlgorithm
-doesn't implement that branch -- extending it to is real, separate
-algorithm-engineering work, not a fused-execution concern, so it's left
-for later rather than bolted on here to chase bit-exactness. Practical
-consequence: for parameters under 10,000 elements (most individual LoRA
-matrices), this Node's math differs from FusedXPUAdafactor's; for larger
-parameters, both branches already agree (see algorithms/adafactor.py),
-and that's exactly the regime smoke_test_fused_adafactor_equivalence.py
-checks. The actual size of this gap, run against real torch, is in
-nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py (see
-docs/CLEANUP_TODO.md for results once available) -- separately, that
-same legacy class has a real, confirmed momentum-corruption bug for
-float32 parameters (docs/known-issues/open.md) that this Node does not
-reproduce.
+**Now matches FusedXPUAdafactor's small-parameter (< 10,000 element)
+formula too, not just its large-parameter one.** Was a real, documented
+gap (see docs/CLEANUP_TODO.md for the full history): FusedXPUAdafactor
+has a TINY_NUMEL special case that swaps in a full elementwise
+second-moment buffer instead of the row/col factored approximation for
+small parameters -- a real formula change, not just a storage-layout
+optimization (see composed_fused.py's module docstring). Closed by
+passing tiny_parameter_threshold=10_000 to AdafactorAlgorithm below,
+which already had everywhere it needed for this (the existing
+elementwise "vs" state/update path already handles any shape, not just
+1D -- see AdafactorAlgorithm._is_factored()'s own docstring for exactly
+what changed and the one deliberate, small, documented simplification
+this doesn't chase (a first-update-only ~1e-4-relative difference from
+not replicating FusedXPUAdafactor's lazy initialization quirk exactly).
+Verification: nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py
+was extended with a Part D specifically for this -- run it and confirm
+before trusting this over the legacy node for real training.
+ChunkedXPUAdafactor's own, different tiny-parameter mechanism (cross-
+parameter batching, not per-parameter) is unrelated to this fix and
+still open -- see ComposedAdafactorOptimizerNode's own docstring.
+Separately, FusedXPUAdafactor has a real, confirmed momentum-corruption
+bug for float32 parameters (docs/known-issues/open.md) that this Node
+does not reproduce.
 """
 
 from __future__ import annotations
@@ -44,8 +45,8 @@ from .node import OptimizerNode
 class ComposedFusedAdafactorOptimizerNode(OptimizerNode):
     """Adafactor, fused into backward-pass hooks via ComposedFusedOptimizerHandle
     -- see that module's docstring for the execution model and this
-    module's docstring for the one documented divergence from the legacy
-    reference (small parameters, see above)."""
+    module's docstring for how small-parameter handling was brought in
+    line with the legacy reference."""
 
     INPUTS: ClassVar[dict[str, Port]] = {
         **OptimizerNode.COMMON_INPUTS,
@@ -79,6 +80,10 @@ class ComposedFusedAdafactorOptimizerNode(OptimizerNode):
             beta1=inputs.get("beta1", self.INPUTS["beta1"].default),
             scale_parameter=inputs.get("scale_parameter", self.INPUTS["scale_parameter"].default),
             weight_decay=inputs.get("weight_decay", self.INPUTS["weight_decay"].default),
+            tiny_parameter_threshold=10_000,  # matches FusedXPUAdafactor's TINY_NUMEL
+            # exactly -- this Node specifically, not ComposedAdafactorOptimizerNode,
+            # since Foreach/Chunked's own tiny-parameter behavior differs (see
+            # AdafactorAlgorithm._is_factored()'s docstring).
         )
         handle = ComposedFusedOptimizerHandle(
             algorithm=algorithm,

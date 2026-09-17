@@ -8,12 +8,18 @@ schedule (distinct from CAME's fixed EMA betas -- see begin_step() for
 why that needs its own hook), raw-gradient RMS clipping, optional
 momentum (`beta1`), `scale_parameter` (on and off), and `weight_decay`.
 
-Does not cover the tiny-parameter batching fast path -- a strategy/
-batching concern, not an algorithm one (see algorithms/base.py).
-compute_update_batched() batches the common (scale_parameter=False)
-case for ShapeGroupedBatchStrategy -- see that method's own docstring
-for why scale_parameter=True falls back to the per-member default
-instead.
+Does cover FusedXPUAdafactor's tiny-parameter (< 10,000 element) fast
+path now, opt-in via tiny_parameter_threshold (see _is_factored()'s own
+docstring for why it's opt-in, not a universal default). Does not cover
+ChunkedXPUAdafactor's own, different tiny-parameter mechanism -- that
+one batches multiple parameters together across the whole optimizer, a
+strategy/batching concern this per-parameter Algorithm has no way to
+see, let alone implement (see algorithms/base.py, and
+docs/design/09-prioritized-backlog.md for the real, separate
+ExecutionStrategy work that would take). compute_update_batched()
+batches the common (scale_parameter=False) case for
+ShapeGroupedBatchStrategy -- see that method's own docstring for why
+scale_parameter=True falls back to the per-member default instead.
 
 In-place scratch reuse (when `scratch is not None`) needs the shared
 buffer reused only once, since Adafactor's formula has one normalization
@@ -48,14 +54,58 @@ class AdafactorAlgorithm(Algorithm):
 
     def __init__(self, eps=(1e-8, 1e-3), clip_threshold: float = 1.0,
                  beta1: float | None = None, scale_parameter: bool = False,
-                 weight_decay: float = 0.0):
+                 weight_decay: float = 0.0, tiny_parameter_threshold: int | None = None):
         self.eps1, self.eps2 = eps
         self.clip_threshold = clip_threshold
         self.beta1 = beta1
         self.scale_parameter = scale_parameter
         self.wd = weight_decay
+        self.tiny_parameter_threshold = tiny_parameter_threshold
         self.t = 0
         self._rho_t: float | None = None
+
+    def _is_factored(self, shape) -> bool:
+        """Row/col factoring applies to 2D+ parameters -- except when
+        tiny_parameter_threshold is set and this parameter's total
+        element count falls under it, in which case the plain
+        elementwise ("vs") path applies instead regardless of
+        dimensionality. Matches FusedXPUAdafactor's TINY_NUMEL special
+        case (core/optimizers.py ~1239) for parameters under the
+        threshold -- see composed_fused_adafactor.py for why only that
+        Node sets this, and why setting it universally would be wrong:
+        ChunkedXPUAdafactor/ForeachXPUAdafactor's own tiny-parameter
+        behavior (or, for Foreach, lack of any) is different, so this
+        can't be one shared default across every strategy. None (the
+        default -- every strategy except ComposedFusedOptimizerHandle
+        uses it) preserves the exact original behavior: pure
+        dimensionality, no size check at all.
+
+        Deliberate, documented simplification, not a bug: this reuses
+        the existing eager-zero-initialized "vs" state and EMA exactly
+        as already used for genuinely 1D parameters, rather than also
+        replicating FusedXPUAdafactor's own lazy-first-step
+        initialization quirk (`tv = g2 + eps1` directly on a tiny
+        parameter's very first update, skipping the EMA-against-zero
+        step every other case in this codebase uses). The two differ
+        only on that first update, by a factor of `rho_t` at `t=1`
+        (`max(1e-4, ...)` -- i.e. a ~1e-4 relative difference), three
+        orders of magnitude below the gap this closes (~1e-3 to ~1e-2,
+        see nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py) --
+        and it doesn't compound over later steps (EMA memory decays the
+        contribution from step 1, it isn't carried forward at full
+        weight). Not chased further for the same reason CAME's own
+        bf16 divergence wasn't: within the kind of noise floor this
+        project already accepts elsewhere, confirmed by the same
+        script's actual measured numbers, not assumed."""
+        if len(shape) < 2:
+            return False
+        if self.tiny_parameter_threshold is not None:
+            numel = 1
+            for d in shape:
+                numel *= d
+            if numel < self.tiny_parameter_threshold:
+                return False
+        return True
 
     def begin_step(self, n_steps: int = 1) -> None:
         """Advance the shared step counter and compute this step's rho_t
@@ -74,7 +124,7 @@ class AdafactorAlgorithm(Algorithm):
         ChunkedXPUAdafactor's verified behavior (see CAMEAlgorithm's
         init_state() docstring for the same note, which applies
         identically here)."""
-        if len(param_shape) >= 2:
+        if self._is_factored(param_shape):
             rows = param_shape[0]
             cols = 1
             for d in param_shape[1:]:
@@ -135,7 +185,7 @@ class AdafactorAlgorithm(Algorithm):
             alpha_t = max(self.eps1, 1.0) * lr
 
         decay = (1.0 - self.wd * alpha_t) if self.wd != 0 else None
-        factored = grad.dim() >= 2
+        factored = self._is_factored(grad.shape)
 
         if scratch is not None:
             update = self._compute_update_inplace(grad, state, rho_t, alpha_t, clip_mul, factored)
@@ -277,6 +327,14 @@ class AdafactorAlgorithm(Algorithm):
         reduction-order caveat as CAMEAlgorithm's own batched override)."""
         import torch
 
+        if self.tiny_parameter_threshold is not None:
+            raise NotImplementedError(
+                "AdafactorAlgorithm.compute_update_batched() doesn't honor "
+                "tiny_parameter_threshold -- nothing currently combines it with "
+                "ShapeGroupedBatchStrategy (only ComposedFusedOptimizerHandle sets "
+                "it, which never calls this method), so this was never implemented "
+                "rather than silently producing the wrong (untiny'd) math."
+            )
         if self.scale_parameter:
             return Algorithm.compute_update_batched(self, grad_stack, params, states, lr)
         if self._rho_t is None:

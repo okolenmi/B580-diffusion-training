@@ -43,21 +43,28 @@
   production path.
 
   Separately, and not the same issue: `ChunkedXPUAdafactor`/
-  `FusedXPUAdafactor` both have a real, unreplicated small-parameter
+  `FusedXPUAdafactor` both have (had, for Fused) a real small-parameter
   (< 10,000 element) fast path -- a plain elementwise second-moment EMA
   in place of the row/col factored approximation -- that
-  `AdafactorAlgorithm` doesn't cover, and the two don't even agree with
+  `AdafactorAlgorithm` didn't cover, and the two don't even agree with
   each other on the mechanism (`FusedXPUAdafactor`'s is genuinely
   per-parameter; `ChunkedXPUAdafactor`'s ties every tiny parameter in
   the whole optimizer together into one shared clip and EMA state, a
   cross-parameter batching concern, not a per-parameter algorithm
   branch). `ForeachXPUAdafactor` has no tiny-parameter special case at
-  all, as far as reading its source shows -- meaning
-  `ForeachAdafactorOptimizerNode` may already be fully redundant with
-  `ComposedAdafactorOptimizerNode(strategy="foreach")`, pending a real
-  torch run to confirm (`nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
-  was written for exactly this and hasn't been run yet as of this
-  writing). See `docs/CLEANUP_TODO.md` for the full state of this.
+  all -- confirmed, not just theorized, by an actual torch run:
+  `ForeachAdafactorOptimizerNode` came back equivalent to
+  `ComposedAdafactorOptimizerNode(strategy="foreach")` at floating-
+  point-noise magnitude and has been deleted. `FusedXPUAdafactor`'s gap
+  was confirmed real (not noise) the same way, and `AdafactorAlgorithm`
+  has since grown an opt-in fix for it (`tiny_parameter_threshold`,
+  used by `ComposedFusedAdafactorOptimizerNode` only) -- not yet
+  confirmed to actually close the gap on real torch (Part D,
+  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`).
+  `ChunkedXPUAdafactor`'s cross-parameter-batching version is unrelated
+  to that fix and still fully open -- see
+  `docs/design/09-prioritized-backlog.md`. See `docs/CLEANUP_TODO.md`
+  for the full current state of all of this.
 
 - **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
   device placement anywhere.**

@@ -467,7 +467,8 @@ class ChunkedXPUCAME:
         # reading anything about timing at all.
         print(f"[Optimizer] ChunkedXPUCAME active: {n} parameter tensor(s), device={device}. "
               f"This is the slower, per-parameter-synchronizing implementation -- "
-              f"ForeachCAMEOptimizerNode (ForeachXPUCAME) is the fast one for LoRA.")
+              f"ComposedCAMEOptimizerNode(strategy=\"foreach\") (ForeachXPUCAME) is "
+              f"the fast one for LoRA.")
         self._use_pool = False
         self._pool = None
         self._initialized = False

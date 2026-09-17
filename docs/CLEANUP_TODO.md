@@ -58,6 +58,17 @@ Update this file as work happens. Each item: status, what it is, why.
   hardcoded class list was missing `ForeachCAMEOptimizerNode` and every
   `Composed*` node. Nothing outside its own two files referenced it
   (checked).
+- **Relocated, not resolved:** the `nodes/model/`/`nodes/dataset/managed.py`
+  `core`/`manager` coupling was tracked here as a "still to check" item,
+  but it isn't cleanup debt — no competing implementation exists to
+  retire in favor of, just a domain nobody's rewritten yet, same as
+  `optimizer/` before this pass started. Moved to
+  `docs/design/09-prioritized-backlog.md` as a real, sized future item
+  instead of carrying it here indefinitely.
+- Fixed a trivial, unrelated stale reference found in passing:
+  `core/optimizers.py`'s own runtime log message recommended switching
+  to `ForeachCAMEOptimizerNode` by name; pointed at
+  `ComposedCAMEOptimizerNode(strategy="foreach")` instead.
 
 ## Corrected mid-stream (leaving the record — this is exactly the kind
 ## of mistake worth catching, not hiding)
@@ -157,10 +168,35 @@ Update this file as work happens. Each item: status, what it is, why.
       at all (confirmed by reading the exact in-place-vs-copy pattern in
       each, not assumed to be shared). Full writeup in
       `docs/known-issues/open.md`.
-- [ ] Minor: `core/optimizers.py:470` has a runtime message that still
-      recommends switching to `ForeachCAMEOptimizerNode` by name — that
-      class no longer exists. Not fixed here (`core/` untouched by this
-      cleanup), flagging for whoever next touches that file.
+- [ ] **Implemented the `FusedXPUAdafactor` tiny-parameter fix (Part B's
+      gap) — needs a real torch run to confirm before trusting it.**
+      `AdafactorAlgorithm` grew an opt-in `tiny_parameter_threshold`
+      (default `None`, unchanged behavior everywhere except below) —
+      turned out to be a small change, not new algorithm work: the
+      existing elementwise `"vs"` state/update path already handles any
+      parameter shape correctly (it was only ever *selected* by
+      dimensionality, `len(param_shape) >= 2`, not by a separate
+      formula for 1D vs. tiny-2D), so this just changes *when* that
+      already-correct path gets chosen. `ComposedFusedAdafactorOptimizerNode`
+      now passes `10_000`; `ComposedAdafactorOptimizerNode` (chunked/
+      foreach/simple/shape_grouped) deliberately doesn't, since Foreach's
+      Part A match depends on *not* special-casing tiny parameters.
+      One small, documented, deliberate simplification: doesn't
+      replicate `FusedXPUAdafactor`'s lazy first-update initialization
+      quirk exactly — estimated ~1e-4 relative on the first update only,
+      versus the ~1e-3–1e-2 gap being closed; if Part D's real numbers
+      don't bear that estimate out, that's a real problem to fix, not a
+      tolerance to widen. `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
+      grew a Part D to check this — **needs to be run** before
+      `fused_adafactor.py`/`FusedAdafactorOptimizerNode` can be deleted
+      the way `foreach_adafactor.py` was.
+- [ ] `AdafactorOptimizerNode`'s gap (Part C, cross-parameter batching)
+      — real, separate `ExecutionStrategy`-level feature work, not an
+      algorithm fix like the above. Relocated to
+      `docs/design/09-prioritized-backlog.md` as a sized future item
+      rather than tracked here — not cleanup debt in the same sense as
+      the rest of this file, since it needs new capability to be built,
+      not just a wrapper retired.
 
 ### Dataset domain — second "bad competitor" found, done
 - [x] **`nodes/dataset/renoise.py` migrated off `core.noise_schedule`
@@ -234,29 +270,27 @@ Update this file as work happens. Each item: status, what it is, why.
       doesn't exist at the new numbering, *and* the claim itself
       (progress.md has drifted) is no longer true either, per the fix
       above. Whoever next touches that route should know both things.
-- [ ] `docs/design/resources-controller/*` — left alone, same as the
-      code (off-limits route).
-- [ ] **Residual, smaller scope than originally listed:** the general
-      docs/design/*.md trim (per the stated criteria -- keep only
-      hard-to-derive-from-code info, specific design rationale,
-      resources, actively-updated plan) hasn't had a full line-by-line
-      pass beyond the specific inaccuracies fixed above. Files not yet
-      read closely for this: `01-foundational-ontology.md` (name
-      uncertain, check `docs/design/README.md`'s index), `02-...`,
-      `04-...`, `05-...`. Lower priority than everything above -- these
-      weren't flagged as *wrong*, just not yet checked for redundant-
-      with-code narrative bulk.
+- [x] **Residual docs/design/*.md check, done — found clean, no changes
+      needed.** Read `01-design-goals-and-constraints.md`,
+      `02-foundational-ontology.md`,
+      `04-lora-adapter-mechanics-and-loss-weighting.md`,
+      `05-coordination-registry-observability.md` (the four not yet
+      touched by anything above). No references to any deleted class,
+      no stale claims found. `docs/design/README.md`'s own stated
+      policy ("sections describing something now implemented keep their
+      rationale but no longer repeat the illustrative class code") is
+      already being followed — these four files have almost no
+      illustrative code left (1–2 code blocks each, `01` has none). One
+      marginal, defensible exception left as-is:
+      `02-foundational-ontology.md` still illustrates `Port`/`Builder`
+      (the design-doc-era name for what's now `Node`/`Port` in
+      `nodes/core.py`) in full — arguably should point at the real file
+      instead per the stated policy, but it's the foundational
+      vocabulary the *rest* of these documents' own illustrations are
+      written in terms of, so keeping one example of it is a reasonable
+      call, not an oversight. Not changed.
 
 ### Still to check (broader sweep, not yet done)
-- [ ] `nodes/model/` (LoRA/UNet injection), `nodes/model/text_encoder.py`,
-      `nodes/dataset/managed.py` — all still import `core.lora`/
-      `core.unet_wrapper`/`core.clip_encode`/`manager.loader` directly,
-      with no independent alternative built yet anywhere (unlike
-      optimizer/, where one already exists). This is *not* a "bad
-      competitor" situation — there's only one implementation, just
-      still `core`-coupled — so it's real future work, not cleanup, per
-      "don't remove/replace not-yet-duplicated features." Flagged for
-      awareness, not scheduled.
 - [x] Swept `nodes/memory/`, `nodes/train/`, `nodes/primitive/`,
       `nodes/monitor/` for competing implementations of the same job
       (the pattern optimizer/ and dataset/ both had). Nothing found:

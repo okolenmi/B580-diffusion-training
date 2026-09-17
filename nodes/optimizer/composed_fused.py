@@ -25,13 +25,15 @@ execution model: hook registration/teardown, and the multi-pass
 Algorithm-agnostic by construction: the same class drives CAMEAlgorithm,
 AdafactorAlgorithm, and AdamWAlgorithm in
 composed_fused_came.py/composed_fused_adafactor.py/composed_fused_adamw.py,
-no algorithm-specific code anywhere in this file. One behavioral
-divergence worth knowing: the legacy FusedXPUAdafactor has a
-TINY_NUMEL special case for small parameters (full elementwise
-second-moment tracking instead of the row/col factored approximation) --
-that's Adafactor-specific algorithm work, not a fused-execution concern,
-and isn't replicated here. This handle always uses whatever formula the
-Algorithm it's given computes.
+no algorithm-specific code anywhere in this file -- this handle always
+uses whatever formula the Algorithm it's given computes, whatever that
+is. One example worth knowing, precisely because it shows that
+boundary holding: the legacy FusedXPUAdafactor has a TINY_NUMEL special
+case for small parameters (full elementwise second-moment tracking
+instead of the row/col factored approximation) -- real Adafactor-
+specific algorithm work, not a fused-execution concern, so it lives in
+AdafactorAlgorithm itself (opt-in, see its own _is_factored() docstring
+and composed_fused_adafactor.py), not here.
 
 **The multi-pass state machine.** `begin_step(sub_steps)` starts a new
 logical optimizer step that will span exactly `sub_steps` backward()

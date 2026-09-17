@@ -17,12 +17,14 @@ they're the current production path, and stay that way. `nodes/` no
 longer treats wrapping them as a permanent rule, though: where `nodes/`
 has since built its own independent, verified-equivalent replacement
 (the `optimizer/` domain, `components/`), that replacement is canonical
-and the old wrapper gets retired -- see
-[`docs/CLEANUP_TODO.md`](../CLEANUP_TODO.md) for what's been unified,
-what's still mid-migration, and what hasn't started. Most of `nodes/`
-still wraps `core/`/`manager/` directly (LoRA/UNet injection, text
-encoding, dataset ingestion) simply because nobody's built an
-independent version yet -- that's where new work lands.
+and the old wrapper gets retired. The `optimizer/` domain is fully
+unified this way except `AdafactorOptimizerNode`, kept for a real,
+separate gap tracked in
+[`docs/design/09-prioritized-backlog.md`](../design/09-prioritized-backlog.md).
+Most of `nodes/` still wraps `core/`/`manager/` directly (LoRA/UNet
+injection, text encoding, dataset ingestion) simply because nobody's
+built an independent version yet -- also tracked in that same backlog
+doc -- that's where new work lands.
 
 ## Implemented
 

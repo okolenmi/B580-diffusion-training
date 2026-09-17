@@ -10,12 +10,14 @@ with a hand-set `.grad` (as the other tests do) wouldn't actually exercise
 `register_post_accumulate_grad_hook`, which is the entire mechanism under
 test here.
 
-**Deliberately uses only parameters with >= 10,000 elements.** Smaller
-parameters hit FusedXPUAdafactor's TINY_NUMEL special case (a real
-formula difference, not replicated here -- see composed_fused.py and
-composed_fused_adafactor.py's module docstrings for why). This test
-checks the regime where AdafactorAlgorithm and FusedXPUAdafactor compute
-the same thing; it isn't testing the tiny-parameter path, on purpose.
+**Covers both the main (>= 10,000 element) and tiny (< 10,000 element)
+regimes** -- the latter via AdafactorAlgorithm's tiny_parameter_threshold
+(see algorithms/adafactor.py's _is_factored() docstring), added once
+Part D of smoke_test_adafactor_tiny_parameter_gap.py confirmed it closes
+the gap against real torch -- that script's docstring has the full
+before/after numbers and investigation history; this file is where the
+resulting regression coverage actually lives now, the same way this
+file already is for the main-path case.
 
 **A second, more interesting divergence was found while writing this
 test, and is deliberately NOT papered over with a looser tolerance:**
@@ -60,6 +62,14 @@ What's checked, in order:
    sides, `prepare_next_pass()` between them -- checks that no update is
    applied after the first pass and that the final, single applied
    update after the second pass matches.
+5. Tiny-parameter (< 10,000 element) single-pass equivalence, same
+   float32/bf16 x momentum coverage as (3) -- float32+beta1 excluded for
+   the same, already-established reason. scale_parameter=True and
+   weight_decay != 0 are NOT covered here yet (unlike the main-path
+   table in (3)): nothing structurally suggests they'd interact
+   differently with tiny_parameter_threshold (alpha_t/decay are computed
+   before the factored/tiny branch either way), but that's reasoning,
+   not a run -- narrower coverage than (3), on purpose, not an oversight.
 """
 
 import sys
@@ -75,6 +85,7 @@ from nodes.optimizer.composed_fused import ComposedFusedOptimizerHandle
 
 DEVICE = "cpu"
 _SHAPES = [(120, 120), (12000,)]  # both >= TINY_NUMEL (10_000)
+_TINY_SHAPES = [(20, 30), (64,)]  # both < TINY_NUMEL -- factored + unfactored
 
 # Each key: (dtype, scale_parameter, weight_decay, beta1). float32+beta1
 # deliberately excluded -- see module docstring.
@@ -84,6 +95,22 @@ _TOLERANCES = {
     (torch.float32, False, 0.05, None): 1e-4,
     (torch.bfloat16, False, 0.0, None): 1e-2,
     (torch.bfloat16, True, 0.05, 0.9): 1e-2,
+}
+
+# Same shape as _TOLERANCES, narrower coverage (scale_parameter=True/
+# weight_decay!=0 not included -- see (5) above), and float32+beta1
+# excluded for the identical reason _TOLERANCES excludes it -- the bug
+# is in the momentum/dtype-aliasing mechanism itself (check_legacy_
+# float32_momentum_bug() above already proves it, generally, not
+# shape-specifically), not anything to do with the tiny-parameter path.
+# Values are the actual measured max abs diff from
+# smoke_test_adafactor_tiny_parameter_gap.py's Part D (float32
+# no-momentum: 4.768e-07; bf16 no-momentum: 1.953e-03; bf16 momentum:
+# 0.0), plus headroom.
+_TINY_TOLERANCES = {
+    (torch.float32, False, 0.0, None): 1e-4,
+    (torch.bfloat16, False, 0.0, None): 1e-2,
+    (torch.bfloat16, True, 0.0, 0.9): 1e-2,
 }
 
 
@@ -141,9 +168,11 @@ def check_new_momentum_not_corrupted(n_steps: int = 5) -> bool:
     return True
 
 
-def run_single_pass_case(dtype, scale_parameter, weight_decay, beta1, n_steps: int = 15) -> float:
+def run_single_pass_case(dtype, scale_parameter, weight_decay, beta1, n_steps: int = 15,
+                          shapes=None, tiny_parameter_threshold=None) -> float:
+    shapes = shapes if shapes is not None else _SHAPES
     torch.manual_seed(11)
-    inits = [(torch.randn(s) * 0.1).to(dtype) for s in _SHAPES]
+    inits = [(torch.randn(s) * 0.1).to(dtype) for s in shapes]
 
     W_ref = [w.clone().requires_grad_(True) for w in inits]
     legacy = FusedXPUAdafactor(params=W_ref, lr=0.02, weight_decay=weight_decay,
@@ -151,14 +180,14 @@ def run_single_pass_case(dtype, scale_parameter, weight_decay, beta1, n_steps: i
     legacy.register_hooks()
 
     W_new = [w.clone().requires_grad_(True) for w in inits]
-    algorithm = AdafactorAlgorithm(weight_decay=weight_decay,
-                                    scale_parameter=scale_parameter, beta1=beta1)
+    algorithm = AdafactorAlgorithm(weight_decay=weight_decay, scale_parameter=scale_parameter,
+                                    beta1=beta1, tiny_parameter_threshold=tiny_parameter_threshold)
     handle = ComposedFusedOptimizerHandle(algorithm, W_new, lr=0.02, device=DEVICE)
 
     max_diff = 0.0
     for step in range(n_steps):
         torch.manual_seed(2000 + step)
-        targets = [(torch.randn(s) * 0.05).to(dtype) for s in _SHAPES]
+        targets = [(torch.randn(s) * 0.05).to(dtype) for s in shapes]
 
         legacy.begin_step(1)
         loss_ref = sum(((w - t) ** 2).sum() for w, t in zip(W_ref, targets))
@@ -252,6 +281,20 @@ def main():
               f"max abs diff over 15 steps = {diff:.3e} (tolerance {tol:.0e})")
         if not ok:
             failures.append(f"dtype={dtype}, scale_parameter={scale_parameter}, "
+                             f"weight_decay={weight_decay}, beta1={beta1}: "
+                             f"diff {diff:.3e} exceeds tolerance {tol:.0e}")
+
+    print("\n=== single-pass (sub_steps=1), tiny parameters (< 10,000 elements) ===")
+    for (dtype, scale_parameter, weight_decay, beta1), tol in _TINY_TOLERANCES.items():
+        diff = run_single_pass_case(dtype, scale_parameter, weight_decay, beta1,
+                                     shapes=_TINY_SHAPES, tiny_parameter_threshold=10_000)
+        ok = diff <= tol
+        status = "PASS" if ok else "FAIL"
+        print(f"  {status}: dtype={dtype}, scale_parameter={scale_parameter}, "
+              f"weight_decay={weight_decay}, beta1={beta1}: "
+              f"max abs diff over 15 steps = {diff:.3e} (tolerance {tol:.0e})")
+        if not ok:
+            failures.append(f"tiny dtype={dtype}, scale_parameter={scale_parameter}, "
                              f"weight_decay={weight_decay}, beta1={beta1}: "
                              f"diff {diff:.3e} exceeds tolerance {tol:.0e}")
 

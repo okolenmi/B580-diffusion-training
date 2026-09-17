@@ -16,19 +16,26 @@ nodes/smoke_tests/smoke_test_adafactor_equivalence.py, which deliberately
 tests only parameters >= 10,000 elements for exactly this reason). Many
 individual LoRA matrices are smaller than that, so this is a real,
 common-case gap, not an edge case -- adafactor.py's node stays registered
-until this gets addressed (tracked in docs/CLEANUP_TODO.md), at which
+until this gets addressed (see docs/design/09-prioritized-backlog.md),
+at which
 point it becomes redundant the same way CAMEOptimizerNode already did.
 
 FusedXPUAdafactor (composed_fused_adafactor.py's equivalent concern) has
 its own, *different* tiny-parameter mechanism -- genuinely per-parameter,
-not cross-parameter -- see that module's docstring; a real gap for
-factored parameters, confirmed by an actual torch run (not noise) --
-see nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py.
-ForeachXPUAdafactor (formerly foreach_adafactor.py) had no
-tiny-parameter special case at all, confirmed the same way -- deleted
-2026-09-16, the same way CAMEOptimizerNode was once its own equivalence
-was established; ComposedAdafactorOptimizerNode(strategy="foreach") is
-now the only way to get foreach-strategy Adafactor.
+not cross-parameter. AdafactorAlgorithm now supports it too, via an
+opt-in tiny_parameter_threshold (confirmed on real torch -- see
+AdafactorAlgorithm._is_factored()'s own docstring and
+nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py) -- but this
+Node deliberately does not pass it: only
+composed_fused_adafactor.py's ComposedFusedAdafactorOptimizerNode does,
+since ChunkedXPUAdafactor's (this Node's legacy reference) tiny-parameter
+mechanism is the different, unrelated, still-unclosed cross-parameter
+one described above -- passing FusedXPUAdafactor's fix here would fix
+the wrong mismatch. ForeachXPUAdafactor (formerly foreach_adafactor.py)
+had no tiny-parameter special case at all, confirmed the same way --
+deleted 2026-09-16, the same way CAMEOptimizerNode was once its own
+equivalence was established; ComposedAdafactorOptimizerNode(strategy=
+"foreach") is now the only way to get foreach-strategy Adafactor.
 
 `INPUTS` below default to the conservative, predictable values
 (`scale_parameter=False, weight_decay=0.0`) rather than the removed

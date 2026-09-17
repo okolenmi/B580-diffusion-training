@@ -37,7 +37,6 @@ def _load() -> dict[str, type]:
     from nodes.optimizer.composed_fused_adafactor import ComposedFusedAdafactorOptimizerNode
     from nodes.optimizer.composed_fused_adamw import ComposedFusedAdamWOptimizerNode
     from nodes.optimizer.composed_fused_came import ComposedFusedCAMEOptimizerNode
-    from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerNode
     from nodes.primitive.values import (BoolConstantNode, FloatConstantNode,
                                          IntConstantNode, StringConstantNode)
     from nodes.train.loss import (MinSNRLossWeightingNode, P2LossWeightingNode,
@@ -55,7 +54,6 @@ def _load() -> dict[str, type]:
         AdafactorOptimizerNode,
         ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
-        FusedAdafactorOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,
         SupervisedLoRATrainerNode,

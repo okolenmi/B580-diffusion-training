@@ -129,8 +129,7 @@ ever wire into it. `use_checkpoint`/`scaling_policy` already covered the
 two concerns that were ever exercised in practice (`checkpointing_strategy`,
 `lora_scaling_policy`); `parameter_group_policy()` was never called by
 anything outside that same smoke test either, `group_policy` being
-separate as described above. Removed along with its smoke test; see
-`docs/CLEANUP_TODO.md` for the change.
+separate as described above. Removed along with its smoke test.
 
 `ResourceBudget` itself is implemented but still inert -- nothing
 constructs or consumes one in a live path yet. `CheckpointPlacementPolicy`

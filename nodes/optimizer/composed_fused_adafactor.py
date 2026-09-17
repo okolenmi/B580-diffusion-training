@@ -1,31 +1,39 @@
 """ComposedFusedAdafactorOptimizerNode: AdafactorAlgorithm, executed via
 backward hooks through ComposedFusedOptimizerHandle.
 
-Same relationship to FusedAdafactorOptimizerNode (fused_adafactor.py,
-which wraps the legacy core.optimizers.FusedXPUAdafactor) as
-ComposedAdafactorOptimizerNode has to AdafactorOptimizerNode -- adds a
-non-legacy alternative, doesn't touch or retire the legacy wrapper.
+The only fused Adafactor node in nodes/optimizer/ now -- the legacy
+fused_adafactor.py (FusedAdafactorOptimizerNode, wrapped
+core.optimizers.FusedXPUAdafactor) was deleted once this Node was
+confirmed equivalent, including for small (< 10,000 element)
+parameters -- see below (docs/CLEANUP_TODO.md, where this was tracked
+during development, has since been deleted; the full history is in git
+log for this file and nodes/optimizer/algorithms/adafactor.py).
 
-**Now matches FusedXPUAdafactor's small-parameter (< 10,000 element)
-formula too, not just its large-parameter one.** Was a real, documented
-gap (see docs/CLEANUP_TODO.md for the full history): FusedXPUAdafactor
-has a TINY_NUMEL special case that swaps in a full elementwise
-second-moment buffer instead of the row/col factored approximation for
-small parameters -- a real formula change, not just a storage-layout
-optimization (see composed_fused.py's module docstring). Closed by
-passing tiny_parameter_threshold=10_000 to AdafactorAlgorithm below,
-which already had everywhere it needed for this (the existing
+**Matches FusedXPUAdafactor's small-parameter formula, not just its
+large-parameter one -- confirmed on real torch, not just reasoned
+about.** FusedXPUAdafactor has a TINY_NUMEL special case that swaps in
+a full elementwise second-moment buffer instead of the row/col factored
+approximation for small parameters -- a real formula change, not just a
+storage-layout optimization (see composed_fused.py's module docstring).
+Closed by passing tiny_parameter_threshold=10_000 to AdafactorAlgorithm
+below, which needed less new code than expected: the existing
 elementwise "vs" state/update path already handles any shape, not just
 1D -- see AdafactorAlgorithm._is_factored()'s own docstring for exactly
 what changed and the one deliberate, small, documented simplification
-this doesn't chase (a first-update-only ~1e-4-relative difference from
-not replicating FusedXPUAdafactor's lazy initialization quirk exactly).
-Verification: nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py
-was extended with a Part D specifically for this -- run it and confirm
-before trusting this over the legacy node for real training.
+it doesn't chase (a first-update-only ~1e-4-relative difference from
+not replicating FusedXPUAdafactor's lazy initialization quirk exactly,
+confirmed negligible by the same real-torch run below). Permanent
+regression coverage lives in
+nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py, alongside
+the rest of this pair's equivalence checks -- the investigation itself,
+including the two numbers that initially looked like problems but
+turned out to already be inside this project's own established
+tolerances (see that file's _TOLERANCES/_TINY_TOLERANCES), is preserved
+in nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py's Part D
+writeup.
 ChunkedXPUAdafactor's own, different tiny-parameter mechanism (cross-
 parameter batching, not per-parameter) is unrelated to this fix and
-still open -- see ComposedAdafactorOptimizerNode's own docstring.
+still open -- see docs/design/09-prioritized-backlog.md.
 Separately, FusedXPUAdafactor has a real, confirmed momentum-corruption
 bug for float32 parameters (docs/known-issues/open.md) that this Node
 does not reproduce.

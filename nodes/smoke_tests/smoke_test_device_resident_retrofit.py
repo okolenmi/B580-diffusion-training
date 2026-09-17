@@ -2,21 +2,24 @@
 concrete OptimizerHandle -- this is new behavior with no legacy equivalent
 to compare against (not an equivalence test), so what's checked is: sane
 values, and specifically the release()-then-footprint_bytes() round trip,
-since the wrapped legacy classes tested here (ChunkedXPUAdafactor/
-FusedXPUAdafactor) `del` their state attributes entirely in
-free_states() rather than clearing them -- confirmed by reading
-core/optimizers.py directly, not assumed.
+since the wrapped legacy class tested here (ChunkedXPUAdafactor) `del`s
+its state attributes entirely in free_states() rather than clearing them
+-- confirmed by reading core/optimizers.py directly, not assumed.
 
 AdamWOptimizerHandle/SimpleAdamWOptimizerHandle/CAMEOptimizerHandle/
-ForeachCAMEOptimizerHandle/ForeachAdafactorOptimizerHandle used to be
-covered here too -- removed along with adamw.py/came.py/foreach_came.py/
-foreach_adafactor.py once each was proven equivalent to its
-ComposedXOptimizerNode replacement (see docs/CLEANUP_TODO.md;
-ForeachAdafactorOptimizerHandle's removal is the one backed by an actual
-torch run rather than static reading, see
-smoke_test_adafactor_tiny_parameter_gap.py). AdafactorOptimizerHandle/
-FusedAdafactorOptimizerHandle stay: they still have real, unreplicated
-tiny-parameter behavior, confirmed the same way (same script).
+ForeachCAMEOptimizerHandle/ForeachAdafactorOptimizerHandle/
+FusedAdafactorOptimizerHandle used to be covered here too -- removed
+along with adamw.py/came.py/foreach_came.py/foreach_adafactor.py/
+fused_adafactor.py once each was proven equivalent to its
+ComposedXOptimizerNode replacement -- the
+Foreach/Fused-Adafactor removals are the ones backed by an actual torch
+run rather than static reading -- see
+smoke_test_adafactor_tiny_parameter_gap.py and
+smoke_test_fused_adafactor_equivalence.py). AdafactorOptimizerHandle
+stays: it still has real, unreplicated tiny-parameter behavior
+(ChunkedXPUAdafactor's cross-parameter batching, confirmed the same
+way) that Composed doesn't cover yet -- see
+docs/design/09-prioritized-backlog.md.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_device_resident_retrofit.py`
 """
@@ -28,12 +31,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import ChunkedXPUAdafactor, FusedXPUAdafactor
+from core.optimizers import ChunkedXPUAdafactor
 from nodes.memory.handle import DeviceResident
 from nodes.optimizer.adafactor import AdafactorOptimizerHandle
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
-from nodes.optimizer.fused_adafactor import FusedAdafactorOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy
 
 DEVICE = "cpu"
@@ -53,24 +55,7 @@ def _params():
     return [torch.randn(32, 32, requires_grad=True), torch.randn(16, requires_grad=True)]
 
 
-def _fused_legacy(params):
-    # FusedAdafactorOptimizerNode.build() calls register_hooks() as its
-    # last step (see that module's docstring) -- done manually here since
-    # this test constructs the legacy class directly, bypassing the Node.
-    legacy = FusedXPUAdafactor(params, lr=1e-3, device=DEVICE)
-    legacy.register_hooks()
-    return legacy
-
-
 def _step(handle, params):
-    if isinstance(handle, FusedAdafactorOptimizerHandle):
-        # This family applies updates from backward-pass hooks, not a
-        # separate step() call (step() is a real no-op here -- see
-        # FusedAdafactorOptimizerHandle.step()'s own comment) -- so
-        # triggering it means an actual backward(), not p.grad + step().
-        loss = sum(p.sum() for p in params)
-        loss.backward()
-        return
     for p in params:
         p.grad = torch.randn_like(p)
     handle.step()
@@ -97,16 +82,14 @@ def check_eager_family():
 
 
 def check_lazy_family():
-    """Adafactor (+ fused variant): state is None until the first
-    step() lazily allocates it, and free_states() `del`s the attributes
-    entirely -- footprint_bytes() must handle both."""
+    """Adafactor: state is None until the first step() lazily allocates
+    it, and free_states() `del`s the attributes entirely --
+    footprint_bytes() must handle both."""
     print("\n=== Lazily-allocated state: 0 before step(), >0 after, 0 again after release() ===")
 
     cases = [
         ("AdafactorOptimizerHandle",
          lambda p: AdafactorOptimizerHandle(ChunkedXPUAdafactor(p, lr=1e-3, device=DEVICE))),
-        ("FusedAdafactorOptimizerHandle",
-         lambda p: FusedAdafactorOptimizerHandle(_fused_legacy(p))),
     ]
     for name, build in cases:
         params = _params()

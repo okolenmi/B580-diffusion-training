@@ -14,25 +14,29 @@ not yet run.**
     digit precision applied to values at this scale) -- no systematic
     divergence. `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode`
     has been deleted as a result, the same way `came.py`/`foreach_came.py`
-    were once their equivalence was established -- see `docs/CLEANUP_TODO.md`.
+    were once their equivalence was established.
 
   - Part B confirmed a real gap, but only for the *factored* (2D+)
     parameter: 9.8e-04 to 7.8e-03, an order of magnitude-plus above the
     Part A noise floor. The *unfactored* (1D) parameter came back at
     noise level too (2.4e-07 to 2.4e-04, momentum=True/float32's
-    8.0e-04 being the one borderline case, plausibly momentum
-    compounding a small pre-existing constant difference -- see "the
-    `n**-0.5` vs `n**0.5+1e-8` denominator" note in ForeachXPUAdafactor's
-    read-through below -- over 5 steps rather than a new divergence).
-    This makes structural sense on reflection, not just empirically: for
-    a 1D parameter, AdafactorAlgorithm's *regular* path (`init_state()`'s
-    `else` branch) is already a plain elementwise EMA -- row/col
-    factoring only exists for 2D+ tensors in the first place, so there's
-    no "regular vs tiny" formula difference to find for 1D parameters
-    either way. The real gap is specifically: for a 2D+ (factored)
-    parameter under 10,000 elements, `FusedXPUAdafactor` uses the plain
-    elementwise EMA (its tiny path) while `AdafactorAlgorithm` still uses
-    row/col factoring (its only path) -- two genuinely different
+    8.0e-04 being the one exception) -- **not speculation any more: the
+    8.0e-04 exception is the already-documented `FusedXPUAdafactor`
+    float32-momentum aliasing bug (docs/known-issues/open.md), confirmed
+    directly by Part D showing the identical value for the same
+    dtype/momentum combination even after the tiny-parameter fix landed
+    -- a formula fix can't touch a bug in a completely different code
+    path (the momentum blend, applied after the tiny/factored branch
+    either way).** This makes structural sense on reflection, not just
+    empirically: for a 1D parameter, AdafactorAlgorithm's *regular* path
+    (`init_state()`'s `else` branch) is already a plain elementwise
+    EMA -- row/col factoring only exists for 2D+ tensors in the first
+    place, so there's no "regular vs tiny" formula difference to find
+    for 1D parameters either way. The real gap is specifically: for a
+    2D+ (factored) parameter under 10,000 elements, `FusedXPUAdafactor`
+    uses the plain elementwise EMA (its tiny path) while
+    `AdafactorAlgorithm` still uses row/col factoring (its only path) --
+    two genuinely different
     formulas, not the same formula computed two ways. This is exactly
     the gap Part D below closes.
 
@@ -46,23 +50,30 @@ not yet run.**
     needs new ExecutionStrategy-level machinery, not an algorithm
     change -- see `docs/design/09-prioritized-backlog.md`.
 
-  - **Part D: `AdafactorAlgorithm` grew an opt-in
-    `tiny_parameter_threshold` (see its `_is_factored()` docstring),
-    and `ComposedFusedAdafactorOptimizerNode` now passes `10_000` --
-    exactly what Part B showed FusedXPUAdafactor needs, deliberately
-    *not* passed by `ComposedAdafactorOptimizerNode` (which would break
-    Part A's now-confirmed Foreach match). Expected result: the
-    factored-parameter diff collapses to Part A's noise-floor
-    magnitude; the unfactored one, already at noise level, stays there.
-    One small, documented, deliberate simplification this does NOT
-    chase: `FusedXPUAdafactor`'s lazy first-update initialization
-    (skips the EMA-against-zero step on a tiny parameter's very first
-    update) -- estimated at ~1e-4 relative, three orders of magnitude
-    below the gap being closed, and not compounding over later steps.
-    If Part D's actual numbers don't bear that out, this estimate was
-    wrong and needs a real fix, not a bigger tolerance.** If Part D
-    confirms, `fused_adafactor.py`/`FusedAdafactorOptimizerNode` becomes
-    safe to delete the same way `foreach_adafactor.py` was.
+  - **Part D was run 2026-09-17: mixed-looking numbers, fully explained,
+    fix confirmed.** float32 no-momentum matched the Part A noise floor
+    exactly (4.768e-07). float32 momentum showed 9.496e-04/8.026e-04 --
+    NOT a flaw in the fix: this is the exact same known
+    `FusedXPUAdafactor` momentum-corruption bug already documented
+    (`docs/known-issues/open.md`), which `smoke_test_fused_adafactor_equivalence.py`'s
+    own, already-established main-path test excludes from its
+    comparison for the identical reason. bf16 no-momentum showed
+    1.953e-03 -- looked high against Part A's own noise floor at first,
+    but that comparison was the wrong bar: the right one is
+    `smoke_test_fused_adafactor_equivalence.py`'s own already-accepted
+    bf16 tolerance for this exact pairing (`1e-2`, established for the
+    main-path case, for the same reason -- a real, pre-existing
+    multiply-then-cast-vs-cast-then-multiply ordering difference between
+    `apply_update()`'s `delta.to(dtype=param.dtype)` and legacy's
+    `g.to(dtype=p.dtype).mul_(alpha_t)`, unrelated to tiny-vs-main).
+    1.953e-03 is comfortably inside `1e-2`. bf16 momentum matched
+    exactly (`0.0`). **The permanent regression coverage for this now
+    lives in `smoke_test_fused_adafactor_equivalence.py`, the canonical
+    equivalence test for this pair, not here** -- this script's job was
+    the investigation, not being the permanent test; Parts A/B/C below
+    stay here since nothing else covers Foreach's full equivalence, the
+    unfixed baseline for contrast, or Chunked's still-open gap.
+    `fused_adafactor.py`/`FusedAdafactorOptimizerNode` has been deleted.
 
 Three genuinely different mechanisms found by reading core/optimizers.py
 directly (not assumed from any docstring or comment):
@@ -110,16 +121,18 @@ now passes `10_000` explicitly) rather than a strategy-aware branch
 inside the Algorithm itself -- simpler, and the Algorithm still doesn't
 need to know which strategy it's running under, just what its own
 caller told it to do. See AdafactorAlgorithm._is_factored()'s own
-docstring for the implementation and its one small, documented,
-deliberate simplification (Part D above).
+docstring for the implementation and the one small, documented,
+deliberate simplification it doesn't chase, confirmed negligible by
+Part D above.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
 -- Part A now also serves as a real regression check for
 ComposedAdafactorOptimizerNode(strategy="foreach")'s continued
 equivalence to ForeachXPUAdafactor, now that foreach_adafactor.py itself
-is gone and can't be compared against directly any other way. Part D
-will serve the same role for ComposedFusedAdafactorOptimizerNode once
-its own results confirm the fix, the same way Part A already does.
+is gone and can't be compared against directly any other way. The
+equivalent ongoing regression check for ComposedFusedAdafactorOptimizerNode
+lives in smoke_test_fused_adafactor_equivalence.py instead, alongside
+the rest of that pair's equivalence coverage, not here.
 """
 
 import sys
@@ -280,46 +293,6 @@ def check_chunked_tiny_gap(dtype, n_steps=5, seed=0):
     return diff_f, diff_u
 
 
-def check_fused_tiny_gap_fixed(dtype, momentum, n_steps=5, seed=0):
-    """Part D: confirms the fix. Same setup as check_fused_tiny_gap()
-    above, except the Composed side now passes
-    tiny_parameter_threshold=10_000 -- expect the factored-parameter gap
-    to collapse to noise-floor level (matching Part A's magnitude),
-    the unfactored one to stay at noise level like it already was."""
-    torch.manual_seed(seed)
-    p0_f, p0_u = _small_params(seed)
-    beta1 = 0.9 if momentum else None
-
-    legacy_f = torch.nn.Parameter(p0_f.clone().to(dtype))
-    legacy_u = torch.nn.Parameter(p0_u.clone().to(dtype))
-    legacy = FusedXPUAdafactor([legacy_f, legacy_u], lr=1e-3, beta1=beta1,
-                                weight_decay=0.0, scale_parameter=False, device=DEVICE)
-    legacy.register_hooks()
-
-    new_f = torch.nn.Parameter(p0_f.clone().to(dtype))
-    new_u = torch.nn.Parameter(p0_u.clone().to(dtype))
-    algorithm = AdafactorAlgorithm(beta1=beta1, weight_decay=0.0, scale_parameter=False,
-                                    tiny_parameter_threshold=10_000)
-    handle = ComposedFusedOptimizerHandle(algorithm=algorithm, params=[new_f, new_u],
-                                           lr=1e-3, device=DEVICE)
-
-    torch.manual_seed(seed + 1)
-    for step in range(n_steps):
-        g_f = torch.randn_like(p0_f).to(dtype)
-        g_u = torch.randn_like(p0_u).to(dtype)
-
-        legacy.begin_step(1)
-        (legacy_f * g_f).sum().add((legacy_u * g_u).sum()).backward()
-        handle.begin_step(1)
-        (new_f * g_f).sum().add((new_u * g_u).sum()).backward()
-
-    diff_f = _max_abs_diff(legacy_f.data, new_f.data)
-    diff_u = _max_abs_diff(legacy_u.data, new_u.data)
-    print(f"    dtype={dtype} momentum={momentum}: "
-          f"factored max_abs_diff={diff_f:.3e}, unfactored max_abs_diff={diff_u:.3e}")
-    return diff_f, diff_u
-
-
 def main():
     print("=== A: ForeachXPUAdafactor hypothesis (expected: near-zero diff, no gap) ===")
     for dtype in (torch.float32, torch.bfloat16):
@@ -327,7 +300,9 @@ def main():
             check_foreach_hypothesis(dtype, momentum)
 
     print("\n=== B: FusedXPUAdafactor tiny-path gap, tiny_parameter_threshold unset "
-          "(expected: real, nonzero diff for the factored case) ===")
+          "(expected: real, nonzero diff for the factored case -- this is the "
+          "unfixed baseline, for contrast; the fix itself is verified in "
+          "smoke_test_fused_adafactor_equivalence.py, not here) ===")
     for dtype in (torch.float32, torch.bfloat16):
         for momentum in (False, True):
             check_fused_tiny_gap(dtype, momentum)
@@ -337,20 +312,14 @@ def main():
     for dtype in (torch.float32, torch.bfloat16):
         check_chunked_tiny_gap(dtype)
 
-    print("\n=== D: FusedXPUAdafactor tiny-path gap, tiny_parameter_threshold=10_000 "
-          "(expected: gap closed, back to noise-floor level like Part A) ===")
-    for dtype in (torch.float32, torch.bfloat16):
-        for momentum in (False, True):
-            check_fused_tiny_gap_fixed(dtype, momentum)
-
-    print("\nDone. Part A (Foreach) and Part D (Fused, fixed) are now permanent\n"
-          "regression checks -- a real divergence in either would mean\n"
-          "ComposedAdafactorOptimizerNode's foreach strategy, or\n"
-          "ComposedFusedAdafactorOptimizerNode's tiny_parameter_threshold fix,\n"
-          "stopped matching its legacy reference. Part C is expected to keep\n"
-          "showing its real, known gap (see module docstring) until/unless that\n"
-          "scoped-out ExecutionStrategy work happens. Part B is kept as-is for\n"
-          "contrast with Part D, both run with identical seeds/params.")
+    print("\nDone. Part A is now a permanent regression check -- a real "
+          "divergence here would mean ComposedAdafactorOptimizerNode's foreach "
+          "strategy stopped matching ForeachXPUAdafactor. Part B is expected to "
+          "keep showing the real, unfixed gap (that's what it's for -- contrast "
+          "with the fixed version, which is verified permanently in "
+          "smoke_test_fused_adafactor_equivalence.py instead of here). Part C is "
+          "expected to keep showing its real, known gap (see module docstring) "
+          "until/unless the scoped-out ExecutionStrategy work happens.")
 
 
 if __name__ == "__main__":

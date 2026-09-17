@@ -33,38 +33,54 @@
   `.mul(alpha_t)` (`core/optimizers.py:1045`, `:1105`), which always
   returns a new tensor regardless of dtype, never aliasing the momentum
   buffer. `nodes/optimizer/algorithms/adafactor.py`'s `AdafactorAlgorithm`
-  does not have this bug either way. Affects anyone choosing
-  `AdafactorOptimizerNode`/`FusedAdafactorOptimizerNode`
-  (`nodes/optimizer/{,fused_}adafactor.py`) with float32 parameters and
-  momentum enabled (for `AdafactorOptimizerNode`, only parameters >=
-  10,000 elements) -- `ForeachAdafactorOptimizerNode` is not affected.
+  does not have this bug either way -- so `ComposedFusedAdafactorOptimizerNode`
+  doesn't inherit it from the legacy class it was verified against, and
+  `AdafactorOptimizerNode` (`nodes/optimizer/adafactor.py`) is the only
+  node this actually affects now, for float32 parameters with momentum,
+  and only for parameters >= 10,000 elements (its own tiny-parameter
+  path uses a different, unaffected mechanism). The legacy
+  `FusedAdafactorOptimizerNode`/`ForeachAdafactorOptimizerNode` this
+  used to also apply to have both since been deleted --
+  `ForeachXPUAdafactor` was never affected
+  either way, `FusedXPUAdafactor`'s node was retired once
+  `ComposedFusedAdafactorOptimizerNode` (bug-free) was confirmed fully
+  equivalent otherwise.
   `core/` is untouched by the `nodes/` rewrite (see `docs/architecture.md`),
-  so this doesn't get fixed here, but it's real and live in the current
-  production path.
+  so this doesn't get fixed at the source, but it's real and live for
+  anyone using `AdafactorOptimizerNode` directly.
 
   Separately, and not the same issue: `ChunkedXPUAdafactor`/
-  `FusedXPUAdafactor` both have (had, for Fused) a real small-parameter
-  (< 10,000 element) fast path -- a plain elementwise second-moment EMA
-  in place of the row/col factored approximation -- that
-  `AdafactorAlgorithm` didn't cover, and the two don't even agree with
-  each other on the mechanism (`FusedXPUAdafactor`'s is genuinely
-  per-parameter; `ChunkedXPUAdafactor`'s ties every tiny parameter in
-  the whole optimizer together into one shared clip and EMA state, a
-  cross-parameter batching concern, not a per-parameter algorithm
-  branch). `ForeachXPUAdafactor` has no tiny-parameter special case at
-  all -- confirmed, not just theorized, by an actual torch run:
+  `FusedXPUAdafactor` both had a real small-parameter (< 10,000 element)
+  fast path -- a plain elementwise second-moment EMA in place of the
+  row/col factored approximation -- that `AdafactorAlgorithm` didn't
+  cover, and the two didn't even agree with each other on the mechanism
+  (`FusedXPUAdafactor`'s is genuinely per-parameter; `ChunkedXPUAdafactor`'s
+  ties every tiny parameter in the whole optimizer together into one
+  shared clip and EMA state, a cross-parameter batching concern, not a
+  per-parameter algorithm branch). `ForeachXPUAdafactor` had no
+  tiny-parameter special case at all -- confirmed, not just theorized,
+  by an actual torch run:
   `ForeachAdafactorOptimizerNode` came back equivalent to
   `ComposedAdafactorOptimizerNode(strategy="foreach")` at floating-
   point-noise magnitude and has been deleted. `FusedXPUAdafactor`'s gap
   was confirmed real (not noise) the same way, and `AdafactorAlgorithm`
-  has since grown an opt-in fix for it (`tiny_parameter_threshold`,
-  used by `ComposedFusedAdafactorOptimizerNode` only) -- not yet
-  confirmed to actually close the gap on real torch (Part D,
-  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`).
-  `ChunkedXPUAdafactor`'s cross-parameter-batching version is unrelated
-  to that fix and still fully open -- see
-  `docs/design/09-prioritized-backlog.md`. See `docs/CLEANUP_TODO.md`
-  for the full current state of all of this.
+  grew an opt-in fix for it (`tiny_parameter_threshold`, used by
+  `ComposedFusedAdafactorOptimizerNode` only) -- confirmed closed on
+  real torch (within this project's own already-established equivalence
+  tolerances for this exact pair -- `1e-4` float32, `1e-2` bf16, same
+  as the main-path case, float32+momentum excluded for the bug above,
+  same as the main-path case already excludes it), and
+  `FusedAdafactorOptimizerNode` has been deleted too. Permanent
+  regression coverage for both fixes lives in
+  `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py`
+  (tiny-parameter case) and
+  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py` Part A
+  (Foreach case). `ChunkedXPUAdafactor`'s cross-parameter-batching
+  version is unrelated to either fix and still fully open -- real,
+  separate `ExecutionStrategy`-level feature work, see
+  `docs/design/09-prioritized-backlog.md`. `AdafactorOptimizerNode` is
+  now the only legacy Adafactor node left registered, kept specifically
+  for that gap.
 
 - **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
   device placement anywhere.**

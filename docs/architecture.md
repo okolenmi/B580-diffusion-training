@@ -11,7 +11,7 @@ reader fast).
 |---|---|---|
 | Packages | `core/`, `manager/` | `nodes/`, `server/` |
 | Entry point | `convert.py` + a TOML config | `run_server.sh` (browser UI) |
-| Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does (see `docs/CLEANUP_TODO.md`) |
+| Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does |
 | Config style | One big TOML file, many flat fields | A visual graph of typed `Node`s wired together |
 
 **The legacy pipeline (`core/`, `manager/`) is not modified by this
@@ -25,13 +25,15 @@ built its own independent, verified-equivalent version of something
 `core/` does (the `optimizer/` domain's `Algorithm`+`ExecutionStrategy`
 split; `components/diffusion.py`'s noise-schedule/parameterization
 objects), that version is canonical and the old `core/`-wrapping `Node`
-gets retired -- see `docs/CLEANUP_TODO.md` for the running list of
-what's been unified this way, what's still mid-migration (some
-`optimizer/` nodes have a real, unreplicated small-parameter code path
-and can't be retired yet), and what hasn't been started (LoRA/UNet
-injection, text encoding, dataset ingestion still wrap `core/`/`manager/`
-directly, with no independent alternative built). Wrapping is the
-fallback for a domain nobody's rewritten yet, not a destination.
+gets retired. The `optimizer/` domain is fully unified this way except
+one node (`AdafactorOptimizerNode`, `core.optimizers.ChunkedXPUAdafactor`'s
+cross-parameter tiny-batching behavior -- real, separate
+`ExecutionStrategy`-level work, tracked in
+`docs/design/09-prioritized-backlog.md`, not yet started). LoRA/UNet
+injection, text encoding, and dataset ingestion haven't been started at
+all -- still wrap `core/`/`manager/` directly, with no independent
+alternative built (also tracked in that same backlog doc). Wrapping is
+the fallback for a domain nobody's rewritten yet, not a destination.
 
 ## Top-level layout
 

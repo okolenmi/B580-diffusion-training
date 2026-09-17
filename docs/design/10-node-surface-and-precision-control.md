@@ -26,12 +26,13 @@ also doubling as its palette display text, "...Node" suffix included.
 
 ## 11.1 Optimizer node consolidation
 
-**Update, 2026-09-16: mostly executed, not just planned any more** --
-see `docs/CLEANUP_TODO.md` for the full account, including two real
-corrections made along the way that this section's original version
-got wrong. What follows is the current, actual state, not the original
-plan -- kept in one place rather than split into "the plan" and "what
-actually happened" as two separate write-ups.
+**Update, 2026-09-17: fully executed, not just planned any more.**
+What follows is the current, actual state, not the original plan --
+kept in one place rather than split into "the plan" and "what actually
+happened" as two separate write-ups. (Tracked during development in
+docs/CLEANUP_TODO.md, since deleted once nothing was left in it --
+see git log for the day-by-day account, including two real corrections
+made along the way that this section's original version got wrong.)
 
 Grounded in actually reading every node file, not assumed from naming
 alone -- the picture is real but uneven, not a blanket "delete the old
@@ -39,41 +40,44 @@ ones":
 
 **Retired, confirmed equivalent:** `AdamWOptimizerNode` (wrapped
 `CPUAdamW`), `CAMEOptimizerNode`, `ForeachCAMEOptimizerNode`,
-`ForeachAdafactorOptimizerNode` -- each was a thin pass-through wrapper
-around a legacy `core.optimizers` class, and the matching
-`Composed*OptimizerNode` + `strategy=` choice covers the same ground.
-CAME/ForeachCAME were already equivalence-tested in `nodes/smoke_tests/`
-before this pass; Foreach-Adafactor needed a new, dedicated real-torch
-run first (see `smoke_test_adafactor_tiny_parameter_gap.py`) -- this
-section's own original version grouped it with `AdafactorOptimizerNode`
-below as though they shared one mechanism, which running the actual
-numbers disproved (see next entry). `AdamWOptimizerNode` retired for a
-different reason than "proven numerically equivalent": `CPUAdamW`'s
-CPU-resident state solves a full-fine-tune-parameter-count problem this
-project has no way to produce at all (see
-`nodes/optimizer/composed_adamw.py`) -- the design point this section's
-original version called "genuinely different... stays regardless" turned
-out to have no actual consumer anywhere in the codebase to be different
-*for*.
+`ForeachAdafactorOptimizerNode`, `FusedAdafactorOptimizerNode` -- each
+was a thin pass-through wrapper around a legacy `core.optimizers`
+class, and the matching `Composed*OptimizerNode` + `strategy=` choice
+covers the same ground. CAME/ForeachCAME were already
+equivalence-tested in `nodes/smoke_tests/` before this pass;
+Foreach-Adafactor and Fused-Adafactor each needed a new, dedicated
+real-torch run first (see `smoke_test_adafactor_tiny_parameter_gap.py`
+and `smoke_test_fused_adafactor_equivalence.py`) -- this section's own
+original version grouped Foreach with `AdafactorOptimizerNode` below as
+though they shared one mechanism, which running the actual numbers
+disproved (see next entry), and treated Fused's gap as unclosable
+algorithm work rather than the small, opt-in change
+(`AdafactorAlgorithm.tiny_parameter_threshold`) it turned out to be.
+`AdamWOptimizerNode` retired for a different reason than "proven
+numerically equivalent": `CPUAdamW`'s CPU-resident state solves a
+full-fine-tune-parameter-count problem this project has no way to
+produce at all (see `nodes/optimizer/composed_adamw.py`) -- the design
+point this section's original version called "genuinely different...
+stays regardless" turned out to have no actual consumer anywhere in the
+codebase to be different *for*.
 
 **Not retired, a real gap, confirmed on an actual torch run (not just
-static reading):** `AdafactorOptimizerNode` and `FusedAdafactorOptimizerNode`
-each still differ from their `Composed*` equivalent for small (< 10,000
-element) parameters -- but not for the same reason as each other, and
-not the reason this section's original version gave (a single, uniform
-`TINY_NUMEL` special case). `ChunkedXPUAdafactor` (backing
-`AdafactorOptimizerNode`) batches every tiny parameter across the whole
-optimizer into one shared clip/EMA state -- a cross-parameter, execution-
-strategy-level concern, not a per-parameter algorithm one; closing it
-needs new `ExecutionStrategy` machinery (something like
+static reading):** `AdafactorOptimizerNode` alone now -- differs from
+`ComposedAdafactorOptimizerNode` for small (< 10,000 element)
+parameters, for a reason this section's original version got wrong (a
+single, uniform `TINY_NUMEL` special case shared with the other two
+Adafactor variants -- it wasn't shared, see the "Retired" entry above).
+`ChunkedXPUAdafactor` batches every tiny parameter across the whole
+optimizer into one shared clip/EMA state -- a cross-parameter,
+execution-strategy-level concern, not a per-parameter algorithm one
+(unlike `FusedXPUAdafactor`'s tiny-parameter mechanism, which *was*
+per-parameter and got closed the same way the rest of this list did);
+closing it needs new `ExecutionStrategy` machinery (something like
 `ShapeGroupedBatchStrategy`, but grouping "under a size threshold"
-instead of "same shape"), not an `AdafactorAlgorithm` change.
-`FusedXPUAdafactor` (backing `FusedAdafactorOptimizerNode`) has a
-*different*, genuinely per-parameter elementwise formula -- real gap,
-confirmed at 1e-3 to 8e-3 magnitude for factored parameters (`float32`/
-`bf16`, with/without momentum), well above the ~1e-7/1e-4 floating-point
-noise floor the Foreach case above came back at. Both nodes stay
-registered.
+instead of "same shape"), not an `AdafactorAlgorithm` change -- real,
+separate, sized future work, tracked in
+`docs/design/09-prioritized-backlog.md`, not something this pass
+attempted.
 
 **A real, two-directional capability difference, not one-directional
 redundancy -- flagged, not yet acted on:** `SimpleAdamWOptimizerNode`
@@ -88,7 +92,8 @@ pieces" -- a legitimate, real distinction distinct from
 `AdamWOptimizerNode`'s case above (which had no real consumer;
 "minimal trust surface" has one, in principle, regardless of consumer
 count). **`SimpleAdamWOptimizerNode` was deleted anyway, in this same
-pass** (see `docs/CLEANUP_TODO.md`, first commit) -- decided at the time
+pass** (`SimpleAdamWOptimizerNode` deleted in the first commit of this
+pass, before this section was found) -- decided at the time
 without weighing this specific argument (this section wasn't found
 until several commits later). Worth a maintainer decision, not
 silently re-added or silently left deleted: this project's established

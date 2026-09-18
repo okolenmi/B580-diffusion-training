@@ -18,6 +18,7 @@ class AdafactorOptimizerHandle(OptimizerHandle):
 
     def __init__(self, legacy_optimizer):
         self._legacy = legacy_optimizer
+        self._offloaded = False
 
     @property
     def lr(self) -> float:
@@ -35,9 +36,11 @@ class AdafactorOptimizerHandle(OptimizerHandle):
 
     def offload_states_to_cpu(self) -> None:
         self._legacy.offload_states_to_cpu()
+        self._offloaded = True
 
     def reload_states_to_device(self, device: str | None = None) -> None:
         self._legacy.reload_states_to_device(device)
+        self._offloaded = False
 
     def decay_states(self, factor: float) -> None:
         self._legacy.decay_states(factor)
@@ -64,6 +67,15 @@ class AdafactorOptimizerHandle(OptimizerHandle):
         # missing this made footprint_bytes() silently report 0 for an
         # all-small-parameters optimizer, caught by
         # smoke_test_device_resident_retrofit.py before this fix).
+        #
+        # 0 while offloaded: offload_states_to_cpu() moves these tensors
+        # to CPU rather than dropping them, so summing them here would
+        # otherwise keep reporting the same byte total whether they're
+        # actually on-device or not -- device-memory usage is what this
+        # promises (see DeviceResident.footprint_bytes()'s own
+        # docstring), and that's 0 once nothing's actually on a device.
+        if self._offloaded:
+            return 0
         legacy = self._legacy
         return sum_tensor_bytes(getattr(legacy, "vr", ()), getattr(legacy, "vc", ()),
                                  getattr(legacy, "vs", ()), getattr(legacy, "exp_avg", ()),

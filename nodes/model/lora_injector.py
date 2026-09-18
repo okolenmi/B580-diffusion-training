@@ -135,8 +135,15 @@ class ComfyUNetTrainableModel(TrainableModel):
         magnitude (see that function's own docstring), so without this
         those tensors would be wrongly counted as part of the frozen
         base's own footprint instead of excluded as the trainable
-        adapter they actually are."""
+        adapter they actually are.
+
+        0 while offloaded (see offload()/reload() below) for the same
+        reason nodes/model/text_encoder.py's equivalent check is --
+        numel()*element_size() can't tell CPU-resident from
+        device-resident on its own."""
         if self._wrapper is None:
+            return 0
+        if getattr(self, "_device_before_offload", None) is not None:
             return 0
         from .adapter_injection import dora_trainable_parameters
         trainable_ptrs = {p.data_ptr() for p in
@@ -163,6 +170,7 @@ class ComfyUNetTrainableModel(TrainableModel):
                 "remember one -- neither was given."
             )
         self._wrapper.to(device=target)
+        self._device_before_offload = None
 
     def release(self) -> None:
         """Not reversible -- drops the wrapped model entirely. Moves to

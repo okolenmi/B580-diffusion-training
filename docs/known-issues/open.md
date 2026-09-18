@@ -82,9 +82,6 @@
   now the only legacy Adafactor node left registered, kept specifically
   for that gap.
 
-- **[2026-08] `DeviceResident.footprint_bytes()` doesn't check actual
-  device placement anywhere.**
-
 - **[2026-07] "Device lost" errors and silent training hangs after
   VRAM-pressure events, reported from real ComfyUI use (legacy `core/`
   pipeline, not `nodes/`).** User-reported, not yet investigated here.

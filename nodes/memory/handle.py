@@ -32,7 +32,16 @@ class DeviceResident(ABC):
         """Best-effort current device-memory usage. Best-effort, not exact
         -- an implementation wrapping third-party internals may not be
         able to account for every buffer; document what's excluded rather
-        than guessing."""
+        than guessing. *Device*-memory usage specifically: 0 while
+        offloaded, not the byte count of whatever's now sitting in host
+        RAM instead -- numel()*element_size() alone can't tell CPU-
+        resident from device-resident (shape and dtype don't change when
+        a tensor moves), so every implementation has to check this
+        explicitly, typically by tracking its own offloaded/not-offloaded
+        state (see nodes/model/text_encoder.py or
+        nodes/optimizer/composed.py for two different ways to do that).
+        Got this wrong project-wide until it didn't -- see
+        docs/known-issues/pending-testing.md."""
 
     @abstractmethod
     def offload(self) -> None:

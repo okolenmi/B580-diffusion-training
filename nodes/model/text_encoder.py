@@ -54,8 +54,16 @@ class SDXLTextEncoder(TextEncoder):
         """core.clip_encode.SDXLClipEncoder has no footprint accessor of
         its own -- summed here directly from clip_model's (always real)
         and _embedder's (None until encode_for_unet()'s first real call,
-        via _get_embedder()'s lazy construction) parameters/buffers."""
+        via _get_embedder()'s lazy construction) parameters/buffers.
+        0 while offloaded (self._device_before_offload set) -- the
+        tensors still exist, just not on any device this counts:
+        offload()'s own device-memory usage is 0 by definition, and
+        numel()*element_size() alone can't tell CPU-resident from
+        device-resident, so this has to be checked explicitly rather
+        than left to the summing loop below to get right by accident."""
         if self._legacy is None:
+            return 0
+        if self._device_before_offload is not None:
             return 0
         total = sum(p.numel() * p.element_size() for p in self._legacy.clip_model.parameters())
         total += sum(b.numel() * b.element_size() for b in self._legacy.clip_model.buffers())
@@ -91,6 +99,7 @@ class SDXLTextEncoder(TextEncoder):
             device=target, dtype=self._legacy.dtype)
         self._legacy._embedder = None
         self._legacy.device = target
+        self._device_before_offload = None
 
     def release(self) -> None:
         """Genuinely drops the encoder -- unload() alone doesn't (the

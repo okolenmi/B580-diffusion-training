@@ -90,6 +90,7 @@ class ComposedOptimizerHandle(OptimizerHandle):
         ]
         self._group_ratios = (group_policy or UniformGroups()).group_ratios(self.params)
         self.update_lr(lr)  # single place param_lr gets computed, see below
+        self._offloaded = False
 
     @property
     def lr(self) -> float:
@@ -115,11 +116,13 @@ class ComposedOptimizerHandle(OptimizerHandle):
     def offload_states_to_cpu(self) -> None:
         self.states = [self._state_store.to(s, "cpu") for s in self.states]
         self.strategy.offload_extra()
+        self._offloaded = True
 
     def reload_states_to_device(self, device: str | None = None) -> None:
         dev = device if device is not None else self.device
         self.states = [self._state_store.to(s, dev) for s in self.states]
         self.strategy.reload_extra(dev)
+        self._offloaded = False
 
     def decay_states(self, factor: float) -> None:
         # Infrequent (not per-step), so a checkout/commit round trip here -- rather
@@ -146,5 +149,15 @@ class ComposedOptimizerHandle(OptimizerHandle):
         state handles) -- same reason every other lifecycle method here is
         written once: correct for ComposedFusedOptimizerHandle and any
         future Algorithm/ExecutionStrategy/OptimizerStateStore combination
-        for free, by construction, without writing this again."""
+        for free, by construction, without writing this again.
+
+        0 while offloaded: offload_states_to_cpu() moves the real tensors
+        to "cpu" rather than dropping them, so self._state_store's own
+        footprint_bytes() would otherwise keep reporting the same
+        numel()*element_size() total it always did -- device-memory
+        usage is what this promises (see DeviceResident.footprint_bytes()'s
+        own docstring), and that's 0 once nothing's actually on a
+        device."""
+        if self._offloaded:
+            return 0
         return sum(self._state_store.footprint_bytes(handle) for handle in self.states)

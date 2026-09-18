@@ -319,7 +319,25 @@ class ChunkedXPUAdafactor:
                     p.data.mul_(1.0 - self.wd * alpha_t)
 
                 # alpha_t is now a plain Python float — mul_ and sub_ stay async.
-                p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))
+                #
+                # copy=True is load-bearing, not defensive style: when
+                # p.dtype == float32 (g's own dtype, always float32 here --
+                # see the .float() cast this method starts with), plain
+                # .to(dtype=p.dtype) is a no-op that returns g itself, not a
+                # copy. g IS self.exp_avg[i] whenever beta1 is set (aliased
+                # two lines above, not copied) -- so .mul_(alpha_t) right
+                # after would silently corrupt the real momentum buffer in
+                # place, shrinking it by alpha_t (~lr) every step, forever,
+                # as an unintended side effect of computing this step's
+                # update. bf16 parameters were never affected (a real cast
+                # there always produces a real copy) -- confirmed via
+                # smoke_test_fused_adafactor_equivalence.py's
+                # check_legacy_float32_momentum_no_longer_corrupted()/
+                # check_new_momentum_not_corrupted(), written against
+                # FusedXPUAdafactor's identical pattern before this one
+                # (same bug, same fix, same file) was found by reading
+                # it directly.
+                p.data.sub_(g.to(dtype=p.dtype, copy=True).mul_(alpha_t))
 
         finally:
             if ctx:
@@ -1288,7 +1306,10 @@ class FusedXPUAdafactor:
         if self.wd != 0:
             p.data.mul_(1.0 - self.wd * alpha_t)
 
-        p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))
+        p.data.sub_(g.to(dtype=p.dtype, copy=True).mul_(alpha_t))  # copy=True is
+        # load-bearing here too -- see ChunkedXPUAdafactor's identical line
+        # (core/optimizers.py, this same fix) for why plain .to(dtype=p.dtype)
+        # silently corrupted self.exp_avg[i] in place for float32 parameters.
 
     def register_hooks(self):
         self._in_backward = False

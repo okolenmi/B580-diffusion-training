@@ -7,8 +7,9 @@ driver's own numbers, no per-component breakdown) and
 tracked_footprint_mb (ResourceCoordinator.total_footprint_bytes(), a
 single rolled-up total) -- neither answers "how much of my VRAM is the
 text encoder cache vs. optimizer scratch vs. the model itself," which is
-exactly the question docs/known-issues/open.md's
-DeviceResident.footprint_bytes()/VRAM-pressure entries need answered.
+exactly the question docs/known-issues/pending-testing.md's
+DeviceResident.footprint_bytes() entry and docs/known-issues/open.md's
+VRAM-pressure entry need answered.
 This is that: a plain snapshot combining ResourceCoordinator's
 per-resident breakdown, MemoryManager's per-tag pool stats, and
 DeviceContext's own allocator stats into one object, so a caller (or a

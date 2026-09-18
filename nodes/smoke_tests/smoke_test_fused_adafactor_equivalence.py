@@ -20,40 +20,58 @@ resulting regression coverage actually lives now, the same way this
 file already is for the main-path case.
 
 **A second, more interesting divergence was found while writing this
-test, and is deliberately NOT papered over with a looser tolerance:**
-FusedXPUAdafactor's momentum (`beta1` set) path has a real, pre-existing
-bug for float32 parameters. `g = self.exp_avg[i]` aliases the momentum
-buffer (no copy); the very next line, `p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))`,
-calls `.to(dtype=p.dtype)` -- which for a float32 parameter (state is
-already float32) returns the *same object*, not a copy, since there's
-nothing to convert -- and then `.mul_(alpha_t)` mutates it in place. Net
-effect: every step, right after using the momentum buffer to compute that
-step's update, the buffer is permanently shrunk by `alpha_t` (~lr) as an
-unintended side effect -- confirmed directly (see
-check_legacy_float32_momentum_bug() below), and confirmed to be
-float32-specific: for a bf16 parameter, `.to(dtype=p.dtype)` performs a
-real cast, producing a genuine copy, so the aliasing -- and the bug --
-doesn't happen (also confirmed directly, same function). AdafactorAlgorithm
-doesn't have this bug (its own momentum blend explicitly clones before
-any further scaling -- see algorithms/adafactor.py). Replicating it here
-would mean deliberately copying a bug into new code, which is exactly
-what this session was told not to do -- so the equivalence checks below
-compare momentum behavior only where the legacy reference itself isn't
-corrupted (bf16), and check_legacy_float32_momentum_bug() /
-check_new_momentum_not_corrupted() make the float32 divergence explicit
-and understood rather than silently excluded.
+test originally, and has since been fixed at the source, not papered
+over with a looser tolerance:** FusedXPUAdafactor's momentum (`beta1`
+set) path had a real, pre-existing bug for float32 parameters.
+`g = self.exp_avg[i]` aliases the momentum buffer (no copy); the next
+line, `p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))`, called
+`.to(dtype=p.dtype)` -- which for a float32 parameter (state is already
+float32) returned the *same object*, not a copy, since there was
+nothing to convert -- and then `.mul_(alpha_t)` mutated it in place. Net
+effect: every step, right after using the momentum buffer to compute
+that step's update, the buffer was permanently shrunk by `alpha_t`
+(~lr) as an unintended side effect -- confirmed directly (see
+check_legacy_float32_momentum_no_longer_corrupted() below, which used
+to be named for finding the bug and is now the regression check against
+it coming back), and confirmed to be float32-specific: for a bf16
+parameter, `.to(dtype=p.dtype)` performs a real cast, producing a
+genuine copy, so the aliasing -- and the bug -- never happened there.
+AdafactorAlgorithm never had this bug (its own momentum blend
+explicitly clones before any further scaling -- see
+algorithms/adafactor.py). **Fixed in core/optimizers.py** (both here and
+in the identical pattern in ChunkedXPUAdafactor's main-parameter path)
+by forcing a real copy (`.to(dtype=p.dtype, copy=True)`) regardless of
+whether dtype conversion would already produce one -- `core/` is
+untouched by the `nodes/` rewrite's own restructuring (see
+docs/architecture.md), but bugs found in it get fixed in place, which
+this is. check_legacy_float32_momentum_no_longer_corrupted() and
+check_new_momentum_not_corrupted() below now both confirm the same
+thing (no corruption) for the two, formerly-divergent implementations --
+kept as two separate checks anyway since they exercise genuinely
+different code (legacy vs. AdafactorAlgorithm), not because there's
+still something distinct to tell apart. float32+beta1 is no longer
+excluded from the equivalence grid below -- fixing the aliasing bug at
+the source means legacy and AdafactorAlgorithm's momentum math is now
+structurally the same (both: blend into exp_avg, copy, scale, cast),
+so it's expected to agree within the same tolerance every other
+float32 case does.
 
 What's checked, in order:
-1. check_legacy_float32_momentum_bug(): isolates and confirms the bug
-   above, directly, in the untouched legacy class.
+1. check_legacy_float32_momentum_no_longer_corrupted(): confirms the
+   fix directly, in core/optimizers.py's own FusedXPUAdafactor class --
+   exp_avg after one step is close to its true pre-alpha_t value, not
+   collapsed to that step's applied delta, for a float32 parameter; and
+   (unaffected either way, kept as a control) still not collapsed for
+   bf16.
 2. check_new_momentum_not_corrupted(): confirms AdafactorAlgorithm's
-   momentum buffer does NOT get this same corruption for float32
-   parameters, across several real steps.
+   momentum buffer never had this corruption for float32 parameters,
+   across several real steps -- this was never broken, checked here as
+   the other half of "both sides agree because both are now correct,"
+   not because this side was ever in doubt.
 3. Single-pass equivalence (sub_steps=1) across weight_decay,
    scale_parameter, and beta1 (momentum) on/off, float32 and bf16 --
    same config surface smoke_test_adafactor_equivalence.py already covers
    for the non-fused path, now proven for the hook-driven path too.
-   float32+beta1 is deliberately excluded from this grid, per the above.
 4. Multi-pass accumulation (sub_steps=2, this codebase's actual
    conditional+unconditional distillation shape, beta1=None so this is
    purely about the accumulation mechanism, not entangled with the
@@ -63,13 +81,13 @@ What's checked, in order:
    applied after the first pass and that the final, single applied
    update after the second pass matches.
 5. Tiny-parameter (< 10,000 element) single-pass equivalence, same
-   float32/bf16 x momentum coverage as (3) -- float32+beta1 excluded for
-   the same, already-established reason. scale_parameter=True and
-   weight_decay != 0 are NOT covered here yet (unlike the main-path
-   table in (3)): nothing structurally suggests they'd interact
-   differently with tiny_parameter_threshold (alpha_t/decay are computed
-   before the factored/tiny branch either way), but that's reasoning,
-   not a run -- narrower coverage than (3), on purpose, not an oversight.
+   float32/bf16 x momentum coverage as (3), float32+beta1 included now
+   too. scale_parameter=True and weight_decay != 0 are NOT covered here
+   yet (unlike the main-path table in (3)): nothing structurally
+   suggests they'd interact differently with tiny_parameter_threshold
+   (alpha_t/decay are computed before the factored/tiny branch either
+   way), but that's reasoning, not a run -- narrower coverage than (3),
+   on purpose, not an oversight.
 """
 
 import sys
@@ -88,38 +106,54 @@ _SHAPES = [(120, 120), (12000,)]  # both >= TINY_NUMEL (10_000)
 _TINY_SHAPES = [(20, 30), (64,)]  # both < TINY_NUMEL -- factored + unfactored
 
 # Each key: (dtype, scale_parameter, weight_decay, beta1). float32+beta1
-# deliberately excluded -- see module docstring.
+# now included -- see module docstring for why it no longer needs
+# excluding (the aliasing bug it used to hit is fixed at the source,
+# core/optimizers.py). Its 1e-4 tolerance matches the other float32
+# entries on reasoning (same math on both sides now, differing only in
+# copy-vs-clone timing, a float32-negligible ordering difference), not
+# a fresh measurement -- this specific combination hasn't been run
+# since the fix landed as of this writing.
 _TOLERANCES = {
     (torch.float32, False, 0.0, None): 1e-4,
     (torch.float32, True, 0.0, None): 1e-4,
     (torch.float32, False, 0.05, None): 1e-4,
+    (torch.float32, False, 0.0, 0.9): 1e-4,
     (torch.bfloat16, False, 0.0, None): 1e-2,
     (torch.bfloat16, True, 0.05, 0.9): 1e-2,
 }
 
 # Same shape as _TOLERANCES, narrower coverage (scale_parameter=True/
-# weight_decay!=0 not included -- see (5) above), and float32+beta1
-# excluded for the identical reason _TOLERANCES excludes it -- the bug
-# is in the momentum/dtype-aliasing mechanism itself (check_legacy_
-# float32_momentum_bug() above already proves it, generally, not
-# shape-specifically), not anything to do with the tiny-parameter path.
-# Values are the actual measured max abs diff from
+# weight_decay!=0 not included -- see (5) above). float32+beta1 included
+# here too, same reason as _TOLERANCES -- untested at this shape as of
+# this writing, though (Part D predates the momentum-bug fix, so its own
+# float32+momentum numbers -- 9.496e-04/8.026e-04 -- reflect the bug,
+# not this tolerance; 1e-4 here matches the other float32 entries on
+# reasoning, not a fresh measurement -- confirm when this test next
+# runs).
+# Values for the other three are the actual measured max abs diff from
 # smoke_test_adafactor_tiny_parameter_gap.py's Part D (float32
 # no-momentum: 4.768e-07; bf16 no-momentum: 1.953e-03; bf16 momentum:
 # 0.0), plus headroom.
 _TINY_TOLERANCES = {
     (torch.float32, False, 0.0, None): 1e-4,
+    (torch.float32, False, 0.0, 0.9): 1e-4,
     (torch.bfloat16, False, 0.0, None): 1e-2,
     (torch.bfloat16, True, 0.0, 0.9): 1e-2,
 }
 
 
-def check_legacy_float32_momentum_bug() -> bool:
-    """Confirms the aliasing bug described in the module docstring,
-    directly: after one update, legacy's stored exp_avg for a float32
-    parameter equals *that step's applied delta*, not the true
-    pre-alpha_t momentum value -- and does NOT for a bf16 parameter,
-    isolating dtype as the actual cause."""
+def check_legacy_float32_momentum_no_longer_corrupted() -> bool:
+    """Regression check against the aliasing bug this file's module
+    docstring describes in full -- fixed in core/optimizers.py
+    (.to(dtype=p.dtype, copy=True) instead of plain .to(dtype=p.dtype)).
+    Confirms directly: after one update, legacy's stored exp_avg for a
+    float32 parameter is close to its *true* pre-alpha_t momentum value
+    (mul_(beta1).add_(g, alpha=1-beta1) applied to a zero-initialized
+    buffer, for one step with beta1=0.9 that's just 0.1*g), not
+    collapsed to that step's applied delta the way the bug used to
+    cause -- and, as a control, was never collapsed for a bf16
+    parameter either (this bug was always float32-specific, so bf16
+    should show no change in behavior from before the fix)."""
     torch.manual_seed(1)
     p_init = torch.randn(120, 120) * 0.1
     g = torch.randn(120, 120) * 0.05
@@ -131,7 +165,7 @@ def check_legacy_float32_momentum_bug() -> bool:
     legacy.begin_step(1)
     legacy._update_param(p)
     applied_delta = p_init - p.detach()
-    float32_corrupted = torch.allclose(legacy.exp_avg[0], applied_delta, atol=1e-6)
+    float32_not_corrupted = not torch.allclose(legacy.exp_avg[0], applied_delta, atol=1e-6)
 
     p_bf16 = p_init.to(torch.bfloat16).clone().requires_grad_(True)
     legacy_bf16 = FusedXPUAdafactor(params=[p_bf16], lr=0.02, weight_decay=0.0,
@@ -140,9 +174,9 @@ def check_legacy_float32_momentum_bug() -> bool:
     legacy_bf16.begin_step(1)
     legacy_bf16._update_param(p_bf16)
     applied_delta_bf16 = (p_init.to(torch.bfloat16) - p_bf16.detach()).float()
-    bf16_not_corrupted = not torch.allclose(legacy_bf16.exp_avg[0].float(), applied_delta_bf16, atol=1e-6)
+    bf16_still_not_corrupted = not torch.allclose(legacy_bf16.exp_avg[0].float(), applied_delta_bf16, atol=1e-6)
 
-    return float32_corrupted and bf16_not_corrupted
+    return float32_not_corrupted and bf16_still_not_corrupted
 
 
 def check_new_momentum_not_corrupted(n_steps: int = 5) -> bool:
@@ -256,13 +290,15 @@ def main():
           f"backward hooks, pure numerical comparison, real hardware not required)")
     failures = []
 
-    print("\n=== legacy float32-momentum aliasing bug (found while writing this test) ===")
-    ok = check_legacy_float32_momentum_bug()
-    print(f"  {'PASS' if ok else 'FAIL'}: legacy exp_avg corrupted for float32, not for bf16 "
-          f"(confirms the mechanism described in this file's module docstring)")
+    print("\n=== legacy float32-momentum aliasing bug (fixed in core/optimizers.py) ===")
+    ok = check_legacy_float32_momentum_no_longer_corrupted()
+    print(f"  {'PASS' if ok else 'FAIL'}: legacy exp_avg no longer corrupted for float32 "
+          f"(confirms the fix described in this file's module docstring); bf16 unaffected "
+          f"either way, checked as a control")
     if not ok:
-        failures.append("check_legacy_float32_momentum_bug: expected corruption pattern not found "
-                         "-- module docstring's explanation may now be wrong, needs re-checking")
+        failures.append("check_legacy_float32_momentum_no_longer_corrupted: still seeing the "
+                         "corruption pattern -- the core/optimizers.py fix may not have landed, "
+                         "or this needs re-checking")
 
     ok = check_new_momentum_not_corrupted()
     print(f"  {'PASS' if ok else 'FAIL'}: AdafactorAlgorithm's momentum buffer does NOT have "

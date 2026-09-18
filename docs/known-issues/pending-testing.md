@@ -2,6 +2,53 @@
 
 # Pending user testing
 
+- **[2026-09] `core.optimizers.ChunkedXPUAdafactor`/`FusedXPUAdafactor`
+  silently corrupted their own momentum buffer for float32 parameters
+  with `beta1` (momentum) set -- root cause found, fix implemented, not
+  yet confirmed.** `g = self.exp_avg[i]` aliased the momentum buffer (no
+  copy); the following `p.data.sub_(g.to(dtype=p.dtype).mul_(alpha_t))`
+  called `.to(dtype=p.dtype)`, which for a float32 parameter (state is
+  already float32) returned the *same object*, not a copy -- so the
+  subsequent `.mul_(alpha_t)` mutated the momentum buffer in place. Net
+  effect: every step, right after using the momentum buffer to compute
+  that step's update, the buffer got permanently shrunk by `alpha_t`
+  (~lr) as an unintended side effect. Confirmed directly, not theorized
+  -- see `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py`'s
+  `check_legacy_float32_momentum_no_longer_corrupted()` for the
+  `FusedXPUAdafactor` case; `ChunkedXPUAdafactor`'s copy of the same
+  pattern (`core/optimizers.py`, main-parameter path) confirmed the
+  identical way by reading it directly. bf16 parameters were never
+  affected (`.to(dtype=p.dtype)` performs a real cast there, producing a
+  genuine copy).
+  **Scope differed between the two, checked precisely rather than
+  assumed:** `FusedXPUAdafactor`'s buggy line was shared by both its
+  tiny-parameter (< 10,000 element) and main-parameter code paths, so it
+  affected every parameter size. `ChunkedXPUAdafactor`'s sat only in its
+  main-parameter path (guarded by `p.numel() < 10_000` routing tiny
+  parameters elsewhere instead) -- its own tiny-parameter path applies
+  updates via a different mechanism (`ws[s:e].add_(..., alpha=-alpha_t)`,
+  no aliasing problem) and was never affected. `ForeachXPUAdafactor`
+  never had this bug at all -- both its factored and unfactored paths
+  use non-in-place `.mul(alpha_t)`, which always returns a new tensor
+  regardless of dtype, never aliasing the momentum buffer.
+  `nodes/optimizer/algorithms/adafactor.py`'s `AdafactorAlgorithm` never
+  had this bug either way. Fix: forced a real copy
+  (`.to(dtype=p.dtype, copy=True)`) in both `core/optimizers.py`
+  locations, regardless of whether the dtype conversion alone would
+  already produce one -- `core/` is untouched by the `nodes/` rewrite's
+  own restructuring (see `docs/architecture.md`), but bugs found in it
+  get fixed in place, which this is. Since the fix makes legacy's
+  momentum math structurally identical to `AdafactorAlgorithm`'s (both:
+  blend into the buffer, copy, scale, cast), the float32+momentum
+  combination that `smoke_test_fused_adafactor_equivalence.py` used to
+  deliberately exclude from its equivalence grid (because the bug made
+  it meaningless to compare against) is now included, expected to agree
+  within the same `1e-4` tolerance every other float32 case does.
+  **Not run** -- needs `smoke_test_fused_adafactor_equivalence.py` run
+  against real torch to confirm both the fix itself
+  (`check_legacy_float32_momentum_no_longer_corrupted()`) and the
+  newly-included float32+momentum equivalence checks.
+
 - **[2026-09] `DeviceResident.footprint_bytes()` didn't check actual
   device placement -- root cause found, fix implemented across all
   four real implementations, not yet confirmed.** `footprint_bytes()`

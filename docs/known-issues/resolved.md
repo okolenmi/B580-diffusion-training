@@ -2,6 +2,45 @@
 
 # Resolved
 
+- **[2026-09] `AdafactorOptimizerNode`'s legacy-wrapping siblings
+  (`ForeachAdafactorOptimizerNode`, `FusedAdafactorOptimizerNode`) had a
+  real, unreplicated small-parameter (< 10,000 element) code path
+  relative to their `Composed*` equivalents -- confirmed and closed on
+  real torch, not just read from source.** `ChunkedXPUAdafactor`/
+  `FusedXPUAdafactor` both had a tiny-parameter fast path (a plain
+  elementwise second-moment EMA in place of the row/col factored
+  approximation) that `AdafactorAlgorithm` didn't cover -- and the two
+  didn't even agree with each other on the mechanism
+  (`FusedXPUAdafactor`'s is genuinely per-parameter;
+  `ChunkedXPUAdafactor`'s ties every tiny parameter in the whole
+  optimizer together into one shared clip and EMA state, a
+  cross-parameter batching concern, not a per-parameter algorithm one).
+  `ForeachXPUAdafactor` turned out to have no tiny-parameter special
+  case at all. Confirmed by a real-torch run
+  (`nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`):
+  Foreach came back equivalent to `ComposedAdafactorOptimizerNode(
+  strategy="foreach")` at floating-point-noise magnitude (no algorithm
+  change needed) -- `foreach_adafactor.py`/`ForeachAdafactorOptimizerNode`
+  deleted. Fused's gap was real (1e-3 to 1e-2 magnitude, not noise);
+  closed by adding an opt-in `tiny_parameter_threshold` to
+  `AdafactorAlgorithm` (used only by `ComposedFusedAdafactorOptimizerNode`,
+  deliberately not by the chunked/foreach/simple/shape_grouped strategies,
+  since that would have broken the just-confirmed Foreach match) --
+  confirmed closed on real torch, within this project's own
+  already-established equivalence tolerances for this pair (`1e-4`
+  float32, `1e-2` bf16) -- `fused_adafactor.py`/`FusedAdafactorOptimizerNode`
+  deleted too. `ChunkedXPUAdafactor`'s cross-parameter-batching version
+  is a different, bigger problem (new `ExecutionStrategy`-level
+  machinery, not an algorithm change) and is not resolved --
+  `AdafactorOptimizerNode` stays registered for it, tracked as real
+  future work in `docs/design/09-prioritized-backlog.md`, not carried
+  here as an open bug since nothing is broken, there's just a capability
+  gap. Permanent regression coverage:
+  `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py`
+  (tiny-parameter case) and
+  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py` Part A
+  (Foreach case).
+
 - **[2026-08] 8 real, working Node classes existed but weren't
   selectable in the graph editor -- `server/nodegraph_registry.py`'s
   list was stale.** Confirmed directly, not a hypothesis: walked every

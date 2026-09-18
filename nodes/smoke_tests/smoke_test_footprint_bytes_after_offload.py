@@ -1,4 +1,5 @@
-"""Verifies the footprint_bytes()-after-offload() fix (docs/known-issues/open.md)
+"""Verifies the footprint_bytes()-after-offload() fix
+(docs/known-issues/pending-testing.md)
 across all four real DeviceResident implementations in nodes/: none of
 them checked whether their tensors were actually on a device before
 summing numel()*element_size() -- so after offload() moved everything

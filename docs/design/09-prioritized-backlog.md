@@ -101,7 +101,7 @@ missing is a real run:**
   `ShapeGroupedBatchStrategy`, but grouping "every parameter under a
   size threshold, any shape" instead of "same shape" -- real, separate
   feature work, not a formula fix. `AdafactorOptimizerNode` stays
-  registered until this lands (see `docs/known-issues/open.md` and
+  registered until this lands (see `docs/known-issues/resolved.md` and
   `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py` for
   the confirmed, measured gap this would close).
 - **`core`/`manager` coupling in the model and dataset domains** (new

@@ -28,11 +28,12 @@ not yet run.**
     -- a formula fix can't touch a bug in a completely different code
     path (the momentum blend, applied after the tiny/factored branch
     either way). **That bug has since been fixed separately, at the
-    source (core/optimizers.py, see docs/known-issues/resolved.md and
-    pending-testing.md) -- re-running Part B/D today would no longer
-    reproduce the 8.0e-04/9.496e-04 numbers quoted here, since the code
-    path that caused them no longer exists. Left as a historical record
-    of the investigation, not a claim about current behavior.**
+    source (core/optimizers.py) and confirmed fixed by user -- see
+    docs/known-issues/resolved.md -- re-running Part B/D today would no
+    longer reproduce the 8.0e-04/9.496e-04 numbers quoted here, since
+    the code path that caused them no longer exists. Left as a
+    historical record of the investigation, not a claim about current
+    behavior.**
     This makes structural sense on reflection, not just
     empirically: for a 1D parameter, AdafactorAlgorithm's *regular* path
     (`init_state()`'s `else` branch) is already a plain elementwise
@@ -61,8 +62,8 @@ not yet run.**
     exactly (4.768e-07). float32 momentum showed 9.496e-04/8.026e-04 --
     NOT a flaw in the fix: this is the exact same known
     `FusedXPUAdafactor` momentum-corruption bug already documented at
-    the time (since fixed separately, at the source -- see
-    docs/known-issues/resolved.md/pending-testing.md;
+    the time (since fixed separately, at the source, and confirmed by
+    user -- see docs/known-issues/resolved.md;
     smoke_test_fused_adafactor_equivalence.py's momentum exclusion this
     sentence originally referred to has since been lifted too), which
     `smoke_test_fused_adafactor_equivalence.py`'s

@@ -41,7 +41,7 @@ class DeviceResident(ABC):
         state (see nodes/model/text_encoder.py or
         nodes/optimizer/composed.py for two different ways to do that).
         Got this wrong project-wide until it didn't -- see
-        docs/known-issues/pending-testing.md."""
+        docs/known-issues/resolved.md."""
 
     @abstractmethod
     def offload(self) -> None:

@@ -36,10 +36,10 @@ parameter batching, not per-parameter) is unrelated to this fix and
 still open -- see docs/design/09-prioritized-backlog.md.
 Separately, FusedXPUAdafactor had a real momentum-corruption
 bug for float32 parameters, fixed at the source
-(core/optimizers.py) -- see docs/known-issues/pending-testing.md --
-that this Node never reproduced even before that fix (its own
-momentum blend was always correct; only the legacy reference was
-wrong).
+(core/optimizers.py) and confirmed by user -- see
+docs/known-issues/resolved.md -- that this Node never reproduced even
+before that fix (its own momentum blend was always correct; only the
+legacy reference was wrong).
 """
 
 from __future__ import annotations

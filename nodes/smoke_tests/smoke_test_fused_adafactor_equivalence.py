@@ -53,8 +53,8 @@ still something distinct to tell apart. float32+beta1 is no longer
 excluded from the equivalence grid below -- fixing the aliasing bug at
 the source means legacy and AdafactorAlgorithm's momentum math is now
 structurally the same (both: blend into exp_avg, copy, scale, cast),
-so it's expected to agree within the same tolerance every other
-float32 case does.
+and agrees within the same tolerance every other float32 case does --
+confirmed by an actual run (2026-09-18), not just expected.
 
 What's checked, in order:
 1. check_legacy_float32_momentum_no_longer_corrupted(): confirms the
@@ -108,11 +108,10 @@ _TINY_SHAPES = [(20, 30), (64,)]  # both < TINY_NUMEL -- factored + unfactored
 # Each key: (dtype, scale_parameter, weight_decay, beta1). float32+beta1
 # now included -- see module docstring for why it no longer needs
 # excluding (the aliasing bug it used to hit is fixed at the source,
-# core/optimizers.py). Its 1e-4 tolerance matches the other float32
-# entries on reasoning (same math on both sides now, differing only in
-# copy-vs-clone timing, a float32-negligible ordering difference), not
-# a fresh measurement -- this specific combination hasn't been run
-# since the fix landed as of this writing.
+# core/optimizers.py). Confirmed within 1e-4 by an actual run (2026-09-18,
+# user-confirmed) -- matches the other float32 entries' tolerance for the
+# reason expected (same math on both sides now, differing only in
+# copy-vs-clone timing, a float32-negligible ordering difference).
 _TOLERANCES = {
     (torch.float32, False, 0.0, None): 1e-4,
     (torch.float32, True, 0.0, None): 1e-4,
@@ -124,12 +123,11 @@ _TOLERANCES = {
 
 # Same shape as _TOLERANCES, narrower coverage (scale_parameter=True/
 # weight_decay!=0 not included -- see (5) above). float32+beta1 included
-# here too, same reason as _TOLERANCES -- untested at this shape as of
-# this writing, though (Part D predates the momentum-bug fix, so its own
-# float32+momentum numbers -- 9.496e-04/8.026e-04 -- reflect the bug,
-# not this tolerance; 1e-4 here matches the other float32 entries on
-# reasoning, not a fresh measurement -- confirm when this test next
-# runs).
+# here too, same reason as _TOLERANCES, and confirmed the same way
+# (2026-09-18, actual run, user-confirmed, not just reasoned about --
+# Part D predates the momentum-bug fix, so its own float32+momentum
+# numbers -- 9.496e-04/8.026e-04 -- reflect the since-fixed bug, not
+# this tolerance; this test's own run afterward is the real check).
 # Values for the other three are the actual measured max abs diff from
 # smoke_test_adafactor_tiny_parameter_gap.py's Part D (float32
 # no-momentum: 4.768e-07; bf16 no-momentum: 1.953e-03; bf16 momentum:

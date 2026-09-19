@@ -1,5 +1,5 @@
 """Verifies the footprint_bytes()-after-offload() fix
-(docs/known-issues/pending-testing.md)
+(docs/known-issues/resolved.md; confirmed fixed by user, run 2026-09-18)
 across all four real DeviceResident implementations in nodes/: none of
 them checked whether their tensors were actually on a device before
 summing numel()*element_size() -- so after offload() moved everything
@@ -18,6 +18,10 @@ actually touches, confirmed by reading each directly, not guessed. The
 other two (ComposedOptimizerHandle, AdafactorOptimizerHandle) reuse the
 same real, already-proven construction patterns from
 smoke_test_device_resident_retrofit.py.
+
+Now a permanent regression check, not just the original investigation
+-- a real divergence here would mean one of the four implementations
+stopped tracking its own offloaded state correctly.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_footprint_bytes_after_offload.py`
 """

@@ -25,6 +25,7 @@ def _load() -> dict[str, type]:
     from nodes.model.parameters import ModelParametersNode
     from nodes.model.resources_controller import ResourcesControllerNode
     from nodes.model.lora_training_config import LoRATrainingConfigNode
+    from nodes.model.trainer_unpack import TrainerResourcesUnpackNode
     from nodes.model.text_encoder import SDXLTextEncoderNode
     from nodes.model.text_encoder_cache import CachingTextEncoderNode
     from nodes.model.text_encoder_prewarm import PrewarmedTextEncoderNode
@@ -43,20 +44,21 @@ def _load() -> dict[str, type]:
                                    UniformLossWeightingNode)
     from nodes.train.schedule import ConstantLRScheduleNode, CosineLRScheduleNode
     from nodes.train.supervised import SupervisedLoRATrainerNode
+    from nodes.train.budgeted import BudgetedLoRATrainerNode
 
     classes = [
         ManagedDatasetSourceNode, PrefetchingBatchSourceNode, RenoiseBatchSourceNode,
         SafetensorsCheckpointNode, ComfyUNetLoRANode, LoRACheckpointLoaderNode, SDXLTextEncoderNode,
         CachingTextEncoderNode, PrewarmedTextEncoderNode,
         ModelParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,
-        ResourcesControllerNode, LoRATrainingConfigNode,
+        ResourcesControllerNode, LoRATrainingConfigNode, TrainerResourcesUnpackNode,
         TrainingProgressMonitorNode, VRAMBudgetControllerNode,
         AdafactorOptimizerNode,
         ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,
-        SupervisedLoRATrainerNode,
+        SupervisedLoRATrainerNode, BudgetedLoRATrainerNode,
         FloatConstantNode, IntConstantNode, StringConstantNode, BoolConstantNode,
     ]
     return {cls.__name__: cls for cls in classes}

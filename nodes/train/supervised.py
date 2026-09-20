@@ -12,29 +12,24 @@ The step itself is a TrainingStepPipeline (nodes/train/step_pipeline.py)
 dual-pass, gradient accumulation) is "construct one more phase, insert it
 in the list", not "edit the method that does everything" (see
 step_pipeline.py's own docstring).
+
+The real loop lives in nodes/train/loop.py's
+run_supervised_lora_training_loop now, not inline here -- this class
+resolves its own Port defaults into it and nothing else. See that
+module's own docstring for why (shared with BudgetedLoRATrainerNode,
+nodes/train/budgeted.py).
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from ..components.device import DeviceContext, allocator_conf_env
-from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedule,
-                                     EpsParameterization, KarrasInputScaler)
 from ..core import Port
-from ..dataset.handle import TrainingBatchSource
+from ..components.diffusion import DiffusionProcess
 from ..memory.control_handle import ResourceControlHandle
-from ..memory.coordinator import ResourceCoordinator
 from ..model.handle import TrainableModel
-from ..model.text_encoder_cache import CachingTextEncoder
-from ..optimizer.handle import FusedOptimizerHandle, describe_optimizer
-from .loss import UniformLossWeighting
+from .loop import run_supervised_lora_training_loop
 from .node import TrainerNode
-from .step_pipeline import (BackwardPhase, EncodeConditioningPhase, FetchBatchPhase,
-                             ForwardPhase, LossPhase, MonitoringPhase,
-                             OptimizerBeginStepPhase, OptimizerStepPhase,
-                             PrepareDiffusionInputsPhase, StepState, TimedPhase,
-                             TrainingStepPipeline)
 
 
 class SupervisedLoRATrainerNode(TrainerNode):
@@ -105,7 +100,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "to tell 'stable but high' from 'climbing'). Also prints the concrete "
                 "optimizer identity (optimizer.handle.describe_optimizer) and a one-time "
                 "shape histogram of every trainable parameter, unconditionally, regardless of "
-                "this profile flag -- see SupervisedLoRATrainerNode.build()'s own startup "
+                "this profile flag -- see nodes/train/loop.py's own startup "
                 "prints. Also reports tracked_footprint_mb -- the sum of every registered "
                 "DeviceResident's own footprint_bytes() (model/optimizer/text_encoder), "
                 "independent of what the device driver reports. The two staying roughly in "
@@ -124,7 +119,9 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "a real reference leak (check profile=True's vram_allocated_mb for that), only "
                 "caching-allocator fragmentation/bookkeeping. Costs a device sync each time "
                 "it runs (same as any other explicit synchronize), so a very small N will "
-                "cost real step time -- start high (e.g. 50) and go lower only if needed.",
+                "cost real step time -- start high (e.g. 50) and go lower only if needed. See "
+                "BudgetedLoRATrainerNode (nodes/train/budgeted.py) for a variant of this same "
+                "node that defaults this to 50 instead of 0.",
         ),
         "profile_memory_per_phase": Port(
             name="profile_memory_per_phase", type=bool, required=False, default=False,
@@ -152,158 +149,37 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "caching text encoder (one that keeps its own results in RAM and only "
                 "calls back into the underlying model on a cache miss) -- once its cache "
                 "is warm, most steps genuinely don't need it resident, and it reloads "
-                "itself automatically the moment a miss actually needs it.",
+                "itself automatically the moment a miss actually needs it. See "
+                "BudgetedLoRATrainerNode (nodes/train/budgeted.py) for a variant of this same "
+                "node that makes this input required instead of optional.",
         ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
         self.validate_inputs(inputs)
-
-        model: TrainableModel = inputs["model"]
-        batches: TrainingBatchSource = inputs["batches"]
-        steps: int = inputs["steps"]
-        empty_cache_every_n_steps: int = inputs.get(
-            "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
-        profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
-        profile_memory_per_phase: bool = inputs.get(
-            "profile_memory_per_phase", self.INPUTS["profile_memory_per_phase"].default)
-        resource_control: ResourceControlHandle | None = inputs.get("resource_control")
-
-        model.train()
-        device = next(iter(model.trainable_parameters())).device
-        optimizer = inputs["optimizer"]
-        is_fused = isinstance(optimizer, FusedOptimizerHandle)
-        device_ctx = DeviceContext.for_device(device)
-
-        # Three one-time, unconditional (not gated behind `profile`)
-        # prints, cheap and directly answering: which concrete optimizer
-        # is this run actually using, is an allocator-config env var
-        # actually being read, and does this run's real LoRA shape
-        # distribution have enough same-shape parameter groups for
-        # shape-based batching to be worth using.
-        optimizer_id = describe_optimizer(optimizer)
-        print(f"[SupervisedLoRATrainerNode] optimizer: {optimizer_id}")
-        print(f"[SupervisedLoRATrainerNode] allocator config env: {allocator_conf_env()}")
-        _log_shape_histogram(model.trainable_parameters())
-        diffusion_process = inputs.get("diffusion_process") or DiffusionProcess(
-            DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
-        loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
-
-        # Registered for profile=True's tracked_footprint_mb cross-check
-        # (nodes/train/step_pipeline.py's MonitoringPhase) -- not driving
-        # any offload decisions itself here. See
-        # nodes/memory/coordinator.py's OffloadOrchestrator for that;
-        # nothing here publishes a TrainingLifecycleEvent for it to react
-        # to yet.
-        coordinator = ResourceCoordinator()
-        coordinator.register("model", model)
-        coordinator.register("optimizer", optimizer)
-        coordinator.register("text_encoder", inputs["text_encoder"])
-
-        if resource_control is not None:
-            # model/optimizer stay offloadable=False -- both are needed unconditionally
-            # every step's forward/backward/optimizer-step, and nothing here calls
-            # ensure_loaded() on either before that compute runs, so marking them
-            # offloadable would let before_step() offload one and never bring it back --
-            # a real crash, not just a missed optimization. Making that safe needs
-            # ensure_loaded("model")/ensure_loaded("optimizer") wired into the step
-            # pipeline's own compute phase, not done yet.
-            #
-            # text_encoder is different: offloadable exactly when it's a
-            # CachingTextEncoder, which calls ensure_loaded() on its own resource_name
-            # before any cache-miss encode -- self-healing by construction, checked
-            # directly rather than assumed (isinstance, not duck-typing, matching this
-            # file's own existing FusedOptimizerHandle check below). A plain,
-            # non-caching TextEncoder has no such safety net (EncodeConditioningPhase
-            # calls .encode() unconditionally every step), so it stays offloadable=False.
-            resource_control.register("model", model, offloadable=False)
-            resource_control.register("optimizer", optimizer, offloadable=False)
-            resource_control.register(
-                "text_encoder", inputs["text_encoder"],
-                offloadable=isinstance(inputs["text_encoder"], CachingTextEncoder))
-
-        phases = [
-            FetchBatchPhase(batches),
-            PrepareDiffusionInputsPhase(
-                diffusion_process,
-                gate_enabled=inputs.get("gate_enabled", self.INPUTS["gate_enabled"].default),
-                gate_train_low=inputs.get("gate_train_low", self.INPUTS["gate_train_low"].default),
-                gate_train_high=inputs.get("gate_train_high", self.INPUTS["gate_train_high"].default),
-                gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
-            EncodeConditioningPhase(inputs["text_encoder"]),
-            OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused),
-            ForwardPhase(),
-            LossPhase(loss_weighting),
-            BackwardPhase(),
-            OptimizerStepPhase(optimizer, is_fused),
-        ]
-        if profile:
-            phases = [TimedPhase(p, device_ctx, _phase_label(p), capture_memory=profile_memory_per_phase)
-                      for p in phases]
-        phases.append(MonitoringPhase(
-            total_steps=steps, device_ctx=device_ctx, on_step=inputs.get("on_step"),
-            monitor=inputs.get("monitor"), profile=profile, coordinator=coordinator,
-            optimizer_id=optimizer_id))
-        pipeline = TrainingStepPipeline(phases)
-
-        step = 0
-        while step < steps:
-            if self.context.should_cancel():
-                # Cooperative stop, between steps only -- never mid
-                # backward/optimizer-step. Not a failure: the model
-                # trained so far is a normal, valid output, same as a
-                # run that finished all its steps, just fewer of them.
-                result = {"model": model}
-                self.validate_outputs(result)
-                return result
-            state = StepState(step=step, batch=None, model=model, device=device)
-            if resource_control is not None:
-                resource_control.before_step(step)
-            pipeline.run_step(state)
-            step += 1
-            if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
-                import gc
-                gc.collect()
-                device_ctx.empty_cache()
-
-        result = {"model": model}
+        result = run_supervised_lora_training_loop(
+            self.context,
+            model=inputs["model"],
+            batches=inputs["batches"],
+            optimizer=inputs["optimizer"],
+            text_encoder=inputs["text_encoder"],
+            lr_schedule=inputs["lr_schedule"],
+            steps=inputs["steps"],
+            diffusion_process=inputs.get("diffusion_process"),
+            gate_enabled=inputs.get("gate_enabled", self.INPUTS["gate_enabled"].default),
+            gate_train_low=inputs.get("gate_train_low", self.INPUTS["gate_train_low"].default),
+            gate_train_high=inputs.get("gate_train_high", self.INPUTS["gate_train_high"].default),
+            gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default),
+            profile=inputs.get("profile", self.INPUTS["profile"].default),
+            empty_cache_every_n_steps=inputs.get(
+                "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default),
+            profile_memory_per_phase=inputs.get(
+                "profile_memory_per_phase", self.INPUTS["profile_memory_per_phase"].default),
+            resource_control=inputs.get("resource_control"),
+            loss_weighting=inputs.get("loss_weighting"),
+            monitor=inputs.get("monitor"),
+            on_step=inputs.get("on_step"),
+            log_prefix=type(self).__name__,
+        )
         self.validate_outputs(result)
         return result
-
-
-def _log_shape_histogram(params) -> None:
-    """One-time, unconditional -- cheap (a handful of ops over at most a
-    few hundred small tensors), and directly answers whether this run's
-    actual LoRA configuration has enough same-shape parameter groups for
-    exact-shape-grouped batching to pay off, or is closer to the
-    pathological all-unique-shapes case where it wouldn't help at all.
-    Reports against the real, built graph's real parameters -- not a
-    hand-approximated config -- so this number is trustworthy without
-    needing a separate standalone script that could drift from what a
-    real run actually does."""
-    from collections import Counter
-    shapes = Counter(tuple(p.shape) for p in params)
-    total_params = len(params)
-    grouped = sum(count for count in shapes.values() if count > 1)
-    pct = (100 * grouped / total_params) if total_params else 0.0
-    print(f"[shape_histogram] {total_params} trainable parameter tensor(s), "
-          f"{len(shapes)} distinct shape(s), {grouped}/{total_params} "
-          f"({pct:.0f}%) covered by a group of 2+ identical-shape parameters:")
-    for shape, count in shapes.most_common():
-        print(f"    {tuple(shape)}: {count}")
-
-
-def _phase_label(phase) -> str:
-    """CamelCase class name -> snake_case label, minus a trailing
-    "Phase" -- FetchBatchPhase -> "fetch_batch". Mechanical, not
-    hand-maintained per phase, so a new phase class gets a sensible
-    label for free."""
-    name = type(phase).__name__
-    if name.endswith("Phase"):
-        name = name[: -len("Phase")]
-    out = []
-    for i, ch in enumerate(name):
-        if ch.isupper() and i > 0:
-            out.append("_")
-        out.append(ch.lower())
-    return "".join(out)

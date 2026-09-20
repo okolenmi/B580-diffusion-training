@@ -32,3 +32,13 @@ class ResourceBudget:
     pressure."""
     vram_budget_mb: float
     vram_reserve_mb: float = 512.0
+    strict: bool = False
+    # False (default): today's behavior, unchanged -- BudgetedResourceControlHandle
+    # (nodes/memory/control_handle.py) offloads whatever it can and returns, even if
+    # reserved memory is still over (vram_budget_mb - vram_reserve_mb) afterward --
+    # real when model/optimizer, which are never offloadable, already exceed the
+    # budget alone. True: that same handle raises instead, once nothing registered
+    # offloadable is left to move and usage is still over budget -- a hard stop
+    # instead of silently continuing to train past the ceiling that was asked for,
+    # which is exactly the VRAM-pressure condition a budget exists to prevent in the
+    # first place. See BudgetedResourceControlHandle._make_room()'s own docstring.

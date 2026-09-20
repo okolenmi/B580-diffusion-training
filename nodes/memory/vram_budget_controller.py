@@ -44,6 +44,19 @@ class VRAMBudgetControllerNode(Node):
                 "ceiling enforced is a bit under what you asked for, not exactly it.",
         ),
         "device": Port(name="device", type=str, required=False, default="xpu"),
+        "strict": Port(
+            name="strict", type=bool, required=False, default=False,
+            doc="False (default): today's behavior -- offloads whatever it can and "
+                "continues even if reserved memory is still over budget afterward "
+                "(real when model/optimizer, which are never offloadable, already "
+                "exceed it alone). True: raise instead of continuing over budget once "
+                "nothing registered offloadable is left to move -- a hard stop instead "
+                "of training on with usage past the ceiling you asked for. Recommended "
+                "True when the actual goal is staying clear of a GPU/driver VRAM-"
+                "pressure failure (docs/known-issues/open.md), not just visibility into "
+                "usage -- e.g. BudgetedLoRATrainerNode's whole reason to exist "
+                "(nodes/train/budgeted.py).",
+        ),
     }
 
     OUTPUTS: ClassVar[dict[str, Port]] = {
@@ -58,6 +71,7 @@ class VRAMBudgetControllerNode(Node):
         budget = ResourceBudget(
             vram_budget_mb=inputs["vram_budget_mb"],
             vram_reserve_mb=inputs.get("vram_reserve_mb", self.INPUTS["vram_reserve_mb"].default),
+            strict=inputs.get("strict", self.INPUTS["strict"].default),
         )
         result = {
             "control": BudgetedResourceControlHandle(

@@ -33,17 +33,32 @@ model+optimizer are already near the budget shouldn't just silently
 blow past it).
 
 Whether there's anything to offload in the current step pipeline
-(nodes/train/step_pipeline.py, nodes/train/supervised.py) depends on
+(nodes/train/step_pipeline.py, nodes/train/loop.py) depends on
 whether anything registered offloadable is genuinely idle for part of
 a run and calls ensure_loaded() before it needs itself resident again
 -- CachingTextEncoder (nodes/model/text_encoder_cache.py) does exactly
 this on a cache miss, which is what makes text_encoder safe to mark
 offloadable now. model/optimizer are NOT marked offloadable yet
-(nodes/train/supervised.py) even though this module's own machinery
+(nodes/train/loop.py) even though this module's own machinery
 would now handle the reverse direction (offloading them to make room
 for text_encoder, then bringing them back) -- nothing yet calls
 ensure_loaded("model")/ensure_loaded("optimizer") at the right points
 in the step pipeline to make that safe. Real, disclosed, not yet done.
+
+Two additions since the paragraphs above were written, both about
+actually honoring the budget rather than just measuring against it --
+see ResourceBudget.strict's own docstring and _make_room()'s comment
+around its own synchronize() calls below for the full reasoning on
+each:
+
+1. `ResourceBudget.strict` (default False, unchanged behavior): when
+   True, _make_room() raises instead of silently continuing once
+   nothing registered offloadable is left to move and usage is still
+   over budget.
+2. An explicit DeviceContext.synchronize() after every offload/reload
+   transition this class drives, before trusting the next
+   memory_stats() read -- defensive, mirroring a hard-won lesson
+   already paid for once in this project's own legacy core/trainer.py.
 """
 
 from __future__ import annotations
@@ -107,9 +122,15 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
     core/comfy_setup.py-adjacent code already uses, not shared with
     anything else since nothing else needs one before this)."""
 
-    def __init__(self, budget: ResourceBudget, device: str):
+    def __init__(self, budget: ResourceBudget, device: str,
+                 device_ctx: DeviceContext | None = None):
         self._budget = budget
-        self._device_ctx = DeviceContext.for_device(device)
+        # device_ctx: real DeviceContext.for_device(device) by default (unchanged
+        # behavior) -- overridable so a test can inject a fake one that reports
+        # scripted memory_stats() without real XPU/CUDA hardware, the same explicit-
+        # injection posture this project uses everywhere else (no singletons, per
+        # docs/design/01-design-goals-and-constraints.md goal 3).
+        self._device_ctx = device_ctx or DeviceContext.for_device(device)
         self._coordinator = ResourceCoordinator()
         self._offloadable: list[str] = []  # list, not set: registration order
         # is the offload order below, and dict/set iteration order isn't a
@@ -129,6 +150,14 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
     def ensure_loaded(self, name: str) -> None:
         if name in self._offloaded:
             self._coordinator.reload(name)
+            # Defensive, see _make_room()'s own comment on the matching offload-side
+            # call below for the full reasoning -- same "don't trust a memory_stats()
+            # snapshot taken right after a transfer without an explicit sync first"
+            # posture, here for the reload direction: _make_room() below is about to
+            # read reserved_mb again (exclude=(name,) still runs it), and whatever
+            # calls ensure_loaded() is about to use `name` itself immediately after
+            # this returns.
+            self._device_ctx.synchronize()
             self._offloaded.discard(name)
         self._make_room(exclude=(name,))
 
@@ -142,7 +171,15 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         enough up front: one real number from the allocator beats a
         predicted one, and stopping the moment it's enough avoids
         offloading (and later having to reload) more than the pressure
-        actually required."""
+        actually required.
+
+        Raises when self._budget.strict and usage is still over budget
+        once every offloadable, currently-loaded resident (outside
+        `exclude`) has been offloaded -- see ResourceBudget.strict's own
+        docstring for why. Default strict=False keeps this method's
+        previous behavior exactly (return once the offloadable list is
+        exhausted, over budget or not) -- existing callers/tests see no
+        behavior change unless they opt in."""
         stats = self._device_ctx.memory_stats()
         if stats is None:
             return
@@ -154,5 +191,38 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
                 return
             self._coordinator.offload(name)
             self._offloaded.add(name)
+            # Defensive, not provable-necessary from this codebase's own offload()
+            # implementations alone: every DeviceResident.offload() registered here
+            # today already does a synchronous (non_blocking=False, torch's default)
+            # .to("cpu")/.cpu() -- checked directly across nodes/model/lora_injector.py,
+            # nodes/model/text_encoder.py, nodes/optimizer/composed.py, not assumed.
+            # Still worth the explicit call: core/trainer.py's own offload path
+            # (this project's legacy pipeline, same B580/XPU hardware) learned the
+            # hard way that even a nominally-synchronous transfer is worth an
+            # explicit synchronize() before trusting a memory snapshot taken right
+            # after it ("should be synchronous ... an explicit sync is defensive" --
+            # that file's own comment, at the exact preview-generation offload point
+            # docs/known-issues/open.md's "device lost"/hang report names as a real
+            # trigger). A comparable report exists for different training code on
+            # this same hardware (kohya-ss/musubi-tuner, cited in that same
+            # known-issues entry), tracing a matching hang to a missing/incomplete
+            # synchronize on an XPU offload path. Cheap insurance against re-learning
+            # that lesson a second time, here, in code this project's own known-issue
+            # report hadn't reached yet (that entry explicitly scoped itself to
+            # core/trainer.py, not nodes/).
+            self._device_ctx.synchronize()
             stats = self._device_ctx.memory_stats()
+        if self._budget.strict and stats["reserved_mb"] > usable_mb:
+            raise RuntimeError(
+                f"BudgetedResourceControlHandle: {stats['reserved_mb']:.0f}MB reserved "
+                f"still exceeds the {usable_mb:.0f}MB usable budget "
+                f"({self._budget.vram_budget_mb:.0f}MB minus "
+                f"{self._budget.vram_reserve_mb:.0f}MB reserve) after offloading every "
+                f"resident registered as offloadable -- nothing left this handle is "
+                f"allowed to move. Raising now (strict=True) rather than silently "
+                f"training on past the ceiling you asked for, which is exactly the "
+                f"VRAM-pressure condition this handle exists to prevent. Either raise "
+                f"vram_budget_mb, or register more residents as offloadable if that's "
+                f"genuinely safe for them (see register()'s own docstring)."
+            )
 

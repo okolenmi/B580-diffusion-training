@@ -242,11 +242,18 @@ object -- it has no identity afterward, just changed base weights), while
 `continue_lora_sd` loads a saved LoRA into the new trainable adapter
 itself, to actually resume training it (reuses
 `load_lora_into_registry()`, extracted from `LoRACheckpointLoaderNode`
-for this). **`TrainerNode` integration is the one piece still
-open** -- nothing under `nodes/train/` references
-`LoRATrainingConfigNode`/`LoRATrainingResources` yet (checked
-directly), so the config node's output has nowhere to actually plug in
-today.
+for this). Phase 9 closes what Phase 6 left open: `TrainerResourcesUnpackNode`
+(`nodes/model/trainer_unpack.py`) adapts `LoRATrainingConfigNode`'s
+`trainer` output into the plain `model`/`text_encoder` ports
+`ModelParametersNode`/`TrainerNode` already have -- not the port
+replacement Phase 6 originally sketched, which turned out to break the
+existing main route (see `docs/design/resources-controller/`'s own
+Phase 6/9 files). A new `BudgetedLoRATrainerNode`
+(`nodes/train/budgeted.py`, shares `SupervisedLoRATrainerNode`'s real
+loop via a new `nodes/train/loop.py` extraction, not a duplicate)
+makes `resource_control` required instead of optional; a new `strict`
+input on `VRAMBudgetControllerNode` makes the budget it enforces a hard
+raise instead of best-effort. Not run on real hardware yet.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility
@@ -256,9 +263,11 @@ today.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 56 smoke tests under `nodes/smoke_tests/` (runnable via
+- 60 smoke tests under `nodes/smoke_tests/` (runnable via
   `nodes/smoke_tests/run_all.py`), plus 5 more under `server/` and 1
-  under `manager/` -- all CPU-only, no ComfyUI/XPU needed.
+  under `manager/` -- all CPU-only, no ComfyUI/XPU needed. All 60 run
+  and pass as of this sync (`nodes/smoke_tests/run_all.py`, checked
+  directly, not assumed).
 
 ## Still open, in priority order
 
@@ -276,13 +285,18 @@ backlog and not yet folded into its own ordering:
    (3.3)
 
 **Newest, not yet prioritized against the list above:**
-`LoRATrainingConfigNode`/`LoRATrainingResources` (Resources Controller
-Phase 6) have nothing under `nodes/train/` to plug into yet -- wiring
-them into `TrainerNode` is real, scoped work, not started. Also:
 `ResourceControlHandle` only ever marks `text_encoder` offloadable
 today -- extending that to `model`/`optimizer` needs somewhere in the
 step pipeline to call `ensure_loaded("model")`/`ensure_loaded("optimizer")`
-at the right point first, which doesn't exist yet either.
+at the right point first, which doesn't exist yet either (Phase 9's own
+`BudgetedLoRATrainerNode` deliberately didn't attempt this -- see
+`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`).
+Also: `LoRATrainingConfigNode`'s `unet_weight_store="nf4"` path has no
+smoke-test coverage (needs bitsandbytes-level mocking nothing in this
+project has built yet -- untouched, not newly broken); no smoke test
+exists yet for `ResourcesControllerNode`/`LoRATrainingResources`
+themselves (Phase 5) either, checked directly while adding Phase 9's
+own tests -- a real gap, not yet fixed.
 
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
@@ -307,13 +321,8 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 
 ---
 Last synced against `docs/design/` (formerly the single file
-`docs/training_pipeline_design.md`) at commit `2991618` (2026-09-10,
-"optimizer: state_precision -- block-wise 8-bit quantized optimizer
-state") -- the last substantive feature commit before the docs
-restructuring. Resynced from the previous sync point, which claimed
-commit `2c1f0ff` (2026-08-25) but no longer resolves to a real object
-in this repository's history as of this resync -- likely a rewritten
-commit from before this clone's history; not investigated further
-since the content gap it left (everything from the Resources
-Controller redesign's Phase 1, 2026-08-26, onward) was fully
-recoverable by date instead.
+`docs/training_pipeline_design.md`) at commit `ba6b6a8` (2026-09-19,
+"Document both confirmed fixes: momentum bug and footprint_bytes()"),
+plus this session's own unlanded work on top (Phase 9: `TrainerNode`
+integration + VRAM-safety `strict`/`synchronize()` additions -- not
+yet its own commit at the time of this sync).

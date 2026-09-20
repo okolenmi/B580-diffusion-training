@@ -11,7 +11,10 @@ frozen-weight-storage, calls `inject_lora()` (Phase 4, unmodified --
 this, not rebuilt here), and produces something `TrainerNode` can use.
 
 **Status: `LoRATrainingConfigNode` done. Downstream integration into
-`TrainerNode` itself still open (see below).**
+`TrainerNode` also done -- see
+`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`
+for how (a separate unpack node, not the mechanism originally sketched
+below).**
 `nodes/model/lora_training_config.py` (new): `resources` is a wired
 `LoRATrainingResources` input (Phase 5's own output -- nothing left to
 load, everything real and already in memory by the time this node
@@ -86,19 +89,26 @@ verified against a minimal fake `DeviceResident`-shaped object.
 Registered in `server/nodegraph_registry.py`; auto-derives the display
 name "LoRA Training Config".
 
-**Decided, not yet built:** `TrainerNode` consumes `LoRATrainingConfigNode`'s
+**Superseded by `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`:**
+this section originally read "`TrainerNode` consumes `LoRATrainingConfigNode`'s
 own `trainer` output as one bundled port, replacing its separate
-`model`/`optimizer`/`text_encoder` ports -- direct answer to the
+`model`/`optimizer`/`text_encoder` ports" -- a direct answer to the
 question the original sketch's own annotation had left undecided
-("not sure what should be output"). Restated alongside this decision:
-`LoRATrainingSkeleton`/`LoRATrainingResources` are meant to be real
-objects with their own working methods (`describe()`,
-`footprint_bytes()`/`offload()`/`reload()`/`release()`, `from_resources()`)
-that outlive and outnumber whatever any single node's own Ports expose
--- a node is a thin interface over the object, not the other way
-around, and that interface should stay shaped so it works for any
-future LoRA resource type (a second architecture, most concretely),
-not just today's SDXL one. Actually wiring `TrainerNode` to consume the
-bundle is itself not built yet.
+("not sure what should be output"), but wrong once actually checked
+against the rest of the graph: `ComfyUNetLoRANode`/`SDXLTextEncoderNode`
+(the existing, working main route into `TrainerNode`) never produce a
+`LoRATrainingSkeleton` at all, only a bare `TrainableModel`/`TextEncoder`
+each -- replacing `TrainerNode`'s own ports outright would have broken
+that route to unblock this one, not an acceptable trade for a route
+meant to run *alongside* the main one for comparison, not replace it
+sight unseen. What shipped instead in 09: a small, separate
+`TrainerResourcesUnpackNode` that adapts `trainer` into the plain
+`model`/`text_encoder` ports every existing node already understands,
+so nothing about `TrainerNode`, `ModelParametersNode`, or
+`CachingTextEncoderNode` needed to change at all. `LoRATrainingSkeleton`/
+`LoRATrainingResources` staying real objects with their own working
+methods, outliving and outnumbering any one node's own Ports, is still
+exactly the design posture this paragraph originally argued for --
+only the specific "replace TrainerNode's ports" mechanism was wrong.
 
 **Dependency:** Phase 5 (done).

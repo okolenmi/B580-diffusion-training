@@ -32,12 +32,19 @@ a live `Node.diagnostics()` endpoint) any future node can use, not
 just this one. Phase 6's own `LoRATrainingConfigNode` done too -- takes
 that resource pack and actually injects LoRA (rank/alpha/frozen-weight-
 storage), including locking rank when continuing training from an
-existing LoRA; downstream `TrainerNode` integration itself is still
-open.** This tracks a real, multi-session redesign, not a single patch
--- update it as phases land or as open questions get resolved, the
-same way [`docs/status/progress.md`](../../status/progress.md) tracks
-the rest of this project (though that file has drifted --
-see `docs/review_notes.md` item 1 -- this one hasn't, so far).
+existing LoRA. Phase 9 now closes the loop: `TrainerResourcesUnpackNode`
+unblocks the route into `TrainerNode` (a small adapter, not the port
+replacement Phase 6 originally sketched -- see that phase's own updated
+status), and a new `BudgetedLoRATrainerNode` plus a `strict` flag on
+the existing VRAM budget enforcer make the route's actual point --
+staying clear of a VRAM ceiling, with a way to make that a hard
+guarantee instead of best-effort -- a real, wired capability, not just
+plumbing. Not run on real hardware yet.** This tracks a real,
+multi-session redesign, not a single patch -- update it as phases land
+or as open questions get resolved, the same way
+[`docs/status/progress.md`](../../status/progress.md) tracks the rest
+of this project (though that file has drifted -- see
+`docs/review_notes.md` item 1 -- this one hasn't, so far).
 
 **Priority rule, made explicit rather than left implicit:** where this
 plan and the main design docs (`docs/design/`) conflict, this plan
@@ -58,6 +65,7 @@ just not the tie-breaker for anything this plan touches.
 | [`03-phase-3-interactive-node-support.md`](03-phase-3-interactive-node-support.md) | Editor + `core.py` + introspection support for interactive nodes. |
 | [`04-phase-4-resource-preset-abstraction.md`](04-phase-4-resource-preset-abstraction.md) | The `ResourcePreset` abstraction -- core construction mechanics done. |
 | [`05-phase-5-resources-controller-node.md`](05-phase-5-resources-controller-node.md) | The Resources Controller node itself -- done, scope-corrected along the way. |
-| [`06-phase-6-lora-training-config.md`](06-phase-6-lora-training-config.md) | `LoRATrainingConfigNode` and downstream `TrainerNode` integration -- config node done, `TrainerNode` wiring still open. |
+| [`06-phase-6-lora-training-config.md`](06-phase-6-lora-training-config.md) | `LoRATrainingConfigNode` -- done. Downstream `TrainerNode` integration itself moved to 09 (this file's original sketch for it turned out wrong). |
 | [`07-post-phase-6-bugfixes.md`](07-post-phase-6-bugfixes.md) | Four real bugs found by actually using the editor after Phase 6 landed. |
 | [`08-consolidation.md`](08-consolidation.md) | Resolving low-synergy items against the main design docs instead of leaving them to drift. |
+| [`09-trainer-integration-and-vram-safety.md`](09-trainer-integration-and-vram-safety.md) | `TrainerResourcesUnpackNode` (unblocks the route), `BudgetedLoRATrainerNode` + a `strict` VRAM-budget mode (the route's actual memory-safety point). Done, not run on real hardware. |

@@ -26,3 +26,28 @@
   verified against the actual committed function. **Not run** -- needs
   the person to re-ingest a non-square dataset with the new cap and
   confirm `vram_reserved` stays bounded.
+
+- **[2026-09-20] `BudgetedResourceControlHandle` (`nodes/memory/control_handle.py`)
+  gained an explicit `synchronize()` around every offload/reload
+  transition, plus a `strict` mode that raises instead of continuing
+  once usage is still over budget after offloading everything it can --
+  not a fix for a diagnosed bug, defensive hardening motivated by this
+  file's own "Device lost" entry above.** No real XPU hardware in the
+  environment this was built in -- `synchronize()`'s call sites and
+  `strict`'s raise/no-raise logic are verified against a scripted fake
+  `DeviceContext` (`nodes/smoke_tests/smoke_test_resource_control_strict.py`,
+  the actual thing under test in that file's own docstring), not a real
+  VRAM-pressure event on real hardware. Whether this actually helps with,
+  or is even related to, the open "Device lost" report above is
+  unconfirmed and stays unconfirmed here -- that report is about
+  `core/trainer.py` (the legacy pipeline), this change is in `nodes/`
+  (the rewrite), and the "Device lost" entry's own root-cause note (a
+  missing/incomplete synchronize on an XPU offload path, cited from a
+  different project's report on the same hardware) is a plausible
+  *shape*, not a confirmed diagnosis, in either codebase. **Not run** --
+  needs a real training run on real XPU hardware, under real VRAM
+  pressure (e.g. a `vram_budget_mb` set below what the run would
+  otherwise use), to say anything about whether this actually changes
+  observed stability. See
+  `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`
+  for the full reasoning.

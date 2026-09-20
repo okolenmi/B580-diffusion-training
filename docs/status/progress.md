@@ -242,18 +242,22 @@ object -- it has no identity afterward, just changed base weights), while
 `continue_lora_sd` loads a saved LoRA into the new trainable adapter
 itself, to actually resume training it (reuses
 `load_lora_into_registry()`, extracted from `LoRACheckpointLoaderNode`
-for this). Phase 9 closes what Phase 6 left open: `TrainerResourcesUnpackNode`
-(`nodes/model/trainer_unpack.py`) adapts `LoRATrainingConfigNode`'s
-`trainer` output into the plain `model`/`text_encoder` ports
-`ModelParametersNode`/`TrainerNode` already have -- not the port
-replacement Phase 6 originally sketched, which turned out to break the
-existing main route (see `docs/design/resources-controller/`'s own
-Phase 6/9 files). A new `BudgetedLoRATrainerNode`
-(`nodes/train/budgeted.py`, shares `SupervisedLoRATrainerNode`'s real
-loop via a new `nodes/train/loop.py` extraction, not a duplicate)
-makes `resource_control` required instead of optional; a new `strict`
-input on `VRAMBudgetControllerNode` makes the budget it enforces a hard
-raise instead of best-effort. Not run on real hardware yet.
+for this). Phase 9 closes what Phase 6 left open, with the route's own
+independent trainer node (`ManagedLoRATrainerNode`,
+`nodes/train/managed.py`) rather than an adapter into `TrainerNode`'s
+own ports and a shared loop -- that was the first version of this
+phase, tried and reverted once it became clear it just gated the main
+route's own loop behind a stricter default rather than being a real
+alternative (see `docs/design/resources-controller/09-...md`'s own
+"First attempt, reverted"). `ManagedLoRATrainerNode` takes `trainer`
+directly and manages residency deterministically: `optimizer` and
+`text_encoder` are each loaded only for their own phase and released
+right after, every step, not just reactively under pressure (a new
+`ResourceControlHandle.release()` makes this possible); `model` stays
+resident for the run's duration (the frozen base is too expensive to
+move every step). A new `strict` input on `VRAMBudgetControllerNode`
+makes the budget it enforces a hard raise instead of best-effort, as a
+safety net for `model` alone exceeding it. Not run on real hardware yet.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility
@@ -263,11 +267,9 @@ raise instead of best-effort. Not run on real hardware yet.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 60 smoke tests under `nodes/smoke_tests/` (runnable via
+- 59 smoke tests under `nodes/smoke_tests/` (runnable via
   `nodes/smoke_tests/run_all.py`), plus 5 more under `server/` and 1
-  under `manager/` -- all CPU-only, no ComfyUI/XPU needed. All 60 run
-  and pass as of this sync (`nodes/smoke_tests/run_all.py`, checked
-  directly, not assumed).
+  under `manager/` -- all CPU-only, no ComfyUI/XPU needed.
 
 ## Still open, in priority order
 
@@ -285,15 +287,15 @@ backlog and not yet folded into its own ordering:
    (3.3)
 
 **Newest, not yet prioritized against the list above:**
-`ResourceControlHandle` only ever marks `text_encoder` offloadable
-today -- extending that to `model`/`optimizer` needs somewhere in the
-step pipeline to call `ensure_loaded("model")`/`ensure_loaded("optimizer")`
-at the right point first, which doesn't exist yet either (Phase 9's own
-`BudgetedLoRATrainerNode` deliberately didn't attempt this -- see
-`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`).
-Also: `LoRATrainingConfigNode`'s `unet_weight_store="nf4"` path has no
-smoke-test coverage (needs bitsandbytes-level mocking nothing in this
-project has built yet -- untouched, not newly broken); no smoke test
+the main route's own `ResourceControlHandle` usage
+(`SupervisedLoRATrainerNode`) still only ever marks `text_encoder`
+offloadable -- extending that to `model`/`optimizer` there would need
+the same kind of deterministic ensure_loaded()/release() bracketing
+Phase 9's `ManagedLoRATrainerNode` now does for its own route, not
+attempted for the main route itself. Also: `LoRATrainingConfigNode`'s
+`unet_weight_store="nf4"` path has no smoke-test coverage (needs
+bitsandbytes-level mocking nothing in this project has built yet --
+untouched, not newly broken); no smoke test
 exists yet for `ResourcesControllerNode`/`LoRATrainingResources`
 themselves (Phase 5) either, checked directly while adding Phase 9's
 own tests -- a real gap, not yet fixed.
@@ -323,6 +325,8 @@ layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
 Last synced against `docs/design/` (formerly the single file
 `docs/training_pipeline_design.md`) at commit `ba6b6a8` (2026-09-19,
 "Document both confirmed fixes: momentum bug and footprint_bytes()"),
-plus this session's own unlanded work on top (Phase 9: `TrainerNode`
-integration + VRAM-safety `strict`/`synchronize()` additions -- not
-yet its own commit at the time of this sync).
+plus this session's own unlanded work on top (Phase 9: the Resources
+Controller route's own trainer, `ManagedLoRATrainerNode`, plus VRAM-
+safety `strict`/`synchronize()`/`release()` additions to
+`nodes/memory/control_handle.py` -- not yet its own commit at the time
+of this sync).

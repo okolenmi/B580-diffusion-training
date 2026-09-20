@@ -101,11 +101,16 @@ against the rest of the graph: `ComfyUNetLoRANode`/`SDXLTextEncoderNode`
 each -- replacing `TrainerNode`'s own ports outright would have broken
 that route to unblock this one, not an acceptable trade for a route
 meant to run *alongside* the main one for comparison, not replace it
-sight unseen. What shipped instead in 09: a small, separate
-`TrainerResourcesUnpackNode` that adapts `trainer` into the plain
-`model`/`text_encoder` ports every existing node already understands,
-so nothing about `TrainerNode`, `ModelParametersNode`, or
-`CachingTextEncoderNode` needed to change at all. `LoRATrainingSkeleton`/
+sight unseen. What shipped instead in 09: not an adapter into
+`TrainerNode`'s own ports at all -- a genuinely independent trainer
+node (`ManagedLoRATrainerNode`) that takes `trainer` directly, with its
+own step loop built around deterministic residency rather than the
+main route's reactive-only offloading (an intermediate version that
+*did* adapt into `TrainerNode`'s ports and shared its loop was tried
+first and reverted -- see 09's own "First attempt, reverted"). Nothing
+about `TrainerNode`, `SupervisedLoRATrainerNode`, `ModelParametersNode`,
+or `CachingTextEncoderNode` needed to change either way.
+`LoRATrainingSkeleton`/
 `LoRATrainingResources` staying real objects with their own working
 methods, outliving and outnumbering any one node's own Ports, is still
 exactly the design posture this paragraph originally argued for --

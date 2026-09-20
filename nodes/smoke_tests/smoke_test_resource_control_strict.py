@@ -200,6 +200,34 @@ def check_device_ctx_none_uses_real_factory_unchanged():
     print("    PASS")
 
 
+def check_release_offloads_unconditionally_and_rejects_non_offloadable():
+    print("[release(): offloads a registered-offloadable resident regardless of "
+          "current pressure, synchronizes, and is idempotent; raises for a resident "
+          "registered offloadable=False instead of silently no-op-ing]")
+    device_ctx = _FakeDeviceContext([100.0])  # well under budget -- no pressure at all
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=device_ctx)
+    a, pinned = _FakeResident("a"), _FakeResident("pinned")
+    control.register("a", a, offloadable=True)
+    control.register("pinned", pinned, offloadable=False)
+
+    control.release("a")
+    check(a.offload_calls == 1, "must offload even though usage is nowhere near budget")
+    check(device_ctx.synchronize_call_count == 1, device_ctx.synchronize_call_count)
+
+    control.release("a")  # idempotent -- already offloaded
+    check(a.offload_calls == 1, "must not offload a second time")
+
+    raised = False
+    try:
+        control.release("pinned")
+    except ValueError:
+        raised = True
+    check(raised, "expected release() to raise for a resident registered offloadable=False")
+    check(pinned.offload_calls == 0, "must not have touched it before raising")
+    print("    PASS")
+
+
 def main():
     check_offloading_brings_usage_back_under_budget()
     check_non_offloadable_resident_is_never_touched()
@@ -208,6 +236,7 @@ def main():
     check_strict_true_does_not_raise_when_budget_is_actually_honored()
     check_ensure_loaded_reloads_and_synchronizes()
     check_device_ctx_none_uses_real_factory_unchanged()
+    check_release_offloads_unconditionally_and_rejects_non_offloadable()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

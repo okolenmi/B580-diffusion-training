@@ -32,10 +32,12 @@ a live `Node.diagnostics()` endpoint) any future node can use, not
 just this one. Phase 6's own `LoRATrainingConfigNode` done too -- takes
 that resource pack and actually injects LoRA (rank/alpha/frozen-weight-
 storage), including locking rank when continuing training from an
-existing LoRA. Phase 9 now closes the loop: `TrainerResourcesUnpackNode`
-unblocks the route into `TrainerNode` (a small adapter, not the port
-replacement Phase 6 originally sketched -- see that phase's own updated
-status), and a new `BudgetedLoRATrainerNode` plus a `strict` flag on
+existing LoRA. Phase 9 now closes the loop with its own trainer
+(`ManagedLoRATrainerNode`, taking `trainer` directly rather than
+adapting into the main route's ports -- a first attempt at the latter
+was tried and reverted, see that phase's own status), built around
+deterministic per-phase residency instead of the main route's reactive-
+only offloading, plus a `strict` flag on
 the existing VRAM budget enforcer make the route's actual point --
 staying clear of a VRAM ceiling, with a way to make that a hard
 guarantee instead of best-effort -- a real, wired capability, not just
@@ -68,4 +70,4 @@ just not the tie-breaker for anything this plan touches.
 | [`06-phase-6-lora-training-config.md`](06-phase-6-lora-training-config.md) | `LoRATrainingConfigNode` -- done. Downstream `TrainerNode` integration itself moved to 09 (this file's original sketch for it turned out wrong). |
 | [`07-post-phase-6-bugfixes.md`](07-post-phase-6-bugfixes.md) | Four real bugs found by actually using the editor after Phase 6 landed. |
 | [`08-consolidation.md`](08-consolidation.md) | Resolving low-synergy items against the main design docs instead of leaving them to drift. |
-| [`09-trainer-integration-and-vram-safety.md`](09-trainer-integration-and-vram-safety.md) | `TrainerResourcesUnpackNode` (unblocks the route), `BudgetedLoRATrainerNode` + a `strict` VRAM-budget mode (the route's actual memory-safety point). Done, not run on real hardware. |
+| [`09-trainer-integration-and-vram-safety.md`](09-trainer-integration-and-vram-safety.md) | `ManagedLoRATrainerNode` -- the route's own independent step loop, deterministic residency instead of the main route's reactive-only offloading -- plus a `strict` VRAM-budget mode. Done, not run on real hardware. |

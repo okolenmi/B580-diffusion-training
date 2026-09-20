@@ -55,10 +55,11 @@ class _RecordingResourceControl(ResourceControlHandle):
     """Records every ensure_loaded() call's name, in order -- enough to
     prove CachingTextEncoder calls it on a miss and not on a hit, without
     needing a mocking framework, same reasoning as _CountingEncoder above.
-    register()/before_step() are real no-ops here: CachingTextEncoder never
-    calls either itself (see text_encoder_cache.py's own docstring -- it
-    only ever calls ensure_loaded()), so nothing exercises them via this
-    class, but ResourceControlHandle is an ABC and both are abstract.
+    register()/before_step()/release() are real no-ops here: CachingTextEncoder
+    never calls any of them itself (see text_encoder_cache.py's own
+    docstring -- it only ever calls ensure_loaded()), so nothing exercises
+    them via this class, but ResourceControlHandle is an ABC and all are
+    abstract.
     """
 
     def __init__(self):
@@ -72,6 +73,9 @@ class _RecordingResourceControl(ResourceControlHandle):
 
     def ensure_loaded(self, name: str) -> None:
         self.ensure_loaded_calls.append(name)
+
+    def release(self, name: str) -> None:
+        pass
 
 
 def check_contracts():

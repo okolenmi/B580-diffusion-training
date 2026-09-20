@@ -32,18 +32,21 @@ case this needs to handle: encoding a prompt on a cache miss when
 model+optimizer are already near the budget shouldn't just silently
 blow past it).
 
-Whether there's anything to offload in the current step pipeline
-(nodes/train/step_pipeline.py, nodes/train/loop.py) depends on
-whether anything registered offloadable is genuinely idle for part of
-a run and calls ensure_loaded() before it needs itself resident again
--- CachingTextEncoder (nodes/model/text_encoder_cache.py) does exactly
-this on a cache miss, which is what makes text_encoder safe to mark
-offloadable now. model/optimizer are NOT marked offloadable yet
-(nodes/train/loop.py) even though this module's own machinery
-would now handle the reverse direction (offloading them to make room
-for text_encoder, then bringing them back) -- nothing yet calls
-ensure_loaded("model")/ensure_loaded("optimizer") at the right points
-in the step pipeline to make that safe. Real, disclosed, not yet done.
+Whether there's anything to offload depends on whether a caller either
+(a) marks something offloadable and calls ensure_loaded() on it before
+each use, relying on before_step()'s reactive, pressure-triggered
+offloading to actually move it back off between uses (the shape
+CachingTextEncoder, nodes/model/text_encoder_cache.py, uses -- offload
+only happens if and when measured usage actually exceeds budget), or
+(b) additionally calls the newer release() below right after each use,
+for a resident whose idle windows are known upfront rather than
+discovered reactively -- deterministic, not pressure-triggered: gone
+from GPU the moment its own phase ends, every step, budget exceeded or
+not. Which residents get which treatment (or neither -- some are
+resident for a run's entire duration, e.g. a large frozen base model
+that's too expensive to move every step) is each trainer's own,
+disclosed choice; this module provides both mechanisms, not a
+one-size-fits-all policy.
 
 Two additions since the paragraphs above were written, both about
 actually honoring the budget rather than just measuring against it --
@@ -59,6 +62,9 @@ each:
    transition this class drives, before trusting the next
    memory_stats() read -- defensive, mirroring a hard-won lesson
    already paid for once in this project's own legacy core/trainer.py.
+
+A third addition, `release()`, is the deterministic counterpart to
+`ensure_loaded()` described in (b) above -- see its own docstring.
 """
 
 from __future__ import annotations
@@ -112,6 +118,24 @@ class ResourceControlHandle(ABC):
         a step pipeline phase once and forget, rather than something
         that has to track offload state itself."""
 
+    @abstractmethod
+    def release(self, name: str) -> None:
+        """ensure_loaded()'s deterministic opposite: offload `name` now,
+        unconditionally -- regardless of whether measured usage is
+        currently over budget. For a caller that knows precisely when a
+        resident's idle window starts (not just reactively, once
+        something else needs the room) -- e.g. right after a text
+        encoder's own conditioning-encode phase ends for this step, or
+        right after an optimizer's own step() call updates its
+        momentum buffers -- and wants it off GPU for the rest of that
+        window on principle, not only if pressure happens to demand it.
+        Safe to call unconditionally, the same as ensure_loaded() -- a
+        no-op if `name` is already offloaded. Raises if `name` was
+        registered with offloadable=False: release() is an explicit
+        request to move something, not a hint, so silently ignoring one
+        for a resident register() was told is unsafe to move would hide
+        a real caller bug instead of surfacing it."""
+
 
 class BudgetedResourceControlHandle(ResourceControlHandle):
     """The one real implementation. Owns its own ResourceCoordinator
@@ -160,6 +184,25 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             self._device_ctx.synchronize()
             self._offloaded.discard(name)
         self._make_room(exclude=(name,))
+
+    def release(self, name: str) -> None:
+        if name not in self._offloadable:
+            raise ValueError(
+                f"release({name!r}): not registered offloadable -- register() with "
+                f"offloadable=True first if this resident is actually safe to move "
+                f"between uses. Refusing rather than silently no-op-ing: a caller "
+                f"asking to release something it was told is unsafe to move is a real "
+                f"bug worth surfacing, not hiding."
+            )
+        if name in self._offloaded:
+            return
+        self._coordinator.offload(name)
+        self._offloaded.add(name)
+        # Same defensive reasoning as _make_room()'s own offload-side call below --
+        # this is the same operation (coordinator.offload(name) then synchronize()),
+        # just triggered deterministically by a caller instead of reactively by
+        # measured pressure.
+        self._device_ctx.synchronize()
 
     def _make_room(self, exclude: tuple[str, ...]) -> None:
         """Shared by before_step() (exclude=() -- a general check

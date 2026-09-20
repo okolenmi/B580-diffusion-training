@@ -28,11 +28,14 @@
   confirm `vram_reserved` stays bounded.
 
 - **[2026-09-20] `BudgetedResourceControlHandle` (`nodes/memory/control_handle.py`)
-  gained an explicit `synchronize()` around every offload/reload
-  transition, plus a `strict` mode that raises instead of continuing
-  once usage is still over budget after offloading everything it can --
-  not a fix for a diagnosed bug, defensive hardening motivated by this
-  file's own "Device lost" entry above.** No real XPU hardware in the
+  gained an explicit `synchronize()` around every offload/reload/release
+  transition, a `strict` mode that raises instead of continuing once
+  usage is still over budget after offloading everything it can, and a
+  new `release()` method (deterministic, unconditional offload of a
+  named resident, used by `ManagedLoRATrainerNode`,
+  `nodes/train/managed.py`, every step) -- not a fix for a diagnosed
+  bug, defensive hardening motivated by this file's own "Device lost"
+  entry above.** No real XPU hardware in the
   environment this was built in -- `synchronize()`'s call sites and
   `strict`'s raise/no-raise logic are verified against a scripted fake
   `DeviceContext` (`nodes/smoke_tests/smoke_test_resource_control_strict.py`,

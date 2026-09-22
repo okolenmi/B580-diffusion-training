@@ -176,14 +176,24 @@ class EncodeConditioningPhase(ManagedStepPhase):
     (never part of what TrainerParametersNode/nodes/model/
     trainer_parameters.py pulls trainable parameters from), so once
     ctx_emb/y are computed, nothing downstream needs the encoder's own
-    weights resident -- there's no backward pass through it to support."""
+    weights resident -- there's no backward pass through it to support.
 
-    def __init__(self, text_encoder: TextEncoder, resource_control: ResourceControlHandle):
+    device_ctx/profile: reports reserved_mb right after loading and
+    right after releasing, when profile=True -- see this module's own
+    ManagedLoRATrainerNode.build() for why this reporting lives here
+    and in BackwardAndOptimizerStepPhase rather than in MonitoringPhase
+    alone."""
+
+    def __init__(self, text_encoder: TextEncoder, resource_control: ResourceControlHandle,
+                 device_ctx: Optional[DeviceContext] = None, profile: bool = False):
         self._text_encoder = text_encoder
         self._resource_control = resource_control
+        self._device_ctx = device_ctx
+        self._profile = profile
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         self._resource_control.ensure_loaded("text_encoder")
+        self._log("loaded")
         x_t = state.extras["x_t"]
         batch = state.batch
         batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
@@ -192,7 +202,15 @@ class EncodeConditioningPhase(ManagedStepPhase):
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         self._resource_control.release("text_encoder")
+        self._log("released")
         return state
+
+    def _log(self, moment: str) -> None:
+        if not self._profile or self._device_ctx is None:
+            return
+        mem = self._device_ctx.memory_stats()
+        reserved = f"{mem['reserved_mb']:.0f}MB" if mem is not None else "n/a"
+        print(f"    [residency] text_encoder {moment}: vram_reserved={reserved}")
 
 
 class ZeroGradPhase(ManagedStepPhase):
@@ -263,34 +281,56 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
     deliberate over-inclusion, traded for one rule that's correct for
     both cases instead of a fused/non-fused branch in the residency
     logic itself.
+
+    device_ctx/profile: same reporting as EncodeConditioningPhase's own
+    -- see that class's docstring.
     """
 
     def __init__(self, optimizer: OptimizerHandle, is_fused: bool,
-                 resource_control: ResourceControlHandle):
+                 resource_control: ResourceControlHandle,
+                 device_ctx: Optional[DeviceContext] = None, profile: bool = False):
         self._optimizer = optimizer
         self._is_fused = is_fused
         self._resource_control = resource_control
+        self._device_ctx = device_ctx
+        self._profile = profile
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         self._resource_control.ensure_loaded("optimizer")
+        self._log("loaded")
         state.extras["loss"].backward()
         if not self._is_fused:
             self._optimizer.step(n_steps=1)
         self._resource_control.release("optimizer")
+        self._log("released")
         return state
+
+    def _log(self, moment: str) -> None:
+        if not self._profile or self._device_ctx is None:
+            return
+        mem = self._device_ctx.memory_stats()
+        reserved = f"{mem['reserved_mb']:.0f}MB" if mem is not None else "n/a"
+        print(f"    [residency] optimizer {moment}: vram_reserved={reserved}")
 
 
 class MonitoringPhase(ManagedStepPhase):
-    """Deliberately leaner than the main route's own MonitoringPhase
-    (nodes/train/step_pipeline.py), not an oversight: this route's whole
-    point is the offload/reload choreography above, so the number worth
-    seeing every step is each registered resident's own current
-    footprint (model steady, optimizer/text_encoder each dropping to
-    ~0MB outside their own phase, every step) -- not the main route's
-    fuller set (per-phase timing, baseline deltas, a tracked-footprint
-    cross-check against ResourceProfile). Someone wanting that level of
-    detail can still build it the same way that file did; duplicating
-    all of it here wasn't this file's job."""
+    """Runs last in the step -- after EncodeConditioningPhase and
+    BackwardAndOptimizerStepPhase have already released everything
+    they each manage, so per_resident_mb below will correctly show
+    optimizer/text_encoder near 0 every step regardless of whether
+    release() actually did anything: this phase runs too late to ever
+    show their real peak. That's not this phase's job -- see those two
+    phases' own profile=True lines (printed inline, right when loaded/
+    released actually happen) for the number that's actually
+    informative. What's still meaningful here: model's own footprint
+    (steady, since it stays resident throughout) and one end-of-step
+    summary line (loss/lr/vram_reserved_mb). Deliberately leaner than
+    the main route's own MonitoringPhase (nodes/train/step_pipeline.py)
+    beyond that -- not the main route's fuller set (per-phase timing,
+    baseline deltas, a tracked-footprint cross-check against
+    ResourceProfile). Someone wanting that level of detail can still
+    build it the same way that file did; duplicating all of it here
+    wasn't this file's job."""
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  coordinator: ResourceCoordinator, on_step: Optional[Callable] = None,
@@ -401,17 +441,26 @@ class ManagedLoRATrainerNode(TrainerNode):
             doc="Off by default. See SupervisedLoRATrainerNode's identically-named port "
                 "for the full explanation -- same mechanism, same core/lora.py functions.",
         ),
-        "gate_train_low": Port(name="gate_train_low", type=float, required=False, default=0.0),
-        "gate_train_high": Port(name="gate_train_high", type=float, required=False, default=999.0),
-        "gate_width": Port(name="gate_width", type=float, required=False, default=100.0),
+        "gate_train_low": Port(name="gate_train_low", type=float, required=False, default=0.0,
+                                visible_when=("gate_enabled", True)),
+        "gate_train_high": Port(name="gate_train_high", type=float, required=False, default=999.0,
+                                 visible_when=("gate_enabled", True)),
+        "gate_width": Port(name="gate_width", type=float, required=False, default=100.0,
+                            visible_when=("gate_enabled", True)),
         "profile": Port(
             name="profile", type=bool, required=False, default=False,
-            doc="Per-step print of loss/lr/vram_reserved_mb and each registered "
-                "resident's own current footprint (model/optimizer/text_encoder) -- watch "
-                "optimizer/text_encoder drop toward 0MB outside their own phase, every "
-                "step, which is the concrete, checkable claim this route's whole design "
-                "makes. Also included in monitor.report() if a monitor is wired, "
-                "regardless of this flag.",
+            doc="Two lines per phase that manages a resident (text_encoder, optimizer): "
+                "'[residency] NAME loaded: vram_reserved=XMB' / '... released: "
+                "vram_reserved=YMB' -- watch reserved drop right after each release, "
+                "which is the concrete, checkable claim this route's whole design makes. "
+                "An earlier version of this only reported per-resident footprint from "
+                "MonitoringPhase, which runs last in the step, after both phases above "
+                "have already released everything they manage -- structurally could "
+                "never show anything but ~0MB for either, regardless of whether release() "
+                "was actually working. Fixed to report from inside those two phases "
+                "instead, right when loaded/released actually happen. MonitoringPhase "
+                "still prints one summary line per step (loss/lr/vram_reserved/model's own "
+                "footprint) -- meaningful there since model stays resident throughout.",
         ),
         "empty_cache_every_n_steps": Port(
             name="empty_cache_every_n_steps", type=int, required=False, default=1,
@@ -467,11 +516,13 @@ class ManagedLoRATrainerNode(TrainerNode):
                 gate_train_high=inputs.get(
                     "gate_train_high", self.INPUTS["gate_train_high"].default),
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
-            EncodeConditioningPhase(text_encoder, resource_control),
+            EncodeConditioningPhase(text_encoder, resource_control,
+                                     device_ctx=device_ctx, profile=profile),
             ZeroGradPhase(optimizer, lr_schedule, is_fused),
             ForwardPhase(),
             LossPhase(loss_weighting),
-            BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control),
+            BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control,
+                                           device_ctx=device_ctx, profile=profile),
             MonitoringPhase(
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
                 on_step=inputs.get("on_step"), monitor=inputs.get("monitor"),

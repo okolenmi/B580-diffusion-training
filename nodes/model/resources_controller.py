@@ -231,11 +231,19 @@ class LoRASDXLPreset(ResourcePreset):
     gating continue_lora_path/frozen_lora_path(+frozen_lora_strength) --
     both structurally, via Port.visible_when (the editor hides the
     gated Port's own row while its checkbox reads False), and
-    semantically, via process()'s own both-directions check below
-    (checked-without-a-path and a-path-without-being-checked both raise
-    a clear error) -- visible_when is a UI hint only, never enforced by
-    Node/Port themselves, so process() still has to check this for
-    real.
+    semantically, via process() below, which only reads the gated
+    path/strength Ports at all when their own checkbox is checked --
+    a hidden Port's leftover value (typed in before the checkbox was
+    unchecked, or left over from a previous graph -- the editor doesn't
+    clear a widget's own stored value just because visible_when hid its
+    row) is simply never looked at, not treated as an error. An earlier
+    version of this also raised on a path given without its checkbox
+    checked, reasoning that was a real mismatch worth catching -- wrong
+    in practice: the field is invisible exactly when that check would
+    fire, so there was no way for a person to "clear" it, only to
+    toggle the checkbox on, clear it, then off again. checked-without-
+    a-path still raises (below) -- that direction is a real, fixable-
+    by-the-person mistake, not a UI/state artifact.
 
     unet_dtype is the one dtype axis exposed here, including the real
     "inherited" choice (see _UNET_DTYPE_CHOICES above) -- a plain
@@ -324,24 +332,14 @@ class LoRASDXLPreset(ResourcePreset):
 
         continue_training = inputs.get(
             "continue_training", self.inputs["continue_training"].default)
-        continue_lora_path = inputs.get("continue_lora_path")
+        continue_lora_path = inputs.get("continue_lora_path") if continue_training else None
         if continue_training and continue_lora_path is None:
             raise ValueError("continue_training is checked but continue_lora_path wasn't given.")
-        if not continue_training and continue_lora_path is not None:
-            raise ValueError(
-                "continue_lora_path was given but continue_training isn't checked -- "
-                "check it, or clear the path."
-            )
 
         frozen_lora = inputs.get("frozen_lora", self.inputs["frozen_lora"].default)
-        frozen_lora_path = inputs.get("frozen_lora_path")
+        frozen_lora_path = inputs.get("frozen_lora_path") if frozen_lora else None
         if frozen_lora and frozen_lora_path is None:
             raise ValueError("frozen_lora is checked but frozen_lora_path wasn't given.")
-        if not frozen_lora and frozen_lora_path is not None:
-            raise ValueError(
-                "frozen_lora_path was given but frozen_lora isn't checked -- "
-                "check it, or clear the path."
-            )
 
         from safetensors.torch import load_file
 

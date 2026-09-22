@@ -64,16 +64,19 @@ class SupervisedLoRATrainerNode(TrainerNode):
         ),
         "gate_train_low": Port(
             name="gate_train_low", type=float, required=False, default=0.0,
+            visible_when=("gate_enabled", True),
             doc="Only used when gate_enabled=True. Must match the dataset source node's "
                 "own t_low (ManagedDatasetSourceNode) -- see gate_enabled's doc.",
         ),
         "gate_train_high": Port(
             name="gate_train_high", type=float, required=False, default=999.0,
+            visible_when=("gate_enabled", True),
             doc="Only used when gate_enabled=True. Must match the dataset source node's "
                 "own t_high (ManagedDatasetSourceNode) -- see gate_enabled's doc.",
         ),
         "gate_width": Port(
             name="gate_width", type=float, required=False, default=100.0,
+            visible_when=("gate_enabled", True),
             doc="Only used when gate_enabled=True. Smaller = sharper cutoff right at "
                 "[gate_train_low, gate_train_high]'s edges, larger = more gradual handoff. "
                 "Same parameter, same default, as the legacy pipeline's gate_width "
@@ -128,6 +131,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
         ),
         "profile_memory_per_phase": Port(
             name="profile_memory_per_phase", type=bool, required=False, default=False,
+            visible_when=("profile", True),
             doc="Only meaningful when profile=True. Every other VRAM number this node reports "
                 "is a single end-of-step snapshot -- enough to see reserved differs between "
                 "two steps, nothing about which phase within a step actually did it. This "

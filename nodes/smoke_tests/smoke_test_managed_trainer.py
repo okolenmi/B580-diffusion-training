@@ -307,12 +307,42 @@ def check_real_optimizer_via_trainer_parameters_node_actually_updates_the_traine
     print("    PASS")
 
 
+def check_profile_prints_residency_lines_at_the_right_moments():
+    print("[profile=True: EncodeConditioningPhase/BackwardAndOptimizerStepPhase each "
+          "print their own loaded/released line -- MonitoringPhase runs too late to "
+          "ever show this (both are already released by the time it runs), which is "
+          "exactly the bug this closes]")
+    import io
+    import contextlib
+
+    events: list = []
+    model = _FakeModel(events)
+    trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
+    node = ManagedLoRATrainerNode()
+    node.context = ExecutionContext()
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        node.build(
+            trainer=trainer, batches=_FiniteBatches(), optimizer=_FakeOptimizer(events),
+            lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+            steps=1, resource_control=_FakeResourceControl(events), profile=True,
+        )
+    output = buf.getvalue()
+    check("[residency] text_encoder loaded:" in output, output)
+    check("[residency] text_encoder released:" in output, output)
+    check("[residency] optimizer loaded:" in output, output)
+    check("[residency] optimizer released:" in output, output)
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_model_is_registered_non_offloadable_and_never_released()
     check_text_encoder_and_optimizer_bracket_their_own_phase_each_step()
     check_fused_optimizer_still_brackets_around_backward_but_never_calls_step()
     check_real_optimizer_via_trainer_parameters_node_actually_updates_the_trained_parameter()
+    check_profile_prints_residency_lines_at_the_right_moments()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

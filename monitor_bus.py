@@ -52,6 +52,35 @@ class MonitorBus:
         if subs and q in subs:
             subs.remove(q)
 
+    def clear(self, monitor_id: str) -> None:
+        """Drops this monitor_id's history and tells every currently-
+        connected dashboard to reset its own chart, live -- called once
+        by TrainingProgressMonitorNode.build() each time a *new* run
+        starts reporting to a given monitor_id (build() runs exactly
+        once per node per graph run, so "a new run is about to report
+        here" and "this node is being constructed" are the same event).
+
+        Without this, re-running training against the same monitor_id
+        (the normal case -- a monitor_id is deliberately meant to
+        outlive any one run, see MonitorNode.COMMON_INPUTS' own
+        docstring) replayed the old run's full history to every new
+        subscriber ahead of the new run's own data, and kept appending
+        the new run's data onto the same deque behind it -- both runs
+        landing on the same step axis at once, rendered as two
+        overlapping lines with no visual indication they're different
+        runs. A real report, not a hypothetical: confirmed exactly this
+        shape from actual use. Clearing on every fresh build() removes
+        that case entirely rather than trying to distinguish/label
+        "which run" a given point belongs to -- simpler, and matches
+        what was actually asked for (the old run's data gone, not kept
+        and marked)."""
+        self._history[monitor_id].clear()
+        if self._loop is None:
+            return
+        payload = f"data: {json.dumps({'type': 'clear'})}\n\n"
+        for q in list(self._subscribers.get(monitor_id, [])):
+            self._loop.call_soon_threadsafe(self._safe_put, q, payload)
+
     def report(self, monitor_id: str, data: dict) -> None:
         """Safe to call from any thread -- this is the side graph
         execution actually calls, from a FastAPI worker thread."""

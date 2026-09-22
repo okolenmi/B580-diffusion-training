@@ -51,6 +51,60 @@ def test_two_contexts_do_not_share_state():
     check(list(bus_b._history["x"]) == [{"v": 2}], "bus_b should only see its own report")
 
 
+def test_clear_removes_history():
+    bus = MonitorBus()
+    bus.report("m", {"step": 1})
+    bus.report("m", {"step": 2})
+    check(len(bus._history["m"]) == 2, "sanity: history should have both reports before clear()")
+    bus.clear("m")
+    check(len(bus._history["m"]) == 0, "clear() must empty the history deque")
+
+
+def test_a_second_build_against_the_same_monitor_id_clears_the_first_runs_history():
+    """The actual reported bug: re-running training against the same
+    monitor_id overlaid the new run's line on the old one, because
+    MonitorBus never cleared between runs -- a late subscriber (or the
+    same still-open dashboard reconnecting) replayed both runs' data
+    concatenated on one step axis. Fixed by having
+    TrainingProgressMonitorNode.build() -- called exactly once per node
+    per graph run -- clear its own monitor_id's history first."""
+    bus = MonitorBus()
+    ctx = ExecutionContext(monitor_bus=bus)
+
+    first_run_handle = TrainingProgressMonitorNode(ctx).build(monitor_id="run-id")["monitor"]
+    first_run_handle.report({"step": 0, "loss": 1.0})
+    first_run_handle.report({"step": 1, "loss": 0.9})
+    check(len(bus._history["run-id"]) == 2, "sanity: first run's own reports should be there")
+
+    # A second graph run, same monitor_id -- exactly what happens re-running training
+    # without changing the monitor node's id.
+    second_run_handle = TrainingProgressMonitorNode(ctx).build(monitor_id="run-id")["monitor"]
+    check(len(bus._history["run-id"]) == 0,
+          "the first run's history must be gone the moment the second run's monitor "
+          "node is built, before it's reported anything of its own")
+
+    second_run_handle.report({"step": 0, "loss": 0.5})
+    check(list(bus._history["run-id"]) == [{"step": 0, "loss": 0.5}],
+          "only the second run's own data should remain -- no overlap with the first")
+
+
+async def _clear_broadcasts_to_a_live_subscriber():
+    bus = MonitorBus()
+    bus.report("m", {"step": 1})
+    q = bus.subscribe("m")
+    check(q.get_nowait() == 'data: {"step": 1}\n\n', "sanity: history replay on subscribe")
+
+    bus.clear("m")
+    item = await asyncio.wait_for(q.get(), timeout=2)
+    check(item == 'data: {"type": "clear"}\n\n',
+          "a currently-connected dashboard must be told to reset live, not just leave "
+          "stale history for the next fresh subscriber to (not) see")
+
+
+def test_clear_broadcasts_to_a_live_subscriber():
+    asyncio.run(_clear_broadcasts_to_a_live_subscriber())
+
+
 async def _async_checks():
     bus = MonitorBus()
     bus.report("m1", {"step": 1})  # before any subscriber -- must not crash, must buffer
@@ -81,6 +135,9 @@ def main():
     test_no_module_level_singleton()
     test_context_injection_reaches_handle()
     test_two_contexts_do_not_share_state()
+    test_clear_removes_history()
+    test_a_second_build_against_the_same_monitor_id_clears_the_first_runs_history()
+    test_clear_broadcasts_to_a_live_subscriber()
     test_async_bus_behavior()
     print("All monitor_bus checks passed.")
 

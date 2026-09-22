@@ -21,6 +21,13 @@ class TrainingProgressMonitorNode(MonitorNode):
 
     def build(self, **inputs) -> dict[str, MonitorHandle]:
         self.validate_inputs(inputs)
-        result = {"monitor": LiveMonitorHandle(inputs["monitor_id"], self.context.monitor_bus)}
+        monitor_id = inputs["monitor_id"]
+        if self.context.monitor_bus is not None:
+            # Every build() is a *new* run starting to report to this monitor_id --
+            # see MonitorBus.clear()'s own docstring for why this is the right
+            # trigger and what it fixes (a real user report: re-running against the
+            # same monitor_id overlaid the new run's line on top of the old one).
+            self.context.monitor_bus.clear(monitor_id)
+        result = {"monitor": LiveMonitorHandle(monitor_id, self.context.monitor_bus)}
         self.validate_outputs(result)
         return result

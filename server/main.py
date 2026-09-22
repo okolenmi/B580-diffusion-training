@@ -49,14 +49,38 @@ async def lifespan(app: FastAPI):
 
 
 import logging
+import os
+import re
 
-# Filter out successful polling and preview logs to keep console clean
-class EndpointFilter(logging.Filter):
+# Uvicorn's own access log, one line per HTTP request -- useful for a request that
+# actually did something (a POST, an error), noise for the same GET status poll
+# repeated every second while a graph run or a training job is in progress (real
+# complaint: the node-graph editor's own /nodegraph/run/{id} status poll -- not
+# previously covered by the narrower, per-endpoint-string filter this replaces,
+# which excluded two specific legacy polling paths by name and needed a new string
+# added by hand every time a new polling endpoint showed up, exactly the gap that
+# let this one through). Filters by shape instead: a successful (2xx) GET is
+# routine, everything else (a real error, or a non-GET request -- starting a run,
+# saving a setting, uploading a file) is worth seeing.
+#
+# COMFY_ACCESS_LOG controls this -- "filtered" (default): the rule above.
+# "all": no filtering, uvicorn's own unmodified access log. "off": no access log
+# at all. Doesn't touch uvicorn's own error/warning logging (a crash still prints
+# its full traceback regardless of this setting) -- only the one-line-per-request
+# access log.
+_ACCESS_LOG_MODE = os.environ.get("COMFY_ACCESS_LOG", "filtered").strip().lower()
+_SUCCESSFUL_GET_RE = re.compile(r'"GET [^"]*" 2\d\d')
+
+
+class _FilteredAccessLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return "/tasks/active" not in msg and "/previews/" not in msg
+        return not _SUCCESSFUL_GET_RE.search(record.getMessage())
 
-logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
+if _ACCESS_LOG_MODE == "off":
+    logging.getLogger("uvicorn.access").disabled = True
+elif _ACCESS_LOG_MODE != "all":
+    logging.getLogger("uvicorn.access").addFilter(_FilteredAccessLog())
 
 app = FastAPI(
     title="Training Control Center",

@@ -28,6 +28,17 @@
       let data;
       try { data = JSON.parse(ev.data); } catch (e) { return; }
       if (data.type === "connected") { this.setStatus("live"); return; }
+      if (data.type === "clear") {
+        // A fresh run just started reporting to this monitor_id -- see
+        // MonitorBus.clear()'s own docstring (monitor_bus.py) for why this exists:
+        // without it, re-running training against the same monitor_id overlaid the
+        // new run's line on the old one with no indication they were different runs.
+        this.chart.reset();
+        this.firstEventTime = null;
+        this.lastEvent = null;
+        this.recentRates = [];
+        return;
+      }
       if (data.step === undefined) return; // not a training-progress-shaped event; ignore rather than guess
 
       const now = data.t ? data.t * 1000 : Date.now();

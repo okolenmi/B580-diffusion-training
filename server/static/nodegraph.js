@@ -54,6 +54,10 @@
     try { return JSON.parse(rawString); } catch (e) { return rawString; }
   }
 
+  function generateMonitorId() {
+    return "mon-" + Math.random().toString(36).slice(2, 10);
+  }
+
   /* One spawned node instance on the canvas. Port *declarations* (name,
      type, required, default, doc, path_kind, choices, visible_when, widget_only)
      live on classInfo -- this only holds per-instance state: position, and widget
@@ -71,6 +75,20 @@
           try { this.paramValues[p.name] = JSON.parse(p.default.replace(/'/g, '"')); }
           catch (e) { /* leave unset; server default applies if still unconnected+unset */ }
         }
+      }
+      if (classInfo.domain === "monitor" && !this.paramValues.monitor_id) {
+        // Generated here, at construction, not lazily on first render (the previous
+        // version's real bug: buildNodeEl() renders the monitor_id *input widget*
+        // before it reaches appendMonitorControls() further down the same function,
+        // which is where generation used to happen -- the widget's own DOM element
+        // was already built from the still-empty value by the time generation ran,
+        // so it displayed blank on a node's first render even though
+        // node.paramValues.monitor_id *was* correctly set a few lines later in that
+        // same pass; a second, later render -- any subsequent interaction -- would
+        // show it correctly, which is exactly the "happens only sometimes" shape).
+        // GraphModel.restore() below immediately overwrites paramValues wholesale
+        // right after constructing each node, so this never clobbers a saved id.
+        this.paramValues.monitor_id = generateMonitorId();
       }
       this.portOffsets = { inputs: {}, outputs: {} }; // filled in after each render, see GraphView.measurePorts
     }
@@ -629,7 +647,9 @@
     appendMonitorControls(node, el, mode) {
       if (node.classInfo.domain !== "monitor") return;
       if (!node.paramValues.monitor_id) {
-        node.paramValues.monitor_id = this.generateMonitorId();
+        // Defensive backstop only -- GraphNode's own constructor is where this is
+        // really generated now (see its comment for why render time was too late).
+        node.paramValues.monitor_id = generateMonitorId();
         this.persist();
       }
       const monitorId = node.paramValues.monitor_id;
@@ -658,10 +678,6 @@
         this.trackMonitorConnection(node.id, monitorId, null);
       }
       el.appendChild(row);
-    }
-
-    generateMonitorId() {
-      return "mon-" + Math.random().toString(36).slice(2, 10);
     }
 
     trackMonitorConnection(nodeId, monitorId, quickInfoEl) {

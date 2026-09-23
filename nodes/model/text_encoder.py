@@ -74,13 +74,25 @@ class SDXLTextEncoder(TextEncoder):
         return total
 
     def offload(self) -> None:
-        """unload() already does exactly this -- move clip_model/_embedder
-        to CPU, clear the device cache -- just not under this name.
-        Remembering the pre-offload device here since unload() overwrites
-        self._legacy.device to "cpu", same as ComfyUNetTrainableModel's
-        offload()/reload() pair in nodes/model/lora_injector.py."""
+        """A direct move, not unload() -- unload() (core.clip_encode.
+        SDXLClipEncoder.unload()) also calls gc.collect() +
+        empty_cache() internally, appropriate for a one-time "done with
+        this encoder for the rest of the run" call, real, avoidable cost
+        every time for a per-step offload/reload cycle (this class's own
+        DeviceResident.offload(), called every step by
+        ManagedLoRATrainerNode's EncodeConditioningPhase,
+        nodes/train/managed.py). The caller managing this resident's own
+        step loop already has its own empty_cache_every_n_steps
+        mechanism for when a real cache-reclaim is actually worth
+        its cost; this method shouldn't force one on every single call
+        on its own account. Confirmed via profiling this was a real,
+        measurable, previously-invisible cost, not a theoretical one --
+        see docs/known-issues/pending-testing.md's entry on this."""
         self._device_before_offload = self._legacy.device
-        self._legacy.unload()
+        self._legacy.clip_model = self._legacy.clip_model.cpu()
+        if self._legacy._embedder is not None:
+            self._legacy._embedder = self._legacy._embedder.cpu()
+        self._legacy.device = "cpu"
 
     def reload(self, device: str | None = None) -> None:
         """No reload() on the legacy class to delegate to -- unload() is

@@ -184,3 +184,86 @@ footprint this design deliberately doesn't try to shrink via offload --
 isn't newly touched or newly tested by this phase either.
 
 **Dependency:** Phase 6 (done).
+
+## Addendum: from "always release" to "release only if measured usage actually needs it"
+
+A real run reported ~0.36 steps/sec against this route vs. ~1.7 steps/sec
+on the main route (same settings, AdamW) -- a ~4.7x slowdown -- with
+peak reserved VRAM around 9.0GB against a stated 12500MB budget the
+whole time. Investigated rather than guessed at; found several real,
+compounding causes, in roughly descending order of likely impact:
+
+1. **`SDXLTextEncoder.offload()` routed through `unload()`
+   (`core/clip_encode.py`), which calls `gc.collect()` +
+   `empty_cache()` internally, every single call.** Appropriate for
+   `unload()`'s own original "done with this encoder for the rest of
+   the run" use, real, avoidable, previously-invisible cost for a
+   per-step offload cycle. Fixed: `offload()` now does a direct move,
+   no `unload()`. Regression test:
+   `nodes/smoke_tests/smoke_test_sdxl_text_encoder_offload.py`.
+2. **The original design released text_encoder/optimizer
+   unconditionally, every step, regardless of whether the stated
+   budget ever needed it.** In the reported run it never did -- every
+   release()/ensure_loaded() round trip was pure cost, bought nothing.
+   Fixed with `AdaptiveResidencyController` (`nodes/train/managed.py`,
+   full reasoning in its own docstring): `calibration_steps` steps run
+   fully resident first, measuring real peak VRAM
+   (`DeviceContext.reset_peak_stats()`/`memory_stats()`'s own
+   `peak_reserved_mb`, `nodes/components/device.py`); if that already
+   fits the budget, nothing is ever released for the rest of the run.
+   If it doesn't, candidates are released smallest-`footprint_bytes()`-
+   first, only as many as the estimated shortfall needs.
+   `resource_control.usable_budget_mb()` is a new
+   `ResourceControlHandle` method (alongside `release()`) so the
+   controller doesn't need to know how a budget is represented
+   internally. Tested directly (fake numbers, no hardware needed) in
+   `nodes/smoke_tests/smoke_test_adaptive_residency_controller.py`;
+   the CPU-only integration tests in `smoke_test_managed_trainer.py`
+   can only exercise the "no usable ceiling / no memory-stats concept
+   -> decide immediately, stay resident" fallback (`DeviceContext.
+   for_device()` on a CPU tensor returns `_NullDeviceContext`, whose
+   `memory_stats()` is always `None`) -- both are drilled separately
+   in the same file for the "controller actually decided to release,
+   do the phases honor it" side.
+3. **No candidate is wrapped in `CachingTextEncoder` on this route**
+   (`trainer.clip` is always a plain `SDXLTextEncoder`) -- for a
+   dataset with repeated prompts (a single-image dataset, concretely,
+   the reported case), the main route's own `CachingTextEncoderNode`
+   wiring would make conditioning nearly free after the first step;
+   this route pays full transfer + full recompute every step,
+   unconditionally, with no possible cache hit. Real, likely
+   significant for that specific case, **not fixed here** -- would need
+   `trainer.clip` exposed as its own wireable output (the role
+   `TrainerResourcesUnpackNode` used to play, before this file's own
+   "First attempt, reverted" section, for a different reason). A real,
+   scoped, separate follow-up, not attempted in this same change.
+4. **No pinned (page-locked) host memory anywhere in this project's
+   offload/reload paths** -- already known and disclosed, not new:
+   `03-training-step-orchestration.md` section 2.3 already flags this
+   exact gap ("a real platform-specific wrinkle... left for its own
+   follow-up"). Still real, still unaddressed, now more likely to
+   matter given how much more offload/reload traffic this route can
+   generate.
+5. **A rank-64 LoRA's own optimizer state is not negligible** --
+   corrects an assumption in this doc's own first version ("proportional
+   only to the trainable LoRA parameters -- a small fraction of the
+   base model's size -- cheap to move every step"), true at low rank,
+   not reliably true at rank 64. The offload/reload path itself has no
+   hidden costs the way text_encoder's did (checked directly against
+   `ComposedOptimizerHandle.offload_states_to_cpu()`/
+   `reload_states_to_device()`, `nodes/optimizer/composed.py`) -- just
+   real bytes moved, real PCIe time.
+
+**Deliberately not attempted in this same change:** wiring gradient
+checkpointing (`nodes/model/gradient_checkpointing.py`) or its own
+budget-driven block-placement policy
+(`GreedyRatioPlacement`/`BlockCost`, `nodes/model/checkpoint_placement.py`)
+into this route as a genuine "slower but more memory-efficient"
+alternative to offloading -- both already exist, real and working, and
+that policy's own docs already flag it as unvalidated against a real
+training run and deliberately not wired into any node's construction
+path yet, for the same "measure, don't guess" reason
+`AdaptiveResidencyController` exists. Extending that same caution to a
+second, newer piece, built and tested on hardware neither has ever
+actually run on, felt like the right call rather than rushing both in
+under one patch. A natural next step, not started here.

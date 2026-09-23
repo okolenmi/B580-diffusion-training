@@ -18,15 +18,20 @@ encoder outside its own encode call, the optimizer's state outside its
 own update) still just sits resident the common case, no pressure
 required to justify moving it.
 
-This route's own step loop instead treats residency as deterministic,
-not reactive: each resident is loaded immediately before the one phase
-that needs it and released immediately after, every step, budget
-exceeded or not -- see EncodeConditioningPhase and
-BackwardAndOptimizerStepPhase below for exactly which resident, which
-window, and why. `resource_control.before_step()` still runs every step
-too, as a safety net for whatever's registered non-offloadable (model,
-here -- see ManagedLoRATrainerNode's own docstring for why) rather than
-the sole mechanism.
+This route's own step loop can release each resident immediately after
+the one phase that needs it, every step -- see EncodeConditioningPhase
+and BackwardAndOptimizerStepPhase below for exactly which resident,
+which window, and why -- but whether it actually *does* that is decided
+once, adaptively, by AdaptiveResidencyController below, not
+unconditionally. An earlier version of this file released
+unconditionally, always, regardless of whether the stated budget needed
+it -- real, measured cost (see AdaptiveResidencyController's own
+docstring for the numbers and the actual report that motivated this),
+paid on every run whether or not anything was ever close to the
+ceiling. `resource_control.before_step()` still runs every step too, as
+a safety net for whatever's registered non-offloadable (model, here --
+see ManagedLoRATrainerNode's own docstring for why) and for whatever the
+controller's own measured-peak estimate gets wrong.
 
 Concretely, for a LoRA run: the frozen base dominates the model's own
 footprint and is too expensive to move every step (a real multi-GB
@@ -34,17 +39,12 @@ transfer, likely making per-step offload/reload of the whole model
 slower than the run it's meant to protect) -- it stays resident for the
 run's duration, same conclusion the main route reaches, not a
 carried-over assumption (see ManagedLoRATrainerNode's own docstring).
-The optimizer's tracked state, by contrast, is proportional only to the
-trainable LoRA parameters -- a small fraction of the base model's size
--- so moving it every step is cheap, and SDXL's two text encoders
-(a full CLIP ViT-L/14 plus OpenCLIP ViT-bigG/14) are large enough on
-their own that keeping them off GPU outside their one phase is a real,
-not token, VRAM reduction for the step's most memory-hungry stretch
-(forward+backward, activations included). Whether this is actually
-*worth* the transfer cost it adds -- a real, disclosed step-time
-tradeoff on top of the main route -- is exactly the thing this route
-exists to let a person measure against the main one, not something this
-file can decide on anyone's behalf.
+The optimizer's tracked state and SDXL's two text encoders (a full CLIP
+ViT-L/14 plus OpenCLIP ViT-bigG/14) are both real, not-always-negligible
+chunks of VRAM -- how large depends on LoRA rank (optimizer state) and
+is simply fixed and large (~1.6GB combined) for the text encoders --
+and are the two AdaptiveResidencyController actually chooses between
+when the budget can't be honored with everything resident.
 
 `ResourceControlHandle.release()` (nodes/memory/control_handle.py) is
 new this session, specifically for this file: the existing handle only
@@ -73,6 +73,7 @@ from ..core import Port
 from ..dataset.handle import TrainingBatchSource
 from ..memory.control_handle import ResourceControlHandle
 from ..memory.coordinator import ResourceCoordinator
+from ..memory.handle import DeviceResident
 from ..model.handle import TrainableModel
 from ..model.lora_training_resources import LoRATrainingSkeleton
 from ..model.text_encoder import TextEncoder
@@ -106,6 +107,139 @@ class ManagedTrainingStepPipeline:
         for phase in self.phases:
             state = phase.run(state)
         return state
+
+
+class AdaptiveResidencyController:
+    """Decides, once, whether text_encoder/optimizer actually need to be
+    released between uses at all -- an earlier version of this file
+    always released both, every step, regardless of the stated budget.
+    That version was real, measured, and wrong for a case that turned
+    out to be common, not an edge case: a real run reported ~0.36
+    steps/sec against this route vs. ~1.7 steps/sec on the main route
+    (SupervisedLoRATrainerNode, same settings) -- a ~4.7x slowdown --
+    with peak reserved VRAM around 9.0GB against a 12500MB budget the
+    whole time. The offloading was never once necessary in that run;
+    every release()/ensure_loaded() round trip was pure cost, bought
+    nothing.
+
+    This controller fixes that by measuring instead of assuming:
+    `calibration_steps` steps run with *everything* resident (no
+    release() calls at all -- see EncodeConditioningPhase/
+    BackwardAndOptimizerStepPhase's own should_release() checks below),
+    while DeviceContext.reset_peak_stats() + memory_stats()'s own
+    peak_reserved_mb (nodes/components/device.py) track the real
+    high-water mark. If that peak already fits the budget, nothing ever
+    gets released for the rest of the run -- full speed, same as the
+    main route pays for the same reason. If it doesn't, candidates are
+    released starting from the smallest footprint_bytes() first (a
+    direct reading of "less performance costly options first" -- byte
+    count is the one real, already-available number that's actually
+    proportional to transfer cost, not a proxy for it), only as many as
+    the shortfall actually needs, estimated by subtracting each
+    candidate's own footprint_bytes() from the measured peak in that
+    order. That subtraction is an approximation, not a
+    guarantee -- offloading X doesn't necessarily save exactly X's own
+    byte count at the *real* peak moment (timing, fragmentation, and
+    other residents' own footprint at that instant all affect it) --
+    which is exactly why this controller doesn't replace
+    resource_control.before_step()'s own reactive check, it front-runs
+    it: before_step() (and strict=True, if set) is still there as the
+    real backstop for whatever this estimate gets wrong.
+
+    Why measure real usage instead of estimating it analytically up
+    front (batch size, resolution, rank, etc.): this project's own
+    docs consistently favor a real, checked number over a predicted
+    one (see e.g. nodes/model/checkpoint_placement.py's own
+    BlockCost/GreedyRatioPlacement, explicitly not wired into real use
+    yet because it has no real profiled numbers to validate a
+    placement against). Analytically modeling this UNet's own
+    activation memory across arbitrary batch/resolution/rank
+    combinations is a much harder, more fragile problem than reading
+    the number the allocator already tracks -- and here, unlike
+    per-block checkpoint placement, there are only two candidates to
+    choose between, so a few real, cheap calibration steps settle it
+    directly rather than needing a model of the cost at all.
+
+    Not addressed here, and deliberately not attempted in the same
+    change as this controller: an algorithmic alternative to offloading
+    at all (gradient checkpointing trades recompute time for reduced
+    *activation* memory -- a different axis than moving *weights*
+    on/off device, and this project already has real, working
+    infrastructure for it -- ActivationCheckpointingStrategy,
+    nodes/model/gradient_checkpointing.py -- plus a real, matching
+    budget-driven placement policy, GreedyRatioPlacement,
+    nodes/model/checkpoint_placement.py, for deciding *which UNet
+    blocks* to checkpoint under a budget, ranked the same
+    memory-per-cost way this controller ranks text_encoder vs.
+    optimizer). That policy's own docs already flag it as real but
+    unvalidated against an actual training run and deliberately not
+    wired into any node's construction path yet, for exactly the "measure,
+    don't guess" reason above -- extending that same caution to a second,
+    newer piece built in this same session, on hardware this was never
+    run on, felt like the right call rather than rushing it in under the
+    same patch. A natural, real next step once someone can confirm the
+    existing per-block placement work on real hardware -- not done here.
+    """
+
+    def __init__(self, usable_mb: Optional[float], candidates: dict[str, DeviceResident],
+                 calibration_steps: int = 3):
+        self._usable_mb = usable_mb
+        self._candidates = candidates  # name -> resident, for footprint_bytes() at decision time
+        self._calibration_steps = max(1, calibration_steps)
+        self._steps_seen = 0
+        self._peak_reserved_mb = 0.0
+        self._decided: Optional[set] = None  # None while still calibrating
+
+    @property
+    def calibrating(self) -> bool:
+        return self._decided is None
+
+    def record_step_peak(self, memory_stats: Optional[dict]) -> None:
+        """Call once per step, only during calibration -- a no-op once
+        a decision has been made (nothing left to calibrate). Decides
+        immediately, on the very first call, when there's no usable
+        ceiling to plan against at all (usable_budget_mb() returned
+        None -- ResourceControlHandle's own docstring: "no fixed
+        ceiling concept") or no memory-stats concept on this device
+        (memory_stats is None -- DeviceContext's own docstring: CPU,
+        mainly) -- both cases mean there's nothing offloading could
+        ever be measured against, so waiting calibration_steps for a
+        number that will never arrive would just mean never deciding
+        at all, staying fully resident is the only coherent answer
+        either way."""
+        if self._decided is not None:
+            return
+        if self._usable_mb is None or memory_stats is None:
+            self._decided = set()
+            return
+        self._peak_reserved_mb = max(self._peak_reserved_mb, memory_stats["peak_reserved_mb"])
+        self._steps_seen += 1
+        if self._steps_seen >= self._calibration_steps:
+            self._decide()
+
+    def _decide(self) -> None:
+        order = sorted(self._candidates.items(), key=lambda kv: kv[1].footprint_bytes())
+        release: set = set()
+        remaining_mb = self._peak_reserved_mb
+        for name, resident in order:
+            if remaining_mb <= self._usable_mb:
+                break
+            release.add(name)
+            remaining_mb -= resident.footprint_bytes() / (1024 ** 2)
+        self._decided = release
+        verdict = ("releasing " + ", ".join(sorted(release))) if release \
+            else "nothing -- staying fully resident for the rest of this run"
+        print(f"[AdaptiveResidencyController] measured peak={self._peak_reserved_mb:.0f}MB "
+              f"over {self._steps_seen} calibration step(s), usable budget="
+              f"{self._usable_mb:.0f}MB -- {verdict}")
+
+    def should_release(self, name: str) -> bool:
+        """False during calibration (never release yet -- that's the
+        whole point of measuring the unmodified peak first) and False
+        after a decision that didn't select `name`."""
+        if self._decided is None:
+            return False
+        return name in self._decided
 
 
 class FetchBatchPhase(ManagedStepPhase):
@@ -182,12 +316,22 @@ class EncodeConditioningPhase(ManagedStepPhase):
     right after releasing, when profile=True -- see this module's own
     ManagedLoRATrainerNode.build() for why this reporting lives here
     and in BackwardAndOptimizerStepPhase rather than in MonitoringPhase
-    alone."""
+    alone.
+
+    controller: AdaptiveResidencyController -- release() only actually
+    runs when controller.should_release("text_encoder") says so (False
+    during calibration, and after calibration if the measured peak
+    never needed it). ensure_loaded() still runs unconditionally either
+    way -- cheap and safe when nothing was ever offloaded, and correct
+    if before_step()'s own reactive check offloaded this for some other
+    reason between calls."""
 
     def __init__(self, text_encoder: TextEncoder, resource_control: ResourceControlHandle,
+                 controller: "AdaptiveResidencyController",
                  device_ctx: Optional[DeviceContext] = None, profile: bool = False):
         self._text_encoder = text_encoder
         self._resource_control = resource_control
+        self._controller = controller
         self._device_ctx = device_ctx
         self._profile = profile
 
@@ -201,8 +345,9 @@ class EncodeConditioningPhase(ManagedStepPhase):
             batch["prompt"], batch_size=x_t.shape[0], height=batch_h, width=batch_w)
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
-        self._resource_control.release("text_encoder")
-        self._log("released")
+        if self._controller.should_release("text_encoder"):
+            self._resource_control.release("text_encoder")
+            self._log("released")
         return state
 
     def _log(self, moment: str) -> None:
@@ -284,14 +429,19 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
 
     device_ctx/profile: same reporting as EncodeConditioningPhase's own
     -- see that class's docstring.
+
+    controller: same gating as EncodeConditioningPhase's own -- see
+    that class's docstring.
     """
 
     def __init__(self, optimizer: OptimizerHandle, is_fused: bool,
                  resource_control: ResourceControlHandle,
+                 controller: "AdaptiveResidencyController",
                  device_ctx: Optional[DeviceContext] = None, profile: bool = False):
         self._optimizer = optimizer
         self._is_fused = is_fused
         self._resource_control = resource_control
+        self._controller = controller
         self._device_ctx = device_ctx
         self._profile = profile
 
@@ -301,8 +451,9 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
         state.extras["loss"].backward()
         if not self._is_fused:
             self._optimizer.step(n_steps=1)
-        self._resource_control.release("optimizer")
-        self._log("released")
+        if self._controller.should_release("optimizer"):
+            self._resource_control.release("optimizer")
+            self._log("released")
         return state
 
     def _log(self, moment: str) -> None:
@@ -423,12 +574,14 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "optional (see this class's own docstring). model is registered "
                 "non-offloadable (the frozen base dominates its footprint and is too "
                 "expensive to move every step); optimizer and text_encoder are each "
-                "loaded only for their own phase and released right after, every step, "
-                "not just under pressure -- see EncodeConditioningPhase/"
-                "BackwardAndOptimizerStepPhase in this module for exactly which window "
-                "and why. before_step() still runs every step too, as a safety net for "
-                "model alone exceeding the budget -- set strict=True on the connected "
-                "VRAMBudgetControllerNode to raise instead of continuing if that happens.",
+                "registered offloadable, but whether either is actually released between "
+                "uses is decided once by AdaptiveResidencyController (this module's own "
+                "docstring) after measuring real peak usage with everything resident -- "
+                "not unconditionally, every step, regardless of whether the budget needed "
+                "it. before_step() still runs every step too, as a safety net for model "
+                "alone exceeding the budget, or for the controller's own estimate being "
+                "wrong -- set strict=True on the connected VRAMBudgetControllerNode to "
+                "raise instead of continuing if either happens.",
         ),
         "diffusion_process": Port(
             name="diffusion_process", type=DiffusionProcess, required=False, default=None,
@@ -467,6 +620,17 @@ class ManagedLoRATrainerNode(TrainerNode):
             doc="See this class's own docstring for why this defaults to 1 (every step) "
                 "instead of the main route's 0.",
         ),
+        "calibration_steps": Port(
+            name="calibration_steps", type=int, required=False, default=3,
+            doc="AdaptiveResidencyController (see this module's own docstring) runs this "
+                "many steps with everything resident first, measuring real peak VRAM, "
+                "before deciding whether optimizer/text_encoder need to be released at "
+                "all for the rest of the run. Higher -- more confidence the measured peak "
+                "is representative (a batch with unusual content, or one-time allocator "
+                "warmup on the very first step, could make a single step's own peak "
+                "unrepresentative); lower -- less of the run spent paying whatever this "
+                "decides against (nothing, if it turns out headroom was never needed).",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -486,11 +650,14 @@ class ManagedLoRATrainerNode(TrainerNode):
         profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
         empty_cache_every_n_steps: int = inputs.get(
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
+        calibration_steps: int = inputs.get(
+            "calibration_steps", self.INPUTS["calibration_steps"].default)
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
         is_fused = isinstance(optimizer, FusedOptimizerHandle)
         device_ctx = DeviceContext.for_device(str(device))
+        device_ctx.reset_peak_stats()  # calibration below measures THIS run, not process history
 
         optimizer_id = describe_optimizer(optimizer)
         print(f"[ManagedLoRATrainerNode] optimizer: {optimizer_id}")
@@ -498,6 +665,12 @@ class ManagedLoRATrainerNode(TrainerNode):
         resource_control.register("model", model, offloadable=False)
         resource_control.register("optimizer", optimizer, offloadable=True)
         resource_control.register("text_encoder", text_encoder, offloadable=True)
+
+        controller = AdaptiveResidencyController(
+            usable_mb=resource_control.usable_budget_mb(),
+            candidates={"optimizer": optimizer, "text_encoder": text_encoder},
+            calibration_steps=calibration_steps,
+        )
 
         # Separate from resource_control -- tracking/reporting only (MonitoringPhase's
         # own per-resident footprint numbers), same split the main route's own build()
@@ -516,12 +689,12 @@ class ManagedLoRATrainerNode(TrainerNode):
                 gate_train_high=inputs.get(
                     "gate_train_high", self.INPUTS["gate_train_high"].default),
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
-            EncodeConditioningPhase(text_encoder, resource_control,
+            EncodeConditioningPhase(text_encoder, resource_control, controller,
                                      device_ctx=device_ctx, profile=profile),
             ZeroGradPhase(optimizer, lr_schedule, is_fused),
             ForwardPhase(),
             LossPhase(loss_weighting),
-            BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control,
+            BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control, controller,
                                            device_ctx=device_ctx, profile=profile),
             MonitoringPhase(
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
@@ -537,6 +710,7 @@ class ManagedLoRATrainerNode(TrainerNode):
             state = ManagedStepState(step=step, batch=None, model=model, device=device)
             resource_control.before_step(step)  # safety net -- see this class's own docstring
             pipeline.run_step(state)
+            controller.record_step_peak(device_ctx.memory_stats())
             step += 1
             if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
                 gc.collect()

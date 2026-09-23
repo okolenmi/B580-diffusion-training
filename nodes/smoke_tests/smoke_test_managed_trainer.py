@@ -1,13 +1,26 @@
 """Checks nodes/train/managed.py's ManagedLoRATrainerNode -- specifically
-the one thing that's actually new and risky here: that optimizer/
-text_encoder residency really is bracketed (ensure_loaded before use,
-release right after) in the right order relative to encode/backward/
-step, for both a plain and a fused optimizer, and that model is never
-released at all. Everything else this node does (diffusion math,
-gating, monitoring) is either a straight, low-risk read of the main
-route's own equivalent, or already covered by this node's own
-docstrings' worked reasoning -- this file deliberately doesn't
-re-verify all of that, only the choreography that's genuinely new.
+that optimizer/text_encoder residency is correctly wired to
+AdaptiveResidencyController's own decision (ensure_loaded always fires;
+release only fires when the controller actually decided to), for both a
+plain and a fused optimizer, and that model is never released at all.
+Everything else this node does (diffusion math, gating, monitoring) is
+either a straight, low-risk read of the main route's own equivalent, or
+already covered by this node's own docstrings' worked reasoning -- this
+file deliberately doesn't re-verify all of that, only the choreography
+that's genuinely new.
+
+AdaptiveResidencyController's own decision logic (calibrate, then
+release nothing vs. release smallest-first) is tested directly, with
+fake numbers, in smoke_test_adaptive_residency_controller.py -- this
+file can't drive that branch through a full ManagedLoRATrainerNode.build()
+run at all: every check here runs on CPU tensors, where
+DeviceContext.for_device() returns _NullDeviceContext (memory_stats()
+always None), so the controller always falls back to "stay resident"
+immediately (see its own record_step_peak() docstring for why that's
+the correct fallback, not a gap). check_phases_actually_call_release_
+when_the_controller_decides_to and check_profile_prints_residency_lines_
+at_the_right_moments below drive a controller directly instead, to
+cover the "release actually happens" side of the wiring too.
 
 One more thing this file checks, added after the rest: every check
 above uses a fake optimizer that never actually looks at `params` --
@@ -70,6 +83,15 @@ class _FakeResourceControl(ResourceControlHandle):
     def release(self, name: str) -> None:
         check(name in self._offloadable, f"release({name!r}) called but not registered offloadable")
         self._events.append(f"release:{name}")
+
+    def usable_budget_mb(self):
+        return 8000.0  # never actually consulted in this file's own tests: every one
+        # of them runs on CPU tensors, where DeviceContext.for_device() returns
+        # _NullDeviceContext (memory_stats() always None) -- AdaptiveResidencyController
+        # decides immediately, ignoring usable_budget_mb() entirely, and always decides
+        # "stay resident" (see its own record_step_peak() docstring, and
+        # smoke_test_adaptive_residency_controller.py for the real, direct coverage of
+        # its decision logic with fake, non-None numbers).
 
 
 class _FakeModel(TrainableModel):
@@ -224,10 +246,12 @@ def check_model_is_registered_non_offloadable_and_never_released():
     print("    PASS")
 
 
-def check_text_encoder_and_optimizer_bracket_their_own_phase_each_step():
-    print("[non-fused: ensure_loaded/encode/release for text_encoder, then "
-          "ensure_loaded/[backward]/optimizer_step/release for optimizer -- once "
-          "per step, both steps]")
+def check_ensure_loaded_always_fires_but_release_does_not_when_calibration_cannot_resolve():
+    print("[non-fused, on CPU (no memory_stats concept -- see AdaptiveResidencyController's "
+          "own record_step_peak() docstring): ensure_loaded fires every step for both "
+          "text_encoder and optimizer, release never fires for either -- calibration "
+          "immediately falls back to \"stay resident\", the correct answer when there's "
+          "nothing to measure against, not a gap in this test]")
     events: list = []
     _run(_FakeOptimizer(events), events)
 
@@ -237,18 +261,16 @@ def check_text_encoder_and_optimizer_bracket_their_own_phase_each_step():
         step_events = events[start:end]
         check(step_events == [
             step_events[0],  # before_step:N
-            "ensure_loaded:text_encoder", "encode", "release:text_encoder",
-            "forward", "ensure_loaded:optimizer", "optimizer_step", "release:optimizer",
+            "ensure_loaded:text_encoder", "encode",
+            "forward", "ensure_loaded:optimizer", "optimizer_step",
         ], step_events)
     print("    PASS")
 
 
-def check_fused_optimizer_still_brackets_around_backward_but_never_calls_step():
-    print("[fused: optimizer.step() is never called (the real update happens in a "
-          "backward hook this fake doesn't model, matching FusedOptimizerHandle's own "
-          "documented no-op step()) -- but ensure_loaded/release still bracket "
-          "backward the same as the non-fused case, just without an optimizer_step "
-          "event in between]")
+def check_fused_optimizer_same_fallback_never_calls_step_either_way():
+    print("[fused: same \"stay resident\" fallback, and optimizer.step() is still never "
+          "called regardless (the real update happens in a backward hook this fake "
+          "doesn't model, matching FusedOptimizerHandle's own documented no-op step())]")
     events: list = []
     _run(_FakeFusedOptimizer(events), events)
 
@@ -258,9 +280,46 @@ def check_fused_optimizer_still_brackets_around_backward_but_never_calls_step():
         step_events = events[start:end]
         check(step_events == [
             step_events[0],  # before_step:N
-            "ensure_loaded:text_encoder", "encode", "release:text_encoder",
-            "begin_step", "forward", "ensure_loaded:optimizer", "release:optimizer",
+            "ensure_loaded:text_encoder", "encode",
+            "begin_step", "forward", "ensure_loaded:optimizer",
         ], step_events)
+    print("    PASS")
+
+
+def check_phases_actually_call_release_when_the_controller_decides_to():
+    print("[the other half of the wiring: when AdaptiveResidencyController *has* decided "
+          "to release something (driven directly here with a fake peak, since CPU can't "
+          "produce one), EncodeConditioningPhase/BackwardAndOptimizerStepPhase actually "
+          "call release() -- not exercised by any check above, all of which hit the "
+          "always-stays-resident CPU fallback instead]")
+    from nodes.train.managed import (AdaptiveResidencyController, BackwardAndOptimizerStepPhase,
+                                      EncodeConditioningPhase, ManagedStepState)
+
+    events: list = []
+    model = _FakeModel(events)
+    text_encoder = _FakeTextEncoder(events)
+    optimizer = _FakeOptimizer(events)
+    resource_control = _FakeResourceControl(events)
+    resource_control.register("text_encoder", text_encoder, offloadable=True)
+    resource_control.register("optimizer", optimizer, offloadable=True)
+
+    controller = AdaptiveResidencyController(
+        usable_mb=100.0, candidates={"text_encoder": text_encoder, "optimizer": optimizer},
+        calibration_steps=1)
+    controller.record_step_peak({"peak_reserved_mb": 99999.0})  # forces "release everything"
+    check(controller.should_release("text_encoder") and controller.should_release("optimizer"),
+          "sanity: the controller must actually have decided to release both")
+
+    state = ManagedStepState(step=0, batch={"x_t": torch.zeros(1, 4, 4, 4), "prompt": "x"},
+                              model=model, device=torch.device("cpu"))
+    state.extras["x_t"] = state.batch["x_t"]
+    EncodeConditioningPhase(text_encoder, resource_control, controller).run(state)
+    check("release:text_encoder" in events, events)
+
+    state.extras["loss"] = model.p.sum()
+    BackwardAndOptimizerStepPhase(optimizer, is_fused=False,
+                                   resource_control=resource_control, controller=controller).run(state)
+    check("release:optimizer" in events, events)
     print("    PASS")
 
 
@@ -310,24 +369,42 @@ def check_real_optimizer_via_trainer_parameters_node_actually_updates_the_traine
 def check_profile_prints_residency_lines_at_the_right_moments():
     print("[profile=True: EncodeConditioningPhase/BackwardAndOptimizerStepPhase each "
           "print their own loaded/released line -- MonitoringPhase runs too late to "
-          "ever show this (both are already released by the time it runs), which is "
-          "exactly the bug this closes]")
-    import io
+          "ever show this even when release() does fire, which is the bug this "
+          "closes (see this module's own docstring). Forces a real release decision "
+          "directly (CPU can't produce one through the full node -- see "
+          "check_phases_actually_call_release_when_the_controller_decides_to above) "
+          "so both the loaded and released lines actually get exercised, not just "
+          "loaded.]")
     import contextlib
+    import io
+
+    from nodes.train.managed import (AdaptiveResidencyController, BackwardAndOptimizerStepPhase,
+                                      DeviceContext, EncodeConditioningPhase, ManagedStepState)
 
     events: list = []
     model = _FakeModel(events)
-    trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
-    node = ManagedLoRATrainerNode()
-    node.context = ExecutionContext()
+    text_encoder = _FakeTextEncoder(events)
+    optimizer = _FakeOptimizer(events)
+    resource_control = _FakeResourceControl(events)
+    resource_control.register("text_encoder", text_encoder, offloadable=True)
+    resource_control.register("optimizer", optimizer, offloadable=True)
+    controller = AdaptiveResidencyController(
+        usable_mb=100.0, candidates={"text_encoder": text_encoder, "optimizer": optimizer},
+        calibration_steps=1)
+    controller.record_step_peak({"peak_reserved_mb": 99999.0})
+    device_ctx = DeviceContext.for_device("cpu")
 
+    state = ManagedStepState(step=0, batch={"x_t": torch.zeros(1, 4, 4, 4), "prompt": "x"},
+                              model=model, device=torch.device("cpu"))
+    state.extras["x_t"] = state.batch["x_t"]
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        node.build(
-            trainer=trainer, batches=_FiniteBatches(), optimizer=_FakeOptimizer(events),
-            lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
-            steps=1, resource_control=_FakeResourceControl(events), profile=True,
-        )
+        EncodeConditioningPhase(text_encoder, resource_control, controller,
+                                 device_ctx=device_ctx, profile=True).run(state)
+        state.extras["loss"] = model.p.sum()
+        BackwardAndOptimizerStepPhase(optimizer, is_fused=False, resource_control=resource_control,
+                                       controller=controller, device_ctx=device_ctx,
+                                       profile=True).run(state)
     output = buf.getvalue()
     check("[residency] text_encoder loaded:" in output, output)
     check("[residency] text_encoder released:" in output, output)
@@ -339,8 +416,9 @@ def check_profile_prints_residency_lines_at_the_right_moments():
 def main():
     check_contracts()
     check_model_is_registered_non_offloadable_and_never_released()
-    check_text_encoder_and_optimizer_bracket_their_own_phase_each_step()
-    check_fused_optimizer_still_brackets_around_backward_but_never_calls_step()
+    check_ensure_loaded_always_fires_but_release_does_not_when_calibration_cannot_resolve()
+    check_fused_optimizer_same_fallback_never_calls_step_either_way()
+    check_phases_actually_call_release_when_the_controller_decides_to()
     check_real_optimizer_via_trainer_parameters_node_actually_updates_the_trained_parameter()
     check_profile_prints_residency_lines_at_the_right_moments()
     print()

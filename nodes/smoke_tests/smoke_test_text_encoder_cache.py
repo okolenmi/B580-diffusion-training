@@ -77,6 +77,9 @@ class _RecordingResourceControl(ResourceControlHandle):
     def release(self, name: str) -> None:
         pass
 
+    def usable_budget_mb(self):
+        return None
+
 
 def check_contracts():
     print("[contracts]")

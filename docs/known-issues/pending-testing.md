@@ -54,3 +54,16 @@
   observed stability. See
   `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`
   for the full reasoning.
+
+- **[2026-09-20] `AdaptiveResidencyController` (`nodes/train/managed.py`)
+  and the `SDXLTextEncoder.offload()`/`unload()` fix (`nodes/model/text_encoder.py`)
+  -- both real, motivated by an actual reported run (~4.7x slower than
+  the main route, offloading never once necessary at 9.0GB peak against
+  a 12500MB budget), neither one run again after the fix on the hardware
+  that produced that report.** See
+  `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`'s
+  own addendum for the full investigation and every change made. **Not
+  run** -- needs the same real run repeated post-fix to confirm the
+  actual steps/sec improves, and to check whether anything in the
+  still-open list there (no text-encoder caching on this route, no
+  pinned host memory anywhere) is now the next dominant cost.

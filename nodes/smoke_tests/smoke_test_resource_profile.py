@@ -64,6 +64,9 @@ class _FixedDeviceContext(DeviceContext):
     def memory_stats(self):
         return self._stats
 
+    def reset_peak_stats(self) -> None:
+        pass
+
 
 def check_capture_builds_per_resident_breakdown():
     print("\n=== capture(): per_resident_bytes matches coordinator's real breakdown ===")

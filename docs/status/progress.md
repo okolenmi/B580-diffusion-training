@@ -250,14 +250,22 @@ phase, tried and reverted once it became clear it just gated the main
 route's own loop behind a stricter default rather than being a real
 alternative (see `docs/design/resources-controller/09-...md`'s own
 "First attempt, reverted"). `ManagedLoRATrainerNode` takes `trainer`
-directly and manages residency deterministically: `optimizer` and
-`text_encoder` are each loaded only for their own phase and released
-right after, every step, not just reactively under pressure (a new
-`ResourceControlHandle.release()` makes this possible); `model` stays
-resident for the run's duration (the frozen base is too expensive to
-move every step). A new `strict` input on `VRAMBudgetControllerNode`
-makes the budget it enforces a hard raise instead of best-effort, as a
-safety net for `model` alone exceeding it. Not run on real hardware yet.
+directly and can release `optimizer`/`text_encoder` between uses
+(`model` always stays resident -- the frozen base is too expensive to
+move every step); whether it actually does is decided once by
+`AdaptiveResidencyController`, which measures real peak VRAM over a
+few calibration steps before releasing anything -- a real run showed
+the first, unconditional-release version paying a ~4.7x slowdown for
+zero benefit when the budget was never actually tight (see that same
+doc's own addendum for the full investigation, including a second, real
+bug found along the way: `SDXLTextEncoder.offload()` was routing
+through `unload()`'s own `gc.collect()`+`empty_cache()`, meant for a
+one-time cleanup, not a per-step cycle). A new `strict` input on
+`VRAMBudgetControllerNode` makes the budget it enforces a hard raise
+instead of best-effort, as a safety net for `model` alone exceeding it,
+or for the controller's own estimate being wrong. Not run on real
+hardware yet -- the ~4.7x number is what motivated this addendum's own
+fixes, not yet confirmed improved by them.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility

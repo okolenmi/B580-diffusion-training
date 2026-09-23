@@ -57,6 +57,9 @@ class _FakeDeviceContext(DeviceContext):
         self._calls += 1
         return {"reserved_mb": value}
 
+    def reset_peak_stats(self) -> None:
+        pass
+
 
 class _FakeResident(DeviceResident):
     def __init__(self, name: str):

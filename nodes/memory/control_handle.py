@@ -70,6 +70,7 @@ A third addition, `release()`, is the deterministic counterpart to
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from ..components.device import DeviceContext
 from ..resource_budget import ResourceBudget
@@ -135,6 +136,16 @@ class ResourceControlHandle(ABC):
         request to move something, not a hint, so silently ignoring one
         for a resident register() was told is unsafe to move would hide
         a real caller bug instead of surfacing it."""
+
+    @abstractmethod
+    def usable_budget_mb(self) -> Optional[float]:
+        """The ceiling a caller can plan against directly, without
+        needing to know how this handle represents its own budget
+        internally (ResourceBudget is this module's own concern, not
+        every caller's) -- None if this implementation has no fixed
+        ceiling concept at all. For nodes/train/managed.py's own
+        AdaptiveResidencyController: what "does everything fit without
+        offloading" actually means here."""
 
 
 class BudgetedResourceControlHandle(ResourceControlHandle):
@@ -203,6 +214,9 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         # just triggered deterministically by a caller instead of reactively by
         # measured pressure.
         self._device_ctx.synchronize()
+
+    def usable_budget_mb(self) -> Optional[float]:
+        return self._budget.vram_budget_mb - self._budget.vram_reserve_mb
 
     def _make_room(self, exclude: tuple[str, ...]) -> None:
         """Shared by before_step() (exclude=() -- a general check

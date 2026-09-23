@@ -111,6 +111,15 @@ class DeviceContext(ABC):
         the strongest single signal in this dict, worth reading before
         the others."""
 
+    @abstractmethod
+    def reset_peak_stats(self) -> None:
+        """Zeroes peak_allocated_mb/peak_reserved_mb's own running
+        maximum, so a subsequent memory_stats() read reports the peak
+        *since this call*, not since process start (or since whatever
+        earlier training run happened to share this process -- a real
+        concern in a long-lived server, not hypothetical). A no-op
+        where memory_stats() itself is None (CPU)."""
+
     @staticmethod
     def for_device(device) -> "DeviceContext":
         """Factory, called once at pipeline-construction time -- not a
@@ -142,6 +151,10 @@ class _XPUDeviceContext(DeviceContext):
                 torch.xpu.memory_stats, torch.xpu.memory_allocated, torch.xpu.memory_reserved)
         return None
 
+    def reset_peak_stats(self) -> None:
+        if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "reset_peak_memory_stats"):
+            torch.xpu.reset_peak_memory_stats()
+
 
 class _CUDADeviceContext(DeviceContext):
     """Same three operations for CUDA, reachable when for_device()
@@ -161,6 +174,10 @@ class _CUDADeviceContext(DeviceContext):
                 torch.cuda.memory_stats, torch.cuda.memory_allocated, torch.cuda.memory_reserved)
         return None
 
+    def reset_peak_stats(self) -> None:
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
 
 class _NullDeviceContext(DeviceContext):
     """CPU, or any backend without a cache/sync/stats concept. Every
@@ -175,3 +192,6 @@ class _NullDeviceContext(DeviceContext):
 
     def memory_stats(self) -> dict[str, float] | None:
         return None
+
+    def reset_peak_stats(self) -> None:
+        pass

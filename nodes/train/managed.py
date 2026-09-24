@@ -110,7 +110,7 @@ class ManagedTrainingStepPipeline:
 
 
 class AdaptiveResidencyController:
-    """Decides, once, whether text_encoder/optimizer actually need to be
+    """Decides whether text_encoder/optimizer actually need to be
     released between uses at all -- an earlier version of this file
     always released both, every step, regardless of the stated budget.
     That version was real, measured, and wrong for a case that turned
@@ -128,23 +128,46 @@ class AdaptiveResidencyController:
     BackwardAndOptimizerStepPhase's own should_release() checks below),
     while DeviceContext.reset_peak_stats() + memory_stats()'s own
     peak_reserved_mb (nodes/components/device.py) track the real
-    high-water mark. If that peak already fits the budget, nothing ever
-    gets released for the rest of the run -- full speed, same as the
-    main route pays for the same reason. If it doesn't, candidates are
-    released starting from the smallest footprint_bytes() first (a
-    direct reading of "less performance costly options first" -- byte
-    count is the one real, already-available number that's actually
-    proportional to transfer cost, not a proxy for it), only as many as
-    the shortfall actually needs, estimated by subtracting each
-    candidate's own footprint_bytes() from the measured peak in that
-    order. That subtraction is an approximation, not a
-    guarantee -- offloading X doesn't necessarily save exactly X's own
-    byte count at the *real* peak moment (timing, fragmentation, and
-    other residents' own footprint at that instant all affect it) --
-    which is exactly why this controller doesn't replace
-    resource_control.before_step()'s own reactive check, it front-runs
-    it: before_step() (and strict=True, if set) is still there as the
-    real backstop for whatever this estimate gets wrong.
+    high-water mark. If that peak already fits the budget (with
+    `safety_margin` headroom -- see below), nothing ever gets released
+    -- full speed, same as the main route pays for the same reason. If
+    it doesn't, candidates are released starting from the smallest
+    footprint_bytes() first (a direct reading of "less performance
+    costly options first" -- byte count is the one real, already-
+    available number that's actually proportional to transfer cost, not
+    a proxy for it), only as many as the shortfall actually needs,
+    estimated by subtracting each candidate's own footprint_bytes()
+    from the measured peak in that order.
+
+    **Keeps watching after deciding, and escalates -- doesn't calibrate
+    once and stop.** A second real report, from real use of the version
+    of this class that only ever calibrated once: a variable-resolution
+    ("non-square") dataset, where each step's own activation memory
+    depends on that step's own image size, OOM'd partway through a run
+    that had calibrated fine -- calibration_steps steps (default 3)
+    happened to sample smaller images, so the true worst case never got
+    measured before the decision to stay fully resident was locked in.
+    ManagedLoRATrainerNode's own build() now calls
+    DeviceContext.reset_peak_stats() every step, not just once before
+    calibration, so every memory_stats() reading passed to
+    record_step_peak() reflects *that one step's own* peak, not a
+    cumulative one -- after the initial decision, a step whose own peak
+    exceeds the (margined) usable budget triggers escalation:
+    should_release() gains one more candidate (smallest-footprint-
+    among-what's-not-already-released first, same ordering as the
+    initial decision), permanently, for the rest of the run -- no
+    de-escalating back once something's been added, to avoid thrashing
+    between resident and released every time usage happens to dip.
+    Escalation is real insurance, not a guarantee: it still can't react
+    *within* the step that actually OOMs (a within-step activation
+    spike isn't something any between-step check can catch in time --
+    before_step()'s own reactive check has the same limit); what it
+    does is make the *next* image of that size survive, once one
+    instance has been seen and escalated for. `safety_margin` (default
+    0.1 -- 10%) is the other, complementary piece: shaving the usable
+    ceiling down before comparing against it, specifically so a
+    somewhat-larger-than-calibrated step has a chance of still fitting
+    without needing to escalate at all.
 
     Why measure real usage instead of estimating it analytically up
     front (batch size, resolution, rank, etc.): this project's own
@@ -157,33 +180,31 @@ class AdaptiveResidencyController:
     combinations is a much harder, more fragile problem than reading
     the number the allocator already tracks -- and here, unlike
     per-block checkpoint placement, there are only two candidates to
-    choose between, so a few real, cheap calibration steps settle it
-    directly rather than needing a model of the cost at all.
+    choose between, so a few real, cheap calibration steps (plus
+    ongoing escalation for what they miss) settle it directly rather
+    than needing a model of the cost at all.
 
-    Not addressed here, and deliberately not attempted in the same
-    change as this controller: an algorithmic alternative to offloading
-    at all (gradient checkpointing trades recompute time for reduced
-    *activation* memory -- a different axis than moving *weights*
-    on/off device, and this project already has real, working
-    infrastructure for it -- ActivationCheckpointingStrategy,
-    nodes/model/gradient_checkpointing.py -- plus a real, matching
-    budget-driven placement policy, GreedyRatioPlacement,
-    nodes/model/checkpoint_placement.py, for deciding *which UNet
-    blocks* to checkpoint under a budget, ranked the same
-    memory-per-cost way this controller ranks text_encoder vs.
-    optimizer). That policy's own docs already flag it as real but
-    unvalidated against an actual training run and deliberately not
-    wired into any node's construction path yet, for exactly the "measure,
-    don't guess" reason above -- extending that same caution to a second,
-    newer piece built in this same session, on hardware this was never
-    run on, felt like the right call rather than rushing it in under the
-    same patch. A natural, real next step once someone can confirm the
-    existing per-block placement work on real hardware -- not done here.
+    What this still can't do anything about: for a real reported case,
+    releasing *both* candidates (optimizer + text_encoder, together a
+    small fraction of total usage next to activation memory for a large
+    or variable-resolution image) wasn't enough headroom on its own --
+    the dominant, unmanaged cost was activation memory, which neither
+    this controller nor NF4/Int8 weight quantization touches at all
+    (see docs/design/resources-controller/09-...md's own addendum for
+    the full reasoning, including why NF4/Int8's *storage* savings
+    don't translate to comparable *peak-during-compute* savings -- both
+    dequantize to a real, transient full-precision buffer on every use,
+    by design, not a bug). Gradient checkpointing
+    (nodes/model/gradient_checkpointing.py, real, working, not wired
+    into this route) is the lever that actually addresses activation
+    memory -- still deliberately not attempted here, same reasoning as
+    before: a real, separate follow-up.
     """
 
     def __init__(self, usable_mb: Optional[float], candidates: dict[str, DeviceResident],
-                 calibration_steps: int = 3):
-        self._usable_mb = usable_mb
+                 calibration_steps: int = 3, safety_margin: float = 0.1):
+        self._raw_usable_mb = usable_mb
+        self._usable_mb = usable_mb if usable_mb is None else usable_mb * (1.0 - safety_margin)
         self._candidates = candidates  # name -> resident, for footprint_bytes() at decision time
         self._calibration_steps = max(1, calibration_steps)
         self._steps_seen = 0
@@ -194,28 +215,47 @@ class AdaptiveResidencyController:
     def calibrating(self) -> bool:
         return self._decided is None
 
+    @property
+    def releases_anything(self) -> bool:
+        """False while still calibrating (nothing decided yet) or once
+        decided that nothing needs releasing. ManagedLoRATrainerNode's
+        own empty_cache_every_n_steps loop checks this before paying for
+        a gc.collect()/empty_cache() pass -- reclaiming unused cached
+        memory back to the driver is pointless work when nothing was
+        ever released in the first place, and a real, reported case: a
+        run at 9964MB reserved against a 12500MB budget decided
+        (correctly) to release nothing, and was still paying a full
+        gc.collect()+empty_cache() pass every single step regardless,
+        for nothing to actually reclaim."""
+        return bool(self._decided)
+
     def record_step_peak(self, memory_stats: Optional[dict]) -> None:
-        """Call once per step, only during calibration -- a no-op once
-        a decision has been made (nothing left to calibrate). Decides
-        immediately, on the very first call, when there's no usable
-        ceiling to plan against at all (usable_budget_mb() returned
-        None -- ResourceControlHandle's own docstring: "no fixed
-        ceiling concept") or no memory-stats concept on this device
-        (memory_stats is None -- DeviceContext's own docstring: CPU,
-        mainly) -- both cases mean there's nothing offloading could
-        ever be measured against, so waiting calibration_steps for a
-        number that will never arrive would just mean never deciding
-        at all, staying fully resident is the only coherent answer
-        either way."""
-        if self._decided is not None:
-            return
+        """Call every step -- caller (ManagedLoRATrainerNode.build())
+        resets DeviceContext's own peak counter every step too, so each
+        call here sees *that step's own* peak, not a cumulative one.
+        Decides immediately, on the very first call, when there's no
+        usable ceiling to plan against at all (usable_budget_mb()
+        returned None -- ResourceControlHandle's own docstring: "no
+        fixed ceiling concept") or no memory-stats concept on this
+        device (memory_stats is None -- DeviceContext's own docstring:
+        CPU, mainly) -- both cases mean there's nothing offloading
+        could ever be measured against, so waiting calibration_steps
+        for a number that will never arrive would just mean never
+        deciding at all, staying fully resident is the only coherent
+        answer either way (and there's nothing to escalate against
+        later either, so this class has nothing further to do)."""
         if self._usable_mb is None or memory_stats is None:
-            self._decided = set()
+            if self._decided is None:
+                self._decided = set()
             return
-        self._peak_reserved_mb = max(self._peak_reserved_mb, memory_stats["peak_reserved_mb"])
-        self._steps_seen += 1
-        if self._steps_seen >= self._calibration_steps:
-            self._decide()
+        peak = memory_stats["peak_reserved_mb"]
+        if self._decided is None:
+            self._peak_reserved_mb = max(self._peak_reserved_mb, peak)
+            self._steps_seen += 1
+            if self._steps_seen >= self._calibration_steps:
+                self._decide()
+        else:
+            self._maybe_escalate(peak)
 
     def _decide(self) -> None:
         order = sorted(self._candidates.items(), key=lambda kv: kv[1].footprint_bytes())
@@ -227,11 +267,33 @@ class AdaptiveResidencyController:
             release.add(name)
             remaining_mb -= resident.footprint_bytes() / (1024 ** 2)
         self._decided = release
-        verdict = ("releasing " + ", ".join(sorted(release))) if release \
-            else "nothing -- staying fully resident for the rest of this run"
-        print(f"[AdaptiveResidencyController] measured peak={self._peak_reserved_mb:.0f}MB "
-              f"over {self._steps_seen} calibration step(s), usable budget="
-              f"{self._usable_mb:.0f}MB -- {verdict}")
+        self._log(f"measured peak={self._peak_reserved_mb:.0f}MB over {self._steps_seen} "
+                   f"calibration step(s)", release)
+
+    def _maybe_escalate(self, this_step_peak_mb: float) -> None:
+        if this_step_peak_mb <= self._usable_mb:
+            return
+        order = sorted(self._candidates.items(), key=lambda kv: kv[1].footprint_bytes())
+        for name, _resident in order:
+            if name not in self._decided:
+                self._decided.add(name)
+                self._log(f"a later step's own peak={this_step_peak_mb:.0f}MB exceeded "
+                           f"budget even with the current release set -- escalating",
+                           self._decided, escalated_name=name)
+                return
+        # Nothing left to escalate to. resource_control.before_step()'s own reactive
+        # check (and strict=True, if set) is whatever's left from here -- and neither
+        # of those can react *within* the step that's already over, only the next one.
+
+    def _log(self, prefix: str, release: set, escalated_name: Optional[str] = None) -> None:
+        if escalated_name is not None:
+            verdict = f"now also releasing {escalated_name!r} (release set: {sorted(release)})"
+        elif release:
+            verdict = "releasing " + ", ".join(sorted(release))
+        else:
+            verdict = "nothing -- staying fully resident for the rest of this run"
+        print(f"[AdaptiveResidencyController] {prefix}, usable budget={self._usable_mb:.0f}MB "
+              f"(={self._raw_usable_mb:.0f}MB minus safety margin) -- {verdict}")
 
     def should_release(self, name: str) -> bool:
         """False during calibration (never release yet -- that's the
@@ -618,18 +680,36 @@ class ManagedLoRATrainerNode(TrainerNode):
         "empty_cache_every_n_steps": Port(
             name="empty_cache_every_n_steps", type=int, required=False, default=1,
             doc="See this class's own docstring for why this defaults to 1 (every step) "
-                "instead of the main route's 0.",
+                "instead of the main route's 0 -- only actually fires once "
+                "AdaptiveResidencyController has decided to release something; a no-op "
+                "for the rest of the run once it's decided the budget was never tight "
+                "enough to need offloading at all (nothing to reclaim in that case, so "
+                "paying for gc.collect()/empty_cache() every step would be pure waste -- "
+                "a real, reported case, not a hypothetical one).",
         ),
         "calibration_steps": Port(
             name="calibration_steps", type=int, required=False, default=3,
             doc="AdaptiveResidencyController (see this module's own docstring) runs this "
                 "many steps with everything resident first, measuring real peak VRAM, "
                 "before deciding whether optimizer/text_encoder need to be released at "
-                "all for the rest of the run. Higher -- more confidence the measured peak "
-                "is representative (a batch with unusual content, or one-time allocator "
-                "warmup on the very first step, could make a single step's own peak "
-                "unrepresentative); lower -- less of the run spent paying whatever this "
-                "decides against (nothing, if it turns out headroom was never needed).",
+                "all. Not the only protection against an unrepresentative sample -- the "
+                "same controller keeps watching every step after that and escalates "
+                "(releases one more candidate) if a later step's own peak exceeds budget, "
+                "real insurance for e.g. a variable-resolution dataset where the largest "
+                "image doesn't show up in the first few steps. Higher calibration_steps "
+                "still means more confidence in the *initial* decision, and less of the "
+                "run spent finding out the hard way via escalation; lower means less of "
+                "the run spent paying for a release() cycle nothing ever needed.",
+        ),
+        "residency_safety_margin": Port(
+            name="residency_safety_margin", type=float, required=False, default=0.1,
+            doc="Shaves this fraction off the connected VRAM Budget Controller's own "
+                "usable ceiling before AdaptiveResidencyController compares anything "
+                "against it -- 0.1 (default) means a 12500MB budget (minus its own "
+                "vram_reserve_mb) is really treated as 90% of that. Headroom for a "
+                "somewhat-larger-than-calibrated step to still fit without needing to "
+                "escalate at all, on top of escalation itself. 0.0 disables it -- the "
+                "original, un-margined comparison.",
         ),
     }
 
@@ -652,12 +732,13 @@ class ManagedLoRATrainerNode(TrainerNode):
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
         calibration_steps: int = inputs.get(
             "calibration_steps", self.INPUTS["calibration_steps"].default)
+        residency_safety_margin: float = inputs.get(
+            "residency_safety_margin", self.INPUTS["residency_safety_margin"].default)
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
         is_fused = isinstance(optimizer, FusedOptimizerHandle)
         device_ctx = DeviceContext.for_device(str(device))
-        device_ctx.reset_peak_stats()  # calibration below measures THIS run, not process history
 
         optimizer_id = describe_optimizer(optimizer)
         print(f"[ManagedLoRATrainerNode] optimizer: {optimizer_id}")
@@ -670,6 +751,7 @@ class ManagedLoRATrainerNode(TrainerNode):
             usable_mb=resource_control.usable_budget_mb(),
             candidates={"optimizer": optimizer, "text_encoder": text_encoder},
             calibration_steps=calibration_steps,
+            safety_margin=residency_safety_margin,
         )
 
         # Separate from resource_control -- tracking/reporting only (MonitoringPhase's
@@ -708,11 +790,26 @@ class ManagedLoRATrainerNode(TrainerNode):
             if self.context.should_cancel():
                 return {"model": model}
             state = ManagedStepState(step=step, batch=None, model=model, device=device)
+            device_ctx.reset_peak_stats()  # so this step's own peak is what gets read below --
+            # not a cumulative one since process/run start (AdaptiveResidencyController's own
+            # docstring: this is what makes ongoing escalation, not just one-shot calibration,
+            # possible -- a stale cumulative peak would falsely look "still over budget" on
+            # every subsequent read after the first time it was, even once escalation had
+            # already reacted to it).
             resource_control.before_step(step)  # safety net -- see this class's own docstring
             pipeline.run_step(state)
-            controller.record_step_peak(device_ctx.memory_stats())
+            controller.record_step_peak(device_ctx.memory_stats())  # every step, not just
+            # during calibration -- see AdaptiveResidencyController's own "keeps watching
+            # after deciding" docstring for why this can't stop once a decision is made.
             step += 1
-            if empty_cache_every_n_steps > 0 and step % empty_cache_every_n_steps == 0:
+            if (controller.releases_anything and empty_cache_every_n_steps > 0
+                    and step % empty_cache_every_n_steps == 0):
+                # Gated on releases_anything -- see that property's own docstring.
+                # Reclaiming unused cached memory back to the driver is pointless work
+                # when nothing was ever released in the first place (a real, reported
+                # case: this loop was paying a full gc.collect()+empty_cache() pass
+                # every step even when the controller had already decided to keep
+                # everything resident, with nothing to actually reclaim).
                 gc.collect()
                 device_ctx.empty_cache()
 

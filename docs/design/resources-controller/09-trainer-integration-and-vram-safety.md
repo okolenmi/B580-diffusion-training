@@ -267,3 +267,89 @@ path yet, for the same "measure, don't guess" reason
 second, newer piece, built and tested on hardware neither has ever
 actually run on, felt like the right call rather than rushing both in
 under one patch. A natural next step, not started here.
+
+## Second addendum: calibrate-once wasn't enough either
+
+A second real report, from real use of the addendum above:
+`AdaptiveResidencyController` calibrated fine (measured peak comfortably
+under budget, decided to stay resident) and the run still OOM'd partway
+through, on a variable-resolution ("non-square") dataset. Root cause:
+each step's own activation memory depends on that step's own image
+size, and `calibration_steps` (default 3) happened to sample smaller
+images -- the true worst case in the dataset was never measured before
+the "stay resident" decision was locked in for the rest of the run.
+
+Two real, complementary fixes, not a bigger `calibration_steps` default
+(which only ever narrows the odds, never closes the gap -- the largest
+image in a dataset can be anywhere):
+
+1. **Ongoing escalation, not calibrate-once.** `ManagedLoRATrainerNode.
+   build()` now calls `DeviceContext.reset_peak_stats()` every step, not
+   just once before calibration, so every `memory_stats()` reading
+   reflects *that step's own* peak, not a cumulative one -- which is
+   what makes "keep checking after the initial decision, and escalate
+   (release one more candidate) if a later step's own peak exceeds
+   budget" possible at all. No de-escalation once something's been
+   added, to avoid thrashing. Honest limit, stated plainly in
+   `AdaptiveResidencyController`'s own docstring: this still can't react
+   *within* the step that actually OOMs -- a within-step activation
+   spike isn't something any between-step check can catch in time, the
+   same limit `before_step()`'s own reactive check already had. What it
+   does buy: the *next* image of that size survives, once one instance
+   has been seen and escalated for once.
+2. **`residency_safety_margin`** (new `ManagedLoRATrainerNode` input,
+   default 0.1): shaves that fraction off the usable ceiling before any
+   comparison runs, so a somewhat-larger-than-calibrated step has a
+   chance of fitting without needing to escalate at all.
+
+Neither one is a guarantee for a dataset with truly wide resolution
+variance and a small `calibration_steps` -- both are real, disclosed
+insurance, not a solved problem. The right fix for large numbers of
+same-answer variance would look at the dataset itself (bucket by
+resolution and calibrate per bucket, or make calibration explicitly
+seek out the largest sample) -- not attempted here.
+
+## Third addendum: activation memory is the ceiling residency management and weight precision can't touch
+
+The report that surfaced the above also included the actual numbers
+behind an OOM: 10218MB reserved, of which the three residents this
+route tracks accounted for only ~4806MB combined (model 3061MB +
+optimizer 184MB + text_encoder 1561MB) -- more than half the real usage
+was activation memory (forward/backward intermediate tensors), which
+neither `AdaptiveResidencyController` nor NF4/Int8 weight quantization
+touches at all. Releasing every candidate this controller manages
+(1745MB combined, in that report) was never going to be enough headroom
+against a multi-GB activation spike on its own.
+
+The same report asked why switching from NF4 (frozen base) + Int8
+(optimizer state) to bf16 + fp32 only changed measured usage by ~1GB,
+much less than the ~4x difference their own storage footprints would
+suggest. Real, and not a bug: both `NF4WeightStore` (`nodes/model/
+nf4_weight_store.py`) and `Int8BlockStateStore` (`nodes/optimizer/
+state_store.py`) dequantize to a real, transient full-precision buffer
+on every use -- `footprint_bytes()` deliberately doesn't count that
+buffer (both classes' own docstrings: it's the caller's, freed right
+after, not storage either class holds) -- so the *resting* footprint is
+genuinely ~4x smaller, but the *peak-during-compute* footprint (what
+actually determines whether a step OOMs) is much closer to the
+unquantized case, because the transient buffer still has to exist for
+that one use. This is inherent to this whole class of technique
+(bitsandbytes/QLoRA has the same characteristic), not specific to this
+project's own implementation. (Also, for the record: `unet_weight_store`
+only has two real choices, `"bf16"` and `"nf4"` --
+`nodes/model/lora_training_config.py`'s own `_UNET_WEIGHT_STORE_CHOICES`
+-- there is no `"nvfp4"` option in this codebase; a value outside those
+two would have raised immediately via `Port.choices` validation, so
+whatever was actually selected and produced these numbers was `"nf4"`.)
+
+Together, these two findings point at the same conclusion the first
+addendum already named as deliberately not attempted: gradient
+checkpointing (`nodes/model/gradient_checkpointing.py`, real, working,
+not wired into this route) is the lever that actually addresses
+activation memory, the dominant, currently-unmanaged cost in both
+reports. Two real cases now, not a hypothetical -- still not started
+here; see the first addendum's own reasoning for why rushing it into
+the same session as everything else felt like the wrong tradeoff, which
+still holds, but the case for it being the actual next priority (over
+further residency-management or precision tuning) is now real, not
+speculative.

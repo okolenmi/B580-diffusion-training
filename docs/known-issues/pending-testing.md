@@ -67,3 +67,23 @@
   actual steps/sec improves, and to check whether anything in the
   still-open list there (no text-encoder caching on this route, no
   pinned host memory anywhere) is now the next dominant cost.
+
+- **[2026-09-20] `AdaptiveResidencyController`'s ongoing escalation +
+  `residency_safety_margin` (`nodes/train/managed.py`), fixing a real
+  OOM report on a variable-resolution dataset (calibration sampled only
+  smaller images, "stay resident" was locked in before the true worst
+  case was ever measured) -- not run again on the hardware that
+  produced that report.** See
+  `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`'s
+  second and third addenda for the full investigation, including a
+  second, separate finding (not fixed, disclosed as a real limit): more
+  than half of reserved VRAM in that report was activation memory,
+  which this controller and NF4/Int8 weight quantization both leave
+  completely unmanaged -- gradient checkpointing
+  (`nodes/model/gradient_checkpointing.py`, real, unwired) is the actual
+  lever for that, still not attempted. **Not run** -- needs the same
+  variable-resolution dataset repeated post-fix to confirm the OOM is
+  actually gone, and, separately, a real test of whether escalation's
+  fundamental "next occurrence, not this one" limit is acceptable in
+  practice or whether the dataset needs bucketing/resolution-aware
+  calibration instead.

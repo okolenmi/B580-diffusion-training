@@ -17,7 +17,11 @@
 
 - **[2026-08] Only `ResBlock` instances ever route through this
   project's checkpoint patch -- attention blocks don't, in this pinned
-  ComfyUI version.** Found while building `nodes/model/block_profiler.py`
+  ComfyUI version. Moved to `docs/known-issues/pending-testing.md`
+  ([2026-09] entry) -- a real fix now exists
+  (`nodes/model/attention_checkpointing.py`), not confirmed on real
+  hardware yet, so it belongs there rather than here.** Original finding
+  kept below for context. Found while building `nodes/model/block_profiler.py`
   (design doc section 2.3, backlog item 1): cloned
   comfyanonymous/ComfyUI directly to confirm what `ctx.run_function`
   actually is. `comfy/ldm/modules/diffusionmodules/openaimodel.py`'s
@@ -26,11 +30,11 @@
   does not call `checkpoint()` anywhere in its body, despite taking a
   `checkpoint=True` constructor parameter that looks like it should.
   Not a bug in this project -- `enable_frozen_param_safe_checkpointing()`
-  only ever patches what ComfyUI itself routes through it -- but it does
-  mean `GreedyRatioPlacement` (once wired in) can only ever place
-  ResBlocks, and `use_checkpoint=True`'s real VRAM savings today only
-  ever come from ResBlocks, never attention blocks, regardless of what
-  the constructor parameter's name suggests.
+  only ever patches what ComfyUI itself routes through it -- but it did
+  mean `GreedyRatioPlacement` (once wired in) could only ever place
+  ResBlocks, and `use_checkpoint=True`'s real VRAM savings only ever
+  came from ResBlocks, never attention blocks, regardless of what the
+  constructor parameter's name suggests.
 
 - **`config_model.py` doesn't yet warn about grad_accum's real-update math
   anywhere in the UI/docs.** The step-counting refactor fixed the mechanism,

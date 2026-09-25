@@ -39,6 +39,13 @@ timing/activation-memory instrumentation, composed via
 enable_frozen_param_safe_checkpointing()'s optional recompute_wrapper
 parameter below rather than a second copy of this delicate autograd
 code.
+
+See nodes/model/attention_checkpointing.py for what FrozenParamSafeCheckpointing.apply()
+below also installs: ResBlock is not the only block that needs this
+frozen-param filter applied to it to actually reach the checkpointed
+autograd.Function -- see that module's own docstring for the real,
+confirmed second half of what use_checkpoint=True needs to cover SDXL's
+actual dominant activation cost (attention blocks, not just ResBlock).
 """
 
 from __future__ import annotations
@@ -68,10 +75,24 @@ class FrozenParamSafeCheckpointing(ActivationCheckpointingStrategy):
     transcribing it a second place risks the two copies drifting apart
     for no benefit. This class is the interface other code should compose
     with going forward; the free function keeps the one real
-    implementation."""
+    implementation.
+
+    apply() also installs attention_checkpointing.py's
+    enable_attention_block_checkpointing() -- both patches together are
+    what use_checkpoint=True actually needs to reach the UNet's real
+    dominant activation cost, not just ResBlock. See that module's own
+    docstring; kept as a second function/file rather than folded into
+    enable_frozen_param_safe_checkpointing() itself because it patches a
+    different class in a different comfy module (attention.py, not
+    diffusionmodules/util.py) for a different, independently-confirmed
+    reason -- one delicate-autograd-code file per real seam, matching
+    this file's own docstring's reasoning for keeping ProfilingCheckpointing
+    a composed second call here rather than a third copy of this backward()."""
 
     def apply(self) -> None:
         enable_frozen_param_safe_checkpointing()
+        from .attention_checkpointing import enable_attention_block_checkpointing
+        enable_attention_block_checkpointing()
 
 
 def enable_frozen_param_safe_checkpointing(recompute_wrapper=None) -> None:

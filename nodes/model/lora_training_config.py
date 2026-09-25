@@ -85,6 +85,16 @@ class LoRATrainingConfigNode(Node):
     moved here rather than reinvented, because storage of the *frozen*
     base weights is only meaningful once something is actually being
     injected around them, which happens here, not in Phase 5.
+
+    `use_checkpoint` mirrors `ComfyUNetLoRANode`'s own identically-named
+    Port (`nodes/model/lora_injector.py`) the same way -- this route
+    always inherited that Port's same `True` default implicitly (both
+    routes build through the one shared `build_lora_injected_unet()`),
+    just with no way to turn it off before this Port existed. See
+    `docs/known-issues/pending-testing.md`'s `[2026-09]` entry for why
+    that default stopped being close to enough on its own for SDXL's
+    attention-heavy blocks, and what `nodes/model/
+    attention_checkpointing.py` does about it.
     """
 
     INPUTS: ClassVar[dict[str, Port]] = {
@@ -116,6 +126,21 @@ class LoRATrainingConfigNode(Node):
             doc="Frozen UNet base-weight storage. 'nf4' quantizes to ~4 bits/parameter -- "
                 "real VRAM savings, real quantization error, genuinely lossy before "
                 "any training happens.",
+        ),
+        "use_checkpoint": Port(
+            name="use_checkpoint", type=bool, required=False, default=True,
+            doc="Gradient (activation) checkpointing -- trades recompute time for a real "
+                "cut in peak VRAM (dominant cost is activations, not the frozen base weights "
+                "or the tiny LoRA adapters -- see docs/design/resources-controller/"
+                "09-trainer-integration-and-vram-safety.md's third addendum). Defaults to "
+                "True, same default ComfyUNetLoRANode's own identically-named Port already "
+                "uses for the main route -- this route inherited that same True default "
+                "implicitly before this Port existed (build_lora_injected_unet()'s own "
+                "default, nothing here ever overrode it), just without a way to turn it off. "
+                "Set False to trade back for faster steps. Mapped internally to "
+                "FrozenParamSafeCheckpointing (True, covers both ResBlock and, as of "
+                "nodes/model/attention_checkpointing.py, attention blocks too) or "
+                "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py.",
         ),
     }
 
@@ -168,6 +193,7 @@ class LoRATrainingConfigNode(Node):
             rank=rank,
             alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
             frozen_weight_store_factory=weight_store_factory,
+            use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
         )
         result = {"trainer": trainer}
         self.validate_outputs(result)

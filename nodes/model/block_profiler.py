@@ -30,11 +30,19 @@ self.use_checkpoint)` -- `self._forward` is a *bound method*, so
 Separately confirmed comfy/ldm/modules/attention.py's
 BasicTransformerBlock.forward() does **not** call checkpoint() at all in
 this pinned ComfyUI version (its `checkpoint=True` constructor
-parameter is unused dead wiring) -- so in practice, only ResBlock
-instances ever reach this profiler. A CheckpointPlacementPolicy built on
-this profiler's output can only ever place ResBlocks, not attention
-blocks, in this ComfyUI version -- a real, grounded constraint on what
-item 1 can actually decide over, not a gap in this implementation.
+parameter is unused dead wiring) -- so until attention_checkpointing.py
+existed, only ResBlock instances ever reached this profiler, and a
+CheckpointPlacementPolicy built on its output could only ever place
+ResBlocks, not attention blocks. Closed, not just documented:
+attention_checkpointing.py's enable_attention_block_checkpointing()
+(composed into ProfilingCheckpointing.apply() below) makes
+BasicTransformerBlock route through this exact same checkpoint()/
+CheckpointFunction seam too, so this collector now sees both block
+types from a real profiled run -- see that module's own docstring for
+the mechanism. CheckpointPlacementPolicy itself is unchanged by this:
+GreedyRatioPlacement still isn't wired into real construction (below),
+this only widens what a future real placement run would have BlockCost
+numbers for.
 
 **Naming, honestly bounded.** `type(instance).__name__` (e.g. "ResBlock")
 plus a per-process first-seen ordinal gives a stable, real per-block
@@ -160,6 +168,14 @@ class ProfilingCheckpointing(ActivationCheckpointingStrategy):
 
     def apply(self) -> None:
         enable_frozen_param_safe_checkpointing(recompute_wrapper=self._recompute_and_record)
+        # attention_checkpointing.py's patch routes through the exact same
+        # checkpoint()/CheckpointFunction seam (unparameterized -- it has no
+        # recompute_wrapper of its own to pass one through), so once it's
+        # installed too, BasicTransformerBlock recomputes land in this same
+        # collector automatically -- see that module's own docstring for why
+        # ResBlock was never the only block this should have measured.
+        from .attention_checkpointing import enable_attention_block_checkpointing
+        enable_attention_block_checkpointing()
 
     def _recompute_and_record(self, run_function, args):
         """The recompute_wrapper enable_frozen_param_safe_checkpointing()

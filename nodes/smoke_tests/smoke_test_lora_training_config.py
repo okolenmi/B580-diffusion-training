@@ -56,7 +56,8 @@ def check_contracts():
     print("[contracts]")
     check(not getattr(LoRATrainingConfigNode, "__abstractmethods__", None),
           "must be concretely instantiable")
-    check(set(LoRATrainingConfigNode.INPUTS) == {"resources", "rank", "alpha", "unet_weight_store"},
+    check(set(LoRATrainingConfigNode.INPUTS) ==
+          {"resources", "rank", "alpha", "unet_weight_store", "use_checkpoint"},
           LoRATrainingConfigNode.INPUTS)
     check(set(LoRATrainingConfigNode.OUTPUTS) == {"trainer"}, LoRATrainingConfigNode.OUTPUTS)
     print("    PASS")
@@ -164,6 +165,36 @@ def check_malformed_continue_lora_sd_raises_before_injecting():
     print("    PASS")
 
 
+def check_use_checkpoint_threads_through_to_the_real_unet_wrapper():
+    print("[use_checkpoint: defaults True (this route silently inherited that from "
+          "build_lora_injected_unet() before this Port existed -- now it's a real, "
+          "checkable choice), an explicit False reaches ComfyUNetWrapper exactly as given]")
+    resources = _build_real_resources()
+    node = LoRATrainingConfigNode()
+
+    rec = _Recorder()
+    rec.install()
+    try:
+        node.build(resources=resources)  # use_checkpoint omitted -- must default True
+    finally:
+        rec.uninstall()
+    check(rec.wrapper_calls[0]["use_checkpoint"] is True,
+          f"expected the Port's own documented default (True): "
+          f"got {rec.wrapper_calls[0]['use_checkpoint']!r}")
+
+    resources = _build_real_resources()
+    rec = _Recorder()
+    rec.install()
+    try:
+        node.build(resources=resources, use_checkpoint=False)
+    finally:
+        rec.uninstall()
+    check(rec.wrapper_calls[0]["use_checkpoint"] is False,
+          f"expected the explicit False to reach ComfyUNetWrapper unchanged: "
+          f"got {rec.wrapper_calls[0]['use_checkpoint']!r}")
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_dispatches_to_the_matching_trainer_class_and_injects()
@@ -171,6 +202,7 @@ def main():
     check_rank_input_is_free_when_there_is_no_continuing_lora()
     check_rank_input_is_ignored_and_overridden_when_continuing_a_lora()
     check_malformed_continue_lora_sd_raises_before_injecting()
+    check_use_checkpoint_threads_through_to_the_real_unet_wrapper()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

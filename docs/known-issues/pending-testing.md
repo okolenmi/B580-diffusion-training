@@ -27,6 +27,48 @@
   the person to re-ingest a non-square dataset with the new cap and
   confirm `vram_reserved` stays bounded.
 
+- **[2026-09] `use_checkpoint=True` only ever actually checkpointed
+  `ResBlock`, never SDXL's attention blocks -- real fix landed, not yet
+  confirmed on real hardware.** Follow-up on the `docs/known-issues/
+  deferred.md` entry with the same title/date-2026-08: two separate real
+  OOM reports (`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`'s
+  third addendum) showed activation memory as roughly half of real
+  reserved VRAM even with `use_checkpoint=True` on for both trainer
+  routes (checked directly: it defaults `True` all the way through
+  `build_lora_injected_unet()`, and nothing overrides it for either
+  route) -- consistent with checkpointing only ever reaching `ResBlock`,
+  a minority of SDXL's UNet next to its `BasicTransformerBlock` stacks
+  (`transformer_depth` up to 10 per level). Re-confirmed the root cause
+  directly against a fresh comfyanonymous/ComfyUI `master` checkout
+  (this project doesn't pin/vendor a ComfyUI version -- `docs/setup.md`):
+  `BasicTransformerBlock.__init__` never assigns its own `checkpoint`
+  argument to `self`, and `SpatialTransformer.forward()`'s
+  `transformer_blocks` loop calls each block directly, no `checkpoint()`
+  anywhere in the path. Fix: `nodes/model/attention_checkpointing.py`'s
+  `enable_attention_block_checkpointing()` monkeypatches
+  `BasicTransformerBlock.forward()` to route through the same
+  `checkpoint()`/`CheckpointFunction` seam `ResBlock` already used
+  (reusing, not reimplementing, whichever `CheckpointFunction` variant
+  this project's own `gradient_checkpointing.py` has installed -- the
+  frozen-param-safe fix applies here too, since LoRA freezes most of a
+  `BasicTransformerBlock`'s own parameters the same way it does
+  `ResBlock`'s), composed into both `FrozenParamSafeCheckpointing.apply()`
+  and `ProfilingCheckpointing.apply()` so both the real training path and
+  `block_profiler.py`'s own instrumentation pick it up automatically.
+  Verified with a new mocked-comfy smoke test
+  (`nodes/smoke_tests/smoke_test_attention_checkpointing.py`, same
+  technique as `smoke_test_gradient_checkpointing.py`: a faithful stub of
+  `BasicTransformerBlock` built from the real, freshly-fetched
+  comfyanonymous/ComfyUI source, real gradients checked, not just
+  "doesn't crash") -- confirms the patch logic and the frozen-parameter
+  fix both hold for this block too. **Not run** -- needs a real
+  before/after VRAM comparison on real hardware (ideally against one of
+  the two reports that motivated this) to confirm the actual activation-
+  memory reduction this was built to deliver, the same gap
+  `gradient_checkpointing.py`'s own ResBlock-only test coverage already
+  disclosed (verifies the patch's logic, not that it moves real peak
+  VRAM by the expected amount).
+
 - **[2026-09-20] `BudgetedResourceControlHandle` (`nodes/memory/control_handle.py`)
   gained an explicit `synchronize()` around every offload/reload/release
   transition, a `strict` mode that raises instead of continuing once

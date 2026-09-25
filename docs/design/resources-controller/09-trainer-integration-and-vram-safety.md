@@ -353,3 +353,21 @@ the same session as everything else felt like the wrong tradeoff, which
 still holds, but the case for it being the actual next priority (over
 further residency-management or precision tuning) is now real, not
 speculative.
+
+**Update, follow-up session:** checked directly, not assumed --
+`use_checkpoint` (`ComfyUNetLoRANode`'s own Port) already defaults
+`True` all the way through `build_lora_injected_unet()`, and nothing in
+this route's own construction path (`LoRATrainingConfigNode.build()` ->
+`SDXL_LoraTrainer.from_resources()`) overrides it, so gradient
+checkpointing was, in that narrow sense, already active for both
+reports above. It just wasn't doing much: `docs/known-issues/
+pending-testing.md`'s `[2026-09]` entry has the full story --
+`BasicTransformerBlock.forward()` never actually called `checkpoint()`
+in ComfyUI's own implementation, so `use_checkpoint=True` only ever
+checkpointed `ResBlock`, a minority of SDXL's UNet next to its
+attention-heavy `BasicTransformerBlock` stacks. That's almost certainly
+why activation memory stayed ~half of reserved VRAM in both reports
+above despite checkpointing nominally being on. `nodes/model/
+attention_checkpointing.py` closes that gap; not yet confirmed this
+actually pulls either of the two real reports above under budget --
+needs a real before/after run to know by how much.

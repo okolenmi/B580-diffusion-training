@@ -36,6 +36,24 @@ def _install_stub_comfy_checkpoint_module():
     closure-based stub would capture the original class at definition
     time and never see the patch -- this bit the first version of this
     test, which is exactly why it's called out here.
+
+    Also registers a minimal comfy.ldm.modules.attention stub (just
+    enough of a BasicTransformerBlock -- a class with a forward
+    attribute -- for FrozenParamSafeCheckpointing.apply()/
+    ProfilingCheckpointing.apply() to successfully also call
+    nodes/model/attention_checkpointing.py's
+    enable_attention_block_checkpointing() without crashing on a
+    missing import, now that both patches are always installed
+    together). Every caller of this function exercises .apply(), not
+    just enable_frozen_param_safe_checkpointing() directly, so this
+    needs to be here rather than added separately per caller -- see
+    nodes/smoke_tests/smoke_test_attention_checkpointing.py for the
+    real, faithful verification of that patch's own logic; this stub
+    only needs to exist, not be correct, for every *other* test in this
+    project that merely needs the overall pipeline to not crash. Fresh
+    class each call, same reason `util`'s own CheckpointFunction is
+    rebuilt fresh each call above: so one check's patched `forward`/
+    idempotency sentinel can never leak into the next.
     """
     for name in ("comfy", "comfy.ldm", "comfy.ldm.modules",
                  "comfy.ldm.modules.diffusionmodules"):
@@ -86,6 +104,17 @@ def _install_stub_comfy_checkpoint_module():
     )
     sys.modules["comfy.ldm.modules.diffusionmodules.util"] = util
     sys.modules["comfy.ldm.modules.diffusionmodules"].util = util
+
+    attention = types.ModuleType("comfy.ldm.modules.attention")
+
+    class BasicTransformerBlock:
+        def forward(self, x, context=None, transformer_options={}):
+            return x
+
+    attention.BasicTransformerBlock = BasicTransformerBlock
+    sys.modules["comfy.ldm.modules.attention"] = attention
+    sys.modules["comfy.ldm.modules"].attention = attention
+
     return util
 
 

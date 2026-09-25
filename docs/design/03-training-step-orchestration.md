@@ -201,10 +201,19 @@ call.
 - `comfy/ldm/modules/attention.py`'s `BasicTransformerBlock.forward()`
   does **not** call `checkpoint()` at all in this pinned ComfyUI
   version -- its `checkpoint=True` constructor parameter is unused dead
-  wiring. In practice, only `ResBlock` instances ever reach this
-  profiler or get placed by `GreedyRatioPlacement` -- a real, grounded
-  constraint on what this item can decide over today, not a gap in the
-  implementation.
+  wiring. In practice, only `ResBlock` instances ever reached this
+  profiler or got placed by `GreedyRatioPlacement` -- a real, grounded
+  constraint on what this item could decide over, not a gap in the
+  implementation. **Closed** (see `docs/known-issues/pending-testing.md`):
+  `nodes/model/attention_checkpointing.py`'s
+  `enable_attention_block_checkpointing()` patches `BasicTransformerBlock.
+  forward()` itself to route through the same `checkpoint()`/
+  `CheckpointFunction` seam `ResBlock` already used, composed into both
+  `FrozenParamSafeCheckpointing.apply()` and `ProfilingCheckpointing.apply()`
+  -- so `use_checkpoint=True` now actually reaches SDXL's dominant
+  activation cost (attention blocks, not just the two convolutions in
+  each `ResBlock`), and this profiler now sees both block types. Not yet
+  confirmed against real hardware.
 
 **Not wired into `ComfyUNetLoRANode`'s real construction path** (unlike
 `AdapterStrategy`'s seam, now live-wired -- see 3.1): real, tested,

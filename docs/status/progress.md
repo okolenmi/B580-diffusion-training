@@ -308,6 +308,19 @@ exists yet for `ResourcesControllerNode`/`LoRATrainingResources`
 themselves (Phase 5) either, checked directly while adding Phase 9's
 own tests -- a real gap, not yet fixed.
 
+**Also newest:** `use_checkpoint=True`'s real coverage was
+`ResBlock`-only until this session -- `nodes/model/
+attention_checkpointing.py` now also routes `BasicTransformerBlock`
+(SDXL's dominant activation cost) through the same seam, composed into
+both `FrozenParamSafeCheckpointing.apply()` and
+`ProfilingCheckpointing.apply()`; see `docs/known-issues/
+pending-testing.md`'s `[2026-09]` entry for the full story and what
+still needs a real-hardware run to confirm. Alongside it:
+`LoRATrainingConfigNode` (the Resources Controller route) gained its
+own `use_checkpoint` Port, mirroring `ComfyUNetLoRANode`'s -- that
+route silently inherited the same `True` default before with no way to
+turn it off; now it's a real, tested, per-route choice on both routes.
+
 **Not yet its own item, nothing above needs it yet:** thread a shared
 `MemoryManager` through optimizer construction so `ResourceProfile`'s
 `memory_manager_stats` is ever populated in a real run -- see

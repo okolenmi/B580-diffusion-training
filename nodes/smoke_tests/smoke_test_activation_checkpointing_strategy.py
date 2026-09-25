@@ -54,6 +54,24 @@ def _install_stub_comfy_checkpoint_module():
     util.CheckpointFunction = _StockCheckpointFunction
     sys.modules["comfy.ldm.modules.diffusionmodules.util"] = util
     sys.modules["comfy.ldm.modules.diffusionmodules"].util = util
+
+    # FrozenParamSafeCheckpointing.apply() below also calls
+    # enable_attention_block_checkpointing() (nodes/model/
+    # attention_checkpointing.py) now -- same minimal-stub reasoning as
+    # above, just enough of a BasicTransformerBlock (a class with a
+    # forward attribute) for that patch to install without crashing on
+    # a missing import. That patch's own real correctness is covered by
+    # smoke_test_attention_checkpointing.py, not here.
+    attention = types.ModuleType("comfy.ldm.modules.attention")
+
+    class _StubBasicTransformerBlock:
+        def forward(self, x, context=None, transformer_options={}):
+            return x
+
+    attention.BasicTransformerBlock = _StubBasicTransformerBlock
+    sys.modules["comfy.ldm.modules.attention"] = attention
+    sys.modules["comfy.ldm.modules"].attention = attention
+
     return util
 
 

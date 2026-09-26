@@ -1,26 +1,20 @@
 """CLI entry point — simplified, config-driven."""
 
 import argparse
-import os
 import random
 import sys
 from pathlib import Path
 
-import torch
-
-#os.environ["SYCL_CACHE_PERSISTENT"] = "1"
-#os.environ["SYCL_CACHE_DIR"] = str(Path.home() / ".cache" / "sycl_kernels")
-os.environ["SYCL_IN_MEM_CACHE_EVICTION_THRESHOLD"] = "0"
-os.environ["SYCL_CACHE_IN_MEM"] = "1"
-
-os.environ["UR_L0_USE_RELAXED_ALLOCATION_LIMITS"] = "1"
-os.environ["SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS"] = "1"
-os.environ["IGC_EnableDPEmulation"] = "1"
-torch.set_num_threads(6)
-
 _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
+
+from core.xpu_env import set_xpu_perf_env_vars
+set_xpu_perf_env_vars()
+
+import torch
+
+torch.set_num_threads(6)
 
 
 def main():

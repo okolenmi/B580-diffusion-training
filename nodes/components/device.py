@@ -120,6 +120,34 @@ class DeviceContext(ABC):
         concern in a long-lived server, not hypothetical). A no-op
         where memory_stats() itself is None (CPU)."""
 
+    @abstractmethod
+    def total_memory_mb(self) -> float | None:
+        """The device's real, physical total VRAM in MB, queried from
+        the driver -- not this process's own allocator bookkeeping
+        (memory_stats()'s numbers are already covered elsewhere; this is
+        the one number this class never otherwise exposes: how much
+        exists in total, full stop). None if this backend has no such
+        concept (CPU) or the query itself fails (older torch build,
+        unexpected backend quirk -- best-effort, matching every other
+        method here's own defensive style, not something worth crashing
+        over).
+
+        What this exists for: nodes/memory/vram_budget_controller.py's
+        own vram_budget_mb Port is a number the person configuring a run
+        states -- nothing before this method ever checked it against
+        anything real. A stated number that happens to exceed the GPU's
+        actual total capacity (wrong assumption about the card, VRAM
+        already spoken for by another process or the desktop compositor,
+        or -- a real, separate, if usually small, contributor -- some of
+        it already reserved by this very process from an earlier run
+        that didn't share this one's process lifetime) would let this
+        project's own budget math report \"under budget\" right up until
+        a real driver-level OOM anyway, no matter how correct the
+        accounting against the stated number was. This can't fix a wrong
+        assumption about the card or VRAM genuinely used elsewhere, but
+        it can surface the mismatch instead of staying silent about it --
+        see VRAMBudgetControllerNode.build()'s own use of this."""
+
     @staticmethod
     def for_device(device) -> "DeviceContext":
         """Factory, called once at pipeline-construction time -- not a
@@ -155,6 +183,19 @@ class _XPUDeviceContext(DeviceContext):
         if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "reset_peak_memory_stats"):
             torch.xpu.reset_peak_memory_stats()
 
+    def total_memory_mb(self) -> float | None:
+        if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            return None
+        try:
+            # get_device_properties().total_memory mirrors torch.cuda's own
+            # attribute name -- PyTorch's native XPU backend followed the
+            # same shape deliberately, not confirmed against this project's
+            # own pinned torch version (no XPU in this environment -- see
+            # this method's own docstring).
+            return torch.xpu.get_device_properties(torch.xpu.current_device()).total_memory / (1024 ** 2)
+        except Exception:
+            return None
+
 
 class _CUDADeviceContext(DeviceContext):
     """Same three operations for CUDA, reachable when for_device()
@@ -178,6 +219,14 @@ class _CUDADeviceContext(DeviceContext):
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
+    def total_memory_mb(self) -> float | None:
+        if not torch.cuda.is_available():
+            return None
+        try:
+            return torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / (1024 ** 2)
+        except Exception:
+            return None
+
 
 class _NullDeviceContext(DeviceContext):
     """CPU, or any backend without a cache/sync/stats concept. Every
@@ -195,3 +244,6 @@ class _NullDeviceContext(DeviceContext):
 
     def reset_peak_stats(self) -> None:
         pass
+
+    def total_memory_mb(self) -> float | None:
+        return None

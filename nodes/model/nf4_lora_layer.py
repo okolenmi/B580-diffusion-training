@@ -94,7 +94,7 @@ class NF4LoRALinear(nn.Module):
         self.frozen = frozen
 
         if original.bias is not None:
-            self.register_buffer("base_bias", original.bias.detach().to(frozen.materialize().dtype))
+            self.register_buffer("base_bias", original.bias.detach().to(frozen.dtype))
         else:
             self.register_buffer("base_bias", None)
 
@@ -144,7 +144,7 @@ class NF4LoRAConv2d(nn.Module):
         self.frozen = frozen
 
         if original.bias is not None:
-            self.register_buffer("base_bias", original.bias.detach().to(frozen.materialize().dtype))
+            self.register_buffer("base_bias", original.bias.detach().to(frozen.dtype))
         else:
             self.register_buffer("base_bias", None)
 

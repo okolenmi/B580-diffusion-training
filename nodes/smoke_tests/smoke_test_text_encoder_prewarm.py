@@ -19,12 +19,17 @@ from nodes.model.text_encoder_prewarm import PrewarmedTextEncoderNode
 
 class _CountingEncoder(TextEncoder):
     def __init__(self):
-        self.calls = []
+        self.prompt_calls = []
+        self.resolution_calls = []
         self.unloaded = False
 
-    def encode(self, prompt: str, batch_size: int, height: int, width: int):
-        self.calls.append((prompt, batch_size, height, width))
+    def encode_prompt_only(self, prompt: str, batch_size: int):
+        self.prompt_calls.append((prompt, batch_size))
         return torch.zeros(batch_size, 2), torch.zeros(batch_size, 1)
+
+    def resolution_embedding(self, height: int, width: int, batch_size: int):
+        self.resolution_calls.append((height, width, batch_size))
+        return torch.zeros(batch_size, 1)
 
     def unload(self) -> None:
         self.unloaded = True
@@ -82,12 +87,19 @@ def check_warms_exactly_the_keys_training_will_request():
     encoder = result["encoder"]
     assert isinstance(encoder, CachingTextEncoder)
 
-    assert len(inner.calls) == 3, f"expected exactly 3 real calls, got {inner.calls}"
-    assert ("a cat", 2, 512, 512) in inner.calls
-    assert ("a dog", 2, 512, 512) in inner.calls
-    assert ("a cat", 2, 768, 768) in inner.calls
-    print(f"    PASS: {len(inner.calls)} real encode calls for 3 unique keys "
-          f"across 4 batches (one repeat correctly deduplicated)")
+    # NOT 3 (one per unique combined key, the pre-split-cache count) -- the
+    # whole point of this session's text_encoder_cache.py change: "a cat" at
+    # 512x512 and "a cat" at 768x768 share one prompt-encode; 512x512 for
+    # "a cat" and 512x512 for "a dog" share one resolution-embed. See
+    # text_encoder_cache.py's own module docstring.
+    assert sorted(inner.prompt_calls) == sorted([("a cat", 2), ("a dog", 2)]), \
+        f"expected exactly 2 distinct prompts encoded, got {inner.prompt_calls}"
+    assert sorted(inner.resolution_calls) == sorted([(512, 512, 2), (768, 768, 2)]), \
+        f"expected exactly 2 distinct resolutions embedded, got {inner.resolution_calls}"
+    print(f"    PASS: {len(inner.prompt_calls)} real CLIP calls (2 unique prompts) + "
+          f"{len(inner.resolution_calls)} real resolution-embed calls (2 unique resolutions) "
+          f"across 4 batches / 3 unique combined keys -- fewer real calls than unique combined "
+          f"keys, not just fewer than 4")
 
 
 def check_unloads_after_warming():
@@ -105,10 +117,12 @@ def check_post_warmup_calls_are_free():
     dataset = _FakeDataset([_batch("x", 1, 64, 64)])
     result = PrewarmedTextEncoderNode().build(encoder=inner, dataset=dataset)
     encoder = result["encoder"]
-    calls_after_warmup = len(inner.calls)
+    prompt_calls_after_warmup = len(inner.prompt_calls)
+    resolution_calls_after_warmup = len(inner.resolution_calls)
     encoder.encode("x", 1, 512, 512)
     encoder.encode("x", 1, 512, 512)
-    assert len(inner.calls) == calls_after_warmup, "should be served entirely from cache"
+    assert len(inner.prompt_calls) == prompt_calls_after_warmup, "should be served entirely from cache"
+    assert len(inner.resolution_calls) == resolution_calls_after_warmup, "should be served entirely from cache"
     print("    PASS")
 
 
@@ -118,9 +132,13 @@ def check_unknown_key_degrades_not_breaks():
     dataset = _FakeDataset([_batch("x", 1, 64, 64)])
     result = PrewarmedTextEncoderNode().build(encoder=inner, dataset=dataset)
     encoder = result["encoder"]
-    calls_before = len(inner.calls)
+    prompt_calls_before = len(inner.prompt_calls)
+    resolution_calls_before = len(inner.resolution_calls)
     ctx, y = encoder.encode("a completely different prompt", 3, 512, 512)
-    assert len(inner.calls) == calls_before + 1, "an uncached key must still be served, via the unloaded encoder"
+    assert len(inner.prompt_calls) == prompt_calls_before + 1, \
+        "an uncached prompt must still be served, via the unloaded encoder"
+    assert len(inner.resolution_calls) == resolution_calls_before, \
+        "512x512 was already warmed -- this new prompt shouldn't need a new resolution embed"
     assert ctx.shape == (3, 2)
     print("    PASS: falls back to a real (if now CPU-side) call rather than failing")
 

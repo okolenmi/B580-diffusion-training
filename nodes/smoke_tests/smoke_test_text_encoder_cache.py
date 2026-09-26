@@ -7,6 +7,16 @@ reasoning, covers the optional resource_control wiring: ensure_loaded()
 called on a miss (and only a miss), with the right resource_name, both
 directly on CachingTextEncoder and threaded through
 CachingTextEncoderNode.build().
+
+_CountingEncoder counts encode_prompt_only()/resolution_embedding() calls
+separately (not a single combined counter the way this file's previous
+version did, back when CachingTextEncoder cached on one combined key) --
+that split, and being able to tell the two apart in a test, is the whole
+point of this session's change to text_encoder_cache.py: see that
+module's own docstring for why a single (prompt, batch_size, height,
+width) key defeated caching almost entirely for exactly the dataset
+shape (many resolutions, one repeated or empty prompt) this project's
+own real use has hit.
 """
 
 import sys
@@ -23,17 +33,22 @@ from nodes.model.text_encoder_cache import CachingTextEncoder, CachingTextEncode
 
 class _CountingEncoder(TextEncoder):
     def __init__(self):
-        self.calls = 0
+        self.prompt_calls = 0
+        self.resolution_calls = 0
         self.unloaded = False
 
-    def encode(self, prompt: str, batch_size: int, height: int, width: int):
-        self.calls += 1
+    def encode_prompt_only(self, prompt: str, batch_size: int):
+        self.prompt_calls += 1
         # Distinct per-call values so a cache bug (returning the wrong
         # cached entry) would actually be visible, not accidentally masked
         # by every call returning the same constant.
-        ctx = torch.full((batch_size, 2), float(self.calls))
-        y = torch.full((batch_size, 1), float(self.calls) * 10)
-        return ctx, y
+        ctx = torch.full((batch_size, 2), float(self.prompt_calls))
+        pooled = torch.full((batch_size, 1), float(self.prompt_calls) * 10)
+        return ctx, pooled
+
+    def resolution_embedding(self, height: int, width: int, batch_size: int):
+        self.resolution_calls += 1
+        return torch.full((batch_size, 1), float(self.resolution_calls) * 100)
 
     def unload(self) -> None:
         self.unloaded = True
@@ -95,22 +110,54 @@ def check_hit_skips_the_real_call():
     cache = CachingTextEncoder(inner, max_entries=8)
 
     ctx1, y1 = cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert inner.calls == 1
+    assert (inner.prompt_calls, inner.resolution_calls) == (1, 1)
     ctx2, y2 = cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert inner.calls == 1, "same key must not re-call the inner encoder"
+    assert (inner.prompt_calls, inner.resolution_calls) == (1, 1), \
+        "same key must not re-call the inner encoder, on either half"
     torch.testing.assert_close(ctx1, ctx2)
     torch.testing.assert_close(y1, y2)
-    print("    PASS: identical (prompt, batch_size, height, width) reuses the cached pair")
+    print("    PASS: identical (prompt, batch_size, height, width) reuses both cached halves")
 
     cache.encode("a cat", batch_size=4, height=512, width=512)
-    assert inner.calls == 2, "a different batch_size must be treated as a different key"
+    assert (inner.prompt_calls, inner.resolution_calls) == (2, 2), \
+        "a different batch_size changes both keys -- both halves must re-call"
     cache.encode("a dog", batch_size=2, height=512, width=512)
-    assert inner.calls == 3
+    assert (inner.prompt_calls, inner.resolution_calls) == (3, 3)
     print("    PASS: any differing key element forces a real call")
 
 
+def check_prompt_and_resolution_caches_are_independent():
+    print("[the real point of this session's change: same prompt at a new "
+          "resolution skips CLIP entirely; same resolution with a new "
+          "prompt skips the resolution embedding entirely]")
+    inner = _CountingEncoder()
+    cache = CachingTextEncoder(inner, max_entries=8)
+
+    cache.encode("a cat", batch_size=1, height=512, width=512)
+    assert (inner.prompt_calls, inner.resolution_calls) == (1, 1)
+
+    # Same prompt, brand new resolution -- exactly this project's own real
+    # "100 images without captions, every image a different resolution"
+    # case: the (only) prompt should never be re-encoded.
+    cache.encode("a cat", batch_size=1, height=768, width=1024)
+    assert inner.prompt_calls == 1, \
+        "same prompt at a new resolution must NOT re-run the CLIP forward pass"
+    assert inner.resolution_calls == 2, \
+        "a genuinely new (height, width) must still compute its own embedding"
+    print("    PASS: repeated prompt, new resolution -- CLIP not re-run")
+
+    # Same resolution as the very first call, brand new prompt -- the
+    # symmetric case: the resolution embedding should never be recomputed.
+    cache.encode("a dog", batch_size=1, height=512, width=512)
+    assert inner.prompt_calls == 2, "a genuinely new prompt must still run CLIP"
+    assert inner.resolution_calls == 2, \
+        "a resolution already seen must NOT recompute its embedding"
+    print("    PASS: repeated resolution, new prompt -- embedding not recomputed")
+
+
 def check_resource_control_called_only_on_miss():
-    print("[resource_control.ensure_loaded() called on a miss, not on a hit]")
+    print("[resource_control.ensure_loaded() called on a miss of either "
+          "cache, not on a hit of both]")
     inner = _CountingEncoder()
     control = _RecordingResourceControl()
     cache = CachingTextEncoder(inner, max_entries=8, resource_control=control)
@@ -118,16 +165,17 @@ def check_resource_control_called_only_on_miss():
     cache.encode("a cat", batch_size=2, height=512, width=512)
     assert control.ensure_loaded_calls == ["text_encoder"], (
         "a miss must call ensure_loaded() exactly once, with the default "
-        "resource_name, before the real encode()")
+        "resource_name, before the real encode")
 
     cache.encode("a cat", batch_size=2, height=512, width=512)
     assert control.ensure_loaded_calls == ["text_encoder"], (
-        "a hit must not call ensure_loaded() again -- the whole point is "
-        "that the inner encoder (and whatever backs it) isn't touched")
+        "a hit of both caches must not call ensure_loaded() again -- the "
+        "whole point is that the inner encoder isn't touched")
 
-    cache.encode("a dog", batch_size=2, height=512, width=512)
+    cache.encode("a cat", batch_size=2, height=999, width=999)
     assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
-        "a second, different miss must call ensure_loaded() again")
+        "a prompt-cache hit alongside a resolution-cache miss is still a "
+        "miss overall -- ensure_loaded() must fire")
     print("    PASS")
 
     print("[resource_name override is threaded through to ensure_loaded()]")
@@ -143,23 +191,23 @@ def check_resource_control_called_only_on_miss():
     inner3 = _CountingEncoder()
     cache3 = CachingTextEncoder(inner3)  # resource_control defaults to None
     cache3.encode("a cat", batch_size=2, height=512, width=512)
-    assert inner3.calls == 1
+    assert inner3.prompt_calls == 1
     print("    PASS")
 
 
 def check_eviction():
-    print("[LRU eviction at max_entries]")
+    print("[LRU eviction at max_entries, independently per cache]")
     inner = _CountingEncoder()
     cache = CachingTextEncoder(inner, max_entries=2)
     cache.encode("p1", 1, 64, 64)
     cache.encode("p2", 1, 64, 64)
-    cache.encode("p3", 1, 64, 64)  # evicts p1 (oldest, never re-touched)
-    assert len(cache._cache) == 2
-    assert ("p1", 1, 64, 64) not in cache._cache
-    assert ("p3", 1, 64, 64) in cache._cache
-    calls_before = inner.calls
+    cache.encode("p3", 1, 64, 64)  # evicts p1's prompt entry (oldest, never re-touched)
+    assert len(cache._prompt_cache) == 2
+    assert ("p1", 1) not in cache._prompt_cache
+    assert ("p3", 1) in cache._prompt_cache
+    calls_before = inner.prompt_calls
     cache.encode("p1", 1, 64, 64)
-    assert inner.calls == calls_before + 1, "p1 was evicted, must re-call"
+    assert inner.prompt_calls == calls_before + 1, "p1 was evicted, must re-call"
     print("    PASS: oldest entry evicted once max_entries is exceeded")
 
 
@@ -171,20 +219,21 @@ def check_move_to_end_on_hit():
     cache.encode("p2", 1, 64, 64)
     cache.encode("p1", 1, 64, 64)  # hit -- should move p1 to most-recently-used
     cache.encode("p3", 1, 64, 64)  # should evict p2, not p1
-    assert ("p1", 1, 64, 64) in cache._cache
-    assert ("p2", 1, 64, 64) not in cache._cache
+    assert ("p1", 1) in cache._prompt_cache
+    assert ("p2", 1) not in cache._prompt_cache
     print("    PASS: recently-hit entries survive eviction ahead of untouched ones")
 
 
 def check_unload_and_clear_delegate():
-    print("[unload()/clear_cache() delegate correctly]")
+    print("[unload()/clear_cache() delegate correctly, across both caches]")
     inner = _CountingEncoder()
     cache = CachingTextEncoder(inner, max_entries=8)
     cache.encode("p1", 1, 64, 64)
     cache.unload()
     assert inner.unloaded, "unload() must reach the wrapped encoder"
     cache.clear_cache()
-    assert len(cache._cache) == 0
+    assert len(cache._prompt_cache) == 0
+    assert len(cache._resolution_cache) == 0
     print("    PASS")
 
 
@@ -197,7 +246,7 @@ def check_node_build():
     assert isinstance(wrapped, CachingTextEncoder)
     wrapped.encode("p", 1, 64, 64)
     wrapped.encode("p", 1, 64, 64)
-    assert inner.calls == 1
+    assert inner.prompt_calls == 1
     print("    PASS")
 
     print("[CachingTextEncoderNode.build() threads resource_control through]")
@@ -215,6 +264,7 @@ def check_node_build():
 def main():
     check_contracts()
     check_hit_skips_the_real_call()
+    check_prompt_and_resolution_caches_are_independent()
     check_resource_control_called_only_on_miss()
     check_eviction()
     check_move_to_end_on_hit()

@@ -15,8 +15,37 @@ from .handle import ModelWeights
 class TextEncoder(DeviceResident, ABC):
 
     @abstractmethod
+    def encode_prompt_only(self, prompt: str, batch_size: int):
+        """The expensive half of encode(): (context, pooled_y) for this
+        prompt alone -- depends only on the prompt string (and
+        batch_size, for the repeat), never on height/width. Split out
+        from encode() this session specifically so a caller can cache
+        this half separately from resolution_embedding()'s (cheap,
+        resolution-dependent) one -- see
+        nodes/model/text_encoder_cache.py's CachingTextEncoder, the
+        reason this split exists at all."""
+
+    @abstractmethod
+    def resolution_embedding(self, height: int, width: int, batch_size: int):
+        """The cheap half of encode(): the resolution-dependent
+        SDXL time-embedding tensor that gets concatenated onto pooled_y.
+        Never involves the prompt at all."""
+
     def encode(self, prompt: str, batch_size: int, height: int, width: int):
-        """Return (context, pooled_y) tensors for the UNet's conditioning inputs."""
+        """Return (context, pooled_y) tensors for the UNet's conditioning
+        inputs -- concrete here, combining the two pieces above, so a
+        subclass only has to implement the two granular methods once
+        rather than every subclass re-deriving the same "concatenate
+        pooled text conditioning with the resolution embedding" step.
+        Not abstract anymore as of this session (previously subclasses
+        implemented this directly, single-piece); CachingTextEncoder is
+        the only reason it needed to become two pieces, but this default
+        keeps calling it exactly this way meaning exactly what it always
+        meant for every other caller."""
+        ctx, pooled = self.encode_prompt_only(prompt, batch_size)
+        res_emb = self.resolution_embedding(height, width, batch_size)
+        import torch
+        return ctx, torch.cat([pooled, res_emb], dim=-1)
 
     @abstractmethod
     def unload(self) -> None:
@@ -44,8 +73,11 @@ class SDXLTextEncoder(TextEncoder):
         self._legacy = legacy_encoder
         self._device_before_offload = None
 
-    def encode(self, prompt: str, batch_size: int, height: int, width: int):
-        return self._legacy.encode_for_unet(prompt, batch_size=batch_size, height=height, width=width)
+    def encode_prompt_only(self, prompt: str, batch_size: int):
+        return self._legacy.encode_prompt_and_pool(prompt, batch_size)
+
+    def resolution_embedding(self, height: int, width: int, batch_size: int):
+        return self._legacy.resolution_embedding(height, width, batch_size)
 
     def unload(self) -> None:
         self._legacy.unload()

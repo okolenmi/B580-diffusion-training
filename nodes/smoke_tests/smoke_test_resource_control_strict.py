@@ -60,6 +60,9 @@ class _FakeDeviceContext(DeviceContext):
     def reset_peak_stats(self) -> None:
         pass
 
+    def total_memory_mb(self) -> float | None:
+        return None
+
 
 class _FakeResident(DeviceResident):
     def __init__(self, name: str):

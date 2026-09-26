@@ -122,6 +122,21 @@ def check_xpu_context_matches_legacy():
         record(new_stats is None, "memory_stats() is None when XPU unavailable")
 
 
+def check_total_memory_mb_no_legacy_equivalent():
+    print("\n=== total_memory_mb(): no legacy equivalent (new capability, "
+          "not a reimplementation) -- same guard behavior as everything else here ===")
+    xpu_actually_available = hasattr(torch, "xpu") and torch.xpu.is_available()
+    cuda_available = torch.cuda.is_available()
+    record(_NullDeviceContext().total_memory_mb() is None,
+           "_NullDeviceContext.total_memory_mb() is None")
+    if not xpu_actually_available:
+        record(_XPUDeviceContext().total_memory_mb() is None,
+               "_XPUDeviceContext.total_memory_mb() is None when XPU unavailable")
+    if not cuda_available:
+        record(_CUDADeviceContext().total_memory_mb() is None,
+               "_CUDADeviceContext.total_memory_mb() is None when CUDA unavailable")
+
+
 def check_cuda_context_no_legacy_equivalent():
     print("\n=== _CUDADeviceContext: guarded the same way, no legacy equivalent ===")
     ctx = _CUDADeviceContext()
@@ -147,6 +162,7 @@ def main():
     check_null_context()
     check_xpu_context_matches_legacy()
     check_cuda_context_no_legacy_equivalent()
+    check_total_memory_mb_no_legacy_equivalent()
 
     print("\n" + "=" * 60)
     if failures:

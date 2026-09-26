@@ -192,6 +192,19 @@ class NF4WeightStore(FrozenWeightStore):
             + self._offset.numel() * self._offset.element_size()
         )
 
+    @property
+    def dtype(self) -> torch.dtype:
+        """materialize()'s own output dtype, without paying for a full
+        dequantize just to read it -- nodes/model/nf4_lora_layer.py's
+        NF4LoRALinear/NF4LoRAConv2d both used to call
+        frozen.materialize().dtype during __init__ purely to size
+        base_bias's cast, materializing (dequantizing every block,
+        allocating a full-precision copy of the whole weight) and then
+        immediately throwing the result away -- a real, if one-time,
+        wasted allocation and compute pass per frozen layer at model-
+        construction time. self._dtype already holds exactly this."""
+        return self._dtype
+
     def materialize(self) -> torch.Tensor:
         """Re-dequantizes fresh every call -- see this module's docstring
         for why nothing is cached."""

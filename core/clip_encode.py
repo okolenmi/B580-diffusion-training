@@ -89,11 +89,63 @@ class SDXLClipEncoder:
             ctx, pooled = self.clip_model.encode_token_weights(tokens)
         return ctx, pooled
 
+    def encode_prompt_and_pool(self, prompt: str, batch_size: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
+        """encode_prompt() plus the padding/dtype/device/batch handling
+        encode_for_unet() below always did right after it -- pulled out
+        on its own for the same reason resolution_embedding() was: the
+        expensive half (the real CLIP forward pass, inside encode_prompt()
+        above) depends only on the prompt string, never on height/width,
+        so a caller with real cached (ctx, pooled) for this exact prompt
+        (nodes/model/text_encoder_cache.py's CachingTextEncoder, as of
+        this session) can skip straight to resolution_embedding() on a
+        cache hit instead of re-running this. encode_for_unet() below
+        calls this too, unchanged in what it returns."""
+        ctx, pooled = self.encode_prompt(prompt)
+
+        # Ensure at least 77 tokens (standard SDXL base length)
+        if ctx.shape[1] < 77:
+            padding = torch.zeros((ctx.shape[0], 77 - ctx.shape[1], ctx.shape[2]),
+                                 device=ctx.device, dtype=ctx.dtype)
+            ctx = torch.cat([ctx, padding], dim=1)
+
+        pooled = pooled.to(device=self.device, dtype=self.out_dtype)
+        ctx = ctx.to(device=self.device, dtype=self.out_dtype).repeat(batch_size, 1, 1)
+        pooled = pooled.repeat(batch_size, 1)
+        return ctx, pooled
+
     def _get_embedder(self):
         if self._embedder is None:
             from comfy.model_base import Timestep
             self._embedder = Timestep(256).to(device=self.device, dtype=self.out_dtype)
         return self._embedder
+
+    def resolution_embedding(self, height: int, width: int, batch_size: int = 1,
+                              crop_w: int = 0, crop_h: int = 0,
+                              target_width: int = None, target_height: int = None) -> torch.Tensor:
+        """The (batch, 1536) SDXL time-embedding half of encode_for_unet()'s
+        own `y` output -- same computation (same as ComfyUI's
+        SDXL.encode_adm), pulled out on its own specifically so a caller
+        that already has real, cached pooled text conditioning for this
+        prompt (nodes/model/text_encoder_cache.py's CachingTextEncoder,
+        as of this session) can get just the resolution-dependent part
+        recomputed, without re-running the CLIP forward pass encode_prompt()
+        does -- CLIP's own encoding depends only on the prompt string, never
+        on height/width, so the two were always independent pieces of work,
+        just not separately callable before this. encode_for_unet() below
+        calls this too, unchanged in what it returns, not a second copy of
+        this math."""
+        if target_width is None:
+            target_width = width
+        if target_height is None:
+            target_height = height
+
+        embedder = self._get_embedder()
+
+        time_embs = []
+        # original_h, original_w, crop_h, crop_w, target_h, target_w
+        for val in [height, width, crop_h, crop_w, target_height, target_width]:
+            time_embs.append(embedder(torch.tensor([val], device=self.device, dtype=self.out_dtype)))
+        return torch.cat(time_embs, dim=-1).repeat(batch_size, 1)
 
     def encode_for_unet(self, prompt: str, batch_size: int = 1,
                         height: int = 1024, width: int = 1024,
@@ -106,33 +158,15 @@ class SDXLClipEncoder:
 
         Time embeddings encode: height, width, crop_h, crop_w, target_height, target_width
         Each embedded to 256 dims using sinusoidal timestep embedding (total 6×256=1536).
+
+        Thin combination of encode_prompt_and_pool() + resolution_embedding()
+        (both above) -- kept as one call for every caller except
+        CachingTextEncoder, which needs the two pieces separately instead.
         """
-        ctx, pooled = self.encode_prompt(prompt)
-        
-        # Ensure at least 77 tokens (standard SDXL base length)
-        if ctx.shape[1] < 77:
-            padding = torch.zeros((ctx.shape[0], 77 - ctx.shape[1], ctx.shape[2]), 
-                                 device=ctx.device, dtype=ctx.dtype)
-            ctx = torch.cat([ctx, padding], dim=1)
-
-        pooled = pooled.to(device=self.device, dtype=self.out_dtype)
-        ctx = ctx.to(device=self.device, dtype=self.out_dtype).repeat(batch_size, 1, 1)
-        pooled = pooled.repeat(batch_size, 1)
-
-        # Build SDXL time embeddings (same as ComfyUI's SDXL.encode_adm)
-        if target_width is None:
-            target_width = width
-        if target_height is None:
-            target_height = height
-
-        embedder = self._get_embedder()
-
-        time_embs = []
-        # original_h, original_w, crop_h, crop_w, target_h, target_w
-        for val in [height, width, crop_h, crop_w, target_height, target_width]:
-            time_embs.append(embedder(torch.tensor([val], device=self.device, dtype=self.out_dtype)))
-        time_emb_flat = torch.cat(time_embs, dim=-1).repeat(batch_size, 1)
-
+        ctx, pooled = self.encode_prompt_and_pool(prompt, batch_size)
+        time_emb_flat = self.resolution_embedding(
+            height, width, batch_size, crop_w=crop_w, crop_h=crop_h,
+            target_width=target_width, target_height=target_height)
         y = torch.cat([pooled, time_emb_flat], dim=-1)
         return ctx, y
 

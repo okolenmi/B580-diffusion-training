@@ -9,6 +9,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# Before anything else touches torch/XPU -- see core/xpu_env.py's own
+# docstring. This is the fix half of a real gap found investigating a
+# reported speed regression: unlike core/cli.py (the older, subprocess-
+# per-run route, which already set these), nothing in this process ever
+# did, and graph execution runs as a background thread inside *this*
+# same long-lived process (server/routes_nodegraph.py's _worker()), not
+# as its own core.cli subprocess -- so core/cli.py's own env vars,
+# module-level as they are, never had a chance to apply here.
+from core.xpu_env import set_xpu_perf_env_vars
+set_xpu_perf_env_vars()
+
 
 def main():
     p = argparse.ArgumentParser(

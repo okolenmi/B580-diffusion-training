@@ -142,6 +142,22 @@ class LoRATrainingConfigNode(Node):
                 "nodes/model/attention_checkpointing.py, attention blocks too) or "
                 "NoCheckpointing (False) -- see nodes/model/gradient_checkpointing.py.",
         ),
+        "cache_text_encoder": Port(
+            name="cache_text_encoder", type=bool, required=False, default=False,
+            doc="Wrap trainer.clip in a CachingTextEncoder (nodes/model/text_encoder_cache.py) "
+                "before returning it, so ManagedLoRATrainerNode's EncodeConditioningPhase, "
+                "which calls trainer.clip.encode() fresh every single step with no caching of "
+                "its own, gets one for free -- there was no way to reach that class from this "
+                "route's own construction path before this Port existed (CachingTextEncoderNode "
+                "is a separate graph node with no Port on this route or on ManagedLoRATrainerNode "
+                "to substitute its output in for trainer.clip). Off by default: real VRAM/compute "
+                "savings depend entirely on captions actually repeating (or being empty) across "
+                "the dataset -- see CachingTextEncoder's own docstring -- so this isn't a safe "
+                "default for every dataset shape the way use_checkpoint's default is. No separate "
+                "max_entries/resource_control knobs here -- CachingTextEncoderNode's own defaults "
+                "(512 entries, no resource_control) apply; wire a real CachingTextEncoderNode "
+                "into the graph instead of this Port if either needs to be non-default.",
+        ),
     }
 
     OUTPUTS: ClassVar[dict[str, Port]] = {
@@ -195,6 +211,11 @@ class LoRATrainingConfigNode(Node):
             frozen_weight_store_factory=weight_store_factory,
             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
         )
+
+        if inputs.get("cache_text_encoder", self.INPUTS["cache_text_encoder"].default):
+            from .text_encoder_cache import CachingTextEncoder
+            trainer.clip = CachingTextEncoder(trainer.clip)
+
         result = {"trainer": trainer}
         self.validate_outputs(result)
         return result

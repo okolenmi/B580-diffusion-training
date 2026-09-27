@@ -59,6 +59,7 @@ machinery, used here as directly as the main route uses it.
 from __future__ import annotations
 
 import gc
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -100,12 +101,57 @@ class ManagedStepPhase(ABC):
 
 
 class ManagedTrainingStepPipeline:
+    """run_step() also carries optional per-phase timing, gated behind
+    TRAIN_STEP_TIMING=1 (env var, same zero-overhead-unless-opted-in
+    convention as core/comfy_setup.py's own TRAIN_VRAM_DEBUG -- checked
+    once here, not re-read from os.environ every step). Added this
+    session after two guesses at what a real, reported "fast steps, then
+    a long stall, then a few more, correlated with new image
+    resolutions" pattern's root cause was (SYCL/Level-Zero env vars;
+    CachingTextEncoder's cache-key granularity) both turned out not to
+    move the real number -- rather than guess a third time with no way
+    to check it here (no XPU in this environment, still), this measures
+    where a real run's own time actually goes, per phase, per step, so
+    the next round of investigation starts from data instead of another
+    guess. Off by default: an unconditional sync point after every phase
+    (needed for the timing itself to mean anything against an async
+    GPU queue) is real, deliberate overhead, not something to pay on
+    every real training step.
+
+    Usage: TRAIN_STEP_TIMING=1, run a short session (a few dozen steps
+    covering at least one "long stall" is enough -- this doesn't need a
+    full run), and the printed per-phase milliseconds will show which
+    phase the stall actually lands in. That's the one piece of real
+    information every guess so far has been missing."""
+
     def __init__(self, phases: list[ManagedStepPhase]):
         self.phases = phases
+        self._timing = os.environ.get("TRAIN_STEP_TIMING", "0") == "1"
 
     def run_step(self, state: ManagedStepState) -> ManagedStepState:
+        if not self._timing:
+            for phase in self.phases:
+                state = phase.run(state)
+            return state
+
+        device_module = None
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            device_module = torch.xpu
+        elif torch.cuda.is_available():
+            device_module = torch.cuda
+
+        timings = []
         for phase in self.phases:
+            if device_module is not None:
+                device_module.synchronize()
+            start = time.perf_counter()
             state = phase.run(state)
+            if device_module is not None:
+                device_module.synchronize()
+            timings.append((type(phase).__name__, (time.perf_counter() - start) * 1000))
+        parts = ", ".join(f"{name}={ms:.1f}ms" for name, ms in timings)
+        total = sum(ms for _, ms in timings)
+        print(f"[step {state.step} timing] total={total:.1f}ms  {parts}")
         return state
 
 

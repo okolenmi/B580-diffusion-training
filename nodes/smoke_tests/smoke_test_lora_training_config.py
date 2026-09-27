@@ -57,7 +57,7 @@ def check_contracts():
     check(not getattr(LoRATrainingConfigNode, "__abstractmethods__", None),
           "must be concretely instantiable")
     check(set(LoRATrainingConfigNode.INPUTS) ==
-          {"resources", "rank", "alpha", "unet_weight_store", "use_checkpoint"},
+          {"resources", "rank", "alpha", "unet_weight_store", "use_checkpoint", "cache_text_encoder"},
           LoRATrainingConfigNode.INPUTS)
     check(set(LoRATrainingConfigNode.OUTPUTS) == {"trainer"}, LoRATrainingConfigNode.OUTPUTS)
     print("    PASS")
@@ -195,6 +195,25 @@ def check_use_checkpoint_threads_through_to_the_real_unet_wrapper():
     print("    PASS")
 
 
+def check_cache_text_encoder_wraps_clip_and_defaults_off():
+    print("[cache_text_encoder: off by default (trainer.clip is the plain "
+          "encoder, unwrapped), wraps it in CachingTextEncoder when True]")
+    from nodes.model.text_encoder import TextEncoder
+    from nodes.model.text_encoder_cache import CachingTextEncoder
+
+    resources = _build_real_resources()
+    node = LoRATrainingConfigNode()
+    trainer = node.build(resources=resources)["trainer"]
+    check(isinstance(trainer.clip, TextEncoder) and not isinstance(trainer.clip, CachingTextEncoder),
+          f"expected the plain encoder by default, got {type(trainer.clip).__name__}")
+
+    resources2 = _build_real_resources()
+    trainer2 = node.build(resources=resources2, cache_text_encoder=True)["trainer"]
+    check(isinstance(trainer2.clip, CachingTextEncoder),
+          f"expected trainer.clip wrapped in CachingTextEncoder, got {type(trainer2.clip).__name__}")
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_dispatches_to_the_matching_trainer_class_and_injects()
@@ -203,6 +222,7 @@ def main():
     check_rank_input_is_ignored_and_overridden_when_continuing_a_lora()
     check_malformed_continue_lora_sd_raises_before_injecting()
     check_use_checkpoint_threads_through_to_the_real_unet_wrapper()
+    check_cache_text_encoder_wraps_clip_and_defaults_off()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

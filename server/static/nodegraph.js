@@ -10,6 +10,7 @@
   "use strict";
 
   const STORAGE_KEY = "ng_graph_v1";
+  const RUNNING_EXECUTION_KEY = "ng_running_execution_v1";
   const NODE_WIDTH = 270;
   const ZOOM_MIN = 0.2;
   const ZOOM_MAX = 2.5;
@@ -342,7 +343,7 @@
   class GraphView {
     constructor(model, els) {
       this.model = model;
-      this.els = els; // {palette, canvas, wires, viewport, canvasWrap, runBtn, clearBtn, runStatus, results, zoomIn, zoomOut, zoomPct}
+      this.els = els; // {palette, canvas, wires, viewport, canvasWrap, runBtn, clearBtn, runStatus, results, zoomIn, zoomOut, zoomPct, processesBtn, processesBadge, processesPanel, processesList}
       this.pendingWire = null; // {nodeId, portName, isOutput} while dragging a new connection
       this.dragState = null;   // {node, startX, startY, origX, origY} while dragging a node
       this.panState = null;    // {startX, startY, origPanX, origPanY} while panning the canvas
@@ -365,6 +366,14 @@
       this.els.runBtn.addEventListener("click", () => this.runGraph());
       this.els.stopBtn.addEventListener("click", () => this.stopGraph());
       this.els.clearBtn.addEventListener("click", () => this.clearAll());
+      this.els.processesBtn.addEventListener("click", () => this.toggleProcessesPanel());
+      document.addEventListener("click", (e) => {
+        if (this.els.processesPanel.classList.contains("open")
+            && !this.els.processesPanel.contains(e.target)
+            && e.target !== this.els.processesBtn) {
+          this.els.processesPanel.classList.remove("open");
+        }
+      });
       this.els.zoomIn.addEventListener("click", () => this.setZoomCentered(this.zoom + 0.1));
       this.els.zoomOut.addEventListener("click", () => this.setZoomCentered(this.zoom - 0.1));
       this.els.zoomPct.addEventListener("click", () => this.setZoomCentered(1.0));
@@ -377,6 +386,9 @@
       this.applyViewportTransform();
       this.drawOriginMarker();
       this.renderAll();
+      this.reconnectToRunningExecution();
+      this.refreshProcessesBadge();
+      setInterval(() => this.refreshProcessesBadge(), 15000);
     }
 
     drawOriginMarker() {
@@ -1456,13 +1468,24 @@
         const data = await res.json();
         if (!res.ok) { this.setStatus(data.detail || `HTTP ${res.status}`, true); this.renderResults(null, [], data.detail); return; }
         this.currentExecutionId = data.execution_id;
+        // Survives a reload/new tab (unlike this.currentExecutionId, a
+        // plain in-memory field) -- reconnectToRunningExecution() reads
+        // it back on the next init(). Cleared in the finally: block
+        // below, the same place currentExecutionId itself is cleared, so
+        // the two can never disagree about whether a run is still ours
+        // to reconnect to.
+        try { localStorage.setItem(RUNNING_EXECUTION_KEY, data.execution_id); }
+        catch (e) { console.warn("Could not persist execution id:", e); }
+        this.refreshProcessesBadge();
         await this.pollExecution(data.execution_id);
       } catch (err) {
         this.setStatus("Request failed: " + err.message, true);
       } finally {
         this.currentExecutionId = null;
         this.els.stopBtn.style.display = "none";
+        localStorage.removeItem(RUNNING_EXECUTION_KEY);
         this.updateRunButton();
+        this.refreshProcessesBadge();
       }
     }
 
@@ -1501,6 +1524,126 @@
       // Not setting status/results here -- the pollExecution() loop
       // already in flight will pick up status="stopped" on its next poll
       // and finish the run's normal cleanup (button states etc).
+    }
+
+    // ---- reconnecting after a reload, and the Processes panel ----
+    // A page reload loses currentExecutionId (a plain in-memory field) --
+    // there was no way at all, before this, to get back to a run still
+    // going server-side, including to stop it. RUNNING_EXECUTION_KEY
+    // (localStorage) covers "reconnect to the run *this browser* started";
+    // GET /nodegraph/executions (the Processes panel below) covers the
+    // more general case -- a run started from a different tab or a
+    // browser whose localStorage got cleared -- since the server tracks
+    // every execution regardless of who started it.
+
+    async reconnectToRunningExecution() {
+      let executionId;
+      try { executionId = localStorage.getItem(RUNNING_EXECUTION_KEY); }
+      catch (e) { return; }
+      if (!executionId) return;
+      try {
+        const res = await fetch(`/api/nodegraph/run/${executionId}`);
+        if (!res.ok) { localStorage.removeItem(RUNNING_EXECUTION_KEY); return; }
+        const data = await res.json();
+        if (data.status !== "running") { localStorage.removeItem(RUNNING_EXECUTION_KEY); return; }
+        this.currentExecutionId = executionId;
+        this.els.runBtn.disabled = true;
+        this.els.stopBtn.style.display = "inline-block";
+        this.els.stopBtn.disabled = false;
+        this.setStatus("Reconnected to a run already in progress\u2026");
+        await this.pollExecution(executionId);
+      } catch (e) {
+        // Network hiccup on load -- leave the stored id alone, worst
+        // case the next reload tries again rather than silently losing
+        // track of a run that may still be going.
+      } finally {
+        this.currentExecutionId = null;
+        this.els.stopBtn.style.display = "none";
+        localStorage.removeItem(RUNNING_EXECUTION_KEY);
+        this.updateRunButton();
+        this.refreshProcessesBadge();
+      }
+    }
+
+    formatElapsed(startedAt) {
+      const seconds = Math.max(0, Date.now() / 1000 - startedAt);
+      if (seconds < 60) return `${Math.round(seconds)}s`;
+      if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+      return `${(seconds / 3600).toFixed(1)}h`;
+    }
+
+    async fetchExecutions() {
+      const res = await fetch("/api/nodegraph/executions");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data.executions || [];
+    }
+
+    async refreshProcessesBadge() {
+      try {
+        const executions = await this.fetchExecutions();
+        const runningCount = executions.filter(e => e.status === "running").length;
+        this.els.processesBadge.textContent = String(runningCount);
+        this.els.processesBadge.style.display = runningCount > 0 ? "block" : "none";
+      } catch (e) {
+        // Best-effort -- a failed background poll for the badge count
+        // shouldn't itself produce any visible error.
+      }
+    }
+
+    async toggleProcessesPanel() {
+      const willOpen = !this.els.processesPanel.classList.contains("open");
+      this.els.processesPanel.classList.toggle("open", willOpen);
+      if (willOpen) await this.loadAndRenderProcessesList();
+    }
+
+    async loadAndRenderProcessesList() {
+      this.els.processesList.className = "ng-process-empty";
+      this.els.processesList.textContent = "Loading\u2026";
+      let executions;
+      try {
+        executions = await this.fetchExecutions();
+      } catch (e) {
+        this.els.processesList.textContent = "Could not load: " + e.message;
+        return;
+      }
+      if (executions.length === 0) {
+        this.els.processesList.textContent = "No runs tracked on the server yet.";
+        return;
+      }
+      this.els.processesList.className = "";
+      this.els.processesList.innerHTML = executions.slice().reverse().map(exec => {
+        const statusClass = exec.status === "running" ? "ng-process-status-running"
+          : exec.status === "error" ? "ng-process-status-error" : "";
+        const stopBtn = exec.status === "running"
+          ? `<button data-stop-execution="${escapeHtml(exec.execution_id)}">Stop</button>` : "";
+        return `<div class="ng-process-row">
+          <span><span class="ng-process-id">${escapeHtml(exec.execution_id.slice(0, 8))}</span>
+          &nbsp;<span class="${statusClass}">${escapeHtml(exec.status)}</span>
+          &nbsp;<span style="color:var(--text-dim)">${this.formatElapsed(exec.started_at)} ago</span></span>
+          ${stopBtn}
+        </div>`;
+      }).join("");
+      this.els.processesList.querySelectorAll("[data-stop-execution]").forEach(btn => {
+        btn.addEventListener("click", () => this.stopExecutionFromPanel(btn.getAttribute("data-stop-execution")));
+      });
+    }
+
+    async stopExecutionFromPanel(executionId) {
+      try {
+        await fetch(`/api/nodegraph/run/${executionId}/stop`, { method: "POST" });
+      } catch (e) {
+        // Reflected in the list refresh either way -- a failed stop
+        // request just means the row will still show "running".
+      }
+      if (executionId === this.currentExecutionId) {
+        // This tab's own run, stopped from the panel instead of the
+        // toolbar Stop button -- the in-flight pollExecution() loop
+        // will still pick up status="stopped" on its own next poll and
+        // do the normal cleanup, same as stopGraph().
+      }
+      await this.loadAndRenderProcessesList();
+      await this.refreshProcessesBadge();
     }
 
     renderResults(results, problems, hardError) {
@@ -1553,6 +1696,10 @@
       zoomIn: document.getElementById("ng-zoom-in"),
       zoomOut: document.getElementById("ng-zoom-out"),
       zoomPct: document.getElementById("ng-zoom-pct"),
+      processesBtn: document.getElementById("ng-processes-btn"),
+      processesBadge: document.getElementById("ng-processes-badge"),
+      processesPanel: document.getElementById("ng-processes-panel"),
+      processesList: document.getElementById("ng-processes-list"),
     };
     try {
       const res = await fetch("/api/nodegraph/registry");

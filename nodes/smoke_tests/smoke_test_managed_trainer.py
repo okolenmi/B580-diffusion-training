@@ -34,6 +34,7 @@ actually_updates_the_trained_parameter below closes that gap directly,
 end to end, rather than trusting that identity holds by inspection.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -413,6 +414,56 @@ def check_profile_prints_residency_lines_at_the_right_moments():
     print("    PASS")
 
 
+def check_step_timing_off_by_default_and_on_when_requested():
+    print("[TRAIN_STEP_TIMING: off by default (identical to the pre-instrumentation "
+          "loop -- no prints, no sync calls), on when the env var is set]")
+    from nodes.train.managed import ManagedStepPhase, ManagedStepState, ManagedTrainingStepPipeline
+
+    class _RecordingPhase(ManagedStepPhase):
+        def __init__(self, name):
+            self.name = name
+            self.ran = False
+
+        def run(self, state):
+            self.ran = True
+            state.extras.setdefault("order", []).append(self.name)
+            return state
+
+    phase_a, phase_b = _RecordingPhase("a"), _RecordingPhase("b")
+    pipeline = ManagedTrainingStepPipeline([phase_a, phase_b])
+    state = ManagedStepState(step=0, batch=None, model=None, device="cpu")
+
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        result = pipeline.run_step(state)
+    assert phase_a.ran and phase_b.ran
+    assert result.extras["order"] == ["a", "b"], "phases must still run in the given order"
+    assert buf.getvalue() == "", f"must print nothing when TRAIN_STEP_TIMING is unset: {buf.getvalue()!r}"
+    print("    PASS: default path unchanged, no output")
+
+    original = os.environ.get("TRAIN_STEP_TIMING")
+    os.environ["TRAIN_STEP_TIMING"] = "1"
+    try:
+        phase_c, phase_d = _RecordingPhase("c"), _RecordingPhase("d")
+        timed_pipeline = ManagedTrainingStepPipeline([phase_c, phase_d])
+        state2 = ManagedStepState(step=7, batch=None, model=None, device="cpu")
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            result2 = timed_pipeline.run_step(state2)
+        assert phase_c.ran and phase_d.ran
+        assert result2.extras["order"] == ["c", "d"]
+        out = buf2.getvalue()
+        assert "step 7 timing" in out and "_RecordingPhase=" in out, out
+        print(f"    PASS: timing line printed when enabled: {out.strip()}")
+    finally:
+        if original is None:
+            os.environ.pop("TRAIN_STEP_TIMING", None)
+        else:
+            os.environ["TRAIN_STEP_TIMING"] = original
+
+
 def main():
     check_contracts()
     check_model_is_registered_non_offloadable_and_never_released()
@@ -421,6 +472,7 @@ def main():
     check_phases_actually_call_release_when_the_controller_decides_to()
     check_real_optimizer_via_trainer_parameters_node_actually_updates_the_trained_parameter()
     check_profile_prints_residency_lines_at_the_right_moments()
+    check_step_timing_off_by_default_and_on_when_requested()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

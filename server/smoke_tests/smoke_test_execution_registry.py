@@ -121,6 +121,35 @@ def check_cleanup_runs_even_after_a_failed_execution():
     print("    PASS")
 
 
+def check_list_all_reports_every_tracked_execution():
+    print("[list_all() reports every tracked execution, oldest first, "
+          "regardless of status -- the reload/second-tab reconnect case]")
+    registry = _ExecutionRegistry()
+    nodes = [NodeSpec(id="a", class_name="IntConstantNode", params={"value": 1})]
+    id1 = registry.start(nodes, [], monitor_bus=None)
+    _wait_for(registry, id1)
+    id2 = registry.start(nodes, [], monitor_bus=None)
+    registry.stop(id2)
+    _wait_for(registry, id2)
+
+    listed = registry.list_all()
+    ids_in_order = [item["execution_id"] for item in listed]
+    assert ids_in_order == [id1, id2], f"expected oldest-first [{id1}, {id2}], got {ids_in_order}"
+
+    by_id = {item["execution_id"]: item for item in listed}
+    assert by_id[id1]["status"] == "finished", by_id[id1]
+    assert by_id[id2]["status"] == "stopped", by_id[id2]
+    assert isinstance(by_id[id1]["started_at"], float)
+    print("    PASS")
+
+
+def check_list_all_empty_registry():
+    print("[list_all() on a registry with nothing started yet]")
+    registry = _ExecutionRegistry()
+    assert registry.list_all() == []
+    print("    PASS")
+
+
 def main():
     check_normal_run_finishes_with_results()
     check_unknown_class_reports_via_status_poll()
@@ -129,6 +158,8 @@ def main():
     check_two_concurrent_runs_have_independent_cancel_events()
     check_cleanup_runs_after_a_finished_execution()
     check_cleanup_runs_even_after_a_failed_execution()
+    check_list_all_reports_every_tracked_execution()
+    check_list_all_empty_registry()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

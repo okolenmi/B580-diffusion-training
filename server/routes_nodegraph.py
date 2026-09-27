@@ -125,6 +125,26 @@ class _ExecutionRegistry:
         execution.cancel_event.set()
         return True
 
+    def list_all(self) -> list[dict]:
+        """Every tracked execution, oldest first -- what
+        GET /nodegraph/executions returns. Exists for the case a page
+        reload (or a second browser tab) has no client-side memory of
+        which execution_id a still-running graph is under: this project's
+        run/stop endpoints always required already knowing that id, with
+        nothing to look it up by if it was lost. Same "no eviction, dev
+        server, bounded count" reasoning as this class's own docstring
+        already gives for storing every execution at all -- listing all
+        of them here, not just running ones, costs nothing extra and
+        lets the UI show a just-finished run for a few seconds too,
+        rather than have it disappear from the list the instant it ends."""
+        with self._lock:
+            items = list(self._executions.items())
+        return [
+            {"execution_id": execution_id, "status": execution.status,
+             "started_at": execution.started_at}
+            for execution_id, execution in items
+        ]
+
 
 _registry = _ExecutionRegistry()
 
@@ -302,6 +322,17 @@ def run_graph(payload: GraphRunRequest, request: Request):
 
     execution_id = _registry.start(nodes, edges, request.app.state.monitor_bus)
     return {"execution_id": execution_id}
+
+
+@router.get("/executions")
+def list_executions():
+    """Every tracked execution (running, finished, stopped, or errored),
+    oldest first -- what a page reload (or a second tab) can use to find
+    a run's execution_id again when nothing client-side remembers it,
+    specifically so /run/{execution_id}/stop is still reachable for a
+    graph that's still going. See _ExecutionRegistry.list_all()'s own
+    docstring."""
+    return {"executions": _registry.list_all()}
 
 
 @router.get("/run/{execution_id}")

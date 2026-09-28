@@ -47,6 +47,7 @@ import torch
 from nodes.core import ExecutionContext
 from nodes.memory.control_handle import BudgetedResourceControlHandle, ResourceControlHandle
 from nodes.model.handle import TrainableModel
+from nodes.model.text_encoder_cache import CachingTextEncoder
 from nodes.model.trainer_parameters import TrainerParametersNode
 from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
 from nodes.optimizer.handle import FusedOptimizerHandle, OptimizerHandle
@@ -144,10 +145,28 @@ class _FakeModel(TrainableModel):
 class _FakeTextEncoder:
     def __init__(self, events: list):
         self._events = events
+        self.prompt_encodes = 0
+        self.unloaded = False
 
     def encode(self, prompt, batch_size, height, width):
         self._events.append("encode")
         return torch.zeros(batch_size, 1, 4), torch.zeros(batch_size, 4)
+
+    def encode_prompt_only(self, prompt, batch_size):
+        # Reached only through a CachingTextEncoder's cache-miss path --
+        # the two halves below are what prewarm warms and what a
+        # step-time cache hit skips entirely.
+        self._events.append("encode_prompt_only")
+        self.prompt_encodes += 1
+        return torch.zeros(batch_size, 1, 4), torch.zeros(batch_size, 4)
+
+    def resolution_embedding(self, height, width, batch_size):
+        self._events.append("resolution_embedding")
+        return torch.zeros(batch_size, 2)
+
+    def unload(self):
+        self._events.append("unload")
+        self.unloaded = True
 
     def footprint_bytes(self):
         return 0
@@ -209,6 +228,22 @@ def _make_optimizer_class(base):
 
 _FakeOptimizer = _make_optimizer_class(OptimizerHandle)
 _FakeFusedOptimizer = _make_optimizer_class(FusedOptimizerHandle)
+
+
+class _FiniteEpoch:
+    """Finite per iteration (one pass = two batches), re-iterable --
+    the shape ManagedDatasetSourceNode's real output has, and what
+    prewarm_text_encoder's full-dataset discovery pass assumes.
+    Deliberately not _FiniteBatches (smoke_test_trainer_cancellation's),
+    which yields forever per iter() and would hang any full pass.
+    Two distinct prompts -> two unique (prompt, batch_size, h, w) keys
+    at identical resolution -> one shared resolution-cache entry."""
+
+    def __iter__(self):
+        yield {"x_t": torch.randn(2, 4, 4, 4), "target": torch.randn(2, 4, 4, 4),
+               "t": torch.tensor([500, 500]), "prompt": "a"}
+        yield {"x_t": torch.randn(2, 4, 4, 4), "target": torch.randn(2, 4, 4, 4),
+               "t": torch.tensor([500, 500]), "prompt": "b"}
 
 
 def _run(optimizer, events) -> dict:
@@ -464,6 +499,68 @@ def check_step_timing_off_by_default_and_on_when_requested():
             os.environ["TRAIN_STEP_TIMING"] = original
 
 
+def check_prewarm_text_encoder_warms_unloads_and_skips_ensure_loaded():
+    print("[prewarm_text_encoder: wraps clip in a cache sized to the dataset, warms "
+          "every key from the same batches object, unloads the encoder, and the "
+          "encode phase stops forcing ensure_loaded]")
+
+    # Part 1: fresh wrap (no cache_text_encoder set on the config node).
+    events = []
+    node = ManagedLoRATrainerNode()
+    node.context = ExecutionContext()
+    model = _FakeModel(events)
+    inner = _FakeTextEncoder(events)
+    trainer = SimpleNamespace(unet=model, clip=inner)
+    rc = _FakeResourceControl(events)
+    result = node.build(
+        trainer=trainer, batches=_FiniteEpoch(), optimizer=_FakeOptimizer(events),
+        lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+        steps=2, resource_control=rc, prewarm_text_encoder=True)
+    check(result["model"] is model, "must return the exact unet instance")
+    check(isinstance(trainer.clip, CachingTextEncoder),
+          "fresh wrap expected when cache_text_encoder wasn't set")
+    check(trainer.clip._resource_control is rc,
+          "the freshly built cache must be bound to the training handle")
+    check(trainer.clip._max_entries >= 2,
+          "cache must be sized to the dataset's key count so the warm pass can't evict itself")
+    check(inner.unloaded, "encoder must be unloaded once the warm pass completes")
+    first_step = events.index("before_step:0")
+    step_ensures = [e for e in events[first_step:] if e == "ensure_loaded:text_encoder"]
+    check(not step_ensures,
+          f"no ensure_loaded('text_encoder') may fire during training when prewarmed "
+          f"(would re-upload the just-unloaded encoder); got {step_ensures}")
+    warm_inner = [i for i, e in enumerate(events)
+                  if e in ("encode_prompt_only", "resolution_embedding")]
+    check(warm_inner and max(warm_inner) < first_step,
+          "every inner-encoder call must happen during the warm pass, before step 0")
+    check(inner.prompt_encodes == 2,
+          f"one inner CLIP pass per distinct prompt during warm (2), got {inner.prompt_encodes}")
+    check(len([e for e in events if e == "forward"]) == 2, "both steps must still train")
+
+    # Part 2: an existing wrap (LoRATrainingConfigNode's cache_text_encoder=True
+    # shape) is kept as-is -- not double-wrapped -- and gets its handle late-bound.
+    events2 = []
+    node2 = ManagedLoRATrainerNode()
+    node2.context = ExecutionContext()
+    model2 = _FakeModel(events2)
+    inner2 = _FakeTextEncoder(events2)
+    pre_wrapped = CachingTextEncoder(inner2)
+    trainer2 = SimpleNamespace(unet=model2, clip=pre_wrapped)
+    rc2 = _FakeResourceControl(events2)
+    node2.build(
+        trainer=trainer2, batches=_FiniteEpoch(), optimizer=_FakeOptimizer(events2),
+        lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+        steps=1, resource_control=rc2, prewarm_text_encoder=True)
+    check(trainer2.clip is pre_wrapped, "an existing cache wrap must be kept, not replaced")
+    check(pre_wrapped._resource_control is rc2,
+          "an existing wrap must get the handle late-bound (bind_resource_control)")
+    check(inner2.unloaded, "existing wrap's inner encoder must still be unloaded after warm")
+    first_step2 = events2.index("before_step:0")
+    step_ensures2 = [e for e in events2[first_step2:] if e == "ensure_loaded:text_encoder"]
+    check(not step_ensures2, f"same skip rule applies through an existing wrap; got {step_ensures2}")
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_model_is_registered_non_offloadable_and_never_released()
@@ -473,6 +570,7 @@ def main():
     check_real_optimizer_via_trainer_parameters_node_actually_updates_the_trained_parameter()
     check_profile_prints_residency_lines_at_the_right_moments()
     check_step_timing_off_by_default_and_on_when_requested()
+    check_prewarm_text_encoder_warms_unloads_and_skips_ensure_loaded()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

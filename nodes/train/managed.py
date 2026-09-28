@@ -429,23 +429,41 @@ class EncodeConditioningPhase(ManagedStepPhase):
     controller: AdaptiveResidencyController -- release() only actually
     runs when controller.should_release("text_encoder") says so (False
     during calibration, and after calibration if the measured peak
-    never needed it). ensure_loaded() still runs unconditionally either
-    way -- cheap and safe when nothing was ever offloaded, and correct
+    never needed it). ensure_loaded() runs unconditionally by default
+    -- cheap and safe when nothing was ever offloaded, and correct
     if before_step()'s own reactive check offloaded this for some other
-    reason between calls."""
+    reason between calls.
+
+    ensure_loaded_before_encode=False (set by ManagedLoRATrainerNode's
+    `prewarm_text_encoder` Port) is the one exception to that
+    unconditional rule: when the cache was warmed over the exact keys
+    training will ask for and the encoder unloaded, loading here would
+    re-upload the encoder the prewarm just freed and re-reside it for
+    the rest of the run (or re-offload it next phase, churning per
+    step) -- the exact waste that flag exists to avoid. Correctness
+    survives the skip because CachingTextEncoder only needs the inner
+    encoder for a genuine miss, and the prewarm path binds its
+    resource_control handle precisely so a miss still self-loads
+    (misses outside the warmed set -- dataset changed after warm-up --
+    degrade to slow-and-correct, never wrong). release() below is
+    unchanged and stays correct either way: releasing an already-
+    unloaded resident is that handle's own documented no-op."""
 
     def __init__(self, text_encoder: TextEncoder, resource_control: ResourceControlHandle,
                  controller: "AdaptiveResidencyController",
-                 device_ctx: Optional[DeviceContext] = None, profile: bool = False):
+                 device_ctx: Optional[DeviceContext] = None, profile: bool = False,
+                 ensure_loaded_before_encode: bool = True):
         self._text_encoder = text_encoder
         self._resource_control = resource_control
         self._controller = controller
         self._device_ctx = device_ctx
         self._profile = profile
+        self._ensure_loaded_before_encode = ensure_loaded_before_encode
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
-        self._resource_control.ensure_loaded("text_encoder")
-        self._log("loaded")
+        if self._ensure_loaded_before_encode:
+            self._resource_control.ensure_loaded("text_encoder")
+            self._log("loaded")
         x_t = state.extras["x_t"]
         batch = state.batch
         batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
@@ -757,6 +775,35 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "escalate at all, on top of escalation itself. 0.0 disables it -- the "
                 "original, un-margined comparison.",
         ),
+        "prewarm_text_encoder": Port(
+            name="prewarm_text_encoder", type=bool, required=False, default=False,
+            doc="Off by default. One pass over the *same* `batches` object training "
+                "will consume to discover every (prompt, batch_size, height, width) "
+                "key, encode them all into a CachingTextEncoder wrapped around "
+                "trainer.clip, then unload the encoder entirely -- CLIP's ~1.5GB "
+                "leaves VRAM before calibration and never returns for the rest of the "
+                "run; every subsequent step's encode is a cache hit (which also skips "
+                "the per-step CLIP forward). This is the Resources Controller route's "
+                "entry point for what PrewarmedTextEncoderNode (main route) already "
+                "does -- that route has no encoder graph port to wire it through, "
+                "which is exactly why the Port lives here, where trainer.clip and "
+                "batches coexist (see nodes/model/text_encoder_prewarm.py's own "
+                "docstring). Coordinate with EncodeConditioningPhase: when prewarmed, "
+                "that phase skips its unconditional ensure_loaded('text_encoder') -- "
+                "otherwise the first step would re-upload the encoder just unloaded "
+                "and defeat the whole point -- while a genuine cache miss (dataset "
+                "changed after warm-up) still self-loads through the cache's bound "
+                "resource_control handle, so a miss degrades to a slow correct "
+                "answer, never a wrong one. Composes with LoRATrainingConfigNode's "
+                "`cache_text_encoder` (an existing wrap is kept, its handle "
+                "late-bound; its own max_entries cap then applies to the warm pass) "
+                "-- and without `cache_text_encoder`, this Port *is* what installs "
+                "the cache. Safe to combine with residency escalation: an unloaded "
+                "encoder has 0 footprint, so AdaptiveResidencyController just stops "
+                "considering it (nothing left to release). Requires `batches` to be "
+                "finite per iteration (one pass = one epoch, same as "
+                "ManagedDatasetSourceNode's own output).",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -780,6 +827,29 @@ class ManagedLoRATrainerNode(TrainerNode):
             "calibration_steps", self.INPUTS["calibration_steps"].default)
         residency_safety_margin: float = inputs.get(
             "residency_safety_margin", self.INPUTS["residency_safety_margin"].default)
+        prewarm_text_encoder: bool = inputs.get(
+            "prewarm_text_encoder", self.INPUTS["prewarm_text_encoder"].default)
+
+        # Prewarm step 1/2 -- discover the exact keys and wrap/bind trainer.clip
+        # BEFORE registration below: warming itself (step 2/2, after registration)
+        # takes cache misses on an empty cache, and a miss calls
+        # resource_control.ensure_loaded("text_encoder"), which needs the name
+        # registered first. Discovery needs no encoder at all -- just the batches.
+        prewarm_keys = None
+        if prewarm_text_encoder:
+            from ..model.text_encoder_cache import CachingTextEncoder
+            from ..model.text_encoder_prewarm import discover_dataset_keys
+            prewarm_keys = discover_dataset_keys(batches)
+            if isinstance(text_encoder, CachingTextEncoder):
+                # LoRATrainingConfigNode's cache_text_encoder wrap already in place
+                # -- keep it (its max_entries applies), late-bind the handle it
+                # couldn't have been given at config time.
+                text_encoder.bind_resource_control(resource_control)
+            else:
+                text_encoder = CachingTextEncoder(
+                    text_encoder, max_entries=max(len(prewarm_keys), 1),
+                    resource_control=resource_control)
+                trainer.clip = text_encoder
 
         model.train()
         device = next(iter(model.trainable_parameters())).device
@@ -808,6 +878,13 @@ class ManagedLoRATrainerNode(TrainerNode):
         coordinator.register("optimizer", optimizer)
         coordinator.register("text_encoder", text_encoder)
 
+        if prewarm_keys is not None:
+            # Prewarm step 2/2 -- now that registration is in place (a warm-up
+            # miss's ensure_loaded("text_encoder") is a registered no-op here,
+            # encoder still resident), fill the cache and unload for good.
+            from ..model.text_encoder_prewarm import warm_and_unload
+            warm_and_unload(text_encoder, prewarm_keys)
+
         phases: list[ManagedStepPhase] = [
             FetchBatchPhase(batches),
             PrepareDiffusionInputsPhase(
@@ -818,7 +895,8 @@ class ManagedLoRATrainerNode(TrainerNode):
                     "gate_train_high", self.INPUTS["gate_train_high"].default),
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
             EncodeConditioningPhase(text_encoder, resource_control, controller,
-                                     device_ctx=device_ctx, profile=profile),
+                                     device_ctx=device_ctx, profile=profile,
+                                     ensure_loaded_before_encode=not prewarm_text_encoder),
             ZeroGradPhase(optimizer, lr_schedule, is_fused),
             ForwardPhase(),
             LossPhase(loss_weighting),

@@ -214,6 +214,27 @@ def check_resource_control_called_only_on_miss():
     print("    PASS")
 
 
+def check_bind_resource_control():
+    print("[bind_resource_control: late-binds a handle a wrap couldn't have had "
+          "(config-node cache_text_encoder shape), first handle wins]")
+    inner = _CountingEncoder()
+    cache = CachingTextEncoder(inner)  # no handle -- LoRATrainingConfigNode's wrap
+    control = _RecordingResourceControl()
+    cache.bind_resource_control(control, resource_name="clip")
+    cache.encode("a cat", batch_size=2, height=512, width=512)
+    assert control.ensure_loaded_calls == ["clip", "clip"], (
+        "after binding, misses must load through the late-bound handle, "
+        "under the late-bound resource_name (per half, as above)")
+
+    other = _RecordingResourceControl()
+    cache.bind_resource_control(other)  # already bound -- must be a no-op
+    cache.encode("a dog", batch_size=2, height=512, width=512)  # cold prompt -> miss
+    assert other.ensure_loaded_calls == [], "second bind must not replace the first handle"
+    assert control.ensure_loaded_calls[-2:] == ["clip", "clip"], (
+        "the first-bound handle keeps serving misses after a second bind attempt")
+    print("    PASS")
+
+
 def check_eviction():
     print("[LRU eviction at max_entries, independently per cache]")
     inner = _CountingEncoder()
@@ -286,6 +307,7 @@ def main():
     check_hit_skips_the_real_call()
     check_prompt_and_resolution_caches_are_independent()
     check_resource_control_called_only_on_miss()
+    check_bind_resource_control()
     check_eviction()
     check_move_to_end_on_hit()
     check_unload_and_clear_delegate()

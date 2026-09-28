@@ -19,6 +19,12 @@ driven from the shell, e.g.:
     python scripts/hw_validate.py main --label F_frac50 --dataset 1024 \
         --batch 2 --attn-ckpt-fraction 0.5
 
+    # managed route: prewarm the prompt cache from the training batches
+    # and unload the text encoder for the whole run (floor -1561MB,
+    # peak -1602MB, +10% throughput vs the managed baseline)
+    python scripts/hw_validate.py managed --label M_prewarm \
+        --dataset 1024 --batch 2 --steps 40 --prewarm-text-encoder
+
     # same, but with enable_attention_block_checkpointing() neutered --
     # reproduces the pre-fix "checkpointing only reaches ResBlock" behavior
     HW_DISABLE_ATTENTION_CKPT=1 python scripts/hw_validate.py main \
@@ -255,7 +261,8 @@ def run_managed_route(args, ctx) -> str:
         on_step=args._on_step, profile=args.profile,
         calibration_steps=args.calibration_steps,
         residency_safety_margin=args.safety_margin,
-        empty_cache_every_n_steps=args.empty_cache_every)
+        empty_cache_every_n_steps=args.empty_cache_every,
+        prewarm_text_encoder=args.prewarm_text_encoder)
     return load_stats
 
 
@@ -311,6 +318,10 @@ def main() -> None:
                              "unaffected either way)")
     common.add_argument("--weight-store", default="bf16", choices=["bf16", "nf4"])
     common.add_argument("--cache-text-encoder", action="store_true")
+    common.add_argument("--prewarm-text-encoder", action="store_true",
+                        help="managed route only: warm every (prompt, bs, h, w) key "
+                             "from the training batches into a cache around trainer.clip, "
+                             "then unload the encoder for the whole run")
 
     managed = sub.add_parser("managed", parents=[common])
     managed.add_argument("--calibration-steps", type=int, default=3)

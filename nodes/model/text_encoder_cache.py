@@ -134,6 +134,24 @@ class CachingTextEncoder(TextEncoder):
     def release(self) -> None:
         self._inner.release()
 
+    def bind_resource_control(self, resource_control: ResourceControlHandle,
+                              resource_name: str | None = None) -> None:
+        """Late-bind the handle this class loads its inner encoder
+        through on a cache miss (see this class's own docstring). For a
+        cache built before its handle existed -- e.g.
+        LoRATrainingConfigNode's `cache_text_encoder` wrap, which has
+        no handle to give (it runs before the trainer node's
+        `resource_control` input is anywhere in scope), later bound by
+        ManagedLoRATrainerNode's `prewarm_text_encoder` Port. A no-op
+        when a handle is already bound -- the constructor's own value
+        wins, first one in keeps the slot, same first-wins shape this
+        codebase's other idempotent wiring uses.
+        """
+        if self._resource_control is None:
+            self._resource_control = resource_control
+            if resource_name is not None:
+                self._resource_name = resource_name
+
     def clear_cache(self) -> None:
         self._prompt_cache.clear()
         self._resolution_cache.clear()

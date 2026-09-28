@@ -115,3 +115,31 @@
   itself cheaper or by landing the encoder-only release; density
   tuning and the quantized/offload levers are closed by these
   measurements.
+  **2026-09-28 update (same day, later same session): the encoder-only
+  release landed as `ManagedLoRATrainerNode`'s `prewarm_text_encoder`
+  Port -- the order-by-use-cost change to the controller described
+  above was not needed, because prewarming sidesteps the ordering
+  problem entirely (the encoder is unloaded once at build, before
+  calibration, and never re-uploaded: every later step's encode is a
+  cache hit, misses self-load through the cache's bound handle, and a
+  0-footprint candidate is one AdaptiveResidencyController stops
+  considering). Measured, managed route, batch 2, dataset 1024, 40
+  steps: floor 7,888 -> 6,327 MB allocated at step 0, peak reserved
+  9,268 -> 7,666 MB, throughput 0.716 -> 0.789 steps/sec (+10% --
+  the per-step CLIP forward is gone too). This also confirms the
+  causal story above: with the floor cut applied *before* calibration
+  (which the budget path couldn't do -- it only releases after 3
+  fully-resident calibration steps), density 0.75 now completes,
+  peak 10,922 MB (~300 MB under the wall -- feasible, not
+  comfortable). But it is not a speed win: 0.759 steps/sec vs 0.789
+  at density 1.0, i.e. skipping 25% of attention recompute came out
+  slightly *slower* while adding 3.3 GB of activation residency --
+  recomputing these blocks is cheaper than carrying their
+  activations. Practical verdict unchanged and now stronger: keep
+  density 1.0 (full checkpointing), add prewarm; density tuning stays
+  closed, and the quantized/offload levers stay closed (nothing here
+  rescues them -- they were never blocked on floor). The remaining
+  open question is only whether the ~25% recompute penalty figure
+  measured elsewhere still applies to this operating point, where
+  checkpointing's activation residency costs less than its saved
+  compute.

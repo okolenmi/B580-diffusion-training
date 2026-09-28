@@ -384,3 +384,71 @@ at 1024² (10.76 GiB of 11.93 GiB allocated, zero steps); same run
 with it on: 40/40 steps at 8592 MB peak reserved. So yes, both
 reports' activation-dominance shape has a real lever now, and the
 numbers are in `docs/known-issues/resolved.md`.
+
+## Fourth addendum: `prewarm_text_encoder` -- the text encoder leaves VRAM for good
+
+The reports above counted the text encoder (1561MB) as a permanent
+resident this route carries for the whole run, and the first addendum's
+calibration design then concluded, correctly given what existed at the
+time, that nothing could be done about it cheaply: releasing it meant
+re-uploading it whenever the next encode needed it, and the ordering
+rule (candidates released smallest-footprint-first) meant any pressure
+sufficient to reach the encoder had already dragged the always-needed
+optimizer out with it -- measured at -54% throughput in the 2026-09-28
+floor-lever sweep (`docs/known-issues/open.md`, `--budget 8000`).
+
+What that analysis assumed and never questioned: that the encoder has
+to be *resident* to encode with. It doesn't -- `CachingTextEncoder`
+(`nodes/model/text_encoder_cache.py`) only touches its inner encoder on
+a genuine cache miss, and `PrewarmedTextEncoderNode`
+(`nodes/model/text_encoder_prewarm.py`, main route only -- its `encoder`
+input is unwirable here since this route never exposes `trainer.clip`
+as a graph port) showed the rest of the shape: discover every
+(prompt, batch_size, height, width) key the dataset will ever request,
+encode them once, `unload()` the encoder forever. What was missing was
+an entry point where clip and batches coexist, and a step pipeline that
+wouldn't immediately undo it.
+
+Both landed 2026-09-28 as `ManagedLoRATrainerNode`'s
+`prewarm_text_encoder` Port (default `False`):
+
+- **Build order matters twice.** Discovery + wrap/bind happen before
+  `resource_control.register("text_encoder", ...)` (discovery reads
+  only `batches`, no encoder, no handle); the warm pass itself happens
+  *after* registration, because warming an empty cache takes misses and
+  each miss calls `ensure_loaded("text_encoder")`, which needs the name
+  registered first. Fresh wrap sizes `max_entries` to the discovered
+  key count so the warm pass can't evict itself; an existing
+  `cache_text_encoder` wrap is kept and gets its handle late-bound via
+  `CachingTextEncoder.bind_resource_control()` (LoRATrainingConfigNode
+  runs before `resource_control` is anywhere in scope, so that wrap
+  can't have had one).
+- **The pipeline had to cooperate.** `EncodeConditioningPhase` called
+  `ensure_loaded("text_encoder")` unconditionally before every encode --
+  correct for every case that existed (releasable, resident, frozen),
+  and exactly wrong here: it would re-upload the encoder the prewarm
+  just freed and re-reside it for the rest of the run (or re-offload it
+  every step, churning per step under a tight budget). The Port passes
+  `ensure_loaded_before_encode=False`; a genuine miss (dataset changed
+  after warm-up) still self-loads through the cache's bound handle, so
+  the degradation path is slow-and-correct, never wrong, and
+  `release()` stays a no-op for an already-unloaded resident.
+- **Measured** (managed route, batch 2, dataset 1024, 40 steps,
+  budget 11500): floor 7888 -> 6327 MB allocated at step 0, peak
+  reserved 9268 -> 7666 MB, throughput 0.716 -> 0.789 steps/sec
+  (+10%: the per-step CLIP forward is gone too), loss curve healthy.
+  The controller's calibration now measures a peak that already
+  excludes the encoder, and a 0-footprint candidate is one it stops
+  considering -- no ordering change to `AdaptiveResidencyController`
+  was needed after all.
+- **It also unblocked the fraction sweep, and settled it.** With the
+  floor cut applied *before* calibration (the budget path could only
+  release after 3 fully-resident calibration steps, so it never got the
+  chance -- `M_frac75low` OOM'd during calibration), density 0.75
+  completes: 40/40 steps, peak 10922 MB, ~300 MB under the wall. It is
+  not a speed win, though -- 0.759 vs 0.789 steps/sec at density 1.0:
+  skipping 25% of attention-block recompute came out slightly slower
+  while adding 3.3GB of activation residency. Recomputing these blocks
+  is cheaper than carrying their activations. Density 1.0 (full
+  checkpointing) + prewarm is the configuration that wins on both axes,
+  and the full numbers live in `docs/known-issues/open.md`.

@@ -230,11 +230,22 @@ still guards a second call). Exposed as `scripts/hw_validate.py`'s
 `--attn-ckpt-fraction` for the VRAM-vs-recompute sweep. Measured at
 1024x1024/batch 2 on the B580: density 1.0 fits (9268 MB peak reserved),
 but 0.75 and 0.5 both OOM on step 0 (~10.7 GiB allocated mid-forward),
-and 0.75 still OOMs on the managed route with the floor released to
-~6.3 GB -- the release happens *after* calibration, and calibration
-already runs fully resident. At that operating point the choice is
-binary: all attention blocks checkpointed, or OOM. Full numbers and the
-measured floor-lever costs are in `docs/known-issues/open.md`.
+and 0.75 still OOMs on the managed route with a budget-forced floor
+release -- that release only happens *after* calibration, and
+calibration already runs fully resident. With
+`ManagedLoRATrainerNode`'s `prewarm_text_encoder` Port (which unloads
+the 1561 MB text encoder *before* calibration -- see the fourth
+addendum in
+`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`)
+the freed floor does make density 0.75
+complete: 40/40 steps, 10922 MB peak, ~300 MB under the wall -- but at
+0.759 steps/sec against density 1.0's 0.789 while adding 3.3 GB of
+activation residency. Skipping 25% of attention recompute is a net
+*loss*: recomputing these blocks is cheaper than carrying their
+activations. The knob is real and honored, but at this operating point
+the practical recommendation is the default (density 1.0). Full
+numbers and the measured floor-lever costs are in
+`docs/known-issues/open.md`.
 
 **Not wired into `ComfyUNetLoRANode`'s real construction path** (unlike
 `AdapterStrategy`'s seam, now live-wired -- see 3.1): real, tested,

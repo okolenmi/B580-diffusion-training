@@ -134,12 +134,20 @@ def check_unknown_key_degrades_not_breaks():
     encoder = result["encoder"]
     prompt_calls_before = len(inner.prompt_calls)
     resolution_calls_before = len(inner.resolution_calls)
-    ctx, y = encoder.encode("a completely different prompt", 3, 512, 512)
+    # batch_size=1 here, matching _batch("x", 1, ...)'s own warmed batch_size
+    # -- resolution_key is (height, width, batch_size), so this is what
+    # actually exercises "new prompt, already-warmed resolution" the way
+    # this check's own name says it does. An earlier version of this
+    # check used batch_size=3, making the resolution key (512, 512, 3) --
+    # genuinely new, not a repeat of the warmed (512, 512, 1) -- so its
+    # own assertion below was checking something that hadn't happened;
+    # caught only by running this file with real torch, not by reading it.
+    ctx, y = encoder.encode("a completely different prompt", 1, 512, 512)
     assert len(inner.prompt_calls) == prompt_calls_before + 1, \
         "an uncached prompt must still be served, via the unloaded encoder"
     assert len(inner.resolution_calls) == resolution_calls_before, \
-        "512x512 was already warmed -- this new prompt shouldn't need a new resolution embed"
-    assert ctx.shape == (3, 2)
+        "512x512 at batch_size=1 was already warmed -- this new prompt shouldn't need a new resolution embed"
+    assert ctx.shape == (1, 2)
     print("    PASS: falls back to a real (if now CPU-side) call rather than failing")
 
 

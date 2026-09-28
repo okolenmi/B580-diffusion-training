@@ -22,6 +22,19 @@ itself still matches ComfyUI's current source layout, which needs
 confirming on a machine with ComfyUI installed (same disclosed limit as
 the other smoke test).
 
+Any check that actually runs backward() through a frozen `base`
+parameter also calls the real nodes.model.gradient_checkpointing.
+enable_frozen_param_safe_checkpointing() first, on the same fresh stub
+-- attention_checkpointing.py's own patch only makes BasicTransformerBlock
+route through checkpoint()/CheckpointFunction, it was never meant to
+also fix the stock CheckpointFunction's own frozen-parameter crash (that's
+gradient_checkpointing.py's job, and production always installs both
+together via FrozenParamSafeCheckpointing.apply()). A version of this
+file that skipped that composition once got exactly the crash
+check_stock_version_reproduces_the_documented_crash below deliberately
+provokes, for the wrong reason -- caught only by actually running this
+file with real torch, not by reading it.
+
 Each check gets its own fresh stub `BasicTransformerBlock` class (a
 distinct dynamic subclass per _install_stub_comfy_attention_module()
 call, not one shared class reused across checks) specifically so
@@ -173,6 +186,17 @@ def check_patched_version_matches_unchecked_reference():
           "including gradient into a trainable context]")
     _install_stub_comfy_checkpoint_module()
     attn = _install_stub_comfy_attention_module()
+    # Production always installs both together (gradient_checkpointing.py's
+    # FrozenParamSafeCheckpointing.apply() calls this one first, then
+    # enable_attention_block_checkpointing()) -- a block with a frozen
+    # `base` parameter needs the frozen-param-safe CheckpointFunction the
+    # same way ResBlock does; without it this reproduces the same "does
+    # not require grad" crash check_stock_version_reproduces_the_documented_crash
+    # above deliberately provokes, just for the wrong reason (this test's
+    # own setup, not the real patch) -- caught by running this file for
+    # real, not something the earlier compile-only check could catch.
+    from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    enable_frozen_param_safe_checkpointing()
     from nodes.model.attention_checkpointing import enable_attention_block_checkpointing
     enable_attention_block_checkpointing()
 
@@ -216,6 +240,8 @@ def check_context_none_does_not_crash():
     print("[context=None (self-attention-only block) takes the single-input branch cleanly]")
     _install_stub_comfy_checkpoint_module()
     attn = _install_stub_comfy_attention_module()
+    from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    enable_frozen_param_safe_checkpointing()
     from nodes.model.attention_checkpointing import enable_attention_block_checkpointing
     enable_attention_block_checkpointing()
 

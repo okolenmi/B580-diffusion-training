@@ -201,14 +201,33 @@ def check_cache_text_encoder_wraps_clip_and_defaults_off():
     from nodes.model.text_encoder import TextEncoder
     from nodes.model.text_encoder_cache import CachingTextEncoder
 
+    # _Recorder (mocks ComfyUNetWrapper) the same way every other check in
+    # this file that reaches node.build() already does -- this file's own
+    # module-level _install_stub_comfy_checkpoint_module() stubs just
+    # enough of comfy for the checkpointing patches themselves to install
+    # against, not a working comfy.ldm.modules.diffusionmodules.openaimodel
+    # a real (unmocked) ComfyUNetWrapper needs to actually construct. An
+    # earlier version of this check skipped _Recorder -- the only one in
+    # this file to -- and failed for exactly that reason the first time
+    # this file ran against real torch.
     resources = _build_real_resources()
     node = LoRATrainingConfigNode()
-    trainer = node.build(resources=resources)["trainer"]
+    rec = _Recorder()
+    rec.install()
+    try:
+        trainer = node.build(resources=resources)["trainer"]
+    finally:
+        rec.uninstall()
     check(isinstance(trainer.clip, TextEncoder) and not isinstance(trainer.clip, CachingTextEncoder),
           f"expected the plain encoder by default, got {type(trainer.clip).__name__}")
 
     resources2 = _build_real_resources()
-    trainer2 = node.build(resources=resources2, cache_text_encoder=True)["trainer"]
+    rec2 = _Recorder()
+    rec2.install()
+    try:
+        trainer2 = node.build(resources=resources2, cache_text_encoder=True)["trainer"]
+    finally:
+        rec2.uninstall()
     check(isinstance(trainer2.clip, CachingTextEncoder),
           f"expected trainer.clip wrapped in CachingTextEncoder, got {type(trainer2.clip).__name__}")
     print("    PASS")

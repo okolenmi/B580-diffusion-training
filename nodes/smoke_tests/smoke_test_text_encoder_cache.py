@@ -122,8 +122,16 @@ def check_hit_skips_the_real_call():
     assert (inner.prompt_calls, inner.resolution_calls) == (2, 2), \
         "a different batch_size changes both keys -- both halves must re-call"
     cache.encode("a dog", batch_size=2, height=512, width=512)
-    assert (inner.prompt_calls, inner.resolution_calls) == (3, 3)
-    print("    PASS: any differing key element forces a real call")
+    # NOT (3, 3): resolution_key (512, 512, 2) was already cached by the
+    # very first call above -- "a dog" at batch_size=2 is a new prompt but
+    # a repeat resolution, so only prompt_calls should move. Getting this
+    # wrong (asserting (3, 3) here) was this test's own bug the first time
+    # it ran against real torch, not a production one -- the real
+    # CachingTextEncoder was already reusing the resolution embedding
+    # correctly; this assertion just hadn't accounted for it.
+    assert (inner.prompt_calls, inner.resolution_calls) == (3, 2), \
+        f"got {(inner.prompt_calls, inner.resolution_calls)}"
+    print("    PASS: prompt cache and resolution cache miss/hit independently, as designed")
 
 
 def check_prompt_and_resolution_caches_are_independent():

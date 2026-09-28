@@ -28,3 +28,37 @@
   a confirmed diagnosis here. Not investigated further this session --
   out of scope for `nodes/`-only work, and needs `core/trainer.py`,
   which `nodes/` doesn't touch.
+  **2026-09-28 update (hardware now available):** the *rewrite's own*
+  offload path -- a different codebase from the legacy `core/trainer.py`
+  implicated here -- was exercised under real, sustained VRAM pressure
+  (30 steps at `vram_budget_mb=2500` against ~8114 MB actual usage,
+  offload taken every step) with no hang and no device-lost
+  (`scripts/hw_validate.py`, label `C_pressure`; see the confirmed
+  entry in [`resolved.md`](resolved.md)). That says the `nodes/`
+  `synchronize()` hardening behaves under pressure; it says nothing
+  about the legacy path this entry is about, which still has never been
+  run under pressure since this report. What *has* been run now: a
+  plain health check of the legacy CLI route on this hardware
+  (2026-09-28 -- 100 steps on `datasets/test` via `convert.py` with
+  `runs/hw_validation/legacy_check.toml`: 100/100 steps, ~794 ms/step,
+  clean LoRA save, no hang or device-lost) -- a healthy baseline, but
+  not the pressure-plus-preview-decode trigger this entry describes.
+  **VRAM numbers from that run, corrected (the earlier version of this
+  note said "reserved flat at ~6034 MB", which understated real
+  consumption):** the card actually sat at **~11.4 of 12.2 GB used**
+  (user's own monitoring and a cross-process `torch.xpu.mem_get_info`
+  query agree), i.e. only ~450-800 MB headroom -- directly relevant to
+  a hang-under-pressure report. The ~6034 MB figure was real but a
+  different quantity: every training-loop `[vram]` snapshot was taken
+  *after* `xpu_empty_cache()` in the maintenance block, which collapses
+  reserved to roughly allocated (steady reserved during training is
+  ~9942 MB; the allocator keeps a ~4.3 GB free-block pool above live
+  5624 MB tensors, plus ~900 MB desktop baseline and context overhead,
+  which reconciles exactly with the 11.4 GB driver total). The snapshot
+  order was fixed the same day (see the confirmed entry in
+  [`resolved.md`](resolved.md)). Note the
+  CLI run couldn't exercise previews at all: `core/trainer.py` skips
+  preview generation without a server `run_id`, so previews only fire
+  on server-launched runs. The legacy-path repro (training
+  under pressure through preview generation's VAE decode, the reported
+  trigger) remains the next concrete step here.

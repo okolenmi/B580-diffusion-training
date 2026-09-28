@@ -147,6 +147,7 @@ class Trainer:
             teacher_sd = load_file(self.config.paths.base_model)
             self.teacher_unet_sd = {k: v for k, v in teacher_sd.items() if self._is_unet(k)}
             self.non_unet = {k: v for k, v in teacher_sd.items() if not self._is_unet(k)}
+            vram_snapshot("checkpoint file in RAM (host)")
         elif self.config.common.data_source == "teacher":
             raise ValueError("No base model path provided in config (paths.base_model), but data_source='teacher' requires it.")
 
@@ -215,6 +216,7 @@ class Trainer:
                     # This is a problem for LoRA if we don't have ANY base weights
                     raise ValueError("LoRA training requires a base model (paths.teacher or paths.student) to initialize weights.")
 
+        vram_snapshot("after [1/4] load_models (weights staged in RAM)")
         gc.collect()
         return self
 
@@ -558,6 +560,7 @@ class Trainer:
         del full_teacher_sd, _clip_sd
         xpu_empty_cache()
         gc.collect()
+        vram_snapshot("after [3/4] model+encoder init")
 
         if self._lora_unified_teacher and self.optimizer is None:
             # Defensive fallback: the only real entry point (cli.py) already
@@ -574,6 +577,7 @@ class Trainer:
             self.build_optimizer()
 
         print(f"[4/4] Training {self.run_steps} steps in {total_cycles} cycles...")
+        vram_snapshot("training loop entry (before step 1)")
         cycle_idx = 0
         try:
             while global_step < self.total_steps:
@@ -797,6 +801,7 @@ class Trainer:
         if hasattr(self.optimizer, "reload_states_to_device"):
             print("    Reloading optimizer states onto device...")
             self.optimizer.reload_states_to_device(self.device)
+            vram_snapshot("after optimizer states on device")
 
         if self._is_cyclic and hasattr(self.optimizer, "decay_states"):
             decay = self.tuning.cycle_state_decay

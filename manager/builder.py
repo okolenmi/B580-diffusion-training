@@ -513,8 +513,10 @@ class DataTaskRunner:
         (manager/loader.py's ManagedDatasetLoader, gated on this
         trajectory's metadata["format"] == "lora_raw") -- standard practice
         (kohya-ss/diffusers/OneTrainer all do this), and specifically avoids
-        the fixed-grid regularity documented in
-        docs/dataset_renoising_and_clip_prewarm.md. Also simpler and faster
+        fixed-grid regularity: one timestep/noise grid computed once at
+        ingestion and reused for every image (a real bug in the older
+        run_ingestion_task path -- the user caught that "sampled" wasn't
+        sampled at all). Also simpler and faster
         to ingest: one VAE encode per image, no noise loop, no eps/vpred
         target computation, no cond/uncond dual-pass bookkeeping.
 

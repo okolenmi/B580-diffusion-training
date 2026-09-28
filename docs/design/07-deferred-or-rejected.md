@@ -64,6 +64,20 @@ just "future work":
   factored optimizers for a LoRA-sized parameter count, so the marginal
   win from further quantizing an already-small state is real but smaller
   than where the actual VRAM mass is (the frozen base, 3.3).
+  **Update: this one was later shipped anyway**, as the separate
+  `state_precision` port (`Int8BlockStateStore`,
+  `nodes/optimizer/state_store.py`) -- born in design section 11.3
+  (`docs/design/10-node-surface-and-precision-control.md`), living on the
+  `Composed*` optimizer nodes alongside `strategy`/`device` (that's also
+  why the Resources Controller's own precision work explicitly did *not*
+  absorb it -- `docs/design/resources-controller/08-consolidation.md`),
+  and verified end-to-end as a dequantize-around-an-unchanged-Algorithm
+  design (see `docs/status/progress.md`'s 8-bit item). The rejection
+  here still holds for what it rejected -- a quantized-`Algorithm`
+  variant -- and the "smaller win than the frozen base" sizing was
+  never wrong; both notes are kept rather than deleting this entry,
+  since "why did section 7 reject something the codebase now has" is
+  exactly the question a reader of this file will ask.
 - **A second event bus for `OffloadOrchestrator`.** Reused `MonitorBus`'s
   existing shape (5.2) instead of inventing a parallel one -- two pub/sub
   systems in one codebase for two similar-but-different purposes would be

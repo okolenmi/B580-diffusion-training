@@ -2,6 +2,152 @@
 
 # Resolved
 
+All five entries below were moved here from
+[`pending-testing.md`](pending-testing.md) after being run on real
+hardware on 2026-09-28 (Intel Arc B580, 12 GB, torch 2.12.1+xpu), via
+`scripts/hw_validate.py` / `scripts/hw_validation_batch.sh` -- each
+entry's "Confirmed" paragraph carries the measured result. (The
+topmost entry is a different provenance: a user-reported wrong number
+in this project's own documentation, investigated and corrected on
+hardware the same day.)
+
+- **[2026-09-28] User-reported wrong VRAM figure in this project's docs
+  ("reserved flat at ~6034 MB" for the legacy health check) -- the
+  report was right: real consumption was ~11.4/12.2 GB, and the
+  misleading number was a snapshot-ordering artifact, now fixed.**
+  Investigation (legacy `convert.py`, `runs/hw_validation/legacy_check.toml`,
+  instrumented phase snapshots + tensor census + a cross-process
+  `torch.xpu.mem_get_info` monitor): steady state during training is
+  **reserved 9942 MB, live tensors ("allocated" and an independent
+  `gc`-based census, matching to 0.6 MB) 5624 MB, external driver total
+  ~11406 MB** -- which reconciles exactly (allocator free-block pool
+  ~4.3 GB + ~900 MB desktop baseline + context overhead), and matches
+  both the user's own monitoring (11.4/11.9 GB) and the cross-process
+  query. The ~6034 MB in the docs came from `core/train_step.py`'s
+  maintenance block running `xpu_empty_cache()` *before* the
+  `[vram]` snapshot every 250 micro-steps: `empty_cache()` collapses
+  reserved to roughly allocated, so every snapshot the docs quoted was
+  a post-free reading ~3.9 GB below steady state. Fix: the block now
+  snapshots before the maintenance (labelled `pre-maintenance`) and
+  again after (labelled `post-empty_cache`), so the reported reserved
+  is the real device-relevant number and the drop is still observable.
+  Ruled out along the way (each measured, not assumed): torch's
+  allocator stats and the census agree everywhere tested (no
+  under-counting by torch); the external reading is genuine device
+  memory (host-RAM and pinned-memory injections don't move it);
+  the earlier "5.6 GB hidden outside torch" reading was entirely the
+  post-`empty_cache` artifact. Also cross-checked that the numbers in
+  this file's `pending-testing` entries were *not* affected: those are
+  `peak_reserved` values, and an independent driver-level rerun of
+  `A_after` (`A_after_mon`) peaked at 10140 MB external ≈ 8592 MB
+  reserved + ~950 MB desktop + overhead -- consistent. Side finding,
+  tracked in [`deferred.md`](deferred.md): `torch.xpu`'s
+  `pin_memory()` does not actually lock pages on this build.
+
+- **[2026-08, confirmed 2026-09-28] VRAM ratchet on non-square
+  datasets -- `max_aspect_ratio` cap confirmed bounded on real
+  hardware.** Original diagnosis (unchanged, at the time of the move
+  this was the newest of the five and the only one whose fix predated
+  the run): the hypothesis that this was allocator fragmentation tested
+  wrong (`num_alloc_retries` 0, flat on uniform datasets), and real
+  per-phase capture found the actual mechanism -- `resize_mode="fit"`
+  with no cap on the long side pushed genuinely larger tensors through
+  exactly one phase boundary (`forward`), the allocator grabbed a
+  bigger reserved block, and kept it permanently (+560 MB in one step).
+  Fix: `manager/builder.py`'s `run_lora_ingestion_task`'s
+  `max_aspect_ratio` parameter (default `2.0`) splits over-long
+  "fit"-resized images into multiple same-caption crops, wired through
+  the ingestion UI. **Confirmed:** `datasets/non-square` was
+  re-ingested with the cap (its `sources.config` records
+  `"max_aspect_ratio": 1.5`), then a 60-step main-route run on it
+  (label `B_ratchet`, genuinely variable resolutions -- latents from
+  48x64 to 96x64, both orientations, 273 samples) came back bounded:
+  per-step reserved first 8104 MB, last 8168 MB, total drift 64 MB,
+  **max single-step jump +40 MB** (vs the pre-fix +560 MB permanent
+  jump). No ratchet.
+
+- **[2026-09, confirmed 2026-09-28] attention-block checkpointing
+  (`nodes/model/attention_checkpointing.py`) -- before/after on real
+  hardware, and the "before" is an outright OOM.** The fix makes
+  `use_checkpoint=True` actually reach SDXL's
+  `BasicTransformerBlock` stacks (ComfyUI's
+  `BasicTransformerBlock.__init__` never assigns its `checkpoint`
+  argument, so only `ResBlock` was ever checkpointed -- see the
+  original entry's root-cause work in git history for this file's
+  pre-move version). **Confirmed:** two identical main-route runs on
+  the uniform 1024-dataset (40 steps, rank 64, budget 11500), differing
+  only in whether `enable_attention_block_checkpointing()` was
+  active: with the patch (`A_after`) -- 40/40 steps, per-step peak
+  reserved **8592 MB**, 0.943 steps/sec; with it neutered to
+  reproduce the pre-fix ResBlock-only behavior (`A_before`) -- hard
+  `torch.OutOfMemoryError` on the **first forward pass** (10.76 GiB
+  allocated of 11.93 GiB total, zero steps completed). So this wasn't
+  a marginal activation reduction: 1024² at batch 1 is simply not
+  trainable on this 12 GB card without it, which is the same
+  activation-dominance shape as the two OOM reports that motivated
+  the fix.
+
+- **[2026-09-20, confirmed 2026-09-28] `BudgetedResourceControlHandle`'s
+  `synchronize()` / `strict` / `release()` hardening -- exercised under
+  real VRAM pressure, both outcomes as designed.** (Original entry:
+  defensive hardening motivated by the open "Device lost" report,
+  previously verified only against a scripted fake `DeviceContext` in
+  `smoke_test_resource_control_strict.py`.) **Confirmed:** two
+  identical main-route runs at `vram_budget_mb=2500` against actual
+  ~8114 MB usage on the `1image` dataset: non-strict (`C_pressure`)
+  -- 30/30 steps, no hang, no device-lost, the offload path taken
+  every step (allocated dropped 7886 → 6325 MB after the first offload
+  and held there -- text encoder offloaded, allocator kept its
+  reservation, exactly the accounted-for behavior); strict
+  (`C_strict`) -- raised precisely as designed: *"7538MB reserved
+  still exceeds the 1988MB usable budget (2500MB minus 512MB reserve)
+  after offloading every resident registered as offloadable"*. The
+  same run also exercised `SDXLTextEncoder.offload()`/`reload()`
+  under real pressure every step (via the caching wrapper), covering
+  that companion fix from the same session. **Scope caveat kept from
+  the original entry:** this exercises the `nodes/` rewrite's offload
+  path, not the legacy `core/trainer.py` path the open "Device lost"
+  report is about -- that relationship stays unconfirmed (see
+  [`open.md`](open.md)).
+
+- **[2026-09-20, confirmed 2026-09-28] `AdaptiveResidencyController`
+  perf regression (managed route ~4.7x slower than main) -- fixed on
+  the hardware that produced the report.** Original report: 0.36 vs
+  ~1.7 steps/sec (managed vs main), against a stated 12500 MB budget
+  where offloading was never necessary. **Confirmed:** post-fix, two
+  identical runs (uniform 1024-dataset, 40 steps, rank 64, budget
+  11500, AdamW, attention checkpointing on) differing only in trainer
+  node: managed (`D_managed`) **0.897 steps/sec** vs main
+  (`A_after`) **0.943 steps/sec** -- managed at 95% of main-route
+  speed (was ~21%), identical per-step peak reserved (8592 MB both).
+  The residency controller calibrated (measured peak 8592 MB over 3
+  calibration steps, usable 9889 MB) and correctly stayed fully
+  resident. The still-open costs listed in
+  `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`
+  (no text-encoder caching on this route, no pinned host memory) are
+  now the measured ~5% gap's plausible homes, not a 4.7x mystery.
+
+- **[2026-09-20, confirmed 2026-09-28] `AdaptiveResidencyController`'s
+  ongoing escalation + `residency_safety_margin` -- the OOM on the
+  variable-resolution dataset is gone.** Original report: calibration
+  sampled only smaller images, "stay resident" locked in before the
+  worst case was measured, and a run then OOM'd at 10218 MB reserved
+  on `datasets/non-square`. **Confirmed:** post-fix run on that same
+  dataset (`E_managed_nonsq`, 60 steps, budget 8000 MB -- i.e. usable
+  6739 MB after reserve + 10% margin, deliberately below what the run
+  would use): calibration measured 8036 MB > usable, controller
+  escalated ("releasing optimizer, text_encoder"), and the run
+  finished **60/60 steps with no OOM**, per-step peak max 8036 MB.
+  Escalation's "next occurrence, not this one" limit was acceptable
+  in practice across 60 genuinely variable-resolution steps. The run
+  also put a number on the *disclosed, still-open* limit: releasing
+  residents could not bring reserved anywhere near the 6739 MB budget
+  (model 4897 MB + activations dominate; reserved settled ~8000 MB),
+  confirming that release-based escalation cannot budget-fit an
+  activation-dominant run -- the lever for that remains activation
+  checkpointing (the attention-block entry above is now wired and
+  confirmed; full activation management is still the backlog item).
+
 - **[2026-09] `core.optimizers.ChunkedXPUAdafactor`/`FusedXPUAdafactor`
   silently corrupted their own momentum buffer for float32 parameters
   with `beta1` (momentum) set.** `g = self.exp_avg[i]` aliased the

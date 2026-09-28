@@ -12,7 +12,13 @@ phase, not a style preference.
 
 **Status: done, verified against a focused smoke-test run (not the
 full suite -- see "Verified" below for which tests and why only
-those), not yet run on real hardware.**
+those). Update 2026-09-28: also run on real hardware (Arc B580) --
+the addendum's perf regression confirmed fixed (managed 0.897 vs main
+0.943 steps/sec, identical settings), strict/synchronize confirmed
+under real budget pressure, escalation confirmed on the
+variable-resolution dataset with no OOM; measured numbers in
+`docs/known-issues/resolved.md` (moved there from
+`docs/known-issues/pending-testing.md`).**
 
 ### First attempt, reverted
 
@@ -148,7 +154,10 @@ full reasoning, unaffected by the revert above):
    offload point `docs/known-issues/open.md`'s "device lost"/hang
    report names as a real trigger. A plausible root-cause *shape*, not
    a confirmed diagnosis -- see that file's own entry and
-   `docs/known-issues/pending-testing.md`'s new one.
+   `docs/known-issues/resolved.md`'s confirmed control-handle entry
+   (2026-09-28: the `nodes/` offload path itself survived 30 steps of
+   real sustained pressure without a hang; the legacy path in that
+   report still unexercised).
 
 ### Verified
 
@@ -361,13 +370,17 @@ this route's own construction path (`LoRATrainingConfigNode.build()` ->
 `SDXL_LoraTrainer.from_resources()`) overrides it, so gradient
 checkpointing was, in that narrow sense, already active for both
 reports above. It just wasn't doing much: `docs/known-issues/
-pending-testing.md`'s `[2026-09]` entry has the full story --
+resolved.md`'s confirmed `[2026-09]` entry has the full story --
 `BasicTransformerBlock.forward()` never actually called `checkpoint()`
 in ComfyUI's own implementation, so `use_checkpoint=True` only ever
 checkpointed `ResBlock`, a minority of SDXL's UNet next to its
 attention-heavy `BasicTransformerBlock` stacks. That's almost certainly
 why activation memory stayed ~half of reserved VRAM in both reports
 above despite checkpointing nominally being on. `nodes/model/
-attention_checkpointing.py` closes that gap; not yet confirmed this
-actually pulls either of the two real reports above under budget --
-needs a real before/after run to know by how much.
+attention_checkpointing.py` closes that gap; confirmed on real
+hardware 2026-09-28 with the before/after this sentence asked for --
+same run with the patch neutered: hard OOM on the first forward pass
+at 1024² (10.76 GiB of 11.93 GiB allocated, zero steps); same run
+with it on: 40/40 steps at 8592 MB peak reserved. So yes, both
+reports' activation-dominance shape has a real lever now, and the
+numbers are in `docs/known-issues/resolved.md`.

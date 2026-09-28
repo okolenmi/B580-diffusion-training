@@ -39,7 +39,9 @@ the fallback for a domain nobody's rewritten yet, not a destination.
 
 ```
 convert.py            Legacy CLI entry point (see docs/setup.md)
-convert-cfg.toml       An example/real TOML config for convert.py
+convert-cfg.example.toml Template config for convert.py (copy to
+                        convert-cfg.toml, which is gitignored --
+                        it's machine-specific)
 paths.py               Single source of truth for path resolution
                         (COMFY_DIR, VENV_PYTHON, dataset/model paths).
                         Both pipelines read this.
@@ -86,9 +88,9 @@ docs/                  This folder. See the root README.md's map for
 
 ## Design principles, in short
 
-Full statement and reasoning:
-`docs/design/01-design-goals-and-constraints.md`, and the root `README.md`'s
-"Goals" section for the condensed list. The one worth internalizing
+Full statement and reasoning: the root `README.md`'s "Goals" section
+(the seven constraints every design choice here is checked against).
+The one worth internalizing
 before touching `nodes/` code: **a `Builder` (construction-time,
 config-in/runtime-object-out) is a different kind of thing from a
 runtime object (real state, called every training step)** -- collapsing

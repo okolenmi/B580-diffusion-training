@@ -171,19 +171,29 @@ def check_resource_control_called_only_on_miss():
     cache = CachingTextEncoder(inner, max_entries=8, resource_control=control)
 
     cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert control.ensure_loaded_calls == ["text_encoder"], (
-        "a miss must call ensure_loaded() exactly once, with the default "
-        "resource_name, before the real encode")
+    # TWO calls, not one: the two caches split into separate halves
+    # (encode_prompt_only / resolution_embedding), each of which calls
+    # ensure_loaded() immediately before touching the inner encoder on its
+    # own miss -- so a full miss (both halves cold) fires once per half.
+    # This test used to assert exactly one call, written when ensure lived
+    # in a single combined-key encode(); the split design (see the module
+    # docstring) moved it into each half and this assertion wasn't
+    # updated. The second call is a no-op in real ResourceControlHandle
+    # (already resident), so per-half is safe and still fires only on
+    # misses -- which is the property actually under test below.
+    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
+        "a miss of both halves must call ensure_loaded() once per half "
+        "(once before each inner call), with the default resource_name")
 
     cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert control.ensure_loaded_calls == ["text_encoder"], (
+    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
         "a hit of both caches must not call ensure_loaded() again -- the "
         "whole point is that the inner encoder isn't touched")
 
     cache.encode("a cat", batch_size=2, height=999, width=999)
-    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
+    assert control.ensure_loaded_calls == ["text_encoder"] * 3, (
         "a prompt-cache hit alongside a resolution-cache miss is still a "
-        "miss overall -- ensure_loaded() must fire")
+        "miss overall -- ensure_loaded() must fire for the cold half")
     print("    PASS")
 
     print("[resource_name override is threaded through to ensure_loaded()]")
@@ -192,7 +202,8 @@ def check_resource_control_called_only_on_miss():
     cache2 = CachingTextEncoder(inner2, resource_control=control2,
                                  resource_name="text_encoder_2")
     cache2.encode("a cat", batch_size=2, height=512, width=512)
-    assert control2.ensure_loaded_calls == ["text_encoder_2"]
+    # Two halves cold -> two calls, same as the default-name case above.
+    assert control2.ensure_loaded_calls == ["text_encoder_2", "text_encoder_2"]
     print("    PASS")
 
     print("[no resource_control -> encode() still works, nothing to call]")
@@ -263,9 +274,10 @@ def check_node_build():
     result2 = node.build(encoder=inner2, max_entries=4, resource_control=control)
     wrapped2 = result2["encoder"]
     wrapped2.encode("p", 1, 64, 64)
-    assert control.ensure_loaded_calls == ["text_encoder"], (
+    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
         "build()'s resource_control must reach the constructed "
-        "CachingTextEncoder, not be silently dropped")
+        "CachingTextEncoder, not be silently dropped (one call per cold "
+        "half, as above)")
     print("    PASS")
 
 

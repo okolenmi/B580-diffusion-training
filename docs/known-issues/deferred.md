@@ -2,6 +2,23 @@
 
 # Deferred (not urgent, revisit later)
 
+- **[2026-09-28] `torch.xpu`'s `pin_memory()` doesn't actually pin on
+  this build -- `core/cache_utils.py`'s parallel pin thread-pool is a
+  no-op optimization here.** Measured, not assumed: a 4 GB
+  `pin_memory()`-ed tensor showed `Locked: 0 kB` in the allocating
+  process's `/proc/<pid>/smaps_rollup`, and holding it (same-process or
+  a second process) moved `torch.xpu.mem_get_info()` by single-digit MB.
+  So the batches the cache pipeline "pins" before H2D transfer are
+  ordinary pageable host memory, and `_PIN_POOL`'s comment ("pin_memory()
+  is a kernel syscall (mlock) -- it releases the GIL") describes this
+  build's *intended* behavior, not its actual one. Harmless (correctness
+  unaffected; H2D transfers just don't get pinned-memory speed), left
+  alone for now because removing the pinning would also be wrong -- if a
+  future torch build fixes `pin_memory`, it starts helping again for
+  free. Worth re-testing after any torch upgrade (the check above takes
+  30 seconds); found incidentally during the 2026-09-28 VRAM-report
+  investigation documented in [`resolved.md`](resolved.md).
+
 - **[2026-08] No shared `MemoryManager` reachable from
   `SupervisedLoRATrainerNode.build()`.** Found while wiring
   `ResourceProfile` (`nodes/memory/profile.py`, design doc section 5.5):
@@ -17,10 +34,12 @@
 
 - **[2026-08] Only `ResBlock` instances ever route through this
   project's checkpoint patch -- attention blocks don't, in this pinned
-  ComfyUI version. Moved to `docs/known-issues/pending-testing.md`
-  ([2026-09] entry) -- a real fix now exists
-  (`nodes/model/attention_checkpointing.py`), not confirmed on real
-  hardware yet, so it belongs there rather than here.** Original finding
+  ComfyUI version. Moved to `docs/known-issues/resolved.md` (the
+  [2026-09] entry, confirmed on real hardware 2026-09-28: identical
+  run OOMs on its first forward pass with the fix disabled, 40/40
+  steps at 8592 MB peak with it enabled) -- a real fix exists
+  (`nodes/model/attention_checkpointing.py`), now confirmed, so it
+  belongs there rather than here.** Original finding
   kept below for context. Found while building `nodes/model/block_profiler.py`
   (design doc section 2.3, backlog item 1): cloned
   comfyanonymous/ComfyUI directly to confirm what `ctx.run_function`

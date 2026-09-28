@@ -61,15 +61,22 @@ Don't read top-to-bottom unless you actually want the full design
 history. For "what's real right now," start at file 08 (Implementation
 status). For "what's planned next," file 09 (Backlog).
 
+The 7 design goals/constraints every choice here is checked against
+now live in the root [`README.md`](../../README.md)'s Goals section --
+the standalone `01-design-goals-and-constraints.md` that used to
+introduce this folder was removed 2026-09-28 as redundant with it
+(same seven items, same numbering). Section-number references below
+are unaffected: that file was never one of the original numbered
+sections (its row's `#` was `--`).
+
 | # | File | What's in it |
 |---|---|---|
-| -- | [`01-design-goals-and-constraints.md`](01-design-goals-and-constraints.md) | The 7 constraints every design choice here is checked against (VRAM-first, strict OOP, no singletons, composition over inheritance, etc.). Read this once, refer back rather than re-reading. |
 | 1 | [`02-foundational-ontology.md`](02-foundational-ontology.md) | Base vocabulary: `Builder` vs runtime object, `DeviceResident`, pooled buffers, `NoiseSchedule`/`DiffusionProcess`, device backend as Strategy, config as an injected value object. |
 | 2 | [`03-training-step-orchestration.md`](03-training-step-orchestration.md) | The step loop as a pipeline of phases, resource policy, activation checkpointing, text encoder caching, batch prefetching. |
 | 3, 4 | [`04-lora-adapter-mechanics-and-loss-weighting.md`](04-lora-adapter-mechanics-and-loss-weighting.md) | `AdapterStrategy` (plain LoRA vs DoRA), `LoRAScalingPolicy`, `FrozenWeightStore` (incl. NF4), per-parameter-group learning rates; Min-SNR/P2 loss weighting. |
 | 5 | [`05-coordination-registry-observability.md`](05-coordination-registry-observability.md) | `ResourceCoordinator`, offload ordering, `ResourceProfile`, why `ComponentRegistry`/`TrainingRecipe` are deliberately not built yet. |
 | 6 | [`06-composition-walkthrough.md`](06-composition-walkthrough.md) | One concrete LoRA run traced through every piece above, to make sections 1-5 legible as a whole. |
-| 7 | [`07-deferred-or-rejected.md`](07-deferred-or-rejected.md) | Considered and left out on purpose, with real reasoning: `AutoResourcePolicy`, automatic eviction, layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments. |
+| 7 | [`07-deferred-or-rejected.md`](07-deferred-or-rejected.md) | Considered and left out on purpose, with real reasoning: `AutoResourcePolicy`, automatic eviction, layer-wise base offload, flow matching, GaLore -- plus 8-bit optimizer moments, whose entry now carries an update (it was later shipped anyway as `state_precision`; the entry keeps both sides of that story). |
 | 8, 9 | [`08-validation-and-implementation-status.md`](08-validation-and-implementation-status.md) | **The most reliable "what's actually real" table in this repo.** What's implemented, what's partial/unvalidated, what's explicitly out of scope. |
 | 10 | [`09-prioritized-backlog.md`](09-prioritized-backlog.md) | What's left, in order, with reasoning for the order. |
 | 11 | [`10-node-surface-and-precision-control.md`](10-node-surface-and-precision-control.md) | Planning for node-graph surface/precision control -- mostly superseded by, and cross-referenced from, `resources-controller/`. |

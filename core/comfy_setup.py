@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -71,6 +72,11 @@ def xpu_memory_stats() -> dict | None:
     leak to chase); reserved growing while allocated stays flat is just
     the allocator's own bookkeeping, not a leak."""
     if hasattr(torch, "xpu") and torch.xpu.is_available():
+        # Deliberately only the two torch.xpu.memory_stats() keys: nodes/'
+        # _XPUDeviceContext.memory_stats() is documented (and smoke-tested)
+        # as a superset of exactly this dict, reading the same underlying
+        # call -- a key from a different API (e.g. mem_get_info) doesn't
+        # belong here. Driver-level usage is vram_snapshot's job instead.
         return {
             "allocated_mb": torch.xpu.memory_allocated() / (1024 ** 2),
             "reserved_mb": torch.xpu.memory_reserved() / (1024 ** 2),
@@ -79,6 +85,7 @@ def xpu_memory_stats() -> dict | None:
 
 
 _VRAM_DEBUG = os.environ.get("TRAIN_VRAM_DEBUG", "0") == "1"
+_T0 = time.monotonic()
 
 
 def vram_snapshot(label: str):
@@ -101,6 +108,39 @@ def vram_snapshot(label: str):
     try:
         alloc = torch.xpu.memory_allocated() / (1024 ** 2)
         reserved = torch.xpu.memory_reserved() / (1024 ** 2)
-        print(f"    [vram] {label}: allocated={alloc:.1f}MB reserved={reserved:.1f}MB", flush=True)
+        # driver_used: what the GPU driver reports consumed device-wide
+        # (this process + everything else -- desktop baseline included).
+        # Expected to reconcile as reserved + ~0.5-1.5GB (other apps +
+        # runtime/context overhead); the 2026-09-28 known-issues
+        # investigation confirmed that reconciliation holds on this
+        # hardware at every phase. A driver_used that stays *far* above
+        # reserved + baseline would mean memory held outside torch's
+        # allocator -- that gap is the thing to chase.
+        try:
+            _free, _total = torch.xpu.mem_get_info()
+            driver = ( (_total - _free) / (1024 ** 2) )
+            print(f"    [vram +{time.monotonic() - _T0:6.1f}s] {label}: allocated={alloc:.1f}MB reserved={reserved:.1f}MB driver_used={driver:.1f}MB", flush=True)
+        except Exception:
+            print(f"    [vram +{time.monotonic() - _T0:6.1f}s] {label}: allocated={alloc:.1f}MB reserved={reserved:.1f}MB", flush=True)
+        if os.environ.get("TRAIN_VRAM_TENSOR_CENSUS") == "1":
+            # Diagnostic: sum every live XPU tensor reachable via gc. Compare
+            # against allocated= above. If census >> allocated, memory is
+            # held in torch tensors that memory_allocated() isn't counting
+            # (an accounting bug to report, not a leak); if census ~= allocated,
+            # the missing device memory (see known-issues) lives outside torch.
+            try:
+                import gc as _gc
+                _tot = 0
+                _n = 0
+                for _o in _gc.get_objects():
+                    try:
+                        if torch.is_tensor(_o) and _o.device.type == "xpu":
+                            _tot += _o.numel() * _o.element_size()
+                            _n += 1
+                    except Exception:
+                        continue
+                print(f"    [vram +{time.monotonic() - _T0:6.1f}s] {label}: xpu tensor census={_tot / (1024 ** 2):.1f}MB across {_n} tensors", flush=True)
+            except Exception as e:
+                print(f"    [vram +{time.monotonic() - _T0:6.1f}s] {label}: census failed ({e})", flush=True)
     except Exception as e:
-        print(f"    [vram] {label}: snapshot failed ({e})", flush=True)
+        print(f"    [vram +{time.monotonic() - _T0:6.1f}s] {label}: snapshot failed ({e})", flush=True)

@@ -30,9 +30,7 @@ the project's own stated rule (see
 
 ## Goals
 
-Stated in full in
-[`docs/design/01-design-goals-and-constraints.md`](docs/design/01-design-goals-and-constraints.md);
-summarized here:
+Stated once here, referenced rather than repeated throughout:
 
 1. **VRAM first, speed second** -- every VRAM-saving choice either
    costs nothing in speed or has a named, estimable speed cost.
@@ -75,14 +73,13 @@ docs/
 ├── architecture.md          Codebase map: core/manager/server/nodes and how they relate
 ├── review_notes.md          New-reader audit: confusing/stale things flagged for follow-up
 ├── status/
-│   └── progress.md          What's implemented in nodes/ today (STALE -- see banner in the file)
+│   └── progress.md          What's implemented in nodes/ today (fast-read summary; resynced 2026-09-28)
 ├── known-issues/            Bug/quirk tracker, split by status
 │   ├── open.md
 │   ├── resolved.md
 │   ├── deferred.md
 │   └── pending-testing.md
 └── design/                  The full nodes/ rewrite design, one file per topic
-    ├── 01-design-goals-and-constraints.md
     ├── 02-foundational-ontology.md
     ├── 03-training-step-orchestration.md
     ├── 04-lora-adapter-mechanics-and-loss-weighting.md
@@ -99,8 +96,8 @@ docs/
         ├── 04-phase-4-resource-preset-abstraction.md
         ├── 05-phase-5-resources-controller-node.md
         ├── 06-phase-6-lora-training-config.md
-        ├── 07-post-phase-6-bugfixes.md
-        └── 08-consolidation.md
+        ├── 08-consolidation.md
+        └── 09-trainer-integration-and-vram-safety.md
 ```
 
 Each folder with more than one file has its own `README.md` index with
@@ -127,7 +124,14 @@ redesign
 that is itself now well past its "Phase 6" milestone, plus a live
 per-step VRAM budget enforcer and 8-bit optimizer-state quantization.
 [`docs/status/progress.md`](docs/status/progress.md) covers all of
-that as of this writing. Treat
+that as of this writing. As of 2026-09-28 the five previously
+hardware-unconfirmed fixes (VRAM ratchet, attention-block
+checkpointing, control-handle strict/synchronize, managed-route perf,
+managed-route escalation) have all been run and confirmed on the real
+B580, with numbers, in
+[`docs/known-issues/resolved.md`](docs/known-issues/resolved.md) --
+the reusable harness for that lives in `scripts/hw_validate.py`.
+Treat
 [`docs/design/resources-controller/README.md`](docs/design/resources-controller/README.md)'s
 own status banner (top of that file) as the most current single source
 of truth for what's actually landed recently -- `progress.md` is a

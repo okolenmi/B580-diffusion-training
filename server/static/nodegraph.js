@@ -771,8 +771,8 @@
     buildInputBlock(node, port) {
       const wrapper = document.createElement("div");
       wrapper.dataset.portName = port.name;
-      // visible_when (nodes/core.py Port field, docs/resources_controller_redesign_plan.md
-      // Phase 5): this whole block hidden unless the named sibling port currently holds
+      // visible_when (nodes/core.py Port field, Phase 5 of
+      // docs/design/resources-controller/05-phase-5-resources-controller-node.md): this whole block hidden unless the named sibling port currently holds
       // the given value -- e.g. a saved-LoRA path only shown while its own gating
       // checkbox reads true. Set once here from *this render's* current paramValues
       // (correct at initial spawn/re-render regardless of DOM-attachment timing, unlike
@@ -1057,8 +1057,9 @@
     }
 
     scheduleDiagnostics(nodeId) {
-      // docs/resources_controller_redesign_plan.md Phase 5's "node works with the
-      // server, calculates values, shows extra things" -- debounced (this fires on
+      // docs/design/resources-controller/05-phase-5-resources-controller-node.md
+      // ("node works with the server, calculates values, shows extra things")
+      // -- debounced (this fires on
       // every keystroke in a freeform widget, not just picker selections) and
       // best-effort: a node whose class never overrode diagnostics() (has_diagnostics)
       // is skipped before ever making a network call, and any failure here (network,
@@ -1298,8 +1299,8 @@
           // not just reasoned about. Matched on required ports only for
           // presets -- optional ones are "just helpers", no suggestion-
           // worthy signal either way. See
-          // docs/resources_controller_redesign_plan.md's Phase 3 for the
-          // full reasoning; nodes.core.NodePreset for what
+          // docs/design/resources-controller/03-phase-3-interactive-node-support.md
+          // for the full reasoning; nodes.core.NodePreset for what
           // required_inputs/required_outputs actually guarantee.
           const searchTargets = [
             { classInfo, preset: null, inputs: classInfo.inputs, outputs: classInfo.outputs },
@@ -1389,8 +1390,9 @@
         // not from classInfo's common ports -- the freshly-spawned node
         // still renders its default/common shape, since a node's sockets
         // actually reshaping to match a chosen preset is separate,
-        // not-yet-built work (docs/resources_controller_redesign_plan.md
-        // Phase 3's own "not yet done" note -- this metadata is wired
+        // not-yet-built work (docs/design/resources-controller/
+        // 03-phase-3-interactive-node-support.md's own "not yet done"
+        // note -- this metadata is wired
         // into search/suggestion only so far). addConnection() does no
         // validation of its own (see GraphModel.addConnection), so wiring
         // straight to a port name that doesn't exist yet on this node

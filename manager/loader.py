@@ -93,10 +93,12 @@ class ManagedDatasetLoader:
                                 # run_lora_ingestion_task) -- one clean latent, no
                                 # noise/timestep baked in at all. Resampled fresh
                                 # every __iter__() call (every epoch), not here --
-                                # see __iter__/_materialize, and
-                                # docs/dataset_renoising_and_clip_prewarm.md for why
-                                # baking a fixed grid in at ingestion time was the
-                                # thing being avoided.
+                                # see __iter__/_materialize. The reason this format
+                                # exists: baking one fixed timestep/noise grid at
+                                # ingestion time would give every image the same
+                                # draw for the loader's whole lifetime, so training
+                                # never sees a different corruption than the one it
+                                # started with.
                                 all_samples.append({
                                     "x0":          loader.get_image_latent(t["shard_index"]),
                                     "prompt":      t["prompt"],
@@ -192,9 +194,9 @@ class ManagedDatasetLoader:
         __iter__ per batch, not from _load_all_samples (which is cached and
         would otherwise bake one fixed draw in for the loader's whole
         lifetime, reintroducing the same fixed-grid problem this format
-        exists to avoid -- see docs/dataset_renoising_and_clip_prewarm.md).
-        Samples that already have "x_t" (any other format) pass through
-        unchanged -- this is a no-op for them, not just "cheap.\""""
+        exists to avoid). Samples that already have "x_t" (any other
+        format) pass through unchanged -- this is a no-op for them, not
+        just "cheap.\""""
         if "x_t" in s:
             return s
         x0 = s["x0"]

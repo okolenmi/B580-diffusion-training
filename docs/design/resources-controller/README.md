@@ -9,10 +9,8 @@ This folder used to be one file,
 split into one file per phase so each phase can be found, linked, and
 updated on its own as work continues -- the content itself is
 unchanged from the original, only reorganized (with one small in-place
-correction, noted in
-[`docs/review_notes.md`](../../review_notes.md) item 7: an "open
-design question" section that had been left contradicting its own
-later resolution).
+correction, made when it was found: an "open design question" section
+that had been left contradicting its own later resolution).
 
 **Status: Phase 1 + Phase 2 done, Phase 3's suggestion-menu question
 resolved (node_kind/presets metadata), Phase 4's core object-
@@ -41,12 +39,20 @@ only offloading, plus a `strict` flag on
 the existing VRAM budget enforcer make the route's actual point --
 staying clear of a VRAM ceiling, with a way to make that a hard
 guarantee instead of best-effort -- a real, wired capability, not just
-plumbing. Not run on real hardware yet.** This tracks a real,
+plumbing.**
+**Run on real hardware 2026-09-28 (Arc B580):** the managed
+route came back at 0.897 vs the main route's 0.943 steps/sec on
+identical settings (the old ~4.7x regression confirmed fixed), and an
+escalation run on the variable-resolution dataset under a deliberately
+under-budget `vram_budget_mb` finished without OOM -- both confirmed
+with measured numbers in
+[`docs/known-issues/resolved.md`](../../known-issues/resolved.md).
+This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
 or as open questions get resolved, the same way
 [`docs/status/progress.md`](../../status/progress.md) tracks the rest
-of this project (though that file has drifted -- see
-`docs/review_notes.md` item 1 -- this one hasn't, so far).
+of this project (a fast-read summary that needs periodic resyncing to
+stay accurate -- this one hasn't drifted, so far).
 
 **Priority rule, made explicit rather than left implicit:** where this
 plan and the main design docs (`docs/design/`) conflict, this plan
@@ -68,6 +74,11 @@ just not the tie-breaker for anything this plan touches.
 | [`04-phase-4-resource-preset-abstraction.md`](04-phase-4-resource-preset-abstraction.md) | The `ResourcePreset` abstraction -- core construction mechanics done. |
 | [`05-phase-5-resources-controller-node.md`](05-phase-5-resources-controller-node.md) | The Resources Controller node itself -- done, scope-corrected along the way. |
 | [`06-phase-6-lora-training-config.md`](06-phase-6-lora-training-config.md) | `LoRATrainingConfigNode` -- done. Downstream `TrainerNode` integration itself moved to 09 (this file's original sketch for it turned out wrong). |
-| [`07-post-phase-6-bugfixes.md`](07-post-phase-6-bugfixes.md) | Four real bugs found by actually using the editor after Phase 6 landed. |
 | [`08-consolidation.md`](08-consolidation.md) | Resolving low-synergy items against the main design docs instead of leaving them to drift. |
-| [`09-trainer-integration-and-vram-safety.md`](09-trainer-integration-and-vram-safety.md) | `ManagedLoRATrainerNode` -- the route's own independent step loop, deterministic residency instead of the main route's reactive-only offloading -- plus a `strict` VRAM-budget mode. Done, not run on real hardware. |
+| [`09-trainer-integration-and-vram-safety.md`](09-trainer-integration-and-vram-safety.md) | `ManagedLoRATrainerNode` -- the route's own independent step loop, deterministic residency instead of the main route's reactive-only offloading -- plus a `strict` VRAM-budget mode. Done, and run/confirmed on real hardware 2026-09-28 (numbers in `docs/known-issues/resolved.md`). |
+
+(`07-post-phase-6-bugfixes.md` used to sit between 06 and 08 -- four
+real bugs found by actually using the editor after Phase 6 landed.
+All four were fixed and are recorded in their code/tests and git
+history; the file was removed 2026-09-28 as a low-value historical
+record.)

@@ -124,13 +124,36 @@ def check_cleanup_runs_even_after_a_failed_execution():
 def check_list_all_reports_every_tracked_execution():
     print("[list_all() reports every tracked execution, oldest first, "
           "regardless of status -- the reload/second-tab reconnect case]")
+    import unittest.mock as mock
+
+    from server import graph_executor
+
     registry = _ExecutionRegistry()
     nodes = [NodeSpec(id="a", class_name="IntConstantNode", params={"value": 1})]
     id1 = registry.start(nodes, [], monitor_bus=None)
     _wait_for(registry, id1)
-    id2 = registry.start(nodes, [], monitor_bus=None)
-    registry.stop(id2)
-    _wait_for(registry, id2)
+
+    # id2 must land in status "stopped", which only happens if the
+    # cancel_event is set *before* the worker reaches its status line.
+    # With a real, instant IntConstantNode that's a race this check used
+    # to lose on a fast machine: stop() arriving after the worker had
+    # already set "finished" is correct production behavior
+    # (server/routes_nodegraph.py's worker sets "stopped" only when the
+    # event was set in time), just not the case under test. Blocking the
+    # run until it's cancelled makes the stopped path deterministic
+    # instead of timing-dependent -- the executor still runs through the
+    # real registry/worker/status machinery, only the graph's own
+    # execution is swapped for a wait on the same cancel_event the real
+    # one polls.
+    def blocking_run(self):
+        while not self.context.cancel_event.is_set():
+            time.sleep(0.01)
+        return []
+
+    with mock.patch.object(graph_executor.GraphExecutor, "run", blocking_run):
+        id2 = registry.start(nodes, [], monitor_bus=None)
+        registry.stop(id2)
+        _wait_for(registry, id2)
 
     listed = registry.list_all()
     ids_in_order = [item["execution_id"] for item in listed]

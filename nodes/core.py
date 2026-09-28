@@ -350,7 +350,8 @@ class Node(ABC):
         optional, read-only side channel a server endpoint can call as
         the person attaches/edits a resource in the editor, to show
         real information *before* they hit Run, not just after (docs/
-        resources_controller_redesign_plan.md Phase 5's "works with the
+        design/resources-controller/05-phase-5-resources-controller-node.md's
+        "works with the
         server, calculates values, shows extra things" and its own
         ResourcePreset.diagnostics(), which ResourcesControllerNode's
         own override of this method below delegates to). Overriding

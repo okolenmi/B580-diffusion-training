@@ -204,7 +204,10 @@ call.
   wiring. In practice, only `ResBlock` instances ever reached this
   profiler or got placed by `GreedyRatioPlacement` -- a real, grounded
   constraint on what this item could decide over, not a gap in the
-  implementation. **Closed** (see `docs/known-issues/pending-testing.md`):
+  implementation. **Closed** (see `docs/known-issues/resolved.md` --
+  confirmed on real hardware 2026-09-28: without the patch the same
+  run OOMs on its first forward pass, with it the run peaks at
+  8592 MB):
   `nodes/model/attention_checkpointing.py`'s
   `enable_attention_block_checkpointing()` patches `BasicTransformerBlock.
   forward()` itself to route through the same `checkpoint()`/

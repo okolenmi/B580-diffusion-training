@@ -27,6 +27,9 @@ from .timer import StepTimer
 from .save import save_midrun
 from .unet_wrapper import ComfyUNetWrapper, clear_embedder_cache
 
+# See train_step's maintenance block: optional short-interval VRAM snapshots.
+_SNAP_EVERY = int(os.environ.get("TRAIN_VRAM_SNAPSHOT_EVERY", "0") or 0)
+
 
 _gc.disable()
 
@@ -884,9 +887,20 @@ def run_training_loop(
             # pressure comes from forward/backward passes, which happen every
             # micro-step regardless of accumulation. Increased interval (250
             # steps) to minimize periodic stalls.
+            # Snapshot BEFORE empty_cache: reserved is the number that
+            # reflects real device consumption, and empty_cache() collapses
+            # it to ~allocated, so a post-maintenance snapshot under-reports
+            # steady-state VRAM by the allocator's whole free-block pool
+            # (observed: 6034MB post-empty vs 9942MB steady on a real run --
+            # see docs/known-issues for that investigation).
             if (i + 1) % 250 == 0:
+                vram_snapshot(f"training loop, micro-step {i + 1} (pre-maintenance)")
                 xpu_empty_cache()
                 _request_gc()
+                vram_snapshot(f"training loop, micro-step {i + 1} (post-empty_cache)")
+            # Extra diagnostic snapshots (no empty_cache/gc -- pure
+            # observation) at a shorter interval, e.g. TRAIN_VRAM_SNAPSHOT_EVERY=10.
+            if _SNAP_EVERY and (i + 1) % _SNAP_EVERY == 0 and (i + 1) % 250 != 0:
                 vram_snapshot(f"training loop, micro-step {i + 1}")
 
             if stopped: break

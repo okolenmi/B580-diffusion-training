@@ -143,8 +143,9 @@ doc -- that's where new work lands.
   `nodes/train/loss.py` (section 4)
 - LoRA timestep gate (`gate_enabled`/`gate_train_low`/`gate_train_high`/
   `gate_width`) wired into `PrepareDiffusionInputsPhase` -- candidate fix
-  for a real deformation report, **not yet run** on real data (see
-  `docs/known-issues/pending-testing.md`)
+  for a real deformation report, **not yet run** on real data (no
+  known-issues entry tracks it; no hardware run exercises it either --
+  `scripts/hw_validate.py` leaves `gate_enabled` off)
 
 **Memory / offload**
 - `ResourceCoordinator`/`OffloadOrchestrator` --
@@ -263,9 +264,13 @@ through `unload()`'s own `gc.collect()`+`empty_cache()`, meant for a
 one-time cleanup, not a per-step cycle). A new `strict` input on
 `VRAMBudgetControllerNode` makes the budget it enforces a hard raise
 instead of best-effort, as a safety net for `model` alone exceeding it,
-or for the controller's own estimate being wrong. Not run on real
-hardware yet -- the ~4.7x number is what motivated this addendum's own
-fixes, not yet confirmed improved by them.
+or for the controller's own estimate being wrong. Confirmed on real
+hardware 2026-09-28: managed vs main route now 0.897 vs 0.943
+steps/sec on identical settings (the ~4.7x slowdown that motivated
+these fixes is gone -- 95% parity), strict mode raises exactly as
+designed under a sub-usage budget, and the escalation path kept a
+variable-resolution run alive with no OOM -- full numbers in
+`docs/known-issues/resolved.md`.
 
 **Server / graph**
 - `server/graph_executor.py` -- topological execution, port-compatibility
@@ -275,9 +280,11 @@ fixes, not yet confirmed improved by them.
   concrete `Node` subclass in `nodes/`.
 
 **Testing**
-- 59 smoke tests under `nodes/smoke_tests/` (runnable via
-  `nodes/smoke_tests/run_all.py`), plus 5 more under `server/` and 1
-  under `manager/` -- all CPU-only, no ComfyUI/XPU needed.
+- 64 smoke tests under `nodes/smoke_tests/` (runnable via
+  `nodes/smoke_tests/run_all.py`), plus 5 under `server/` and 1 under
+  `manager/` -- all CPU-only, no ComfyUI/XPU needed; run all 70 in one
+  command with `python run_tests.py` at the repo root (picks the venv
+  interpreter with torch automatically).
 
 ## Still open, in priority order
 
@@ -314,8 +321,10 @@ attention_checkpointing.py` now also routes `BasicTransformerBlock`
 (SDXL's dominant activation cost) through the same seam, composed into
 both `FrozenParamSafeCheckpointing.apply()` and
 `ProfilingCheckpointing.apply()`; see `docs/known-issues/
-pending-testing.md`'s `[2026-09]` entry for the full story and what
-still needs a real-hardware run to confirm. Alongside it:
+resolved.md`'s confirmed attention-checkpointing entry for the full
+story and the confirming before/after numbers (2026-09-28: without
+the patch the run OOMs on its first forward pass; with it, 8592 MB
+peak on 1024²). Alongside it:
 `LoRATrainingConfigNode` (the Resources Controller route) gained its
 own `use_checkpoint` Port, mirroring `ComfyUNetLoRANode`'s -- that
 route silently inherited the same `True` default before with no way to
@@ -340,14 +349,22 @@ these solve hasn't materialized.
 **Deferred or rejected**, reasoning in full in
 `docs/design/07-deferred-or-rejected.md` (section 7):
 `AutoResourcePolicy`, automatic eviction inside `MemoryManager`,
-layer-wise base offload, flow matching, GaLore, 8-bit optimizer moments.
+layer-wise base offload, flow matching, GaLore -- plus 8-bit optimizer
+moments, with one honest caveat: section 7's entry now carries an
+update, because that one *was* later shipped anyway as
+`state_precision` (see the 8-bit item under "Memory / offload" above,
+and section 7's own note for what exactly was rejected vs. what
+shipped).
 
 ---
 Last synced against `docs/design/` (formerly the single file
 `docs/training_pipeline_design.md`) at commit `ba6b6a8` (2026-09-19,
 "Document both confirmed fixes: momentum bug and footprint_bytes()"),
-plus this session's own unlanded work on top (Phase 9: the Resources
-Controller route's own trainer, `ManagedLoRATrainerNode`, plus VRAM-
-safety `strict`/`synchronize()`/`release()` additions to
-`nodes/memory/control_handle.py` -- not yet its own commit at the time
-of this sync).
+plus the sessions' own work after that point landing later as its own
+commits (Phase 9 / `ManagedLoRATrainerNode`, attention-block
+checkpointing, the test-suite fixes and doc-hygiene pass -- see
+`git log` for the exact sequence). Most recently updated during the
+2026-09-28 hygiene pass (test counts, the 8-bit entry above, this
+trailer); content is believed current as of that pass -- this file is
+a summary, and like all summaries needs a resync whenever the
+`docs/design/` primary records move.

@@ -69,12 +69,20 @@ cd /path/to/ComfyUI
 python /path/to/B580-diffusion-training/convert.py --config my_run.toml
 ```
 
-`convert-cfg.toml` in this repo's root is a real example config to
-copy and edit, not a template with placeholder syntax -- check every
-path in it (`base_model`, `dataset_name`, `comfy_dir`) against your own
-setup before using it as-is; those are one specific person's real
-paths, not portable defaults (flagged in
-[`review_notes.md`](review_notes.md)).
+`convert-cfg.example.toml` in this repo's root is the committed
+template config to copy and edit; copy it to `convert-cfg.toml` (also
+in the repo root) for your own working config:
+
+```bash
+cp convert-cfg.example.toml convert-cfg.toml
+```
+
+`convert-cfg.toml` itself is gitignored -- it holds machine-specific
+values (real checkpoint/dataset names, real paths, real preview
+prompts) and isn't committed; the example carries the same structure
+with placeholders. `convert.py --config` will also create a
+defaults-filled config for any filename you point it at, so the copy
+step is a convenience rather than a requirement.
 
 ### 2. Node-graph web UI (`nodes/`/`server/`, the active rewrite)
 
@@ -94,20 +102,26 @@ script -- CPU-only, no ComfyUI/XPU hardware required, no test
 framework dependency beyond what's already installed:
 
 ```bash
-# Everything under nodes/ (the bulk of the suite)
-python nodes/smoke_tests/run_all.py
+# Everything, all three suites (nodes/ + server/ + manager/), one command:
+python run_tests.py
 
 # Filter by filename substring, e.g. only memory-related tests
-python nodes/smoke_tests/run_all.py memory
+python run_tests.py memory
 
-# server/ and manager/ each have their own smaller suites, run individually:
+# Per-suite runners still work on their own:
+python nodes/smoke_tests/run_all.py          # nodes/ only
 python server/smoke_tests/smoke_test_graph_executor.py
 python manager/smoke_tests/smoke_test_lora_raw_dataset.py
 ```
 
-There's no single script that runs `nodes/`, `server/`, and `manager/`
-tests together in one command as of this writing -- worth adding if
-that becomes annoying (noted in [`review_notes.md`](review_notes.md)).
+`run_tests.py` picks the interpreter itself: the tests import torch,
+which lives in your ComfyUI venv, not in whatever system `python`
+happens to be first on PATH. If the running interpreter has no torch,
+it resolves `VENV_PYTHON` (environment variable, then `.env`, same
+precedence as `paths.py`) and runs every test under that -- rather
+than emitting ~70 identical `ModuleNotFoundError: No module named
+'torch'` tracebacks, which is exactly what running the suite with the
+wrong python looks like.
 
 ## Hardware notes
 

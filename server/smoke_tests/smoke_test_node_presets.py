@@ -13,10 +13,12 @@ only, optional ports excluded; (3) a real multi-level-inheritance edge
 case (an abstract intermediate class provides list_presets(), a
 concrete subclass doesn't re-override it) -- the override check has to
 resolve through the real MRO, not just check "did *this* class's own
-__dict__ have it"; (4) every real node already in the registry is still
-NODE_KIND == "static" with presets is None -- this is purely additive
-infrastructure, nothing about the 36+ real, already-shipped nodes
-should change.
+__dict__ have it"; (4) every real node in the registry is internally
+consistent -- static means presets is None, dynamic (only
+ResourcesControllerNode today) means real non-empty presets. Check (4)
+was originally written as "every registered node is still static"
+before Phase 4/5 shipped the first dynamic registered node, which is
+what made that older wording stale, not anything about the registry.
 """
 
 import sys
@@ -182,18 +184,36 @@ def check_multi_level_inheritance_resolves_through_the_real_mro():
     print("    PASS")
 
 
-def check_every_real_registered_node_is_static_with_no_presets():
-    print("[every node in the real registry is still node_kind='static', "
-          "presets=None -- purely additive infrastructure, nothing about "
-          "the real, already-shipped nodes changes]")
+def check_every_real_registered_node_is_statically_consistent():
+    print("[every node in the real registry is internally consistent: "
+          "static nodes have presets=None, dynamic nodes introspect as "
+          "dynamic with real (non-empty) presets]")
+    # Written when NODE_KIND was purely additive and every registered node
+    # was static; Phase 4/5 then shipped the first genuinely dynamic
+    # registered node (ResourcesControllerNode, preset "lora_sdxl" --
+    # docs/design/resources-controller/05-phase-5-resources-controller-node.md),
+    # which made the old "everything must be static" assertion stale, not
+    # the registry. The invariant worth checking is the pair: static means
+    # presets is None, dynamic means presets actually exist (a dynamic node
+    # with zero presets would be useless and is already rejected at class
+    # definition time by Node.__init_subclass__, but re-checking here
+    # proves it holds through introspection/serialization too).
     registry = nodegraph_registry.get_registry()
     check(len(registry) > 0, "registry unexpectedly empty")
+    dynamic_seen = []
     for class_name, cls in registry.items():
-        check(cls.NODE_KIND == "static", f"{class_name}: NODE_KIND is {cls.NODE_KIND!r}")
         info = introspect_node_class(cls)
-        check(info.node_kind == "static", f"{class_name}: node_kind is {info.node_kind!r}")
-        check(info.presets is None, f"{class_name}: presets is {info.presets!r}, expected None")
-    print(f"    PASS ({len(registry)} registered nodes checked)")
+        if cls.NODE_KIND == "static":
+            check(info.node_kind == "static", f"{class_name}: node_kind is {info.node_kind!r}")
+            check(info.presets is None, f"{class_name}: presets is {info.presets!r}, expected None")
+        else:
+            check(cls.NODE_KIND == "dynamic", f"{class_name}: NODE_KIND is {cls.NODE_KIND!r}")
+            check(info.node_kind == "dynamic", f"{class_name}: node_kind is {info.node_kind!r}")
+            check(info.presets is not None and len(info.presets) > 0,
+                  f"{class_name}: dynamic but presets is {info.presets!r}")
+            dynamic_seen.append(class_name)
+    print(f"    PASS ({len(registry)} registered nodes checked, "
+          f"{len(dynamic_seen)} dynamic: {dynamic_seen or 'none'})")
 
 
 def main():
@@ -203,7 +223,7 @@ def main():
     check_dynamic_node_introspection()
     check_node_info_to_dict_serializes_presets()
     check_multi_level_inheritance_resolves_through_the_real_mro()
-    check_every_real_registered_node_is_static_with_no_presets()
+    check_every_real_registered_node_is_statically_consistent()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

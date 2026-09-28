@@ -164,7 +164,7 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         # behavior) -- overridable so a test can inject a fake one that reports
         # scripted memory_stats() without real XPU/CUDA hardware, the same explicit-
         # injection posture this project uses everywhere else (no singletons, per
-        # docs/design/01-design-goals-and-constraints.md goal 3).
+        # the root README's Goals section, goal 3).
         self._device_ctx = device_ctx or DeviceContext.for_device(device)
         self._coordinator = ResourceCoordinator()
         self._offloadable: list[str] = []  # list, not set: registration order

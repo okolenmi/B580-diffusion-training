@@ -225,3 +225,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Machine-specific working config -- copy convert-cfg.example.toml to
+# this name and edit it locally; the example is what gets committed.
+convert-cfg.toml

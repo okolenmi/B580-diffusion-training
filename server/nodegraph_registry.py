@@ -42,7 +42,8 @@ def _load() -> dict[str, type]:
                                          IntConstantNode, StringConstantNode)
     from nodes.train.loss import (MinSNRLossWeightingNode, P2LossWeightingNode,
                                    UniformLossWeightingNode)
-    from nodes.train.schedule import ConstantLRScheduleNode, CosineLRScheduleNode
+    from nodes.train.schedule import (ConstantLRScheduleNode, CosineLRScheduleNode,
+                                      WarmupLRScheduleNode)
     from nodes.train.supervised import SupervisedLoRATrainerNode
     from nodes.train.managed import ManagedLoRATrainerNode
 
@@ -56,7 +57,7 @@ def _load() -> dict[str, type]:
         AdafactorOptimizerNode,
         ComposedAdamWOptimizerNode, ComposedAdafactorOptimizerNode, ComposedCAMEOptimizerNode,
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
-        ConstantLRScheduleNode, CosineLRScheduleNode,
+        ConstantLRScheduleNode, CosineLRScheduleNode, WarmupLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,
         SupervisedLoRATrainerNode, ManagedLoRATrainerNode,
         FloatConstantNode, IntConstantNode, StringConstantNode, BoolConstantNode,

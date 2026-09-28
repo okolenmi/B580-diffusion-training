@@ -45,7 +45,7 @@ from ..model.text_encoder import TextEncoder
 from ..memory.profile import ResourceProfile
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
-from .loss import LossWeighting
+from .loss import LossWeighting, t_bucket_losses
 from .schedule import LRSchedule
 
 
@@ -272,21 +272,46 @@ class ForwardPhase(StepPhase):
 
 
 class LossPhase(StepPhase):
-    """Wraps a LossWeighting (nodes/train/loss.py, section 4)."""
+    """Wraps a LossWeighting (nodes/train/loss.py, section 4).
+
+    Weighting is **per-sample**, not one scalar from the batch's mean
+    sigma: LossWeighting.weight() is strongly nonlinear in sigma
+    (Min-SNR's min(snr,gamma)/snr especially), and batches carry
+    per-sample t almost always, so the older `w(mean sigma) * mean(loss)`
+    form weighted mixed-t batches wrong for every sample in them. For a
+    UniformLossWeighting (weight() == 1.0 everywhere) this is identical
+    to the old scalar path.
+
+    Also stashes extras["per_sample_loss"] (detached (B,) raw MSE) so
+    MonitoringPhase can report the per-t-bucket diagnostics
+    (t_bucket_losses) -- t is already in extras from
+    PrepareDiffusionInputsPhase."""
 
     def __init__(self, loss_weighting: LossWeighting):
         self._loss_weighting = loss_weighting
 
     def run(self, state: StepState) -> StepState:
+        import torch
+
         pred = state.extras["pred"]
         target = state.extras["target"]
         sigma = state.extras["sigma"]
         per_sample = (pred.float() - target.float()).pow(2)
         per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
-        # float(sigma...item()) here, not deferred -- matches the old
-        # _run_step's exact sync point, not moved earlier or later.
-        weight = self._loss_weighting.weight(float(sigma.float().mean().item()))
-        state.extras["loss"] = per_sample.mean() * weight
+        sigmas = sigma.float().reshape(-1)
+        if sigmas.numel() == per_sample.numel():
+            weights = torch.tensor(
+                [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
+                dtype=per_sample.dtype, device=per_sample.device)
+            state.extras["loss"] = (per_sample * weights).mean()
+        else:
+            # One shared sigma (scalar schedule output, or a shape that
+            # doesn't track the batch): every sample gets the same weight,
+            # so per-sample weighting collapses exactly to the old scalar
+            # multiply -- one host sync, same as the original code's own.
+            weight = self._loss_weighting.weight(float(sigmas.mean().item()))
+            state.extras["loss"] = per_sample.mean() * weight
+        state.extras["per_sample_loss"] = per_sample.detach()
         return state
 
 
@@ -374,6 +399,7 @@ class MonitoringPhase(StepPhase):
         timing = state.extras.get("timing_ms")
         mem = None
         tracked_mb = None
+        buckets: dict = {}
         resource_profile: Optional[ResourceProfile] = None
         if self._monitor is not None or self._profile:
             report = {
@@ -382,6 +408,13 @@ class MonitoringPhase(StepPhase):
             }
             if self._optimizer_id:
                 report["optimizer"] = self._optimizer_id
+            # Per-t-bucket diagnostics (loss.py's t_bucket_losses): raw
+            # per-sample MSE per fixed third of the t range, keys omitted
+            # for buckets this step had no samples in -- the monitor
+            # chart's colored bucket lines read these keys.
+            buckets = t_bucket_losses(
+                state.extras.get("per_sample_loss"), state.extras.get("t"))
+            report.update(buckets)
             if timing is not None:
                 # timing_ms's own keys are bare phase labels (fetch_batch,
                 # not fetch_batch_ms) -- the report dict is the one place
@@ -454,8 +487,10 @@ class MonitoringPhase(StepPhase):
                     tracked_mb = sum(resource_profile.per_resident_bytes.values()) / (1024 ** 2)
                 tracked_part = f" tracked_footprint={tracked_mb:.0f}MB"
             optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
+            bucket_part = "".join(
+                f" {key.replace('loss_t_', 't_')}={value:.4f}" for key, value in buckets.items())
             print(f"  [step {state.step}]{optimizer_part} {parts} total={total:.0f}ms"
-                  + vram_part + tracked_part)
+                  + vram_part + tracked_part + bucket_part)
 
             if resource_profile is not None and resource_profile.per_resident_bytes:
                 # Same total as tracked_footprint_mb above, broken down by

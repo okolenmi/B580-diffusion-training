@@ -270,6 +270,15 @@ def check_contracts():
           "resource_control must be required")
     check("model" not in ManagedLoRATrainerNode.INPUTS and "text_encoder" not in ManagedLoRATrainerNode.INPUTS,
           "must take `trainer` bundled, not separate model/text_encoder ports")
+    for port_name in ("grad_accum", "grad_clip_max_norm", "save_every_n_steps",
+                      "save_prefix", "project_layout"):
+        check(port_name in ManagedLoRATrainerNode.INPUTS,
+              f"{port_name} port must exist on ManagedLoRATrainerNode")
+    check(ManagedLoRATrainerNode.INPUTS["grad_accum"].default == 1
+          and ManagedLoRATrainerNode.INPUTS["grad_clip_max_norm"].default == 0.0
+          and ManagedLoRATrainerNode.INPUTS["save_every_n_steps"].default == 0,
+          "all three cadence/clip ports must default to the pre-existing "
+          "behavior (no accumulation, no clip, no saves)")
     print("    PASS")
 
 
@@ -561,6 +570,331 @@ def check_prewarm_text_encoder_warms_unloads_and_skips_ensure_loaded():
     print("    PASS")
 
 
+def _recording_optimizer(events, fused: bool):
+    """Recording optimizer for the grad_accum/clip/save cadence checks:
+    counts *every* call those phases make -- update_lr (and the LR values),
+    zero_grad, step, begin_step including its sub_steps argument, and
+    prepare_next_pass. _FakeOptimizer above records only some of these and
+    can't tell begin_step(sub_steps=1) from begin_step(sub_steps=K), which
+    is exactly the distinction the fused accumulation path turns on."""
+    base = FusedOptimizerHandle if fused else OptimizerHandle
+
+    class _Recording(base):
+        def __init__(self, events):
+            self._events = events
+            self.update_lrs = []
+
+        @property
+        def lr(self):
+            return 1e-4
+
+        def update_lr(self, new_lr):
+            self.update_lrs.append(new_lr)
+
+        def step(self, n_steps=1):
+            self._events.append("optimizer_step")
+
+        def zero_grad(self):
+            self._events.append("zero_grad")
+
+        def begin_step(self, sub_steps=1):
+            self._events.append(f"begin_step:{sub_steps}")
+
+        def prepare_next_pass(self):
+            self._events.append("prepare_next_pass")
+
+        def offload_states_to_cpu(self):
+            pass
+
+        def reload_states_to_device(self, device=None):
+            pass
+
+        def decay_states(self, factor):
+            pass
+
+        def reset_states(self):
+            pass
+
+        def free_states(self):
+            pass
+
+        def footprint_bytes(self):
+            return 8
+
+    return _Recording(events)
+
+
+def _run_managed(events, optimizer, *, steps, grad_accum=1, extra=None, batches=None,
+                 model=None, resource_control=None, monitor=None, on_step=None):
+    node = ManagedLoRATrainerNode()
+    node.context = ExecutionContext()
+    model = model or _FakeModel(events)
+    trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
+    inputs = dict(
+        trainer=trainer, batches=batches or _FiniteBatches(), optimizer=optimizer,
+        lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+        steps=steps, resource_control=resource_control or _FakeResourceControl(events),
+        grad_accum=grad_accum, monitor=monitor)
+    if on_step is not None:
+        inputs["on_step"] = on_step
+    if extra:
+        inputs.update(extra)
+    result = node.build(**inputs)
+    check(result["model"] is model, "must return the exact unet instance")
+    return model
+
+
+def check_grad_accum_runs_one_optimizer_update_per_window():
+    print("[grad_accum=2, non-fused, steps=3: 6 micro-steps of forward/"
+          "before_step, but zero_grad/update_lr/optimizer_step/on_step each "
+          "fire exactly once per window]")
+    events: list = []
+    optimizer = _recording_optimizer(events, fused=False)
+    on_steps = []
+    _run_managed(events, optimizer, steps=3, grad_accum=2,
+                 on_step=lambda s, l: on_steps.append(s))
+    check(len([e for e in events if e == "forward"]) == 6,
+          f"one forward per micro-step (3*2=6); got {len([e for e in events if e == 'forward'])}")
+    check(len([e for e in events if e.startswith("before_step")]) == 6,
+          "resource-control safety net runs per micro-step, not per window")
+    check(len([e for e in events if e == "optimizer_step"]) == 3,
+          f"one optimizer.step per window (3); got {len([e for e in events if e == 'optimizer_step'])}")
+    check(len([e for e in events if e == "zero_grad"]) == 3,
+          "zeroing every micro-step would wipe the window's gradients -- must be once per window")
+    check(len(optimizer.update_lrs) == 3,
+          f"update_lr fires once per window (3), got {len(optimizer.update_lrs)}")
+    check(on_steps == [0, 1, 2],
+          f"on_step once per optimizer step with its index; got {on_steps}")
+    print("    PASS")
+
+
+def check_fused_grad_accum_spans_sub_steps():
+    print("[grad_accum=3, fused, steps=2: begin_step(sub_steps=3) once per "
+          "window, prepare_next_pass between passes, step() never called "
+          "(the boundary backward's hook is the update)]")
+    events: list = []
+    optimizer = _recording_optimizer(events, fused=True)
+    _run_managed(events, optimizer, steps=2, grad_accum=3)
+    begins = [e for e in events if e.startswith("begin_step")]
+    check(begins == ["begin_step:3", "begin_step:3"],
+          f"begin_step must be called once per window with sub_steps=grad_accum; got {begins}")
+    check(len([e for e in events if e == "prepare_next_pass"]) == 2 * 2,
+          "one prepare_next_pass per non-boundary micro-step (window of 3 -> 2 each)")
+    check(not [e for e in events if e == "optimizer_step"],
+          "fused must never call step() -- the hook already applied the update")
+    check(len([e for e in events if e == "forward"]) == 6,
+          "all 6 micro-steps still ran")
+    print("    PASS")
+
+
+def check_grad_accum_flows_real_gradients_into_real_optimizer():
+    print("[grad_accum=2 through a real ComposedAdamWOptimizerHandle: the "
+          "loss/K scaling + boundary step still moves the real parameter -- "
+          "the fake-optimizer checks above prove call counts, this proves "
+          "the arithmetic produces a real update]")
+    events: list = []
+    model = _FakeModel(events)
+    trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
+    params = TrainerParametersNode().build(trainer=trainer)["params"]
+    optimizer = ComposedAdamWOptimizerNode().build(params=params, lr=0.5, device="cpu")["optimizer"]
+    resource_control = BudgetedResourceControlHandle(
+        ResourceBudget(vram_budget_mb=1e9, vram_reserve_mb=0.0), device="cpu")
+    before = model.p.detach().clone()
+    node = ManagedLoRATrainerNode()
+    node.context = ExecutionContext()
+    node.build(
+        trainer=trainer, batches=_FiniteBatches(), optimizer=optimizer,
+        lr_schedule=ConstantLRSchedule(lr=0.5), loss_weighting=UniformLossWeighting(),
+        steps=2, resource_control=resource_control, grad_accum=2)
+    check(not torch.equal(before, model.p.detach()),
+          "real parameter must change under grad_accum=2 (window gradient reached step())")
+    print("    PASS")
+
+
+def check_grad_accum_loss_scaling_stays_internal():
+    print("[LossPhase backward_scale: extras['loss'] stays the reportable "
+          "unscaled loss; extras['loss_for_backward'] carries loss/grad_accum "
+          "and is only set when grad_accum > 1]")
+    from nodes.train.managed import LossPhase as ManagedLossPhase
+
+    def state():
+        return SimpleNamespace(extras={
+            "pred": torch.zeros(2, 4),
+            # per-sample MSE: sample0 = (4^2)/4 = 4.0, sample1 = 0.0
+            "target": torch.tensor([[0.0, 0.0, 0.0, 4.0], [0.0, 0.0, 0.0, 0.0]]),
+            "sigma": torch.tensor([1.0, 1.0])})
+
+    st = state()
+    ManagedLossPhase(UniformLossWeighting(), backward_scale=0.5).run(st)
+    check(abs(st.extras["loss"].item() - 2.0) < 1e-6,
+          f"reported loss must stay unscaled (2.0); got {st.extras['loss'].item()}")
+    check("loss_for_backward" in st.extras
+          and abs(st.extras["loss_for_backward"].item() - 1.0) < 1e-6,
+          "loss_for_backward must be loss/grad_accum (2.0/2 = 1.0)")
+
+    st2 = state()
+    ManagedLossPhase(UniformLossWeighting()).run(st2)
+    check("loss_for_backward" not in st2.extras,
+          "grad_accum=1 must keep the old single-tensor path (no extra graph node)")
+    print("    PASS")
+
+
+def check_grad_clip_applies_once_per_optimizer_step():
+    print("[grad_clip_max_norm: clip_grad_norm_ called exactly once per "
+          "optimizer step (boundary only, never on interior micro-steps), "
+          "with the model's own trainable parameters and the port's value; "
+          "clip=0 never calls it]")
+    import torch.nn.utils as torch_utils
+
+    original = torch_utils.clip_grad_norm_
+    calls = []
+
+    def spy(params, max_norm):
+        calls.append((list(params), float(max_norm)))
+        return original(params, max_norm)
+
+    torch_utils.clip_grad_norm_ = spy
+    try:
+        events: list = []
+        optimizer = _recording_optimizer(events, fused=False)
+        model = _run_managed(events, optimizer, steps=2, grad_accum=2,
+                             extra={"grad_clip_max_norm": 3.5})
+        check(len(calls) == 2,
+              f"clip must fire once per optimizer step (2), got {len(calls)}")
+        check(all(m == 3.5 for _, m in calls),
+              f"clip must use the port's max_norm (3.5); got {[m for _, m in calls]}")
+        check(all(p and p[0] is model.p for p, _ in calls),
+              "clip must run over the model's own trainable parameters")
+
+        events2: list = []
+        optimizer2 = _recording_optimizer(events2, fused=False)
+        calls.clear()
+        _run_managed(events2, optimizer2, steps=2, grad_accum=2)
+        check(not calls, "grad_clip_max_norm=0 (default) must not clip at all")
+    finally:
+        torch_utils.clip_grad_norm_ = original
+    print("    PASS")
+
+
+def check_build_rejects_invalid_training_shapes():
+    print("[build-time contract checks: grad_accum < 1, negative clip, "
+          "clip on a fused optimizer, empty save_prefix with saving on -- "
+          "each raises instead of silently doing the wrong thing]")
+
+    def expect_valueerror(extra, fragment):
+        events: list = []
+        node = ManagedLoRATrainerNode()
+        node.context = ExecutionContext()
+        model = _FakeModel(events)
+        trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
+        inputs = dict(
+            trainer=trainer, batches=_FiniteBatches(),
+            optimizer=_recording_optimizer(events, fused=bool(extra.get("_fused"))),
+            lr_schedule=ConstantLRSchedule(lr=1e-4),
+            loss_weighting=UniformLossWeighting(), steps=1,
+            resource_control=_FakeResourceControl(events))
+        inputs.update({k: v for k, v in extra.items() if not k.startswith("_")})
+        try:
+            node.build(**inputs)
+        except ValueError as e:
+            check(fragment in str(e),
+                  f"error for {extra} must mention {fragment!r}; got: {e}")
+            return
+        raise AssertionError(f"build() with {extra} should have raised ValueError")
+
+    expect_valueerror({"grad_accum": 0}, "grad_accum")
+    expect_valueerror({"grad_clip_max_norm": -1.0}, "grad_clip_max_norm")
+    expect_valueerror({"_fused": True, "grad_clip_max_norm": 1.0}, "fused")
+    expect_valueerror({"save_every_n_steps": 1, "save_prefix": "   "}, "save_prefix")
+    print("    PASS")
+
+
+def check_intermediate_save_writes_numbered_checkpoints():
+    print("[save_every_n_steps: numbered LoRA safetensors land in the "
+          "sandboxed loras dir at each boundary step (atomic, no .tmp "
+          "leftovers), and cadence counts optimizer steps]")
+    import shutil
+    import tempfile
+
+    from nodes.components.layout import ProjectLayout
+
+    tmp = Path(tempfile.mkdtemp(prefix="smoke_managed_save_"))
+    try:
+        layout = ProjectLayout(
+            comfy_dir=tmp, checkpoints_dir=tmp / "ckpts", loras_dir=tmp / "loras",
+            datasets_dir=tmp / "ds", runs_dir=tmp / "runs")
+
+        class _SaveableModel(_FakeModel):
+            def trained_state_dict(self):
+                return {"smoke.w": torch.zeros(2, 2)}
+
+        events: list = []
+        model = _SaveableModel(events)
+        _run_managed(events, _recording_optimizer(events, fused=False), steps=2,
+                     model=model, extra={"save_every_n_steps": 1,
+                                         "save_prefix": "smoke_step",
+                                         "project_layout": layout})
+        f1 = layout.loras_dir / "smoke_step_000001.safetensors"
+        f2 = layout.loras_dir / "smoke_step_000002.safetensors"
+        check(f1.exists() and f2.exists(),
+              f"both step checkpoints must exist; got {sorted(p.name for p in layout.loras_dir.glob('*'))}")
+        check(not list(layout.loras_dir.glob("*.tmp")),
+              "atomic write must leave no .tmp file behind")
+
+        # save_every_n_steps=2: only the boundary optimizer step lands.
+        events2: list = []
+        _run_managed(events2, _recording_optimizer(events2, fused=False), steps=2,
+                     model=_SaveableModel(events2),
+                     extra={"save_every_n_steps": 2, "save_prefix": "smoke_two",
+                            "project_layout": layout})
+        check((layout.loras_dir / "smoke_two_000002.safetensors").exists()
+              and not (layout.loras_dir / "smoke_two_000001.safetensors").exists(),
+              "cadence must count optimizer steps: only step 2 saved with save_every=2")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("    PASS")
+
+
+def check_monitor_reports_once_per_optimizer_step_with_t_buckets():
+    from nodes.monitor.handle import MonitorHandle
+
+    class _CaptureMonitor(MonitorHandle):
+        def __init__(self):
+            self.reports = []
+
+        def report(self, data):
+            self.reports.append(dict(data))
+
+    class _TBatches:
+        """t=[100, 800] every batch -> loss_t_low + loss_t_high present,
+        loss_t_mid absent (no mid-t samples -> no key, not a zero)."""
+        def __iter__(self):
+            while True:
+                yield {"x_t": torch.randn(2, 4, 4, 4), "target": torch.randn(2, 4, 4, 4),
+                       "t": torch.tensor([100, 800]), "prompt": "x"}
+
+    print("[monitor diagnostics: one report per optimizer step under "
+          "grad_accum (not one per micro-step), each carrying the raw "
+          "per-t-bucket losses for the buckets the window's batches "
+          "actually sampled]")
+    events: list = []
+    monitor = _CaptureMonitor()
+    _run_managed(events, _recording_optimizer(events, fused=False), steps=2,
+                 grad_accum=2, batches=_TBatches(), monitor=monitor)
+    check(len(monitor.reports) == 2,
+          f"one report per optimizer step (2), got {len(monitor.reports)}")
+    for rep in monitor.reports:
+        check(rep["step"] in (0, 1) and isinstance(rep["loss"], float),
+              f"report must carry the optimizer step and window-averaged loss; got {rep.get('step')}")
+        check("loss_t_low" in rep and "loss_t_high" in rep,
+              f"window sampled t=100 and t=800 -> both bucket keys required; got {sorted(rep)}")
+        check("loss_t_mid" not in rep,
+              "no mid-t samples in the window -> key omitted (chart gap, not a fabricated 0)")
+        check(isinstance(rep["loss_t_low"], float) and isinstance(rep["loss_t_high"], float),
+              "bucket values must be plain floats for JSON transport")
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_model_is_registered_non_offloadable_and_never_released()
@@ -571,6 +905,14 @@ def main():
     check_profile_prints_residency_lines_at_the_right_moments()
     check_step_timing_off_by_default_and_on_when_requested()
     check_prewarm_text_encoder_warms_unloads_and_skips_ensure_loaded()
+    check_grad_accum_runs_one_optimizer_update_per_window()
+    check_fused_grad_accum_spans_sub_steps()
+    check_grad_accum_flows_real_gradients_into_real_optimizer()
+    check_grad_accum_loss_scaling_stays_internal()
+    check_grad_clip_applies_once_per_optimizer_step()
+    check_build_rejects_invalid_training_shapes()
+    check_intermediate_save_writes_numbered_checkpoints()
+    check_monitor_reports_once_per_optimizer_step_with_t_buckets()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

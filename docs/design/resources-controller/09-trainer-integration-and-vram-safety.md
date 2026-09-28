@@ -452,3 +452,102 @@ Both landed 2026-09-28 as `ManagedLoRATrainerNode`'s
   is cheaper than carrying their activations. Density 1.0 (full
   checkpointing) + prewarm is the configuration that wins on both axes,
   and the full numbers live in `docs/known-issues/open.md`.
+
+## Fifth addendum: the loop itself -- accumulation, warmup, per-sample weighting, clip, and a monitor worth reading
+
+Everything above optimizes *what happens between* optimizer steps. This
+addendum is about the steps themselves: a 2026-09-29 review of the
+managed route against the legacy `core/` loop found the managed route
+had silently dropped four stabilizers when it was written, which
+together explain why trained LoRAs came out "slightly destructive" at
+strength 1.0 even when the loss curve looked healthy. All five pieces
+below landed together; defaults keep every pre-existing behavior
+byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
+`save_every_n_steps=0`, uniform weighting unchanged).
+
+- **`grad_accum` Port (default 1): effective batch was 2.** The legacy
+  loop trained with `grad_accum=6`; the managed route had no
+  accumulation at all, so every "step" was a single batch-2 update --
+  noisier gradients and a different effective LR regime than the run the
+  LR was tuned against. `steps` now counts *optimizer* steps: each step
+  consumes K micro-steps (fresh batch, forward, backward) with the loss
+  divided by K, and exactly one `zero_grad`/`update_lr`/`step()`/
+  `on_step`/monitor report at the window's boundary. LR schedules key
+  on the optimizer step, so warmup and decay see the same step count
+  they would without accumulation. This is a deliberate divergence from
+  legacy `core/train_step.py`, where `steps` counted micro-steps and the
+  displayed step/total were batch-position counts -- keeping the old
+  meaning would have made `steps` mean different things at K=1 and K>1.
+  Fused optimizers accumulate through their documented contract:
+  `begin_step(sub_steps=K)` once per window, `prepare_next_pass()`
+  between micro-steps (without it `_in_backward` stays set and pass 2
+  never counts), no `step()` call at all -- the boundary backward's hook
+  *is* the update.
+- **`WarmupLRSchedule` (`nodes/train/schedule.py`): the legacy
+  200-step warmup was never ported.** LR went straight to 1.5e-5 at
+  step 0. The wrapper lerps from `warmup_start` (default 0.0) toward
+  the *wrapped schedule's own value at the same step* -- so a cosine
+  inside warmup already tracks the cosine, and frac reaches 1.0 exactly
+  at the last warmup step (continuous join, no jump). `warmup_steps=0`
+  is a passthrough; the node is registered in the graph.
+- **Loss weighting is now applied per sample, on both routes.** The
+  old code computed one scalar from the batch's *mean* sigma
+  (`w(mean sigma) * mean(loss)`). For Min-SNR that weight is a
+  nonlinear function of sigma, so on any mixed-t batch -- and batches
+  carry per-sample t almost always -- the scalar disagreed with the
+  intended `mean(w(sigma_i) * l_i)`, over-weighting or under-weighting
+  every step depending on where the t-samples landed. Both
+  `ManagedLoRATrainerNode`'s and `step_pipeline.py`'s `LossPhase` now
+  weight per sample when sigma is per-sample (mean-sigma fallback for
+  shared-sigma schedules, uniform is bit-identical either way), and
+  stash the detached raw per-sample MSE in `extras["per_sample_loss"]`
+  for the diagnostics below. The shared `step_pipeline` change means
+  the main route gets this fix and the diagnostics for free.
+- **Per-t loss diagnostics, colored per series on the monitor.**
+  `t_bucket_losses()` (`nodes/train/loss.py`) splits the window's raw
+  per-sample MSE into fixed t thirds -- `loss_t_low` [0, 333),
+  `loss_t_mid` [333, 666), `loss_t_high` [666, 1000) -- unweighted, so
+  the chart shows what the model is actually doing at each noise level
+  rather than the weighting's output. The managed `MonitoringPhase`
+  accumulates them across micro-steps and emits once per optimizer
+  step; a bucket whose window sampled no t falls in that range *omits
+  its key* rather than emitting 0 (the monitor bus passes report dicts
+  through unchanged, so the omission reaches the chart). `LossChart`
+  (`server/static/loss_chart.js`) is now multi-series
+  (`options.series=[{key,label,color}]`): one colored line + dots per
+  series, gaps where a key is absent, per-series tooltip rows with
+  color chips, and a legend laid out per series -- total loss blue
+  `#6c8cff`, t-low green `#4caf50`, t-mid amber `#ffb300`, t-high red
+  `#ff5252`, matching three new color-labeled metric cards on the
+  dashboard. `addPoint(step, number)` still works (legacy single-series
+  form); `point.loss`/`point.smoothed` keep tracking the primary series.
+- **`grad_clip_max_norm` Port (default 0.0): no gradient clipping
+  anywhere, fused or not.** Clipping runs `clip_grad_norm_` once per
+  optimizer step, on the boundary's full accumulated gradient only
+  (never on interior micro-steps, where it would rescale a window in
+  progress). It is a build-time `ValueError` on a fused optimizer --
+  those optimizers fire their updates inside `backward()` hooks, so
+  clipping after backward is already too late and pretending otherwise
+  would be a silent no-op -- and for negative max-norm.
+- **`save_every_n_steps` / `save_prefix` / `project_layout` Ports:
+  intermediate LoRAs.** Runs were routinely killed by hand around step
+  700 with nothing on disk; now each boundary optimizer step divisible
+  by the cadence writes `<prefix>_<step:06d>.safetensors` (default
+  prefix `lora_step`) into the sandboxed loras dir through
+  `save_trained_weights()`, the shared atomic helper extracted from
+  `LoRACheckpointSaverNode` (tmp + `replace`, empty-dict raises).
+  Saving between optimizer steps is safe: gradients are zeroed, the
+  optimizer has stepped, and the next window starts clean. Cadence
+  counts optimizer steps, so it is cadence in *updates* regardless of
+  K. `save_every_n_steps=0` (default) disables saving; 0 cadence with
+  an empty prefix, and negative cadence, are build-time errors.
+
+The K=1 path was kept behavior-identical on purpose (zero_grad at
+micro 0, no `loss_for_backward` tensor in the graph, unchanged
+`empty_cache` cadence, `before_step` index = step), and
+`nodes/smoke_tests/` covers all of it: window call counts and
+fused pass counts, loss/K staying internal to backward, boundary-only
+clip via a monkeypatched spy, numbered files landing on cadence, each
+contract error, bucket keys present/omitted per window, warmup ramp and
+join math, and both LossPhases' per-sample weighting against
+hand-computed values.

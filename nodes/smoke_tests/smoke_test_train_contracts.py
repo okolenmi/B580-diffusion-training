@@ -15,11 +15,12 @@ from nodes.train.loss import (LossWeightingNode, MinSNRLossWeightingNode,
                                UniformLossWeightingNode)
 from nodes.train.node import TrainerNode
 from nodes.train.schedule import (ConstantLRScheduleNode, CosineLRScheduleNode,
-                                   LRScheduleNode)
+                                   LRScheduleNode, WarmupLRScheduleNode)
 from nodes.train.supervised import SupervisedLoRATrainerNode
 
 ABSTRACT = [TextEncoderNode, LRScheduleNode, LossWeightingNode, TrainerNode]
 CONCRETE = [SDXLTextEncoderNode, ConstantLRScheduleNode, CosineLRScheduleNode,
+            WarmupLRScheduleNode,
             UniformLossWeightingNode, MinSNRLossWeightingNode, SupervisedLoRATrainerNode]
 
 
@@ -41,6 +42,32 @@ def main():
     cosine = CosineLRScheduleNode().build(lr=1e-4, total_steps=100)["schedule"]
     check(abs(cosine.value(0) - 1e-4) < 1e-12, "cosine schedule should start at lr")
     check(cosine.value(99) < cosine.value(0), "cosine schedule should decay")
+
+    # WarmupLRSchedule: linear ramp toward the *wrapped* schedule's own value
+    # at each step, exact join at the boundary, pure passthrough at 0.
+    const2 = ConstantLRScheduleNode().build(lr=1e-4)["schedule"]
+    warm = WarmupLRScheduleNode().build(
+        schedule=const2, warmup_steps=100, warmup_start=1e-8)["schedule"]
+    check(abs(warm.value(0) - (1e-8 + (1e-4 - 1e-8) * 0.01)) < 1e-15,
+          "warmup step 0 must sit one ramp-step above warmup_start")
+    check(warm.value(50) > warm.value(10) > warm.value(0),
+          "warmup must ramp up across its window")
+    check(abs(warm.value(99) - const2.value(99)) < 1e-15,
+          "last warmup step must join the wrapped schedule exactly (frac reaches 1.0)")
+    check(warm.value(100) == const2.value(100) and warm.value(9999) == 1e-4,
+          "after warmup the wrapped schedule passes through unchanged")
+    wc = WarmupLRScheduleNode().build(schedule=cosine, warmup_steps=100)["schedule"]
+    check(abs(wc.value(50) - cosine.value(50) * 51 / 100) < 1e-15,
+          "wrapping a cosine must track the cosine's own value per step during "
+          "warmup (lerp toward inner.value(step)), not toward a frozen target")
+    w0 = WarmupLRScheduleNode().build(schedule=const2, warmup_steps=0)["schedule"]
+    check(w0.value(0) == 1e-4 and w0.value(500) == 1e-4,
+          "warmup_steps=0 must be a pure passthrough")
+    try:
+        WarmupLRScheduleNode().build(schedule=const2, warmup_steps=-1)
+        raise AssertionError("negative warmup_steps should have raised")
+    except ValueError:
+        pass
 
     check(UniformLossWeightingNode().build()["weighting"].weight(0.5) == 1.0,
           "uniform weighting should always be 1.0")

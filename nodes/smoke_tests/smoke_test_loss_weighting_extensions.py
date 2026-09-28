@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from nodes.components.diffusion import EpsParameterization, VPredParameterization
 from nodes.train.loss import (MinSNRLossWeighting, MinSNRLossWeightingNode,
-                               P2LossWeighting, P2LossWeightingNode)
+                               P2LossWeighting, P2LossWeightingNode,
+                               UniformLossWeighting)
 
 TOL = 1e-9
 failures = []
@@ -119,12 +120,71 @@ def check_node_wrappers():
           w_p2.weight(2.0), 1.0 / ((2.0 + snr) ** 1.5))
 
 
+def check_loss_phase_weights_per_sample():
+    """Both trainers' LossPhase must apply the weighting *per sample*
+    (mean(w(sigma_i) * l_i)), not the older scalar form from the batch's
+    mean sigma (w(mean sigma) * mean(l)). For a nonlinear weighting the
+    two disagree on every mixed-t batch -- and batches carry per-sample t
+    almost always -- so this is the actual behavioral change, with the
+    uniform case staying bit-identical to the old math."""
+    print("\n=== LossPhase applies weighting per sample (both routes) ===")
+    from types import SimpleNamespace
+
+    import torch
+
+    from nodes.train.managed import LossPhase as ManagedLossPhase
+    from nodes.train.step_pipeline import LossPhase as PipelineLossPhase
+
+    # sample0 l = 9.0 (error 6 on one of four elements), sample1 l = 0.0.
+    def make_state():
+        return SimpleNamespace(extras={
+            "pred": torch.tensor([[0.0, 0.0, 0.0, 6.0], [0.0, 0.0, 0.0, 0.0]]),
+            "target": torch.zeros(2, 4),
+            "sigma": torch.tensor([0.05, 4.0]),  # mixed-t: low noise + high noise
+        })
+
+    gamma = 5.0
+    weighting = MinSNRLossWeighting(gamma=gamma)
+    w0, w1 = weighting.weight(0.05), weighting.weight(4.0)
+    expected_per_sample = (w0 * 9.0 + w1 * 0.0) / 2.0
+    mean_sigma = (0.05 + 4.0) / 2.0
+    old_scalar = weighting.weight(mean_sigma) * (9.0 + 0.0) / 2.0
+    record(abs(old_scalar - expected_per_sample) > 0.1,
+           "test numbers chosen so the two formulas genuinely differ "
+           f"(old {old_scalar:.4f} vs per-sample {expected_per_sample:.4f})")
+
+    for cls, label in ((PipelineLossPhase, "step_pipeline"), (ManagedLossPhase, "managed")):
+        st = make_state()
+        cls(weighting).run(st)
+        got = float(st.extras["loss"])
+        record(abs(got - expected_per_sample) <= TOL,
+               f"{label} LossPhase: mean(w_i * l_i)",
+               detail=f"got {got}, expected {expected_per_sample}")
+        ps = st.extras.get("per_sample_loss")
+        record(ps is not None and not ps.requires_grad
+               and [round(float(v), 6) for v in ps] == [9.0, 0.0],
+               f"{label} LossPhase: stashes detached per-sample raw MSE for the t buckets")
+
+    # Uniform weighting must be bit-identical to the old scalar math.
+    st = make_state()
+    PipelineLossPhase(UniformLossWeighting()).run(st)
+    check("uniform stays mean(l)", float(st.extras["loss"]), 4.5)
+
+    # Scalar-sigma schedules take the old single-weight path.
+    st = make_state()
+    st.extras["sigma"] = torch.tensor(1.0)  # shared sigma, not per-sample
+    PipelineLossPhase(weighting).run(st)
+    check("scalar sigma collapses to one shared weight",
+          float(st.extras["loss"]), weighting.weight(1.0) * 4.5)
+
+
 def main():
     check_eps_branch_unchanged()
     check_vpred_branch()
     check_eps_vpred_relationship()
     check_p2_weighting()
     check_node_wrappers()
+    check_loss_phase_weights_per_sample()
 
     print("\n" + "=" * 60)
     if failures:

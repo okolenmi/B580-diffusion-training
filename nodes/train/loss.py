@@ -16,6 +16,44 @@ class LossWeighting(ABC):
         ...
 
 
+# Fixed thirds of the timestep index range [0, 1000) -- the per-t loss
+# diagnostics both trainers' MonitoringPhase report under these keys.
+# Named by what those timesteps train: low t = low noise = fine detail
+# (late denoising), high t = high noise = coarse structure (early
+# denoising). Fixed boundaries (not per-run quantiles) so two runs' curves
+# are directly comparable; a dataset whose baked t range sits entirely in
+# one third simply omits the other keys (see t_bucket_losses).
+T_BUCKETS = (("loss_t_low", 0, 333), ("loss_t_mid", 333, 666), ("loss_t_high", 666, 1000))
+
+
+def t_bucket_losses(per_sample_loss, t) -> dict[str, float]:
+    """Mean raw (unweighted) per-sample MSE per fixed t third -- the
+    "which end of the timestep range is actually diverging" split behind
+    the monitor chart's colored bucket lines.
+
+    Deliberately raw: the reported `loss` is weighting-applied (and so
+    only comparable to itself across steps), while buckets are always the
+    plain per-sample MSE, so loss_t_low/loss_t_mid/loss_t_high are
+    comparable to each other and to a legacy run's unweighted per-sample
+    numbers. Buckets with no samples in this report get no key at all --
+    a batch-2 step rarely covers all three, and a missing key renders as
+    a gap in the chart rather than a fabricated flat line.
+
+    Pure Python over tolist() output: one small host-side sync in a step
+    that already syncs for loss/lr reporting anyway."""
+    if per_sample_loss is None or t is None:
+        return {}
+    losses = (per_sample_loss.detach().reshape(-1).tolist()
+              if hasattr(per_sample_loss, "detach") else list(per_sample_loss))
+    ts = t.detach().reshape(-1).tolist() if hasattr(t, "detach") else list(t)
+    out: dict[str, float] = {}
+    for name, lo, hi in T_BUCKETS:
+        vals = [loss for loss, ti in zip(losses, ts) if lo <= ti < hi]
+        if vals:
+            out[name] = sum(vals) / len(vals)
+    return out
+
+
 class UniformLossWeighting(LossWeighting):
 
     def weight(self, sigma: float) -> float:

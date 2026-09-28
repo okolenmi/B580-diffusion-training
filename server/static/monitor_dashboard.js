@@ -1,11 +1,25 @@
 (function () {
   "use strict";
 
+  // The managed/main trainers' per-t loss diagnostics (nodes/train/loss.py's
+  // t_bucket_losses keys) plotted alongside the total, one color per series:
+  // total in blue; t-low (fine detail, late denoising) green; t-mid amber;
+  // t-high (coarse structure, early denoising) red -- red last because that's
+  // the end whose divergence reads first as "destructive output at strength
+  // 1.0". Series keys whose report lacks the key (a window whose batches never
+  // sampled that bucket) render as gaps, not zeros -- see LossChart's header.
+  const LOSS_SERIES = [
+    { key: "loss", label: "loss", color: "#6c8cff" },
+    { key: "loss_t_low", label: "t low", color: "#4caf50" },
+    { key: "loss_t_mid", label: "t mid", color: "#ffb300" },
+    { key: "loss_t_high", label: "t high", color: "#ff5252" },
+  ];
+
   class MonitorDashboard {
     constructor(monitorId, els) {
       this.monitorId = monitorId;
       this.els = els;
-      this.chart = new LossChart(els.canvas);
+      this.chart = new LossChart(els.canvas, { series: LOSS_SERIES });
       this.firstEventTime = null;
       this.lastEvent = null;
       this.recentRates = []; // {t, step} pairs, last few, for a steps/sec estimate
@@ -47,7 +61,11 @@
       if (this.recentRates.length > 20) this.recentRates.shift();
       this.lastEvent = data;
 
-      this.chart.addPoint(data.step, data.loss);
+      // Values object (not a bare number): series absent from this report
+      // are omitted, which LossChart renders as a gap.
+      const values = {};
+      for (const s of LOSS_SERIES) if (data[s.key] !== undefined) values[s.key] = data[s.key];
+      this.chart.addPoint(data.step, values);
       this.updateMetrics(data, now);
     }
 
@@ -57,6 +75,11 @@
       e.loss.textContent = this.fmt(data.loss);
       e.smoothed.textContent = this.chart.points.length && this.chart.points[this.chart.points.length - 1].smoothed != null
         ? this.fmt(this.chart.points[this.chart.points.length - 1].smoothed) : "\u2014";
+      // Per-t bucket readouts: latest value or em dash when this report had
+      // no samples for that bucket (same rule as the chart's gaps).
+      if (e.lossTlow) e.lossTlow.textContent = this.fmt(data.loss_t_low);
+      if (e.lossTmid) e.lossTmid.textContent = this.fmt(data.loss_t_mid);
+      if (e.lossThigh) e.lossThigh.textContent = this.fmt(data.loss_t_high);
       e.lr.textContent = data.lr !== undefined ? data.lr.toExponential(2) : "\u2014";
 
       if (data.total_steps) {
@@ -116,6 +139,9 @@
       step: document.getElementById("m-step"),
       loss: document.getElementById("m-loss"),
       smoothed: document.getElementById("m-smoothed"),
+      lossTlow: document.getElementById("m-loss-t-low"),
+      lossTmid: document.getElementById("m-loss-t-mid"),
+      lossThigh: document.getElementById("m-loss-t-high"),
       lr: document.getElementById("m-lr"),
       rate: document.getElementById("m-rate"),
       elapsed: document.getElementById("m-elapsed"),

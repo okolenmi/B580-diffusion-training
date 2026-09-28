@@ -3,6 +3,17 @@
    25% for extreme values), so a loss curve with occasional spikes stays
    readable without the everyday range getting squashed to a flat line.
 
+   Multi-series: options.series = [{key, label, color}] defines the lines
+   (default: a single "loss" series, so a canvas constructed without
+   options draws exactly what it used to). addPoint takes a values object
+   keyed by series key; a series absent from the object (or explicitly
+   null) has a *gap* at that step -- no raw dot, line broken -- because a
+   per-timestep-bucket loss genuinely has no value for a step whose
+   batches never sampled that bucket, and a fabricated flat segment would
+   lie about that. point.loss / point.smoothed keep tracking the primary
+   (first) series for callers that predate multi-series (the monitor
+   dashboard's metric readout reads point.smoothed directly).
+
    This is an instantiable class, not the page-level singleton
    window.ChartManager the original dashboard tab (chart.js) uses -- same
    scale math (ported, not reinvented; it's genuinely good), rebuilt as a
@@ -17,8 +28,12 @@ class LossChart {
     this.ctx = canvas.getContext("2d");
     this.smoothWindow = (options && options.smoothWindow) || 24;
     this.maxPoints = (options && options.maxPoints) || 1000;
+    this.series = (options && options.series && options.series.length)
+      ? options.series
+      : [{ key: "loss", label: "Loss", color: "#6c8cff" }];
+    this.primaryKey = this.series[0].key;
 
-    this.points = []; // {step, loss, smoothed}
+    this.points = []; // {step, values: {key: v|null}, s: {key: smoothed|null}, loss, smoothed}
     this.dpr = window.devicePixelRatio || 1;
     this.margin = { top: 24, right: 20, bottom: 40, left: 80 };
     this.lastMouse = null;
@@ -40,15 +55,47 @@ class LossChart {
     this._draw();
   }
 
-  addPoint(step, loss) {
-    const recent = this.points.slice(-this.smoothWindow).map(p => p.loss);
-    recent.push(loss);
-    const smoothed = this.points.length + 1 >= this.smoothWindow
-      ? recent.reduce((a, b) => a + b, 0) / recent.length
-      : null;
-    this.points.push({ step, loss, smoothed });
+  addPoint(step, values) {
+    // Legacy/number form: addPoint(step, 0.13) == single primary series.
+    if (values === null || typeof values !== "object") values = { [this.primaryKey]: values };
+    const point = { step, values: {}, s: {} };
+    for (const s of this.series) {
+      const v = values[s.key];
+      point.values[s.key] = v === undefined ? null : v;
+      point.s[s.key] = this._smoothedFor(s.key, point.values[s.key]);
+    }
+    // Primary-series compat fields (pre-multi-series callers/readouts).
+    point.loss = point.values[this.primaryKey];
+    point.smoothed = point.s[this.primaryKey];
+    this.points.push(point);
     if (this.points.length > this.maxPoints) this.points.shift();
     this._requestDraw();
+  }
+
+  /* Running mean over the last smoothWindow *present* values of this
+     series (gaps skipped, not counted as 0), null until the window has
+     enough -- same fill rule the single-series version used, applied per
+     series so one sparse series can't shorten another's smoothing. */
+  _smoothedFor(key, value) {
+    if (value === null || value === undefined) return null;
+    const recent = [];
+    for (let i = this.points.length - 1; i >= 0 && recent.length < this.smoothWindow - 1; i--) {
+      const prev = this.points[i].values[key];
+      if (prev !== null && prev !== undefined) recent.push(prev);
+    }
+    recent.push(value);
+    const filled = this._filledCount(key) + 1;
+    if (filled < this.smoothWindow) return null;
+    return recent.reduce((a, b) => a + b, 0) / recent.length;
+  }
+
+  _filledCount(key) {
+    let n = 0;
+    for (let i = this.points.length - 1; i >= 0; i--) {
+      const v = this.points[i].values[key];
+      if (v !== null && v !== undefined) n++;
+    }
+    return n;
   }
 
   reset() {
@@ -75,8 +122,18 @@ class LossChart {
   // values don't compress the everyday range into a flat line. ----
 
   _computeRange() {
-    const smoothVals = this.points.map(p => p.smoothed).filter(v => v != null && v > 0);
-    const lossVals = this.points.map(p => p.loss).filter(v => v != null && v > 0);
+    // Range spans *every* series (raw + smoothed), so a high-t bucket spike
+    // and the total loss share one honest axis instead of one series
+    // clipping outside the computed bounds.
+    const smoothVals = [], lossVals = [];
+    for (const s of this.series) {
+      for (const p of this.points) {
+        const sv = p.s[s.key];
+        if (sv != null && sv > 0) smoothVals.push(sv);
+        const rv = p.values[s.key];
+        if (rv != null && rv > 0) lossVals.push(rv);
+      }
+    }
 
     if (smoothVals.length >= 2) {
       const sMin = Math.min(...smoothVals), sMax = Math.max(...smoothVals);
@@ -205,32 +262,54 @@ class LossChart {
       if (px >= plotL && px <= plotR) ctx.fillText(Math.round(xs).toString(), px, plotB + 6);
     }
 
-    // raw loss dots
-    ctx.fillStyle = "rgba(108,140,255,0.6)";
-    for (const p of this.points) {
-      const dx = xPos(p.step), dy = yPos(p.loss);
-      if (dy >= plotT - 3 && dy <= plotB + 3) {
-        ctx.beginPath(); ctx.arc(dx, dy, 1.5, 0, Math.PI * 2); ctx.fill();
+    // raw loss dots -- one pass per series, in the series' own color; a
+    // series with no value at this step simply has no dot (a gap, not a 0).
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    for (const s of this.series) {
+      ctx.fillStyle = s.color;
+      for (const p of this.points) {
+        const v = p.values[s.key];
+        if (v == null) continue;
+        const dx = xPos(p.step), dy = yPos(v);
+        if (dy >= plotT - 3 && dy <= plotB + 3) {
+          ctx.beginPath(); ctx.arc(dx, dy, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
       }
     }
+    ctx.restore();
 
-    // smoothed line
-    ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 2; ctx.beginPath();
-    let started = false;
-    for (const p of this.points) {
-      if (p.smoothed == null || p.smoothed <= 0) { started = false; continue; }
-      const ax = xPos(p.step), ay = yPos(p.smoothed);
-      if (!started) { ctx.moveTo(ax, ay); started = true; } else { ctx.lineTo(ax, ay); }
+    // smoothed line -- per series, its own color; null smoothed breaks the
+    // line (started=false) so gaps stay gaps.
+    ctx.lineWidth = 2;
+    for (const s of this.series) {
+      ctx.strokeStyle = s.color;
+      ctx.beginPath();
+      let started = false;
+      for (const p of this.points) {
+        const sv = p.s[s.key];
+        if (sv == null || sv <= 0) { started = false; continue; }
+        const ax = xPos(p.step), ay = yPos(sv);
+        if (!started) { ctx.moveTo(ax, ay); started = true; } else { ctx.lineTo(ax, ay); }
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
 
-    // legend
-    ctx.fillStyle = "#6c8cff"; ctx.beginPath(); ctx.arc(plotL + 6, plotT - 8, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#888899"; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.fillText("Loss", plotL + 14, plotT - 8);
-    ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 2; ctx.beginPath();
-    ctx.moveTo(plotL, plotT + 8); ctx.lineTo(plotL + 12, plotT + 8); ctx.stroke();
-    ctx.fillText("Smoothed", plotL + 16, plotT + 8);
+    // legend -- one colored line-swatch + label per series, laid out left
+    // to right across the top margin (wraps to a second row if the labels
+    // don't fit: 4 series fit one row on any reasonable canvas, but a
+    // narrower embedded canvas shouldn't silently overlap).
+    ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    let lx = plotL + 4, ly = plotT - 8, row = 0;
+    for (const s of this.series) {
+      const labelW = ctx.measureText(s.label).width;
+      if (lx + 16 + labelW > plotR && row === 0) { lx = plotL + 4; ly = plotT + 8; row = 1; }
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + 12, ly); ctx.stroke();
+      ctx.fillStyle = "#888899";
+      ctx.fillText(s.label, lx + 16, ly);
+      lx += 16 + labelW + 14;
+    }
 
     this._drawTooltip(W, H, plotT, plotB, plotL, plotR, xPos, yPos);
   }
@@ -246,12 +325,25 @@ class LossChart {
     this.hover = best;
 
     const { ctx } = this;
-    const px = xPos(best.step), py = yPos(best.loss);
-    const lines = [`Step: ${best.step}`, `Loss: ${LossChart._formatNum(best.loss)}`];
-    if (best.smoothed != null) lines.push(`Smooth: ${LossChart._formatNum(best.smoothed)}`);
+    const primaryV = best.values[this.primaryKey];
+    const px = xPos(best.step);
+    const py = primaryV != null ? yPos(primaryV) : (plotT + plotB) / 2;
+    // One line per series present at this step, each in its series color:
+    // label + raw value (smoothed in parens when available). A bucket
+    // series with no value this step is omitted -- the chart's gap, stated
+    // in text.
+    const lines = [{ text: `Step: ${best.step}`, color: null }];
+    for (const s of this.series) {
+      const v = best.values[s.key];
+      if (v == null) continue;
+      let text = `${s.label}: ${LossChart._formatNum(v)}`;
+      const sv = best.s[s.key];
+      if (sv != null) text += ` (${LossChart._formatNum(sv)})`;
+      lines.push({ text, color: s.color });
+    }
 
     ctx.font = "11px monospace";
-    const tw = Math.max(...lines.map(l => ctx.measureText(l).width));
+    const tw = Math.max(...lines.map(l => ctx.measureText(l.text).width));
     const th = lines.length * 16 + 10;
     let tx = px + 12, ty = py - th / 2;
     if (tx + tw + 16 > W) tx = px - tw - 20;
@@ -265,12 +357,24 @@ class LossChart {
     ctx.fill(); ctx.stroke();
 
     ctx.fillStyle = "#ccc"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-    lines.forEach((l, i) => ctx.fillText(l, tx + 8, ty + 6 + i * 16));
+    lines.forEach((l, i) => {
+      const rowY = ty + 6 + i * 16;
+      if (l.color) {
+        ctx.fillStyle = l.color;
+        ctx.fillRect(tx + 8, rowY + 2, 6, 7);
+        ctx.fillStyle = "#ccc";
+        ctx.fillText(l.text, tx + 18, rowY);
+      } else {
+        ctx.fillText(l.text, tx + 8, rowY);
+      }
+    });
 
     ctx.strokeStyle = "rgba(200,200,200,0.3)"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.moveTo(px, plotT); ctx.lineTo(px, plotB); ctx.stroke(); ctx.setLineDash([]);
 
-    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "#6c8cff"; ctx.lineWidth = 1.5; ctx.stroke();
+    if (primaryV != null) {
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = this.series[0].color; ctx.lineWidth = 1.5; ctx.stroke();
+    }
   }
 }

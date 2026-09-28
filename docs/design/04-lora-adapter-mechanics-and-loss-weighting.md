@@ -287,4 +287,20 @@ an earlier version, `huggingface/diffusers#5654`) and `P2LossWeighting`
 (Choi et al., "Perception Prioritized Training of Diffusion Models", CVPR
 2022, weighting by `1 / (k + SNR)^gamma`) -- both in `nodes/train/loss.py`.
 
+**Application site fixed 2026-09-29**: the interface was never the
+problem -- the call site was. Both trainers' `LossPhase` used to feed it
+the batch's *mean* sigma and multiply the resulting scalar into the mean
+loss (`w(mean sigma) * mean(loss)`). Since `weight()` is nonlinear in
+sigma for Min-SNR and P2, that scalar is not the same number as the
+intended `mean(w(sigma_i) * l_i)` whenever a batch's t-samples differ,
+which for a batch drawn uniformly over t is essentially always. Both
+`ManagedLoRATrainerNode`'s and `step_pipeline.py`'s `LossPhase` now
+compute the weight per sample (shared-sigma schedules keep the
+scalar path; uniform weighting is bit-identical either way), and stash
+the detached raw per-sample MSE in `extras["per_sample_loss"]` -- which
+is also what feeds the per-t bucket diagnostics
+(`t_bucket_losses()`, design doc 09's fifth addendum). The
+`LossWeighting` ABC itself needed no change, as the first line above
+predicted.
+
 ---

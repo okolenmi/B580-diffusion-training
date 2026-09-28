@@ -22,13 +22,14 @@ Known gap, not fixed here because nothing in nodes/ can trigger it yet:
 core.save.save_lora_checkpoint also temporarily removes a FusedXPUAdafactor's
 backward hooks during the read, to avoid a hook firing mid-save. That
 race needs a *live, still-training* model and a save happening while
-training is paused mid-loop -- not reachable today since no nodes/
-orchestration node calls LoRACheckpointSaverNode from inside a
-TrainerNode's step loop (checked directly: nothing under nodes/train/
-references LoRACheckpointSaverNode as of this writing). Worth
-revisiting together whenever that node gets built, not before -- and
-this node's previous version, also never passed an optimizer through
-here either, so this isn't a regression.
+training is paused mid-loop -- still not reachable: the one in-loop save
+caller that now exists (ManagedLoRATrainerNode's save_every_n_steps)
+calls this module's save_trained_weights() between optimizer steps,
+never mid-backward, where hooks are the only thing that could fire (see
+that function's own docstring). Still worth revisiting together if a
+save ever lands mid-backward -- and this node's previous version, also
+never passed an optimizer through here either, so this isn't a
+regression.
 """
 
 from __future__ import annotations
@@ -39,6 +40,43 @@ from ..core import Port
 from ..components.layout import ProjectLayout
 from .handle import TrainedWeightsExportable
 from .node import CheckpointSaverNode
+
+
+def save_trained_weights(model: TrainedWeightsExportable, relative_path: str,
+                         layout: ProjectLayout | None = None) -> str:
+    """Atomic safetensors write of a TrainedWeightsExportable under the
+    sandboxed LoRA directory -- one implementation shared by
+    LoRACheckpointSaverNode.build() and ManagedLoRATrainerNode's own
+    save_every_n_steps (the in-training cadence port), so the mid-run
+    files and the end-of-run graph-node file are byte-identical in
+    construction. Returns the resolved path written.
+
+    Mid-training safety, the reason this is a function both callers can
+    use: trained_state_dict() only reads/detaches weights (no mutation),
+    and optimizer backward hooks only fire during a backward() -- a
+    save_every_n_steps save happens between optimizer steps, never
+    mid-backward, so the hook race core.save.save_lora_checkpoint
+    guards against (its temporary fused-hook removal) isn't reachable
+    from this caller either.
+
+    layout=None -> ProjectLayout.from_paths_module(); pass an explicit
+    layout to redirect (tests pass a temp directory). Resolution goes
+    through layout.resolve_safe_model_path(relative_path, "lora"): subfolders
+    allowed, '..'/absolute rejected -- same sandbox as every other
+    graph-reachable path."""
+    from safetensors.torch import save_file
+
+    state_dict = model.trained_state_dict()
+    if not state_dict:
+        raise ValueError("save_trained_weights: nothing to save -- "
+                         "trained_state_dict() returned an empty dict.")
+    layout = layout or ProjectLayout.from_paths_module()
+    resolved = layout.resolve_safe_model_path(relative_path, "lora")
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    tmp = resolved.with_suffix(resolved.suffix + ".tmp")
+    save_file(state_dict, str(tmp))
+    tmp.replace(resolved)
+    return str(resolved)
 
 
 class LoRACheckpointSaverNode(CheckpointSaverNode):
@@ -66,7 +104,6 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
 
     def build(self, **inputs) -> dict[str, str]:
         self.validate_inputs(inputs)
-        from safetensors.torch import save_file
 
         model = inputs["model"]
         if not isinstance(model, TrainedWeightsExportable):
@@ -74,18 +111,9 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
                 f"LoRACheckpointSaverNode needs a TrainedWeightsExportable "
                 f"(a trained model or a phase-split snapshot), got {type(model).__name__}."
             )
-        state_dict = model.trained_state_dict()
-        if not state_dict:
-            raise ValueError("LoRACheckpointSaverNode: nothing to save -- "
-                              "trained_state_dict() returned an empty dict.")
+        saved_path = save_trained_weights(
+            model, inputs["relative_path"], inputs.get("project_layout"))
 
-        layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
-        resolved = layout.resolve_safe_model_path(inputs["relative_path"], "lora")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        tmp = resolved.with_suffix(resolved.suffix + ".tmp")
-        save_file(state_dict, str(tmp))
-        tmp.replace(resolved)
-
-        result = {"saved_path": str(resolved)}
+        result = {"saved_path": saved_path}
         self.validate_outputs(result)
         return result

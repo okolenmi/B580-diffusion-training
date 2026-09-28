@@ -72,6 +72,7 @@ from ..components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedul
                                      EpsParameterization, KarrasInputScaler)
 from ..core import Port
 from ..dataset.handle import TrainingBatchSource
+from ..components.layout import ProjectLayout
 from ..memory.control_handle import ResourceControlHandle
 from ..memory.coordinator import ResourceCoordinator
 from ..memory.handle import DeviceResident
@@ -80,17 +81,28 @@ from ..model.lora_training_resources import LoRATrainingSkeleton
 from ..model.text_encoder import TextEncoder
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import FusedOptimizerHandle, OptimizerHandle, describe_optimizer
-from .loss import LossWeighting, UniformLossWeighting
+from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
 from .node import TrainerNode
 from .schedule import LRSchedule
 
 
 @dataclass
 class ManagedStepState:
+    """One **micro-step**: a single batch fetched, forwarded, backwarded.
+
+    `step` is the optimizer-step index (LR schedule, monitoring, save
+    cadence all key on it); `micro` is the position within that step's
+    grad_accum window (0 .. grad_accum-1), which is what phases gate on
+    to run once per window (zero_grad/begin_step, optimizer.step,
+    reporting) instead of once per batch. `micro` defaults to 0 == first
+    position, but every phase treats a state built without it (grad_accum
+    == 1 runs, every existing test) as a complete one-window step --
+    `0 + 1 >= 1` holds, so boundaries fire on the first/only micro."""
     step: int
     batch: Optional[dict]
     model: TrainableModel
     device: Any
+    micro: int = 0
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -485,28 +497,52 @@ class EncodeConditioningPhase(ManagedStepPhase):
 
 
 class ZeroGradPhase(ManagedStepPhase):
-    """LR update + gradient-buffer reset. No resource_control call here
-    on purpose, unlike BackwardAndOptimizerStepPhase below -- checked
-    directly against ComposedOptimizerHandle (nodes/optimizer/composed.py):
-    zero_grad() only touches .grad on the model's own parameters
+    """LR update + gradient-buffer reset, once per **optimizer step**
+    (grad_accum window), not once per micro-step -- zeroing every
+    micro-step would wipe gradients accumulated earlier in the same
+    window before the boundary optimizer.step() ever saw them, silently
+    defeating grad_accum (the same trap core/train_step.py's own
+    `micro_step % effective_accum == 0` gating exists to avoid). The
+    schedule value itself is read (and stashed into extras["lr"]) every
+    micro-step so MonitoringPhase's boundary report always finds it in
+    its own state's extras -- each micro-step gets a fresh ManagedStepState.
+
+    No resource_control call here on purpose, unlike
+    BackwardAndOptimizerStepPhase below -- checked directly against
+    ComposedOptimizerHandle (nodes/optimizer/composed.py): zero_grad()
+    only touches .grad on the model's own parameters
     (ExecutionStrategy.zero_grad(params)), update_lr() is pure Python
     float arithmetic -- neither one reads or writes the optimizer's own
     tracked state tensors (self.states), so this phase doesn't need
     optimizer state resident at all."""
 
-    def __init__(self, optimizer: OptimizerHandle, lr_schedule: LRSchedule, is_fused: bool):
+    def __init__(self, optimizer: OptimizerHandle, lr_schedule: LRSchedule,
+                 is_fused: bool, grad_accum: int = 1):
         self._optimizer = optimizer
         self._lr_schedule = lr_schedule
         self._is_fused = is_fused
+        self._grad_accum = grad_accum
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         lr = self._lr_schedule.value(state.step)
+        state.extras["lr"] = lr
+        if state.micro != 0:
+            # Mid-window: this window's zero_grad/begin_step already ran
+            # at micro 0 (and the optimizer can't be re-zeroed without
+            # destroying what's accumulated so far).
+            return state
         self._optimizer.update_lr(lr)
         if self._is_fused:
-            self._optimizer.begin_step(sub_steps=1)
+            # sub_steps=grad_accum tells the fused handle's backward
+            # hooks to span this many passes before applying anything --
+            # begin_step(sub_steps) is precisely this handle's multi-pass
+            # entry point (nodes/optimizer/composed_fused.py's own
+            # "multi-pass state machine" docstring), and
+            # BackwardAndOptimizerStepPhase calls prepare_next_pass()
+            # between passes to keep it counting.
+            self._optimizer.begin_step(sub_steps=self._grad_accum)
         else:
             self._optimizer.zero_grad()
-        state.extras["lr"] = lr
         return state
 
 
@@ -518,17 +554,45 @@ class ForwardPhase(ManagedStepPhase):
 
 
 class LossPhase(ManagedStepPhase):
-    def __init__(self, loss_weighting: LossWeighting):
+    """Per-sample loss weighting + per-t diagnostics stash -- same math
+    as the main route's LossPhase (nodes/train/step_pipeline.py; both
+    changed together in the same session, see that class's docstring for
+    why weighting is per-sample rather than one scalar from the batch's
+    mean sigma), plus this route's grad_accum loss scaling:
+
+    extras["loss"] stays the *unscaled* weighted loss (what's reported,
+    what on_step sees -- averaging window losses then equals the plain
+    mean over the window's batches); extras["loss_for_backward"] is that
+    same tensor divided by grad_accum, so backward() accumulates
+    grad_accum micro-step gradients into the mean gradient over the whole
+    window. Set only when backward_scale != 1.0 -- a plain grad_accum=1
+    run's backward reads extras["loss"] exactly as before."""
+
+    def __init__(self, loss_weighting: LossWeighting, backward_scale: float = 1.0):
         self._loss_weighting = loss_weighting
+        self._backward_scale = backward_scale
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
+        import torch
+
         pred = state.extras["pred"]
         target = state.extras["target"]
         sigma = state.extras["sigma"]
         per_sample = (pred.float() - target.float()).pow(2)
         per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
-        weight = self._loss_weighting.weight(float(sigma.float().mean().item()))
-        state.extras["loss"] = per_sample.mean() * weight
+        sigmas = sigma.float().reshape(-1)
+        if sigmas.numel() == per_sample.numel():
+            weights = torch.tensor(
+                [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
+                dtype=per_sample.dtype, device=per_sample.device)
+            loss = (per_sample * weights).mean()
+        else:
+            weight = self._loss_weighting.weight(float(sigmas.mean().item()))
+            loss = per_sample.mean() * weight
+        state.extras["loss"] = loss
+        state.extras["per_sample_loss"] = per_sample.detach()
+        if self._backward_scale != 1.0:
+            state.extras["loss_for_backward"] = loss * self._backward_scale
         return state
 
 
@@ -558,25 +622,52 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
 
     controller: same gating as EncodeConditioningPhase's own -- see
     that class's docstring.
+
+    grad_accum/grad_clip_max_norm: backward runs every micro-step (the
+    graph must be freed per micro-step for accumulation to stay
+    memory-neutral), but the *update* only happens on the boundary
+    micro-step -- non-fused via optimizer.step() gated below, fused via
+    the hook itself: begin_step(sub_steps=grad_accum) at window start
+    made the fused handle count passes, so the boundary backward's hook
+    fires the update on its own, and prepare_next_pass() between passes
+    keeps that count advancing (without it the handle's _in_backward
+    flag would stay True and it would never count a second pass). Grad
+    clipping sits between backward and step, boundary only -- and is
+    refused at build time for fused optimizers, since their update
+    already happened inside backward() before any code here could clip
+    (see ManagedLoRATrainerNode.build's own validation).
     """
 
     def __init__(self, optimizer: OptimizerHandle, is_fused: bool,
                  resource_control: ResourceControlHandle,
                  controller: "AdaptiveResidencyController",
-                 device_ctx: Optional[DeviceContext] = None, profile: bool = False):
+                 device_ctx: Optional[DeviceContext] = None, profile: bool = False,
+                 grad_accum: int = 1, grad_clip_max_norm: float = 0.0):
         self._optimizer = optimizer
         self._is_fused = is_fused
         self._resource_control = resource_control
         self._controller = controller
         self._device_ctx = device_ctx
         self._profile = profile
+        self._grad_accum = grad_accum
+        self._grad_clip_max_norm = grad_clip_max_norm
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         self._resource_control.ensure_loaded("optimizer")
         self._log("loaded")
-        state.extras["loss"].backward()
-        if not self._is_fused:
-            self._optimizer.step(n_steps=1)
+        # extras["loss_for_backward"] (grad_accum-scaled) when a window
+        # is in flight, plain extras["loss"] otherwise -- see LossPhase.
+        state.extras.get("loss_for_backward", state.extras["loss"]).backward()
+        is_boundary = state.micro + 1 >= self._grad_accum
+        if self._is_fused:
+            if not is_boundary:
+                self._optimizer.prepare_next_pass()
+        else:
+            if is_boundary:
+                if self._grad_clip_max_norm > 0.0:
+                    torch.nn.utils.clip_grad_norm_(
+                        state.model.trainable_parameters(), self._grad_clip_max_norm)
+                self._optimizer.step(n_steps=1)
         if self._controller.should_release("optimizer"):
             self._resource_control.release("optimizer")
             self._log("released")
@@ -607,12 +698,30 @@ class MonitoringPhase(ManagedStepPhase):
     baseline deltas, a tracked-footprint cross-check against
     ResourceProfile). Someone wanting that level of detail can still
     build it the same way that file did; duplicating all of it here
-    wasn't this file's job."""
+    wasn't this file's job.
+
+    grad_accum: runs after every micro-step (it's last in the phase
+    list), but *emits* only on the boundary micro-step -- one report /
+    one on_step call / one profile line per optimizer step, with `loss`
+    averaged over the window's micro-steps rather than any single
+    batch's. It accumulates across micro-steps because each micro-step
+    gets a fresh ManagedStepState whose extras die with it (see that
+    class's docstring), so this instance -- constructed once per build,
+    like FetchBatchPhase's iterator -- is the only thing that can carry
+    a window's numbers forward.
+
+    Report keys beyond loss/lr: `loss_t_low`/`loss_t_mid`/
+    `loss_t_high`, the raw per-sample MSE per fixed third of the t range
+    (loss.py's t_bucket_losses), accumulated over the whole window so a
+    grad_accum=1 batch-2 step still usually covers two of the three, and
+    buckets with no samples in the window emit no key at all (the
+    monitor chart draws a gap, not a fabricated flat line) -- the series
+    behind its per-t colored lines."""
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  coordinator: ResourceCoordinator, on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
-                 optimizer_id: str = ""):
+                 optimizer_id: str = "", grad_accum: int = 1):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._coordinator = coordinator
@@ -620,9 +729,29 @@ class MonitoringPhase(ManagedStepPhase):
         self._monitor = monitor
         self._profile = profile
         self._optimizer_id = optimizer_id
+        self._grad_accum = grad_accum
+        self._window_losses: list[float] = []
+        self._window_ps: list[float] = []
+        self._window_t: list[float] = []
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
-        loss_value = float(state.extras["loss"].item())
+        # Accumulate this micro-step's contribution first, always -- the
+        # boundary check below must not lose it.
+        self._window_losses.append(float(state.extras["loss"].item()))
+        ps = state.extras.get("per_sample_loss")
+        t = state.extras.get("t")
+        if ps is not None and t is not None:
+            self._window_ps.extend(ps.detach().reshape(-1).tolist())
+            self._window_t.extend(t.detach().reshape(-1).tolist())
+        if state.micro + 1 < self._grad_accum:
+            # Window still open -- emit once per optimizer step.
+            return state
+
+        loss_value = sum(self._window_losses) / len(self._window_losses)
+        buckets = t_bucket_losses(self._window_ps, self._window_t)
+        self._window_losses.clear()
+        self._window_ps.clear()
+        self._window_t.clear()
         lr = state.extras["lr"]
 
         if self._on_step is not None:
@@ -641,6 +770,7 @@ class MonitoringPhase(ManagedStepPhase):
         }
         if self._optimizer_id:
             report["optimizer"] = self._optimizer_id
+        report.update(buckets)
         mem = self._device_ctx.memory_stats()
         if mem is not None:
             report["vram_reserved_mb"] = mem["reserved_mb"]
@@ -655,8 +785,10 @@ class MonitoringPhase(ManagedStepPhase):
             mem_part = (f" vram_reserved={mem['reserved_mb']:.0f}MB"
                         if mem is not None else "")
             optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
+            bucket_part = "".join(
+                f" {key.replace('loss_t_', 't_')}={value:.4f}" for key, value in buckets.items())
             print(f"  [step {state.step}]{optimizer_part} loss={loss_value:.4f} lr={lr:.2e}"
-                  f"{mem_part} residents: {resident_part}")
+                  f"{bucket_part}{mem_part} residents: {resident_part}")
         return state
 
 
@@ -804,6 +936,64 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "finite per iteration (one pass = one epoch, same as "
                 "ManagedDatasetSourceNode's own output).",
         ),
+        "grad_accum": Port(
+            name="grad_accum", type=int, required=False, default=1,
+            doc="Gradient accumulation: one optimizer step per this many batches. The "
+                "outer `steps` count stays optimizer steps -- with grad_accum=4, a "
+                "steps=1000 run consumes 4000 batches, one "
+                "LR-schedule tick, one monitor report, one on_step call, and one "
+                "grad_accum-window average per step. Each micro-step does its own "
+                "fetch/forward/backward and frees its graph immediately, so peak VRAM "
+                "is identical to grad_accum=1 (accumulation lives in .grad, not in "
+                "held activations); effective batch = batch_size * grad_accum, which is "
+                "the lever for batch-2 gradient noise (the legacy loop trained with "
+                "grad_accum=6). Loss is divided by grad_accum per micro-step so the "
+                "accumulated gradient is the window's mean. Works with fused and "
+                "non-fused optimizers (fused via begin_step(sub_steps) + "
+                "prepare_next_pass between passes). Deliberate difference from legacy "
+                "core/train_step.py: there `steps` counted *micro*-steps (updates = "
+                "steps/grad_accum); here it counts optimizer updates, so `steps` keeps "
+                "meaning 'how many training updates' regardless of this value.",
+        ),
+        "grad_clip_max_norm": Port(
+            name="grad_clip_max_norm", type=float, required=False, default=0.0,
+            doc="0.0 disables. >0 clips gradient global norm to this at the optimizer-"
+                "step boundary, before the update (torch.nn.utils.clip_grad_norm_ over "
+                "the model's trainable parameters) -- the dampener for occasional "
+                "large-gradient batches that this loop otherwise passes straight "
+                "through. Non-fused optimizers only: a fused optimizer's update fires "
+                "inside backward() itself, before clipping could run, so a fused "
+                "optimizer with clip >0 is rejected at build time rather than "
+                "silently not clipping. Not applied during accumulation windows' "
+                "interior micro-steps -- only the boundary's full-window gradient "
+                "gets clipped.",
+        ),
+        "save_every_n_steps": Port(
+            name="save_every_n_steps", type=int, required=False, default=0,
+            doc="0 disables. >0 writes a full LoRA safetensors every N optimizer steps "
+                "(at the window boundary, so the file always reflects completed "
+                "updates) to `<save_prefix>_<step:06d>.safetensors` in the LoRA "
+                "directory, sandboxed through the same resolve_safe_model_path as "
+                "LoRACheckpointSaverNode (subfolders allowed, '..'/absolute rejected). "
+                "The piece a kill-at-step-N run needs: intermediate checkpoints to "
+                "evaluate instead of one file at the end. Safe mid-training: "
+                "trained_state_dict() only reads/detaches weights, and optimizer hooks "
+                "only fire during a backward() -- saves happen between steps. Pass "
+                "`project_layout` to redirect where files land (tests do; default = "
+                "ProjectLayout.from_paths_module()).",
+        ),
+        "save_prefix": Port(
+            name="save_prefix", type=str, required=False, default="lora_step",
+            doc="Filename prefix for save_every_n_steps output, e.g. 'lora_step' -> "
+                "'lora_step_000100.safetensors'. Must be non-empty; the rest of the "
+                "path is sandboxed by resolve_safe_model_path like every other "
+                "graph-reachable path.",
+        ),
+        "project_layout": Port(
+            name="project_layout", type=ProjectLayout, required=False, default=None,
+            doc="None = ProjectLayout.from_paths_module() -- see nodes/components/"
+                "layout.py. Only used by save_every_n_steps.",
+        ),
     }
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
@@ -829,6 +1019,13 @@ class ManagedLoRATrainerNode(TrainerNode):
             "residency_safety_margin", self.INPUTS["residency_safety_margin"].default)
         prewarm_text_encoder: bool = inputs.get(
             "prewarm_text_encoder", self.INPUTS["prewarm_text_encoder"].default)
+        grad_accum: int = inputs.get("grad_accum", self.INPUTS["grad_accum"].default)
+        grad_clip_max_norm: float = inputs.get(
+            "grad_clip_max_norm", self.INPUTS["grad_clip_max_norm"].default)
+        save_every_n_steps: int = inputs.get(
+            "save_every_n_steps", self.INPUTS["save_every_n_steps"].default)
+        save_prefix: str = inputs.get("save_prefix", self.INPUTS["save_prefix"].default)
+        project_layout = inputs.get("project_layout")
 
         # Prewarm step 1/2 -- discover the exact keys and wrap/bind trainer.clip
         # BEFORE registration below: warming itself (step 2/2, after registration)
@@ -855,6 +1052,25 @@ class ManagedLoRATrainerNode(TrainerNode):
         device = next(iter(model.trainable_parameters())).device
         is_fused = isinstance(optimizer, FusedOptimizerHandle)
         device_ctx = DeviceContext.for_device(str(device))
+
+        # Contract checks, up front rather than deep in a phase: each of
+        # these would otherwise either silently do nothing (clip on a
+        # fused optimizer) or produce confusing behavior mid-run.
+        if grad_accum < 1:
+            raise ValueError(f"grad_accum must be >= 1, got {grad_accum}")
+        if grad_clip_max_norm < 0.0:
+            raise ValueError(f"grad_clip_max_norm must be >= 0.0, got {grad_clip_max_norm}")
+        if grad_clip_max_norm > 0.0 and is_fused:
+            raise ValueError(
+                "grad_clip_max_norm > 0 is incompatible with a fused optimizer: its "
+                "update fires inside backward() (per-parameter hooks), before any "
+                "post-backward clip could run -- clipping here would silently do "
+                "nothing. Use a non-fused optimizer node with clipping, or "
+                "grad_clip_max_norm=0 with the fused one.")
+        if save_every_n_steps < 0:
+            raise ValueError(f"save_every_n_steps must be >= 0, got {save_every_n_steps}")
+        if save_every_n_steps > 0 and not str(save_prefix).strip():
+            raise ValueError("save_prefix must be non-empty when save_every_n_steps > 0")
 
         optimizer_id = describe_optimizer(optimizer)
         print(f"[ManagedLoRATrainerNode] optimizer: {optimizer_id}")
@@ -885,6 +1101,9 @@ class ManagedLoRATrainerNode(TrainerNode):
             from ..model.text_encoder_prewarm import warm_and_unload
             warm_and_unload(text_encoder, prewarm_keys)
 
+        if save_every_n_steps > 0:
+            from ..model.lora_saver import save_trained_weights
+
         phases: list[ManagedStepPhase] = [
             FetchBatchPhase(batches),
             PrepareDiffusionInputsPhase(
@@ -897,45 +1116,63 @@ class ManagedLoRATrainerNode(TrainerNode):
             EncodeConditioningPhase(text_encoder, resource_control, controller,
                                      device_ctx=device_ctx, profile=profile,
                                      ensure_loaded_before_encode=not prewarm_text_encoder),
-            ZeroGradPhase(optimizer, lr_schedule, is_fused),
+            ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum),
             ForwardPhase(),
-            LossPhase(loss_weighting),
+            LossPhase(loss_weighting,
+                      backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0),
             BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control, controller,
-                                           device_ctx=device_ctx, profile=profile),
+                                           device_ctx=device_ctx, profile=profile,
+                                           grad_accum=grad_accum,
+                                           grad_clip_max_norm=grad_clip_max_norm),
             MonitoringPhase(
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
                 on_step=inputs.get("on_step"), monitor=inputs.get("monitor"),
-                profile=profile, optimizer_id=optimizer_id),
+                profile=profile, optimizer_id=optimizer_id, grad_accum=grad_accum),
         ]
         pipeline = ManagedTrainingStepPipeline(phases)
 
-        step = 0
+        step = 0  # optimizer-step index; each step runs a grad_accum
+        # window of micro-steps (one batch each) inside the loop below.
         while step < steps:
             if self.context.should_cancel():
                 return {"model": model}
-            state = ManagedStepState(step=step, batch=None, model=model, device=device)
-            device_ctx.reset_peak_stats()  # so this step's own peak is what gets read below --
-            # not a cumulative one since process/run start (AdaptiveResidencyController's own
-            # docstring: this is what makes ongoing escalation, not just one-shot calibration,
-            # possible -- a stale cumulative peak would falsely look "still over budget" on
-            # every subsequent read after the first time it was, even once escalation had
-            # already reacted to it).
-            resource_control.before_step(step)  # safety net -- see this class's own docstring
-            pipeline.run_step(state)
-            controller.record_step_peak(device_ctx.memory_stats())  # every step, not just
-            # during calibration -- see AdaptiveResidencyController's own "keeps watching
-            # after deciding" docstring for why this can't stop once a decision is made.
+            for micro in range(grad_accum):
+                state = ManagedStepState(step=step, batch=None, model=model,
+                                         device=device, micro=micro)
+                device_ctx.reset_peak_stats()  # so this micro-step's own peak is what gets
+                # read below -- not a cumulative one since process/run start
+                # (AdaptiveResidencyController's own docstring: this is what makes ongoing
+                # escalation, not just one-shot calibration, possible -- a stale cumulative
+                # peak would falsely look "still over budget" on every subsequent read after
+                # the first time it was, even once escalation had already reacted to it).
+                # Reset per micro-step even for grad_accum>1: an over-budget micro-step is
+                # exactly what escalation needs to see, not just an over-budget window.
+                resource_control.before_step(step * grad_accum + micro)  # safety net -- see
+                # this class's own docstring
+                pipeline.run_step(state)
+                controller.record_step_peak(device_ctx.memory_stats())  # every micro-step,
+                # not just during calibration -- see AdaptiveResidencyController's own
+                # "keeps watching after deciding" docstring for why this can't stop once a
+                # decision is made.
+                micro_index = step * grad_accum + micro
+                if (controller.releases_anything and empty_cache_every_n_steps > 0
+                        and (micro_index + 1) % empty_cache_every_n_steps == 0):
+                    # Gated on releases_anything -- see that property's own docstring.
+                    # Reclaiming unused cached memory back to the driver is pointless work
+                    # when nothing was ever released in the first place (a real, reported
+                    # case: this loop was paying a full gc.collect()+empty_cache() pass
+                    # every step even when the controller had already decided to keep
+                    # everything resident, with nothing to actually reclaim).
+                    gc.collect()
+                    device_ctx.empty_cache()
             step += 1
-            if (controller.releases_anything and empty_cache_every_n_steps > 0
-                    and step % empty_cache_every_n_steps == 0):
-                # Gated on releases_anything -- see that property's own docstring.
-                # Reclaiming unused cached memory back to the driver is pointless work
-                # when nothing was ever released in the first place (a real, reported
-                # case: this loop was paying a full gc.collect()+empty_cache() pass
-                # every step even when the controller had already decided to keep
-                # everything resident, with nothing to actually reclaim).
-                gc.collect()
-                device_ctx.empty_cache()
+            if save_every_n_steps > 0 and step % save_every_n_steps == 0:
+                # Window boundary == completed updates only -- the file never
+                # reflects a half-accumulated window. See save_every_n_steps's
+                # own Port doc for why this is safe mid-training.
+                saved_path = save_trained_weights(
+                    model, f"{save_prefix}_{step:06d}.safetensors", project_layout)
+                print(f"[ManagedLoRATrainerNode] saved step {step}/{steps} -> {saved_path}")
 
         result = {"model": model}
         self.validate_outputs(result)

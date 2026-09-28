@@ -103,31 +103,72 @@ in the existing `ResBlock` case.
 
 from __future__ import annotations
 
+import math
 
-def enable_attention_block_checkpointing() -> None:
+
+def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
     """Idempotent per process (a sentinel on the class itself, same
     style as `gradient_checkpointing.enable_frozen_param_safe_checkpointing`'s
     own `_frozen_param_safe` flag) -- calling this more than once, even
     across different `ActivationCheckpointingStrategy` instances in the
-    same process, re-wraps nothing the second time. Not parameterized by
-    a `recompute_wrapper` the way the `ResBlock` patch is: this function
-    doesn't reimplement backward, it only makes `BasicTransformerBlock`
-    route through the *existing*, already-patchable `checkpoint()`/
+    same process, re-wraps nothing the second time (first call's
+    fraction wins). Not parameterized by a `recompute_wrapper` the way
+    the `ResBlock` patch is: this function doesn't reimplement backward,
+    it only makes `BasicTransformerBlock` route through the *existing*,
+    already-patchable `checkpoint()`/
     `CheckpointFunction` seam -- whichever `CheckpointFunction` variant
     (plain frozen-param-safe, or `ProfilingCheckpointing`'s instrumented
     one) is installed there at actual call time is the one that runs,
     with no separate copy of that choice to keep in sync here.
+
+    `fraction` selects *how many* blocks checkpoint -- the
+    VRAM-vs-throughput sweep knob (scripts/hw_validate.py's
+    --attn-ckpt-fraction): 1.0 (default, exactly today's behavior)
+    checkpoints every block; 0.75 selects a 3-on/1-off pattern; 0.5
+    every 2nd; 0.0 skips the patch entirely (equivalent
+    to never calling this). Selection is by each block's first-forward
+    traversal index (`_ac_seq_idx`, assigned lazily -- UNet
+    construction is untouched), floor-accumulation based so the
+    checkpointed set spreads across down/mid/up proportionally
+    instead of clumping in one region; a model whose blocks first run
+    later (preview model, second graph run in one process) keeps
+    getting contiguous indices, so density stays ~fraction either way.
+    Forward output is identical checkpointed or not -- the knob only
+    trades recompute for activation residency.
     """
     from comfy.ldm.modules import attention as comfy_attn
 
     current = comfy_attn.BasicTransformerBlock
     if getattr(current, "_attention_block_checkpointing_enabled", False):
         return
+    if fraction <= 0.0:
+        # Deliberately without setting the sentinel: a later call with a
+        # real fraction must still be able to patch (and the harness's
+        # fraction=0 is "attention ckpt off" as an experiment arm).
+        return
+    density = 1.0 if fraction >= 1.0 else fraction
 
     original_forward = current.forward
 
     def patched_forward(self, x, context=None, transformer_options={}):
         from comfy.ldm.modules.diffusionmodules.util import checkpoint as comfy_checkpoint
+
+        idx = getattr(self, "_ac_seq_idx", None)
+        if idx is None:
+            idx = patched_forward._seq_counter
+            patched_forward._seq_counter += 1
+            self._ac_seq_idx = idx  # plain int: nn.Module.__setattr__ stores it normally
+        # Density-fraction selection: checkpoint iff floor(idx*density)
+        # advances past floor((idx-1)*density) -- selects exactly `density`
+        # of blocks over any window. A stride = 1/fraction can only express
+        # 1/2, 1/3, ... and silently turns 0.75 into 0.5 (round(1.33)=1,
+        # clamped up to 2); the floor form handles any fraction and still
+        # spreads the selected set across down/mid/up instead of clumping.
+        if math.floor(idx * density) == math.floor((idx - 1) * density):
+            # Not selected this round: run the real forward directly, no
+            # recompute -- the point of the knob (see docstring).
+            return original_forward(self, x, context=context,
+                                    transformer_options=transformer_options)
 
         if context is None:
             # No cross-attention tensor to recompute a real graph through --
@@ -154,5 +195,6 @@ def enable_attention_block_checkpointing() -> None:
 
         return comfy_checkpoint(run, inputs, tuple(self.parameters()), True)
 
+    patched_forward._seq_counter = 0  # first-forward block indices, see docstring
     current.forward = patched_forward
     current._attention_block_checkpointing_enabled = True

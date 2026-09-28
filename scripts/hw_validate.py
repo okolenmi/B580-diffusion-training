@@ -13,6 +13,12 @@ driven from the shell, e.g.:
     # main route, uniform dataset, attention checkpointing as shipped
     python scripts/hw_validate.py main --label A_after --dataset 1024 --steps 40
 
+    # checkpointing sweep: how much of the shipped 100% attention
+    # checkpointing is actually needed (floor/peak composition lands in
+    # summary.json's floor_stages + steps.jsonl's component_footprints_mb)
+    python scripts/hw_validate.py main --label F_frac50 --dataset 1024 \
+        --batch 2 --attn-ckpt-fraction 0.5
+
     # same, but with enable_attention_block_checkpointing() neutered --
     # reproduces the pre-fix "checkpointing only reaches ResBlock" behavior
     HW_DISABLE_ATTENTION_CKPT=1 python scripts/hw_validate.py main \
@@ -105,6 +111,21 @@ def make_on_step(jsonl_path: Path, probe: MemProbe, state: dict):
         # First row covers checkpoint/text-encoder load + step 0 -- flagged,
         # and excluded from steady-state aggregates in summarize().
         row["covers_load"] = not state.get("reset_done")
+        # Per-component device footprints, captured once on the first step
+        # (after optimizer states exist -- they're lazy). None-valued
+        # entries (component exposes no footprint_bytes) are dropped.
+        if not state.get("probes_done"):
+            comps = {}
+            for name, fn in (state.get("probes") or {}).items():
+                if fn is None:
+                    continue
+                try:
+                    comps[name] = round(fn() / 2**20, 1)
+                except Exception as exc:  # noqa: BLE001 -- probe must never kill a run
+                    comps[name] = f"error: {exc}"[:80]
+            if comps:
+                row["component_footprints_mb"] = comps
+                state["probes_done"] = True
         fh.write(json.dumps(row) + "\n")
         fh.flush()
         probe.reset_peak()
@@ -146,6 +167,7 @@ def build_common(ctx, args, probe: MemProbe):
     from nodes.memory.vram_budget_controller import VRAMBudgetControllerNode
 
     weights = SafetensorsCheckpointNode(ctx).build(path=args.checkpoint)["weights"]
+    args._floor_stages = {"weights_host": probe.snapshot()}
     batches = ManagedDatasetSourceNode(ctx).build(
         dataset_root=args.dataset, batch_size=args.batch, shuffle=True)["batches"]
     schedule = CosineLRScheduleNode(ctx).build(
@@ -169,15 +191,25 @@ def run_main_route(args, ctx) -> str:
     model = ComfyUNetLoRANode(ctx).build(
         weights=weights, rank=args.rank, alpha=args.alpha,
         use_checkpoint=not args.no_checkpoint)["model"]
+    args._floor_stages["unet_lora_on_device"] = probe.snapshot()
     encoder = SDXLTextEncoderNode(ctx).build(weights=weights)["encoder"]
     encoder = CachingTextEncoderNode(ctx).build(
         encoder=encoder, resource_control=control)["encoder"]
+    args._floor_stages["text_encoder_on_device"] = probe.snapshot()
     params = ModelParametersNode(ctx).build(model=model)["params"]
     optimizer = ComposedAdamWOptimizerNode(ctx).build(
         params=params, lr=args.lr, state_precision=args.state_precision)["optimizer"]
 
     load_stats = probe.snapshot()
     probe.reset_peak()
+    # Optimizer states are lazy (allocated on the first step) -- register
+    # post-step footprint probes so the first steady-state steps.jsonl row
+    # records where the floor actually sits once training is underway.
+    args._probes.update({
+        "unet_lora": getattr(model, "footprint_bytes", None),
+        "text_encoder": getattr(encoder, "footprint_bytes", None),
+        "optimizer": getattr(optimizer, "footprint_bytes", None),
+    })
 
     SupervisedLoRATrainerNode(ctx).build(
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,
@@ -198,17 +230,24 @@ def run_managed_route(args, ctx) -> str:
 
     resources = ResourcesControllerNode(ctx).build(
         preset="lora_sdxl", checkpoint_path=args.checkpoint)["resources"]
+    args._floor_stages.update({"resources_controller": probe.snapshot()})
     trainer = LoRATrainingConfigNode(ctx).build(
         resources=resources, rank=args.rank, alpha=args.alpha,
         unet_weight_store=args.weight_store,
         use_checkpoint=not args.no_checkpoint,
         cache_text_encoder=args.cache_text_encoder)["trainer"]
+    args._floor_stages["trainer_model"] = probe.snapshot()
     params = TrainerParametersNode(ctx).build(trainer=trainer)["params"]
     optimizer = ComposedAdamWOptimizerNode(ctx).build(
         params=params, lr=args.lr, state_precision=args.state_precision)["optimizer"]
 
     load_stats = probe.snapshot()
     probe.reset_peak()
+    args._probes.update({
+        "resources": getattr(resources, "footprint_bytes", None),
+        "trainer": getattr(trainer, "footprint_bytes", None),
+        "optimizer": getattr(optimizer, "footprint_bytes", None),
+    })
 
     ManagedLoRATrainerNode(ctx).build(
         trainer=trainer, batches=batches, optimizer=optimizer,
@@ -221,12 +260,26 @@ def run_managed_route(args, ctx) -> str:
 
 
 # ------------------------------------------------------------------ driver
-def maybe_disable_attention_checkpointing() -> bool:
-    if os.environ.get("HW_DISABLE_ATTENTION_CKPT") != "1":
-        return False
-    import nodes.model.attention_checkpointing as ac
-    ac.enable_attention_block_checkpointing = lambda *a, **k: None
-    return True
+def configure_attention_checkpointing(args) -> str:
+    """Applies --attn-ckpt-fraction (and the HW_DISABLE_ATTENTION_CKPT=1
+    escape hatch) by pre-patching the module attribute the strategy's
+    lazy import reads at call time. Returns the mode string recorded in
+    summary.json's config."""
+    if os.environ.get("HW_DISABLE_ATTENTION_CKPT") == "1":
+        import nodes.model.attention_checkpointing as ac
+        ac.enable_attention_block_checkpointing = lambda *a, **k: None
+        return "disabled"
+    frac = float(getattr(args, "attn_ckpt_fraction", 1.0))
+    if frac <= 0.0:
+        import nodes.model.attention_checkpointing as ac
+        ac.enable_attention_block_checkpointing = lambda *a, **k: None
+        return "disabled(fraction=0)"
+    if frac < 1.0:
+        import nodes.model.attention_checkpointing as ac
+        real = ac.enable_attention_block_checkpointing
+        ac.enable_attention_block_checkpointing = lambda: real(fraction=frac)
+        return f"fraction:{frac}"
+    return "all"
 
 
 def main() -> None:
@@ -244,7 +297,7 @@ def main() -> None:
     common.add_argument("--alpha", type=float, default=32.0)
     common.add_argument("--lr", type=float, default=1e-4)
     common.add_argument("--state-precision", default="float32",
-                        choices=["float32", "int8"])
+                        choices=["float32", "int8_blockwise"])
     common.add_argument("--budget", type=float, default=11500.0)
     common.add_argument("--reserve", type=float, default=512.0)
     common.add_argument("--strict", action="store_true")
@@ -252,6 +305,10 @@ def main() -> None:
                         help="per-phase VRAM/timing prints (adds synchronize overhead)")
     common.add_argument("--no-checkpoint", action="store_true",
                         help="use_checkpoint=False (disables ALL activation checkpointing)")
+    common.add_argument("--attn-ckpt-fraction", type=float, default=1.0,
+                        help="fraction of attention blocks to checkpoint: 1.0=all (shipped "
+                             "behavior), 0.5=every 2nd, 0.0=none (ResBlock checkpointing "
+                             "unaffected either way)")
     common.add_argument("--weight-store", default="bf16", choices=["bf16", "nf4"])
     common.add_argument("--cache-text-encoder", action="store_true")
 
@@ -277,16 +334,18 @@ def main() -> None:
     jsonl_path = out_dir / "steps.jsonl"
     jsonl_path.unlink(missing_ok=True)
 
-    attention_disabled = maybe_disable_attention_checkpointing()
+    attn_ckpt_mode = configure_attention_checkpointing(args)
 
+    args._probes = {}   # name -> callable -> bytes, filled by the route builders
+    args._floor_stages = {}
     probe = MemProbe()
-    on_step, fh = make_on_step(jsonl_path, probe, {"t_prev": None})
+    on_step, fh = make_on_step(jsonl_path, probe, {"t_prev": None, "probes": args._probes})
     args._on_step = on_step
 
     config = {k: v for k, v in vars(args).items() if not k.startswith("_")}
     config.update({
         "route": args.route,
-        "attention_checkpointing_disabled": attention_disabled,
+        "attention_checkpointing": attn_ckpt_mode,
         "torch": torch.__version__,
         "device": torch.xpu.get_device_name(0) if torch.xpu.is_available() else "cpu",
         "device_total_mb": (torch.xpu.get_device_properties(0).total_memory // 2**20
@@ -302,6 +361,7 @@ def main() -> None:
         else:
             load_stats = run_managed_route(args, ctx)
         summary["load_stats"] = load_stats
+        summary["floor_stages"] = args._floor_stages
         summary["outcome"] = "ok"
     except Exception as exc:  # noqa: BLE001 -- classified below, full trace kept
         fh.flush()

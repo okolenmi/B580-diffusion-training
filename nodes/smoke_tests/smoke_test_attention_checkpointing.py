@@ -266,11 +266,78 @@ def check_idempotent():
     print("    PASS: second call is a no-op")
 
 
+def check_fraction_knob():
+    print("[fraction knob: 0.0 leaves the class unpatched (no sentinel), "
+          "0.5 checkpoints every 2nd block]")
+    _install_stub_comfy_checkpoint_module()
+    attn = _install_stub_comfy_attention_module()
+    from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    enable_frozen_param_safe_checkpointing()
+    from nodes.model.attention_checkpointing import enable_attention_block_checkpointing
+
+    # fraction=0: equivalent to never calling -- and must NOT burn the
+    # idempotency sentinel, so a later real call can still patch.
+    enable_attention_block_checkpointing(fraction=0.0)
+    cls = attn.BasicTransformerBlock
+    assert not getattr(cls, "_attention_block_checkpointing_enabled", False)
+    original_forward = cls.forward
+    b = cls()
+    b(torch.randn(4, requires_grad=True), context=None, transformer_options={})
+    assert cls.forward is original_forward, "fraction=0 must leave forward untouched"
+
+    # fraction=0.5: patches with stride 2 -- count real checkpoint() calls
+    # across 4 fresh blocks (indices 0..3, selected 0 and 2).
+    enable_attention_block_checkpointing(fraction=0.5)
+    assert getattr(cls, "_attention_block_checkpointing_enabled", False)
+    import comfy.ldm.modules.diffusionmodules.util as util
+    real_checkpoint = util.checkpoint
+    calls = {"n": 0}
+
+    def counting_checkpoint(*a, **k):
+        calls["n"] += 1
+        return real_checkpoint(*a, **k)
+
+    util.checkpoint = counting_checkpoint  # patched_forward imports it per call
+    try:
+        blocks = [cls() for _ in range(4)]
+        for blk in blocks:
+            out = blk(torch.randn(4, requires_grad=True), context=None,
+                      transformer_options={})
+            out.sum().backward()
+    finally:
+        util.checkpoint = real_checkpoint
+    assert [blk._ac_seq_idx for blk in blocks] == [0, 1, 2, 3]
+    assert calls["n"] == 2, f"density 0.5 must checkpoint exactly 2 of 4, got {calls['n']}"
+    assert blocks[0].lora.grad is not None and blocks[1].lora.grad is not None, \
+        "both selected and skipped blocks must still produce real gradients"
+
+    # density 0.75 on a fresh stub class: floor-accumulation selection must
+    # honor non-inverse-of-integer fractions (the earlier round(1/f) stride
+    # form silently mapped 0.75 -> stride 2 -> density 0.5).
+    attn = _install_stub_comfy_attention_module()
+    cls = attn.BasicTransformerBlock
+    enable_attention_block_checkpointing(fraction=0.75)
+    assert getattr(cls, "_attention_block_checkpointing_enabled", False)
+    calls["n"] = 0
+    util.checkpoint = counting_checkpoint
+    try:
+        blocks = [cls() for _ in range(8)]
+        for blk in blocks:
+            blk(torch.randn(4, requires_grad=True), context=None,
+                transformer_options={})
+    finally:
+        util.checkpoint = real_checkpoint
+    assert calls["n"] == 6, f"density 0.75 must checkpoint 6 of 8, got {calls['n']}"
+    print("    PASS: fraction=0 unpatched + sentinel-free; density 0.5 ckpted "
+          "idx 0,2 and density 0.75 ckpted 6/8; gradients real for all 4 blocks")
+
+
 def main():
     check_stock_version_reproduces_the_documented_crash()
     check_patched_version_matches_unchecked_reference()
     check_context_none_does_not_crash()
     check_idempotent()
+    check_fraction_knob()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED "

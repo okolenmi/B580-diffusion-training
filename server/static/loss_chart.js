@@ -27,6 +27,13 @@
      horizontal lines with labels -- e.g. a VRAM budget ceiling -- and
      joins their values to the axis bounds so an out-of-span reference
      lands at its true position instead of clamping to the plot edge.
+   - setViewRange({min, max} in step units, or null for all data)
+     windows the x-axis. Points outside the window are clipped at the
+     plot border, and both the y-range (_computeRangeCore) and the
+     tooltip only consider in-window points -- the axis follows what's
+     on screen, so an out-of-window spike can't keep compressing a
+     panned-back view. The monitor dashboard's freeze / visible-count /
+     history-slider controls drive this.
 
    This is an instantiable class, not the page-level singleton
    window.ChartManager the original dashboard tab (chart.js) uses -- same
@@ -47,6 +54,7 @@ class LossChart {
       : [{ key: "loss", label: "Loss", color: "#6c8cff" }];
     this.primaryKey = this.series[0].key;
     this.referenceLines = (options && options.referenceLines) || [];
+    this.viewRange = null; // {min, max} step window or null = all recorded data
     this._legendHits = []; // rebuilt per draw: legend label boxes -> series, for click-to-hide
 
     this.points = []; // {step, values: {key: v|null}, s: {key: smoothed|null}, loss, smoothed}
@@ -135,6 +143,20 @@ class LossChart {
     this._requestDraw();
   }
 
+  /* Window the x-axis over a step range. null/invalid restores "all data".
+     A no-op when the range didn't change, so a frozen (locked-window) view
+     doesn't redraw identical pixels on every incoming report. */
+  setViewRange(range) {
+    const min = range && isFinite(range.min) ? range.min : null;
+    const max = range && isFinite(range.max) ? range.max : null;
+    const next = (min != null && max != null) ? { min, max } : null;
+    const cur = this.viewRange;
+    if (cur && next && cur.min === next.min && cur.max === next.max) return;
+    if (!cur && !next) return;
+    this.viewRange = next;
+    this._requestDraw();
+  }
+
   _legendHitAt(pt) {
     for (const h of this._legendHits) {
       if (pt.x >= h.x0 && pt.x <= h.x1 && pt.y >= h.y0 && pt.y <= h.y1) return h.series;
@@ -178,11 +200,14 @@ class LossChart {
     // Range spans *every* visible series (raw + smoothed), so a high-t bucket
     // spike and the total loss share one honest axis instead of one series
     // clipping outside the computed bounds. Hidden (legend-toggled-off)
-    // series don't participate: the axis should follow what's on screen.
+    // series don't participate, and neither do points outside an active
+    // view window: the axis should follow what's on screen.
     const smoothVals = [], lossVals = [];
+    const vr = this.viewRange;
     for (const s of this.series) {
       if (s.hidden) continue;
       for (const p of this.points) {
+        if (vr && (p.step < vr.min || p.step > vr.max)) continue;
         const sv = p.s[s.key];
         if (sv != null && sv > 0) smoothVals.push(sv);
         const rv = p.values[s.key];
@@ -286,7 +311,9 @@ class LossChart {
     }
 
     const range = this._computeRange();
-    const xMin = this.points[0].step, xMax = this.points[this.points.length - 1].step;
+    const vr = this.viewRange;
+    const xMin = vr ? vr.min : this.points[0].step;
+    const xMax = vr ? vr.max : this.points[this.points.length - 1].step;
     const xPos = (step) => xMax === xMin ? plotL + plotW / 2 : plotL + ((step - xMin) / (xMax - xMin)) * plotW;
     const yPos = (v) => this._symMap(v, range, plotT, plotH, plotB);
 
@@ -316,6 +343,16 @@ class LossChart {
       const px = xPos(xs);
       if (px >= plotL && px <= plotR) ctx.fillText(Math.round(xs).toString(), px, plotB + 6);
     }
+
+    // Clip all data drawing to the plot area: with a view window active,
+    // out-of-window points map left/right of the plot and an unclipped dot
+    // would bleed over the axis labels, while a line segment crossing the
+    // window edge gets cut cleanly at the border instead of running to the
+    // original point. Legend, axes and tooltip stay outside the clip.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plotL, plotT, plotW, plotH);
+    ctx.clip();
 
     // raw loss dots -- one pass per series, in the series' own color; a
     // series with no value at this step simply has no dot (a gap, not a 0).
@@ -351,6 +388,7 @@ class LossChart {
       }
       ctx.stroke();
     }
+    ctx.restore();
 
     // reference lines (a fixed ceiling/target, e.g. vram_budget_mb): a dashed
     // horizontal rule with its label riding the right edge. Drawn after the
@@ -414,6 +452,7 @@ class LossChart {
     if (!this.lastMouse || this.lastMouse.x < plotL || this.lastMouse.x > plotR) { this.hover = null; return; }
     let best = null, bestDist = Infinity;
     for (const p of this.points) {
+      if (this.viewRange && (p.step < this.viewRange.min || p.step > this.viewRange.max)) continue;
       const dist = Math.abs(xPos(p.step) - this.lastMouse.x);
       if (dist < bestDist) { bestDist = dist; best = p; }
     }

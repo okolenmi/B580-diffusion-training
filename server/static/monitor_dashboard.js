@@ -39,12 +39,17 @@
                           "#ab47bc", "#26c6da", "#ff9800", "#8d6e63"];
   const TIMING_TOTAL_COLOR = "#cfd8dc";
 
+  // LossChart's default cap of 1000 points would silently drop the oldest
+  // records -- exactly what the history slider exists to reach. Runs are a
+  // few thousand steps at most; 100k is "no truncation in practice".
+  const MAX_RECORDS = 100000;
+
   class MonitorDashboard {
     constructor(monitorId, els) {
       this.monitorId = monitorId;
       this.els = els;
-      this.chart = new LossChart(els.canvas, { series: LOSS_SERIES });
-      this.vramChart = new LossChart(els.vramCanvas, { series: VRAM_SERIES });
+      this.chart = new LossChart(els.canvas, { series: LOSS_SERIES, maxPoints: MAX_RECORDS });
+      this.vramChart = new LossChart(els.vramCanvas, { series: VRAM_SERIES, maxPoints: MAX_RECORDS });
       // Built lazily on the first report carrying *_ms keys -- a run that
       // never collects timing (env/profile off) simply never shows the card.
       this.timingChart = null;
@@ -57,6 +62,15 @@
       this.rawHistory = [];     // every step report this session saw -- the CSV export
       this.budget = null;       // vram_budget_mb, once a report states one
       this.bucketLast = {};     // loss_t_* -> {v, step}: latest measured value per range (rail carry)
+      // Graph-view controls, one window shared by all three charts (they all
+      // plot against step): `count` = records shown ("all" | n), `live` =
+      // window follows the newest records, `startIdx` = slider position,
+      // `lockedRange` = concrete step window captured when follow stopped.
+      this.view = { count: "all", live: true, startIdx: 0, lockedRange: null };
+      this.countDefs = [
+        [els.count50, 50], [els.count100, 100], [els.count250, 250],
+        [els.count1000, 1000], [els.countAll, "all"],
+      ];
       this.stats = { best: null, bestStep: null, peakVram: null };
     }
 
@@ -113,9 +127,13 @@
         this.rawHistory = [];
         this.budget = null;
         this.bucketLast = {};
+        this.view.live = true;
+        this.view.lockedRange = null;
+        this.view.startIdx = 0;
         this.runEnded = null;
         this.stats = { best: null, bestStep: null, peakVram: null };
         this.resetReadouts();
+        this.applyView();
         this.renderStatus();
         return;
       }
@@ -146,6 +164,7 @@
       this.feedTimingChart(data);
       this.trackStats(data);
       this.updateMetrics(data, now);
+      this.applyView();
     }
 
     feedVramChart(data) {
@@ -191,7 +210,7 @@
         color: TIMING_PALETTE[i % TIMING_PALETTE.length],
       }));
       series.push({ key: "step_total_ms", label: "total", color: TIMING_TOTAL_COLOR });
-      this.timingChart = new LossChart(this.els.timingCanvas, { series });
+      this.timingChart = new LossChart(this.els.timingCanvas, { series, maxPoints: MAX_RECORDS });
     }
 
     /* A phase key that wasn't in the first timing report still has to be
@@ -427,6 +446,113 @@
       e.progressPct.textContent = "0%";
     }
 
+    /* ---- graph view: one window shared by all three charts ---- */
+
+    /* Recompute the window from state and push it to every chart, the
+       slider and the readout. Live + "all" = no window (everything
+       recorded); live + count = last N records; frozen/panned = the
+       locked step range captured when follow stopped, so incoming
+       reports can never move a held view. */
+    applyView() {
+      const e = this.els, pts = this.chart.points;
+      const n = this.view.count === "all" ? pts.length : Math.min(this.view.count, pts.length);
+      let range;
+      if (this.view.live) {
+        range = (!pts.length || this.view.count === "all")
+          ? null
+          : { min: pts[pts.length - n].step, max: pts[pts.length - 1].step };
+        this.view.startIdx = Math.max(0, pts.length - n);
+      } else {
+        range = this.view.lockedRange;
+      }
+      this.chart.setViewRange(range);
+      this.vramChart.setViewRange(range);
+      if (this.timingChart) this.timingChart.setViewRange(range);
+
+      const maxIdx = Math.max(0, pts.length - n);
+      e.slider.max = String(maxIdx);
+      e.slider.disabled = this.view.count === "all";
+      e.slider.value = String(Math.min(this.view.startIdx, maxIdx));
+
+      if (!pts.length) {
+        e.windowReadout.textContent = "steps \u2014";
+      } else {
+        const latest = pts[pts.length - 1].step;
+        const a = range ? range.min : pts[0].step;
+        const b = range ? range.max : latest;
+        // "/ latest" only when the window ends short of the newest record,
+        // so a held view visibly reports that newer data exists.
+        e.windowReadout.textContent = `steps ${a}\u2013${b}` + (b < latest ? ` / ${latest}` : "");
+      }
+      const frozen = !this.view.live;
+      e.freeze.textContent = frozen ? "Resume" : "Freeze";
+      e.freeze.classList.toggle("mon-freeze-on", frozen);
+    }
+
+    /* Freeze/resume: lock the window exactly where it is, or release it
+       back to following the newest records. */
+    toggleFreeze() {
+      if (this.view.live) {
+        this.view.live = false;
+        const pts = this.chart.points;
+        this.relockAt(pts.length ? pts[pts.length - 1].step : null);
+      } else {
+        this.view.live = true;
+        this.view.lockedRange = null;
+      }
+      this.applyView();
+    }
+
+    /* Lock the window so it ENDS at endStep: keeps the current count
+       ("all" = everything up to endStep), positions the slider index and
+       stores the concrete step range that follow will no longer touch. */
+    relockAt(endStep) {
+      const pts = this.chart.points;
+      if (!pts.length || endStep == null) {
+        this.view.lockedRange = null;
+        this.view.startIdx = 0;
+        return;
+      }
+      let endIdx = pts.length - 1;
+      while (endIdx > 0 && pts[endIdx].step > endStep) endIdx--;
+      if (this.view.count === "all") {
+        this.view.startIdx = 0;
+        this.view.lockedRange = { min: pts[0].step, max: pts[endIdx].step };
+        return;
+      }
+      const startIdx = Math.max(0, endIdx - this.view.count + 1);
+      this.view.startIdx = startIdx;
+      this.view.lockedRange = { min: pts[startIdx].step, max: pts[endIdx].step };
+    }
+
+    setCount(v) {
+      this.view.count = v;
+      // Resizing a held window keeps its END anchored, so switching
+      // 50 -> 100 while frozen reveals earlier records instead of
+      // jumping the view forward past the freeze point.
+      if (!this.view.live && this.view.lockedRange) this.relockAt(this.view.lockedRange.max);
+      for (const [el, val] of this.countDefs) el.classList.toggle("active", val === v);
+      this.applyView();
+    }
+
+    /* Slider: index into recorded records. Dragging to the far end returns
+       to live; anywhere else locks the window at that position. */
+    pan(idx) {
+      const pts = this.chart.points;
+      if (this.view.count === "all" || !pts.length) return;
+      const n = Math.min(this.view.count, pts.length);
+      const maxIdx = Math.max(0, pts.length - n);
+      idx = Math.max(0, Math.min(idx, maxIdx));
+      if (idx >= maxIdx) {
+        this.view.live = true;
+        this.view.lockedRange = null;
+      } else {
+        this.view.live = false;
+        this.relockAt(pts[Math.min(idx + n - 1, pts.length - 1)].step);
+      }
+      this.applyView();
+    }
+
     fmt(v) {
       if (v === undefined || v === null) return "\u2014";
       return v >= 1 ? v.toFixed(4) : v >= 0.001 ? v.toFixed(5) : v.toExponential(2);
@@ -493,9 +619,23 @@
       progressFill: document.getElementById("m-progress-fill"),
       progressPct: document.getElementById("m-progress-pct"),
       runInfo: document.getElementById("m-runinfo"),
+      freeze: document.getElementById("mon-freeze"),
+      slider: document.getElementById("mon-slider"),
+      windowReadout: document.getElementById("mon-window"),
+      count50: document.getElementById("mon-count-50"),
+      count100: document.getElementById("mon-count-100"),
+      count250: document.getElementById("mon-count-250"),
+      count1000: document.getElementById("mon-count-1000"),
+      countAll: document.getElementById("mon-count-all"),
     };
 
     const dashboard = new MonitorDashboard(monitorId, els);
+    els.freeze.addEventListener("click", () => dashboard.toggleFreeze());
+    for (const [el, v] of dashboard.countDefs) {
+      el.addEventListener("click", () => dashboard.setCount(v));
+    }
+    els.slider.addEventListener("input", () => dashboard.pan(parseInt(els.slider.value, 10)));
+    dashboard.applyView(); // initial control state (empty charts: readout "steps —", slider disabled under All)
     document.getElementById("mon-export-csv")
       .addEventListener("click", () => dashboard.exportCsv());
     dashboard.connect();

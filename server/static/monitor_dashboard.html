@@ -90,6 +90,41 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
+  /* ---- graph controls: freeze, visible-items count, history slider.
+         One strip drives all three charts (shared step domain); reports
+         keep recording while frozen, only the view window is locked. ---- */
+  .mon-controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 9px 16px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  }
+  .mon-action.mon-freeze { min-width: 78px; text-align: center; }
+  /* Frozen state: amber, matching the status pill's "ended" tone --
+     a held view is neither live nor broken. */
+  .mon-action.mon-freeze.mon-freeze-on { color: #ffb300; border-color: #ffb300; }
+  .mon-ctl-label {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .mon-counts { display: flex; gap: 4px; }
+  .mon-count {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 3px 9px;
+    background: var(--surface-alt); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  }
+  .mon-count:hover { color: var(--text); border-color: var(--accent); }
+  .mon-count.active {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--bg); font-weight: 700;
+  }
+  .mon-slider { flex: 1 1 220px; min-width: 160px; accent-color: var(--accent); cursor: pointer; }
+  .mon-slider:disabled { opacity: 0.4; cursor: default; }
+  .mon-window {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--text-dim); white-space: nowrap;
+  }
+
   /* ---- main grid: loss chart (fluid) + run-stats rail (fixed) ---- */
   .mon-main { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 20px; align-items: start; }
 
@@ -213,6 +248,26 @@
         <span class="mon-runinfo" id="m-runinfo"></span>
       </div>
     </section>
+
+    <!-- Graph controls: hold the view (Freeze), set how many records the
+         window shows (50..All), pan back through recorded history with the
+         slider. All three charts share the window (step domain); data,
+         stats and the session CSV keep recording while frozen. -->
+    <div class="mon-controls">
+      <button class="mon-action mon-freeze" id="mon-freeze"
+              title="Hold the charts' view: incoming reports keep recording (stats, CSV) but the graph window stops moving">Freeze</button>
+      <span class="mon-ctl-label">visible</span>
+      <div class="mon-counts">
+        <button class="mon-count" id="mon-count-50" title="Window of the last 50 records">50</button>
+        <button class="mon-count" id="mon-count-100" title="Window of the last 100 records">100</button>
+        <button class="mon-count" id="mon-count-250" title="Window of the last 250 records">250</button>
+        <button class="mon-count" id="mon-count-1000" title="Window of the last 1000 records">1000</button>
+        <button class="mon-count active" id="mon-count-all" title="Every recorded record (no panning)">All</button>
+      </div>
+      <input type="range" class="mon-slider" id="mon-slider" min="0" max="0" value="0" step="1"
+             title="Pan the window back through earlier records; drag to the far right to return to live">
+      <span class="mon-window" id="mon-window">steps &mdash;</span>
+    </div>
 
     <!-- Main grid: the loss chart with the run-stats rail beside it. -->
     <div class="mon-main">

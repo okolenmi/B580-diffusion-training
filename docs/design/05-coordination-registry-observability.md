@@ -254,6 +254,19 @@ row collapses to zero height rather than leaving a gap). Blocks whose
 keys depend on run configuration -- the memory section, the grad-norm
 row -- appear only once a report actually carries them and are hidden
 again by `clear`, so a CPU run never shows permanently-empty sections.
+A graph-controls strip below the hero drives all three charts (shared
+step domain): Freeze/Resume locks the window where it is while reports
+keep arriving (the readout keeps showing `/ latest` so a held view
+still reports that newer data exists), the visible-items count
+(50/100/250/1000/All, default All) sets how many records the window
+shows, and a horizontal slider pans back through recorded history --
+dragging it to the far end returns to live; it is disabled under All,
+where there is nothing to pan. The window is a `LossChart` view range:
+out-of-window points are clipped at the plot border and the y-range and
+tooltip only consider in-window points, so an old spike can't keep
+compressing a panned-back view. The charts keep up to 100k records
+(the default 1000-point cap would silently truncate exactly the oldest
+records the slider exists to reach).
 Legend click hides/shows a series (hidden series leave the tooltip and
 the axis range, and show struck-through in the legend itself), and
 session CSV export (`Export CSV`: one row per step report this browser

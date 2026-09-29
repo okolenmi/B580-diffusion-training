@@ -3,6 +3,7 @@ __pycache__/
 datasets/
 runs/
 server/data/
+backend/data/
 converter/__pycache__/
 manager/__pycache__/
 server__pycache__/

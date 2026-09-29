@@ -88,3 +88,10 @@ Resources Controller & precision redesign. This is where new design
 work has actually been landing recently; it's the single most current
 doc in this repo as of the last docs pass. Start there for anything
 resource-policy or precision related, not in the files above.
+
+[`backend/`](backend/README.md) -- the clean-room replacement for
+`server/` (full enterprise layering, clean-break API). Evaluation of
+the old server's structure, the layering rules, and the milestone
+plan are in [`backend/01-architecture.md`](backend/01-architecture.md).
+The legacy `server/` remains the running system until its migration
+strategy is written.

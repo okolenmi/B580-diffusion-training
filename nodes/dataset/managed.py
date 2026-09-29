@@ -63,21 +63,29 @@ class ManagedDatasetSourceNode(DataSourceNode):
                            "bucket ~ (current/baseline)^sample_bias over the buckets "
                            "[t_low, t_high] actually covers, read from a wired Bucket "
                            "Balance node (requires the bucket_balance input); "
-                           "'exact': t pinned to t_values, cycled one value per sample "
-                           "drawn. Anything else fails at build time rather than "
+                           "'exact': t pinned to t_values -- cycled one value per "
+                           "sample drawn, or steered across that list by a wired "
+                           "bucket_balance (each listed t's bucket difficulty picks "
+                           "which value gets hit; without one it stays a plain "
+                           "cycle). Anything else fails at build time rather than "
                            "degrading silently to uniform."),
         "t_values": Port(name="t_values", type=str, required=False, default="",
                          doc="t_mode='exact' only: comma-separated timesteps to pin t "
                              "to, e.g. '500' (every sample at t=500) or '200,500,800' "
                              "(cycled in draw order -- equal long-run share per value "
-                             "regardless of shuffling). Every value must be an integer "
-                             "inside [t_low, t_high] (and 1..999); ignored by other "
-                             "modes."),
+                             "regardless of shuffling). Wire bucket_balance to steer "
+                             "that list toward the buckets the balance measures as "
+                             "behind instead of cycling uniformly. Every value must "
+                             "be an integer inside [t_low, t_high] (and 1..999); "
+                             "ignored by other modes."),
         "bucket_balance": Port(
             name="bucket_balance", type=BucketBalance, required=False, default=None,
             doc="Required when t_mode='adaptive' -- the same Bucket Balance instance "
                 "the trainer is wired to (its observe() is what the sampling reads; "
                 "without the trainer side it would track nothing and stay uniform). "
+                "Optional with t_mode='exact': wired, the balance steers draws across "
+                "t_values toward the buckets it measures as behind; unwired (or with "
+                "nothing to report yet), t_values stays the plain pinned cycle. "
                 "None with any static t_mode = today's behavior, unchanged."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,

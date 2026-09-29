@@ -48,17 +48,21 @@ multiplier and reports no weight key -- nothing is fabricated for a
 region the run hasn't measured. A window that sampled no bucket X
 leaves X's state untouched (gaps skipped, never zero-filled).
 
-Data side -- sample_t()/sampling_probs(): adaptive t sampling for the
-dataset sources. Chooses a bucket with probability ∝
+Data side -- sample_t()/sampling_probs()/exact_probs(): adaptive t
+sampling for the dataset sources. Chooses a bucket with probability ∝
 (current/baseline)^sample_bias over whichever buckets actually intersect
 [t_low, t_high], then draws uniformly inside that intersection -- hard
 regions (relative to their own baseline) get more samples, solved ones
 starve toward the floor, and pre-warmup it is plain uniform over the
-coverage. Independent of `mode`: sample_bias=0 keeps sampling uniform
-whatever the gradient side is doing, so either side can be tested
-alone. The dataset source nodes (t_mode="adaptive") *read* this object;
-the trainer *writes* it via observe() -- one shared instance wired to
-both, either side optional.
+coverage. exact_probs() is that same per-bucket ratio projected onto an
+explicit t list (t_mode="exact" wired to this balance): each listed
+value's weight is the difficulty of the bucket it falls in, so a user's
+precise t's get steered toward the zone this object measures as behind.
+Independent of `mode`: sample_bias=0 keeps sampling uniform whatever the
+gradient side is doing, so either side can be tested alone. The dataset
+source nodes (t_mode="adaptive"/"exact") *read* this object; the trainer
+*writes* it via observe() -- one shared instance wired to both, either
+side optional.
 
 Reports: MonitoringPhase adds weight_t_low/mid/high (mode != off, only
 buckets past warmup) and -- once an adaptive sampler has actually asked
@@ -278,6 +282,46 @@ class BucketBalance:
                 raw.append(1.0)
         total = sum(raw) or 1.0
         return {name: w / total for (name, _, _), w in zip(active, raw)}
+
+    def exact_probs(self, t_low: int, t_high: int, values) -> list[float]:
+        """Relative draw weights, one per entry of an explicit t list --
+        the balance-steered half of t_mode="exact" (manager/t_sampling
+        calls this duck-typed; it owns the cycle-vs-pick semantics).
+
+        A value's weight is its bucket's sampling_probs() weight (the
+        (current/baseline)^sample_bias ratio, the sample_bias=0
+        neutralization, and mode-independence documented there), so
+        duplicates in the list keep their multiplied share. A value
+        whose bucket doesn't cover [t_low, t_high] -- impossible for
+        t_values already validated against the range, defensive anyway
+        -- gets the mean of the active weights: neutral, no fabricated
+        preference for a region the range doesn't even include.
+        Normalized to sum to 1 over the list; an all-equal result
+        (nothing to steer with: every bucket unwarmed, sample_bias=0,
+        or all listed values in one bucket) is what tells t_sampling to
+        keep the plain pinned cycle.
+
+        Deliberately does NOT set _last_sample_range: that flag exists
+        so report() can publish the adaptive *range* distribution as
+        prob_t_*, and this one -- over the listed values, not the range
+        -- would make those keys lie.
+        """
+        if not values:
+            return []
+        probs = self.sampling_probs(t_low, t_high)
+        if not probs:  # unreachable: T_BUCKETS spans the whole t range
+            return [1.0 / len(values)] * len(values)
+        neutral = sum(probs.values()) / len(probs)
+        weights = []
+        for v in values:
+            w = neutral
+            for name, lo, hi in BUCKETS:
+                if lo <= v < hi:  # lo inclusive / hi exclusive, as everywhere
+                    w = probs.get(name, neutral)
+                    break
+            weights.append(w)
+        total = sum(weights) or 1.0
+        return [w / total for w in weights]
 
     def sample_t(self, rng, t_low: int, t_high: int) -> int:
         """Adaptive draw for the dataset sources: bucket ~ sampling_probs,

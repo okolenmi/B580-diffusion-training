@@ -18,6 +18,12 @@ Why each check:
   would happily do that for an unknown mode).
 - Exact cycling is the whole point of exact mode, so it's checked as an
   exact sequence ([200,500,800,200,500,800]), not a distribution.
+- Balance-steered exact: with a wired BucketBalance that can tell the
+  listed values' buckets apart, draws must follow the balance's own
+  (current/baseline)^sample_bias share -- and with no balance, a cold
+  balance, sample_bias=0, or all listed values in one bucket, the exact
+  cycle above must come back untouched (the pin is the default; the
+  balance only earns the list when it has a real opinion).
 - Adaptive is checked end-to-end through a real BucketBalance: a warmed
   balance biased to the hard high bucket must dominate actual draws
   (this is the check that used to run through RenoiseBatchSource's
@@ -193,6 +199,67 @@ def check_adaptive():
                0.2 < share2 < 0.45, detail=f"high_share={share2}")
 
 
+def check_exact_steered():
+    print("\n=== balance-steered exact: the balance's opinion over your pinned list ===")
+
+    def warmed(sample_bias=1.0):
+        # Same shaping as check_adaptive: baselines at 0.1, then one
+        # report putting ema at (0.01, 0.1, 0.9) -- ema_alpha=1.0 makes
+        # the ratios exact. mode="off" on purpose: the data side is
+        # mode-independent, so steering must work whatever the gradient
+        # side is doing (the adaptive e2e relies on the same fact).
+        b = BucketBalance(mode="off", warmup_reports=3, ema_alpha=1.0,
+                          sample_bias=sample_bias)
+        for _ in range(3):
+            b.observe({"loss_t_low": 0.1, "loss_t_mid": 0.1, "loss_t_high": 0.1})
+        b.observe({"loss_t_low": 0.01, "loss_t_mid": 0.1, "loss_t_high": 0.9})
+        return b
+
+    # 1) Wired but uninformed balance: the pinned cycle is untouched.
+    cold = BucketBalance()
+    s0 = TrainTimeSampler("exact", 1, 999, bucket_balance=cold,
+                          t_values="200,500,800")
+    seq0 = [s0.draw(random.Random(i)) for i in range(6)]
+    check_true("cold balance: exact sequence stays [200,500,800] x2",
+               seq0 == [200, 500, 800, 200, 500, 800], detail=f"{seq0}")
+
+    # 2) Warmed, skewed balance: actual draws follow the balance's own
+    #    distribution over the list (computed from sampling_probs, so
+    #    the check can't drift from what the balance really says).
+    b = warmed()
+    s1 = TrainTimeSampler("exact", 1, 999, bucket_balance=b, t_values="500,900")
+    ts = [s1.draw(random) for _ in range(3000)]
+    probs = b.sampling_probs(1, 999)
+    want = probs["loss_t_high"] / (probs["loss_t_high"] + probs["loss_t_mid"])
+    got = sum(1 for v in ts if v == 900) / len(ts)
+    check_true("steered draws hit the bad bucket's t at its expected share",
+               abs(got - want) < 0.04, detail=f"share(t=900)={got:.3f} want={want:.3f}")
+    check_true("every steered draw is still a listed value",
+               all(v in (500, 900) for v in ts))
+
+    # 3) exact_probs' contract: normalized per value, duplicates keep
+    #    their multiplied share, harder bucket outweighs the other.
+    w = b.exact_probs(1, 999, [500, 900, 900])
+    check_true("exact_probs sums to 1; duplicate t=900 shares weight and beats t=500",
+               abs(sum(w) - 1.0) < 1e-12 and abs(w[1] - w[2]) < 1e-15 and w[2] > w[0],
+               detail=f"{w}")
+
+    # 4) sample_bias=0 neutralizes the ratio: back to the plain cycle.
+    s2 = TrainTimeSampler("exact", 1, 999, bucket_balance=warmed(sample_bias=0.0),
+                          t_values="500,900")
+    seq2 = [s2.draw(random.Random(i)) for i in range(4)]
+    check_true("sample_bias=0: the plain [500,900] cycle again",
+               seq2 == [500, 900, 500, 900], detail=f"{seq2}")
+
+    # 5) One bucket can't be told apart from itself -- nothing to steer,
+    #    so the cycle stands even against a fully warmed, skewed balance.
+    s3 = TrainTimeSampler("exact", 1, 999, bucket_balance=warmed(),
+                          t_values="100,200")
+    seq3 = [s3.draw(random.Random(i)) for i in range(4)]
+    check_true("all listed values in one bucket: cycle, not noise",
+               seq3 == [100, 200, 100, 200], detail=f"{seq3}")
+
+
 def check_config_errors_surface_before_fs():
     print("\n=== node/loader config errors fire before any path or DB work ===")
     check_raises("node: exact without t_values, before path resolution",
@@ -226,6 +293,7 @@ def main():
     check_static_modes()
     check_exact_cycles()
     check_adaptive()
+    check_exact_steered()
     check_config_errors_surface_before_fs()
 
     print("=" * 60)

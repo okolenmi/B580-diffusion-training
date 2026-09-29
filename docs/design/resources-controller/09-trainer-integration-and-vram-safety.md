@@ -674,3 +674,43 @@ makes trivial:
   `smoke_test_renoise.py` deleted with the node; port-choices
   expectations extended to `T_MODES_TRAIN_TIME`, not weakened.
   Design detail: doc 04, section 5.5.
+
+## Eighth addendum: `exact` joins the bucket-balance loop -- balance-steered t targeting
+
+The seventh addendum shipped `t_mode="exact"` as a pure pin (cycle the
+list, balance ignored). The actual intent was targeting *inside* the
+bucket-balance toolkit: the balance shows which zone is underutilized
+or losing badly, and you hit precise timesteps there. So the two now
+compose:
+
+- **`BucketBalance.exact_probs(t_low, t_high, values)`** (data side,
+  next to `sampling_probs`): one draw weight per list entry = its
+  bucket's `(current/baseline)^sample_bias` share -- the adaptive
+  sampler's ratio semantics reused verbatim, so `sample_bias` is the
+  steering-strength knob on both data-side modes, and mode-independence
+  holds here too (the gradient side can be `off` while the data side
+  steers). Duplicates in the list keep their multiplied share; a value
+  outside the active coverage (impossible for range-validated
+  `t_values`, defensive anyway) gets the mean of the active weights --
+  neutral, never a fabricated preference. It deliberately does *not*
+  set `_last_sample_range`, so `prob_t_*` (the adaptive *range*
+  distribution) stays absent instead of misreporting a distribution
+  over the range when the real draws are over the list.
+- **`TrainTimeSampler._draw_exact`**: when the wired balance returns
+  weights that actually differ, draws become weighted picks over the
+  list (cursor set aside -- a pick has no position); when they're all
+  equal, the plain pinned cycle runs unchanged. That "all-equal" line
+  is the whole honesty contract: no balance wired, balance never
+  observed, all buckets unwarmed, `sample_bias=0`, or every listed
+  value in one bucket -- in every one of those cases the balance has no
+  real opinion, and the user's equal-share pin is what they get. The
+  cursor is per-loader as before, so the cycle still spans batches and
+  epochs.
+- **Tests** (`smoke_test_t_sampling.py`, `check_exact_steered`): the
+  steered share checked against the balance's *own* `sampling_probs`
+  (the assertion can't drift from what the balance really says), plus
+  all four decline-to-cycle paths (cold balance, `sample_bias=0`,
+  single-bucket list, and the pre-existing no-balance pinned-cycle
+  checks untouched). Port docs on `t_mode`/`t_values`/`bucket_balance`
+  updated to say what wiring buys you. Design detail: doc 04, section
+  5.5.

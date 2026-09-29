@@ -471,6 +471,20 @@ be an integer inside `[t_low, t_high]` (and inside 1..999); anything
 else is a build-time `ValueError`. `t_low`/`t_high` narrows the range,
 `exact` removes it -- they compose as bounds, not competitors.
 
+**Balance-steered exact.** Wiring the same `bucket_balance` the trainer
+uses turns that list into a steering target: each listed value's draw
+weight becomes `(current/baseline)^sample_bias` of the bucket it falls
+in (`BucketBalance.exact_probs()`, the data side's ratio semantics
+reused verbatim), so the precise t's you named get pulled toward
+whichever zone the balance measures as behind -- exact targeting *inside*
+the bucket-balance loop, not a parallel knob. The pin stays the
+default: with no balance wired, a balance that has nothing to say yet
+(all buckets unwarmed), `sample_bias=0`, or every listed value in one
+bucket, the equal-share cycle is untouched. Steering deliberately does
+not publish `prob_t_*` -- that key is the adaptive *range*
+distribution, and this one is over your list, so it stays absent rather
+than misreported.
+
 `manager/t_sampling.py`'s `TrainTimeSampler` is now the single
 interpreter of all three t_mode families (the static five, delegated to
 `core.noise_schedule.sample_timestep`; `adaptive`; `exact`) and the
@@ -483,7 +497,9 @@ copy -- a Port's `choices` is needed at class-definition time, when
 neither `core.*` nor `manager.*` is importable there).
 `nodes/smoke_tests/smoke_test_t_sampling.py` checks the copy against
 core's list and t_sampling's accepted set, the exact cycle as an exact
-sequence, and the adaptive-bias end-to-end that used to run through
+sequence, the balance-steered exact draw against the balance's own
+distribution (and all four ways steering declines back to the plain
+cycle), and the adaptive-bias end-to-end that used to run through
 `RenoiseBatchSource._renoise()`; `manager/smoke_tests/
 smoke_test_lora_raw_dataset.py` covers the pinned-cycle and
 skip-non-single-latent behavior against a real temp dataset.

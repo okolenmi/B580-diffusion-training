@@ -397,13 +397,13 @@ def _run_one_step(
 
         # If the negative prompt is literally the same string as the positive one
         # (always true for plain, uncaptioned real-image training, since both
-        # default to "" -- see manager/builder.py's run_ingestion_task and the
-        # loader's per-batch bucketing on (prompt, neg_prompt, size), which
-        # guarantees prompt/neg_prompt are constant across an entire batch), the
-        # uncond conditioning is guaranteed identical to the cond conditioning:
+        # default to "" -- see the loader's per-batch bucketing on
+        # (prompt, neg_prompt, size), which guarantees prompt/neg_prompt are
+        # constant across an entire batch), the uncond conditioning is
+        # guaranteed identical to the cond conditioning:
         # same encoder, same input string. If target_c/target_u are also
-        # tensor-equal (guaranteed for real-image samples, where
-        # run_ingestion_task writes both from the same `target` value), the
+        # tensor-equal (guaranteed for real-image samples, whose stored p/n
+        # targets were written from the same `target` value), the
         # uncond pass would then be an exact repeat of the cond pass --
         # identical input, identical target, identical loss and gradient -- so
         # running it provides zero additional information for a full extra

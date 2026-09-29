@@ -110,8 +110,8 @@ class PrewarmedTextEncoderNode(TextEncoderNode):
             name="dataset", type=TrainingBatchSource, required=True,
             doc="One full pass is taken over this to discover every (prompt, batch_size, "
                 "height, width) combination training will request -- must be the same "
-                "dataset (with the same wiring, e.g. through a RenoiseBatchSourceNode if "
-                "one's used) that actually gets wired into the trainer, not a subset of it.",
+                "dataset (with the same wiring, e.g. through a PrefetchingBatchSourceNode "
+                "if one's used) that actually gets wired into the trainer, not a subset of it.",
         ),
     }
 

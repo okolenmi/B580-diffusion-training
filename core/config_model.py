@@ -79,11 +79,12 @@ class CommonSettings(BaseModel):
 
     latent_size: int = Field(default=0, ge=0, le=256, description="Spatial size (e.g. 64). 0 = auto (64).")
 
-    use_dataset_cfg: bool = Field(default=True, description="When training from a managed dataset, mix each "
-                                                              "sample's target using its own stored per-trajectory "
-                                                              "CFG metadata. When off, the stored CFG is ignored "
-                                                              "entirely and the plain conditional target is used "
-                                                              "(equivalent to CFG=1).")
+    use_dataset_cfg: bool = Field(default=True, description="Legacy, now a no-op: it only gated the "
+                                                             "baked-format loader path's dual-pass target "
+                                                             "blending, retired with that format (the "
+                                                             "dataset pipeline is single-latent now -- see "
+                                                             "doc 04, section 5.5). Kept so existing configs "
+                                                             "still parse.")
 
     training_positive_prompt: str = ""
     training_negative_prompt: str = ""

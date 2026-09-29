@@ -278,8 +278,10 @@ EXTRAS: dict[str, ExtraDef] = {
  'group': '3. MODEL & DATA',
  'step': 8},
     'common.use_dataset_cfg': {'label': 'Use Dataset CFG',
- 'help': "Mix each sample's target using its own stored per-trajectory CFG "
-         'metadata. Off ignores the stored CFG entirely (equivalent to CFG=1).',
+ 'help': 'Legacy, now a no-op: it only gated the baked-format loader path\'s '
+         'dual-pass target blending, retired with that format (single-latent '
+         'datasets now -- see doc 04, section 5.5). Kept so existing configs '
+         'still parse.',
  'group': '4. SAMPLING',
  'extra_visible_when': {'paths.dataset_name': '__truthy__'}},
     'common.training_positive_prompt': {'label': 'Training Pos Prompt',

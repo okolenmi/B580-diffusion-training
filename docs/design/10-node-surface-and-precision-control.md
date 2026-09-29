@@ -276,9 +276,12 @@ if real, explicit demand shows up, not speculatively now.
 section's own "Update" below
 anticipated -- `Port.choices` (`nodes/core.py`), not per-node. See that
 plan for what shipped, what it's wired into today (`strategy` on the
-`Composed*OptimizerNode` classes, `t_mode` on the two real dataset
-nodes), and why `device` deliberately stays open-ended rather than
-getting a closed list. The original planning text below is kept as the
+`Composed*OptimizerNode` classes, `t_mode` on
+`ManagedDatasetSourceNode` -- the other original consumer,
+`RenoiseBatchSourceNode`, has since been retired with the baked-grid
+format it corrected, doc 04 §5.5), and why `device` deliberately stays
+open-ended rather than getting a closed list. The original planning
+text below is kept as the
 rationale for *why*, per this document's own top-of-file rule for
 implemented sections.
 

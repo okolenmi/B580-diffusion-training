@@ -16,7 +16,6 @@ _CACHE: dict[str, type] | None = None
 def _load() -> dict[str, type]:
     from nodes.dataset.managed import ManagedDatasetSourceNode
     from nodes.dataset.prefetch import PrefetchingBatchSourceNode
-    from nodes.dataset.renoise import RenoiseBatchSourceNode
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
     from nodes.model.lora_checkpoint_loader import LoRACheckpointLoaderNode
     from nodes.model.lora_injector import ComfyUNetLoRANode
@@ -49,7 +48,7 @@ def _load() -> dict[str, type]:
     from nodes.train.managed import ManagedLoRATrainerNode
 
     classes = [
-        ManagedDatasetSourceNode, PrefetchingBatchSourceNode, RenoiseBatchSourceNode,
+        ManagedDatasetSourceNode, PrefetchingBatchSourceNode,
         SafetensorsCheckpointNode, ComfyUNetLoRANode, LoRACheckpointLoaderNode, SDXLTextEncoderNode,
         CachingTextEncoderNode, PrewarmedTextEncoderNode,
         ModelParametersNode, TrainerParametersNode, LoRACheckpointSaverNode, LoRAPhaseSplitNode,

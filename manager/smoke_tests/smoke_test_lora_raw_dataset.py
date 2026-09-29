@@ -88,12 +88,13 @@ def check_fresh_resampling_each_iteration(tmpdir: Path):
     print("    PASS: two epochs got different (x_t, t), and both recover the exact same x0")
 
 
-def _make_one_sample_dataset(tmpdir: Path) -> Path:
-    """A dataset with exactly one real sample -- shared setup for both the
-    regression check below and (implicitly) the resampling check above's
-    same shape, factored out since a second test needs the identical
-    one-sample setup."""
-    dataset_root = tmpdir / "dataset_single"
+def _make_one_sample_dataset(tmpdir: Path, name: str = "dataset_single") -> Path:
+    """A dataset with exactly one real sample -- shared setup for the
+    regression check below, the exact-mode and skip checks, and
+    (implicitly) the resampling check above's same shape, factored out
+    since several tests need the identical one-sample setup (each caller
+    passes its own `name` so the roots never collide)."""
+    dataset_root = tmpdir / name
     dataset_root.mkdir()
     db_path = dataset_root / "metadata.db"
     init_local_db(db_path)
@@ -163,6 +164,46 @@ def check_undersized_dataset_raises_not_silently_empty(tmpdir: Path):
     print("    PASS: the same dataset with batch_size=1 (satisfiable) is unaffected")
 
 
+def check_exact_mode_round_trip(tmpdir: Path):
+    print("[ManagedDatasetLoader: t_mode='exact' pins t to t_values and cycles it]")
+    dataset_root = _make_one_sample_dataset(tmpdir, name="dataset_exact")
+    loader = ManagedDatasetLoader(dataset_root, shuffle=False, batch_size=1,
+                                  t_mode="exact", t_values="100,200")
+    t1 = next(iter(loader))["t"][0].item()
+    t2 = next(iter(loader))["t"][0].item()   # cursor persists across __iter__ (epochs)
+    t3 = next(iter(loader))["t"][0].item()
+    assert (t1, t2, t3) == (100, 200, 100), \
+        f"expected cycle [100, 200, 100] across epochs, got [{t1}, {t2}, {t3}]"
+    print(f"    PASS: t pinned and cycled across epochs ({t1}, {t2}, {t3})")
+
+
+def check_non_single_latent_trajectories_skipped(tmpdir: Path):
+    print("[ManagedDatasetLoader: non-lora_raw trajectories are skipped, not misread]")
+    dataset_root = _make_one_sample_dataset(tmpdir, name="dataset_mixed")
+    db_path = dataset_root / "metadata.db"
+    # A teacher/compressed trajectory in the same dataset: not single-latent
+    # data. The loader must skip it (honestly reported) instead of trying to
+    # read it as a clean latent -- and the single real sample still trains.
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT source_id, shard_id, shard_index FROM trajectories").fetchone()
+    conn.execute(
+        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, metadata) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (row[0], row[1], 1, 5, 1, "a cat",
+         json.dumps({"compressed": True, "format": "teacher"})),
+    )
+    conn.commit()
+    conn.close()
+
+    loader = ManagedDatasetLoader(dataset_root, shuffle=False, batch_size=1)
+    batches = list(loader)
+    assert len(batches) == 1, \
+        f"expected only the single-latent sample to survive, got {len(batches)} batches"
+    print("    PASS: the compressed/teacher trajectory was skipped; the "
+          "single-latent sample still yields its batch")
+
+
 def main():
     _no_gpu_pin_memory_workaround()
     with tempfile.TemporaryDirectory() as td:
@@ -170,6 +211,8 @@ def main():
         check_shard_round_trip(tmpdir)
         check_fresh_resampling_each_iteration(tmpdir)
         check_undersized_dataset_raises_not_silently_empty(tmpdir)
+        check_exact_mode_round_trip(tmpdir)
+        check_non_single_latent_trajectories_skipped(tmpdir)
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

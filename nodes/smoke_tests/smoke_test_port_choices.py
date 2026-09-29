@@ -10,7 +10,9 @@ Node.validate_inputs() accepts a valid explicit value, rejects an
 invalid one, and never touches choices for a value that's simply absent
 (missing-optional is a different, pre-existing check); (4) the two real
 call sites this landed on -- ComposedAdamWOptimizerNode's `strategy` and
-RenoiseBatchSourceNode/ManagedDatasetSourceNode's `t_mode` -- genuinely
+ManagedDatasetSourceNode's `t_mode` (the other original t_mode consumer,
+RenoiseBatchSourceNode, was retired with the baked-grid format it
+existed to correct -- see doc 04, section 5.5) -- genuinely
 read their choices from the same shared registries their doc strings
 already cited (STRATEGIES, T_MODES), not a hand-copied second list, and
 `device` (deliberately NOT given choices -- torch.device-parseable,
@@ -116,22 +118,21 @@ def check_real_strategy_ports_share_strategy_registry():
 
 def check_real_t_mode_ports_share_timestep_modes():
     print("[Real 't_mode' Ports read choices from the shared timestep_modes "
-          "constant -- now T_MODES_ADAPTIVE (T_MODES + 'adaptive'), still "
-          "single-sourced there, never a hand-copied list]")
-    from nodes.dataset.timestep_modes import T_MODES, T_MODES_ADAPTIVE
-    from nodes.dataset.renoise import RenoiseBatchSourceNode
+          "constant -- T_MODES_TRAIN_TIME (T_MODES + 'adaptive' + 'exact'), "
+          "still single-sourced there, never a hand-copied list]")
+    from nodes.dataset.timestep_modes import T_MODES, T_MODES_TRAIN_TIME
     from nodes.dataset.managed import ManagedDatasetSourceNode
     # The extension must stay a pure extension of the shared static list --
-    # 'adaptive' is a BucketBalance-driven mode (nodes/train/
-    # bucket_balance.py), not a sixth core.noise_schedule distribution, so
-    # it may be appended, never inserted/rewritten.
-    check(T_MODES_ADAPTIVE == (*T_MODES, "adaptive"),
-          f"T_MODES_ADAPTIVE = {T_MODES_ADAPTIVE!r}, expected {(*T_MODES, 'adaptive')!r}")
-    for cls in (RenoiseBatchSourceNode, ManagedDatasetSourceNode):
-        got = cls.INPUTS["t_mode"].choices
-        check(got == T_MODES_ADAPTIVE,
-              f"{cls.__name__}.INPUTS['t_mode'].choices = {got!r}, expected {T_MODES_ADAPTIVE!r}")
-    print(f"    PASS ({T_MODES_ADAPTIVE})")
+    # 'adaptive' (BucketBalance-driven, nodes/train/bucket_balance.py) and
+    # 'exact' (pinned t_values list) are train-time modes handled by
+    # manager/t_sampling.py, not additional core.noise_schedule
+    # distributions, so they may be appended, never inserted/rewritten.
+    check(T_MODES_TRAIN_TIME == (*T_MODES, "adaptive", "exact"),
+          f"T_MODES_TRAIN_TIME = {T_MODES_TRAIN_TIME!r}, expected {(*T_MODES, 'adaptive', 'exact')!r}")
+    got = ManagedDatasetSourceNode.INPUTS["t_mode"].choices
+    check(got == T_MODES_TRAIN_TIME,
+          f"ManagedDatasetSourceNode.INPUTS['t_mode'].choices = {got!r}, expected {T_MODES_TRAIN_TIME!r}")
+    print(f"    PASS ({T_MODES_TRAIN_TIME})")
 
 
 def main():

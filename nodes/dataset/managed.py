@@ -15,7 +15,7 @@ from ..components.layout import ProjectLayout
 from ..train.bucket_balance import BucketBalance
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
-from .timestep_modes import T_MODES_ADAPTIVE
+from .timestep_modes import T_MODES_TRAIN_TIME
 
 
 class ManagedDatasetBatchSource(TrainingBatchSource):
@@ -45,20 +45,34 @@ class ManagedDatasetSourceNode(DataSourceNode):
                                 doc="Training-set name or ID; None = every trajectory in the dataset."),
         "shuffle": Port(name="shuffle", type=bool, required=False, default=True),
         "batch_size": Port(name="batch_size", type=int, required=False, default=1),
-        "use_dataset_cfg": Port(name="use_dataset_cfg", type=bool, required=False, default=True),
+        "use_dataset_cfg": Port(name="use_dataset_cfg", type=bool, required=False, default=True,
+                                doc="Legacy, now a no-op: it only ever gated the retired "
+                                    "baked-format path's dual-pass target blending. "
+                                    "Kept so existing graphs still load unchanged."),
         "t_low": Port(name="t_low", type=int, required=False, default=1,
-                      doc="Only affects 'lora_raw'-format trajectories (see manager/builder.py's "
-                          "run_lora_ingestion_task) -- every other format has its own t baked in."),
-        "t_high": Port(name="t_high", type=int, required=False, default=999),
+                      doc="Low end of the t range each sample's noise timestep is drawn "
+                          "from at train time (ingestion stores clean latents only, so "
+                          "t is chosen per draw -- see manager/t_sampling.py)."),
+        "t_high": Port(name="t_high", type=int, required=False, default=999,
+                       doc="High end of that range (inclusive)."),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
-                       choices=T_MODES_ADAPTIVE,
-                       doc="Same distributions core.noise_schedule.sample_timestep "
-                           "implements, plus 'adaptive': bucket ~ (current/baseline)"
-                           "^sample_bias over the buckets [t_low, t_high] actually "
-                           "covers, read from a wired Bucket Balance node -- requires "
-                           "the bucket_balance input, and only ever steers samples "
-                           "whose t this node chooses ('lora_raw' format, same as "
-                           "t_low/t_high above)."),
+                       choices=T_MODES_TRAIN_TIME,
+                       doc="How t is drawn for each sample at train time: the five "
+                           "static distributions core.noise_schedule.sample_timestep "
+                           "implements, plus two train-time modes -- 'adaptive': "
+                           "bucket ~ (current/baseline)^sample_bias over the buckets "
+                           "[t_low, t_high] actually covers, read from a wired Bucket "
+                           "Balance node (requires the bucket_balance input); "
+                           "'exact': t pinned to t_values, cycled one value per sample "
+                           "drawn. Anything else fails at build time rather than "
+                           "degrading silently to uniform."),
+        "t_values": Port(name="t_values", type=str, required=False, default="",
+                         doc="t_mode='exact' only: comma-separated timesteps to pin t "
+                             "to, e.g. '500' (every sample at t=500) or '200,500,800' "
+                             "(cycled in draw order -- equal long-run share per value "
+                             "regardless of shuffling). Every value must be an integer "
+                             "inside [t_low, t_high] (and 1..999); ignored by other "
+                             "modes."),
         "bucket_balance": Port(
             name="bucket_balance", type=BucketBalance, required=False, default=None,
             doc="Required when t_mode='adaptive' -- the same Bucket Balance instance "
@@ -75,18 +89,27 @@ class ManagedDatasetSourceNode(DataSourceNode):
         self.validate_inputs(inputs)
         from manager.loader import ManagedDatasetLoader
 
-        # Before any path resolution: "adaptive without a balance" is a
-        # config error, and it should fail as one, not as a loader crash
-        # mid-iteration (the loader itself repeats this check -- it's a
-        # public constructor).
+        # Before any path resolution: t misconfiguration is a config error
+        # and should fail as one, not as a loader crash mid-iteration (the
+        # loader itself repeats every one of these checks -- it's a public
+        # constructor -- but only after this node would already have
+        # resolved paths).
         t_mode = inputs.get("t_mode", self.INPUTS["t_mode"].default)
         bucket_balance = inputs.get("bucket_balance")
+        t_low = inputs.get("t_low", self.INPUTS["t_low"].default)
+        t_high = inputs.get("t_high", self.INPUTS["t_high"].default)
+        t_values = inputs.get("t_values", self.INPUTS["t_values"].default)
         if t_mode == "adaptive" and bucket_balance is None:
             raise ValueError(
                 "ManagedDatasetSourceNode: t_mode='adaptive' requires the "
                 "bucket_balance input -- wire a Bucket Balance node's output (it is "
                 "what knows per-bucket progress to steer sampling by). Any static "
                 "t_mode works without it.")
+        if t_mode == "exact":
+            # Parse/validate the cycled list here for the same reason:
+            # a typo'd t_values is a config error, raised before any fs/DB work.
+            from manager.t_sampling import parse_exact_t_values
+            parse_exact_t_values(t_values, t_low, t_high)
 
         layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
         loader = ManagedDatasetLoader(
@@ -95,10 +118,11 @@ class ManagedDatasetSourceNode(DataSourceNode):
             shuffle=inputs.get("shuffle", self.INPUTS["shuffle"].default),
             batch_size=inputs.get("batch_size", self.INPUTS["batch_size"].default),
             use_dataset_cfg=inputs.get("use_dataset_cfg", self.INPUTS["use_dataset_cfg"].default),
-            t_low=inputs.get("t_low", self.INPUTS["t_low"].default),
-            t_high=inputs.get("t_high", self.INPUTS["t_high"].default),
+            t_low=t_low,
+            t_high=t_high,
             t_mode=t_mode,
             bucket_balance=bucket_balance,
+            t_values=t_values,
         )
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)

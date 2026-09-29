@@ -78,7 +78,6 @@
     function updateModeVisibility() {
         const type = document.getElementById("gen-source-type").value;
         document.getElementById("gen-teacher-options").style.display = type === "teacher" ? "grid" : "none";
-        document.getElementById("gen-real-options").style.display = type === "real" ? "block" : "none";
         document.getElementById("gen-lora-options").style.display = type === "lora" ? "block" : "none";
     }
 
@@ -918,18 +917,6 @@
                 payload.neg_max_keywords = getInt("gen-neg-max");
             }
 
-        } else if (type === "real") {
-            payload.model_name = getStr("gen-vae-model");
-            payload.image_dir = getStr("gen-image-dir");
-            payload.recursive = document.getElementById("gen-recursive").checked;
-            payload.auto_caption = document.getElementById("gen-auto-caption").checked;
-            payload.resize_mode = getStr("gen-resize-mode");
-            payload.ingest_latent_size = parseInt(getStr("gen-ingest-latent-size"));
-            payload.t_mode = getStr("gen-real-t-mode");
-            payload.t_low = getInt("gen-real-t-low");
-            payload.t_high = getInt("gen-real-t-high");
-            payload.n_timesteps = getInt("gen-real-n-timesteps");
-
         } else if (type === "lora") {
             payload.model_name = getStr("gen-lora-vae-model");
             payload.image_dir = getStr("gen-lora-image-dir");
@@ -976,7 +963,6 @@
             .then(data => {
                 const selects = [
                     document.getElementById("gen-teacher-model"),
-                    document.getElementById("gen-vae-model"),
                     document.getElementById("gen-lora-vae-model")
                 ];
                 selects.forEach(select => {
@@ -1020,9 +1006,6 @@
         const btnGenT = document.querySelector("#gen-teacher-options .btn-start");
         if (btnGenT) btnGenT.onclick = startGeneration;
         
-        const btnGenR = document.querySelector("#gen-real-options .btn-start");
-        if (btnGenR) btnGenR.onclick = startGeneration;
-
         const btnGenL = document.querySelector("#gen-lora-options .btn-start");
         if (btnGenL) btnGenL.onclick = startGeneration;
 

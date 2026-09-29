@@ -52,7 +52,6 @@
                     <div style="width: 200px;">
                         <select id="gen-source-type" class="cfg-input">
                             <option value="teacher">Teacher (Synthetic)</option>
-                            <option value="real">Real (VAE Encoding)</option>
                             <option value="lora">LoRA (Images + Captions)</option>
                         </select>
                     </div>
@@ -190,66 +189,6 @@
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Real Mode -->
-                    <div id="gen-real-options" style="display:none;">
-                        <div class="generator-grid">
-                            <div class="gen-col">
-                                <div class="option-row">
-                                    <label class="option-label">VAE Source (Checkpoint)</label>
-                                    <select id="gen-vae-model"></select>
-                                </div>
-                                <div class="option-row">
-                                    <label class="option-label">Image Directory Path</label>
-                                    <input type="text" id="gen-image-dir" class="cfg-input" placeholder="/path/to/images">
-                                </div>
-                                <div class="option-row">
-                                    <label class="option-label">Target Resolution</label>
-                                    <select id="gen-ingest-latent-size">
-                                        <option value="32">256px (32 latent)</option>
-                                        <option value="64" selected>512px (64 latent)</option>
-                                        <option value="96">768px (96 latent)</option>
-                                        <option value="128">1024px (128 latent)</option>
-                                    </select>
-                                </div>
-                                <div class="option-row">
-                                    <label class="option-label">Resize Mode</label>
-                                    <select id="gen-resize-mode">
-                                        <option value="center_crop" selected>Center Crop — fill square, no distortion</option>
-                                        <option value="fit">Fit — preserve full aspect ratio, non-square</option>
-                                        <option value="pad">Pad — preserve aspect ratio, fill with black</option>
-                                        <option value="resize">Stretch — distort to square</option>
-                                    </select>
-                                </div>
-                                <div class="option-row">
-                                    <label class="option-label">Timestep Sampling (mode / count / low / high)</label>
-                                    <div style="display:flex; gap:0.5rem;">
-                                        <select id="gen-real-t-mode" class="cfg-input" style="flex:2">
-                                            <option value="uniform">Uniform</option>
-                                            <option value="logit">Logit-Normal</option>
-                                            <option value="low">Low Noise</option>
-                                            <option value="mid">Mid Noise</option>
-                                            <option value="high">High Noise</option>
-                                        </select>
-                                        <input type="number" id="gen-real-n-timesteps" class="cfg-input" value="20" title="n_timesteps" style="flex:1">
-                                        <input type="number" id="gen-real-t-low" class="cfg-input" value="20" title="t_low" style="flex:1">
-                                        <input type="number" id="gen-real-t-high" class="cfg-input" value="999" title="t_high" style="flex:1">
-                                    </div>
-                                </div>
-                                <button class="btn btn-start btn-block mt-1">START INGESTION TASK</button>
-                            </div>
-                            <div class="gen-col p-1-5">
-                                <label><input type="checkbox" id="gen-recursive" checked> Recursive Scanning</label><br><br>
-                                <label><input type="checkbox" id="gen-auto-caption" checked> Use .txt files for captions</label>
-                                <p class="text-dim mt-1" style="font-size: 0.8rem;">
-                                    Center Crop: resize so smallest dim = target, crop center to square.<br>
-                                    Fit: resize so smallest dim = target, preserve full image (non-square).<br>
-                                    Pad: resize so largest dim = target, add black bars to reach square.<br>
-                                    Stretch: hard resize to target, distorts non-square images.
-                                </p>
                             </div>
                         </div>
                     </div>

@@ -19,10 +19,11 @@ backlog items 1-2, equivalence-tested against `core.noise_schedule`/
 `nodes/train/supervised.py`'s `_run_step` in place of the three direct
 `core.*` imports it used to reach for. `core.noise_schedule`/
 `core.model_io`/`core.comfy_setup` themselves are untouched (reference
-material, per the project's existing rule) -- `nodes/dataset/renoise.py`
-still imports them directly and is intentionally out of scope for this
-slice (its `sample_timestep` usage isn't part of the `NoiseSchedule`/
-`Parameterization` contract at all).
+material, per the project's existing rule) -- `manager/loader.py` and
+`manager/t_sampling.py` still import them directly (manager's layer, not
+a nodes/ shortcut), and no `nodes/` module reaches for them at module
+load (`nodes/dataset/renoise.py`, which did, was retired together with
+the baked-grid format it existed to correct -- see doc 04, section 5.5).
 
 `layout.py` (`ProjectLayout`) has also landed -- backlog item 8,
 equivalence-tested against `paths.py` in

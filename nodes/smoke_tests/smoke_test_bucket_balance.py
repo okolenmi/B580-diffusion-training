@@ -481,35 +481,11 @@ def check_config_validation():
                                               t_mode="adaptive"),
                  contains="bucket_balance")
 
-    from nodes.dataset.renoise import RenoiseBatchSource, RenoiseBatchSourceNode
-    check_raises("renoise source ctor: adaptive without balance",
-                 lambda: RenoiseBatchSource(None, t_mode="adaptive"),
-                 contains="bucket_balance")
-    check_raises("renoise node: adaptive without balance",
-                 lambda: RenoiseBatchSourceNode().build(
-                     batches=object(), t_mode="adaptive"),
-                 contains="bucket_balance")
-
-    # ...and with a balance, the renoise path really samples through it:
-    # a warmed balance biased to the hard high bucket must dominate the
-    # resampled t values end-to-end through _renoise.
-    import torch
-    b = BucketBalance(mode="off", warmup_reports=3, ema_alpha=1.0)
-    for _ in range(3):
-        b.observe({"loss_t_low": 0.1, "loss_t_mid": 0.1, "loss_t_high": 0.1})
-    b.observe({"loss_t_low": 0.01, "loss_t_mid": 0.1, "loss_t_high": 0.9})
-    src = RenoiseBatchSourceNode().build(
-        batches=object(), t_mode="adaptive", bucket_balance=b, seed=7)["batches"]
-    batch = {"x_t": torch.zeros(2, 4, 8, 8), "target": torch.zeros(2, 4, 8, 8),
-             "t": torch.tensor([100, 200])}
-    ts = []
-    for _ in range(60):
-        ts.extend(src._renoise(batch)["t"].tolist())
-    check_true("every resampled t inside [t_low, t_high]",
-               all(1 <= v <= 999 for v in ts), detail=f"{ts[:10]}...")
-    high_share = sum(1 for v in ts if v >= 666) / len(ts)
-    check_true("end-to-end renoise draws follow the balance's bias",
-               high_share > 0.75, detail=f"high_share={high_share}")
+    # The "with a balance, draws really follow the bias" end-to-end used to
+    # run through RenoiseBatchSource's _renoise(); that node is retired with
+    # the baked-grid format it corrected, and the equivalent check now runs
+    # through the real train-time path in smoke_test_t_sampling.py
+    # (TrainTimeSampler + the same warmed-balance construction).
 
 
 def main():

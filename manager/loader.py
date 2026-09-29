@@ -8,8 +8,8 @@ import torch
 
 from .db import get_training_set_trajectories, get_training_set_by_name
 from .storage import ShardLoader
-from core.model_io import raw_to_target
-from core.noise_schedule import eps_to_vpred, get_alpha_sigma, sample_timestep
+from .t_sampling import TrainTimeSampler
+from core.noise_schedule import eps_to_vpred, get_alpha_sigma
 
 
 class ManagedDatasetLoader:
@@ -18,29 +18,30 @@ class ManagedDatasetLoader:
     def __init__(self, dataset_root: Path, set_identifier: Optional[Union[int, str]] = None,
                  shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True,
                  t_low: int = 1, t_high: int = 999, t_mode: str = "uniform",
-                 bucket_balance=None):
+                 bucket_balance=None, t_values: str = ""):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
         self.batch_size = batch_size
+        # Kept as a parameter for core/trainer.py's existing call site; the
+        # only code that ever read it (baked-format dual-pass target
+        # blending) went out with that format -- single-latent batches carry
+        # no stored target_p/target_n for it to gate.
         self.use_dataset_cfg = use_dataset_cfg
-        # Only used for "lora_raw"-format trajectories (see _load_all_samples) --
-        # every other format already has its own t baked in at ingestion time.
+        # Single-latent datasets: every t is chosen at draw time, so this is
+        # the whole of a run's t configuration. Interpreted and validated in
+        # one place (manager/t_sampling.py) before any DB access, so a
+        # misconfigured graph fails as a config error, not mid-iteration:
+        # "adaptive without a balance", "exact without/with invalid values",
+        # unknown modes, empty ranges. The bucket_balance is duck-typed on
+        # purpose -- manager/ must not import nodes/ -- documented by
+        # contract in t_sampling.py, not by type here.
         self.t_low = t_low
         self.t_high = t_high
         self.t_mode = t_mode
-        # Adaptive t sampling (nodes/train/bucket_balance.py's data side):
-        # duck-typed on purpose -- manager/ must not import nodes/, so this
-        # is documented by contract, not by type. Checked before any DB
-        # access so a misconfigured graph fails as a config error, not a
-        # mid-iteration crash.
-        if t_mode == "adaptive" and bucket_balance is None:
-            raise ValueError(
-                "ManagedDatasetLoader: t_mode='adaptive' requires a bucket_balance "
-                "(a nodes/train/bucket_balance.BucketBalance instance) -- without it "
-                "there is no progress signal to be adaptive with. Wire a Bucket "
-                "Balance node, or pick a static t_mode.")
-        self._bucket_balance = bucket_balance
+        self._t_sampler = TrainTimeSampler(t_mode, t_low, t_high,
+                                           bucket_balance=bucket_balance,
+                                           t_values=t_values)
         self._samples: list | None = None  # loaded once on first iteration, reused
         
         if set_identifier is not None:
@@ -79,153 +80,73 @@ class ManagedDatasetLoader:
             self.shard_map[path].append(t)
 
     def _load_all_samples(self) -> list:
-        """Load every sample from every trajectory into a flat list.
+        """Load every single-latent ("lora_raw") sample into a flat list.
 
-        Samples from different trajectories and timesteps are interleaved
-        so that subsequent shuffling produces a truly random order across
-        both images and timesteps.  The list is held in RAM; for typical
-        datasets (100-1000 images × 20 timesteps) this is well under 1 GB.
+        One entry per image -- ingestion stores one clean latent, so there
+        is no per-timestep structure left to interleave (the docstring this
+        replaced described the retired baked-grid format). Trajectories in
+        any other format (teacher/compressed sequences, or shards written
+        by the retired run_ingestion_task) are skipped, not guessed at:
+        they are not single-latent data, and reading them as such would be
+        wrong. The list is held in RAM; for typical datasets (100-1000
+        images) this is well under 1 GB.
         """
         all_samples = []
+        skipped = {}
         for path, trajs in self.shard_map.items():
             loader = ShardLoader(self.root / path)
             loader.load()
             try:
                 for t in trajs:
-                    neg_prompt = ""
                     meta = {}
-                    trajectory_samples = []
-
                     if t.get("metadata"):
                         try:
                             meta = json.loads(t["metadata"])
-                            neg_prompt = meta.get("neg", "")
-
-                            if meta.get("format") == "lora_raw":
-                                # Simple images+captions format (manager/builder.py's
-                                # run_lora_ingestion_task) -- one clean latent, no
-                                # noise/timestep baked in at all. Resampled fresh
-                                # every __iter__() call (every epoch), not here --
-                                # see __iter__/_materialize. The reason this format
-                                # exists: baking one fixed timestep/noise grid at
-                                # ingestion time would give every image the same
-                                # draw for the loader's whole lifetime, so training
-                                # never sees a different corruption than the one it
-                                # started with.
-                                all_samples.append({
-                                    "x0":          loader.get_image_latent(t["shard_index"]),
-                                    "prompt":      t["prompt"],
-                                    "neg_prompt":  neg_prompt,
-                                    "seed":        t["seed"],
-                                    "metadata":    t["metadata"],
-                                    "traj_type":   meta.get("type", "good"),
-                                })
-                                continue
-                            elif meta.get("compressed"):
-                                trajectory_samples = loader.get_compressed_trajectory(t["shard_index"])
-                                if "model_type" not in meta:
-                                    import warnings
-                                    warnings.warn(
-                                        "Dataset trajectory has no 'model_type' in metadata — "
-                                        "assuming 'eps'.  If the teacher was a vpred model, the "
-                                        "stored targets are wrong and this data should be regenerated "
-                                        "with the updated run_teacher_task (model_type='vpred').",
-                                        stacklevel=2,
-                                    )
-                            else:
-                                trajectory_samples = loader.get_trajectory_samples(
-                                    t["shard_index"], t["sample_count"])
                         except (json.JSONDecodeError, TypeError):
-                            trajectory_samples = loader.get_trajectory_samples(
-                                t["shard_index"], t["sample_count"])
-                    else:
-                        trajectory_samples = loader.get_trajectory_samples(
-                            t["shard_index"], t["sample_count"])
-
-                    traj_type = meta.get("type", "good") if isinstance(meta, dict) else "good"
-                    cfg_val = meta.get("cfg", 7.5) if isinstance(meta, dict) else 7.5
-                    # Whether this sample actually needs a distinct cond/uncond
-                    # training pass at all. This is the single place that
-                    # decision gets made -- train_step.py just does whatever
-                    # target_p/target_n being present-or-not tells it,
-                    # instead of also needing its own logic to guess whether
-                    # a dual pass was really intended. cfg_val == 1.0 means
-                    # no negative-conditioning influence by definition (see
-                    # the blend formula below), so there's nothing a second
-                    # pass would teach beyond what the cond pass already
-                    # does, independent of use_dataset_cfg's own on/off
-                    # state -- both conditions are checked so either one
-                    # alone is enough to fall back to a single pass.
-                    want_dual_pass = self.use_dataset_cfg and abs(cfg_val - 1.0) > 1e-6
-                    for s in trajectory_samples:
-                        if s["t"] == 0:
-                            continue
-                        target_p = s.get("target_p")
-                        target_n = s.get("target_n")
-                        if want_dual_pass and target_p is not None and target_n is not None:
-                            # Real-image samples have target_p == target_n by
-                            # construction, so this is a safe no-op for them
-                            # regardless of cfg_val.
-                            target = target_n + (target_p - target_n) * cfg_val
-                        elif target_p is not None:
-                            # No real dual-pass signal: either use_dataset_cfg
-                            # is off, or cfg_val == 1.0 makes it a no-op
-                            # anyway. Ignore the stored cfg entirely --
-                            # equivalent to CFG=1, no negative-conditioning
-                            # influence on the target.
-                            target = target_p
-                        else:
-                            # Older/legacy sample with no separate p/n stored
-                            # at all -- use whatever target it already has.
-                            target = s.get("target")
-                        all_samples.append({
-                            "x_t":      s["x_t"],
-                            "target":   target,
-                            # Only expose target_p/target_n as a distinct
-                            # pair when a dual pass is actually wanted --
-                            # otherwise train_step.py would always run the
-                            # (redundant, 2x cost) cond+uncond dual pass
-                            # regardless of use_dataset_cfg/cfg_val, since it
-                            # only checks whether these two keys are present,
-                            # not whether they were meant to be used.
-                            "target_p": target_p if want_dual_pass else None,
-                            "target_n": target_n if want_dual_pass else None,
-                            "t":        s["t"],
-                            "prompt":      t["prompt"],
-                            "neg_prompt":  neg_prompt,
-                            "seed":        t["seed"],
-                            "metadata":    t["metadata"],
-                            "traj_type":   traj_type,
-                        })
+                            meta = {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    if meta.get("format") != "lora_raw":
+                        fmt = meta.get("format") or (
+                            "compressed sequence" if meta.get("compressed")
+                            else "no format key")
+                        skipped[fmt] = skipped.get(fmt, 0) + 1
+                        continue
+                    # Simple images+captions format (manager/builder.py's
+                    # run_lora_ingestion_task): one clean latent, no
+                    # noise/timestep baked in at all -- sampled fresh every
+                    # __iter__() call (every epoch), not here; see
+                    # __iter__/_materialize and manager/t_sampling.py.
+                    all_samples.append({
+                        "x0":          loader.get_image_latent(t["shard_index"]),
+                        "prompt":      t["prompt"],
+                        "neg_prompt":  meta.get("neg", ""),
+                        "seed":        t["seed"],
+                        "metadata":    t["metadata"],
+                        "traj_type":   meta.get("type", "good"),
+                    })
             finally:
                 loader.close()
+        if skipped:
+            print(f"  [DataLoader] skipped {sum(skipped.values())} non-single-latent "
+                  f"trajectory(s): {dict(skipped)} -- LoRA training reads clean "
+                  "latents only; regenerate with 'LoRA (Images + Captions)' ingestion.")
         return all_samples
 
     def _materialize(self, s: Dict) -> Dict:
-        """Turn a "lora_raw" sample (just x0) into a trainable one -- fresh
-        noise and timestep every call, which is the point: called from
-        __iter__ per batch, not from _load_all_samples (which is cached and
-        would otherwise bake one fixed draw in for the loader's whole
-        lifetime, reintroducing the same fixed-grid problem this format
-        exists to avoid). Samples that already have "x_t" (any other
-        format) pass through unchanged -- this is a no-op for them, not
-        just "cheap.\""""
-        if "x_t" in s:
-            return s
+        """Turn a single-latent sample (just x0) into a trainable one --
+        fresh noise every call and a timestep from the run's
+        TrainTimeSampler (static/adaptive/exact -- manager/t_sampling.py),
+        which is the point: called from __iter__ per batch, not from
+        _load_all_samples (which is cached and would otherwise bake one
+        fixed draw in for the loader's whole lifetime)."""
         x0 = s["x0"]
         try:
             model_type = json.loads(s["metadata"]).get("model_type", "eps")
         except (json.JSONDecodeError, TypeError):
             model_type = "eps"
 
-        if self.t_mode == "adaptive":
-            # Data side of BucketBalance: bucket ~ live (current/baseline)
-            # difficulty over whatever buckets [t_low, t_high] covers, then
-            # uniform inside the chosen bucket. Same t_range restriction as
-            # sample_timestep below (bounds pass straight through).
-            t_val = self._bucket_balance.sample_t(random, self.t_low, self.t_high)
-        else:
-            t_val = sample_timestep(random, self.t_mode, self.t_low, self.t_high)
+        t_val = self._t_sampler.draw(random)
         at, st = get_alpha_sigma(t_val)
         eps = torch.randn_like(x0)
         x_t = x0 + st * eps
@@ -277,7 +198,7 @@ class ManagedDatasetLoader:
         # 1. Group by key (prompt, neg_prompt, size)
         buckets = {}
         for s in self._samples:
-            size = (s["x_t"] if "x_t" in s else s["x0"]).shape[2:]
+            size = s["x0"].shape[2:]
             key = (s["prompt"], s["neg_prompt"], size)
             if key not in buckets:
                 buckets[key] = []
@@ -294,8 +215,8 @@ class ManagedDatasetLoader:
                 # Drop incomplete last batch if shuffling (common training practice)
                 if len(chunk) < self.batch_size and self.shuffle:
                     continue
-                # Fresh noise/timestep per "lora_raw" sample, every batch --
-                # a no-op for every other format (see _materialize).
+                # Fresh noise + TrainTimeSampler t per sample, every batch
+                # (see _materialize).
                 chunk = [self._materialize(s) for s in chunk]
                 all_batches.append(self._merge_samples(chunk))
 

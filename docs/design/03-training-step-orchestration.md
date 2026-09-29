@@ -282,8 +282,10 @@ built.
 
 **Implemented**, unchanged from the design: `PrefetchingBatchSource`
 (`nodes/dataset/prefetch.py`) -- a decorator over any
-`TrainingBatchSource`, same pattern `nodes/dataset/renoise.py`'s
-`RenoiseBatchSource` already established for this domain. One real
+`TrainingBatchSource`, the wrap-don't-reimplement pattern this domain's
+batch sources established (the original instance,
+`RenoiseBatchSource`, has since been retired together with the
+baked-grid format it corrected -- see doc 04, section 5.5). One real
 deviation worth noting: a fresh worker thread per `__iter__()` call
 rather than one shared for the object's whole lifetime, since
 `TrainingBatchSource.__iter__()` is expected to be restartable (a fresh

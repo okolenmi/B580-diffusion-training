@@ -371,23 +371,22 @@ in `{loss_t_*: mean raw MSE}`) and exposes:
 
 Wiring: `BucketBalanceNode` (registered in the graph) produces the
 instance; it goes to a trainer's `bucket_balance` port (both routes,
-in `TrainerNode.COMMON_INPUTS`) and/or to a dataset source node's
-`bucket_balance` port with `t_mode="adaptive"`
-(`ManagedDatasetSourceNode`, `RenoiseBatchSourceNode` -- `adaptive`
-is appended to their shared choices as `T_MODES_ADAPTIVE` in
-`nodes/dataset/timestep_modes.py`, deliberately *not* to `T_MODES`
-itself: `core.noise_schedule.sample_timestep` would silently degrade
-an unknown mode to uniform, and a silently-uniform "adaptive" would
-be a lie). One instance, shared: the trainer's `observe()` feeds what
+in `TrainerNode.COMMON_INPUTS`) and/or to `ManagedDatasetSourceNode`'s
+`bucket_balance` port with `t_mode="adaptive"` -- `adaptive` (and the
+`exact` mode in 5.5) is carried as `T_MODES_TRAIN_TIME` in
+`nodes/dataset/timestep_modes.py`, deliberately *not* appended to
+`T_MODES` itself: `core.noise_schedule.sample_timestep` would silently
+degrade an unknown mode to uniform, and a silently-uniform mode would
+be a lie. One instance, shared: the trainer's `observe()` feeds what
 the sampler reads. Either side optional, both optional -- the point is
 that all four mechanisms are independently wireable for A/B testing.
 
 `adaptive` without a wired balance is a build-time `ValueError` on the
-node *and* on `ManagedDatasetLoader`/`RenoiseBatchSource`'s own
-constructors, raised before any filesystem/DB access -- a config
+node *and* on `ManagedDatasetLoader`'s own constructor (both route
+through `manager/t_sampling.py`'s `TrainTimeSampler`, which interprets
+every t_mode), raised before any filesystem/DB access -- a config
 error, not a mid-iteration crash. `manager/` stays duck-typed (it
-must never import `nodes/`), documented by contract in the loader's
-ctor.
+must never import `nodes/`), documented by contract in `t_sampling.py`.
 
 ### 5.3 Cadence, honesty, reports
 
@@ -434,3 +433,57 @@ directions against hand-computed values, mean-1/clip invariants,
 bit-identical `off` path, window-cadence observe on both routes,
 coverage- and bias-correct sampling, and the config-error checks
 above); no GPU involved.
+
+### 5.5 One latent per image: the single-latent consolidation and `exact` t targeting
+
+Everything in section 5 -- adaptive sampling above, exact targeting
+below -- rides on one format property: **the dataset is one clean latent
+(x0) per image, and noise + t are injected at draw time.** That was
+already the live reality when this section was written (verified on
+disk: every trajectory of all six real datasets is `format=lora_raw`,
+`sample_count=1` -- the standard kohya/diffusers/OneTrainer model, one
+VAE encode per image). What changed is that the *old* concept stopped
+existing around it:
+
+- **Retired:** `manager/builder.py`'s `run_ingestion_task` (the legacy
+  real-image path that baked a fixed ~20-value t grid per image into the
+  shard -- the "sampled wasn't sampled" bug), the loader branch that read
+  those shards (including its dual-pass target blending;
+  `use_dataset_cfg` survives on the node as a documented no-op so old
+  graphs still load), the `real` ("Real (VAE Encoding)") option in the
+  dataset generator UI plus its route branch, and
+  `RenoiseBatchSourceNode` (`nodes/dataset/renoise.py` + its smoke test)
+  -- a workaround node whose entire reason for existing was undoing that
+  baked grid.
+- **Loader:** `ManagedDatasetLoader` now reads `format=lora_raw`
+  trajectories only; anything else (teacher/compressed sequences, old
+  baked shards) is *skipped* -- count and formats printed, never
+  misread as a clean latent.
+- **Kept:** `run_teacher_task` (distillation trajectories are genuinely
+  sequential multi-t data -- a different format for a different purpose)
+  and the shard-reader functions the dataset UI uses.
+
+**New: `t_mode="exact"` + a `t_values` Port.** `t_values="500"` pins
+every sample to one precise timestep; `t_values="200,500,800"` cycles
+the list in draw order, one value per sample drawn, so each listed t
+gets an equal long-run share regardless of shuffling. Every value must
+be an integer inside `[t_low, t_high]` (and inside 1..999); anything
+else is a build-time `ValueError`. `t_low`/`t_high` narrows the range,
+`exact` removes it -- they compose as bounds, not competitors.
+
+`manager/t_sampling.py`'s `TrainTimeSampler` is now the single
+interpreter of all three t_mode families (the static five, delegated to
+`core.noise_schedule.sample_timestep`; `adaptive`; `exact`) and the
+single place they are validated -- in the node's `build()` before path
+resolution, in the loader's ctor before any DB access, never silently:
+unknown modes used to degrade to uniform through
+`alpha_beta.get(mode, ...)`, and a silently-uniform mode is a lie. The
+node-side choices constant is `T_MODES_TRAIN_TIME` (still a deliberate
+copy -- a Port's `choices` is needed at class-definition time, when
+neither `core.*` nor `manager.*` is importable there).
+`nodes/smoke_tests/smoke_test_t_sampling.py` checks the copy against
+core's list and t_sampling's accepted set, the exact cycle as an exact
+sequence, and the adaptive-bias end-to-end that used to run through
+`RenoiseBatchSource._renoise()`; `manager/smoke_tests/
+smoke_test_lora_raw_dataset.py` covers the pinned-cycle and
+skip-non-single-latent behavior against a real temp dataset.

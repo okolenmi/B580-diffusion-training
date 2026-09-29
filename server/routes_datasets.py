@@ -157,10 +157,9 @@ async def api_start_task(
     n_samples_per_cond: int = Body(1),
     min_keywords: int = Body(3),
     max_keywords: int = Body(10),
-    # Real params
+    # Real-image params (single-latent "lora" ingestion)
     image_dir: str = Body(None),
     recursive: bool = Body(True),
-    auto_caption: bool = Body(True),
     resize_mode: str = Body("center_crop"),
     ingest_latent_size: int = Body(64),
     model_type: str = Body("eps"),
@@ -212,24 +211,6 @@ async def api_start_task(
                 t_mode=t_mode, t_low=t_low, t_high=t_high
             )
         
-        elif type == "real":
-            if not image_dir: raise ValueError("Image directory not specified")
-            
-            p_dir = Path(image_dir)
-            img_exts = {".png", ".jpg", ".jpeg", ".webp"}
-            if recursive: files = [p for p in p_dir.glob("**/*") if p.is_file() and p.suffix.lower() in img_exts]
-            else: files = [p for p in p_dir.glob("*") if p.is_file() and p.suffix.lower() in img_exts]
-            
-            task_id = create_task(ds.db_path, 'real', len(files))
-            
-            _task_manager.start_task(
-                ds.root, task_id, runner.run_ingestion_task,
-                ds.root, model_path, p_dir,
-                recursive=recursive, resize_mode=resize_mode,
-                latent_size=ingest_latent_size,
-                t_mode=t_mode, t_low=t_low, t_high=t_high
-            )
-            
         elif type == "lora":
             if not image_dir: raise ValueError("Image directory not specified")
 

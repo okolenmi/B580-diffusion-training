@@ -70,17 +70,22 @@ for Phase 4/5 to be the only caller:** the three
 `choices=tuple(STRATEGIES)` off `strategy_registry.py`'s own existing
 registry (zero new duplication -- that module already generates
 `STRATEGY_DOC` from the same dict for exactly this reason).
-`RenoiseBatchSourceNode`/`ManagedDatasetSourceNode`'s `t_mode` Port
-sets `choices=T_MODES` off a new `nodes/dataset/timestep_modes.py`.
+`ManagedDatasetSourceNode`'s `t_mode` Port (the other original consumer,
+`RenoiseBatchSourceNode`, has since been retired with the baked-grid
+format it corrected -- doc 04 §5.5) sets
+`choices=T_MODES` off a new `nodes/dataset/timestep_modes.py`.
 That constant is a **deliberate**, documented duplicate of a same-named
 constant added to `core/noise_schedule.py` (where `sample_timestep()`
 actually implements those five distributions), not importable from
 there directly -- checked directly, not assumed: `core/__init__.py`
 eagerly imports `core.unet_wrapper` (ComfyUI-dependent) and other heavy
 modules, so anything under `core.*` pulls all of that in at import
-time, which is exactly why `renoise.py`'s own `_renoise()` already
-deferred its `core.noise_schedule` import to call time rather than
-module load -- `nodes/dataset/` is deliberately ComfyUI/torch-free at
+time, which is exactly why the original deferral example
+(`renoise.py`'s `_renoise()`, since retired with the baked-grid format
+it corrected -- `managed.py`'s build()-local `from manager.loader
+import ...` is the live one) deferred its `core.noise_schedule` import
+to call time rather than module load -- `nodes/dataset/` is deliberately
+ComfyUI/torch-free at
 import time, and a Port's `choices` is needed at class-definition time
 (module load), where that deferral trick isn't available. `device`
 Ports deliberately did **not** get `choices` -- checked directly

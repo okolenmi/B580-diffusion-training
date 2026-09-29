@@ -503,25 +503,26 @@ class DataTaskRunner:
                                 max_aspect_ratio: float = 2.0,
                                 task_id: int = None):
         """VAE-encode real images to clean latents, one per image -- the
-        simple "just images and captions" LoRA format, no distillation
-        machinery involved at all.
+        "just images and captions" LoRA format, the project's only
+        real-image ingestion path (no distillation machinery involved at
+        all).
 
-        Unlike run_ingestion_task (which bakes a fixed grid of n_timesteps
-        noise draws per image directly into the shard, reused identically
-        for every image), this stores only x0. Noise and timestep are
-        sampled fresh every time a sample is actually drawn for training
-        (manager/loader.py's ManagedDatasetLoader, gated on this
-        trajectory's metadata["format"] == "lora_raw") -- standard practice
-        (kohya-ss/diffusers/OneTrainer all do this), and specifically avoids
-        fixed-grid regularity: one timestep/noise grid computed once at
-        ingestion and reused for every image (a real bug in the older
-        run_ingestion_task path -- the user caught that "sampled" wasn't
-        sampled at all). Also simpler and faster
+        Stores only x0. Noise and timestep are sampled fresh every time a
+        sample is actually drawn for training (manager/loader.py's
+        ManagedDatasetLoader via manager/t_sampling.py's TrainTimeSampler,
+        gated on this trajectory's metadata["format"] == "lora_raw") --
+        standard practice (kohya-ss/diffusers/OneTrainer all do this),
+        and specifically avoids fixed-grid regularity: the retired
+        run_ingestion_task path baked one timestep/noise grid at ingestion
+        time and reused it for every image (a real bug -- the user caught
+        that "sampled" wasn't sampled at all -- and the reason that path,
+        its loader branch, and the RenoiseBatchSource workaround are all
+        gone now; see doc 04 section 5.5). Also simpler and faster
         to ingest: one VAE encode per image, no noise loop, no eps/vpred
         target computation, no cond/uncond dual-pass bookkeeping.
 
         Captions: a same-basename .txt sidecar file next to each image
-        (empty string if missing) -- same convention run_ingestion_task uses.
+        (empty string if missing).
 
         max_aspect_ratio: only affects resize_mode="fit" (the only mode
         whose long side isn't already capped at px by construction -- see
@@ -646,212 +647,3 @@ class DataTaskRunner:
             if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
             raise e
 
-    def run_ingestion_task(self, dataset_root: Path, model_path: Path, image_dir: Path,
-                           latent_size: int = 64, recursive: bool = True,
-                           resize_mode: str = "resize",
-                           n_timesteps: int = 20,
-                           cfg_range: tuple = (1.0, 7.5),
-                           neg_prompt: str = "",
-                           model_type: str = "eps",
-                           seed: int = 42,
-                           task_id: int = None,
-                           t_mode: str = "uniform",
-                           t_low: int = 20,
-                           t_high: int = 999):
-        """VAE-encode real images and store denoising reconstruction targets.
-
-        Each image is encoded to x0, then noised at n_timesteps uniformly-spaced
-        timesteps.  The reconstruction target at each step is the true noise eps
-        (for eps models) or the v-prediction equivalent (for vpred models).
-        This is standard diffusion fine-tuning — no teacher forward is needed,
-        and the loss starts near 1.0 rather than near 0.
-
-        Previously the teacher was run on each noised latent to produce targets.
-        Since the teacher is the same model as the LoRA base, its outputs are
-        identical to the student's outputs at LoRA init (lora_B=0), producing a
-        loss of zero from step 0 with no gradient signal to drive learning.
-
-        resize_mode:
-          "fit"         — resize so smallest dim = px*8 preserving aspect ratio,
-                          then crop to be divisible by 8. Output may be non-square.
-          "center_crop" — resize so smallest dim = px*8, then center-crop to square.
-          "pad"         — resize so largest dim = px*8, pad to square with black.
-          "resize"      — hard stretch to (px*8, px*8), distorts aspect ratio.
-
-        model_type: "eps" or "vpred" — must match the checkpoint used for training.
-        n_timesteps: number of timesteps sampled per image (default 20).
-        t_mode: distribution to sample from (uniform, logit, low, mid, high).
-        t_low, t_high: bounds for timestep sampling.
-        cfg_range: kept for API compatibility; not used (no teacher forward).
-        neg_prompt: negative prompt stored in metadata for training conditioning.
-        """
-        try:
-            if task_id: update_task_progress(dataset_root / "metadata.db", task_id, 0, pid=os.getpid())
-
-            source_id = add_source(dataset_root / "metadata.db", f"{image_dir.name}_real", "real",
-                                str(model_path), {
-                                    "image_dir": str(image_dir), "recursive": recursive,
-                                    "resize_mode": resize_mode, "model_type": model_type,
-                                    "n_timesteps": n_timesteps,
-                                    "t_mode": t_mode, "t_low": t_low, "t_high": t_high,
-                                })
-
-            print(f"  Loading VAE from: {model_path.name}")
-            sd = load_file(str(model_path))
-            vae_sd = {k.replace("first_stage_model.", ""): v
-                    for k, v in sd.items() if k.startswith("first_stage_model")}
-            vae = VAEDecoder.from_vae_sd(vae_sd, device=self.device)
-            previewer = PreviewGenerator(self.device, vae_sd)
-            del sd; xpu_empty_cache(); gc.collect()
-
-            px = latent_size * 8
-
-            img_exts = {".png", ".jpg", ".jpeg", ".webp"}
-            if recursive:
-                image_files = [p for p in image_dir.glob("**/*")
-                               if p.is_file() and p.suffix.lower() in img_exts]
-            else:
-                image_files = [p for p in image_dir.glob("*")
-                               if p.is_file() and p.suffix.lower() in img_exts]
-
-            # Read per-image prompts from .txt sidecar files
-            image_prompts = []
-            for img_path in image_files:
-                cap_path = img_path.with_suffix(".txt")
-                image_prompts.append(cap_path.read_text().strip() if cap_path.exists() else "")
-
-            rng = random.Random(seed)
-
-            # Generate timestep grid
-            if t_mode == "uniform":
-                # Uniformly-spaced timesteps with jitter
-                # (t=0 excluded — sigma≈0 produces unreliable targets)
-                # A small random jitter (±half the step size) is added so the model
-                # sees a spread of timestep values rather than the same 20 discrete
-                # points every epoch — this improves generalisation to arbitrary
-                # inference timesteps that fall between the training grid points.
-                _step = (t_high - t_low) / max(n_timesteps - 1, 1)
-                _half = _step / 2.0
-                t_grid = []
-                for i in range(n_timesteps):
-                    base = t_high - i * _step
-                    jitter = rng.uniform(-_half, _half) if i not in (0, n_timesteps - 1) else 0.0
-                    t_grid.append(int(round(max(t_low, min(t_high, base + jitter)))))
-            else:
-                # Distribution-based sampling (logit, low, mid, high)
-                t_grid_raw = []
-                for _ in range(n_timesteps):
-                    t_grid_raw.append(sample_timestep(rng, t_mode, t_low, t_high))
-                # Sort descending to maintain consistent order in shards
-                t_grid = sorted(t_grid_raw, reverse=True)
-
-            shard_file = dataset_root / "staging" / f"real_{uuid.uuid4().hex[:12]}.safetensors"
-            shard_writer = ShardWriter(shard_file)
-            pending_trajs = []
-            trajs_in_shard = 0
-            preview_tasks = []
-
-            for i, img_path in enumerate(tqdm(image_files, desc="Ingest")):
-                try:
-                    img_tensor = self._preprocess_image(img_path, px, resize_mode)
-                    with torch.no_grad():
-                        x0 = vae.encode(img_tensor).to(device=self.device, dtype=torch.float32)
-                    del img_tensor
-
-                    prompt = image_prompts[i]
-
-                    traj_samples = []
-                    for t_val in t_grid:
-                        at_cur, st_cur = get_alpha_sigma(t_val)
-                        at_f = at_cur.item()
-                        st_f = st_cur.item()
-
-                        # Sample noise and compute noised latent
-                        cpu_gen = torch.Generator(device="cpu")
-                        cpu_gen.manual_seed(derive_seed(seed, i * len(t_grid) + t_val, "ingest_noise"))
-                        eps = torch.randn(x0.shape, generator=cpu_gen,
-                                         device="cpu", dtype=torch.float32)
-
-                        x_t = x0.cpu() + st_f * eps
-
-                        # Reconstruction target: the true noise we added.
-                        # For eps model: target = eps.
-                        # For vpred model: target = eps_to_vpred(eps, x_t, alpha, sigma),
-                        # i.e. (eps - sigma*x0) / sqrt(sigma^2+1) -- see the derivation
-                        # in noise_schedule.py. This matches ComfyUI's V_PREDICTION
-                        # class under this codebase's x_t = x0 + sigma*eps forward
-                        # process. NOTE: this is *not* the textbook DDPM v-formula
-                        # (v = alpha*eps - sigma*x0), which assumes a different
-                        # forward process (x_t = alpha*x0 + sigma*eps) and gives a
-                        # wrong target here, especially at high-noise timesteps
-                        # where alpha is small.
-                        if model_type == "vpred":
-                            target = eps_to_vpred(eps, x_t, at_cur, st_cur)
-                        else:
-                            target = eps
-
-                        traj_samples.append({
-                            "t": t_val,
-                            "x_t": x_t.contiguous(),
-                            "target": target.contiguous(),
-                            "target_p": target.contiguous(),
-                            "target_n": target.contiguous(),
-                            "at": at_f, "st": st_f,
-                        })
-                        del eps, x_t, target
-
-                    # Stack into compressed format
-                    xt_seq = torch.cat([s["x_t"]      for s in traj_samples], dim=0)
-                    p_seq  = torch.cat([s["target_p"] for s in traj_samples], dim=0)
-                    n_seq  = torch.cat([s["target_n"] for s in traj_samples], dim=0)
-                    t_list = [s["t"]  for s in traj_samples]
-                    m_list = [{"at": s["at"], "st": s["st"]} for s in traj_samples]
-
-                    traj_id = shard_writer.add_compressed_trajectory(xt_seq, p_seq, n_seq,
-                                                                      t_list, m_list)
-                    # Least-noisy step (last in t_grid) used as preview
-                    rel_preview = f"previews/real_{uuid.uuid4().hex[:16]}.webp"
-                    preview_tasks.append((traj_samples[-1]["x_t"], dataset_root / rel_preview))
-
-                    pending_trajs.append({
-                        "shard_index": traj_id,
-                        "sample_count": len(t_list),
-                        "seed": seed + i,
-                        "prompt": prompt,
-                        "preview_path": rel_preview,
-                        "metadata_json": json.dumps({
-                            "neg": neg_prompt,
-                            "compressed": True, "type": "good",
-                            "model_type": model_type,
-                        }),
-                    })
-                    trajs_in_shard += 1
-                    if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
-                        self._finalize_shard(dataset_root, shard_writer, shard_file,
-                                             source_id, pending_trajs)
-                        shard_file = dataset_root / "staging" / f"real_{uuid.uuid4().hex[:12]}.safetensors"
-                        shard_writer = ShardWriter(shard_file)
-                        pending_trajs = []
-                        trajs_in_shard = 0
-                    if task_id: update_task_progress(dataset_root / "metadata.db", task_id, i + 1)
-                    del x0, xt_seq, p_seq, n_seq, traj_samples
-
-                except Exception as e:
-                    print(f"    Failed {img_path.name}: {e}")
-
-            if pending_trajs:
-                self._finalize_shard(dataset_root, shard_writer, shard_file,
-                                     source_id, pending_trajs)
-
-            if preview_tasks:
-                print(f"  Generating {len(preview_tasks)} previews...")
-                for latent, preview_path in preview_tasks:
-                    previewer.generate_preview(latent, preview_path)
-
-            vae.free(); previewer.free(); del vae, previewer
-            xpu_empty_cache(); gc.collect()
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'finished')
-
-        except Exception as e:
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
-            raise e

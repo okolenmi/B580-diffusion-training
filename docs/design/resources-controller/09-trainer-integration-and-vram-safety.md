@@ -630,3 +630,47 @@ the right `step`/`cancelled` (including the mid-run cancel path),
 `vram_budget_mb` present-with-budget and absent-without, `grad_norm`
 present-with-clip and absent-without, and timing keys reaching the
 managed report end-to-end with `step_total_ms` equal to their sum.
+
+## Seventh addendum: the dataset pipeline collapses onto single-latent, and t becomes fully targetable
+
+Everything up to here already *trained* on single-latent data -- one
+clean latent (x0) per image, noise + timestep injected at draw time
+(verified on disk: all six datasets are `format=lora_raw`,
+`sample_count=1`, the standard kohya/diffusers model). What this
+addendum removes is the other, older concept still living in the code
+around it, and adds the precise targeting that the single-latent model
+makes trivial:
+
+- **Retired:** `run_ingestion_task` (the legacy real-image path that
+  baked a fixed ~20-value t grid per image -- the "sampled wasn't
+  sampled" bug), the loader branch that read those shards (including
+  its dual-pass target blending; `use_dataset_cfg` survives on the node
+  as a documented no-op so old graphs still load), the `real` ("Real
+  (VAE Encoding)") option in the dataset generator UI plus its route
+  branch, and `RenoiseBatchSourceNode` (`nodes/dataset/renoise.py` +
+  its smoke test) -- a workaround node whose entire reason for existing
+  was undoing that grid. `ManagedDatasetLoader` now reads
+  `format=lora_raw` trajectories only; anything else (teacher/
+  compressed sequences) is skipped with a printed count, never misread
+  as a clean latent. `run_teacher_task` stays: distillation
+  trajectories are genuinely sequential multi-t data, a different
+  format for a different purpose.
+- **New:** `t_mode="exact"` + a `t_values` Port on
+  `ManagedDatasetSourceNode` -- `t_values="500"` pins every sample to
+  one precise timestep, `t_values="200,500,800"` cycles the list in
+  draw order (one value per sample, equal long-run share regardless of
+  shuffling), every value validated inside `[t_low, t_high] ∩ [1, 999]`
+  at build time. `manager/t_sampling.py`'s `TrainTimeSampler` is the
+  single interpreter/validator for all three t_mode families (static
+  five / adaptive / exact) -- config errors fire in the node's `build()`
+  before path resolution and in the loader's ctor before DB access,
+  never by silently degrading to uniform.
+- **Tests:** new `nodes/smoke_tests/smoke_test_t_sampling.py` (the
+  node/core/t_sampling list-sync guarantee, the exact cycle as an exact
+  sequence, every config-error path, and the adaptive-bias end-to-end
+  that used to run through `RenoiseBatchSource._renoise()`);
+  `smoke_test_lora_raw_dataset.py` gains real round trips for the
+  pinned cycle and for skipping non-single-latent trajectories;
+  `smoke_test_renoise.py` deleted with the node; port-choices
+  expectations extended to `T_MODES_TRAIN_TIME`, not weakened.
+  Design detail: doc 04, section 5.5.

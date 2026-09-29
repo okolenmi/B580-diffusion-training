@@ -50,10 +50,13 @@ def get_alpha_sigma(t):
 
 
 # Single source of truth for sample_timestep()'s valid `mode` values --
-# shared with nodes/dataset/renoise.py and nodes/dataset/managed.py's own
-# `t_mode` Ports (Port.choices), so the two node doc strings and this
+# mirrored (as a deliberate documented copy, since nodes/ can't import
+# core.* at module load) by nodes/dataset/timestep_modes.py's own
+# `t_mode` Ports (Port.choices), so the node doc strings and this
 # function can't drift the same way nodes/optimizer/strategy_registry.py's
 # own docstring explains STRATEGIES was built to prevent for `strategy`.
+# The train-time extras ("adaptive", "exact") live only in that copy and
+# are interpreted by manager/t_sampling.py, never by sample_timestep().
 T_MODES = ("uniform", "low", "mid", "high", "logit")
 
 

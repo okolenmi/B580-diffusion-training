@@ -2,11 +2,11 @@
 the *next* batch's host-side preparation with the *current* step's device
 compute. docs/design/03-training-step-orchestration.md section 2.5.
 
-Same pattern nodes/dataset/renoise.py's RenoiseBatchSource already
-establishes for this domain (wrap, don't reimplement iteration) -- a
-bounded background queue.Queue, one worker thread per __iter__() call
-(not one for this object's whole lifetime -- see below for why that
-matters), reading self._inner and handing batches to the training thread.
+Same pattern this domain's batch sources already established (wrap,
+don't reimplement iteration) -- a bounded background queue.Queue, one
+worker thread per __iter__() call (not one for this object's whole
+lifetime -- see below for why that matters), reading self._inner and
+handing batches to the training thread.
 
 Explicitly NOT a VRAM optimization -- it trades a small, bounded amount
 of extra host memory (maxsize=depth batches sitting in the queue at once)
@@ -28,9 +28,10 @@ lifetime -- why:** nodes/train/step_pipeline.py's FetchBatchPhase calls
 iter(batches) once at construction, then again on StopIteration (wrapping
 to a new epoch once the dataset is exhausted -- see that phase's own
 docstring). A TrainingBatchSource's __iter__() is expected to be
-restartable, a fresh pass each time it's called (RenoiseBatchSource
-already works this way: `for batch in self._inner: yield ...` inside
-__iter__() itself calls self._inner's __iter__() fresh every time). This
+restartable, a fresh pass each time it's called (every TrainingBatchSource
+works this way: e.g. ManagedDatasetBatchSource.__iter__ calls
+self._loader's __iter__ fresh every time, and a decorator's own
+`for batch in self._inner: yield ...` does the same). This
 class matches that: each __iter__() call starts a fresh worker thread
 against a fresh iter(self._inner), and the worker (and its queue) are
 torn down when that particular pass ends -- normally (the dataset

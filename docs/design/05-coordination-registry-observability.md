@@ -259,7 +259,11 @@ the chart itself: Freeze/Resume and the visible-items count
 (50/100/250/1000/All, default All) are centered in the loss card's
 header row, and a horizontal slider under the chart pans back through
 recorded history -- dragging it to the far end returns to live; it is
-disabled under All, where there is nothing to pan. Freeze/Resume locks
+disabled under All, where there is nothing to pan. The window readout
+(`steps 111-210 / 500`) sits in the header beside the title, NOT next
+to the slider: its text width changes every report, and a readout in the
+slider's row resizes the track under a held thumb -- a second teleport
+source on top of the value writes. Freeze/Resume locks
 the window where it is while reports keep arriving (the readout keeps
 showing `/ latest` so a held view still reports that newer data exists).
 While the pointer holds the slider thumb, its `max`/`value` are frozen:

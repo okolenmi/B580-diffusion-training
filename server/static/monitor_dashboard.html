@@ -91,10 +91,10 @@
   }
 
   /* ---- graph controls: freeze + visible-items count centered in the loss
-         card header (title left, legend hint right), pan slider + window
-         readout directly under the chart. One set drives all three charts
-         (shared step domain); reports keep recording while frozen, only
-         the view window is locked. ---- */
+         card header (title + window readout left, legend hint right), pan
+         slider alone directly under the chart. One set drives all three
+         charts (shared step domain); reports keep recording while frozen,
+         only the view window is locked. ---- */
   .card-header.mon-loss-head {
     display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px;
   }
@@ -103,7 +103,15 @@
     gap: 12px; flex-wrap: wrap;
   }
   .mon-loss-head .mon-hint { justify-self: end; text-align: right; }
-  .mon-scrub { display: flex; align-items: center; gap: 14px; padding: 0 1.5rem 1.5rem; }
+  /* Title + window readout share the header's first grid cell. Keeping the
+     readout OUT of the slider row matters: its text width changes every
+     report (`/ 1000` appearing, step digits growing), and a readout next to
+     a flex-grown slider resizes the track under the held thumb -- that
+     alone teleports the thumb even with slider writes frozen. */
+  .mon-loss-title {
+    display: flex; align-items: baseline; gap: 12px; min-width: 0;
+  }
+  .mon-scrub { padding: 0 1.5rem 1.5rem; }
   .mon-action.mon-freeze { min-width: 78px; text-align: center; }
   /* Frozen state: amber, matching the status pill's "ended" tone --
      a held view is neither live nor broken. */
@@ -129,7 +137,7 @@
      anywhere, it has no "completion" semantics). Track stays neutral;
      only the thumb carries the accent. */
   .mon-slider {
-    flex: 1; min-width: 160px; height: 16px;
+    display: block; width: 100%; height: 16px;
     -webkit-appearance: none; appearance: none;
     background: transparent; cursor: pointer;
   }
@@ -286,12 +294,18 @@
     <!-- Main grid: the loss chart with the run-stats rail beside it. -->
     <div class="mon-main">
       <div class="card">
-        <!-- Graph controls live in the header: Freeze/Resume + visible-items
-             count centered on the title row, pan slider under the chart.
-             All three charts share the window (step domain); data, stats
-             and the session CSV keep recording while frozen. -->
+        <!-- Graph controls live in the header: window readout beside the
+             title, Freeze/Resume + visible-items count centered on the
+             title row, pan slider alone under the chart (the readout must
+             NOT share the slider's row -- its changing width would resize
+             the track under the thumb). All three charts share the window
+             (step domain); data, stats and the session CSV keep recording
+             while frozen. -->
         <div class="card-header mon-loss-head">
-          <span>Loss</span>
+          <div class="mon-loss-title">
+            <span>Loss</span>
+            <span class="mon-window" id="mon-window">steps &mdash;</span>
+          </div>
           <div class="mon-ctl-group">
             <button class="mon-action mon-freeze" id="mon-freeze"
                     title="Hold the charts' view: incoming reports keep recording (stats, CSV) but the graph window stops moving">Freeze</button>
@@ -312,7 +326,6 @@
         <div class="mon-scrub">
           <input type="range" class="mon-slider" id="mon-slider" min="0" max="0" value="0" step="1"
                  title="Pan the window back through earlier records; drag to the far right to return to live">
-          <span class="mon-window" id="mon-window">steps &mdash;</span>
         </div>
       </div>
 

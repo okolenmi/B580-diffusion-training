@@ -257,7 +257,18 @@ VRAM usage and phase times are bands to compare proportionally, and
 symlog would squeeze an 8-9 GB range into the center half of the plot
 while stretching everything through the logarithmic wings above and
 below -- the loss chart keeps symlog because spikes are exactly what it
-is for. Blocks whose
+is for. The loss chart also draws trend lines (`trend: true`): one
+straight, dashed begin-to-end line per series, from the average of the
+first few present values in the window to the average of the last few
+(gaps skipped; window = max(3, n/4) capped at 30, and nothing at all
+below 6 values, where the two windows would overlap and the number
+would be an artifact). The legend entry for each series carries the
+movement -- end avg - begin avg, signed, green when the series came
+down and red when it went up -- because the first and last raw points
+are noise: the averaged straight line is what says overall progress or
+regress. The line stops at each series' last present step rather than
+being extrapolated to the plot border, and it recomputes against the
+active view window like everything else. Blocks whose
 keys depend on run configuration -- the memory section, the grad-norm
 row -- appear only once a report actually carries them and are hidden
 again by `clear`, so a CPU run never shows permanently-empty sections.

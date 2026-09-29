@@ -48,7 +48,11 @@
     constructor(monitorId, els) {
       this.monitorId = monitorId;
       this.els = els;
-      this.chart = new LossChart(els.canvas, { series: LOSS_SERIES, maxPoints: MAX_RECORDS });
+      // Trend lines: a straight begin-avg -> end-avg line per bucket (and
+      // the total), with the movement (end - begin) in the legend -- two
+      // raw endpoints are noise; the straight line is the progress/regress
+      // statement. Loss chart only.
+      this.chart = new LossChart(els.canvas, { series: LOSS_SERIES, maxPoints: MAX_RECORDS, trend: true });
       // VRAM/residency is magnitude data (a narrow MB band), not spike-
       // prone loss -- symlog would squeeze it into the center half of the
       // plot and distort proportionality; linear maps it over the full one.

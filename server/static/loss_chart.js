@@ -44,6 +44,18 @@
      on screen, so an out-of-window spike can't keep compressing a
      panned-back view. The monitor dashboard's freeze / visible-count /
      history-slider controls drive this.
+   - options.trend draws, per visible series, one straight start-to-
+     finish trend line: from the average of the first few present
+     values in the window to the average of the last few (gaps
+     skipped), and appends the movement -- end avg - begin avg -- to
+     that series' legend entry. The first and last raw points are
+     noise and say nothing on their own; the averaged straight line
+     through the middle of the noise is the honest "is this training
+     getting better or worse" statement. Legend color follows the loss
+     convention: green when the series moved down, red when it moved
+     up. Off by default; the monitor dashboard turns it on for the
+     loss chart only (a budget ceiling or a phase time has no
+     "progress" direction to report).
 
    This is an instantiable class, not the page-level singleton
    window.ChartManager the original dashboard tab (chart.js) uses -- same
@@ -64,8 +76,10 @@ class LossChart {
       : [{ key: "loss", label: "Loss", color: "#6c8cff" }];
     this.primaryKey = this.series[0].key;
     this.scale = (options && options.scale === "linear") ? "linear" : "symlog";
+    this.trend = !!(options && options.trend);
     this.referenceLines = (options && options.referenceLines) || [];
     this.viewRange = null; // {min, max} step window or null = all recorded data
+    this._trends = {}; // rebuilt per draw when trend is on: key -> _trendFor result
     this._legendHits = []; // rebuilt per draw: legend label boxes -> series, for click-to-hide
 
     this.points = []; // {step, values: {key: v|null}, s: {key: smoothed|null}, loss, smoothed}
@@ -166,6 +180,42 @@ class LossChart {
     if (!cur && !next) return;
     this.viewRange = next;
     this._requestDraw();
+  }
+
+  /* Start-to-finish trend for one series over the visible window
+     (viewRange applies, hidden series are the caller's job to skip):
+     the average of the first k present values (begin), the average of
+     the last k (end), and movement = end - begin. Gaps are skipped,
+     never zero-filled -- a bucket that sampled nothing at a step has no
+     opinion at that step.
+
+     k = max(3, n/4) capped at 30 present values: short runs still
+     average over the noise, long runs don't average the whole history
+     into one flat number. Needs >= 6 values -- below that the first
+     and last windows would overlap and the "movement" would be an
+     artifact of that overlap rather than a direction, so it returns
+     null and the chart draws nothing (no line, no legend number)
+     instead of inventing one. */
+  _trendFor(key) {
+    const vr = this.viewRange;
+    const vals = [];
+    let x0 = null, x1 = null;
+    for (const p of this.points) {
+      if (vr && (p.step < vr.min || p.step > vr.max)) continue;
+      const v = p.values[key];
+      if (v != null && isFinite(v)) { vals.push(v); x1 = p.step; if (x0 === null) x0 = p.step; }
+    }
+    const n = vals.length;
+    if (n < 6) return null;
+    const k = Math.max(3, Math.min(30, Math.floor(n / 4)));
+    let begin = 0, end = 0;
+    for (let i = 0; i < k; i++) begin += vals[i];
+    for (let i = n - k; i < n; i++) end += vals[i];
+    begin /= k; end /= k;
+    // x0/x1 bracket every present value, so a bucket whose last sample
+    // predates the window's end stops there instead of being extrapolated
+    // to the plot border.
+    return { begin, end, movement: end - begin, count: n, window: k, x0, x1 };
   }
 
   _legendHitAt(pt) {
@@ -343,6 +393,14 @@ class LossChart {
     return String(Math.round(v * 100) / 100);
   }
 
+  /* Movement = end average - begin average: signed, 2 significant
+     digits. This is the number that says progress (negative, loss
+     coming down) or regress at a glance, without reading the squiggle. */
+  static _formatMovement(v) {
+    if (v == null || !isFinite(v)) return "";
+    return (v < 0 ? "\u2212" : "+") + Math.abs(v).toPrecision(2);
+  }
+
   static _niceNum(range, round) {
     if (range <= 0) return 1;
     const exp = Math.floor(Math.log10(range));
@@ -460,6 +518,35 @@ class LossChart {
       }
       ctx.stroke();
     }
+
+    // trend lines (options.trend): one straight begin-avg -> end-avg line
+    // per visible series, dashed in the series' own color so it reads as
+    // "the direction of this line", not another measurement. Recomputed
+    // each draw (view window, hidden toggles) and reused by the legend
+    // below, which prints the movement. Still inside the clip: a windowed
+    // view maps the line's endpoints to that window's own first/last
+    // present steps.
+    if (this.trend) {
+      this._trends = {};
+      for (const s of this.series) {
+        if (s.hidden) continue;
+        this._trends[s.key] = this._trendFor(s.key);
+      }
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.9;
+      ctx.setLineDash([7, 5]);
+      for (const s of this.series) {
+        const tr = this._trends[s.key];
+        if (!tr) continue;
+        ctx.strokeStyle = s.color;
+        ctx.beginPath();
+        ctx.moveTo(xPos(tr.x0), yPos(tr.begin));
+        ctx.lineTo(xPos(tr.x1), yPos(tr.end));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     ctx.restore();
 
     // reference lines (a fixed ceiling/target, e.g. vram_budget_mb): a dashed
@@ -499,8 +586,11 @@ class LossChart {
     this._legendHits = [];
     let lx = plotL + 4, ly = plotT - 8, row = 0;
     for (const s of this.series) {
+      const tr = this.trend ? this._trends[s.key] : null;
+      const deltaTxt = tr ? LossChart._formatMovement(tr.movement) : "";
+      const deltaW = deltaTxt ? ctx.measureText(deltaTxt).width + 6 : 0;
       const labelW = ctx.measureText(s.label).width;
-      if (lx + 16 + labelW > plotR && row === 0) { lx = plotL + 4; ly = plotT + 8; row = 1; }
+      if (lx + 16 + labelW + deltaW > plotR && row === 0) { lx = plotL + 4; ly = plotT + 8; row = 1; }
       ctx.save();
       if (s.hidden) ctx.globalAlpha = 0.4;
       ctx.strokeStyle = s.color; ctx.lineWidth = 2;
@@ -511,10 +601,16 @@ class LossChart {
         ctx.strokeStyle = "#888899"; ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(lx + 16, ly); ctx.lineTo(lx + 16 + labelW, ly); ctx.stroke();
+      } else if (deltaTxt) {
+        // movement: green when the series came down (progress on a loss
+        // chart), red when it went up, gray when it didn't move -- flat is
+        // not good, it's nothing. The sign is also in the text.
+        ctx.fillStyle = tr.movement < 0 ? "#4caf50" : tr.movement > 0 ? "#ff5252" : "#888899";
+        ctx.fillText(deltaTxt, lx + 16 + labelW + 6, ly);
       }
       ctx.restore();
-      this._legendHits.push({ series: s, x0: lx - 4, x1: lx + 20 + labelW, y0: ly - 8, y1: ly + 8 });
-      lx += 16 + labelW + 14;
+      this._legendHits.push({ series: s, x0: lx - 4, x1: lx + 20 + labelW + deltaW, y0: ly - 8, y1: ly + 8 });
+      lx += 16 + labelW + deltaW + 14;
     }
 
     this._drawTooltip(W, H, plotT, plotB, plotL, plotR, xPos, yPos);

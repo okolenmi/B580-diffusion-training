@@ -87,8 +87,31 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Static files
+# Static files. /static responses *and* HTML pages get
+# `Cache-Control: no-cache` (via the middleware below, not
+# StaticFiles(headers=...) -- this Starlette build doesn't take a
+# headers kwarg): without any Cache-Control header the browser applies
+# heuristic freshness, so a normal reload can serve yesterday's JS (or
+# yesterday's HTML, with its old script list) against today's server
+# introspect data -- a real mixed-version bug hit once already (old
+# nodegraph.js's strict-equality visible_when check vs the new
+# array-valued gates: every gated row silently hidden until a hard
+# reload). no-cache still caches, it just forces a cheap revalidation
+# (304 when unchanged), so plain reloads always get fresh assets.
+# /datasets and /runs keep default caching: staleness there is a
+# preview nit, not a correctness bug.
 app.mount("/static", StaticFiles(directory=str(settings.project_root / "server/static")), name="static")
+
+
+@app.middleware("http")
+async def browser_assets_revalidate(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    is_static = path == "/static" or path.startswith("/static/")
+    is_html = response.headers.get("content-type", "").startswith("text/html")
+    if is_static or is_html:
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 # Ensure datasets directory exists for preview serving
 datasets_dir = settings.project_root / "datasets"

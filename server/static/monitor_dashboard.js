@@ -56,6 +56,7 @@
       this.runEnded = null;     // null while running; {step, cancelled} after run_end
       this.rawHistory = [];     // every step report this session saw -- the CSV export
       this.budget = null;       // vram_budget_mb, once a report states one
+      this.bucketLast = {};     // loss_t_* -> {v, step}: latest measured value per range (rail carry)
       this.stats = { best: null, bestStep: null, peakVram: null };
     }
 
@@ -111,6 +112,7 @@
         this.recentRates = [];
         this.rawHistory = [];
         this.budget = null;
+        this.bucketLast = {};
         this.runEnded = null;
         this.stats = { best: null, bestStep: null, peakVram: null };
         this.resetReadouts();
@@ -237,20 +239,52 @@
         e.best.textContent = this.fmt(this.stats.best);
         e.best.title = `lowest raw loss seen this session, at step ${this.stats.bestStep}`;
       }
-      // Per-t bucket readouts: latest value or em dash when this report had
-      // no samples for that bucket (same rule as the chart's gaps) -- and a
-      // bar whose length is that value relative to the largest bucket this
-      // report had (same target, same scale, so the magnitudes compare
-      // honestly); an absent bucket gets an empty bar, never a zero one.
-      if (e.lossTlow) e.lossTlow.textContent = this.fmt(data.loss_t_low);
-      if (e.lossTmid) e.lossTmid.textContent = this.fmt(data.loss_t_mid);
-      if (e.lossThigh) e.lossThigh.textContent = this.fmt(data.loss_t_high);
-      const bucketVals = [data.loss_t_low, data.loss_t_mid, data.loss_t_high]
-        .filter((v) => typeof v === "number");
-      const bucketMax = bucketVals.length ? Math.max(...bucketVals) : 0;
-      this.setBar(e.barTlow, data.loss_t_low, bucketMax);
-      this.setBar(e.barTmid, data.loss_t_mid, bucketMax);
-      this.setBar(e.barThigh, data.loss_t_high, bucketMax);
+      // Per-t bucket readouts: with batch 2 a bucket often gets no sample in
+      // a window, so an em dash every few steps made the rail read like data
+      // loss. Each row shows the latest *measured* value for its range: this
+      // report's own when its window sampled that range, otherwise the last
+      // one -- dimmed and tagged @step, so a carried number never claims to
+      // be this step's measurement. The chart still draws per-step gaps: the
+      // chart answers "what happened at step N", the rail "where does each
+      // range stand now". A range never measured this run stays em dash +
+      // empty bar; bars compare the three displayed magnitudes (same target,
+      // same scale, so they compare honestly).
+      const rows = [
+        { key: "loss_t_low", val: e.lossTlow, bar: e.barTlow, range: "[0,333)" },
+        { key: "loss_t_mid", val: e.lossTmid, bar: e.barTmid, range: "[333,666)" },
+        { key: "loss_t_high", val: e.lossThigh, bar: e.barThigh, range: "[666,1000)" },
+      ];
+      const shown = [];
+      for (const r of rows) {
+        const v = data[r.key];
+        if (typeof v === "number") {
+          this.bucketLast[r.key] = { v, step: data.step };
+          shown.push({ r, v, stale: false, step: data.step });
+        } else if (this.bucketLast[r.key]) {
+          const last = this.bucketLast[r.key];
+          shown.push({ r, v: last.v, stale: true, step: last.step });
+        } else {
+          shown.push({ r, v: null });
+        }
+      }
+      const bucketMax = Math.max(...shown.filter((s) => s.v != null).map((s) => s.v), 0);
+      for (const s of shown) {
+        if (s.v == null) {
+          s.r.val.textContent = "\u2014";
+          s.r.val.title = `never sampled in ${s.r.range} this run`;
+          s.r.val.classList.remove("mon-stale");
+          s.r.bar.classList.remove("mon-stale");
+          this.setBar(s.r.bar, null, bucketMax);
+          continue;
+        }
+        s.r.val.textContent = s.stale ? `${this.fmt(s.v)} @${s.step}` : this.fmt(s.v);
+        s.r.val.classList.toggle("mon-stale", s.stale);
+        s.r.val.title = s.stale
+          ? `last measured at step ${s.step}; this window had no sample in ${s.r.range}`
+          : `measured at step ${data.step} in ${s.r.range}`;
+        s.r.bar.classList.toggle("mon-stale", s.stale);
+        this.setBar(s.r.bar, s.v, bucketMax);
+      }
 
       e.lr.textContent = data.lr !== undefined ? data.lr.toExponential(2) : "\u2014";
       // Grad norm row appears only once a report actually carries it (clip
@@ -370,9 +404,16 @@
       e.loss.textContent = "\u2014";
       e.smoothed.textContent = "\u2014";
       e.best.textContent = "\u2014";
-      e.lossTlow.textContent = "\u2014";
-      e.lossTmid.textContent = "\u2014";
-      e.lossThigh.textContent = "\u2014";
+      for (const r of [
+        { val: e.lossTlow, bar: e.barTlow },
+        { val: e.lossTmid, bar: e.barTmid },
+        { val: e.lossThigh, bar: e.barThigh },
+      ]) {
+        r.val.textContent = "\u2014";
+        r.val.title = "";
+        r.val.classList.remove("mon-stale");
+        r.bar.classList.remove("mon-stale");
+      }
       e.lr.textContent = "\u2014";
       e.gradNorm.textContent = "\u2014";
       e.vram.textContent = "\u2014";

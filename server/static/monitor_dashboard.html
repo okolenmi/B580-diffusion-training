@@ -110,18 +110,23 @@
     font-size: 9px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--text-dim); padding: 15px 0 7px; border-bottom: 1px solid var(--border);
   }
-  /* Per-t bucket rows: bar length = this report's bucket MSE relative to
-     the largest of the three (same target, same scale, so magnitudes are
-     honestly comparable). Absent bucket -> empty bar, em-dash value --
-     the chart's gap rule, stated visually. */
+  /* Per-t bucket rows: bar length = the displayed value relative to the
+     largest of the three (same target, same scale, so magnitudes compare
+     honestly). When a range was not sampled this step, the rail carries the
+     latest measured value instead of an em dash -- dimmed + tagged @step so
+     a carried number never claims to be this step's measurement; a range
+     never measured this run keeps the em dash and an empty bar. */
   .mon-bar-row {
-    display: grid; grid-template-columns: 54px minmax(0, 1fr) 88px; gap: 10px;
+    display: grid; grid-template-columns: 54px minmax(0, 1fr) 96px; gap: 10px;
     align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border);
   }
   .mon-bar-label { font-size: 11px; font-weight: 700; }
   .mon-bar-track { height: 6px; background: var(--surface-alt); border-radius: 3px; overflow: hidden; }
   .mon-bar-fill { height: 100%; width: 0%; border-radius: 3px; transition: width 0.3s; }
   .mon-bar-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: right; }
+  /* Carried (last-measured, not from this step) readout: visually quiet so
+     it reads as provenance-marked rather than current. */
+  .mon-stale { opacity: 0.6; }
 
   /* Budget-utilization meter: fill color = pressure band (accent below
      90%, amber 90-99%, red at/over the stated budget). */

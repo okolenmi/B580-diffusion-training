@@ -236,8 +236,16 @@ cards -- a hero status block (step, loss, smoothed and ETA as large
 readouts, a full-width progress bar, then a meta row with steps/sec,
 elapsed time and the optimizer id the report carried); the loss chart
 beside a run-stats rail (best loss, LR, the grad-norm row, per-t
-bucket rows whose bar length compares this report's three bucket
-magnitudes on their shared scale, and a memory block with a
+bucket rows showing each range's latest *measured* loss -- the
+current report's own value when its window sampled that range,
+otherwise the last measured one, dimmed and tagged `@step` so a
+carried number never claims to be this step's measurement (at batch
+2 a bucket is often unsampled; the chart still draws per-step gaps --
+the chart answers "what happened at step N", the rail "where does
+each range stand now"), bar length comparing the three displayed
+magnitudes on their shared scale; a range never measured this run
+keeps the em dash and an empty bar; tooltips state the provenance
+step either way, and a memory block with a
 budget-utilization meter -- color-banded by pressure: accent below
 90%, amber 90-99%, red at/over the stated budget -- plus the session
 peak); and the VRAM/residency and phase-timing charts side by side

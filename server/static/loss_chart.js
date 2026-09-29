@@ -3,6 +3,16 @@
    25% for extreme values), so a loss curve with occasional spikes stays
    readable without the everyday range getting squashed to a flat line.
 
+   options.scale picks the y mapping: "symlog" (default, the paragraph
+   above) or "linear" -- a plain proportional mapping from the visible
+   data's padded min/max, with nice-step gridlines. Symlog is wrong for
+   magnitude data with no spike problem: VRAM usage living in an 8-9 GB
+   band would be squeezed into the center 50% of the plot and stretched
+   non-proportionally through the log wings above/below it, when what the
+   reader needs is "this bump is twice that one". The monitor dashboard
+   therefore builds its VRAM/residency and phase-timing charts with
+   {scale: "linear"} and only the loss chart on the default.
+
    Multi-series: options.series = [{key, label, color}] defines the lines
    (default: a single "loss" series, so a canvas constructed without
    options draws exactly what it used to). addPoint takes a values object
@@ -53,6 +63,7 @@ class LossChart {
       ? options.series
       : [{ key: "loss", label: "Loss", color: "#6c8cff" }];
     this.primaryKey = this.series[0].key;
+    this.scale = (options && options.scale === "linear") ? "linear" : "symlog";
     this.referenceLines = (options && options.referenceLines) || [];
     this.viewRange = null; // {min, max} step window or null = all recorded data
     this._legendHits = []; // rebuilt per draw: legend label boxes -> series, for click-to-hide
@@ -197,13 +208,37 @@ class LossChart {
   }
 
   _computeRangeCore() {
+    const vr = this.viewRange;
+    // Linear scale: padded min/max of the visible values (raw + smoothed,
+    // hidden series and out-of-window points excluded, same rules as
+    // below). fullMin/fullMax start at the padded bounds because that's
+    // what _symMap's linear branch maps from -- and _computeRange() may
+    // widen them for a reference line (the VRAM budget ceiling), which
+    // must land inside the plot at its true proportional position.
+    if (this.scale === "linear") {
+      let vMin = Infinity, vMax = -Infinity, n = 0;
+      for (const s of this.series) {
+        if (s.hidden) continue;
+        for (const p of this.points) {
+          if (vr && (p.step < vr.min || p.step > vr.max)) continue;
+          const rv = p.values[s.key];
+          if (rv != null && isFinite(rv)) { n++; if (rv < vMin) vMin = rv; if (rv > vMax) vMax = rv; }
+          const sv = p.s[s.key];
+          if (sv != null && isFinite(sv)) { n++; if (sv < vMin) vMin = sv; if (sv > vMax) vMax = sv; }
+        }
+      }
+      if (!n) return { linMin: 0, linMax: 1, fullMin: 0, fullMax: 1 };
+      let span = vMax - vMin;
+      if (span <= 0) span = Math.abs(vMax) * 0.05 || 1; // flat series: a little headroom, not zero
+      const lo = vMin - span * 0.1, hi = vMax + span * 0.1;
+      return { linMin: lo, linMax: hi, fullMin: lo, fullMax: hi };
+    }
     // Range spans *every* visible series (raw + smoothed), so a high-t bucket
     // spike and the total loss share one honest axis instead of one series
     // clipping outside the computed bounds. Hidden (legend-toggled-off)
     // series don't participate, and neither do points outside an active
     // view window: the axis should follow what's on screen.
     const smoothVals = [], lossVals = [];
-    const vr = this.viewRange;
     for (const s of this.series) {
       if (s.hidden) continue;
       for (const p of this.points) {
@@ -242,6 +277,14 @@ class LossChart {
   }
 
   _symMap(value, range, plotT, plotH, plotB) {
+    // Linear: one proportional mapping over the whole plot (full bounds,
+    // so a reference line that widened the range positions correctly).
+    if (this.scale === "linear") {
+      const lo = range.fullMin, hi = range.fullMax;
+      if (!(hi > lo) || !isFinite(value)) return plotT + plotH / 2;
+      const frac = Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
+      return plotT + plotH * (1 - frac);
+    }
     let { linMin, linMax, fullMin, fullMax } = range;
     if (fullMax <= linMax) fullMax = linMax * 2;
     if (fullMin >= linMin || fullMin <= 0) fullMin = linMin * 0.5;
@@ -263,6 +306,7 @@ class LossChart {
   }
 
   static _formatNum(v) {
+    if (v >= 1000) return v.toFixed(1); // MB/ms magnitudes: 9123.4, not 9123.4568
     if (v >= 1) return v.toFixed(4);
     if (v >= 0.01) return v.toFixed(5);
     return v.toExponential(2);
@@ -274,6 +318,29 @@ class LossChart {
     const rounded = Number(av.toPrecision(2));
     const s = (rounded >= 1000 || rounded < 0.0001) ? rounded.toExponential(1) : String(rounded);
     return v < 0 ? "-" + s : s;
+  }
+
+  /* Evenly spaced ticks over [min, max] at a nice step (~6 of them).
+     Only used by the linear scale: nice numbers are already clean (50,
+     200, 500), so their labels print exactly -- _formatAxisLabel's 2-sig
+     digit rounding would turn a 8850 tick into "8900" and collide with
+     the next one. */
+  static _linearTicks(min, max) {
+    if (!isFinite(min) || !isFinite(max) || !(max > min)) return isFinite(max) ? [max] : [];
+    const step = LossChart._niceNum((max - min) / 6, true);
+    if (!(step > 0)) return [min, max];
+    const out = [];
+    for (let t = Math.ceil(min / step) * step; t <= max + step * 1e-6; t += step) {
+      out.push(Math.round(t * 1e9) / 1e9); // undo float drift so labels stay exact
+    }
+    return out;
+  }
+
+  static _formatLinearTick(v) {
+    if (!isFinite(v)) return "";
+    const r = Math.round(v);
+    if (Math.abs(v - r) < 1e-9) return String(r);
+    return String(Math.round(v * 100) / 100);
   }
 
   static _niceNum(range, round) {
@@ -317,20 +384,25 @@ class LossChart {
     const xPos = (step) => xMax === xMin ? plotL + plotW / 2 : plotL + ((step - xMin) / (xMax - xMin)) * plotW;
     const yPos = (v) => this._symMap(v, range, plotT, plotH, plotB);
 
-    // grid + y labels
+    // grid + y labels: linear gets nice-step gridlines across the whole
+    // range (a proportional axis wants proportional, evenly spaced rules);
+    // symlog keeps its four boundary ticks (the scale's landmarks).
     ctx.strokeStyle = "#2a2d3a";
     ctx.lineWidth = 1;
     ctx.fillStyle = "#888899";
     ctx.font = "10px monospace";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    const ticks = [range.fullMax, range.linMax, range.linMin, range.fullMin]
-      .filter((v, i, arr) => isFinite(v) && arr.findIndex(o => Math.abs(o - v) <= Math.abs(v) * 1e-6 + 1e-12) === i);
+    const linear = this.scale === "linear";
+    const ticks = linear
+      ? LossChart._linearTicks(range.fullMin, range.fullMax)
+      : [range.fullMax, range.linMax, range.linMin, range.fullMin]
+          .filter((v, i, arr) => isFinite(v) && arr.findIndex(o => Math.abs(o - v) <= Math.abs(v) * 1e-6 + 1e-12) === i);
     for (const tick of ticks) {
       const py = yPos(tick);
       if (py >= plotT - 0.5 && py <= plotB + 0.5) {
         ctx.beginPath(); ctx.moveTo(plotL, py); ctx.lineTo(plotR, py); ctx.stroke();
-        ctx.fillText(LossChart._formatAxisLabel(tick), plotL - 6, py);
+        ctx.fillText(linear ? LossChart._formatLinearTick(tick) : LossChart._formatAxisLabel(tick), plotL - 6, py);
       }
     }
 

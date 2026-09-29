@@ -250,7 +250,14 @@ budget-utilization meter -- color-banded by pressure: accent below
 90%, amber 90-99%, red at/over the stated budget -- plus the session
 peak); and the VRAM/residency and phase-timing charts side by side
 below, each hidden until a report carries their keys (an all-hidden
-row collapses to zero height rather than leaving a gap). Blocks whose
+row collapses to zero height rather than leaving a gap). Both
+magnitude charts are plotted on a linear y-axis (`LossChart`'s
+`scale: "linear"` option), not the loss chart's symmetric-log default:
+VRAM usage and phase times are bands to compare proportionally, and
+symlog would squeeze an 8-9 GB range into the center half of the plot
+while stretching everything through the logarithmic wings above and
+below -- the loss chart keeps symlog because spikes are exactly what it
+is for. Blocks whose
 keys depend on run configuration -- the memory section, the grad-norm
 row -- appear only once a report actually carries them and are hidden
 again by `clear`, so a CPU run never shows permanently-empty sections.

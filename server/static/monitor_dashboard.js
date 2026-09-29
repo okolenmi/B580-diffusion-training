@@ -49,7 +49,10 @@
       this.monitorId = monitorId;
       this.els = els;
       this.chart = new LossChart(els.canvas, { series: LOSS_SERIES, maxPoints: MAX_RECORDS });
-      this.vramChart = new LossChart(els.vramCanvas, { series: VRAM_SERIES, maxPoints: MAX_RECORDS });
+      // VRAM/residency is magnitude data (a narrow MB band), not spike-
+      // prone loss -- symlog would squeeze it into the center half of the
+      // plot and distort proportionality; linear maps it over the full one.
+      this.vramChart = new LossChart(els.vramCanvas, { series: VRAM_SERIES, maxPoints: MAX_RECORDS, scale: "linear" });
       // Built lazily on the first report carrying *_ms keys -- a run that
       // never collects timing (env/profile off) simply never shows the card.
       this.timingChart = null;
@@ -215,7 +218,9 @@
         color: TIMING_PALETTE[i % TIMING_PALETTE.length],
       }));
       series.push({ key: "step_total_ms", label: "total", color: TIMING_TOTAL_COLOR });
-      this.timingChart = new LossChart(this.els.timingCanvas, { series, maxPoints: MAX_RECORDS });
+      // Linear for the same reason as the VRAM chart: phase times are
+      // magnitudes to compare proportionally, not a spike-prone loss.
+      this.timingChart = new LossChart(this.els.timingCanvas, { series, maxPoints: MAX_RECORDS, scale: "linear" });
     }
 
     /* A phase key that wasn't in the first timing report still has to be

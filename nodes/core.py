@@ -51,9 +51,14 @@ class Port:
     visible_when: tuple[str, Any] | None = None
     # (other_port_name, value) -- this Port's own widget is only shown by
     # the graph editor while the *other*, sibling Port named here
-    # currently holds exactly `value` (e.g. a saved-LoRA path Port only
-    # shown while its own gating checkbox Port is True). Purely a UI
-    # hint, same posture as path_kind above -- build()/validate_inputs()
+    # currently holds `value` (e.g. a saved-LoRA path Port only
+    # shown while its own gating checkbox Port is True). `value` may
+    # instead be a tuple/list of accepted values -- membership rather
+    # than equality -- for a port that's valid under several modes at
+    # once (t_values only for t_mode="exact"; bucket_balance for
+    # ("adaptive", "exact"); the balance's clip knobs for any mode that
+    # reweights, i.e. not "off"). Purely a
+    # UI hint, same posture as path_kind above -- build()/validate_inputs()
     # never read this, so a hidden-but-still-populated value (a stale
     # path left over from before its checkbox was unchecked, say) is
     # each Node's own build()/process() concern to reject if it matters,

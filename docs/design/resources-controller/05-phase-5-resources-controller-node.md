@@ -81,7 +81,15 @@ Resources-Controller-specific) additions to `nodes/core.py`/the
 server/editor, not one-off plumbing: **`Port.visible_when`**
 (`nodes/core.py`) -- `(other_port_name, value)`; the graph editor
 hides a Port's own row unless the named sibling currently holds that
-value. Checked at class-definition time (`Node.__init_subclass__`):
+value. `value` may also be a tuple/list of accepted values -- membership
+rather than equality -- added for the mode gates that need "one of
+several modes" (`t_values` only under `t_mode="exact"`,
+`bucket_balance` under `("adaptive", "exact")`, the BucketBalanceNode's
+clip knobs under any mode that reweights); `nodegraph.js`'s
+`visibleWhenHolds()` does `includes()` for arrays and `===` otherwise,
+and resolves an unset controlling value to that port's declared default
+so a saved graph predating the port evaluates like `build()` would.
+Checked at class-definition time (`Node.__init_subclass__`):
 the referenced name has to actually be in that class's own `INPUTS`,
 so a typo fails loudly there. A UI hint only -- `Node`/`Port` never
 read it, so `process()` still enforces the real invariant.

@@ -42,7 +42,9 @@ class PortInfo:
     # precedent of "list" for this same kind of value here.
     visible_when: list | None = None  # Port.visible_when as [other_port_name, value] --
     # tells the UI to hide this Port's own row unless the sibling input named here
-    # currently holds exactly `value`. list (JSON has no tuple), same reasoning as choices
+    # currently holds `value` -- a bare value (equality) or a collection of accepted
+    # values (membership, for mode-gated ports valid under several modes at once).
+    # list (JSON has no tuple), same reasoning as choices
     # above; None for a legacy-guessed port or any real Port that didn't declare one.
     widget_only: bool = False  # Port.widget_only -- tells the UI to draw only this
     # Port's own widget, no wire socket at all. False for a legacy-guessed port (no

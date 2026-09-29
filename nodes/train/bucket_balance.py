@@ -400,28 +400,33 @@ class BucketBalanceNode(Node):
             name="fast_alpha", type=float, required=False, default=0.25,
             doc="'speed' mode only: fast EMA rate; its ratio to the slow "
                 "EMA is the bucket's descent rate (fast/slow < 1 = falling).",
+            visible_when=("mode", "speed"),
         ),
         "eta": Port(
             name="eta", type=float, required=False, default=0.5,
             doc="'speed' mode only: how hard to steer. 0.5 = square-root "
                 "step (deliberate), 1.0 = full relative correction per "
                 "report -- large values chase noise.",
+            visible_when=("mode", "speed"),
         ),
         "clip_min": Port(
             name="clip_min", type=float, required=False, default=0.25,
             doc="Lower clamp on a bucket's multiplier: the 'no bucket gets "
                 "ignored' guarantee (weight never below 0.25x).",
+            visible_when=("mode", ("normalize", "speed", "dro")),
         ),
         "clip_max": Port(
             name="clip_max", type=float, required=False, default=4.0,
             doc="Upper clamp: keeps one noisy window from flinging the loss "
                 "scale. Applied after the mean-1 renormalization.",
+            visible_when=("mode", ("normalize", "speed", "dro")),
         ),
         "dro_lambda": Port(
             name="dro_lambda", type=float, required=False, default=1.0,
             doc="'dro' only: sharpness of the worst-bucket emphasis. "
                 "0 = all buckets equal (weights flat at 1), larger = the "
                 "worst bucket dominates harder.",
+            visible_when=("mode", "dro"),
         ),
         "sample_bias": Port(
             name="sample_bias", type=float, required=False, default=1.0,

@@ -999,7 +999,38 @@
     portVisible(node, port) {
       if (!port.visible_when) return true;
       const [controllingPort, expected] = port.visible_when;
-      return node.paramValues[controllingPort] === expected;
+      return this.visibleWhenHolds(node, controllingPort, expected);
+    }
+
+    visibleWhenHolds(node, controllingPort, expected) {
+      // Resolve the controlling port's *effective* value: the widget's own
+      // stored value if there is one, else the port's declared default --
+      // a saved graph may predate the controlling port entirely (never
+      // touched, never saved), and "what build() would see" for an unset
+      // key is the default, so visibility must agree with the runtime
+      // instead of treating undefined as a non-match.
+      let actual = node.paramValues[controllingPort];
+      if (actual === undefined) {
+        const p = node.classInfo.inputs.find((x) => x.name === controllingPort);
+        if (p && p.default !== null && p.default !== undefined) {
+          // classInfo defaults are *Python reprs* (the same text the widget
+          // seeding path parses): 'uniform', 10, 'True', 'None' -- map the
+          // repr-only literals JSON doesn't know, parse the rest.
+          const text = String(p.default).replace(/'/g, '"');
+          try {
+            if (text === "True") actual = true;
+            else if (text === "False") actual = false;
+            else if (text === "None") actual = null;
+            else actual = JSON.parse(text);
+          } catch (e) { /* unparseable repr: leave undefined, non-match */ }
+        }
+      }
+      // `expected` may be a *collection* of accepted values -- the mode-gated
+      // ports (t_mode in ("adaptive","exact"), balance mode != "off" as
+      // ("normalize","speed","dro")), membership, order irrelevant -- or a
+      // bare value, which keeps Phase 5's original exact-equality rule.
+      return Array.isArray(expected) ? expected.includes(actual)
+                                     : actual === expected;
     }
 
     updatePortDotState(nodeId, portName) {
@@ -1039,8 +1070,8 @@
       if (!el || !node) return;
       el.querySelectorAll("[data-visible-when-port]").forEach((wrapper) => {
         const expected = JSON.parse(wrapper.dataset.visibleWhenValue);
-        const actual = node.paramValues[wrapper.dataset.visibleWhenPort];
-        wrapper.style.display = (actual === expected) ? "" : "none";
+        wrapper.style.display =
+          this.visibleWhenHolds(node, wrapper.dataset.visibleWhenPort, expected) ? "" : "none";
       });
       // Hiding/showing a row changes this node's own height, which moves every port
       // dot below it -- measurePorts()'s cached offsets (node.portOffsets, used by

@@ -24,6 +24,10 @@ Why each check:
   balance, sample_bias=0, or all listed values in one bucket, the exact
   cycle above must come back untouched (the pin is the default; the
   balance only earns the list when it has a real opinion).
+- Editor gating: t_values must only exist under t_mode="exact" and
+  bucket_balance only under ("adaptive", "exact") -- the mode fields
+  the graph editor hides/shows via Port.visible_when, checked as
+  metadata here because the editor itself can't run in CI.
 - Adaptive is checked end-to-end through a real BucketBalance: a warmed
   balance biased to the hard high bucket must dominate actual draws
   (this is the check that used to run through RenoiseBatchSource's
@@ -260,6 +264,22 @@ def check_exact_steered():
                seq3 == [100, 200, 100, 200], detail=f"{seq3}")
 
 
+def check_visible_when_gates():
+    print("\n=== editor gating: mode-specific inputs hide under the wrong t_mode ===")
+    inputs = ManagedDatasetSourceNode.INPUTS
+    check_true("t_values gated to t_mode='exact'",
+               inputs["t_values"].visible_when == ("t_mode", "exact"),
+               detail=f"got {inputs['t_values'].visible_when!r}")
+    check_true("bucket_balance gated to t_mode in ('adaptive', 'exact')",
+               inputs["bucket_balance"].visible_when ==
+               ("t_mode", ("adaptive", "exact")),
+               detail=f"got {inputs['bucket_balance'].visible_when!r}")
+    for name in ("t_mode", "t_low", "t_high"):
+        check_true(f"{name} ungated (meaningful under every t_mode)",
+                   inputs[name].visible_when is None,
+                   detail=f"got {inputs[name].visible_when!r}")
+
+
 def check_config_errors_surface_before_fs():
     print("\n=== node/loader config errors fire before any path or DB work ===")
     check_raises("node: exact without t_values, before path resolution",
@@ -294,6 +314,7 @@ def main():
     check_exact_cycles()
     check_adaptive()
     check_exact_steered()
+    check_visible_when_gates()
     check_config_errors_surface_before_fs()
 
     print("=" * 60)

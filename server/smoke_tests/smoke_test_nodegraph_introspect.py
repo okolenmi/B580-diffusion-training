@@ -157,6 +157,35 @@ def check_port_choices_propagate_and_stay_none_elsewhere():
     print("    PASS")
 
 
+def check_visible_when_serializes_value_and_collection():
+    print("[Port.visible_when survives introspection as [name, value-or-list] -- "
+          "the exact JSON shape nodegraph.js's visibleWhenHolds() parses]")
+    import json
+    from nodes.dataset.managed import ManagedDatasetSourceNode
+    from nodes.train.supervised import SupervisedLoRATrainerNode
+    d = node_info_to_dict(introspect_node_class(ManagedDatasetSourceNode))
+    by_name = {p["name"]: p for p in d["inputs"]}
+    # Bare-value (equality) gate.
+    check(json.loads(json.dumps(by_name["t_values"]["visible_when"])) ==
+          ["t_mode", "exact"],
+          f"t_values should gate on t_mode=='exact', got "
+          f"{by_name['t_values']['visible_when']!r}")
+    # Collection (membership) gate -- the multi-mode case.
+    check(json.loads(json.dumps(by_name["bucket_balance"]["visible_when"])) ==
+          ["t_mode", ["adaptive", "exact"]],
+          f"bucket_balance should gate on t_mode in (adaptive, exact), got "
+          f"{by_name['bucket_balance']['visible_when']!r}")
+    check(by_name["t_low"]["visible_when"] is None,
+          "t_low is valid under every t_mode -- no gate, stays None")
+    # A pre-existing bare-True checkbox gate still round-trips unchanged.
+    d2 = node_info_to_dict(introspect_node_class(SupervisedLoRATrainerNode))
+    gated = {p["name"]: p["visible_when"] for p in d2["inputs"]
+             if p["visible_when"] is not None}
+    check(gated.get("gate_train_low") == ["gate_enabled", True],
+          f"the Phase 5 checkbox gates must keep exact-equality shape, got {gated!r}")
+    print("    PASS")
+
+
 def main():
     check_auto_display_name_matches_expected_examples()
     check_display_name_override_wins_over_auto_derivation()
@@ -165,6 +194,7 @@ def main():
     check_node_info_to_dict_includes_display_name()
     check_every_real_registered_node_gets_a_sane_display_name()
     check_port_choices_propagate_and_stay_none_elsewhere()
+    check_visible_when_serializes_value_and_collection()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

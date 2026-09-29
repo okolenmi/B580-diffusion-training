@@ -77,7 +77,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                              "that list toward the buckets the balance measures as "
                              "behind instead of cycling uniformly. Every value must "
                              "be an integer inside [t_low, t_high] (and 1..999); "
-                             "ignored by other modes."),
+                             "ignored by other modes.",
+                         visible_when=("t_mode", "exact")),
         "bucket_balance": Port(
             name="bucket_balance", type=BucketBalance, required=False, default=None,
             doc="Required when t_mode='adaptive' -- the same Bucket Balance instance "
@@ -86,7 +87,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "Optional with t_mode='exact': wired, the balance steers draws across "
                 "t_values toward the buckets it measures as behind; unwired (or with "
                 "nothing to report yet), t_values stays the plain pinned cycle. "
-                "None with any static t_mode = today's behavior, unchanged."),
+                "None with any static t_mode = today's behavior, unchanged.",
+            visible_when=("t_mode", ("adaptive", "exact"))),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",

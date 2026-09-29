@@ -33,6 +33,13 @@ What's checked, and why:
   (the balance drives training, so tracking must not depend on
   reporting); managed route observes window-accumulated means at the
   grad_accum boundary.
+- Editor gating (Port.visible_when): the mode-specific knobs must be
+  gated to their own mode (speed's fast_alpha/eta, dro's dro_lambda,
+  the clips under any mode that actually reweights) and the
+  mode-independent knobs must stay ungated -- metadata, but checked
+  here because the graph editor itself can't run in CI, and a wrong
+  gate either shows dead fields (the user complaint that started this)
+  or hides a knob someone needs.
 
 No GPU involved anywhere -- phases are driven with hand-built states.
 
@@ -488,6 +495,33 @@ def check_config_validation():
     # (TrainTimeSampler + the same warmed-balance construction).
 
 
+def check_port_mode_gates():
+    print("\n=== editor gating: mode-specific knobs hide under the wrong mode ===")
+    inputs = BucketBalanceNode.INPUTS
+    for name in ("fast_alpha", "eta"):
+        check_true(f"{name} gated to mode='speed'",
+                   inputs[name].visible_when == ("mode", "speed"),
+                   detail=f"got {inputs[name].visible_when!r}")
+    check_true("dro_lambda gated to mode='dro'",
+               inputs["dro_lambda"].visible_when == ("mode", "dro"),
+               detail=f"got {inputs['dro_lambda'].visible_when!r}")
+    for name in ("clip_min", "clip_max"):
+        # _recompute_weights clamps in all three reweighting modes (the
+        # terminal min/max runs after every branch) and in no other:
+        # "off" never computes weights, the data side never reads clips.
+        check_true(f"{name} gated to any reweighting mode (never 'off')",
+                   inputs[name].visible_when ==
+                   ("mode", ("normalize", "speed", "dro")),
+                   detail=f"got {inputs[name].visible_when!r}")
+    for name in ("mode", "warmup_reports", "ema_alpha", "sample_bias"):
+        # warmup/ema feed weights AND the data side's difficulty ratio,
+        # sample_bias is purely data-side -- none of them are knowably
+        # dead under any mode the node itself can see.
+        check_true(f"{name} ungated (meaningful under every mode)",
+                   inputs[name].visible_when is None,
+                   detail=f"got {inputs[name].visible_when!r}")
+
+
 def main():
     check_ctor_validation()
     check_off_mode_tracks_without_reweighting()
@@ -498,6 +532,7 @@ def main():
     check_main_route_phases()
     check_managed_route_phases()
     check_config_validation()
+    check_port_mode_gates()
     print()
     if failures:
         print("=" * 60)

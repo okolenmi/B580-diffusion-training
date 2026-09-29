@@ -304,3 +304,133 @@ is also what feeds the per-t bucket diagnostics
 predicted.
 
 ---
+
+## 5. Per-t-bucket rebalancing (optional, `nodes/train/bucket_balance.py`)
+
+### 5.1 The problem it exists for
+
+The optimizer minimizes one scalar -- the batch mean of per-sample
+loss -- and a sum freely trades one t region's progress against
+another's: `loss_t_low` descending can pay for `loss_t_high` rising,
+and nothing objects. The per-t bucket numbers are diagnostics only
+(section 4's `t_bucket_losses()`): a bucket that stalls or regresses
+never changes what the gradient does. The only region levers are
+static -- `t_mode` picks a sampling distribution once at config time,
+Min-SNR/P2 are fixed functions of sigma -- so neither can react to
+what is actually happening per region mid-run. The dashboard's
+per-series trend lines make the symptom directly visible: three
+movement numbers disagreeing (one down, one flat, one up) *is* the
+tradeoff, quantified.
+
+### 5.2 What it is: one shared object, two independently optional sides
+
+`BucketBalance` tracks each bucket's window means (`observe()` folds
+in `{loss_t_*: mean raw MSE}`) and exposes:
+
+- **Gradient side** -- `weight_for_t(t)`: a per-sample multiplier
+  applied in both routes' `LossPhase`, composing with the existing
+  sigma weighting as `w(sigma) * w_bucket(t)`. Modes:
+  - **`off` (default)**: tracking only. `weight_for_t()` returns
+    `None`, and both `LossPhase`s keep their original code path
+    expression-for-expression -- wiring a balance in this mode is a
+    guaranteed bit-identical no-op (tested), so the tracking can exist
+    for the sampler side alone.
+  - **`normalize`**: after warmup, `w ∝ 1/baseline`, renormalized to
+    mean 1. Equalizes contribution *magnitude* -- a bucket whose raw
+    loss lives at 0.2 can't outshout one at 0.02 just by being 10x
+    the number. Static after warmup, no controller.
+  - **`speed`**: training-rate matching (the GradNorm idea, minus its
+    per-layer gradient norms -- here the rate is measured off the
+    reported bucket losses directly): each bucket's rate is
+    `fast_ema / slow_ema` (< 1 = descending), compared to the mean
+    rate across buckets; weights step by `(relative)^eta`,
+    renormalized, clamped. The control target is literally "all
+    losses should go down at the same speed" -- laggards gain weight,
+    fast descendents lose it.
+  - **`dro`**: worst-bucket emphasis (Group-DRO flavored):
+    `w ∝ exp(dro_lambda * current/baseline)` over buckets,
+    renormalized -- the bucket furthest above its own baseline
+    dominates, so one broken region pulls the run's capacity instead
+    of being averaged away.
+
+  Every mode renormalizes to mean 1 over *eligible* buckets and then
+  clamps to `[clip_min, clip_max]` (defaults 0.25 / 4.0): the floor is
+  the "no bucket gets ignored" guarantee, the ceiling keeps one noisy
+  window from flinging the loss scale. Renormalization happens before
+  the clamp, so in saturation a winner may sit inside the ceiling
+  rather than on it -- the guarantee is bounded weights, not a
+  specific saturation point.
+
+- **Data side** -- `sample_t(rng, t_low, t_high)`: adaptive t
+  sampling. Picks a bucket with probability ∝
+  `(current/baseline)^sample_bias` over whichever buckets
+  `[t_low, t_high]` actually intersects, then draws uniformly inside
+  that intersection. `sample_bias=0` keeps sampling uniform whatever
+  the gradient side is doing, so either side can be tested alone.
+  Pre-warmup it is plain uniform over the coverage.
+
+Wiring: `BucketBalanceNode` (registered in the graph) produces the
+instance; it goes to a trainer's `bucket_balance` port (both routes,
+in `TrainerNode.COMMON_INPUTS`) and/or to a dataset source node's
+`bucket_balance` port with `t_mode="adaptive"`
+(`ManagedDatasetSourceNode`, `RenoiseBatchSourceNode` -- `adaptive`
+is appended to their shared choices as `T_MODES_ADAPTIVE` in
+`nodes/dataset/timestep_modes.py`, deliberately *not* to `T_MODES`
+itself: `core.noise_schedule.sample_timestep` would silently degrade
+an unknown mode to uniform, and a silently-uniform "adaptive" would
+be a lie). One instance, shared: the trainer's `observe()` feeds what
+the sampler reads. Either side optional, both optional -- the point is
+that all four mechanisms are independently wireable for A/B testing.
+
+`adaptive` without a wired balance is a build-time `ValueError` on the
+node *and* on `ManagedDatasetLoader`/`RenoiseBatchSource`'s own
+constructors, raised before any filesystem/DB access -- a config
+error, not a mid-iteration crash. `manager/` stays duck-typed (it
+must never import `nodes/`), documented by contract in the loader's
+ctor.
+
+### 5.3 Cadence, honesty, reports
+
+`observe()` runs once per optimizer step, at the *reported window*:
+the managed route folds in the window-accumulated means at the
+grad_accum boundary, the main route its per-report means -- batch-2
+per-step numbers are too noisy to steer by. Both routes'
+`MonitoringPhase` observe even when no monitor is wired and profiling
+is off: the balance drives training, so tracking must not depend on
+reporting. A window that sampled no bucket X leaves X's state
+untouched (a gap is data, never zero-filled); a bucket with fewer
+than `warmup_reports` observations has no baseline, gets a neutral
+1.0 multiplier, and reports no key -- nothing is fabricated for a
+region the run hasn't measured.
+
+Reports gain `weight_t_low/mid/high` (mode `!= off`, only buckets
+past their own warmup, values as applied *after* this step's update)
+and, only once an adaptive sampler has actually stated its range,
+`prob_t_low/mid/high` (the real current sampling distribution over
+the covered buckets -- before that there is no distribution to
+report). Absent keys, not zeros -- the monitor chart's gap rule.
+
+### 5.4 Knobs (all Port-configurable on `BucketBalanceNode`)
+
+| Port | Default | Meaning |
+|---|---|---|
+| `mode` | `off` | Which gradient-side mechanism (table above) |
+| `warmup_reports` | 10 | Observations a bucket needs before it gets a baseline / any weight |
+| `ema_alpha` | 0.05 | Slow EMA of bucket loss (tracking + difficulty) |
+| `fast_alpha` | 0.25 | `speed` only: fast EMA; `fast/slow` is the descent rate |
+| `eta` | 0.5 | `speed` only: step gain (0.5 = square-root correction) |
+| `clip_min` / `clip_max` | 0.25 / 4.0 | Multiplier clamp after mean-1 renormalization |
+| `dro_lambda` | 1.0 | `dro` only: worst-bucket sharpness (0 = flat) |
+| `sample_bias` | 1.0 | Data side: difficulty exponent (0 = uniform sampling) |
+
+Honest limits, stated as such: `speed` equalizes *speed*, not level --
+a hopelessly broken bucket still has high absolute loss, just
+descending at the same relative rate as everything else; the only
+option that provably prevents one region's update from harming
+another is gradient surgery (per-bucket backward passes), which was
+deliberately not done here (×2-3 backwards on a 12 GB B580).
+Verified by `nodes/smoke_tests/smoke_test_bucket_balance.py` (mode
+directions against hand-computed values, mean-1/clip invariants,
+bit-identical `off` path, window-cadence observe on both routes,
+coverage- and bias-correct sampling, and the config-error checks
+above); no GPU involved.

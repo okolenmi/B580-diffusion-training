@@ -17,7 +17,8 @@ class ManagedDatasetLoader:
 
     def __init__(self, dataset_root: Path, set_identifier: Optional[Union[int, str]] = None,
                  shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True,
-                 t_low: int = 1, t_high: int = 999, t_mode: str = "uniform"):
+                 t_low: int = 1, t_high: int = 999, t_mode: str = "uniform",
+                 bucket_balance=None):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
@@ -28,6 +29,18 @@ class ManagedDatasetLoader:
         self.t_low = t_low
         self.t_high = t_high
         self.t_mode = t_mode
+        # Adaptive t sampling (nodes/train/bucket_balance.py's data side):
+        # duck-typed on purpose -- manager/ must not import nodes/, so this
+        # is documented by contract, not by type. Checked before any DB
+        # access so a misconfigured graph fails as a config error, not a
+        # mid-iteration crash.
+        if t_mode == "adaptive" and bucket_balance is None:
+            raise ValueError(
+                "ManagedDatasetLoader: t_mode='adaptive' requires a bucket_balance "
+                "(a nodes/train/bucket_balance.BucketBalance instance) -- without it "
+                "there is no progress signal to be adaptive with. Wire a Bucket "
+                "Balance node, or pick a static t_mode.")
+        self._bucket_balance = bucket_balance
         self._samples: list | None = None  # loaded once on first iteration, reused
         
         if set_identifier is not None:
@@ -205,7 +218,14 @@ class ManagedDatasetLoader:
         except (json.JSONDecodeError, TypeError):
             model_type = "eps"
 
-        t_val = sample_timestep(random, self.t_mode, self.t_low, self.t_high)
+        if self.t_mode == "adaptive":
+            # Data side of BucketBalance: bucket ~ live (current/baseline)
+            # difficulty over whatever buckets [t_low, t_high] covers, then
+            # uniform inside the chosen bucket. Same t_range restriction as
+            # sample_timestep below (bounds pass straight through).
+            t_val = self._bucket_balance.sample_t(random, self.t_low, self.t_high)
+        else:
+            t_val = sample_timestep(random, self.t_mode, self.t_low, self.t_high)
         at, st = get_alpha_sigma(t_val)
         eps = torch.randn_like(x0)
         x_t = x0 + st * eps

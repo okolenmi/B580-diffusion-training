@@ -83,19 +83,31 @@ from typing import ClassVar, Iterator, Optional
 
 from ..components.diffusion import DiscreteLinearNoiseSchedule
 from ..core import Port
+from ..train.bucket_balance import BucketBalance
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
-from .timestep_modes import T_MODES
+from .timestep_modes import T_MODES_ADAPTIVE
 
 
 class RenoiseBatchSource(TrainingBatchSource):
 
     def __init__(self, inner: TrainingBatchSource, t_low: int = 1, t_high: int = 999,
-                 t_mode: str = "uniform", seed: Optional[int] = None):
+                 t_mode: str = "uniform", seed: Optional[int] = None,
+                 bucket_balance=None):
+        if t_mode == "adaptive" and bucket_balance is None:
+            # Same config-error posture as ManagedDatasetLoader's own
+            # check (nodes/train/bucket_balance.py's data side): fail at
+            # construction, not mid-iteration inside _renoise.
+            raise ValueError(
+                "RenoiseBatchSource: t_mode='adaptive' requires a bucket_balance "
+                "(a nodes/train/bucket_balance.BucketBalance instance) -- without it "
+                "there is no progress signal to be adaptive with. Wire a Bucket "
+                "Balance node, or pick a static t_mode.")
         self._inner = inner
         self._t_low = t_low
         self._t_high = t_high
         self._t_mode = t_mode
+        self._bucket_balance = bucket_balance
         self._rng = random.Random(seed)
         self._schedule = DiscreteLinearNoiseSchedule()
         import torch
@@ -137,11 +149,18 @@ class RenoiseBatchSource(TrainingBatchSource):
         st_orig = st_orig.view(-1, 1, 1, 1).float()
         x0 = parameterization.to_x0(target.float(), x_t.float(), at_orig, st_orig)
 
-        t_new = torch.tensor(
-            [sample_timestep(self._rng, self._t_mode, self._t_low, self._t_high)
-             for _ in range(batch_size)],
-            dtype=torch.long,
-        )
+        if self._t_mode == "adaptive":
+            t_new = torch.tensor(
+                [self._bucket_balance.sample_t(self._rng, self._t_low, self._t_high)
+                 for _ in range(batch_size)],
+                dtype=torch.long,
+            )
+        else:
+            t_new = torch.tensor(
+                [sample_timestep(self._rng, self._t_mode, self._t_low, self._t_high)
+                 for _ in range(batch_size)],
+                dtype=torch.long,
+            )
         at_new, st_new = self._schedule.alpha_sigma(t_new)
         at_new_b = at_new.view(-1, 1, 1, 1).float()
         st_new_b = st_new.view(-1, 1, 1, 1).float()
@@ -188,9 +207,17 @@ class RenoiseBatchSourceNode(DataSourceNode):
         "t_high": Port(name="t_high", type=int, required=False, default=999,
                        doc="Upper bound of the resampled timestep range (inclusive)."),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
-                       choices=T_MODES,
+                       choices=T_MODES_ADAPTIVE,
                        doc="Same distributions core.noise_schedule.sample_timestep "
-                           "already implements."),
+                           "already implements, plus 'adaptive' (requires "
+                           "bucket_balance): bucket ~ (current/baseline)^sample_bias "
+                           "over the buckets [t_low, t_high] actually covers, read "
+                           "from the wired Bucket Balance node."),
+        "bucket_balance": Port(
+            name="bucket_balance", type=BucketBalance, required=False, default=None,
+            doc="Required when t_mode='adaptive' -- the same Bucket Balance instance "
+                "the trainer is wired to (its observe() is what the sampling reads). "
+                "None with any static t_mode = today's behavior, unchanged."),
         "seed": Port(name="seed", type=int, required=False, default=None,
                      doc="None = nondeterministic (fresh draws every run)."),
     }
@@ -203,6 +230,7 @@ class RenoiseBatchSourceNode(DataSourceNode):
             t_high=inputs.get("t_high", self.INPUTS["t_high"].default),
             t_mode=inputs.get("t_mode", self.INPUTS["t_mode"].default),
             seed=inputs.get("seed", self.INPUTS["seed"].default),
+            bucket_balance=inputs.get("bucket_balance"),
         )}
         self.validate_outputs(result)
         return result

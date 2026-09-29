@@ -40,6 +40,7 @@ def _load() -> dict[str, type]:
     from nodes.optimizer.composed_fused_came import ComposedFusedCAMEOptimizerNode
     from nodes.primitive.values import (BoolConstantNode, FloatConstantNode,
                                          IntConstantNode, StringConstantNode)
+    from nodes.train.bucket_balance import BucketBalanceNode
     from nodes.train.loss import (MinSNRLossWeightingNode, P2LossWeightingNode,
                                    UniformLossWeightingNode)
     from nodes.train.schedule import (ConstantLRScheduleNode, CosineLRScheduleNode,
@@ -59,6 +60,7 @@ def _load() -> dict[str, type]:
         ComposedFusedAdamWOptimizerNode, ComposedFusedAdafactorOptimizerNode, ComposedFusedCAMEOptimizerNode,
         ConstantLRScheduleNode, CosineLRScheduleNode, WarmupLRScheduleNode,
         UniformLossWeightingNode, MinSNRLossWeightingNode, P2LossWeightingNode,
+        BucketBalanceNode,
         SupervisedLoRATrainerNode, ManagedLoRATrainerNode,
         FloatConstantNode, IntConstantNode, StringConstantNode, BoolConstantNode,
     ]

@@ -193,6 +193,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
         diffusion_process = inputs.get("diffusion_process") or DiffusionProcess(
             DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
+        bucket_balance = inputs.get("bucket_balance")  # None = no rebalancing
 
         # Registered for profile=True's tracked_footprint_mb cross-check
         # (nodes/train/step_pipeline.py's MonitoringPhase) -- not driving
@@ -238,7 +239,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
             EncodeConditioningPhase(inputs["text_encoder"]),
             OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused),
             ForwardPhase(),
-            LossPhase(loss_weighting),
+            LossPhase(loss_weighting, bucket_balance=bucket_balance),
             BackwardPhase(),
             OptimizerStepPhase(optimizer, is_fused),
         ]
@@ -250,7 +251,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
             monitor=inputs.get("monitor"), profile=profile, coordinator=coordinator,
             optimizer_id=optimizer_id,
             usable_budget_mb=(resource_control.usable_budget_mb()
-                              if resource_control is not None else None)))
+                              if resource_control is not None else None),
+            bucket_balance=bucket_balance))
         pipeline = TrainingStepPipeline(phases)
 
         monitor = inputs.get("monitor")

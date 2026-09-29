@@ -115,15 +115,23 @@ def check_real_strategy_ports_share_strategy_registry():
 
 
 def check_real_t_mode_ports_share_timestep_modes():
-    print("[Real 't_mode' Ports read choices from the same T_MODES constant "
-          "their doc string already described]")
-    from nodes.dataset.timestep_modes import T_MODES
+    print("[Real 't_mode' Ports read choices from the shared timestep_modes "
+          "constant -- now T_MODES_ADAPTIVE (T_MODES + 'adaptive'), still "
+          "single-sourced there, never a hand-copied list]")
+    from nodes.dataset.timestep_modes import T_MODES, T_MODES_ADAPTIVE
     from nodes.dataset.renoise import RenoiseBatchSourceNode
     from nodes.dataset.managed import ManagedDatasetSourceNode
+    # The extension must stay a pure extension of the shared static list --
+    # 'adaptive' is a BucketBalance-driven mode (nodes/train/
+    # bucket_balance.py), not a sixth core.noise_schedule distribution, so
+    # it may be appended, never inserted/rewritten.
+    check(T_MODES_ADAPTIVE == (*T_MODES, "adaptive"),
+          f"T_MODES_ADAPTIVE = {T_MODES_ADAPTIVE!r}, expected {(*T_MODES, 'adaptive')!r}")
     for cls in (RenoiseBatchSourceNode, ManagedDatasetSourceNode):
         got = cls.INPUTS["t_mode"].choices
-        check(got == T_MODES, f"{cls.__name__}.INPUTS['t_mode'].choices = {got!r}, expected {T_MODES!r}")
-    print(f"    PASS ({T_MODES})")
+        check(got == T_MODES_ADAPTIVE,
+              f"{cls.__name__}.INPUTS['t_mode'].choices = {got!r}, expected {T_MODES_ADAPTIVE!r}")
+    print(f"    PASS ({T_MODES_ADAPTIVE})")
 
 
 def main():

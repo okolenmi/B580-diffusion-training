@@ -580,9 +580,17 @@ class LossPhase(ManagedStepPhase):
     window. Set only when backward_scale != 1.0 -- a plain grad_accum=1
     run's backward reads extras["loss"] exactly as before."""
 
-    def __init__(self, loss_weighting: LossWeighting, backward_scale: float = 1.0):
+    def __init__(self, loss_weighting: LossWeighting, backward_scale: float = 1.0,
+                 bucket_balance=None):
         self._loss_weighting = loss_weighting
         self._backward_scale = backward_scale
+        # Optional BucketBalance (nodes/train/bucket_balance.py): a second
+        # per-sample factor, w(sigma) * w_bucket(t). weight_for_t() returns
+        # None whenever the balance applies nothing (mode "off", warmup
+        # unfinished, no t) -- then the branch below is the original code
+        # expression-for-expression, so wiring a tracking-only balance is a
+        # guaranteed no-op here (mirrors the main route's LossPhase).
+        self._bucket_balance = bucket_balance
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         import torch
@@ -593,14 +601,24 @@ class LossPhase(ManagedStepPhase):
         per_sample = (pred.float() - target.float()).pow(2)
         per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
         sigmas = sigma.float().reshape(-1)
+        w_bucket = None
+        if self._bucket_balance is not None:
+            w_bucket = self._bucket_balance.weight_for_t(
+                state.extras.get("t"), dtype=per_sample.dtype,
+                device=per_sample.device)
         if sigmas.numel() == per_sample.numel():
             weights = torch.tensor(
                 [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
                 dtype=per_sample.dtype, device=per_sample.device)
+            if w_bucket is not None:
+                weights = weights * w_bucket
             loss = (per_sample * weights).mean()
         else:
             weight = self._loss_weighting.weight(float(sigmas.mean().item()))
-            loss = per_sample.mean() * weight
+            if w_bucket is not None:
+                loss = (per_sample * w_bucket).mean() * weight
+            else:
+                loss = per_sample.mean() * weight
         state.extras["loss"] = loss
         state.extras["per_sample_loss"] = per_sample.detach()
         if self._backward_scale != 1.0:
@@ -754,7 +772,8 @@ class MonitoringPhase(ManagedStepPhase):
                  coordinator: ResourceCoordinator, on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
                  optimizer_id: str = "", grad_accum: int = 1,
-                 usable_budget_mb: Optional[float] = None):
+                 usable_budget_mb: Optional[float] = None,
+                 bucket_balance=None):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._coordinator = coordinator
@@ -764,6 +783,10 @@ class MonitoringPhase(ManagedStepPhase):
         self._optimizer_id = optimizer_id
         self._grad_accum = grad_accum
         self._usable_budget_mb = usable_budget_mb
+        # observe() runs at every boundary below, before the no-monitor
+        # early return -- the balance drives training, so it keeps
+        # tracking even in a run with no monitor and no profiling.
+        self._bucket_balance = bucket_balance
         self._window_losses: list[float] = []
         self._window_ps: list[float] = []
         self._window_t: list[float] = []
@@ -783,6 +806,12 @@ class MonitoringPhase(ManagedStepPhase):
 
         loss_value = sum(self._window_losses) / len(self._window_losses)
         buckets = t_bucket_losses(self._window_ps, self._window_t)
+        if self._bucket_balance is not None:
+            # Window-accumulated means -- the right cadence for the
+            # balance (batch-2 per-step numbers are too noisy to steer
+            # by). Before the early return below, so observe() doesn't
+            # depend on monitoring being on.
+            self._bucket_balance.observe(buckets)
         self._window_losses.clear()
         self._window_ps.clear()
         self._window_t.clear()
@@ -805,6 +834,10 @@ class MonitoringPhase(ManagedStepPhase):
         if self._optimizer_id:
             report["optimizer"] = self._optimizer_id
         report.update(buckets)
+        if self._bucket_balance is not None:
+            # weight_t_*/prob_t_* -- post-update weights (observe() ran
+            # above), keys the balance doesn't have stay absent.
+            report.update(self._bucket_balance.report())
         if self._usable_budget_mb is not None:
             # Constant per run -- the ceiling the vram_* numbers are held
             # under (ctor doc). None-handling is the key's whole contract:
@@ -845,8 +878,12 @@ class MonitoringPhase(ManagedStepPhase):
             optimizer_part = f" optimizer={self._optimizer_id}" if self._optimizer_id else ""
             bucket_part = "".join(
                 f" {key.replace('loss_t_', 't_')}={value:.4f}" for key, value in buckets.items())
+            balance_part = "".join(
+                f" {key.replace('weight_t_', 'w_')}={value:.2f}"
+                for key, value in (self._bucket_balance.report().items()
+                                   if self._bucket_balance is not None else ()))
             print(f"  [step {state.step}]{optimizer_part} loss={loss_value:.4f} lr={lr:.2e}"
-                  f"{bucket_part}{mem_part} residents: {resident_part}")
+                  f"{bucket_part}{balance_part}{mem_part} residents: {resident_part}")
         return state
 
 
@@ -1068,6 +1105,7 @@ class ManagedLoRATrainerNode(TrainerNode):
         diffusion_process = inputs.get("diffusion_process") or DiffusionProcess(
             DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
+        bucket_balance = inputs.get("bucket_balance")  # None = no rebalancing
         profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
         empty_cache_every_n_steps: int = inputs.get(
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
@@ -1179,7 +1217,8 @@ class ManagedLoRATrainerNode(TrainerNode):
             ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum),
             ForwardPhase(),
             LossPhase(loss_weighting,
-                      backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0),
+                      backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0,
+                      bucket_balance=bucket_balance),
             BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control, controller,
                                            device_ctx=device_ctx, profile=profile,
                                            grad_accum=grad_accum,
@@ -1188,7 +1227,8 @@ class ManagedLoRATrainerNode(TrainerNode):
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
                 on_step=inputs.get("on_step"), monitor=monitor,
                 profile=profile, optimizer_id=optimizer_id, grad_accum=grad_accum,
-                usable_budget_mb=resource_control.usable_budget_mb()),
+                usable_budget_mb=resource_control.usable_budget_mb(),
+                bucket_balance=bucket_balance),
         ]
         pipeline = ManagedTrainingStepPipeline(phases)
 

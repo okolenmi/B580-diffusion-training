@@ -22,3 +22,14 @@ package import this particular case can't afford.
 """
 
 T_MODES = ("uniform", "low", "mid", "high", "logit")
+
+# The five static distributions above, plus "adaptive". "adaptive" is
+# deliberately NOT appended to T_MODES itself: it is not a distribution
+# core.noise_schedule.sample_timestep implements -- it reads a wired
+# BucketBalance's live per-bucket difficulty (nodes/train/
+# bucket_balance.py), and sample_timestep's alpha_beta.get(mode, ...)
+# would silently degrade any mode it doesn't know to Beta(1,1) ==
+# uniform. A silently-uniform "adaptive" would be a lie, so the two
+# dataset nodes handle it themselves (requiring their bucket_balance
+# input) and T_MODES stays a faithful copy of core's static list.
+T_MODES_ADAPTIVE = (*T_MODES, "adaptive")

@@ -59,7 +59,11 @@ def _build_ingestion_style_batch(x0: torch.Tensor, t_val: int, model_type: str, 
 def check_contracts():
     print("[contracts]")
     assert not getattr(RenoiseBatchSourceNode, "__abstractmethods__", None)
-    assert set(RenoiseBatchSourceNode.INPUTS) == {"batches", "t_low", "t_high", "t_mode", "seed"}
+    # bucket_balance joined the contract deliberately (t_mode="adaptive",
+    # nodes/train/bucket_balance.py) -- kept in the explicit set so any
+    # further input drift still trips this line.
+    assert set(RenoiseBatchSourceNode.INPUTS) == {
+        "batches", "t_low", "t_high", "t_mode", "seed", "bucket_balance"}
     assert set(RenoiseBatchSourceNode.OUTPUTS) == {"batches"}
     print("    PASS")
 

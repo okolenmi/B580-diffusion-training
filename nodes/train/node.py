@@ -13,6 +13,7 @@ from ..model.handle import TrainableModel
 from ..model.text_encoder import TextEncoder
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
+from .bucket_balance import BucketBalance
 from .loss import LossWeighting
 from .schedule import LRSchedule
 
@@ -33,6 +34,14 @@ class TrainerNode(Node):
         "steps": Port(name="steps", type=int, required=True),
         "loss_weighting": Port(name="loss_weighting", type=LossWeighting, required=False,
                                 default=None, doc="None = uniform weighting."),
+        "bucket_balance": Port(
+            name="bucket_balance", type=BucketBalance, required=False, default=None,
+            doc="Optional -- wire a Bucket Balance node's output here to rebalance "
+                "per-t-bucket losses during training (nodes/train/bucket_balance.py: "
+                "normalize / speed / dro modes; mode='off' wires the tracking only and "
+                "changes no arithmetic). None = today's behavior, bit-identical. The "
+                "same balance object can also be wired into the dataset source node "
+                "for t_mode='adaptive' sampling -- either side alone, or both."),
         "monitor": Port(name="monitor", type=MonitorHandle, required=False, default=None,
                          doc="Optional -- wire a MonitorNode here (e.g. "
                              "TrainingProgressMonitorNode) for a live step/loss/lr feed, "

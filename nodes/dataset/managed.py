@@ -12,9 +12,10 @@ from typing import Any, ClassVar, Iterator
 
 from ..core import Port
 from ..components.layout import ProjectLayout
+from ..train.bucket_balance import BucketBalance
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
-from .timestep_modes import T_MODES
+from .timestep_modes import T_MODES_ADAPTIVE
 
 
 class ManagedDatasetBatchSource(TrainingBatchSource):
@@ -50,8 +51,20 @@ class ManagedDatasetSourceNode(DataSourceNode):
                           "run_lora_ingestion_task) -- every other format has its own t baked in."),
         "t_high": Port(name="t_high", type=int, required=False, default=999),
         "t_mode": Port(name="t_mode", type=str, required=False, default="uniform",
-                       choices=T_MODES,
-                       doc="Same distributions core.noise_schedule.sample_timestep implements."),
+                       choices=T_MODES_ADAPTIVE,
+                       doc="Same distributions core.noise_schedule.sample_timestep "
+                           "implements, plus 'adaptive': bucket ~ (current/baseline)"
+                           "^sample_bias over the buckets [t_low, t_high] actually "
+                           "covers, read from a wired Bucket Balance node -- requires "
+                           "the bucket_balance input, and only ever steers samples "
+                           "whose t this node chooses ('lora_raw' format, same as "
+                           "t_low/t_high above)."),
+        "bucket_balance": Port(
+            name="bucket_balance", type=BucketBalance, required=False, default=None,
+            doc="Required when t_mode='adaptive' -- the same Bucket Balance instance "
+                "the trainer is wired to (its observe() is what the sampling reads; "
+                "without the trainer side it would track nothing and stay uniform). "
+                "None with any static t_mode = today's behavior, unchanged."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
@@ -62,6 +75,19 @@ class ManagedDatasetSourceNode(DataSourceNode):
         self.validate_inputs(inputs)
         from manager.loader import ManagedDatasetLoader
 
+        # Before any path resolution: "adaptive without a balance" is a
+        # config error, and it should fail as one, not as a loader crash
+        # mid-iteration (the loader itself repeats this check -- it's a
+        # public constructor).
+        t_mode = inputs.get("t_mode", self.INPUTS["t_mode"].default)
+        bucket_balance = inputs.get("bucket_balance")
+        if t_mode == "adaptive" and bucket_balance is None:
+            raise ValueError(
+                "ManagedDatasetSourceNode: t_mode='adaptive' requires the "
+                "bucket_balance input -- wire a Bucket Balance node's output (it is "
+                "what knows per-bucket progress to steer sampling by). Any static "
+                "t_mode works without it.")
+
         layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
         loader = ManagedDatasetLoader(
             dataset_root=layout.resolve_safe_dataset_path(str(inputs["dataset_root"])),
@@ -71,7 +97,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
             use_dataset_cfg=inputs.get("use_dataset_cfg", self.INPUTS["use_dataset_cfg"].default),
             t_low=inputs.get("t_low", self.INPUTS["t_low"].default),
             t_high=inputs.get("t_high", self.INPUTS["t_high"].default),
-            t_mode=inputs.get("t_mode", self.INPUTS["t_mode"].default),
+            t_mode=t_mode,
+            bucket_balance=bucket_balance,
         )
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)

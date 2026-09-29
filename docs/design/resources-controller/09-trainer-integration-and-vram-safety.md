@@ -542,6 +542,23 @@ byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
   counts optimizer steps, so it is cadence in *updates* regardless of
   K. `save_every_n_steps=0` (default) disables saving; 0 cadence with
   an empty prefix, and negative cadence, are build-time errors.
+- **Optional per-t-bucket rebalancing (all mechanisms off by default).**
+  The `loss_t_*` diagnostics above showed *which* region diverges but
+  never changed what the optimizer did about it -- a plain sum
+  objective trades one t region's progress against another's, and
+  `t_mode`/Min-SNR are fixed at config time. A new `BucketBalanceNode`
+  (design doc 04, section 5) produces one shared `BucketBalance`
+  wired to the trainer's `bucket_balance` port (both routes) and/or a
+  dataset source node's `bucket_balance` with `t_mode="adaptive"`:
+  gradient side `normalize` (equalize contribution magnitude),
+  `speed` (equalize relative descent rates), `dro` (worst-bucket
+  emphasis), or `off` (tracking only -- bit-identical no-op); data
+  side reweights t sampling toward buckets lagging their own
+  baseline. Reports gain `weight_t_low/mid/high` (post-update,
+  post-warmup only) and `prob_t_low/mid/high` (only once an adaptive
+  sampler has stated its range) -- absent, not zero, whenever
+  meaningless. `mode="off"` + no adaptive sampling = today's behavior,
+  byte-identical.
 
 The K=1 path was kept behavior-identical on purpose (zero_grad at
 micro 0, no `loss_for_backward` tensor in the graph, unchanged

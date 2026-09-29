@@ -308,10 +308,20 @@ class LossPhase(StepPhase):
     Also stashes extras["per_sample_loss"] (detached (B,) raw MSE) so
     MonitoringPhase can report the per-t-bucket diagnostics
     (t_bucket_losses) -- t is already in extras from
-    PrepareDiffusionInputsPhase."""
+    PrepareDiffusionInputsPhase.
 
-    def __init__(self, loss_weighting: LossWeighting):
+    BucketBalance (nodes/train/bucket_balance.py), when wired, multiplies
+    a second per-sample factor in -- one per t bucket, so the sigma
+    weighting and the bucket rebalancing compose as w(sigma) * w_bucket(t).
+    weight_for_t() returns None whenever the balance applies nothing
+    (mode "off", warmup not finished, no t), and in that case this method
+    runs its original code path expression-for-expression: wiring a
+    balance in tracking-only mode is a guaranteed no-op here."""
+
+    def __init__(self, loss_weighting: LossWeighting,
+                 bucket_balance=None):
         self._loss_weighting = loss_weighting
+        self._bucket_balance = bucket_balance
 
     def run(self, state: StepState) -> StepState:
         import torch
@@ -322,10 +332,17 @@ class LossPhase(StepPhase):
         per_sample = (pred.float() - target.float()).pow(2)
         per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
         sigmas = sigma.float().reshape(-1)
+        w_bucket = None
+        if self._bucket_balance is not None:
+            w_bucket = self._bucket_balance.weight_for_t(
+                state.extras.get("t"), dtype=per_sample.dtype,
+                device=per_sample.device)
         if sigmas.numel() == per_sample.numel():
             weights = torch.tensor(
                 [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
                 dtype=per_sample.dtype, device=per_sample.device)
+            if w_bucket is not None:
+                weights = weights * w_bucket
             state.extras["loss"] = (per_sample * weights).mean()
         else:
             # One shared sigma (scalar schedule output, or a shape that
@@ -333,7 +350,10 @@ class LossPhase(StepPhase):
             # so per-sample weighting collapses exactly to the old scalar
             # multiply -- one host sync, same as the original code's own.
             weight = self._loss_weighting.weight(float(sigmas.mean().item()))
-            state.extras["loss"] = per_sample.mean() * weight
+            if w_bucket is not None:
+                state.extras["loss"] = (per_sample * w_bucket).mean() * weight
+            else:
+                state.extras["loss"] = per_sample.mean() * weight
         state.extras["per_sample_loss"] = per_sample.detach()
         return state
 
@@ -409,7 +429,8 @@ class MonitoringPhase(StepPhase):
                  on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
                  coordinator=None, optimizer_id: str = "",
-                 usable_budget_mb: Optional[float] = None):
+                 usable_budget_mb: Optional[float] = None,
+                 bucket_balance=None):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._on_step = on_step
@@ -418,6 +439,12 @@ class MonitoringPhase(StepPhase):
         self._coordinator = coordinator
         self._optimizer_id = optimizer_id
         self._usable_budget_mb = usable_budget_mb
+        # observe() happens here, unconditionally when wired -- the
+        # balance drives training, so it must keep tracking even in a run
+        # with no monitor and no profiling. report() below then publishes
+        # whatever keys the balance honestly has (weight_t_*/prob_t_*,
+        # absent until meaningful -- bucket_balance.py's module docstring).
+        self._bucket_balance = bucket_balance
         self._baseline_mem: Optional[dict[str, float]] = None
 
     def run(self, state: StepState) -> StepState:
@@ -432,6 +459,17 @@ class MonitoringPhase(StepPhase):
         tracked_mb = None
         buckets: dict = {}
         resource_profile: Optional[ResourceProfile] = None
+        # Per-t-bucket diagnostics (loss.py's t_bucket_losses): raw
+        # per-sample MSE per fixed third of the t range, keys omitted
+        # for buckets this step had no samples in -- the monitor
+        # chart's colored bucket lines read these keys. Also the balance's
+        # observe() input, so computed whenever either consumer needs
+        # them (even a monitor-less, unprofiled run must keep tracking).
+        if self._bucket_balance is not None or self._monitor is not None or self._profile:
+            buckets = t_bucket_losses(
+                state.extras.get("per_sample_loss"), state.extras.get("t"))
+        if self._bucket_balance is not None:
+            self._bucket_balance.observe(buckets)
         if self._monitor is not None or self._profile:
             report = {
                 "step": state.step, "total_steps": self._total_steps,
@@ -444,13 +482,11 @@ class MonitoringPhase(StepPhase):
                 # constant per run; the dashboard draws it as a reference
                 # line against the vram_* series.
                 report["vram_budget_mb"] = self._usable_budget_mb
-            # Per-t-bucket diagnostics (loss.py's t_bucket_losses): raw
-            # per-sample MSE per fixed third of the t range, keys omitted
-            # for buckets this step had no samples in -- the monitor
-            # chart's colored bucket lines read these keys.
-            buckets = t_bucket_losses(
-                state.extras.get("per_sample_loss"), state.extras.get("t"))
             report.update(buckets)
+            if self._bucket_balance is not None:
+                # weight_t_*/prob_t_* -- post-update weights (observe()
+                # ran above), keys the balance doesn't have stay absent.
+                report.update(self._bucket_balance.report())
             if timing is not None:
                 # timing_ms's own keys are bare phase labels (fetch_batch,
                 # not fetch_batch_ms) -- the report dict is the one place

@@ -279,12 +279,18 @@ out-of-window points are clipped at the plot border and the y-range and
 tooltip only consider in-window points, so an old spike can't keep
 compressing a panned-back view. The charts keep up to 100k records
 (the default 1000-point cap would silently truncate exactly the oldest
-records the slider exists to reach).
+records the slider exists to reach), and the monitor bus replays that
+same 100k cap on (re)connect, so a reload restores the whole chart
+instead of just the newest tail -- at the old 500-report cap a refresh
+truncated every longer run to its newest 500 steps and shrank the
+hero's elapsed readout to those 500 reports' span (elapsed spans the
+oldest report the dashboard has seen).
 Legend click hides/shows a series (hidden series leave the tooltip and
 the axis range, and show struck-through in the legend itself), and
 session CSV export (`Export CSV`: one row per step report this browser
 session received, columns = union of report keys in first-seen order,
-missing cells empty -- session-scoped because that's all the page ever
-had; the bus keeps only its 500-event history).
+missing cells empty -- session-scoped because a reload starts a new
+browser session; reports the bus replayed on connect count as received
+by that session).
 
 ---

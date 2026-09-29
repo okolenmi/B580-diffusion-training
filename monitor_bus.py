@@ -7,8 +7,10 @@ thread, not the event loop) -- not reused directly because the domain is
 different enough to not share a class cleanly: string monitor_id keys
 instead of int run_id, a generic payload dict instead of a fixed
 progress/status shape, and a history buffer so a dashboard opened after a
-run has already started still shows recent data instead of just future
-events.
+run has already started (or reloaded mid-run) gets the run's data back,
+not just future events -- capped at HISTORY_LIMIT, matched to the
+dashboard's own record cap so the replay covers everything the charts
+would have kept.
 
 Deliberately NOT a module-level singleton the way SSEManager's `sse =
 SSEManager()` is: no instance is created here. server/main.py's lifespan
@@ -26,7 +28,16 @@ import asyncio
 import json
 from collections import defaultdict, deque
 
-HISTORY_LIMIT = 500
+# How much of a run a (re)connecting dashboard gets replayed. Matched to
+# the monitor dashboard's own MAX_RECORDS (100k) on purpose: a page
+# reload must restore exactly what the chart would have kept running --
+# at 500, any refresh silently truncated the graph to "the newest 500
+# steps", and shrank the hero's elapsed readout with it (elapsed spans
+# the oldest report the dashboard has seen). Reports cost ~2KB each: a
+# 3k-step run ~6MB; the cap's worst case (~200MB, plus ~0.8s of
+# json.dumps in the subscribe path) only exists for runs that actually
+# report 100k steps, and clear() drops it all when the next run starts.
+HISTORY_LIMIT = 100000
 
 
 class MonitorBus:

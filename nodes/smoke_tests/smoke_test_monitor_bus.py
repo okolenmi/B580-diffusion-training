@@ -51,6 +51,37 @@ def test_two_contexts_do_not_share_state():
     check(list(bus_b._history["x"]) == [{"v": 2}], "bus_b should only see its own report")
 
 
+def test_history_cap_matches_dashboard_and_evicts_oldest():
+    """The two caps must agree: the bus replays on (re)connect, the
+    dashboard keeps MAX_RECORDS -- a smaller bus cap truncates the graph
+    AND the hero's elapsed readout (elapsed spans the oldest report seen)
+    on every reload, which is exactly what happened at 500."""
+    import re
+
+    import monitor_bus as mb
+
+    src = (Path(__file__).resolve().parents[2] / "server" / "static"
+           / "monitor_dashboard.js").read_text()
+    m = re.search(r"MAX_RECORDS = (\d+)", src)
+    check(m is not None, "the dashboard must declare MAX_RECORDS")
+    check(mb.HISTORY_LIMIT == int(m.group(1)),
+          "server replay cap must equal the dashboard's MAX_RECORDS")
+
+    # Finite and oldest-first once over the cap (patch the module global
+    # BEFORE the deque is created -- the defaultdict factory reads it then).
+    bus = MonitorBus()
+    original = mb.HISTORY_LIMIT
+    mb.HISTORY_LIMIT = 3
+    try:
+        for i in range(5):
+            bus.report("cap", {"step": i})
+    finally:
+        mb.HISTORY_LIMIT = original
+    check([r["step"] for r in bus._history["cap"]] == [2, 3, 4],
+          "reports past the cap must evict the oldest first")
+    check(mb.HISTORY_LIMIT == original, "the patched cap must not leak past the test")
+
+
 def test_clear_removes_history():
     bus = MonitorBus()
     bus.report("m", {"step": 1})
@@ -135,6 +166,7 @@ def main():
     test_no_module_level_singleton()
     test_context_injection_reaches_handle()
     test_two_contexts_do_not_share_state()
+    test_history_cap_matches_dashboard_and_evicts_oldest()
     test_clear_removes_history()
     test_a_second_build_against_the_same_monitor_id_clears_the_first_runs_history()
     test_clear_broadcasts_to_a_live_subscriber()

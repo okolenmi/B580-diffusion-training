@@ -6,10 +6,35 @@ All five entries below were moved here from
 [`pending-testing.md`](pending-testing.md) after being run on real
 hardware on 2026-09-28 (Intel Arc B580, 12 GB, torch 2.12.1+xpu), via
 `scripts/hw_validate.py` / `scripts/hw_validation_batch.sh` -- each
-entry's "Confirmed" paragraph carries the measured result. (The
-topmost entry is a different provenance: a user-reported wrong number
-in this project's own documentation, investigated and corrected on
-hardware the same day.)
+entry's "Confirmed" paragraph carries the measured result. (The topmost
+two entries are a different provenance: 2026-09-29's is a review-caught
+bug, fixed in the encoder rather than in the test that caught it, and
+the one below it a user-reported wrong number in this project's own
+documentation, investigated and corrected on hardware the same day.)
+
+- **[2026-09-29] A cold `CachingTextEncoder.encode()` called
+  `ensure_loaded()` twice (once per cache half), and the test that
+  caught it was edited to expect two instead of fixing the encoder.**
+  The split-key redesign gave each half (`encode_prompt_only` /
+  `resolution_embedding`) its own `ensure_loaded()`, so a both-cold
+  encode fired it once per half; `c703aa6` changed
+  `check_resource_control_called_only_on_miss`'s assertion from one
+  call to two, justified by "the second call is a no-op in real
+  ResourceControlHandle (already resident)" -- not true:
+  `BudgetedResourceControlHandle.ensure_loaded()` skips the reload when
+  resident but unconditionally runs `_make_room()`, whose first act is a
+  `memory_stats()` read -- a real device query on every call. Every
+  both-halves-cold encode paid that query twice for the rest of the run
+  with caching on. Fixed in the encoder this time:
+  `CachingTextEncoder.encode()` checks both cache keys before either
+  half loads and calls `ensure_loaded()` once, suppressing the halves'
+  own per-miss calls only for the duration of that call (direct half
+  calls keep theirs); the test asserts one again, plus a new check that
+  direct half calls still ensure. The docstrings now state the real
+  cost too: `ensure_loaded()`'s no longer calls the resident-path
+  check just "cheap" -- it says the reload branch is skipped yet
+  `_make_room()`'s `memory_stats()` read (a real device query) still
+  runs every call.
 
 - **[2026-09-28] User-reported wrong VRAM figure in this project's docs
   ("reserved flat at ~6034 MB" for the legacy health check) -- the

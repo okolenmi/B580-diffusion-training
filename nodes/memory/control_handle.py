@@ -107,15 +107,21 @@ class ResourceControlHandle(ABC):
     @abstractmethod
     def ensure_loaded(self, name: str) -> None:
         """Call right before using a specific registered resident --
-        reloads it if it was offloaded, a no-op otherwise. If reloading
-        it pushes measured usage over budget, offloads other
+        reloads it if it was offloaded, a no-op *state-wise* otherwise.
+        If reloading it pushes measured usage over budget, offloads other
         offloadable, currently-loaded residents (registration order)
         to make room, the same as before_step() would between steps --
         "offload everything else until this one's done its work."
         Safe to call unconditionally before every use regardless of
         whether that resident was ever actually offloaded (the common
-        case, absent real pressure) -- the check inside is cheap, and
-        calling it unconditionally is what makes this safe to wire into
+        case, absent real pressure) -- correct either way, but not free
+        when already resident: the reload branch is skipped, yet
+        _make_room() still runs, and its first act is a memory_stats()
+        read -- a real device query, not a cache lookup. Callers that
+        can batch several imminent uses behind one call should (see
+        CachingTextEncoder.encode()'s both-keys-first check -- the one
+        place in this repo where the difference was worth fixing).
+        Calling it unconditionally is what makes this safe to wire into
         a step pipeline phase once and forget, rather than something
         that has to track offload state itself."""
 

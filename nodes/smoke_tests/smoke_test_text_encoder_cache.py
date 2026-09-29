@@ -165,35 +165,54 @@ def check_prompt_and_resolution_caches_are_independent():
 
 def check_resource_control_called_only_on_miss():
     print("[resource_control.ensure_loaded() called on a miss of either "
-          "cache, not on a hit of both]")
+          "cache, not on a hit of both -- exactly once per encode(), "
+          "never once per cold half]")
     inner = _CountingEncoder()
     control = _RecordingResourceControl()
     cache = CachingTextEncoder(inner, max_entries=8, resource_control=control)
 
     cache.encode("a cat", batch_size=2, height=512, width=512)
-    # TWO calls, not one: the two caches split into separate halves
-    # (encode_prompt_only / resolution_embedding), each of which calls
-    # ensure_loaded() immediately before touching the inner encoder on its
-    # own miss -- so a full miss (both halves cold) fires once per half.
-    # This test used to assert exactly one call, written when ensure lived
-    # in a single combined-key encode(); the split design (see the module
-    # docstring) moved it into each half and this assertion wasn't
-    # updated. The second call is a no-op in real ResourceControlHandle
-    # (already resident), so per-half is safe and still fires only on
-    # misses -- which is the property actually under test below.
-    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
-        "a miss of both halves must call ensure_loaded() once per half "
-        "(once before each inner call), with the default resource_name")
+    # ONE call, not two. This assertion originally read one; c703aa6
+    # relaxed it to two when the split-key redesign moved ensure_loaded()
+    # into each half (encode_prompt_only / resolution_embedding), so a
+    # both-cold encode fired it once per half -- and the comment
+    # justifying the edit claimed the second call was "a no-op in real
+    # ResourceControlHandle (already resident)". It isn't:
+    # BudgetedResourceControlHandle.ensure_loaded() unconditionally runs
+    # _make_room() past the reload branch, and _make_room()'s first act
+    # is memory_stats() -- a real device query every call, resident or
+    # not (nodes/memory/control_handle.py). Editing the test to match
+    # the doubled call hid that cost for the rest of any run with
+    # caching on; CachingTextEncoder.encode() now checks both keys
+    # before either half loads, so the assertion is one again -- fixed
+    # in the code this time, not the expectation.
+    assert control.ensure_loaded_calls == ["text_encoder"], (
+        "a miss of both halves must call ensure_loaded() exactly once per "
+        "encode(), with the default resource_name")
 
     cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
+    assert control.ensure_loaded_calls == ["text_encoder"], (
         "a hit of both caches must not call ensure_loaded() again -- the "
         "whole point is that the inner encoder isn't touched")
 
     cache.encode("a cat", batch_size=2, height=999, width=999)
-    assert control.ensure_loaded_calls == ["text_encoder"] * 3, (
+    assert control.ensure_loaded_calls == ["text_encoder"] * 2, (
         "a prompt-cache hit alongside a resolution-cache miss is still a "
-        "miss overall -- ensure_loaded() must fire for the cold half")
+        "miss overall -- ensure_loaded() must fire exactly once for it")
+    print("    PASS")
+
+    print("[direct half calls, bypassing encode(), still ensure on their own "
+          "miss -- the suppression is encode()'s, not the halves']")
+    direct_inner = _CountingEncoder()
+    direct_control = _RecordingResourceControl()
+    direct = CachingTextEncoder(direct_inner, resource_control=direct_control)
+    direct.encode_prompt_only("a cat", 1)
+    assert direct_control.ensure_loaded_calls == ["text_encoder"], (
+        "encode_prompt_only() called directly must load before touching the "
+        "inner encoder (no encode() in flight to have checked for it)")
+    direct.resolution_embedding(512, 512, 1)
+    assert direct_control.ensure_loaded_calls == ["text_encoder"] * 2, (
+        "resolution_embedding() called directly keeps the same contract")
     print("    PASS")
 
     print("[resource_name override is threaded through to ensure_loaded()]")
@@ -202,8 +221,8 @@ def check_resource_control_called_only_on_miss():
     cache2 = CachingTextEncoder(inner2, resource_control=control2,
                                  resource_name="text_encoder_2")
     cache2.encode("a cat", batch_size=2, height=512, width=512)
-    # Two halves cold -> two calls, same as the default-name case above.
-    assert control2.ensure_loaded_calls == ["text_encoder_2", "text_encoder_2"]
+    # Both halves cold -> still one call, under the override name.
+    assert control2.ensure_loaded_calls == ["text_encoder_2"]
     print("    PASS")
 
     print("[no resource_control -> encode() still works, nothing to call]")
@@ -222,15 +241,15 @@ def check_bind_resource_control():
     control = _RecordingResourceControl()
     cache.bind_resource_control(control, resource_name="clip")
     cache.encode("a cat", batch_size=2, height=512, width=512)
-    assert control.ensure_loaded_calls == ["clip", "clip"], (
+    assert control.ensure_loaded_calls == ["clip"], (
         "after binding, misses must load through the late-bound handle, "
-        "under the late-bound resource_name (per half, as above)")
+        "under the late-bound resource_name (one call per cold encode)")
 
     other = _RecordingResourceControl()
     cache.bind_resource_control(other)  # already bound -- must be a no-op
     cache.encode("a dog", batch_size=2, height=512, width=512)  # cold prompt -> miss
     assert other.ensure_loaded_calls == [], "second bind must not replace the first handle"
-    assert control.ensure_loaded_calls[-2:] == ["clip", "clip"], (
+    assert control.ensure_loaded_calls[-1] == "clip", (
         "the first-bound handle keeps serving misses after a second bind attempt")
     print("    PASS")
 
@@ -295,10 +314,10 @@ def check_node_build():
     result2 = node.build(encoder=inner2, max_entries=4, resource_control=control)
     wrapped2 = result2["encoder"]
     wrapped2.encode("p", 1, 64, 64)
-    assert control.ensure_loaded_calls == ["text_encoder", "text_encoder"], (
+    assert control.ensure_loaded_calls == ["text_encoder"], (
         "build()'s resource_control must reach the constructed "
         "CachingTextEncoder, not be silently dropped (one call per cold "
-        "half, as above)")
+        "encode, as above)")
     print("    PASS")
 
 

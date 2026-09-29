@@ -1096,8 +1096,9 @@ class ManagedLoRATrainerNode(TrainerNode):
 
         if prewarm_keys is not None:
             # Prewarm step 2/2 -- now that registration is in place (a warm-up
-            # miss's ensure_loaded("text_encoder") is a registered no-op here,
-            # encoder still resident), fill the cache and unload for good.
+            # miss's ensure_loaded("text_encoder") finds the encoder already
+            # resident here: reload skipped, just _make_room()'s measure),
+            # fill the cache and unload for good.
             from ..model.text_encoder_prewarm import warm_and_unload
             warm_and_unload(text_encoder, prewarm_keys)
 

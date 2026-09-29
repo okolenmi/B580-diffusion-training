@@ -38,12 +38,19 @@ Optional resource_control (a ResourceControlHandle,
 nodes/memory/control_handle.py) is what actually makes a warm cache pay
 off in VRAM, not just compute: on a hit (of either cache), the inner
 encoder genuinely isn't touched for that half, so it's safe for it to be
-offloaded between hits; on a miss of either, ensure_loaded() below
-brings it back first -- including, if something else is currently using
-the room, offloading that to make space (ResourceControlHandle.ensure_loaded()'s
+offloaded between hits; on a miss of either half, encode() below calls
+ensure_loaded() once for the whole encode -- both keys checked before
+either half loads, never once per cold half -- bringing the encoder
+back first, including, if something else is currently using the room,
+offloading that to make space (ResourceControlHandle.ensure_loaded()'s
 own "offload everything else until this one's done" behavior, direct
 feedback on the case where model+optimizer are already near budget when
-a miss happens). This class doesn't decide *when* the inner encoder gets
+a miss happens). Once per encode, not once per half, because
+ensure_loaded() with the encoder already resident is correct but not
+free: BudgetedResourceControlHandle.ensure_loaded() unconditionally
+runs _make_room(), which reads memory_stats() -- a real device query,
+not a cache lookup -- every single call (nodes/memory/control_handle.py).
+This class doesn't decide *when* the inner encoder gets
 offloaded in the first place -- that's whatever holds this handle
 calling before_step() between steps (nodes/train/supervised.py), same as
 any other registered resident.
@@ -82,6 +89,13 @@ class CachingTextEncoder(TextEncoder):
         # derives independently. Overridable in case that convention doesn't
         # hold for some future caller.
         self._resource_name = resource_name
+        # True only while encode() is in flight (set/reset in its
+        # try/finally): encode() has already done the both-keys check and
+        # called ensure_loaded() at most once, so the halves' own
+        # per-miss calls must not fire a second time for the same encode.
+        # Direct half calls (outside encode()) see False and keep their
+        # own load -- they're public interface with no one else to check.
+        self._ensured_for_encode = False
 
     def encode_prompt_only(self, prompt: str, batch_size: int):
         """The base class's own encode() (nodes/model/text_encoder.py)
@@ -94,7 +108,9 @@ class CachingTextEncoder(TextEncoder):
         if cached is not None:
             self._prompt_cache.move_to_end(key)
             return cached
-        if self._resource_control is not None:
+        if self._resource_control is not None and not self._ensured_for_encode:
+            # Suppressed while encode() is in flight: it already ensured
+            # once for this encode (see encode()'s both-keys check).
             self._resource_control.ensure_loaded(self._resource_name)
         ctx, pooled = self._inner.encode_prompt_only(prompt, batch_size)
         entry = (ctx.detach().cpu(), pooled.detach().cpu())
@@ -109,13 +125,46 @@ class CachingTextEncoder(TextEncoder):
         if cached is not None:
             self._resolution_cache.move_to_end(key)
             return cached
-        if self._resource_control is not None:
+        if self._resource_control is not None and not self._ensured_for_encode:
+            # Same suppression as encode_prompt_only()'s -- one
+            # ensure_loaded() per encode(), not one per cold half.
             self._resource_control.ensure_loaded(self._resource_name)
         res_emb = self._inner.resolution_embedding(height, width, batch_size).detach().cpu()
         self._resolution_cache[key] = res_emb
         if len(self._resolution_cache) > self._max_entries:
             self._resolution_cache.popitem(last=False)
         return res_emb
+
+    def encode(self, prompt: str, batch_size: int, height: int, width: int):
+        """Both cache keys checked *before* either half loads: a full
+        miss (both halves cold) calls ensure_loaded() exactly once, not
+        once per half. ensure_loaded() with the encoder already resident
+        is correct but not free -- BudgetedResourceControlHandle runs
+        _make_room()'s memory_stats() device query on every call,
+        resident or not (nodes/memory/control_handle.py) -- so a
+        both-cold encode firing it twice paid that query twice for one
+        load, on top of the reload path's own work. This was once
+        asserted as one call, relaxed to two when the split-key
+        redesign moved ensure into each half (c703aa6 edited the test,
+        not this class), and is now one again for real: the halves keep
+        their own per-miss ensure for direct callers (they're public
+        interface; base TextEncoder.encode() is the only in-repo path,
+        which is why this override can suppress the duplicates for the
+        duration of the call -- see _ensured_for_encode).
+        """
+        if self._resource_control is not None:
+            prompt_miss = (prompt, batch_size) not in self._prompt_cache
+            resolution_miss = (height, width, batch_size) not in self._resolution_cache
+            if prompt_miss or resolution_miss:
+                self._resource_control.ensure_loaded(self._resource_name)
+            self._ensured_for_encode = True
+        try:
+            return super().encode(prompt, batch_size, height, width)
+        finally:
+            # Restored even if the inner encoder raises: a flag stuck True
+            # would make every later *direct* half call skip its own
+            # ensure_loaded() and touch an offloaded encoder.
+            self._ensured_for_encode = False
 
     def unload(self) -> None:
         self._inner.unload()

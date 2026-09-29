@@ -518,9 +518,10 @@ byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
   series, gaps where a key is absent, per-series tooltip rows with
   color chips, and a legend laid out per series -- total loss blue
   `#6c8cff`, t-low green `#4caf50`, t-mid amber `#ffb300`, t-high red
-  `#ff5252`, matching three new color-labeled metric cards on the
-  dashboard. `addPoint(step, number)` still works (legacy single-series
-  form); `point.loss`/`point.smoothed` keep tracking the primary series.
+  `#ff5252`, matching three new color-labeled bucket rows in the
+  dashboard's run-stats rail. `addPoint(step, number)` still works
+  (legacy single-series form); `point.loss`/`point.smoothed` keep
+  tracking the primary series.
 - **`grad_clip_max_norm` Port (default 0.0): no gradient clipping
   anywhere, fused or not.** Clipping runs `clip_grad_norm_` once per
   optimizer step, on the boundary's full accumulated gradient only
@@ -594,8 +595,11 @@ what changed on *this* doc's side of the boundary:
 
 Dashboard side (details and honest-data rules in 5.8): a VRAM/residency
 chart and a phase-timing chart, both hidden until a report actually
-carries their keys; best-loss/VRAM/peak/grad-norm cards; optimizer id
-beside the progress bar; legend click to hide/show any series (hidden
+carries their keys; a hero status block (step/loss/smoothed/ETA +
+progress bar + meta row with rate, elapsed time and optimizer id) above
+the loss chart; best-loss/LR/grad-norm/VRAM/peak readouts in a
+run-stats rail beside the chart, with a budget-utilization meter under
+the reserved value; legend click to hide/show any series (hidden
 series leave the tooltip and the axis range); session CSV export.
 
 Tests updated to the new message contract rather than around it: step

@@ -113,19 +113,7 @@
         this.budget = null;
         this.runEnded = null;
         this.stats = { best: null, bestStep: null, peakVram: null };
-        // Config-dependent cards go back to hidden until the new run's own
-        // reports prove it has data for them.
-        this.els.vramCard.classList.add("mon-hidden");
-        this.els.timingCard.classList.add("mon-hidden");
-        // Readouts whose source may not report at all this run (budget,
-        // grad norm, peaks are config-dependent) must not keep showing the
-        // previous run's numbers in the meantime.
-        this.els.best.textContent = "\u2014";
-        this.els.vram.textContent = "\u2014";
-        this.els.vram.title = "reserved now";
-        this.els.vramPeak.textContent = "\u2014";
-        this.els.gradNorm.textContent = "\u2014";
-        this.els.runInfo.textContent = "";
+        this.resetReadouts();
         this.renderStatus();
         return;
       }
@@ -250,30 +238,56 @@
         e.best.title = `lowest raw loss seen this session, at step ${this.stats.bestStep}`;
       }
       // Per-t bucket readouts: latest value or em dash when this report had
-      // no samples for that bucket (same rule as the chart's gaps).
+      // no samples for that bucket (same rule as the chart's gaps) -- and a
+      // bar whose length is that value relative to the largest bucket this
+      // report had (same target, same scale, so the magnitudes compare
+      // honestly); an absent bucket gets an empty bar, never a zero one.
       if (e.lossTlow) e.lossTlow.textContent = this.fmt(data.loss_t_low);
       if (e.lossTmid) e.lossTmid.textContent = this.fmt(data.loss_t_mid);
       if (e.lossThigh) e.lossThigh.textContent = this.fmt(data.loss_t_high);
+      const bucketVals = [data.loss_t_low, data.loss_t_mid, data.loss_t_high]
+        .filter((v) => typeof v === "number");
+      const bucketMax = bucketVals.length ? Math.max(...bucketVals) : 0;
+      this.setBar(e.barTlow, data.loss_t_low, bucketMax);
+      this.setBar(e.barTmid, data.loss_t_mid, bucketMax);
+      this.setBar(e.barThigh, data.loss_t_high, bucketMax);
+
       e.lr.textContent = data.lr !== undefined ? data.lr.toExponential(2) : "\u2014";
-      if (e.gradNorm) {
-        e.gradNorm.textContent = typeof data.grad_norm === "number"
-          ? data.grad_norm.toFixed(3) : "\u2014";
+      // Grad norm row appears only once a report actually carries it (clip
+      // runs only under grad_clip_max_norm>0) -- before that, a permanently
+      // em-dashed row would claim "measured, zero known" instead of
+      // "never measured".
+      if (e.gradRow) {
+        if (typeof data.grad_norm === "number") {
+          e.gradRow.classList.remove("mon-hidden");
+          e.gradNorm.textContent = data.grad_norm.toFixed(3);
+        } else if (!e.gradRow.classList.contains("mon-hidden")) {
+          e.gradNorm.textContent = "\u2014";
+        }
       }
       if (e.runInfo && data.optimizer) e.runInfo.textContent = data.optimizer;
 
       if (data.vram_reserved_mb !== undefined) {
+        e.memorySection.classList.remove("mon-hidden");
         e.vram.textContent = this.fmtMB(data.vram_reserved_mb);
-        const parts = [];
+        const bits = [];
         if (data.vram_allocated_mb !== undefined) {
-          parts.push(`allocated ${this.fmtMB(data.vram_allocated_mb)}`);
+          bits.push("alloc " + this.fmtMB(data.vram_allocated_mb));
         }
         if (this.budget != null) {
           const pct = (data.vram_reserved_mb / this.budget) * 100;
-          parts.push(`budget ${this.fmtMB(this.budget)} (${pct.toFixed(0)}%)`);
-          e.vram.title = parts.join(" \u00b7 ");
-        } else if (parts.length) {
-          e.vram.title = parts.join(" \u00b7 ");
+          bits.push("budget " + this.fmtMB(this.budget) + " \u00b7 " + pct.toFixed(0) + "%");
+          // Meter fill = pressure band against the stated budget: accent
+          // while comfortable, amber approaching it, red at/over it. The
+          // width caps at 100% (a bar can't overflow its track) but the
+          // sub-line always prints the true percentage.
+          e.vramFill.style.width = Math.min(100, pct) + "%";
+          e.vramFill.style.background = pct >= 100 ? "var(--red)" : pct >= 90 ? "#ffb300" : "var(--accent)";
+        } else {
+          bits.push("budget \u2014");
+          e.vramFill.style.width = "0%";
         }
+        e.vramSub.textContent = bits.join(" \u00b7 ");
       }
       if (this.stats.peakVram != null) {
         e.vramPeak.textContent = this.fmtMB(this.stats.peakVram);
@@ -329,6 +343,49 @@
       URL.revokeObjectURL(url);
     }
 
+    /* One bucket bar: width relative to this report's largest bucket, a
+       2%-sliver floor so a genuinely-present but small value still reads
+       as present, empty for an absent one (no bar, not a zero bar). */
+    setBar(el, v, max) {
+      if (!el) return;
+      if (typeof v !== "number" || !(max > 0)) { el.style.width = "0%"; return; }
+      el.style.width = Math.max(2, Math.min(100, (v / max) * 100)) + "%";
+    }
+
+    /* Everything a previous run put on screen, back to "no data yet" --
+       called on MonitorBus clear(). Config-dependent blocks (memory
+       section, grad-norm row, the two secondary chart cards) also go
+       hidden again: the next run may not produce their keys at all, and
+       stale numbers from the old run would read as the new run's. */
+    resetReadouts() {
+      const e = this.els;
+      for (const el of [e.barTlow, e.barTmid, e.barThigh, e.vramFill]) {
+        if (el) el.style.width = "0%";
+      }
+      e.vramCard.classList.add("mon-hidden");
+      e.timingCard.classList.add("mon-hidden");
+      e.memorySection.classList.add("mon-hidden");
+      e.gradRow.classList.add("mon-hidden");
+      e.step.textContent = "\u2014";
+      e.loss.textContent = "\u2014";
+      e.smoothed.textContent = "\u2014";
+      e.best.textContent = "\u2014";
+      e.lossTlow.textContent = "\u2014";
+      e.lossTmid.textContent = "\u2014";
+      e.lossThigh.textContent = "\u2014";
+      e.lr.textContent = "\u2014";
+      e.gradNorm.textContent = "\u2014";
+      e.vram.textContent = "\u2014";
+      e.vramPeak.textContent = "\u2014";
+      e.vramSub.textContent = "\u2014";
+      e.rate.textContent = "\u2014";
+      e.elapsed.textContent = "\u2014";
+      e.eta.textContent = "\u2014";
+      e.runInfo.textContent = "";
+      e.progressFill.style.width = "0%";
+      e.progressPct.textContent = "0%";
+    }
+
     fmt(v) {
       if (v === undefined || v === null) return "\u2014";
       return v >= 1 ? v.toFixed(4) : v >= 0.001 ? v.toFixed(5) : v.toExponential(2);
@@ -378,8 +435,15 @@
       lossTlow: document.getElementById("m-loss-t-low"),
       lossTmid: document.getElementById("m-loss-t-mid"),
       lossThigh: document.getElementById("m-loss-t-high"),
+      barTlow: document.getElementById("m-bar-t-low"),
+      barTmid: document.getElementById("m-bar-t-mid"),
+      barThigh: document.getElementById("m-bar-t-high"),
       vram: document.getElementById("m-vram"),
       vramPeak: document.getElementById("m-vram-peak"),
+      vramFill: document.getElementById("m-vram-fill"),
+      vramSub: document.getElementById("m-vram-sub"),
+      memorySection: document.getElementById("m-memory"),
+      gradRow: document.getElementById("m-grad-row"),
       gradNorm: document.getElementById("m-grad-norm"),
       lr: document.getElementById("m-lr"),
       rate: document.getElementById("m-rate"),

@@ -231,12 +231,26 @@ the same rule `t_bucket_losses` follows):
   means "not measured" (measuring separately would cost a grad pass +
   device sync every step), never a placeholder.
 
-**Screen features**: metric cards (step/loss/smoothed/best/VRAM/peak/
-grad norm/ETA...), legend click hides/shows a series (hidden series
-leave the tooltip and the axis range, and show struck-through in the
-legend itself), and session CSV export (`Export CSV`: one row per step
-report this browser session received, columns = union of report keys in
-first-seen order, missing cells empty -- session-scoped because that's
-all the page ever had; the bus keeps only its 500-event history).
+**Screen features**: composition instead of a flat grid of equal
+cards -- a hero status block (step, loss, smoothed and ETA as large
+readouts, a full-width progress bar, then a meta row with steps/sec,
+elapsed time and the optimizer id the report carried); the loss chart
+beside a run-stats rail (best loss, LR, the grad-norm row, per-t
+bucket rows whose bar length compares this report's three bucket
+magnitudes on their shared scale, and a memory block with a
+budget-utilization meter -- color-banded by pressure: accent below
+90%, amber 90-99%, red at/over the stated budget -- plus the session
+peak); and the VRAM/residency and phase-timing charts side by side
+below, each hidden until a report carries their keys (an all-hidden
+row collapses to zero height rather than leaving a gap). Blocks whose
+keys depend on run configuration -- the memory section, the grad-norm
+row -- appear only once a report actually carries them and are hidden
+again by `clear`, so a CPU run never shows permanently-empty sections.
+Legend click hides/shows a series (hidden series leave the tooltip and
+the axis range, and show struck-through in the legend itself), and
+session CSV export (`Export CSV`: one row per step report this browser
+session received, columns = union of report keys in first-seen order,
+missing cells empty -- session-scoped because that's all the page ever
+had; the bus keeps only its 500-event history).
 
 ---

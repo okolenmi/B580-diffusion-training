@@ -181,4 +181,62 @@ domain ABCs live in each domain's own `handle.py`), including in
 > the shared piece belongs in `core.py`, `memory/`, or a new
 > domain-independent module -- not that the rule should bend.
 
+## 5.8 The Training Monitor dashboard
+
+One graph node (`TrainingProgressMonitorNode`) + one bus
+(`MonitorBus`, section 5.2's shape) feed one page
+(`server/static/monitor_dashboard.{html,js}` via `routes_monitor.py`).
+There is deliberately no per-metric monitor node: a run already reports
+everything through one `MonitorHandle`, so splitting the *screen* into
+more graph nodes would add wiring without adding information.
+
+**Message vocabulary** on the bus (checked by the dashboard in this
+order, before the step-shaped filter -- `run_end` carries a `step` but
+is not a step report):
+
+- `{"type": "connected"}` -- sent by the SSE route on subscribe.
+- `{"type": "clear"}` -- a fresh run started against this `monitor_id`
+  (`MonitorBus.clear()`, called from `build()`); the dashboard resets
+  charts/stats/CSV history so two runs never overlay silently.
+- `{"type": "run_end", "step", "cancelled", "t"}` -- emitted by **both**
+  trainer routes at **both** exits (normal and cooperative cancel).
+  Without it an open SSE stream looks identical during "running" and
+  "finished", so "is it done or hung?" was unanswerable.
+- Step-shaped reports: `{step, total_steps, loss, lr, t, ...}` plus the
+  optional keys below.
+
+**Report keys the dashboard charts** (each absent -- never fabricated 0
+-- when its source doesn't have it; charts draw gaps for missing series,
+the same rule `t_bucket_losses` follows):
+
+- loss + `loss_t_low/mid/high` -- the multi-series loss chart (colored
+  per t bucket; the t-high divergence reads first as "destructive at
+  strength 1.0").
+- `vram_reserved_mb`/`vram_allocated_mb`/`vram_peak_reserved_mb` (both
+  routes, `vram_{k}` naming shared with the main route's full
+  `memory_stats()` dump) and `resident_{model,optimizer,text_encoder}_mb`
+  -- the VRAM/residency chart; its card stays hidden until a report
+  actually carries one of these keys.
+- `vram_budget_mb` -- the handle's `usable_budget_mb()`, drawn as a
+  dashed reference line at its true position (the chart's range joins
+  reference values so an out-of-span ceiling doesn't clamp to the plot
+  edge and read as "equal to the largest sample").
+- `{label}_ms` + `step_total_ms` -- the phase-timing chart. Labels come
+  from the shared `_phase_label` (`step_pipeline.py`), so the managed
+  route's `TRAIN_STEP_TIMING=1` report and the main route's `profile`
+  report use identical key names. Series are discovered from the first
+  timing-bearing report (phase lists aren't known client-side).
+- `grad_norm` -- only when gradient clipping is on: the clip already
+  measured the pre-clip total norm, so the report key is free. Absent
+  means "not measured" (measuring separately would cost a grad pass +
+  device sync every step), never a placeholder.
+
+**Screen features**: metric cards (step/loss/smoothed/best/VRAM/peak/
+grad norm/ETA...), legend click hides/shows a series (hidden series
+leave the tooltip and the axis range, and show struck-through in the
+legend itself), and session CSV export (`Export CSV`: one row per step
+report this browser session received, columns = union of report keys in
+first-seen order, missing cells empty -- session-scoped because that's
+all the page ever had; the bus keeps only its 500-event history).
+
 ---

@@ -84,6 +84,7 @@ from ..optimizer.handle import FusedOptimizerHandle, OptimizerHandle, describe_o
 from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
 from .node import TrainerNode
 from .schedule import LRSchedule
+from .step_pipeline import _phase_label
 
 
 @dataclass
@@ -160,7 +161,18 @@ class ManagedTrainingStepPipeline:
             state = phase.run(state)
             if device_module is not None:
                 device_module.synchronize()
-            timings.append((type(phase).__name__, (time.perf_counter() - start) * 1000))
+            ms = (time.perf_counter() - start) * 1000
+            timings.append((type(phase).__name__, ms))
+            # Land each measurement in extras *as phases complete*, not after
+            # the loop: MonitoringPhase is one of these phases (the last), and
+            # its report is what ships these as {label}_ms / step_total_ms to
+            # the monitor -- same naming as the main route's TimedPhase, same
+            # shared _phase_label, so the dashboard's timing chart reads both
+            # routes identically. MonitoringPhase's own entry lands after its
+            # report already went out (never read -- a phase can't time itself
+            # into the report it's building); the printed line below still
+            # covers every phase, class names unchanged for anyone grepping it.
+            state.extras.setdefault("timing_ms", {})[_phase_label(phase)] = ms
         parts = ", ".join(f"{name}={ms:.1f}ms" for name, ms in timings)
         total = sum(ms for _, ms in timings)
         print(f"[step {state.step} timing] total={total:.1f}ms  {parts}")
@@ -665,8 +677,16 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
         else:
             if is_boundary:
                 if self._grad_clip_max_norm > 0.0:
-                    torch.nn.utils.clip_grad_norm_(
+                    total_norm = torch.nn.utils.clip_grad_norm_(
                         state.model.trainable_parameters(), self._grad_clip_max_norm)
+                    # clip_grad_norm_ already measured the pre-clip total norm --
+                    # stashing it here makes `grad_norm` in the monitor report
+                    # free. Deliberately absent when clipping is off
+                    # (grad_clip_max_norm=0): measuring it separately would cost
+                    # an extra pass over every grad plus a device sync every
+                    # optimizer step, so the key present-or-absent means
+                    # "measured here", never a stale placeholder.
+                    state.extras["grad_norm"] = float(total_norm)
                 self._optimizer.step(n_steps=1)
         if self._controller.should_release("optimizer"):
             self._resource_control.release("optimizer")
@@ -716,12 +736,25 @@ class MonitoringPhase(ManagedStepPhase):
     grad_accum=1 batch-2 step still usually covers two of the three, and
     buckets with no samples in the window emit no key at all (the
     monitor chart draws a gap, not a fabricated flat line) -- the series
-    behind its per-t colored lines."""
+    behind its per-t colored lines. Plus, when available:
+    `vram_budget_mb` (the handle's usable_budget_mb(), constant --
+    the ceiling the vram numbers are held under, for the dashboard's
+    reference line), `vram_peak_reserved_mb`/`vram_peak_allocated_mb`
+    (memory_stats()'s peaks -- since the build loop resets peak stats
+    per micro-step, these are the *within-step* high-water mark, not a
+    since-process-start one; same `vram_{k}` naming the main route's
+    reports use), `grad_norm` (BackwardAndOptimizerStepPhase's stashed
+    clip_grad_norm_ total -- only when clipping is on, see that stash),
+    and `{label}_ms`/`step_total_ms` (TRAIN_STEP_TIMING=1's per-phase
+    measurements, same keys as the main route's TimedPhase). All keys
+    absent rather than fabricated when the source doesn't have them --
+    the monitor chart's gap rule, applied to every series."""
 
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  coordinator: ResourceCoordinator, on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
-                 optimizer_id: str = "", grad_accum: int = 1):
+                 optimizer_id: str = "", grad_accum: int = 1,
+                 usable_budget_mb: Optional[float] = None):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._coordinator = coordinator
@@ -730,6 +763,7 @@ class MonitoringPhase(ManagedStepPhase):
         self._profile = profile
         self._optimizer_id = optimizer_id
         self._grad_accum = grad_accum
+        self._usable_budget_mb = usable_budget_mb
         self._window_losses: list[float] = []
         self._window_ps: list[float] = []
         self._window_t: list[float] = []
@@ -771,10 +805,34 @@ class MonitoringPhase(ManagedStepPhase):
         if self._optimizer_id:
             report["optimizer"] = self._optimizer_id
         report.update(buckets)
+        if self._usable_budget_mb is not None:
+            # Constant per run -- the ceiling the vram_* numbers are held
+            # under (ctor doc). None-handling is the key's whole contract:
+            # absent means "this handle states no budget", never 0.
+            report["vram_budget_mb"] = self._usable_budget_mb
+        grad_norm = state.extras.get("grad_norm")
+        if grad_norm is not None:
+            report["grad_norm"] = grad_norm
+        timing = state.extras.get("timing_ms")
+        if timing:
+            # Same {label}_ms / step_total_ms shape the main route's
+            # TimedPhase-built reports carry -- one dashboard reads both.
+            # Window nuance for grad_accum>1: extras dies with each micro
+            # state, so this is the boundary micro-step's timing, not the
+            # whole window's (honest label either way: it's timing for the
+            # step that was measured).
+            report.update({f"{label}_ms": ms for label, ms in timing.items()})
+            report["step_total_ms"] = sum(timing.values())
         mem = self._device_ctx.memory_stats()
         if mem is not None:
             report["vram_reserved_mb"] = mem["reserved_mb"]
             report["vram_allocated_mb"] = mem["allocated_mb"]
+            # Peaks since the build loop's per-micro reset -- the within-step
+            # high-water mark (same `vram_{k}` key names the main route's
+            # full memory_stats dump produces, so the dashboard's VRAM series
+            # work identically on either route).
+            report["vram_peak_reserved_mb"] = mem["peak_reserved_mb"]
+            report["vram_peak_allocated_mb"] = mem["peak_allocated_mb"]
         for name, mb in per_resident_mb.items():
             report[f"resident_{name}_mb"] = mb
 
@@ -1105,6 +1163,7 @@ class ManagedLoRATrainerNode(TrainerNode):
         if save_every_n_steps > 0:
             from ..model.lora_saver import save_trained_weights
 
+        monitor = inputs.get("monitor")
         phases: list[ManagedStepPhase] = [
             FetchBatchPhase(batches),
             PrepareDiffusionInputsPhase(
@@ -1127,8 +1186,9 @@ class ManagedLoRATrainerNode(TrainerNode):
                                            grad_clip_max_norm=grad_clip_max_norm),
             MonitoringPhase(
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
-                on_step=inputs.get("on_step"), monitor=inputs.get("monitor"),
-                profile=profile, optimizer_id=optimizer_id, grad_accum=grad_accum),
+                on_step=inputs.get("on_step"), monitor=monitor,
+                profile=profile, optimizer_id=optimizer_id, grad_accum=grad_accum,
+                usable_budget_mb=resource_control.usable_budget_mb()),
         ]
         pipeline = ManagedTrainingStepPipeline(phases)
 
@@ -1136,6 +1196,12 @@ class ManagedLoRATrainerNode(TrainerNode):
         # window of micro-steps (one batch each) inside the loop below.
         while step < steps:
             if self.context.should_cancel():
+                # run_end still reports so a dashboard can tell "cancelled,
+                # data is final" from "hung or still going" -- SSE stays open
+                # either way, so silence alone can't distinguish them.
+                if monitor is not None:
+                    monitor.report({"type": "run_end", "step": step,
+                                    "cancelled": True, "t": time.time()})
                 return {"model": model}
             for micro in range(grad_accum):
                 state = ManagedStepState(step=step, batch=None, model=model,
@@ -1175,6 +1241,12 @@ class ManagedLoRATrainerNode(TrainerNode):
                     model, f"{save_prefix}_{step:06d}.safetensors", project_layout)
                 print(f"[ManagedLoRATrainerNode] saved step {step}/{steps} -> {saved_path}")
 
+        if monitor is not None:
+            # Normal completion -- the dashboard's "finished" state, which
+            # an open-but-quiet SSE connection can't signal on its own
+            # (it stays open after the run ends either way).
+            monitor.report({"type": "run_end", "step": step,
+                            "cancelled": False, "t": time.time()})
         result = {"model": model}
         self.validate_outputs(result)
         return result

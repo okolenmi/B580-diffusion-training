@@ -15,15 +15,48 @@
     { key: "loss_t_high", label: "t high", color: "#ff5252" },
   ];
 
+  // Allocator state + per-resident footprints, same `vram_{k}` /
+  // `resident_{name}_mb` key names on both trainer routes (managed reports
+  // them every step on an XPU run; the main route reports them when timing
+  // is collected). reserved is the primary series -- it's the number the
+  // budget is actually enforced against; peak reserved rides above it so a
+  // within-step spike is visible even when the sampled value looks calm.
+  const VRAM_SERIES = [
+    { key: "vram_reserved_mb", label: "reserved", color: "#6c8cff" },
+    { key: "vram_peak_reserved_mb", label: "peak reserved", color: "#ff9800" },
+    { key: "vram_allocated_mb", label: "allocated", color: "#4caf50" },
+    { key: "resident_model_mb", label: "model", color: "#26c6da" },
+    { key: "resident_optimizer_mb", label: "optimizer", color: "#ab47bc" },
+    { key: "resident_text_encoder_mb", label: "text encoder", color: "#8d6e63" },
+  ];
+
+  // Phase-timing series aren't known up front: which {label}_ms keys exist
+  // depends on the trainer route (and its phase list), discovered from the
+  // first report that carries any. Palette-assigned in discovery order;
+  // step_total_ms always gets the neutral tone so "sum of everything"
+  // reads as an envelope, not one more competing phase.
+  const TIMING_PALETTE = ["#6c8cff", "#4caf50", "#ffb300", "#ff5252",
+                          "#ab47bc", "#26c6da", "#ff9800", "#8d6e63"];
+  const TIMING_TOTAL_COLOR = "#cfd8dc";
+
   class MonitorDashboard {
     constructor(monitorId, els) {
       this.monitorId = monitorId;
       this.els = els;
       this.chart = new LossChart(els.canvas, { series: LOSS_SERIES });
+      this.vramChart = new LossChart(els.vramCanvas, { series: VRAM_SERIES });
+      // Built lazily on the first report carrying *_ms keys -- a run that
+      // never collects timing (env/profile off) simply never shows the card.
+      this.timingChart = null;
       this.firstEventTime = null;
       this.lastEvent = null;
       this.recentRates = []; // {t, step} pairs, last few, for a steps/sec estimate
       this.source = null;
+      this.conn = "connecting"; // SSE connection state, for the status readout
+      this.runEnded = null;     // null while running; {step, cancelled} after run_end
+      this.rawHistory = [];     // every step report this session saw -- the CSV export
+      this.budget = null;       // vram_budget_mb, once a report states one
+      this.stats = { best: null, bestStep: null, peakVram: null };
     }
 
     connect() {
@@ -34,8 +67,30 @@
     }
 
     setStatus(state) {
-      this.els.statusDot.className = "mon-status-dot" + (state === "live" ? " live" : state === "disconnected" ? " disconnected" : "");
-      this.els.statusText.textContent = state === "live" ? "live" : state === "disconnected" ? "disconnected \u2014 retrying\u2026" : "connecting\u2026";
+      this.conn = state;
+      this.renderStatus();
+    }
+
+    /* Connection state and run state combined into one readout. A finished
+       run's SSE stream stays open (and the browser reconnects through the
+       occasional blip), so "live" alone would keep saying live after the
+       run is over -- run_end is what makes "finished vs still going"
+       answerable at all. */
+    renderStatus() {
+      const dot = this.els.statusDot, text = this.els.statusText;
+      if (this.conn === "disconnected") {
+        dot.className = "mon-status-dot disconnected";
+        text.textContent = "disconnected \u2014 retrying\u2026";
+        return;
+      }
+      if (this.runEnded) {
+        const c = this.runEnded.cancelled;
+        dot.className = "mon-status-dot " + (c ? "ended" : "live");
+        text.textContent = (c ? "cancelled at step " : "finished at step ") + this.runEnded.step;
+        return;
+      }
+      dot.className = "mon-status-dot" + (this.conn === "live" ? " live" : "");
+      text.textContent = this.conn === "live" ? "live" : "connecting\u2026";
     }
 
     handleEvent(ev) {
@@ -48,9 +103,39 @@
         // without it, re-running training against the same monitor_id overlaid the
         // new run's line on the old one with no indication they were different runs.
         this.chart.reset();
+        this.vramChart.reset();
+        if (this.timingChart) this.timingChart.reset();
+        this.vramChart.setReferenceLines([]);
         this.firstEventTime = null;
         this.lastEvent = null;
         this.recentRates = [];
+        this.rawHistory = [];
+        this.budget = null;
+        this.runEnded = null;
+        this.stats = { best: null, bestStep: null, peakVram: null };
+        // Config-dependent cards go back to hidden until the new run's own
+        // reports prove it has data for them.
+        this.els.vramCard.classList.add("mon-hidden");
+        this.els.timingCard.classList.add("mon-hidden");
+        // Readouts whose source may not report at all this run (budget,
+        // grad norm, peaks are config-dependent) must not keep showing the
+        // previous run's numbers in the meantime.
+        this.els.best.textContent = "\u2014";
+        this.els.vram.textContent = "\u2014";
+        this.els.vram.title = "reserved now";
+        this.els.vramPeak.textContent = "\u2014";
+        this.els.gradNorm.textContent = "\u2014";
+        this.els.runInfo.textContent = "";
+        this.renderStatus();
+        return;
+      }
+      if (data.type === "run_end") {
+        // Terminal status from the trainer (both routes, both exits): the
+        // run is over -- normal or cancelled -- and these numbers are final.
+        // Checked before the step-shaped filter below: run_end carries a
+        // step, but it is not a step report.
+        this.runEnded = { step: data.step, cancelled: !!data.cancelled };
+        this.renderStatus();
         return;
       }
       if (data.step === undefined) return; // not a training-progress-shaped event; ignore rather than guess
@@ -60,13 +145,98 @@
       this.recentRates.push({ t: now, step: data.step });
       if (this.recentRates.length > 20) this.recentRates.shift();
       this.lastEvent = data;
+      this.rawHistory.push(data);
 
       // Values object (not a bare number): series absent from this report
       // are omitted, which LossChart renders as a gap.
       const values = {};
       for (const s of LOSS_SERIES) if (data[s.key] !== undefined) values[s.key] = data[s.key];
       this.chart.addPoint(data.step, values);
+      this.feedVramChart(data);
+      this.feedTimingChart(data);
+      this.trackStats(data);
       this.updateMetrics(data, now);
+    }
+
+    feedVramChart(data) {
+      const present = VRAM_SERIES.some((s) => data[s.key] !== undefined);
+      if (present) {
+        this.els.vramCard.classList.remove("mon-hidden");
+        const vals = {};
+        for (const s of VRAM_SERIES) if (data[s.key] !== undefined) vals[s.key] = data[s.key];
+        this.vramChart.addPoint(data.step, vals);
+      }
+      if (this.budget == null && typeof data.vram_budget_mb === "number") {
+        this.budget = data.vram_budget_mb;
+        this.vramChart.setReferenceLines([{
+          value: this.budget,
+          label: "budget " + this.fmtMB(this.budget),
+          color: "#ff5252",
+        }]);
+      }
+    }
+
+    feedTimingChart(data) {
+      const keys = Object.keys(data).filter(
+        (k) => k.endsWith("_ms") && k !== "step_total_ms");
+      // Report has no timing at all -> nothing to show, and crucially no
+      // all-gap point: after a clear() the previous run's chart object
+      // still exists, and re-unhiding the card around an empty point would
+      // present "no timing data" as if this run had some.
+      if (keys.length === 0) return;
+      if (this.timingChart === null) this.buildTimingChart(keys);
+      else this.extendTimingChart(keys);
+      this.els.timingCard.classList.remove("mon-hidden");
+      const vals = {};
+      for (const s of this.timingChart.series) {
+        if (data[s.key] !== undefined) vals[s.key] = data[s.key];
+      }
+      this.timingChart.addPoint(data.step, vals);
+    }
+
+    buildTimingChart(keys) {
+      const series = keys.map((k, i) => ({
+        key: k,
+        label: k.slice(0, -3), // strip the "_ms" suffix -- the phase label itself
+        color: TIMING_PALETTE[i % TIMING_PALETTE.length],
+      }));
+      series.push({ key: "step_total_ms", label: "total", color: TIMING_TOTAL_COLOR });
+      this.timingChart = new LossChart(this.els.timingCanvas, { series });
+    }
+
+    /* A phase key that wasn't in the first timing report still has to be
+       plotted rather than silently dropped (LossChart only stores keys it
+       knows). Real runs don't change phase lists mid-run; this exists so
+       the failure mode of being wrong about that is "a late line appears",
+       not "data vanished". */
+    extendTimingChart(keys) {
+      for (const k of keys) {
+        if (this.timingChart.series.some((s) => s.key === k)) continue;
+        const total = this.timingChart.series.length;
+        this.timingChart.series.push({
+          key: k,
+          label: k.slice(0, -3),
+          color: TIMING_PALETTE[total % TIMING_PALETTE.length],
+        });
+      }
+    }
+
+    trackStats(data) {
+      if (typeof data.loss === "number"
+          && (this.stats.best === null || data.loss < this.stats.best)) {
+        this.stats.best = data.loss;
+        this.stats.bestStep = data.step;
+      }
+      // Peak: the explicit per-step peak when the trainer reports one,
+      // otherwise fall back to the sampled reserved value (which is all a
+      // config without peaks can honestly claim).
+      const peak = data.vram_peak_reserved_mb !== undefined
+        ? data.vram_peak_reserved_mb
+        : data.vram_reserved_mb;
+      if (typeof peak === "number"
+          && (this.stats.peakVram === null || peak > this.stats.peakVram)) {
+        this.stats.peakVram = peak;
+      }
     }
 
     updateMetrics(data, now) {
@@ -75,12 +245,39 @@
       e.loss.textContent = this.fmt(data.loss);
       e.smoothed.textContent = this.chart.points.length && this.chart.points[this.chart.points.length - 1].smoothed != null
         ? this.fmt(this.chart.points[this.chart.points.length - 1].smoothed) : "\u2014";
+      if (this.stats.best != null) {
+        e.best.textContent = this.fmt(this.stats.best);
+        e.best.title = `lowest raw loss seen this session, at step ${this.stats.bestStep}`;
+      }
       // Per-t bucket readouts: latest value or em dash when this report had
       // no samples for that bucket (same rule as the chart's gaps).
       if (e.lossTlow) e.lossTlow.textContent = this.fmt(data.loss_t_low);
       if (e.lossTmid) e.lossTmid.textContent = this.fmt(data.loss_t_mid);
       if (e.lossThigh) e.lossThigh.textContent = this.fmt(data.loss_t_high);
       e.lr.textContent = data.lr !== undefined ? data.lr.toExponential(2) : "\u2014";
+      if (e.gradNorm) {
+        e.gradNorm.textContent = typeof data.grad_norm === "number"
+          ? data.grad_norm.toFixed(3) : "\u2014";
+      }
+      if (e.runInfo && data.optimizer) e.runInfo.textContent = data.optimizer;
+
+      if (data.vram_reserved_mb !== undefined) {
+        e.vram.textContent = this.fmtMB(data.vram_reserved_mb);
+        const parts = [];
+        if (data.vram_allocated_mb !== undefined) {
+          parts.push(`allocated ${this.fmtMB(data.vram_allocated_mb)}`);
+        }
+        if (this.budget != null) {
+          const pct = (data.vram_reserved_mb / this.budget) * 100;
+          parts.push(`budget ${this.fmtMB(this.budget)} (${pct.toFixed(0)}%)`);
+          e.vram.title = parts.join(" \u00b7 ");
+        } else if (parts.length) {
+          e.vram.title = parts.join(" \u00b7 ");
+        }
+      }
+      if (this.stats.peakVram != null) {
+        e.vramPeak.textContent = this.fmtMB(this.stats.peakVram);
+      }
 
       if (data.total_steps) {
         const pct = Math.min(100, (data.step / data.total_steps) * 100);
@@ -103,9 +300,43 @@
       }
     }
 
+    /* Session CSV: every step report this page received, columns = union of
+       keys in first-seen order (reports differ by route/config, and a fixed
+       column list would drop whichever keys this run happens to have). One
+       row per report, missing keys empty -- never imputed. */
+    exportCsv() {
+      if (this.rawHistory.length === 0) return;
+      const cols = [];
+      for (const r of this.rawHistory) {
+        for (const k of Object.keys(r)) if (!cols.includes(k)) cols.push(k);
+      }
+      const esc = (v) => {
+        if (v === undefined || v === null) return "";
+        const s = String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const lines = [cols.join(",")];
+      for (const r of this.rawHistory) lines.push(cols.map((c) => esc(r[c])).join(","));
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const lastStep = this.rawHistory[this.rawHistory.length - 1].step;
+      a.href = url;
+      a.download = `monitor_${this.monitorId}_step${lastStep}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
     fmt(v) {
       if (v === undefined || v === null) return "\u2014";
       return v >= 1 ? v.toFixed(4) : v >= 0.001 ? v.toFixed(5) : v.toExponential(2);
+    }
+
+    fmtMB(v) {
+      if (v === undefined || v === null) return "\u2014";
+      return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : Math.round(v) + " MB";
     }
 
     fmtDuration(seconds) {
@@ -134,23 +365,34 @@
 
     const els = {
       canvas: document.getElementById("mon-loss-chart"),
+      vramCanvas: document.getElementById("mon-vram-chart"),
+      timingCanvas: document.getElementById("mon-timing-chart"),
+      vramCard: document.getElementById("mon-vram-card"),
+      timingCard: document.getElementById("mon-timing-card"),
       statusDot: document.getElementById("mon-status-dot"),
       statusText: document.getElementById("mon-status-text"),
       step: document.getElementById("m-step"),
       loss: document.getElementById("m-loss"),
       smoothed: document.getElementById("m-smoothed"),
+      best: document.getElementById("m-best"),
       lossTlow: document.getElementById("m-loss-t-low"),
       lossTmid: document.getElementById("m-loss-t-mid"),
       lossThigh: document.getElementById("m-loss-t-high"),
+      vram: document.getElementById("m-vram"),
+      vramPeak: document.getElementById("m-vram-peak"),
+      gradNorm: document.getElementById("m-grad-norm"),
       lr: document.getElementById("m-lr"),
       rate: document.getElementById("m-rate"),
       elapsed: document.getElementById("m-elapsed"),
       eta: document.getElementById("m-eta"),
       progressFill: document.getElementById("m-progress-fill"),
       progressPct: document.getElementById("m-progress-pct"),
+      runInfo: document.getElementById("m-runinfo"),
     };
 
     const dashboard = new MonitorDashboard(monitorId, els);
+    document.getElementById("mon-export-csv")
+      .addEventListener("click", () => dashboard.exportCsv());
     dashboard.connect();
   }
 

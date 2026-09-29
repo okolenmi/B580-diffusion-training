@@ -551,3 +551,57 @@ clip via a monkeypatched spy, numbered files landing on cadence, each
 contract error, bucket keys present/omitted per window, warmup ramp and
 join math, and both LossPhases' per-sample weighting against
 hand-computed values.
+
+## Sixth addendum: the monitor screen grows up -- new report keys, run_end, and a multi-panel dashboard
+
+The fifth addendum's monitor was one loss chart plus metric cards. The
+dashboard (`server/static/monitor_dashboard.{html,js}`) now answers the
+questions a loss line alone can't, and the trainers grew the report
+keys to feed it. The screen's full contract lives in design doc 5.8;
+what changed on *this* doc's side of the boundary:
+
+- **`run_end`, both routes, both exits.** `{"type": "run_end", step,
+  cancelled, t}` is emitted on normal completion and on cooperative
+  cancel by `ManagedLoRATrainerNode` and `SupervisedLoRATrainerNode`.
+  An open SSE stream looks identical while running and after finishing,
+  so before this the dashboard could never distinguish "finished" from
+  "hung"; now the status readout says finished/cancelled at step N, and
+  a cancelled run's numbers are visibly final.
+- **`vram_budget_mb`** on every report from both routes'
+  `MonitoringPhase`s (new `usable_budget_mb` ctor param, wired at build
+  from `resource_control.usable_budget_mb()`; key omitted when no
+  handle states a budget) -- drawn as a dashed reference line against
+  the new VRAM/residency chart, so the ceiling is visible where the
+  reserved numbers are instead of only in graph config.
+- **`vram_peak_reserved_mb`/`vram_peak_allocated_mb`** from the managed
+  report (`vram_{k}` naming, same as the main route's full
+  `memory_stats()` dump) -- the per-micro-step high-water mark, since
+  the build loop resets peak stats every micro-step.
+- **`grad_norm`, only when clipping is on.** The boundary clip already
+  ran `clip_grad_norm_`; its returned pre-clip total norm is stashed in
+  `extras["grad_norm"]` and shipped by the report. With clipping off
+  the key is absent, because measuring it separately would cost a grad
+  pass + device sync every optimizer step -- present-or-absent is the
+  contract, and absent is never a placeholder 0.
+- **Timing reaches the report, not just the print.** With
+  `TRAIN_STEP_TIMING=1`, `ManagedTrainingStepPipeline` now lands each
+  phase's measurement into `extras["timing_ms"]` *as phases complete*
+  (the boundary `MonitoringPhase` reads it to emit `{label}_ms` +
+  `step_total_ms`). Labels come from `_phase_label`, moved to
+  `step_pipeline.py` so both routes and the shared dashboard use one
+  naming scheme. The sync-per-phase overhead is unchanged and still
+  opt-in.
+
+Dashboard side (details and honest-data rules in 5.8): a VRAM/residency
+chart and a phase-timing chart, both hidden until a report actually
+carries their keys; best-loss/VRAM/peak/grad-norm cards; optimizer id
+beside the progress bar; legend click to hide/show any series (hidden
+series leave the tooltip and the axis range); session CSV export.
+
+Tests updated to the new message contract rather than around it: step
+counts now filter on "no `type` key" (run_end is a different message,
+not a step report), and new checks assert exactly one `run_end` with
+the right `step`/`cancelled` (including the mid-run cancel path),
+`vram_budget_mb` present-with-budget and absent-without, `grad_norm`
+present-with-clip and absent-without, and timing keys reaching the
+managed report end-to-end with `step_total_ms` equal to their sum.

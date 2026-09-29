@@ -485,6 +485,9 @@ def check_step_timing_off_by_default_and_on_when_requested():
     assert phase_a.ran and phase_b.ran
     assert result.extras["order"] == ["a", "b"], "phases must still run in the given order"
     assert buf.getvalue() == "", f"must print nothing when TRAIN_STEP_TIMING is unset: {buf.getvalue()!r}"
+    assert "timing_ms" not in result.extras, (
+        "unset TRAIN_STEP_TIMING must leave no timing_ms in extras at all "
+        "(zero overhead means zero writes, not just zero prints)")
     print("    PASS: default path unchanged, no output")
 
     original = os.environ.get("TRAIN_STEP_TIMING")
@@ -500,7 +503,41 @@ def check_step_timing_off_by_default_and_on_when_requested():
         assert result2.extras["order"] == ["c", "d"]
         out = buf2.getvalue()
         assert "step 7 timing" in out and "_RecordingPhase=" in out, out
+        # extras["timing_ms"] is the channel MonitoringPhase reads to build the
+        # report's {label}_ms / step_total_ms keys -- snake_case labels from
+        # the shared _phase_label (both instances here are the same class, so
+        # they share one label and the second write wins; real phase lists are
+        # all distinct classes, and it's the key *shape* under test).
+        timing = result2.extras.get("timing_ms")
+        assert timing and all(v >= 0 for v in timing.values()), timing
+        # "_RecordingPhase" -> strip "Phase" -> "_Recording" -> snake, so the
+        # private class's own leading underscore survives as a double one.
+        assert list(timing) == ["__recording"], timing
+
+        # End-to-end: those extras keys must actually reach the monitor report
+        # as {label}_ms + step_total_ms (managed MonitoringPhase's report
+        # path), step_total_ms exactly their sum.
+        from nodes.monitor.handle import MonitorHandle
+
+        class _Cap(MonitorHandle):
+            def __init__(self):
+                self.reports = []
+
+            def report(self, d):
+                self.reports.append(dict(d))
+
+        cap = _Cap()
+        _run_managed([], _recording_optimizer([], fused=False), steps=1, monitor=cap)
+        step_reports = [r for r in cap.reports if "type" not in r]
+        assert len(step_reports) == 1, step_reports
+        rep = step_reports[0]
+        phase_keys = [k for k in rep if k.endswith("_ms") and k != "step_total_ms"]
+        assert phase_keys and "step_total_ms" in rep, sorted(rep)
+        assert rep["step_total_ms"] >= 0 and all(rep[k] >= 0 for k in phase_keys)
+        assert abs(rep["step_total_ms"] - sum(rep[k] for k in phase_keys)) < 1e-6, (
+            f"step_total_ms ({rep['step_total_ms']}) != sum of {phase_keys}")
         print(f"    PASS: timing line printed when enabled: {out.strip()}")
+        print(f"    PASS: report carries timing: { {k: round(v, 1) for k, v in rep.items() if k.endswith('_ms')} }")
     finally:
         if original is None:
             os.environ.pop("TRAIN_STEP_TIMING", None)
@@ -746,6 +783,15 @@ def check_grad_clip_applies_once_per_optimizer_step():
           "clip=0 never calls it]")
     import torch.nn.utils as torch_utils
 
+    from nodes.monitor.handle import MonitorHandle
+
+    class _CaptureMonitor(MonitorHandle):
+        def __init__(self):
+            self.reports = []
+
+        def report(self, data):
+            self.reports.append(dict(data))
+
     original = torch_utils.clip_grad_norm_
     calls = []
 
@@ -757,20 +803,33 @@ def check_grad_clip_applies_once_per_optimizer_step():
     try:
         events: list = []
         optimizer = _recording_optimizer(events, fused=False)
+        monitor = _CaptureMonitor()
         model = _run_managed(events, optimizer, steps=2, grad_accum=2,
-                             extra={"grad_clip_max_norm": 3.5})
+                             extra={"grad_clip_max_norm": 3.5}, monitor=monitor)
         check(len(calls) == 2,
               f"clip must fire once per optimizer step (2), got {len(calls)}")
         check(all(m == 3.5 for _, m in calls),
               f"clip must use the port's max_norm (3.5); got {[m for _, m in calls]}")
         check(all(p and p[0] is model.p for p, _ in calls),
               "clip must run over the model's own trainable parameters")
+        # clip_grad_norm_ already measured the pre-clip total norm; the stash
+        # must put it on every step report as a plain float -- the value the
+        # monitor dashboard's grad-norm readout plots.
+        step_reports = [r for r in monitor.reports if "type" not in r]
+        check(len(step_reports) == 2
+              and all(isinstance(r.get("grad_norm"), float) for r in step_reports),
+              "clip measured the norm -> every step report carries a float "
+              f"grad_norm; got {[r.get('grad_norm') for r in step_reports]}")
 
         events2: list = []
         optimizer2 = _recording_optimizer(events2, fused=False)
         calls.clear()
-        _run_managed(events2, optimizer2, steps=2, grad_accum=2)
+        monitor2 = _CaptureMonitor()
+        _run_managed(events2, optimizer2, steps=2, grad_accum=2, monitor=monitor2)
         check(not calls, "grad_clip_max_norm=0 (default) must not clip at all")
+        check(all("grad_norm" not in r for r in monitor2.reports if "type" not in r),
+              "no clip -> no grad_norm key (absent means unmeasured, never a "
+              "fabricated 0)")
     finally:
         torch_utils.clip_grad_norm_ = original
     print("    PASS")
@@ -876,14 +935,21 @@ def check_monitor_reports_once_per_optimizer_step_with_t_buckets():
     print("[monitor diagnostics: one report per optimizer step under "
           "grad_accum (not one per micro-step), each carrying the raw "
           "per-t-bucket losses for the buckets the window's batches "
-          "actually sampled]")
+          "actually sampled, plus exactly one terminal run_end]")
     events: list = []
     monitor = _CaptureMonitor()
     _run_managed(events, _recording_optimizer(events, fused=False), steps=2,
                  grad_accum=2, batches=_TBatches(), monitor=monitor)
-    check(len(monitor.reports) == 2,
-          f"one report per optimizer step (2), got {len(monitor.reports)}")
-    for rep in monitor.reports:
+    # Step-shaped reports only: run_end is a *different* message type (a
+    # terminal status the dashboard needs to tell "finished" from "hung"),
+    # not a step report -- counting it would be counting the wrong thing.
+    step_reports = [r for r in monitor.reports if "type" not in r]
+    check(len(step_reports) == 2,
+          f"one report per optimizer step (2), got {len(step_reports)}")
+    ends = [r for r in monitor.reports if r.get("type") == "run_end"]
+    check(len(ends) == 1 and ends[0]["step"] == 2 and ends[0]["cancelled"] is False,
+          f"exactly one run_end after 2 completed steps, not cancelled; got {ends}")
+    for rep in step_reports:
         check(rep["step"] in (0, 1) and isinstance(rep["loss"], float),
               f"report must carry the optimizer step and window-averaged loss; got {rep.get('step')}")
         check("loss_t_low" in rep and "loss_t_high" in rep,
@@ -892,6 +958,16 @@ def check_monitor_reports_once_per_optimizer_step_with_t_buckets():
               "no mid-t samples in the window -> key omitted (chart gap, not a fabricated 0)")
         check(isinstance(rep["loss_t_low"], float) and isinstance(rep["loss_t_high"], float),
               "bucket values must be plain floats for JSON transport")
+        # New report keys (monitor dashboard upgrade): the fake handle states
+        # a usable budget, so the ceiling must ride along on every report;
+        # grad_norm/timing keys stay absent because this run clips nothing
+        # and never opted into TRAIN_STEP_TIMING -- present-or-absent is the
+        # contract, and absent must not be a fabricated 0.
+        check(rep.get("vram_budget_mb") == 8000.0,
+              f"vram_budget_mb must carry the handle's usable budget; got {rep.get('vram_budget_mb')}")
+        check("grad_norm" not in rep and "step_total_ms" not in rep,
+              "grad_norm/timing keys must stay absent when clipping is off and "
+              "TRAIN_STEP_TIMING is unset (no fabricated values)")
     print("    PASS")
 
 

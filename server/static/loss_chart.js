@@ -14,6 +14,20 @@
    (first) series for callers that predate multi-series (the monitor
    dashboard's metric readout reads point.smoothed directly).
 
+   Two interaction features, both generic (nothing about loss specifically):
+
+   - Legend click toggles a series hidden: hidden series are excluded from
+     the line/dots/tooltip/range (so one spike can't keep compressing an
+     axis for a series the reader turned off) and drawn dimmed with a
+     strikethrough in the legend itself, so the state is visible where the
+     control is. Stored as `s.hidden` on the series object itself -- the
+     series list is the caller's data, and a toggle that mutated a copy
+     would silently stop persisting across draws.
+   - options.referenceLines (or setReferenceLines()) draws fixed dashed
+     horizontal lines with labels -- e.g. a VRAM budget ceiling -- and
+     joins their values to the axis bounds so an out-of-span reference
+     lands at its true position instead of clamping to the plot edge.
+
    This is an instantiable class, not the page-level singleton
    window.ChartManager the original dashboard tab (chart.js) uses -- same
    scale math (ported, not reinvented; it's genuinely good), rebuilt as a
@@ -32,6 +46,8 @@ class LossChart {
       ? options.series
       : [{ key: "loss", label: "Loss", color: "#6c8cff" }];
     this.primaryKey = this.series[0].key;
+    this.referenceLines = (options && options.referenceLines) || [];
+    this._legendHits = []; // rebuilt per draw: legend label boxes -> series, for click-to-hide
 
     this.points = []; // {step, values: {key: v|null}, s: {key: smoothed|null}, loss, smoothed}
     this.dpr = window.devicePixelRatio || 1;
@@ -43,11 +59,20 @@ class LossChart {
     this._onMouseMove = (e) => {
       const rect = canvas.getBoundingClientRect();
       this.lastMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      canvas.style.cursor = this._legendHitAt(this.lastMouse) ? "pointer" : "";
       this._requestDraw();
     };
-    this._onMouseLeave = () => { this.lastMouse = null; this.hover = null; this._requestDraw(); };
+    this._onMouseLeave = () => { this.lastMouse = null; this.hover = null; canvas.style.cursor = ""; this._requestDraw(); };
+    this._onClick = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const s = this._legendHitAt({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      if (!s) return;
+      s.hidden = !s.hidden;
+      this._requestDraw();
+    };
     canvas.addEventListener("mousemove", this._onMouseMove);
     canvas.addEventListener("mouseleave", this._onMouseLeave);
+    canvas.addEventListener("click", this._onClick);
 
     this._resizeObserver = new ResizeObserver(() => this._requestDraw());
     this._resizeObserver.observe(canvas);
@@ -105,9 +130,22 @@ class LossChart {
     this._requestDraw();
   }
 
+  setReferenceLines(lines) {
+    this.referenceLines = lines || [];
+    this._requestDraw();
+  }
+
+  _legendHitAt(pt) {
+    for (const h of this._legendHits) {
+      if (pt.x >= h.x0 && pt.x <= h.x1 && pt.y >= h.y0 && pt.y <= h.y1) return h.series;
+    }
+    return null;
+  }
+
   destroy() {
     this.canvas.removeEventListener("mousemove", this._onMouseMove);
     this.canvas.removeEventListener("mouseleave", this._onMouseLeave);
+    this.canvas.removeEventListener("click", this._onClick);
     this._resizeObserver.disconnect();
     if (this._animFrame) cancelAnimationFrame(this._animFrame);
   }
@@ -122,11 +160,28 @@ class LossChart {
   // values don't compress the everyday range into a flat line. ----
 
   _computeRange() {
-    // Range spans *every* series (raw + smoothed), so a high-t bucket spike
-    // and the total loss share one honest axis instead of one series
-    // clipping outside the computed bounds.
+    const r = this._computeRangeCore();
+    // Reference-line values (e.g. a VRAM budget ceiling) join the axis
+    // bounds: a ceiling just above every observed number must land at its
+    // true position, not clamp to the plot edge where it would read as
+    // "equal to the largest sample".
+    for (const rl of this.referenceLines) {
+      const v = rl.value;
+      if (v == null || !isFinite(v) || v <= 0) continue;
+      if (v > r.fullMax) r.fullMax = v * 1.05;
+      if (v < r.fullMin) r.fullMin = v * 0.95;
+    }
+    return r;
+  }
+
+  _computeRangeCore() {
+    // Range spans *every* visible series (raw + smoothed), so a high-t bucket
+    // spike and the total loss share one honest axis instead of one series
+    // clipping outside the computed bounds. Hidden (legend-toggled-off)
+    // series don't participate: the axis should follow what's on screen.
     const smoothVals = [], lossVals = [];
     for (const s of this.series) {
+      if (s.hidden) continue;
       for (const p of this.points) {
         const sv = p.s[s.key];
         if (sv != null && sv > 0) smoothVals.push(sv);
@@ -267,6 +322,7 @@ class LossChart {
     ctx.save();
     ctx.globalAlpha = 0.6;
     for (const s of this.series) {
+      if (s.hidden) continue;
       ctx.fillStyle = s.color;
       for (const p of this.points) {
         const v = p.values[s.key];
@@ -283,6 +339,7 @@ class LossChart {
     // line (started=false) so gaps stay gaps.
     ctx.lineWidth = 2;
     for (const s of this.series) {
+      if (s.hidden) continue;
       ctx.strokeStyle = s.color;
       ctx.beginPath();
       let started = false;
@@ -295,19 +352,58 @@ class LossChart {
       ctx.stroke();
     }
 
+    // reference lines (a fixed ceiling/target, e.g. vram_budget_mb): a dashed
+    // horizontal rule with its label riding the right edge. Drawn after the
+    // data so the ceiling stays visible over a line that reaches it, and
+    // only when it falls inside the computed range (the range joins
+    // reference values in _computeRange, so this is a genuine offscreen
+    // guard, not a routine skip).
+    if (this.referenceLines.length) {
+      ctx.save();
+      ctx.lineWidth = 1;
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      for (const rl of this.referenceLines) {
+        if (rl.value == null || !isFinite(rl.value)) continue;
+        const py = yPos(rl.value);
+        if (!(py >= plotT && py <= plotB)) continue;
+        ctx.strokeStyle = rl.color || "#ff5252";
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(plotL, py); ctx.lineTo(plotR, py); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = rl.color || "#ff5252";
+        ctx.fillText(rl.label || "", plotR - 4, py - 2);
+      }
+      ctx.restore();
+    }
+
     // legend -- one colored line-swatch + label per series, laid out left
     // to right across the top margin (wraps to a second row if the labels
     // don't fit: 4 series fit one row on any reasonable canvas, but a
-    // narrower embedded canvas shouldn't silently overlap).
+    // narrower embedded canvas shouldn't silently overlap). Each label's
+    // box is recorded so a click toggles that series hidden; a hidden
+    // series draws dimmed with a strikethrough so the toggle's state is
+    // visible right where the control is.
     ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    this._legendHits = [];
     let lx = plotL + 4, ly = plotT - 8, row = 0;
     for (const s of this.series) {
       const labelW = ctx.measureText(s.label).width;
       if (lx + 16 + labelW > plotR && row === 0) { lx = plotL + 4; ly = plotT + 8; row = 1; }
+      ctx.save();
+      if (s.hidden) ctx.globalAlpha = 0.4;
       ctx.strokeStyle = s.color; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + 12, ly); ctx.stroke();
       ctx.fillStyle = "#888899";
       ctx.fillText(s.label, lx + 16, ly);
+      if (s.hidden) {
+        ctx.strokeStyle = "#888899"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(lx + 16, ly); ctx.lineTo(lx + 16 + labelW, ly); ctx.stroke();
+      }
+      ctx.restore();
+      this._legendHits.push({ series: s, x0: lx - 4, x1: lx + 20 + labelW, y0: ly - 8, y1: ly + 8 });
       lx += 16 + labelW + 14;
     }
 
@@ -334,6 +430,7 @@ class LossChart {
     // in text.
     const lines = [{ text: `Step: ${best.step}`, color: null }];
     for (const s of this.series) {
+      if (s.hidden) continue;
       const v = best.values[s.key];
       if (v == null) continue;
       let text = `${s.label}: ${LossChart._formatNum(v)}`;
@@ -372,7 +469,7 @@ class LossChart {
     ctx.strokeStyle = "rgba(200,200,200,0.3)"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.moveTo(px, plotT); ctx.lineTo(px, plotB); ctx.stroke(); ctx.setLineDash([]);
 
-    if (primaryV != null) {
+    if (primaryV != null && !this.series[0].hidden) {
       ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = this.series[0].color; ctx.lineWidth = 1.5; ctx.stroke();
     }

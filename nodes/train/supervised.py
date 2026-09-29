@@ -16,6 +16,7 @@ step_pipeline.py's own docstring).
 
 from __future__ import annotations
 
+import time
 from typing import ClassVar
 
 from ..components.device import DeviceContext, allocator_conf_env
@@ -34,7 +35,7 @@ from .step_pipeline import (BackwardPhase, EncodeConditioningPhase, FetchBatchPh
                              ForwardPhase, LossPhase, MonitoringPhase,
                              OptimizerBeginStepPhase, OptimizerStepPhase,
                              PrepareDiffusionInputsPhase, StepState, TimedPhase,
-                             TrainingStepPipeline)
+                             TrainingStepPipeline, _phase_label)
 
 
 class SupervisedLoRATrainerNode(TrainerNode):
@@ -247,9 +248,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
         phases.append(MonitoringPhase(
             total_steps=steps, device_ctx=device_ctx, on_step=inputs.get("on_step"),
             monitor=inputs.get("monitor"), profile=profile, coordinator=coordinator,
-            optimizer_id=optimizer_id))
+            optimizer_id=optimizer_id,
+            usable_budget_mb=(resource_control.usable_budget_mb()
+                              if resource_control is not None else None)))
         pipeline = TrainingStepPipeline(phases)
 
+        monitor = inputs.get("monitor")
         step = 0
         while step < steps:
             if self.context.should_cancel():
@@ -257,6 +261,11 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 # backward/optimizer-step. Not a failure: the model
                 # trained so far is a normal, valid output, same as a
                 # run that finished all its steps, just fewer of them.
+                # run_end still reports so a dashboard can tell
+                # "cancelled, data is final" from "hung or still going".
+                if monitor is not None:
+                    monitor.report({"type": "run_end", "step": step,
+                                    "cancelled": True, "t": time.time()})
                 result = {"model": model}
                 self.validate_outputs(result)
                 return result
@@ -270,6 +279,12 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 gc.collect()
                 device_ctx.empty_cache()
 
+        if monitor is not None:
+            # Normal completion -- the dashboard's "finished" state (vs a
+            # connection that just went quiet, which it can't distinguish
+            # on its own: SSE stays open after a run ends either way).
+            monitor.report({"type": "run_end", "step": step,
+                            "cancelled": False, "t": time.time()})
         result = {"model": model}
         self.validate_outputs(result)
         return result
@@ -295,19 +310,3 @@ def _log_shape_histogram(params) -> None:
           f"({pct:.0f}%) covered by a group of 2+ identical-shape parameters:")
     for shape, count in shapes.most_common():
         print(f"    {tuple(shape)}: {count}")
-
-
-def _phase_label(phase) -> str:
-    """CamelCase class name -> snake_case label, minus a trailing
-    "Phase" -- FetchBatchPhase -> "fetch_batch". Mechanical, not
-    hand-maintained per phase, so a new phase class gets a sensible
-    label for free."""
-    name = type(phase).__name__
-    if name.endswith("Phase"):
-        name = name[: -len("Phase")]
-    out = []
-    for i, ch in enumerate(name):
-        if ch.isupper() and i > 0:
-            out.append("_")
-        out.append(ch.lower())
-    return "".join(out)

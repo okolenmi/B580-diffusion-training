@@ -17,10 +17,24 @@
     border: 1px solid transparent;
   }
   .mon-id:hover { color: var(--text); border-color: var(--border); }
-  .mon-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); margin-left: auto; }
+  /* Pushes the actions + status group to the right edge (this element's
+     own margin-left:auto replaced .mon-status's, so the button sits flush
+     against the status readout instead of the space splitting between
+     two auto margins). */
+  .mon-action {
+    margin-left: auto; font-size: 12px; color: var(--text-dim); cursor: pointer;
+    background: var(--surface-alt); border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; font-family: inherit;
+  }
+  .mon-action:hover { color: var(--text); border-color: var(--accent); }
+  .mon-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
   .mon-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
   .mon-status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .mon-status-dot.disconnected { background: var(--red); }
+  /* Cancelled run: data is final but the run didn't reach its own last
+     step -- amber, distinct from both "live" green and "disconnected"
+     red, because it's neither. */
+  .mon-status-dot.ended { background: #ffb300; }
   .mon-body { padding: 24px; max-width: 1400px; margin: 0 auto; }
 
   .mon-progress-row { display: flex; align-items: center; gap: 10px; margin: 14px 0 24px; }
@@ -29,18 +43,36 @@
   }
   .mon-progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
   .mon-progress-pct { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); min-width: 36px; text-align: right; }
+  /* Optimizer id (whatever the trainer's report carried) -- which concrete
+     implementation produced these numbers belongs next to the numbers. */
+  .mon-runinfo {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);
+    max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: right;
+  }
+
+  .mon-hint { font-size: 11px; font-weight: normal; color: var(--text-dim); }
+
+  /* Cards whose data only exists for some run configurations (VRAM keys on
+     an XPU run, *_ms keys under TRAIN_STEP_TIMING/profile) stay out of
+     sight until the first report actually carries them -- a CPU run should
+     not show two permanently-empty charts. */
+  .mon-hidden { display: none; }
 
   /* The canvas element has no intrinsic size of its own -- without this it
      falls back to the browser default (~300x150 CSS px) regardless of how
      large .chart-container is, which is what made the chart render as a
-     tiny fixed-size box in the corner of a mostly-empty card. */
-  #mon-loss-chart { width: 100%; height: 100%; display: block; }
+     tiny fixed-size box in the corner of a mostly-empty card. Applies to
+     every chart on this page (loss, VRAM, timing). */
+  .chart-container canvas { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
   <div class="mon-topbar">
     <h1>Training Monitor</h1>
     <span class="mon-id" id="mon-id" title="Click to copy">id: &mdash;</span>
+    <button class="mon-action" id="mon-export-csv"
+            title="Download every step report this browser session received as one CSV (columns = union of report keys)">Export CSV</button>
     <div class="mon-status"><span class="mon-status-dot" id="mon-status-dot"></span><span id="mon-status-text">connecting&hellip;</span></div>
   </div>
 
@@ -49,9 +81,13 @@
       <div class="metric-card"><div class="metric-label">Step</div><div class="metric-value" id="m-step">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label">Loss</div><div class="metric-value" id="m-loss">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label">Smoothed</div><div class="metric-value" id="m-smoothed">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Best</div><div class="metric-value" id="m-best" title="Lowest raw loss seen this session">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label" style="color:#4caf50">t low</div><div class="metric-value" id="m-loss-t-low">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label" style="color:#ffb300">t mid</div><div class="metric-value" id="m-loss-t-mid">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label" style="color:#ff5252">t high</div><div class="metric-value" id="m-loss-t-high">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">VRAM</div><div class="metric-value" id="m-vram" title="reserved now">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">VRAM peak</div><div class="metric-value" id="m-vram-peak" title="highest reserved seen this session (per-step high-water mark when the trainer resets peaks each micro-step)">&mdash;</div></div>
+      <div class="metric-card"><div class="metric-label">Grad norm</div><div class="metric-value" id="m-grad-norm" title="pre-clip gradient norm; only reported when grad clipping is on (measured for free by the clip itself)">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label">LR</div><div class="metric-value" id="m-lr">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label">Steps/sec</div><div class="metric-value" id="m-rate">&mdash;</div></div>
       <div class="metric-card"><div class="metric-label">Elapsed</div><div class="metric-value" id="m-elapsed">&mdash;</div></div>
@@ -61,12 +97,27 @@
     <div class="mon-progress-row">
       <div class="mon-progress-track"><div class="mon-progress-fill" id="m-progress-fill"></div></div>
       <div class="mon-progress-pct" id="m-progress-pct">0%</div>
+      <div class="mon-runinfo" id="m-runinfo"></div>
     </div>
 
     <div class="card">
-      <div class="card-header">Loss</div>
+      <div class="card-header"><span>Loss</span><span class="mon-hint">click a legend label to hide/show its series</span></div>
       <div class="chart-container" style="height: 60vh; min-height: 420px;">
         <canvas id="mon-loss-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="card mon-hidden" id="mon-vram-card">
+      <div class="card-header"><span>VRAM &amp; residency</span><span class="mon-hint">dashed red = budget ceiling</span></div>
+      <div class="chart-container" style="height: 45vh; min-height: 320px;">
+        <canvas id="mon-vram-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="card mon-hidden" id="mon-timing-card">
+      <div class="card-header"><span>Phase timing</span><span class="mon-hint">ms per phase; present with TRAIN_STEP_TIMING=1 (managed) or profile (main)</span></div>
+      <div class="chart-container" style="height: 45vh; min-height: 320px;">
+        <canvas id="mon-timing-chart"></canvas>
       </div>
     </div>
   </div>

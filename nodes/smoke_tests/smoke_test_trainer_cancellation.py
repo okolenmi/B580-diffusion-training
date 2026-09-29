@@ -150,10 +150,22 @@ def check_cancel_before_first_step_trains_zero_steps():
 
 
 def check_cancel_mid_run_stops_but_keeps_progress():
-    print("[cancel_event set mid-run: stops before all steps, keeps what trained so far]")
+    print("[cancel_event set mid-run: stops before all steps, keeps what trained so far, "
+          "and emits run_end(cancelled=True) so a dashboard can tell finished-with-data "
+          "from hung]")
+    from nodes.monitor.handle import MonitorHandle
+
+    class _CaptureMonitor(MonitorHandle):
+        def __init__(self):
+            self.reports = []
+
+        def report(self, data):
+            self.reports.append(dict(data))
+
     model = _FakeModel()
     cancel_event = threading.Event()
     node = _make_node(cancel_event)
+    monitor = _CaptureMonitor()
 
     class _CancelAfterNSteps(_FiniteBatches):
         def __iter__(self):
@@ -166,10 +178,19 @@ def check_cancel_mid_run_stops_but_keeps_progress():
         model=model, optimizer=_FakeOptimizer(), text_encoder=_FakeTextEncoder(),
         batches=_CancelAfterNSteps(), steps=100,
         lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
+        monitor=monitor,
     )
     assert result["model"] is model
     assert 0 < model.calls < 100, f"expected somewhere between 1 and 99 steps, got {model.calls}"
-    print(f"    PASS: stopped after {model.calls} steps, not all 100")
+    ends = [r for r in monitor.reports if r.get("type") == "run_end"]
+    assert len(ends) == 1 and ends[0]["cancelled"] is True, (
+        f"a cancelled run must still emit exactly one run_end with cancelled=True; got {ends}")
+    # One forward per completed step in this pipeline, so the run_end's step
+    # must be exactly the number of steps that actually finished.
+    assert ends[0]["step"] == model.calls, (
+        f"run_end step {ends[0]['step']} != completed steps {model.calls}")
+    print(f"    PASS: stopped after {model.calls} steps, not all 100; "
+          f"run_end {ends[0]}")
 
 
 def check_no_cancel_event_runs_normally():

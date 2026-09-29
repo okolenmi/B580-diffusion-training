@@ -119,6 +119,29 @@ class TimedPhase(StepPhase):
         return state
 
 
+def _phase_label(phase) -> str:
+    """CamelCase class name -> snake_case label, minus a trailing
+    "Phase" -- FetchBatchPhase -> "fetch_batch". Mechanical, not
+    hand-maintained per phase, so a new phase class gets a sensible
+    label for free.
+
+    Lives here (was supervised.py's, moved when the managed route's
+    TRAIN_STEP_TIMING pipeline needed the same labels for its own
+    extras["timing_ms"] keys): both routes' timing reports use these
+    strings as their `{label}_ms` keys, so one definition means the
+    main route's profile print and the monitor dashboard's timing
+    chart can never drift into two naming schemes for the same phase."""
+    name = type(phase).__name__
+    if name.endswith("Phase"):
+        name = name[: -len("Phase")]
+    out = []
+    for i, ch in enumerate(name):
+        if ch.isupper() and i > 0:
+            out.append("_")
+        out.append(ch.lower())
+    return "".join(out)
+
+
 class FetchBatchPhase(StepPhase):
     """Fetches the next batch, wrapping back to the start of the dataset
     when exhausted -- a dataset with fewer batches than `steps` needs is
@@ -363,6 +386,12 @@ class MonitoringPhase(StepPhase):
        but high" from "climbing" -- this makes that distinction
        possible from a handful of report lines pulled from anywhere in
        one run, not just by comparing separately-run reports by hand.
+    3. `vram_budget_mb` in every report when the caller passed a usable
+       budget (resource_control.usable_budget_mb() -- None for a
+       resource_control-less run, key then absent): the ceiling the
+       reserved numbers are being held under, so the monitor dashboard
+       can draw it as a reference line against vram_reserved_mb instead
+       of the reader having to remember the number from graph config.
 
     tracked_footprint_mb was already this: a single rolled-up total
     from ResourceCoordinator, no per-component breakdown. Now built via
@@ -379,7 +408,8 @@ class MonitoringPhase(StepPhase):
     def __init__(self, total_steps: int, device_ctx: DeviceContext,
                  on_step: Optional[Callable] = None,
                  monitor: Optional[MonitorHandle] = None, profile: bool = False,
-                 coordinator=None, optimizer_id: str = ""):
+                 coordinator=None, optimizer_id: str = "",
+                 usable_budget_mb: Optional[float] = None):
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._on_step = on_step
@@ -387,6 +417,7 @@ class MonitoringPhase(StepPhase):
         self._profile = profile
         self._coordinator = coordinator
         self._optimizer_id = optimizer_id
+        self._usable_budget_mb = usable_budget_mb
         self._baseline_mem: Optional[dict[str, float]] = None
 
     def run(self, state: StepState) -> StepState:
@@ -408,6 +439,11 @@ class MonitoringPhase(StepPhase):
             }
             if self._optimizer_id:
                 report["optimizer"] = self._optimizer_id
+            if self._usable_budget_mb is not None:
+                # Ceiling the run is being held under (see ctor doc 3) --
+                # constant per run; the dashboard draws it as a reference
+                # line against the vram_* series.
+                report["vram_budget_mb"] = self._usable_budget_mb
             # Per-t-bucket diagnostics (loss.py's t_bucket_losses): raw
             # per-sample MSE per fixed third of the t range, keys omitted
             # for buckets this step had no samples in -- the monitor

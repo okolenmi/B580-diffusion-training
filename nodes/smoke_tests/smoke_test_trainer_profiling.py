@@ -22,8 +22,30 @@ from nodes.model.handle import TrainableModel
 from nodes.optimizer.handle import OptimizerHandle
 from nodes.train.loss import UniformLossWeighting
 from nodes.train.schedule import ConstantLRSchedule
+from nodes.memory.control_handle import ResourceControlHandle
 from nodes.monitor.handle import MonitorHandle
 from nodes.train.supervised import SupervisedLoRATrainerNode
+
+class _FakeResourceControl(ResourceControlHandle):
+    """Minimal handle whose only job is to state a budget -- the report
+    path under test reads usable_budget_mb() once at build time and puts
+    it on every report as vram_budget_mb (MonitoringPhase ctor doc 3)."""
+
+    def register(self, name, resident, offloadable: bool = False) -> None:
+        pass
+
+    def before_step(self, step: int) -> None:
+        pass
+
+    def ensure_loaded(self, name: str) -> None:
+        pass
+
+    def release(self, name: str) -> None:
+        pass
+
+    def usable_budget_mb(self):
+        return 7500.0
+
 
 EXPECTED_PHASE_LABELS = (
     "fetch_batch", "prepare_diffusion_inputs", "encode_conditioning",
@@ -144,7 +166,7 @@ class _OneBatch:
             }
 
 
-def _run(profile: bool, monitor=None, steps: int = 1) -> dict:
+def _run(profile: bool, monitor=None, steps: int = 1, resource_control=None) -> dict:
     node = SupervisedLoRATrainerNode()
     from nodes.core import ExecutionContext
     node.context = ExecutionContext()
@@ -153,7 +175,7 @@ def _run(profile: bool, monitor=None, steps: int = 1) -> dict:
         model=_FakeModel(), optimizer=optimizer, text_encoder=_FakeTextEncoder(),
         batches=_OneBatch(), steps=steps,
         lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
-        profile=profile, monitor=monitor,
+        profile=profile, monitor=monitor, resource_control=resource_control,
     )
     return optimizer
 
@@ -169,8 +191,15 @@ def check_profile_off_unchanged_behavior():
     print("[profile=False: runs, no timing keys, monitor gets a plain report]")
     monitor = _RecordingMonitor()
     optimizer = _run(profile=False, monitor=monitor)
-    assert len(monitor.reports) == 1
-    report = monitor.reports[0]
+    # Step-shaped reports only; run_end is a separate terminal message (see
+    # supervised.py's exits) -- asserting on the wrong subset would be the
+    # bug, not the count.
+    step_reports = [r for r in monitor.reports if "type" not in r]
+    assert len(step_reports) == 1
+    report = step_reports[0]
+    ends = [r for r in monitor.reports if r.get("type") == "run_end"]
+    assert len(ends) == 1 and ends[0]["step"] == 1 and ends[0]["cancelled"] is False, (
+        f"normal completion must emit exactly one run_end for step 1; got {ends}")
     for label in EXPECTED_PHASE_LABELS:
         assert f"{label}_ms" not in report, f"{label}_ms should not be present when profile=False"
     assert "step_total_ms" not in report
@@ -184,8 +213,9 @@ def check_profile_on_produces_full_timing_breakdown():
     print("[profile=True: full per-phase timing breakdown, all present, non-negative, sums correctly]")
     monitor = _RecordingMonitor()
     _run(profile=True, monitor=monitor)
-    assert len(monitor.reports) == 1
-    report = monitor.reports[0]
+    step_reports = [r for r in monitor.reports if "type" not in r]
+    assert len(step_reports) == 1
+    report = step_reports[0]
     for label in EXPECTED_PHASE_LABELS:
         key = f"{label}_ms"
         assert key in report, f"missing {key}"
@@ -199,6 +229,27 @@ def check_profile_on_produces_full_timing_breakdown():
 def check_profile_on_without_monitor_does_not_crash():
     print("[profile=True with no monitor wired -- still prints, doesn't need one]")
     _run(profile=True, monitor=None)
+    print("    PASS")
+
+
+def check_budget_rides_report_when_resource_control_wired():
+    print("[resource_control wired: report carries vram_budget_mb (its "
+          "usable_budget_mb) so the dashboard can draw the ceiling as a "
+          "reference line against the vram_* series]")
+    monitor = _RecordingMonitor()
+    _run(profile=False, monitor=monitor, resource_control=_FakeResourceControl())
+    step_reports = [r for r in monitor.reports if "type" not in r]
+    assert len(step_reports) == 1, f"expected one step report, got {monitor.reports}"
+    assert step_reports[0].get("vram_budget_mb") == 7500.0, (
+        f"vram_budget_mb must be the handle's usable budget; got "
+        f"{step_reports[0].get('vram_budget_mb')}")
+    # No resource_control at all (the default graph): key absent, not 0 --
+    # absent is the contract for "no budget stated".
+    monitor2 = _RecordingMonitor()
+    _run(profile=False, monitor=monitor2)
+    step_reports2 = [r for r in monitor2.reports if "type" not in r]
+    assert "vram_budget_mb" not in step_reports2[0], (
+        f"no resource_control -> no budget key; got {step_reports2[0].get('vram_budget_mb')}")
     print("    PASS")
 
 
@@ -234,6 +285,7 @@ def main():
     check_profile_on_produces_full_timing_breakdown()
     check_profile_on_without_monitor_does_not_crash()
     check_profile_on_reports_resident_footprint_breakdown()
+    check_budget_rides_report_when_resource_control_wired()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

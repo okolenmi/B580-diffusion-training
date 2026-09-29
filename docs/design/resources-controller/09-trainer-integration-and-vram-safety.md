@@ -599,10 +599,12 @@ carries their keys; a hero status block (step/loss/smoothed/ETA +
 progress bar + meta row with rate, elapsed time and optimizer id) above
 the loss chart; best-loss/LR/grad-norm/VRAM/peak readouts in a
 run-stats rail beside the chart, with a budget-utilization meter under
-the reserved value; a graph-controls strip (Freeze/Resume, visible-items
-count, history slider over a shared step window); legend click to
-hide/show any series (hidden series leave the tooltip and the axis
-range); session CSV export.
+the reserved value; graph controls with the chart (Freeze/Resume and
+visible-items count centered in the loss card's header, history slider
+under the chart, over a shared step window -- slider geometry frozen
+while the thumb is held so incoming reports can't teleport it); legend
+click to hide/show any series (hidden series leave the tooltip and the
+axis range); session CSV export.
 
 Tests updated to the new message contract rather than around it: step
 counts now filter on "no `type` key" (run_end is a different message,

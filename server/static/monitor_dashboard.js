@@ -65,8 +65,13 @@
       // Graph-view controls, one window shared by all three charts (they all
       // plot against step): `count` = records shown ("all" | n), `live` =
       // window follows the newest records, `startIdx` = slider position,
-      // `lockedRange` = concrete step window captured when follow stopped.
-      this.view = { count: "all", live: true, startIdx: 0, lockedRange: null };
+      // `lockedRange` = concrete step window captured when follow stopped,
+      // `dragging`/`frozenMax` = pointer holds the thumb and the slider
+      // geometry it was grabbed with (slider writes are frozen then).
+      this.view = {
+        count: "all", live: true, startIdx: 0, lockedRange: null,
+        dragging: false, frozenMax: null,
+      };
       this.countDefs = [
         [els.count50, 50], [els.count100, 100], [els.count250, 250],
         [els.count1000, 1000], [els.countAll, "all"],
@@ -470,9 +475,16 @@
       if (this.timingChart) this.timingChart.setViewRange(range);
 
       const maxIdx = Math.max(0, pts.length - n);
-      e.slider.max = String(maxIdx);
-      e.slider.disabled = this.view.count === "all";
-      e.slider.value = String(Math.min(this.view.startIdx, maxIdx));
+      // While the pointer holds the thumb, leave the slider alone: every
+      // report would otherwise rewrite max/value under the finger, and the
+      // browser's own drag tracking then fights those writes -- the thumb
+      // teleports back and forth (worst at the live end, where maxIdx grows
+      // on every report). Resync happens on release (setDragging(false)).
+      if (!this.view.dragging) {
+        e.slider.max = String(maxIdx);
+        e.slider.disabled = this.view.count === "all";
+        e.slider.value = String(Math.min(this.view.startIdx, maxIdx));
+      }
 
       if (!pts.length) {
         e.windowReadout.textContent = "steps \u2014";
@@ -487,6 +499,24 @@
       const frozen = !this.view.live;
       e.freeze.textContent = frozen ? "Resume" : "Freeze";
       e.freeze.classList.toggle("mon-freeze-on", frozen);
+    }
+
+    /* Pointer on the slider thumb: while held, applyView stops rewriting
+       max/value (they would fight the browser's drag tracking and teleport
+       the thumb -- worst at the live end, where maxIdx grows per report).
+       The chart window itself keeps following reports as usual; only the
+       slider geometry is frozen. On release we re-run applyView once so
+       max/value snap back to reality. */
+    setDragging(on) {
+      on = !!on;
+      if (this.view.dragging === on) return;
+      this.view.dragging = on;
+      if (on) {
+        this.view.frozenMax = this.els.slider.max;
+      } else {
+        this.view.frozenMax = null;
+        this.applyView();
+      }
     }
 
     /* Freeze/resume: lock the window exactly where it is, or release it
@@ -536,14 +566,20 @@
     }
 
     /* Slider: index into recorded records. Dragging to the far end returns
-       to live; anywhere else locks the window at that position. */
+       to live; anywhere else locks the window at that position. While the
+       pointer holds the thumb, the far end is the frozen max the thumb was
+       grabbed with -- not the grown maxIdx -- so a drag that reaches the
+       right edge stays "live" even as reports widen the real range. */
     pan(idx) {
       const pts = this.chart.points;
       if (this.view.count === "all" || !pts.length) return;
       const n = Math.min(this.view.count, pts.length);
       const maxIdx = Math.max(0, pts.length - n);
+      const frozen = this.view.dragging && this.view.frozenMax != null
+        ? Math.min(parseInt(this.view.frozenMax, 10) || 0, maxIdx)
+        : maxIdx;
       idx = Math.max(0, Math.min(idx, maxIdx));
-      if (idx >= maxIdx) {
+      if (idx >= frozen) {
         this.view.live = true;
         this.view.lockedRange = null;
       } else {
@@ -635,6 +671,16 @@
       el.addEventListener("click", () => dashboard.setCount(v));
     }
     els.slider.addEventListener("input", () => dashboard.pan(parseInt(els.slider.value, 10)));
+    // Hold/release on the thumb: while held, applyView must not rewrite the
+    // slider (see setDragging) -- pointerup/pointercancel on document too,
+    // since the release can land outside the input.
+    els.slider.addEventListener("pointerdown", () => dashboard.setDragging(true));
+    const release = () => dashboard.setDragging(false);
+    els.slider.addEventListener("pointerup", release);
+    els.slider.addEventListener("pointercancel", release);
+    els.slider.addEventListener("change", release); // fires on release for mouse/touch drags
+    document.addEventListener("pointerup", release);
+    document.addEventListener("pointercancel", release);
     dashboard.applyView(); // initial control state (empty charts: readout "steps —", slider disabled under All)
     document.getElementById("mon-export-csv")
       .addEventListener("click", () => dashboard.exportCsv());

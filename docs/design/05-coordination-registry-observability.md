@@ -254,14 +254,23 @@ row collapses to zero height rather than leaving a gap). Blocks whose
 keys depend on run configuration -- the memory section, the grad-norm
 row -- appear only once a report actually carries them and are hidden
 again by `clear`, so a CPU run never shows permanently-empty sections.
-A graph-controls strip below the hero drives all three charts (shared
-step domain): Freeze/Resume locks the window where it is while reports
-keep arriving (the readout keeps showing `/ latest` so a held view
-still reports that newer data exists), the visible-items count
-(50/100/250/1000/All, default All) sets how many records the window
-shows, and a horizontal slider pans back through recorded history --
-dragging it to the far end returns to live; it is disabled under All,
-where there is nothing to pan. The window is a `LossChart` view range:
+Graph controls drive all three charts (shared step domain) and sit with
+the chart itself: Freeze/Resume and the visible-items count
+(50/100/250/1000/All, default All) are centered in the loss card's
+header row, and a horizontal slider under the chart pans back through
+recorded history -- dragging it to the far end returns to live; it is
+disabled under All, where there is nothing to pan. Freeze/Resume locks
+the window where it is while reports keep arriving (the readout keeps
+showing `/ latest` so a held view still reports that newer data exists).
+While the pointer holds the slider thumb, its `max`/`value` are frozen:
+every report would otherwise rewrite them under the finger, and the
+browser's drag tracking then fights those writes -- the thumb teleports
+(worst at the live end, where the index grows per report); the far-end
+test meanwhile uses the frozen max, so a drag that reaches the right
+edge stays live, and release resyncs the geometry to current data. The
+slider's track has no accent-filled segment (a left-to-thumb fill reads
+as progress, but a window has no completion semantics) -- neutral track,
+accent thumb only. The window is a `LossChart` view range:
 out-of-window points are clipped at the plot border and the y-range and
 tooltip only consider in-window points, so an old spike can't keep
 compressing a panned-back view. The charts keep up to 100k records

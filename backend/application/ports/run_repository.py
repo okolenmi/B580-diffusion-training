@@ -39,8 +39,32 @@ class RunRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_if_status(self, run: Run, expected: RunStatus) -> bool:
+        """Persist only if the stored row still has ``expected`` status.
+
+        Compare-and-swap on the status column: when the supervisor, a
+        stop request, and startup reconciliation race to finalise the
+        same run, exactly one writer wins and the losers discard their
+        outcome. Returns ``False`` when someone else already won.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def find_active(self) -> Run | None:
-        """The most recently started run that is currently ``running``."""
+        """The most recent unfinished run (``created`` or ``running``).
+
+        ``created`` counts as active: a run mid-launch must block a
+        second start and reconciliation must be able to sweep it.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_unfinished(self) -> list[Run]:
+        """All runs in ``created``/``running`` state, newest first.
+
+        Normally at most one; more means a previous process died mid-
+        launch or a race left debris -- reconciliation sweeps them.
+        """
         raise NotImplementedError
 
     @abstractmethod

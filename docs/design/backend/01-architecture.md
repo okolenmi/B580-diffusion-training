@@ -1,8 +1,8 @@
 # 01 -- Backend architecture
 
-Status: **M1 implemented and tested** (2026-09-30). This doc is the
-blueprint `backend/` was built from and the contract later milestones
-must keep.
+Status: **M1 + M2 implemented and tested** (2026-09-30). This doc is
+the blueprint `backend/` was built from and the contract later
+milestones must keep.
 
 ## 1. Why this exists: the evaluation of `server/`
 
@@ -123,27 +123,36 @@ Rules (each is enforced by review and by the tests):
     file for integration, raw-ASGI calls for end-to-end -- including
     the SSE stream, which must not deadlock through the loop hop.
 
-## 4. File structure (as of M1)
+## 4. File structure (as of M2)
 
 ```
 backend/
 ├── __init__.py               # version stamp; package docstring
 ├── config.py                 # frozen Settings; explicit Settings.load(env)
 ├── cli.py                    # entry: python -m backend.cli [--host --port --db]
-├── bootstrap.py              # composition root -> Container
+├── bootstrap.py              # composition root -> Container (+ startup reconcile)
 ├── domain/                   # imports nothing
 │   ├── value_objects.py      # RunId, RunStatus (state enum)
 │   ├── exceptions.py         # DomainError, InvalidTransitionError
-│   ├── events.py             # DomainEvent + run lifecycle events
+│   ├── events.py             # DomainEvent + lifecycle + RunProgressed telemetry
 │   └── entities/run.py       # Run: state machine + event buffer
 ├── application/
-│   ├── errors.py             # RunNotFoundError, InvalidQueryError (code -> HTTP)
-│   ├── dto.py                # RunDTO + query/result shapes + mapping
+│   ├── errors.py             # 8 errors, each with a code -> HTTP status
+│   ├── dto.py                # RunDTO + command/result shapes + mapping
 │   ├── services.py           # ApplicationServices (frozen aggregate)
-│   ├── ports/                # ABCs: RunRepository, EventBus, Clock
-│   └── use_cases/            # ListRuns, GetRun, DeleteRuns
+│   ├── supervisor.py         # RunSupervisor: one daemon thread per run
+│   ├── ports/                # ABCs: RunRepository, EventBus, Clock,
+│   │                         # TrainingGateway, ConfigInspector,
+│   │                         # RunArtifacts, ProgressSource
+│   └── use_cases/            # ListRuns, GetRun, DeleteRuns, StartTraining,
+│                             # StopTraining, GetActiveRun, GetRunLog, ReconcileRuns
 ├── infrastructure/
 │   ├── clock.py              # SystemClock
+│   ├── workspace.py          # WorkspaceLayout (bridges repo paths.py)
+│   ├── subprocess_gateway.py # SubprocessTrainingGateway (spawn/signal/reap)
+│   ├── core_config_inspector.py  # CoreConfigInspector (core.config_io)
+│   ├── directory_run_artifacts.py
+│   ├── jsonl_progress_source.py  # offset-tailed progress reader
 │   ├── persistence/          # SqliteDatabase + SqliteRunRepository + migrations/
 │   └── events/               # CallbackEventBus (thread-safe)
 ├── presentation/
@@ -156,22 +165,36 @@ backend/
 └── tests/                    # standalone check() scripts + run_all.py
 ```
 
-Later milestones add: `application/ports/training_gateway.py` +
-`use_cases/training/*` + `infrastructure/training/*` (M2),
-config/settings/datasets domains (M3), the nodegraph subsystem
-behind a `GraphRuntime` port (M4).
+Later milestones add: config/settings/datasets domains (M3), the
+nodegraph subsystem behind a `GraphRuntime` port (M4).
+
+Two deliberate bridges to the repo (adapter-owned, never leaked past
+infrastructure): `workspace.py` imports `paths` so parent and *child*
+agree on `runs/run_<id>/log.progress.jsonl` exactly (its documented
+.env fill-on-import equals what `run_server.sh` does for the shell),
+and the gateway/inspector import `core.config_io` for argv/config
+parsing. Import purity holds for every backend module itself.
 
 ## 5. API contract (v1, clean-break)
 
-Endpoints as of M1:
+Endpoints as of M2:
 
 | Method | Path | Use case |
 |--------|------|----------|
 | GET | `/api/v1/health` | liveness + version |
 | GET | `/api/v1/runs?limit=&status=` | `ListRuns` |
+| GET | `/api/v1/runs/active` | `GetActiveRun` (404 `no_active_run`) |
 | GET | `/api/v1/runs/{id}` | `GetRun` |
+| POST | `/api/v1/runs` | `StartTraining` (body: `config_path`, `start_from`, `reset_optimizer`) -> 201 |
+| POST | `/api/v1/runs/{id}/stop` | `StopTraining` (body: `force`) |
+| GET | `/api/v1/runs/{id}/log?lines=` | `GetRunLog` (1..500, tail text) |
 | DELETE | `/api/v1/runs` | `DeleteRuns` |
 | GET | `/api/v1/events` | SSE stream of domain events |
+
+`/runs/active` is registered before `/runs/{id}` so the path param
+never swallows it. Request bodies are thin: validation that matters
+(`start_from` values, `lines` range, config resolution) lives in the
+use cases, not in pydantic/`Query` -- one source of truth.
 
 **Error envelope** -- every non-2xx response, no exceptions (unknown
 routes, method-not-allowed, and framework validation included):
@@ -182,13 +205,18 @@ routes, method-not-allowed, and framework validation included):
 
 Codes map to statuses centrally: `run_not_found` 404,
 `invalid_query` 422, `validation_error` 422 (FastAPI/pydantic input),
-`http_{status}` for transport-level errors, `internal_error` 500
-(traceback logged, message generic).
+`config_not_found` 404, `config_invalid` 422, `run_already_active`
+409, `run_not_running` 409, `no_active_run` 404,
+`training_launch_failed` 500, `http_{status}` for transport-level
+errors, `internal_error` 500 (traceback logged, message generic).
 
 **SSE**: `data: {json}` frames where json carries `type`
 (`stream_opened`, `run_created`, `run_started`, `run_completed`,
-`run_failed`, `run_cancelled`, `runs_deleted`), `occurred_at`, and
-the event's fields; `: ping` heartbeat every 15 s.
+`run_failed`, `run_cancelled`, `runs_deleted`, `run_progressed`),
+`occurred_at`, and the event's fields; `: ping` heartbeat every 15 s.
+`run_progressed` is telemetry: published by the supervisor per
+progress sample, never buffered by the entity (`Run.record_progress`
+emits nothing -- that invariant is test-pinned).
 
 ## 6. Concurrency model
 
@@ -202,14 +230,33 @@ the event's fields; `: ping` heartbeat every 15 s.
   `call_soon_threadsafe` into a bounded queue (256). Full queue drops
   the incoming event: SSE is a live tail, history belongs to the
   database. Subscription closes when the stream ends.
+* **Single-writer status (M2)**: the supervisor, `StopTraining`, and
+  `ReconcileRuns` all race to finalise a run, so every status write
+  goes through `RunRepository.update_if_status(run, expected)` --
+  `UPDATE ... WHERE status = expected`. Exactly one wins; losers
+  discard their outcome and publish nothing. The supervisor is the
+  sole writer of *final* outcome for a run it watches: it re-fetches
+  the row every 0.5 s tick and exits without writing when the row is
+  no longer `running` (someone stopped or swept it).
+* **One run at a time**: `StartTraining` holds a lock across
+  check-then-spawn (the process is single-process; the lock closes the
+  TOCTOU a concurrent double-POST would open), and any row in
+  `created`/`running` counts as active. `ReconcileRuns` runs at
+  composition time, before the first request can race it.
+* **Trainer subprocess**: spawned with `start_new_session=True`
+  (own process group); stop = SIGINT to the group with SIGKILL
+  escalation after 3 s (`force` skips ahead); orphan kill re-checks
+  `/proc/<pid>/cmdline` for `core.cli` against PID reuse. Progress is
+  read from the run's `log.progress.jsonl` by an offset-tailed reader
+  (state per path; a truncated file resets its offset).
 
 ## 7. Milestones
 
 | # | Scope | Status |
 |---|-------|--------|
 | M1 | Skeleton: layering, settings, SQLite + migrations, runs read-side, delete + event, error envelope, SSE, tests, boot on own port | **done** |
-| M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | next |
-| M3 | Config file, settings store, assets (checkpoints/loras), datasets domains | planned |
+| M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | **done** |
+| M3 | Config file, settings store, assets (checkpoints/loras), datasets domains | next |
 | M4 | Nodegraph subsystem (registry, introspect, executor, presets) behind a `GraphRuntime` port | planned |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
 

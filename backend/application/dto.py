@@ -27,6 +27,8 @@ class RunDTO:
     done_steps: int
     current_loss: float | None
     avg_loss: float | None
+    cache_done: int | None
+    cache_total: int | None
     pid: int | None
     exit_code: int | None
     error: str | None
@@ -51,6 +53,8 @@ def to_run_dto(run: Run) -> RunDTO:
         done_steps=run.done_steps,
         current_loss=run.current_loss,
         avg_loss=run.avg_loss,
+        cache_done=run.cache_done,
+        cache_total=run.cache_total,
         pid=run.pid,
         exit_code=run.exit_code,
         error=run.error,
@@ -85,3 +89,36 @@ class ListRunsResult:
 @dataclass(frozen=True, slots=True)
 class DeleteRunsResult:
     deleted: int
+
+
+# Valid values for StartTrainingCommand.start_from (validated by the
+# use case -- one source of truth, not duplicated into pydantic).
+START_FROM_OPTIONS: tuple[str, ...] = (
+    "teacher",
+    "student",
+    "resume",
+    "lora_checkpoint",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StartTrainingCommand:
+    """Launch request; relative ``config_path`` anchors at project root."""
+
+    config_path: str
+    start_from: str = "teacher"
+    reset_optimizer: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LogResult:
+    """Tail of a run's log; empty string when the file does not exist."""
+
+    log: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileResult:
+    """Outcome of the startup sweep: rows moved out of unfinished."""
+
+    cleaned: int

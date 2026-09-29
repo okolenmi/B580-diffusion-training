@@ -21,7 +21,14 @@ from backend.domain.events import RunsDeleted
 from backend.domain.value_objects import RunStatus
 from backend.infrastructure.persistence.run_repository import SqliteRunRepository
 from backend.presentation.app import create_app
-from backend.tests.support import FakeClock, asgi_request, check, finish
+from backend.tests.support import (
+    FakeClock,
+    FakeTrainingGateway,
+    asgi_request,
+    build_services,
+    check,
+    finish,
+)
 
 
 def _build(tmp: str) -> tuple[Container, object]:
@@ -149,7 +156,7 @@ def test_get_run_and_errors() -> None:
             f"unknown route -> same envelope, no bare detail (got {body!r})",
         )
 
-        status, _, body = asgi_request(app, "/api/v1/runs", method="POST")
+        status, _, body = asgi_request(app, "/api/v1/runs", method="PUT")
         check(
             status == 405 and body["error"]["code"] == "http_405",
             f"method not allowed uses the envelope too (got {status} {body!r})",
@@ -257,11 +264,118 @@ def test_sse_stream() -> None:
         check(True, "stream shut down cleanly (no deadlock, no timeout)")
 
 
+def _build_faked(tmp: str) -> tuple[object, object]:
+    """App over in-memory services + fake gateway (no real spawning)."""
+    project = Path(tmp)
+    (project / "cfg.toml").write_text("[common]\nsteps = 100\n", encoding="utf-8")
+    gateway = FakeTrainingGateway()
+    services = build_services(
+        gateway=gateway,
+        project_root=project,
+        runs_dir=project / "runs",
+        poll_interval=0.02,
+    )
+    return gateway, create_app(services)
+
+
+def test_lifecycle_endpoints() -> None:
+    print("\n== POST /runs, /stop, /active, /log (faked gateway) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway, app = _build_faked(tmp)
+
+        status, _, body = asgi_request(app, "/api/v1/runs/active")
+        check(
+            status == 404 and body["error"]["code"] == "no_active_run",
+            f"no active run -> 404 no_active_run (got {status} {body!r})",
+        )
+
+        # Launch-validation failures first, while no run is active yet
+        # (the active check would 409 before config validation).
+        status, _, body = asgi_request(
+            app,
+            "/api/v1/runs",
+            method="POST",
+            json_body={"config_path": "cfg.toml", "start_from": "nope"},
+        )
+        check(
+            status == 422 and body["error"]["code"] == "invalid_query",
+            f"bad start_from -> 422 invalid_query (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST", json_body={"config_path": "gone.toml"}
+        )
+        check(
+            status == 404 and body["error"]["code"] == "config_not_found",
+            f"missing config -> 404 config_not_found (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(app, "/api/v1/runs", method="POST")
+        check(
+            status == 422 and body["error"]["code"] == "validation_error",
+            f"no body -> 422 validation_error (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST", json_body={"config_path": "cfg.toml"}
+        )
+        check(status == 201, f"start -> 201 (got {status} {body!r})")
+        check(
+            body["id"] == 1 and body["status"] == "running" and body["pid"] is not None,
+            "launched run returned with pid",
+        )
+        check(len(gateway.spawned) == 1, "fake gateway received the spawn")
+
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST", json_body={"config_path": "cfg.toml"}
+        )
+        check(
+            status == 409 and body["error"]["code"] == "run_already_active",
+            f"second start -> 409 run_already_active (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(app, "/api/v1/runs/active")
+        check(status == 200 and body["id"] == 1, "active run visible after start")
+
+        log_path = Path(tmp) / "runs" / "run_1" / "log.txt"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("a\nb\nc\n", encoding="utf-8")
+        status, _, body = asgi_request(app, "/api/v1/runs/1/log?lines=2")
+        check(
+            status == 200 and body == {"log": "b\nc\n"},
+            f"log tail (got {status} {body!r})",
+        )
+        status, _, body = asgi_request(app, "/api/v1/runs/1/log?lines=999")
+        check(
+            status == 422 and body["error"]["code"] == "invalid_query",
+            f"lines out of range -> 422 (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(
+            app, "/api/v1/runs/1/stop", method="POST", json_body={"force": True}
+        )
+        check(status == 200 and body["status"] == "cancelled", "stop -> 200 cancelled")
+        check(gateway.stopped == [(4242, True)], "force forwarded to the gateway")
+
+        status, _, body = asgi_request(app, "/api/v1/runs/1/stop", method="POST")
+        check(
+            status == 409 and body["error"]["code"] == "run_not_running",
+            f"second stop -> 409 run_not_running (got {status} {body!r})",
+        )
+
+        status, _, body = asgi_request(app, "/api/v1/runs/active")
+        check(
+            status == 404 and body["error"]["code"] == "no_active_run",
+            "cancelled run no longer active",
+        )
+
+
 def main() -> None:
     test_health()
     test_list_runs()
     test_get_run_and_errors()
     test_delete_runs()
+    test_lifecycle_endpoints()
     test_sse_stream()
     finish()
 

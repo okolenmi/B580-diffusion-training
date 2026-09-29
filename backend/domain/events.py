@@ -84,9 +84,31 @@ class RunFailed(DomainEvent):
 
 @dataclass(frozen=True)
 class RunCancelled(DomainEvent):
-    """The run was stopped on request."""
+    """The run was stopped on request or swept by orphan cleanup."""
 
     run_id: RunId
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RunProgressed(DomainEvent):
+    """Telemetry: a progress sample was applied to a running run.
+
+    Unlike lifecycle events, this one is published directly by the
+    supervisor, never buffered by the entity -- ``Run.record_progress``
+    deliberately emits nothing, keeping high-frequency step updates out
+    of the aggregate's event buffer (that invariant is test-pinned).
+    """
+
+    run_id: RunId
+    step: int
+    total_steps: int
+    loss: float | None
+    avg_loss: float | None
+    lr: float | None
+    phase: str | None
+    cache_done: int | None
+    cache_total: int | None
 
 
 @dataclass(frozen=True)

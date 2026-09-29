@@ -63,6 +63,10 @@ def test_roundtrip() -> None:
         )
         check(fetched.phase == "training", "phase roundtrip")
         check(
+            fetched.cache_done is None and fetched.cache_total is None,
+            "cache columns default to NULL",
+        )
+        check(
             fetched.created_at == run.created_at and fetched.started_at == run.started_at,
             "timestamps roundtrip (tz-aware equality)",
         )
@@ -122,7 +126,11 @@ def test_find_active_and_delete() -> None:
             config_path="c", mode="m", total_steps=1, created_at=clock.now()
         )
         repo.add(run)
-        check(repo.find_active() is None, "no active run initially")
+        active = repo.find_active()
+        check(
+            active is not None and active.id == run.id,
+            "created run counts as active (blocks a second start)",
+        )
 
         run.mark_started(pid=1, at=clock.now())
         repo.update(run)
@@ -181,8 +189,97 @@ def test_persistence_across_instances() -> None:
                 for row in conn.execute("SELECT version FROM schema_migrations")
             ]
         check(
-            applied == ["001_initial"],
-            f"schema_migrations records 001_initial (got {applied})",
+            applied == ["001_initial", "002_cache_progress"],
+            f"schema_migrations records both migrations (got {applied})",
+        )
+
+
+def test_update_if_status() -> None:
+    print("\n== update_if_status (compare-and-swap) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = SqliteRunRepository(_open(tmp))
+        clock = FakeClock()
+        run = Run.create(
+            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+        )
+        repo.add(run)
+
+        run.mark_started(pid=7, at=clock.now())
+        check(
+            repo.update_if_status(run, expected=RunStatus.CREATED),
+            "CAS succeeds when the row still has the expected status",
+        )
+        check(
+            repo.get(run.id).status is RunStatus.RUNNING,
+            "row took the new status",
+        )
+
+        # A racing writer that already transitioned the row: the loser's
+        # write (stale entity copy still believing it is running) must
+        # not land. Capture the loser BEFORE the winner transitions.
+        loser = repo.get(run.id)  # independent copy (fresh row -> Run)
+        winner = repo.get(run.id)
+        winner.mark_completed(at=clock.now())
+        check(
+            repo.update_if_status(winner, expected=RunStatus.RUNNING),
+            "first terminal writer wins",
+        )
+
+        loser.mark_failed(at=clock.now(), error="late loser")
+        check(
+            repo.update_if_status(loser, expected=RunStatus.RUNNING) is False,
+            "second terminal writer sees False",
+        )
+        check(
+            repo.get(run.id).status is RunStatus.COMPLETED,
+            "loser did not overwrite the winner's status",
+        )
+
+        check(
+            repo.update_if_status(run, expected=RunStatus.CREATED) is False,
+            "stale expected status fails the CAS",
+        )
+        try:
+            repo.update_if_status(
+                Run.create(config_path="c", mode="m", total_steps=1, created_at=clock.now()),
+                expected=RunStatus.CREATED,
+            )
+            check(False, "CAS of an unpersisted run must be rejected")
+        except DomainError:
+            check(True, "CAS of an unpersisted run rejected")
+
+
+def test_list_unfinished() -> None:
+    print("\n== list_unfinished ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = SqliteRunRepository(_open(tmp))
+        clock = FakeClock()
+        created = Run.create(
+            config_path="a", mode="m", total_steps=1, created_at=clock.now()
+        )
+        repo.add(created)
+        running = Run.create(
+            config_path="b", mode="m", total_steps=1, created_at=clock.now()
+        )
+        repo.add(running)
+        running.mark_started(pid=3, at=clock.now())
+        repo.update(running)
+        done = Run.create(
+            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+        )
+        repo.add(done)
+        done.mark_started(pid=4, at=clock.now())
+        done.mark_completed(at=clock.now())
+        repo.update(done)
+
+        unfinished = repo.list_unfinished()
+        check(
+            [r.id for r in unfinished] == [2, 1],
+            f"unfinished, newest first (got {[r.id for r in unfinished]})",
+        )
+        check(
+            all(r.id != 3 for r in unfinished),
+            "terminal rows never appear in unfinished",
         )
 
 
@@ -192,6 +289,8 @@ def main() -> None:
     test_find_active_and_delete()
     test_update_edge_cases()
     test_persistence_across_instances()
+    test_update_if_status()
+    test_list_unfinished()
     finish()
 
 

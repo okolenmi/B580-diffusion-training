@@ -3,6 +3,11 @@
 All SQL for runs lives in this file (the old server leaked a query
 into ``process_manager.py``); the row <-> entity mapping is the only
 translation point.
+
+``update_if_status`` is the compare-and-swap primitive every status
+transition goes through: ``UPDATE ... WHERE status = expected`` means
+exactly one racing writer (supervisor, stop, reconcile) wins a run's
+terminal transition, and the losers see ``rowcount == 0``.
 """
 
 from __future__ import annotations
@@ -17,14 +22,22 @@ from .sqlite import SqliteDatabase
 
 _COLUMNS = (
     "id, status, config_path, mode, phase, total_steps, done_steps, "
-    "current_loss, avg_loss, pid, exit_code, error, log_path, "
-    "created_at, updated_at, started_at, finished_at"
+    "current_loss, avg_loss, cache_done, cache_total, pid, exit_code, "
+    "error, log_path, created_at, updated_at, started_at, finished_at"
 )
 
 # id is generated; created_at is immutable identity.
 _MUTABLE_COLUMNS = (
     "status, phase, total_steps, done_steps, current_loss, avg_loss, "
-    "pid, exit_code, error, log_path, updated_at, started_at, finished_at"
+    "cache_done, cache_total, pid, exit_code, error, log_path, "
+    "updated_at, started_at, finished_at"
+)
+
+# Single source for the UPDATE's parameter order (per _MUTABLE_COLUMNS).
+_MUTABLE_PARAMS = (
+    "status", "phase", "total_steps", "done_steps", "current_loss",
+    "avg_loss", "cache_done", "cache_total", "pid", "exit_code", "error",
+    "log_path", "updated_at", "started_at", "finished_at",
 )
 
 
@@ -43,6 +56,8 @@ def _row_to_run(row) -> Run:
         done_steps=row["done_steps"],
         current_loss=row["current_loss"],
         avg_loss=row["avg_loss"],
+        cache_done=row["cache_done"],
+        cache_total=row["cache_total"],
         pid=row["pid"],
         exit_code=row["exit_code"],
         error=row["error"],
@@ -61,36 +76,59 @@ class SqliteRunRepository(RunRepository):
     def add(self, run: Run) -> Run:
         if run.id is not None:
             raise DomainError(f"run already has id {run.id}")
-        columns = (
-            "status, config_path, mode, phase, total_steps, done_steps, "
-            "current_loss, avg_loss, pid, exit_code, error, log_path, "
-            "created_at, updated_at, started_at, finished_at"
-        )
+        columns = _COLUMNS.replace("id, ", "", 1)  # id is AUTOINCREMENT
         placeholders = ", ".join("?" for _ in columns.split(", "))
         with self._db.connection() as conn:
             cursor = conn.execute(
                 f"INSERT INTO runs ({columns}) VALUES ({placeholders})",
-                (
-                    run.status.value,
-                    run.config_path,
-                    run.mode,
-                    run.phase,
-                    run.total_steps,
-                    run.done_steps,
-                    run.current_loss,
-                    run.avg_loss,
-                    run.pid,
-                    run.exit_code,
-                    run.error,
-                    run.log_path,
-                    run.created_at.isoformat(),
-                    run.updated_at.isoformat(),
-                    run.started_at.isoformat() if run.started_at else None,
-                    run.finished_at.isoformat() if run.finished_at else None,
-                ),
+                self._insert_values(run),
             )
             run.assign_id(RunId(cursor.lastrowid))
         return run
+
+    @staticmethod
+    def _insert_values(run: Run) -> tuple[object, ...]:
+        return (
+            run.status.value,
+            run.config_path,
+            run.mode,
+            run.phase,
+            run.total_steps,
+            run.done_steps,
+            run.current_loss,
+            run.avg_loss,
+            run.cache_done,
+            run.cache_total,
+            run.pid,
+            run.exit_code,
+            run.error,
+            run.log_path,
+            run.created_at.isoformat(),
+            run.updated_at.isoformat(),
+            run.started_at.isoformat() if run.started_at else None,
+            run.finished_at.isoformat() if run.finished_at else None,
+        )
+
+    @staticmethod
+    def _mutable_values(run: Run) -> tuple[object, ...]:
+        attrs = {
+            "status": run.status.value,
+            "phase": run.phase,
+            "total_steps": run.total_steps,
+            "done_steps": run.done_steps,
+            "current_loss": run.current_loss,
+            "avg_loss": run.avg_loss,
+            "cache_done": run.cache_done,
+            "cache_total": run.cache_total,
+            "pid": run.pid,
+            "exit_code": run.exit_code,
+            "error": run.error,
+            "log_path": run.log_path,
+            "updated_at": run.updated_at.isoformat(),
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        }
+        return tuple(attrs[name] for name in _MUTABLE_PARAMS)
 
     def get(self, run_id: RunId) -> Run | None:
         with self._db.connection() as conn:
@@ -118,33 +156,38 @@ class SqliteRunRepository(RunRepository):
         with self._db.connection() as conn:
             cursor = conn.execute(
                 f"UPDATE runs SET {assignments} WHERE id = ?",
-                (
-                    run.status.value,
-                    run.phase,
-                    run.total_steps,
-                    run.done_steps,
-                    run.current_loss,
-                    run.avg_loss,
-                    run.pid,
-                    run.exit_code,
-                    run.error,
-                    run.log_path,
-                    run.updated_at.isoformat(),
-                    run.started_at.isoformat() if run.started_at else None,
-                    run.finished_at.isoformat() if run.finished_at else None,
-                    run.id,
-                ),
+                (*self._mutable_values(run), run.id),
+            )
+        return cursor.rowcount > 0
+
+    def update_if_status(self, run: Run, expected: RunStatus) -> bool:
+        if run.id is None:
+            raise DomainError("cannot update an unpersisted run (no id yet)")
+        assignments = ", ".join(f"{name} = ?" for name in _MUTABLE_COLUMNS.split(", "))
+        with self._db.connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE runs SET {assignments} WHERE id = ? AND status = ?",
+                (*self._mutable_values(run), run.id, expected.value),
             )
         return cursor.rowcount > 0
 
     def find_active(self) -> Run | None:
         with self._db.connection() as conn:
             row = conn.execute(
-                f"SELECT {_COLUMNS} FROM runs WHERE status = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (RunStatus.RUNNING.value,),
+                f"SELECT {_COLUMNS} FROM runs "
+                "WHERE status IN (?, ?) ORDER BY id DESC LIMIT 1",
+                (RunStatus.CREATED.value, RunStatus.RUNNING.value),
             ).fetchone()
         return _row_to_run(row) if row else None
+
+    def list_unfinished(self) -> list[Run]:
+        with self._db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_COLUMNS} FROM runs "
+                "WHERE status IN (?, ?) ORDER BY id DESC",
+                (RunStatus.CREATED.value, RunStatus.RUNNING.value),
+            ).fetchall()
+        return [_row_to_run(row) for row in rows]
 
     def delete_all(self) -> int:
         with self._db.connection() as conn:

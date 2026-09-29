@@ -35,7 +35,12 @@ class Run:
     """A training run with enforced lifecycle rules."""
 
     _ALLOWED: dict[RunStatus, frozenset[RunStatus]] = {
-        RunStatus.CREATED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
+        # FAILED is reachable from CREATED: a launch can fail before the
+        # process ever starts (missing interpreter, unreadable config), and
+        # startup reconciliation fails runs abandoned mid-launch.
+        RunStatus.CREATED: frozenset(
+            {RunStatus.RUNNING, RunStatus.CANCELLED, RunStatus.FAILED}
+        ),
         RunStatus.RUNNING: frozenset(
             {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
         ),
@@ -62,6 +67,8 @@ class Run:
         exit_code: int | None = None,
         error: str | None = None,
         log_path: str | None = None,
+        cache_done: int | None = None,
+        cache_total: int | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> None:
@@ -87,6 +94,8 @@ class Run:
         self.current_loss = current_loss
         self.avg_loss = avg_loss
         self.phase = phase
+        self.cache_done = cache_done
+        self.cache_total = cache_total
         self.pid = pid
         self.exit_code = exit_code
         self.error = error
@@ -170,16 +179,27 @@ class Run:
         current_loss: float | None = None,
         avg_loss: float | None = None,
         phase: str | None = None,
+        total_steps: int | None = None,
+        cache_done: int | None = None,
+        cache_total: int | None = None,
     ) -> None:
         """Update training progress (``running`` only, no event).
 
-        High-frequency telemetry deliberately does not emit domain
-        events -- the monitor event stream carries step-level data
-        separately; domain events mark lifecycle changes only.
+        ``None`` means "leave unchanged" for every optional field;
+        ``total_steps`` is adopted explicitly by the caller (the
+        supervisor only ever passes a *larger* total than the config
+        promised). High-frequency telemetry deliberately does not emit
+        domain events -- the supervisor publishes ``RunProgressed``
+        itself; domain events mark lifecycle changes only.
         """
         self._require_status(RunStatus.RUNNING, action="record progress")
         if done_steps < 0:
             raise DomainError("done_steps cannot be negative")
+        if total_steps is not None and total_steps < 0:
+            raise DomainError("total_steps cannot be negative")
+        for value, label in ((cache_done, "cache_done"), (cache_total, "cache_total")):
+            if value is not None and value < 0:
+                raise DomainError(f"{label} cannot be negative")
         self._require_id()
         self.done_steps = done_steps
         if current_loss is not None:
@@ -188,6 +208,12 @@ class Run:
             self.avg_loss = avg_loss
         if phase is not None:
             self.phase = phase
+        if total_steps is not None:
+            self.total_steps = total_steps
+        if cache_done is not None:
+            self.cache_done = cache_done
+        if cache_total is not None:
+            self.cache_total = cache_total
         self.updated_at = at
 
     def mark_completed(self, *, at: datetime) -> None:
@@ -208,11 +234,18 @@ class Run:
             RunFailed(run_id=run_id, error=error, exit_code=exit_code, occurred_at=at)
         )
 
-    def cancel(self, *, at: datetime) -> None:
-        """Stopped on request: ``created``/``running`` -> ``cancelled``."""
+    def cancel(self, *, at: datetime, reason: str | None = None) -> None:
+        """Stopped on request: ``created``/``running`` -> ``cancelled``.
+
+        ``reason`` (e.g. "stop requested (force)", "orphan cleanup: ...")
+        is recorded in ``error`` -- for a cancelled run that field is the
+        termination note, not a failure.
+        """
         run_id = self._require_id()
         self._transition(to=RunStatus.CANCELLED, at=at)
-        self._emit(RunCancelled(run_id=run_id, occurred_at=at))
+        if reason is not None:
+            self.error = reason
+        self._emit(RunCancelled(run_id=run_id, reason=reason, occurred_at=at))
 
     # ------------------------------------------------------------------
     # Event buffer

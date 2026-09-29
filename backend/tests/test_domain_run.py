@@ -102,10 +102,13 @@ def test_illegal_transitions() -> None:
     except InvalidTransitionError:
         check(run.status is RunStatus.CREATED, "rejected transition changed nothing")
     try:
-        run.mark_failed(at=clock.now())
-        check(False, "created -> failed must be rejected")
+        run.mark_failed(at=clock.now(), error="launch failed")
+        check(
+            run.status is RunStatus.FAILED,
+            "created -> failed allowed (launch failure path)",
+        )
     except InvalidTransitionError:
-        check(True, "created -> failed rejected")
+        check(False, "created -> failed must be allowed now")
     try:
         run.record_progress(done_steps=1, at=clock.now())
         check(False, "progress while 'created' must be rejected")

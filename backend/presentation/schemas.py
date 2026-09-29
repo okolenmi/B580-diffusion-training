@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..application.dto import RunDTO
 from ..domain.value_objects import RunStatus
@@ -25,6 +25,8 @@ class RunOut(BaseModel):
     done_steps: int
     current_loss: float | None = None
     avg_loss: float | None = None
+    cache_done: int | None = None
+    cache_total: int | None = None
     pid: int | None = None
     exit_code: int | None = None
     error: str | None = None
@@ -44,6 +46,23 @@ class DeleteRunsOut(BaseModel):
     deleted: int
 
 
+class StartRunIn(BaseModel):
+    """Launch request. ``start_from`` stays a plain string: the use
+    case validates it (one source of truth for allowed values)."""
+
+    config_path: str = Field(min_length=1)
+    start_from: str = "teacher"
+    reset_optimizer: bool = False
+
+
+class StopRunIn(BaseModel):
+    force: bool = False
+
+
+class RunLogOut(BaseModel):
+    log: str
+
+
 class HealthOut(BaseModel):
     status: str
     version: str
@@ -61,6 +80,8 @@ def run_out(dto: RunDTO) -> RunOut:
         done_steps=dto.done_steps,
         current_loss=dto.current_loss,
         avg_loss=dto.avg_loss,
+        cache_done=dto.cache_done,
+        cache_total=dto.cache_total,
         pid=dto.pid,
         exit_code=dto.exit_code,
         error=dto.error,

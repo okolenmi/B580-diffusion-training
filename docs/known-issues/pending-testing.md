@@ -2,7 +2,7 @@
 
 # Pending user testing
 
-**One entry pending as of 2026-09-30 (below).** The five earlier
+**Two entries pending as of 2026-09-30 (below).** The five earlier
 fixes were run on real hardware (Intel Arc B580, 12 GB,
 torch 2.12.1+xpu) and moved to [`resolved.md`](resolved.md), each with
 the measured result that confirmed it.
@@ -39,3 +39,11 @@ to `resolved.md` with the numbers.
   confirm the warning's counts on a real dataset, and that
   `keep_incomplete_batches=True` doesn't trigger a new-shape stall on XPU
   (each extra batch shape is a fresh kernel set).
+- **[2026-09-30] Fixed-probe / gradient-alignment diagnostics**
+  (`probe_every_n_steps` etc. on `ManagedLoRATrainerNode`; see
+  [`../training-diagnostics.md`](../training-diagnostics.md)). Unit-tested
+  on toy models only. **Not run on a real SDXL UNet or XPU:** confirm the
+  step-1 record reads rel~1.000 / drift~0 on a real LoRA-injected model
+  (DoRA and NF4 included), measure the probe's real wall/VRAM cost, and
+  that `probe_grad_alignment`'s backward fits next to the training step's
+  VRAM peak at your operating point.

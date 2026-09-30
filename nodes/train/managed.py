@@ -85,6 +85,7 @@ from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
 from .node import TrainerNode
 from .schedule import LRSchedule
 from .step_pipeline import _phase_label
+from .t_probe import TProbe, format_probe_line
 
 
 @dataclass
@@ -719,6 +720,59 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
         print(f"    [residency] optimizer {moment}: vram_reserved={reserved}")
 
 
+class ProbePhase(ManagedStepPhase):
+    """Optional fixed-probe diagnostics (nodes/train/t_probe.py -- read its
+    module docstring for what the numbers mean).
+
+    Runs after BackwardAndOptimizerStepPhase, every micro-step for
+    *collection* (capturing element 0 of the first few batches -- already
+    on device, conditioning already cached in extras -- as probe items,
+    until the probe has n_items) and only at the optimizer-step boundary
+    for *evaluation*: once as soon as the probe is ready (so the first
+    numbers arrive early, when rel ~ 1.0 is the expected answer), then
+    every `every_n_steps` optimizer steps. Position matters for the
+    gradient-alignment diagnostic: after the update (its diagnostic
+    backward would otherwise contaminate the step) and before the next
+    window's ZeroGradPhase, which clears whatever .grad it leaves.
+
+    The result lands in extras["probe_report"] for MonitoringPhase to merge
+    into that step's report (one record per step -- the dashboard needs no
+    new record type) and is also printed here, unconditionally: a probe is
+    an explicit opt-in, and its numbers are useless if they only exist when
+    a monitor is wired.
+    """
+
+    def __init__(self, probe: TProbe, process: DiffusionProcess, every_n_steps: int,
+                 grad_accum: int = 1):
+        self._probe = probe
+        self._process = process
+        self._every = every_n_steps
+        self._grad_accum = grad_accum
+        self._evaluated_once = False
+
+    def run(self, state: ManagedStepState) -> ManagedStepState:
+        ex = state.extras
+        if self._probe.wants_items():
+            self._probe.collect(self._process, ex["x_t"], ex["target"], ex["t"],
+                                ex["sigma"], ex["ctx_emb"], ex["y"])
+        if state.micro + 1 < self._grad_accum:
+            return state
+        if not self._probe.ready():
+            return state
+        due = (state.step + 1) % self._every == 0
+        if not (due or not self._evaluated_once):
+            return state
+        self._evaluated_once = True
+        report, detail = self._probe.evaluate(state.model, self._process)
+        if self._probe.grad_alignment:
+            report.update(self._probe.alignment(
+                state.model, self._process, state.model.trainable_parameters()))
+        if report:
+            ex["probe_report"] = report
+            print(format_probe_line(state.step, report, detail))
+        return state
+
+
 class MonitoringPhase(ManagedStepPhase):
     """Runs last in the step -- after EncodeConditioningPhase and
     BackwardAndOptimizerStepPhase have already released everything
@@ -834,6 +888,11 @@ class MonitoringPhase(ManagedStepPhase):
         if self._optimizer_id:
             report["optimizer"] = self._optimizer_id
         report.update(buckets)
+        probe_report = state.extras.get("probe_report")
+        if probe_report:
+            # probe_*/gc_* from ProbePhase -- present only on the steps a
+            # probe actually ran (absent, not carried, in between).
+            report.update(probe_report)
         if self._bucket_balance is not None:
             # weight_t_*/prob_t_* -- post-update weights (observe() ran
             # above), keys the balance doesn't have stay absent.
@@ -1084,6 +1143,39 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "path is sandboxed by resolve_safe_model_path like every other "
                 "graph-reachable path.",
         ),
+        "probe_every_n_steps": Port(
+            name="probe_every_n_steps", type=int, required=False, default=0,
+            doc="0 disables (default -- zero cost, zero behavior change). >0 runs the "
+                "fixed-probe diagnostic (nodes/train/t_probe.py) every N optimizer steps, "
+                "and once as soon as the probe items are captured: a handful of probe "
+                "images re-noised with FIXED seeded noise at a fixed t grid, forward-only, "
+                "LoRA live vs. the frozen base (LoRA gated to exactly zero). Publishes "
+                "probe_rel_t_low/mid/high (= LoRA loss / base loss on identical inputs; "
+                ">1 means this run made that t region worse than no LoRA), "
+                "probe_drift_t_* and probe_worst_rel, and prints a per-t line. Unlike "
+                "loss_t_* (random samples every step), a change between two probe "
+                "records is the model's change, not sampling noise.",
+        ),
+        "probe_items": Port(
+            name="probe_items", type=int, required=False, default=2,
+            doc="How many training images the probe captures (element 0 of the first "
+                "batches seen). More = less noisy probe, proportionally more forwards.",
+        ),
+        "probe_points_per_bucket": Port(
+            name="probe_points_per_bucket", type=int, required=False, default=2,
+            doc="Fixed t's per low/mid/high third. Forwards per probe = probe_items * 3 * "
+                "this (plus the same again once, for the cached frozen-base reference).",
+        ),
+        "probe_grad_alignment": Port(
+            name="probe_grad_alignment", type=bool, required=False, default=False,
+            doc="Also measure, per t bucket, the gradient norm and the cosine between "
+                "buckets' gradients (gc_* keys): the direct test of whether one t "
+                "region's improvement is being paid for by another. One forward+backward "
+                "per probe point, so use a coarse probe_every_n_steps. Non-fused "
+                "optimizers only (a fused optimizer would apply the diagnostic backward "
+                "as a real update). Read gc_self_* first -- it is the noise floor for "
+                "every cross-bucket cosine.",
+        ),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/"
@@ -1122,6 +1214,13 @@ class ManagedLoRATrainerNode(TrainerNode):
             "save_every_n_steps", self.INPUTS["save_every_n_steps"].default)
         save_prefix: str = inputs.get("save_prefix", self.INPUTS["save_prefix"].default)
         project_layout = inputs.get("project_layout")
+        probe_every: int = inputs.get(
+            "probe_every_n_steps", self.INPUTS["probe_every_n_steps"].default)
+        probe_items: int = inputs.get("probe_items", self.INPUTS["probe_items"].default)
+        probe_points: int = inputs.get(
+            "probe_points_per_bucket", self.INPUTS["probe_points_per_bucket"].default)
+        probe_grad_alignment: bool = inputs.get(
+            "probe_grad_alignment", self.INPUTS["probe_grad_alignment"].default)
 
         # Prewarm step 1/2 -- discover the exact keys and wrap/bind trainer.clip
         # BEFORE registration below: warming itself (step 2/2, after registration)
@@ -1163,6 +1262,14 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "post-backward clip could run -- clipping here would silently do "
                 "nothing. Use a non-fused optimizer node with clipping, or "
                 "grad_clip_max_norm=0 with the fused one.")
+        if probe_every < 0:
+            raise ValueError(f"probe_every_n_steps must be >= 0, got {probe_every}")
+        if probe_every > 0 and probe_grad_alignment and is_fused:
+            raise ValueError(
+                "probe_grad_alignment is incompatible with a fused optimizer: its update "
+                "fires inside backward(), so the diagnostic backward passes would be "
+                "applied as real training steps on probe data. Use a non-fused optimizer "
+                "node, or probe_grad_alignment=False (the forward-only probe is fine).")
         if save_every_n_steps < 0:
             raise ValueError(f"save_every_n_steps must be >= 0, got {save_every_n_steps}")
         if save_every_n_steps > 0 and not str(save_prefix).strip():
@@ -1223,6 +1330,10 @@ class ManagedLoRATrainerNode(TrainerNode):
                                            device_ctx=device_ctx, profile=profile,
                                            grad_accum=grad_accum,
                                            grad_clip_max_norm=grad_clip_max_norm),
+            *([ProbePhase(TProbe(n_items=probe_items, points_per_bucket=probe_points,
+                                 grad_alignment=probe_grad_alignment),
+                          diffusion_process, probe_every, grad_accum=grad_accum)]
+              if probe_every > 0 else []),
             MonitoringPhase(
                 total_steps=steps, device_ctx=device_ctx, coordinator=coordinator,
                 on_step=inputs.get("on_step"), monitor=monitor,

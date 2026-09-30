@@ -226,6 +226,10 @@ the same rule `t_bucket_losses` follows):
   route's `TRAIN_STEP_TIMING=1` report and the main route's `profile`
   report use identical key names. Series are discovered from the first
   timing-bearing report (phase lists aren't known client-side).
+- `probe_*` / `gc_*` -- opt-in fixed-probe and gradient-alignment
+  diagnostics (managed route, `probe_every_n_steps > 0`); present only on
+  the steps a probe ran, not charted, included in the CSV export. See
+  [`docs/training-diagnostics.md`](../training-diagnostics.md).
 - `grad_norm` -- only when gradient clipping is on: the clip already
   measured the pre-clip total norm, so the report key is free. Absent
   means "not measured" (measuring separately would cost a grad pass +

@@ -71,6 +71,7 @@ python /path/to/this-project/convert.py --config my_run.toml
 docs/
 ├── setup.md                 Environment setup, running either pipeline, running tests
 ├── architecture.md          Codebase map: core/manager/server/nodes and how they relate
+├── training-diagnostics.md  Fixed-probe / gradient-alignment tools: is a LoRA damaging a t region?
 ├── review_notes.md          New-reader audit: confusing/stale things flagged for follow-up
 ├── status/
 │   └── progress.md          What's implemented in nodes/ today (fast-read summary; resynced 2026-09-28)

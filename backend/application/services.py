@@ -21,12 +21,16 @@ from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
 from .use_cases.commit_dataset_items import CommitDatasetItems
 from .use_cases.create_dataset import CreateDataset
 from .use_cases.delete_dataset import DeleteDataset
+from .use_cases.delete_graph import DeleteGraph
+from .use_cases.delete_graph_executions import DeleteGraphExecutions
 from .use_cases.delete_runs import DeleteRuns
 from .use_cases.discard_dataset_items import DiscardDatasetItems
 from .use_cases.get_active_run import GetActiveRun
 from .use_cases.get_config import GetConfig
 from .use_cases.get_config_options import GetConfigOptions
 from .use_cases.get_dataset import GetDataset
+from .use_cases.get_graph import GetGraph
+from .use_cases.get_graph_execution import GetGraphExecution
 from .use_cases.get_run import GetRun
 from .use_cases.get_run_log import GetRunLog
 from .use_cases.get_settings import GetSettings
@@ -37,19 +41,28 @@ from .use_cases.list_dataset_items import ListDatasetItems
 from .use_cases.list_dataset_sets import ListDatasetSets
 from .use_cases.list_dataset_tasks import ListDatasetTasks
 from .use_cases.list_datasets import ListDatasets
+from .use_cases.list_graph_executions import ListGraphExecutions
+from .use_cases.list_graphs import ListGraphs
+from .use_cases.list_node_catalog import ListNodeCatalog
 from .use_cases.list_runs import ListRuns
 from .use_cases.make_asset_folder import MakeAssetFolder
+from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.read_config_raw import ReadConfigRaw
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
+from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.reconcile_runs import ReconcileRuns
+from .use_cases.save_graph import SaveGraph
 from .use_cases.start_dataset_task import StartDatasetTask
+from .use_cases.start_graph_execution import StartGraphExecution
 from .use_cases.start_training import StartTraining
 from .use_cases.stop_dataset_task import StopDatasetTask
+from .use_cases.stop_graph_execution import StopGraphExecution
 from .use_cases.stop_training import StopTraining
 from .use_cases.update_config import UpdateConfig
 from .use_cases.update_dataset_item import UpdateDatasetItem
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
+from .use_cases.validate_graph import ValidateGraph
 from .use_cases.write_config_raw import WriteConfigRaw
 
 
@@ -101,6 +114,25 @@ class DatasetServices:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphServices:
+    """Node-graph catalog, validation, execution, history, library (M4)."""
+
+    catalog: ListNodeCatalog
+    diagnostics: NodeDiagnostics
+    validate: ValidateGraph
+    start_execution: StartGraphExecution
+    list_executions: ListGraphExecutions
+    get_execution: GetGraphExecution
+    stop_execution: StopGraphExecution
+    delete_executions: DeleteGraphExecutions
+    reconcile_executions: ReconcileGraphExecutions
+    save_graph: SaveGraph
+    get_graph: GetGraph
+    list_graphs: ListGraphs
+    delete_graph: DeleteGraph
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationServices:
     # runs domain (M1/M2)
     list_runs: ListRuns
@@ -117,5 +149,7 @@ class ApplicationServices:
     assets: AssetServices
     # dataset domain (M3b)
     datasets: DatasetServices
+    # graph domain (M4)
+    graphs: GraphServices
     # shared
     event_bus: EventBus

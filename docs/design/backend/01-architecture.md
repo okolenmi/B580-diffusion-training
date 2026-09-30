@@ -1,6 +1,6 @@
 # 01 -- Backend architecture
 
-Status: **M1, M2, M3a and M3b implemented and tested** (2026-09-30).
+Status: **M1, M2, M3a, M3b and M4 implemented and tested** (2026-09-30).
 This doc is the blueprint `backend/` was built from and the contract
 later milestones must keep.
 
@@ -123,7 +123,7 @@ Rules (each is enforced by review and by the tests):
     file for integration, raw-ASGI calls for end-to-end -- including
     the SSE stream, which must not deadlock through the loop hop.
 
-## 4. File structure (as of M3b)
+## 4. File structure (as of M4)
 
 ```
 backend/
@@ -132,27 +132,34 @@ backend/
 ├── cli.py                    # entry: python -m backend.cli [--host --port --db]
 ├── bootstrap.py              # composition root -> Container (+ startup reconcile)
 ├── domain/                   # imports nothing
-│   ├── value_objects.py      # RunId, RunStatus (state enum)
+│   ├── value_objects.py      # RunId/RunStatus; ExecutionId/GraphStatus
 │   ├── exceptions.py         # DomainError, InvalidTransitionError
-│   ├── events.py             # DomainEvent + lifecycle + RunProgressed telemetry
-│   └── entities/run.py       # Run: state machine + event buffer
+│   ├── events.py             # DomainEvent + lifecycle + graph execution events
+│   ├── graph.py              # GraphDefinition/GraphNodeSpec/GraphEdgeSpec/NodeResult
+│   └── entities/             # run.py (Run state machine); graph_execution.py
+│                             # (GraphExecution: queued->running->terminal + CAS)
 ├── application/
-│   ├── errors.py             # 17 errors, each with a code -> HTTP status
-│   ├── dto.py                # RunDTO + config/settings/asset/dataset shapes
+│   ├── errors.py             # 24 errors, each with a code -> HTTP status
+│   ├── dto.py                # Run/config/settings/asset/dataset/graph shapes
 │   ├── services.py           # ApplicationServices + Config/Settings/Asset/
-│   │                         # Dataset groups
+│   │                         # Dataset/Graph groups
 │   ├── supervisor.py         # RunSupervisor: one daemon thread per run
+│   ├── graph_supervisor.py   # GraphExecutionSupervisor: one thread per graph run
 │   ├── ports/                # ABCs: RunRepository, EventBus, Clock,
 │   │                         # TrainingGateway, ConfigInspector, ConfigFiles,
 │   │                         # ConfigOptions, SettingsStore, AssetStore,
-│   │                         # DatasetLibrary, DatasetTasks,
-│   │                         # DatasetTaskGateway, RunArtifacts, ProgressSource
+│   │                         # DatasetLibrary, DatasetTasks, DatasetTaskGateway,
+│   │                         # RunArtifacts, ProgressSource, GraphCatalog,
+│   │                         # GraphRuntime, GraphExecutionRepository, GraphLibrary
 │   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
 │                             # raw x2/options/start-options); settings (Get/
 │                             # Update); assets (List/Browse/MakeFolder/Upload/
 │                             # Inspect); datasets (List/Get/Create/Delete, items
 │                             # x4, sets/commit, tasks list/start/stop,
-│                             # ReconcileDatasetTasks)
+│                             # ReconcileDatasetTasks); graphs (catalog/diagnostics,
+│                             # validate/start/list/get/stop/delete executions,
+│                             # ReconcileGraphExecutions, library save/get/list/
+│                             # delete)
 ├── infrastructure/
 │   ├── clock.py              # SystemClock
 │   ├── workspace.py          # WorkspaceLayout (settings_kv tier + paths bridge)
@@ -172,7 +179,13 @@ backend/
 │   │                         # kind is catalog-only)
 │   ├── directory_run_artifacts.py
 │   ├── jsonl_progress_source.py  # offset-tailed progress reader
-│   ├── persistence/          # SqliteDatabase + SqliteRunRepository + migrations/
+│   ├── graph/                # discovery.py (pkgutil walk -> NodeRegistry),
+│   │                         # introspect.py (class -> NodeInfo), catalog.py
+│   │                         # (GraphCatalog), runtime.py (GraphRuntime:
+│   │                         # validate + execute over real Node classes)
+│   ├── persistence/          # SqliteDatabase + SqliteRunRepository +
+│   │                         # SqliteGraphExecutionRepository/SqliteGraphLibrary
+│   │                         # + migrations/ (001..005_graphs.sql)
 │   └── events/               # CallbackEventBus (thread-safe)
 ├── presentation/
 │   ├── app.py                # create_app(services) factory
@@ -181,12 +194,12 @@ backend/
 │   ├── schemas.py            # pydantic response models + *_out mappers
 │   ├── sse.py                # EventBus -> text/event-stream bridge
 │   └── api/                  # health.py, runs.py, config.py, settings.py,
-│                             # assets.py, datasets.py, events.py
+│                             # assets.py, datasets.py, graphs.py, events.py
 └── tests/                    # standalone check() scripts + run_all.py
 ```
 
-Later milestones add: the nodegraph subsystem behind a `GraphRuntime`
-port (M4).
+Later milestones add: the frontend decision + migration strategy
+(M5).
 
 Deliberate bridges to the repo (adapter-owned, never leaked past
 infrastructure): `workspace.py`/`path_tiers.py` import `paths` so
@@ -200,12 +213,16 @@ dataset library bridges to `manager.db`/`manager.dataset` lazily inside
 `create`/`commit` only (schema and membership semantics must stay
 byte-identical to what the trainer writes -- torch loads on those two
 calls, never on reads), and the dataset task worker imports
-`manager.builder` in the child process only. Import purity holds for
-every backend module itself.
+`manager.builder` in the child process only. The graph domain's one
+lazy bridge is the memory releaser inside `ReflectedGraphRuntime`
+(`core.comfy_setup.xpu_empty_cache`, pulled on the first *run*, never
+at startup); discovery itself walks `nodes/` through `pkgutil` (the
+modules are the project's own, stdlib-plus-torch as they come).
+Import purity holds for every backend module itself.
 
 ## 5. API contract (v1, clean-break)
 
-Endpoints as of M3b:
+Endpoints as of M4:
 
 | Method | Path | Use case |
 |--------|------|----------|
@@ -243,6 +260,18 @@ Endpoints as of M3b:
 | GET | `/api/v1/datasets/{name}/tasks?active_only=` | `ListDatasetTasks` (sweeps dead rows) |
 | POST | `/api/v1/datasets/{name}/tasks` | `StartDatasetTask` (body: kind/image_dir/model/flags) -> 201; 409 `dataset_task_active` |
 | POST | `/api/v1/datasets/{name}/tasks/{id}/stop` | `StopDatasetTask` (SIGKILL; 409 if terminal) |
+| GET | `/api/v1/graphs/nodes?refresh=` | `ListNodeCatalog` -- palette (auto-discovered classes by domain; `refresh=true` re-walks `nodes/`) |
+| POST | `/api/v1/graphs/nodes/{class}/diagnostics` | `NodeDiagnostics` (404 unknown class; 400 `node_diagnostics_failed`) |
+| POST | `/api/v1/graphs/validate` | `ValidateGraph` -- full issue list, always 200 (`ok=false` = run would refuse) |
+| POST | `/api/v1/graphs/run` | `StartGraphExecution` -> 201; 422 `graph_invalid` (all issues); 409 `graph_execution_active` (single-active) |
+| GET | `/api/v1/graphs/executions?limit=` | `ListGraphExecutions` (1..500, newest first) |
+| DELETE | `/api/v1/graphs/executions` | `DeleteGraphExecutions` (`{deleted}`) |
+| GET | `/api/v1/graphs/executions/{id}` | `GetGraphExecution` (results + snapshot; 404) |
+| POST | `/api/v1/graphs/executions/{id}/stop` | `StopGraphExecution` (409 `graph_execution_not_active` if terminal) |
+| GET | `/api/v1/graphs/library` | `ListGraphs` (summaries, most recently updated first) |
+| PUT | `/api/v1/graphs/library/{name}` | `SaveGraph` -> 201 first save / 200 replace (verbatim payload, no class validation; 422 `invalid_query` on bad name) |
+| GET | `/api/v1/graphs/library/{name}` | `GetGraph` (404 `graph_not_found`) |
+| DELETE | `/api/v1/graphs/library/{name}` | `DeleteGraph` (404 `graph_not_found`) |
 | GET | `/api/v1/events` | SSE stream of domain events |
 
 `/runs/active` is registered before `/runs/{id}` so the path param
@@ -322,16 +351,24 @@ Codes map to statuses centrally: `run_not_found` 404,
 `config_not_found` 404, `config_invalid` 422, `run_already_active`
 409, `run_not_running` 409, `no_active_run` 404,
 `training_launch_failed` 500, `settings_invalid` 400 (`details` is a
-`{key: message}` map), `http_{status}` for transport-level errors,
+`{key: message}` map), graph codes `graph_invalid` 422 (its `details`
+is the full issue list), `graph_execution_not_found` 404,
+`graph_execution_active` 409, `graph_execution_not_active` 409,
+`node_class_not_found` 404, `node_diagnostics_failed` 400,
+`graph_not_found` 404, `http_{status}` for transport-level errors,
 `internal_error` 500 (traceback logged, message generic).
 
 **SSE**: `data: {json}` frames where json carries `type`
 (`stream_opened`, `run_created`, `run_started`, `run_completed`,
-`run_failed`, `run_cancelled`, `runs_deleted`, `run_progressed`),
+`run_failed`, `run_cancelled`, `runs_deleted`, `run_progressed`,
+plus the graph set `graph_execution_queued/started/progressed/
+finished/failed/stopped`, `graph_executions_deleted`),
 `occurred_at`, and the event's fields; `: ping` heartbeat every 15 s.
 `run_progressed` is telemetry: published by the supervisor per
 progress sample, never buffered by the entity (`Run.record_progress`
-emits nothing -- that invariant is test-pinned).
+emits nothing -- that invariant is test-pinned); the graph twin
+(`graph_execution_progressed`, one per completed node) is published by
+the graph supervisor after the row CAS lands, not by the entity.
 
 ## 6. Concurrency model
 
@@ -364,6 +401,19 @@ emits nothing -- that invariant is test-pinned).
   `/proc/<pid>/cmdline` for `core.cli` against PID reuse. Progress is
   read from the run's `log.progress.jsonl` by an offset-tailed reader
   (state per path; a truncated file resets its offset).
+* **Graph executions (M4)**: `GraphExecutionSupervisor` runs one
+  daemon thread per run against the same CAS rules
+  (`update_if_status` on `graph_executions`); `StartGraphExecution`
+  holds a lock across validate + active-check + insert, and **one
+  execution may be active at a time** (409
+  `graph_execution_active`) -- deliberate: one B580, and graph nodes
+  can build in-process training loops. Cancellation is cooperative
+  twice: the stop use case sets the thread's event first, then CASes
+  `queued|running -> stopped` (3 refetch attempts for the claim
+  race); the executor checks the event between nodes and passes it
+  into every node's `ExecutionContext`. `ReconcileGraphExecutions`
+  sweeps non-terminal rows at composition time with the same
+  "server stopped/restarted" reasons.
 
 ## 7. Milestones
 
@@ -373,7 +423,7 @@ emits nothing -- that invariant is test-pinned).
 | M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | **done** |
 | M3a | Config (read/PATCH/raw/options/start-options), settings store (atomic, tiered), assets (catalog/browse/mkdir/upload/inspect) | **done** |
 | M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | **done** |
-| M4 | Nodegraph subsystem (registry, introspect, executor, presets) behind a `GraphRuntime` port | planned |
+| M4 | Graph subsystem: auto-discovery (`pkgutil` -> `NodeRegistry`), reflection palette, authoritative `validate` (issue-code table), threaded executor + CAS history, single-active runs, server-side saved-graph library (`05-graph-runtime.md`) | **done** |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
 
 ## 8. Running it
@@ -382,9 +432,10 @@ emits nothing -- that invariant is test-pinned).
 # server (own port; old server keeps 8765)
 python -m backend.cli --port 8766
 
-# tests (14 files: domain, repository, use cases, supervisor, event bus,
-# training adapter, start/stop, end-to-end API+SSE, config, settings,
-# assets, dataset library, dataset tasks, dataset API)
+# tests (19 files: domain, repositories, use cases, supervisors, event
+# bus, training adapter, start/stop, end-to-end API+SSE, config,
+# settings, assets, dataset library/tasks/API, graph discovery/catalog/
+# runtime/execution/API)
 python backend/tests/run_all.py
 ```
 

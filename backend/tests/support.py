@@ -14,6 +14,8 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -23,17 +25,24 @@ from backend.application.ports.config_inspector import (
     ConfigSummary,
     StartOption,
 )
+from backend.application.ports.graph_execution_repository import (
+    GraphExecutionRepository,
+)
+from backend.application.ports.graph_library import GraphLibrary
+from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.run_repository import RunRepository
 from backend.application.ports.training_gateway import (
     TrainingGateway,
     TrainingLaunch,
 )
 from backend.application.errors import ConfigNotFoundError
+from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
     DatasetServices,
+    GraphServices,
     SettingsServices,
 )
 from backend.application.supervisor import RunSupervisor
@@ -43,12 +52,16 @@ from backend.application.use_cases import (
     CommitDatasetItems,
     CreateDataset,
     DeleteDataset,
+    DeleteGraph,
+    DeleteGraphExecutions,
     DeleteRuns,
     DiscardDatasetItems,
     GetActiveRun,
     GetConfig,
     GetConfigOptions,
     GetDataset,
+    GetGraph,
+    GetGraphExecution,
     GetRun,
     GetRunLog,
     GetSettings,
@@ -59,19 +72,28 @@ from backend.application.use_cases import (
     ListDatasetSets,
     ListDatasetTasks,
     ListDatasets,
+    ListGraphExecutions,
+    ListGraphs,
+    ListNodeCatalog,
     ListRuns,
     MakeAssetFolder,
+    NodeDiagnostics,
     ReadConfigRaw,
     ReconcileDatasetTasks,
+    ReconcileGraphExecutions,
     ReconcileRuns,
+    SaveGraph,
     StartDatasetTask,
+    StartGraphExecution,
     StartTraining,
     StopDatasetTask,
+    StopGraphExecution,
     StopTraining,
     UpdateConfig,
     UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
+    ValidateGraph,
     WriteConfigRaw,
 )
 from backend.domain.entities.run import Run
@@ -90,10 +112,18 @@ from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
+from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
+from backend.infrastructure.graph.discovery import NodeRegistry
+from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.jsonl_progress_source import JsonlProgressSource as _Jsonl
+from backend.infrastructure.persistence.graph_execution_repository import (
+    SqliteGraphExecutionRepository,
+)
+from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
 from backend.infrastructure.workspace import WorkspaceLayout
+from nodes.core import Node, NodePreset, Port
 
 FAILURES: list[str] = []
 
@@ -352,6 +382,236 @@ class FakeConfigInspector(ConfigInspector):
         return self.descriptions.get(key, self.default_description)
 
 
+# --------------------------------------------------------------------------
+# Graph fixture nodes (M4)
+# --------------------------------------------------------------------------
+#
+# Defined here rather than under nodes/ because the catalog/runtime/
+# execution tests want deterministic shapes -- every validation issue
+# code has a class that can trigger it -- without walking all 94 real
+# modules. stdlib-only, same as nodes.core itself, so no test in this
+# file needs torch.
+
+
+class SumNode(Node):
+    """Add two numbers."""
+
+    INPUTS = {
+        "a": Port(name="a", type=float, doc="first addend"),
+        "b": Port(name="b", type=float, doc="second addend"),
+    }
+    OUTPUTS = {"sum": Port(name="sum", type=float, doc="a + b")}
+
+    def build(self, a, b):
+        return {"sum": a + b}
+
+
+class ScaleNode(Node):
+    """Multiply or divide (closed ``choices`` set for invalid_choice)."""
+
+    INPUTS = {
+        "value": Port(name="value", type=float, doc="input value"),
+        "factor": Port(name="factor", type=float, required=False, default=2.0),
+        "mode": Port(
+            name="mode", type=str, required=False, default="mul",
+            choices=("mul", "div"),
+        ),
+    }
+    OUTPUTS = {"scaled": Port(name="scaled", type=float)}
+
+    def build(self, value, factor=2.0, mode="mul"):
+        return {"scaled": value * factor if mode == "mul" else value / factor}
+
+
+class LabelNode(Node):
+    """String output -- str -> float wiring is an incompatible_types issue."""
+
+    INPUTS = {"text": Port(name="text", type=str)}
+    OUTPUTS = {"label": Port(name="label", type=str)}
+
+    def build(self, text):
+        return {"label": text}
+
+
+class ObjectNode(Node):
+    """Non-JSON output: reported as a ``_type``/``_repr`` summary."""
+
+    INPUTS = {"token": Port(name="token", type=str, required=False, default="x")}
+    OUTPUTS = {"obj": Port(name="obj", type=Any)}
+
+    def build(self, token="x"):
+        return {"obj": object()}
+
+
+class BoomNode(Node):
+    """build() always raises -- a node failure is a normal outcome."""
+
+    INPUTS = {"trigger": Port(name="trigger", type=bool, required=False, default=True)}
+    OUTPUTS = {"never": Port(name="never", type=bool)}
+
+    def build(self, trigger=True):
+        raise RuntimeError("boom")
+
+
+class PickyNode(Node):
+    """Shape hook that raises -- reported as shape_resolution_failed."""
+
+    INPUTS = {"x": Port(name="x", type=float)}
+    OUTPUTS = {"y": Port(name="y", type=float)}
+
+    @classmethod
+    def resolve_inputs(cls, params: dict):
+        raise ValueError("shape unavailable")
+
+    def build(self, x):
+        return {"y": x}
+
+
+class DiagnosingNode(Node):
+    """diagnostics() overridden -- has_diagnostics=True."""
+
+    INPUTS = {"path": Port(name="path", type=str, required=False, default="")}
+    OUTPUTS = {"ok": Port(name="ok", type=bool)}
+
+    def build(self, path=""):
+        return {"ok": True}
+
+    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
+        return {"path": [f"looked at {inputs.get('path')!r}"]}
+
+
+class BadDiagnosticsNode(Node):
+    """diagnostics() raises -- 400 node_diagnostics_failed, never 500."""
+
+    INPUTS = {"x": Port(name="x", type=float, required=False, default=0.0)}
+    OUTPUTS = {"y": Port(name="y", type=float)}
+
+    def build(self, x=0.0):
+        return {"y": x}
+
+    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
+        raise ValueError("cannot resolve mid-edit path")
+
+
+class PresetChoiceNode(Node):
+    """Dynamic kind: presets are its palette payload."""
+
+    NODE_KIND = "dynamic"
+
+    INPUTS = {
+        "source": Port(name="source", type=str),
+        "strength": Port(name="strength", type=float, required=False, default=1.0),
+    }
+    OUTPUTS = {"result": Port(name="result", type=str)}
+
+    @classmethod
+    def list_presets(cls) -> list[NodePreset]:
+        return [
+            NodePreset(
+                name="identity",
+                required_inputs={"source": Port(name="source", type=str)},
+                required_outputs={"result": Port(name="result", type=str)},
+            ),
+        ]
+
+    def build(self, source, strength=1.0):
+        return {"result": source}
+
+
+class PathNode(Node):
+    """Path-typed input: str accepted (editors send strings), int not."""
+
+    INPUTS = {
+        "path": Port(
+            name="path", type=Path, required=False, default=None,
+            path_kind="checkpoint",
+        )
+    }
+    OUTPUTS = {"exists": Port(name="exists", type=bool)}
+
+    def build(self, path=None):
+        return {"exists": True}
+
+
+class SlowNode(Node):
+    """Sleeps briefly -- gives stop/single-active tests a live window."""
+
+    INPUTS = {
+        "seconds": Port(name="seconds", type=float, required=False, default=0.3)
+    }
+    OUTPUTS = {"slept": Port(name="slept", type=float)}
+
+    def build(self, seconds=0.3):
+        time.sleep(seconds)
+        return {"slept": seconds}
+
+
+class Handle:
+    """Marker base classes: edge compatibility is a real issubclass
+    check on real class objects, so SubHandle satisfies a Handle input."""
+
+
+class SubHandle(Handle):
+    pass
+
+
+class EmitHandleNode(Node):
+    """Source node with a class-typed output (Handle)."""
+
+    INPUTS = {}
+    OUTPUTS = {"handle": Port(name="handle", type=Handle)}
+
+    def build(self):
+        return {"handle": Handle()}
+
+
+class EmitSubHandleNode(Node):
+    """Source node whose output is a Handle *subclass*."""
+
+    INPUTS = {}
+    OUTPUTS = {"handle": Port(name="handle", type=SubHandle)}
+
+    def build(self):
+        return {"handle": SubHandle()}
+
+
+class TakeHandleNode(Node):
+    """Class-typed input (Handle) -- accepts SubHandle outputs."""
+
+    INPUTS = {"handle": Port(name="handle", type=Handle)}
+    OUTPUTS = {"ok": Port(name="ok", type=bool)}
+
+    def build(self, handle):
+        return {"ok": isinstance(handle, Handle)}
+
+
+FIXTURE_NODES: dict[str, type] = {
+    cls.__name__: cls
+    for cls in (
+        SumNode,
+        ScaleNode,
+        LabelNode,
+        ObjectNode,
+        BoomNode,
+        PickyNode,
+        DiagnosingNode,
+        BadDiagnosticsNode,
+        PresetChoiceNode,
+        PathNode,
+        SlowNode,
+        EmitHandleNode,
+        EmitSubHandleNode,
+        TakeHandleNode,
+    )
+}
+
+
+def fixture_graph_registry() -> NodeRegistry:
+    """A NodeRegistry over the fixture classes above (no nodes/ walk,
+    no import errors, deterministic ordering)."""
+    return NodeRegistry(scan=lambda: (dict(FIXTURE_NODES), ()))
+
+
 def build_services(
     *,
     runs: RunRepository | None = None,
@@ -371,6 +631,11 @@ def build_services(
     dataset_library: SqliteDatasetLibrary | None = None,
     dataset_tasks: SqliteDatasetTasks | None = None,
     dataset_gateway: DatasetTaskGateway | None = None,
+    graph_registry: NodeRegistry | None = None,
+    graph_runtime: GraphRuntime | None = None,
+    graph_executions: GraphExecutionRepository | None = None,
+    graph_library: GraphLibrary | None = None,
+    graph_supervisor: GraphExecutionSupervisor | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
@@ -379,7 +644,11 @@ def build_services(
     over temp locations -- they are cheap, and exercising the real TOML /
     SQLite / filesystem code paths is the point of these tests. The
     dataset *gateway* is fake by default: spawning a real child that
-    imports torch is nobody's unit test.
+    imports torch is nobody's unit test. The graph domain defaults to
+    the *fixture* node classes (a NodeRegistry that skips the nodes/
+    walk) with the real SQLite execution/library tables and a no-op
+    memory releaser -- validation and execution run for real, the GPU
+    never does.
     """
     runs = runs if runs is not None else InMemoryRunRepository()
     events = events if events is not None else RecordingEventBus()
@@ -415,6 +684,27 @@ def build_services(
         config_files = CoreConfigFiles()
     if config_options is None:
         config_options = PydanticConfigOptions()
+    if graph_registry is None:
+        graph_registry = fixture_graph_registry()
+    graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    if graph_runtime is None:
+        graph_runtime = ReflectedGraphRuntime(
+            graph_registry, memory_releaser=lambda: None
+        )
+    if graph_executions is None or graph_library is None:
+        graphs_db = SqliteDatabase(project_root / "test-graphs.db")
+        graphs_db.initialize()
+        if graph_executions is None:
+            graph_executions = SqliteGraphExecutionRepository(graphs_db)
+        if graph_library is None:
+            graph_library = SqliteGraphLibrary(graphs_db)
+    if graph_supervisor is None:
+        graph_supervisor = GraphExecutionSupervisor(
+            executions=graph_executions,
+            runtime=graph_runtime,
+            events=events,
+            clock=clock,
+        )
     if supervisor is None:
         supervisor = RunSupervisor(
             runs=runs,
@@ -495,6 +785,36 @@ def build_services(
             reconcile_tasks=ReconcileDatasetTasks(
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
+        ),
+        graphs=GraphServices(
+            catalog=ListNodeCatalog(catalog=graph_catalog),
+            diagnostics=NodeDiagnostics(catalog=graph_catalog),
+            validate=ValidateGraph(runtime=graph_runtime),
+            start_execution=StartGraphExecution(
+                executions=graph_executions,
+                runtime=graph_runtime,
+                events=events,
+                supervisor=graph_supervisor,
+                clock=clock,
+            ),
+            list_executions=ListGraphExecutions(executions=graph_executions),
+            get_execution=GetGraphExecution(executions=graph_executions),
+            stop_execution=StopGraphExecution(
+                executions=graph_executions,
+                events=events,
+                supervisor=graph_supervisor,
+                clock=clock,
+            ),
+            delete_executions=DeleteGraphExecutions(
+                executions=graph_executions, events=events
+            ),
+            reconcile_executions=ReconcileGraphExecutions(
+                executions=graph_executions, events=events, clock=clock
+            ),
+            save_graph=SaveGraph(library=graph_library),
+            get_graph=GetGraph(library=graph_library),
+            list_graphs=ListGraphs(library=graph_library),
+            delete_graph=DeleteGraph(library=graph_library),
         ),
         event_bus=events,
     )
@@ -721,7 +1041,9 @@ async def _asgi_call(
         "http_version": "1.1",
         "method": method,
         "scheme": "http",
-        "path": raw_path,
+        # ASGI spec: scope["path"] is the *decoded* path (what uvicorn
+        # hands the app); raw_path keeps the original bytes.
+        "path": unquote(raw_path),
         "raw_path": raw_path.encode(),
         "query_string": query.encode(),
         "root_path": "",

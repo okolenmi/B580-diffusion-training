@@ -10,15 +10,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..application.dto import (
     DatasetDetail,
+    GraphExecutionDTO,
+    GraphExecutionSummaryDTO,
     RunDTO,
     StartDatasetTaskCommand,
     StartOptionsResult,
 )
 from ..application.ports.asset_store import AssetCatalog, AssetBrowse
+from ..application.ports.graph_catalog import CatalogSnapshot, NodeInfo, PortInfo
+from ..application.ports.graph_runtime import GraphIssue
+from ..domain.graph import GRAPH_FORMAT, GraphDefinition, GraphEdgeSpec, GraphNodeSpec
 from ..application.ports.dataset_library import (
     DatasetInfo,
     DatasetItem,
@@ -28,7 +33,7 @@ from ..application.ports.dataset_library import (
 )
 from ..application.ports.dataset_tasks import DatasetTask
 from ..application.ports.settings_store import SettingsChanges, SettingsView
-from ..domain.value_objects import RunStatus
+from ..domain.value_objects import GraphStatus, RunStatus
 
 
 class RunOut(BaseModel):
@@ -554,4 +559,342 @@ def dataset_tasks_out(result) -> DatasetTasksOut:
     """``result``: application ``DatasetTaskListResult``."""
     return DatasetTasksOut(
         tasks=[dataset_task_out(t) for t in result.tasks], count=result.count
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph domain (M4) -- docs/design/backend/05-graph-runtime.md section 6
+# ---------------------------------------------------------------------------
+
+
+class GraphNodeIn(BaseModel):
+    """One submitted node. ``id``/``class_name`` are *not* constrained
+    here: empty/duplicate ids and unknown classes are graph validation
+    issues (complete, localized, listed together) -- a 422 body rejection
+    would truncate that report to one field error."""
+
+    id: str
+    class_name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphEdgeIn(BaseModel):
+    from_node: str
+    from_port: str
+    to_node: str
+    to_port: str
+
+
+class GraphRunIn(BaseModel):
+    """Submission body for ``/validate`` and ``/run``."""
+
+    nodes: list[GraphNodeIn]
+    edges: list[GraphEdgeIn] = Field(default_factory=list)
+
+    def to_definition(self) -> GraphDefinition:
+        return GraphDefinition(
+            nodes=tuple(
+                GraphNodeSpec(id=n.id, class_name=n.class_name, params=dict(n.params))
+                for n in self.nodes
+            ),
+            edges=tuple(
+                GraphEdgeSpec(
+                    from_node=e.from_node,
+                    from_port=e.from_port,
+                    to_node=e.to_node,
+                    to_port=e.to_port,
+                )
+                for e in self.edges
+            ),
+        )
+
+
+class DiagnosticsIn(BaseModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortOut(BaseModel):
+    """One declared port: JSON ``default`` *and* ``default_repr`` so
+    consumers never have to parse reprs (and never lose non-JSON
+    defaults). Outputs carry the identity defaults (no default, no
+    hints)."""
+
+    name: str
+    type: str
+    required: bool
+    doc: str = ""
+    type_mro: list[str] = Field(default_factory=list)
+    default: Any = None
+    default_repr: str | None = None
+    path_kind: str | None = None
+    choices: list[str] | None = None
+    visible_when: list[Any] | None = None
+    widget_only: bool = False
+
+
+class PresetOut(BaseModel):
+    name: str
+    required_inputs: list[PortOut]
+    required_outputs: list[PortOut]
+
+
+class GraphNodeOut(BaseModel):
+    """One palette entry, reflected from the real class."""
+
+    class_name: str
+    display_name: str
+    domain: str
+    module: str
+    doc: str = ""
+    bases: list[str]
+    inputs: list[PortOut]
+    outputs: list[PortOut]
+    node_kind: str
+    presets: list[PresetOut] | None = None
+    has_diagnostics: bool = False
+
+
+class CatalogLoadErrorOut(BaseModel):
+    module: str
+    message: str
+
+
+class GraphCatalogOut(BaseModel):
+    count: int
+    domains: dict[str, list[GraphNodeOut]]
+    load_errors: list[CatalogLoadErrorOut]
+
+
+class DiagnosticsOut(BaseModel):
+    messages: dict[str, list[str]]
+
+
+class GraphIssueOut(BaseModel):
+    severity: str
+    code: str
+    message: str
+    node_id: str | None = None
+    edge_index: int | None = None
+    param: str | None = None
+
+
+class ValidateOut(BaseModel):
+    """Always 200: ``ok=false`` means the run endpoint would reject
+    this submission (422 with these same issues)."""
+
+    ok: bool
+    issues: list[GraphIssueOut]
+
+
+class NodeResultOut(BaseModel):
+    node_id: str
+    ok: bool
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    duration_ms: float = 0.0
+
+
+class ExecutionSummaryOut(BaseModel):
+    execution_id: int
+    status: GraphStatus
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ExecutionOut(ExecutionSummaryOut):
+    results: list[NodeResultOut]
+    graph: dict[str, Any]
+
+
+class ExecutionListOut(BaseModel):
+    executions: list[ExecutionSummaryOut]
+    count: int
+
+
+class DeleteExecutionsOut(BaseModel):
+    deleted: int
+
+
+class LibraryGraphIn(BaseModel):
+    """``PUT /library/{name}``: a graph payload plus an optional
+    description. Unknown top-level keys ride along verbatim (the
+    library stores what was submitted; validation happens at run)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    format: int | None = None
+    nodes: list[GraphNodeIn] = Field(default_factory=list)
+    edges: list[GraphEdgeIn] = Field(default_factory=list)
+    description: str = ""
+
+    def to_payload(self) -> dict:
+        payload = dict(self.model_extra or {})
+        payload["format"] = self.format if self.format is not None else GRAPH_FORMAT
+        payload["nodes"] = [n.model_dump() for n in self.nodes]
+        payload["edges"] = [e.model_dump() for e in self.edges]
+        return payload
+
+
+class SavedGraphOut(BaseModel):
+    name: str
+    description: str = ""
+    graph: dict[str, Any]
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedGraphSummaryOut(BaseModel):
+    name: str
+    description: str = ""
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedGraphListOut(BaseModel):
+    graphs: list[SavedGraphSummaryOut]
+    count: int
+
+
+class DeleteGraphOut(BaseModel):
+    deleted: bool
+
+
+def port_out(port: PortInfo) -> PortOut:
+    return PortOut(
+        name=port.name,
+        type=port.type,
+        required=port.required,
+        doc=port.doc,
+        type_mro=list(port.type_mro),
+        default=port.default,
+        default_repr=port.default_repr,
+        path_kind=port.path_kind,
+        choices=list(port.choices) if port.choices is not None else None,
+        visible_when=list(port.visible_when) if port.visible_when is not None else None,
+        widget_only=port.widget_only,
+    )
+
+
+def graph_node_out(info: NodeInfo) -> GraphNodeOut:
+    presets = (
+        None
+        if info.presets is None
+        else [
+            PresetOut(
+                name=preset.name,
+                required_inputs=[port_out(p) for p in preset.required_inputs],
+                required_outputs=[port_out(p) for p in preset.required_outputs],
+            )
+            for preset in info.presets
+        ]
+    )
+    return GraphNodeOut(
+        class_name=info.class_name,
+        display_name=info.display_name,
+        domain=info.domain,
+        module=info.module,
+        doc=info.doc,
+        bases=list(info.bases),
+        inputs=[port_out(p) for p in info.inputs],
+        outputs=[port_out(p) for p in info.outputs],
+        node_kind=info.node_kind,
+        presets=presets,
+        has_diagnostics=info.has_diagnostics,
+    )
+
+
+def graph_catalog_out(snapshot: CatalogSnapshot) -> GraphCatalogOut:
+    return GraphCatalogOut(
+        count=len(snapshot.nodes),
+        domains={
+            domain: [graph_node_out(node) for node in nodes]
+            for domain, nodes in snapshot.domains.items()
+        },
+        load_errors=[
+            CatalogLoadErrorOut(module=e.module, message=e.message)
+            for e in snapshot.load_errors
+        ],
+    )
+
+
+def graph_issue_out(issue: GraphIssue) -> GraphIssueOut:
+    return GraphIssueOut(
+        severity=issue.severity,
+        code=issue.code,
+        message=issue.message,
+        node_id=issue.node_id,
+        edge_index=issue.edge_index,
+        param=issue.param,
+    )
+
+
+def execution_summary_out(dto: GraphExecutionSummaryDTO) -> ExecutionSummaryOut:
+    return ExecutionSummaryOut(
+        execution_id=dto.execution_id,
+        status=dto.status,
+        error=dto.error,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+        started_at=dto.started_at,
+        finished_at=dto.finished_at,
+    )
+
+
+def execution_out(dto: GraphExecutionDTO) -> ExecutionOut:
+    return ExecutionOut(
+        **execution_summary_out(dto).model_dump(),
+        results=[
+            NodeResultOut(
+                node_id=result.node_id,
+                ok=result.ok,
+                outputs=dict(result.outputs),
+                error=result.error,
+                duration_ms=result.duration_ms,
+            )
+            for result in dto.results
+        ],
+        graph=dict(dto.graph),
+    )
+
+
+def execution_list_out(result) -> ExecutionListOut:
+    """``result``: application ``ExecutionListResult``."""
+    return ExecutionListOut(
+        executions=[execution_summary_out(e) for e in result.executions],
+        count=result.count,
+    )
+
+
+def saved_graph_out(dto) -> SavedGraphOut:
+    """``dto``: application ``SavedGraphDTO``."""
+    return SavedGraphOut(
+        name=dto.name,
+        description=dto.description,
+        graph=dict(dto.graph),
+        node_count=dto.node_count,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+    )
+
+
+def saved_graph_summary_out(dto) -> SavedGraphSummaryOut:
+    return SavedGraphSummaryOut(
+        name=dto.name,
+        description=dto.description,
+        node_count=dto.node_count,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+    )
+
+
+def saved_graph_list_out(result) -> SavedGraphListOut:
+    """``result``: application ``SavedGraphListResult``."""
+    return SavedGraphListOut(
+        graphs=[saved_graph_summary_out(g) for g in result.graphs],
+        count=result.count,
     )

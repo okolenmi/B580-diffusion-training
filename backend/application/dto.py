@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..domain.entities.run import Run
-from ..domain.value_objects import RunStatus
+from ..domain.value_objects import GraphStatus, RunStatus
 from .ports.config_inspector import StartOption
 
 
@@ -227,3 +227,149 @@ class StartDatasetTaskCommand:
     model_type: str = "eps"
     seed: int = 42
     max_aspect_ratio: float = 2.0
+
+
+# --------------------------------------------------------------------------
+# Graphs (M4)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class GraphExecutionDTO:
+    """Full projection of one execution: identity, lifecycle, per-node
+    results, and the graph snapshot of what actually ran."""
+
+    execution_id: int
+    status: GraphStatus
+    error: str | None
+    results: tuple  # tuple[NodeResult, ...]
+    graph: dict  # {"format": 1, "nodes": [...], "edges": [...]}
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphExecutionSummaryDTO:
+    """List-page projection: no results, no graph snapshot."""
+
+    execution_id: int
+    status: GraphStatus
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+def to_execution_dto(execution: "GraphExecution") -> GraphExecutionDTO:
+    """Map a domain entity to its full read-side projection."""
+    if execution.id is None:
+        raise ValueError("cannot project an unpersisted execution (no id yet)")
+    return GraphExecutionDTO(
+        execution_id=execution.id,
+        status=execution.status,
+        error=execution.error,
+        results=execution.results,
+        graph=execution.graph.as_dict(),
+        created_at=execution.created_at,
+        updated_at=execution.updated_at,
+        started_at=execution.started_at,
+        finished_at=execution.finished_at,
+    )
+
+
+def to_execution_summary_dto(execution: "GraphExecution") -> GraphExecutionSummaryDTO:
+    if execution.id is None:
+        raise ValueError("cannot project an unpersisted execution (no id yet)")
+    return GraphExecutionSummaryDTO(
+        execution_id=execution.id,
+        status=execution.status,
+        error=execution.error,
+        created_at=execution.created_at,
+        updated_at=execution.updated_at,
+        started_at=execution.started_at,
+        finished_at=execution.finished_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionListResult:
+    executions: tuple  # tuple[GraphExecutionSummaryDTO, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class GraphValidationResult:
+    """``ok`` is "no error-severity issue"; warnings never block."""
+
+    ok: bool
+    issues: tuple  # tuple[GraphIssue, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteGraphExecutionsResult:
+    deleted: int
+
+
+@dataclass(frozen=True, slots=True)
+class SavedGraphDTO:
+    """One library row on the wire (``graph`` verbatim as stored)."""
+
+    name: str
+    description: str
+    graph: dict
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SavedGraphSummaryDTO:
+    """List-page projection (no payload)."""
+
+    name: str
+    description: str
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_saved_graph_dto(saved) -> SavedGraphDTO:
+    """Map a ``SavedGraph`` port row to its projection."""
+    return SavedGraphDTO(
+        name=saved.name,
+        description=saved.description,
+        graph=dict(saved.graph),
+        node_count=saved.node_count,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+    )
+
+
+def to_saved_graph_summary(saved) -> SavedGraphSummaryDTO:
+    return SavedGraphSummaryDTO(
+        name=saved.name,
+        description=saved.description,
+        node_count=saved.node_count,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SavedGraphListResult:
+    graphs: tuple  # tuple[SavedGraphSummaryDTO, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SaveGraphResult:
+    graph: SavedGraphDTO
+    created: bool  # True on first save (201), False on replace (200)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteGraphResult:
+    deleted: bool

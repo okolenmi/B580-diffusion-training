@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.ports.clock import Clock
 from .application.ports.training_gateway import TrainingGateway
 from .application.services import (
@@ -29,6 +30,7 @@ from .application.services import (
     AssetServices,
     ConfigServices,
     DatasetServices,
+    GraphServices,
     SettingsServices,
 )
 from .application.supervisor import RunSupervisor
@@ -38,12 +40,16 @@ from .application.use_cases import (
     CommitDatasetItems,
     CreateDataset,
     DeleteDataset,
+    DeleteGraph,
+    DeleteGraphExecutions,
     DeleteRuns,
     DiscardDatasetItems,
     GetActiveRun,
     GetConfig,
     GetConfigOptions,
     GetDataset,
+    GetGraph,
+    GetGraphExecution,
     GetRun,
     GetRunLog,
     GetSettings,
@@ -54,19 +60,28 @@ from .application.use_cases import (
     ListDatasetSets,
     ListDatasetTasks,
     ListDatasets,
+    ListGraphExecutions,
+    ListGraphs,
+    ListNodeCatalog,
     ListRuns,
     MakeAssetFolder,
+    NodeDiagnostics,
     ReadConfigRaw,
     ReconcileDatasetTasks,
+    ReconcileGraphExecutions,
     ReconcileRuns,
+    SaveGraph,
     StartDatasetTask,
+    StartGraphExecution,
     StartTraining,
     StopDatasetTask,
+    StopGraphExecution,
     StopTraining,
     UpdateConfig,
     UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
+    ValidateGraph,
     WriteConfigRaw,
 )
 from .config import Settings
@@ -80,7 +95,14 @@ from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
+from .infrastructure.graph.catalog import DiscoveredGraphCatalog
+from .infrastructure.graph.discovery import NodeRegistry
+from .infrastructure.graph.runtime import ReflectedGraphRuntime
 from .infrastructure.jsonl_progress_source import JsonlProgressSource
+from .infrastructure.persistence.graph_execution_repository import (
+    SqliteGraphExecutionRepository,
+)
+from .infrastructure.persistence.graph_library import SqliteGraphLibrary
 from .infrastructure.persistence.run_repository import SqliteRunRepository
 from .infrastructure.persistence.sqlite import SqliteDatabase
 from .infrastructure.settings_store import SqliteSettingsStore
@@ -134,6 +156,24 @@ def build_container(settings: Settings) -> Container:
     dataset_tasks = SqliteDatasetTasks(database, clock)
     dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
     assets = FileSystemAssetStore(layout, datasets=dataset_library)
+
+    # Graph domain (M4): one NodeRegistry feeds both the palette and the
+    # executor -- a single discovery cache, swapped atomically on
+    # refresh. Execution rows and the saved library are server state in
+    # backend.db; the runtime keeps the default memory releaser (gc,
+    # then the XPU caching allocator) so freed VRAM goes back to the
+    # driver after every run.
+    graph_registry = NodeRegistry()
+    graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    graph_runtime = ReflectedGraphRuntime(graph_registry)
+    graph_executions = SqliteGraphExecutionRepository(database)
+    graph_library = SqliteGraphLibrary(database)
+    graph_supervisor = GraphExecutionSupervisor(
+        executions=graph_executions,
+        runtime=graph_runtime,
+        events=event_bus,
+        clock=clock,
+    )
 
     supervisor = RunSupervisor(
         runs=run_repository,
@@ -225,6 +265,36 @@ def build_container(settings: Settings) -> Container:
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
         ),
+        graphs=GraphServices(
+            catalog=ListNodeCatalog(catalog=graph_catalog),
+            diagnostics=NodeDiagnostics(catalog=graph_catalog),
+            validate=ValidateGraph(runtime=graph_runtime),
+            start_execution=StartGraphExecution(
+                executions=graph_executions,
+                runtime=graph_runtime,
+                events=event_bus,
+                supervisor=graph_supervisor,
+                clock=clock,
+            ),
+            list_executions=ListGraphExecutions(executions=graph_executions),
+            get_execution=GetGraphExecution(executions=graph_executions),
+            stop_execution=StopGraphExecution(
+                executions=graph_executions,
+                events=event_bus,
+                supervisor=graph_supervisor,
+                clock=clock,
+            ),
+            delete_executions=DeleteGraphExecutions(
+                executions=graph_executions, events=event_bus
+            ),
+            reconcile_executions=ReconcileGraphExecutions(
+                executions=graph_executions, events=event_bus, clock=clock
+            ),
+            save_graph=SaveGraph(library=graph_library),
+            get_graph=GetGraph(library=graph_library),
+            list_graphs=ListGraphs(library=graph_library),
+            delete_graph=DeleteGraph(library=graph_library),
+        ),
         event_bus=event_bus,
     )
 
@@ -238,6 +308,12 @@ def build_container(settings: Settings) -> Container:
         logger.info(
             "reconciled %d unfinished dataset task(s) at startup",
             dataset_reconciled.cleaned,
+        )
+    graph_reconciled = services.graphs.reconcile_executions.execute()
+    if graph_reconciled.cleaned:
+        logger.info(
+            "reconciled %d unfinished graph execution(s) at startup",
+            graph_reconciled.cleaned,
         )
 
     return Container(

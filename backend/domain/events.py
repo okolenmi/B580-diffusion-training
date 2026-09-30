@@ -116,3 +116,69 @@ class RunsDeleted(DomainEvent):
     """Run history was wiped (a batch deletion, not tied to one run)."""
 
     deleted: int
+
+
+# --------------------------------------------------------------------------
+# Graph execution lifecycle (M4)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GraphExecutionQueued(DomainEvent):
+    """A graph passed validation and received its execution id."""
+
+    execution_id: int
+    node_count: int
+
+
+@dataclass(frozen=True)
+class GraphExecutionStarted(DomainEvent):
+    """The worker thread claimed the queued row and began building nodes."""
+
+    execution_id: int
+
+
+@dataclass(frozen=True)
+class GraphExecutionProgressed(DomainEvent):
+    """Telemetry: one node finished building (published by the
+    supervisor, never buffered by the entity -- same posture as
+    ``RunProgressed``: lifecycle events mark state changes, this one
+    streams per-node timing while ``running``."""
+
+    execution_id: int
+    node_id: str
+    ok: bool
+    duration_ms: float
+
+
+@dataclass(frozen=True)
+class GraphExecutionFinished(DomainEvent):
+    """Every node in the graph built successfully."""
+
+    execution_id: int
+    nodes: int
+
+
+@dataclass(frozen=True)
+class GraphExecutionFailed(DomainEvent):
+    """Graph-level failure, a node's build() raised, or startup
+    reconciliation swept a row left behind by a dead process."""
+
+    execution_id: int
+    error: str | None
+
+
+@dataclass(frozen=True)
+class GraphExecutionStopped(DomainEvent):
+    """Cancel requested (stop endpoint, or a queued row stopped before
+    its thread started)."""
+
+    execution_id: int
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class GraphExecutionsDeleted(DomainEvent):
+    """Execution history was wiped (a batch deletion)."""
+
+    deleted: int

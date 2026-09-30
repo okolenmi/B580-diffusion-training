@@ -254,6 +254,27 @@ class Node(ABC):
             f"see NodePreset's docstring in this module."
         )
 
+    # Params-aware shape resolution (additive hooks; default = the static
+    # class-level dicts above). A future node whose port *set* depends on
+    # its widget values (the "params-aware shape resolution" gap in
+    # docs/design/resources-controller/03-phase-3-interactive-node-support.md) overrides these;
+    # the backend's graph validator and edge-compatibility checks call
+    # them with the node's submitted params, so such a node needs no
+    # backend change to be validated correctly. Legacy callers that only
+    # know INPUTS/OUTPUTS keep working untouched -- every default here
+    # returns exactly what they already read. Never raises for a merely
+    # odd params dict when it can be avoided (a raise is reported to the
+    # graph editor as a validation issue, not a crash).
+    @classmethod
+    def resolve_inputs(cls, params: dict) -> dict[str, Port]:
+        """The real input shape for *this* params dict (default: INPUTS)."""
+        return cls.INPUTS
+
+    @classmethod
+    def resolve_outputs(cls, params: dict) -> dict[str, Port]:
+        """The real output shape for *this* params dict (default: OUTPUTS)."""
+        return cls.OUTPUTS
+
     def __init__(self, context: ExecutionContext | None = None):
         self.context = context or ExecutionContext()
 

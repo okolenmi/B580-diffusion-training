@@ -43,6 +43,14 @@ _STATUS_BY_CODE: dict[str, int] = {
     "dataset_task_not_found": 404,
     "dataset_task_not_active": 409,
     "dataset_task_launch_failed": 500,
+    # graphs (M4)
+    "graph_invalid": 422,
+    "graph_execution_not_found": 404,
+    "graph_execution_active": 409,
+    "graph_execution_not_active": 409,
+    "node_class_not_found": 404,
+    "node_diagnostics_failed": 400,
+    "graph_not_found": 404,
 }
 
 

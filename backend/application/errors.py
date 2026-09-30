@@ -135,3 +135,62 @@ class DatasetTaskLaunchError(ApplicationError):
     """The ingestion child could not be started (row already failed)."""
 
     code = "dataset_task_launch_failed"
+
+
+# Graphs (M4)
+
+
+class GraphInvalidError(ApplicationError):
+    """The submitted graph failed validation.
+
+    ``details`` is the issue list (``issue_to_dict`` per entry) -- every
+    error-severity finding, not just the first.
+    """
+
+    code = "graph_invalid"
+
+
+class GraphExecutionNotFoundError(ApplicationError):
+    """No graph execution exists under the requested id."""
+
+    code = "graph_execution_not_found"
+
+
+class GraphExecutionActiveError(ApplicationError):
+    """Another execution is queued or running; single-active holds.
+
+    ``details`` carries the blocking execution's id/status.
+    """
+
+    code = "graph_execution_active"
+
+
+class GraphExecutionNotActiveError(ApplicationError):
+    """The action needs a live execution; this one already ended.
+
+    ``details`` carries the terminal status that won.
+    """
+
+    code = "graph_execution_not_active"
+
+
+class NodeClassNotFoundError(ApplicationError):
+    """No discovered node class answers to the requested name."""
+
+    code = "node_class_not_found"
+
+
+class NodeDiagnosticsError(ApplicationError):
+    """The node's own diagnostics() raised for these params.
+
+    An ordinary outcome mid-edit (bad path, missing file) -- reported
+    as a normal 400, never a 500.
+    """
+
+    code = "node_diagnostics_failed"
+
+
+class GraphNotFoundError(ApplicationError):
+    """No saved graph exists under the requested library name."""
+
+    code = "graph_not_found"

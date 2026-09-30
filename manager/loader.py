@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Iterator, Union
 import torch
 
-from .db import get_training_set_trajectories, get_training_set_by_name
+from .db import get_training_set_trajectories, get_training_set_by_name, ensure_v2
 from .storage import ShardLoader
 from .t_sampling import TrainTimeSampler
 from core.noise_schedule import eps_to_vpred, get_alpha_sigma
@@ -53,7 +53,14 @@ class ManagedDatasetLoader:
                                            bucket_balance=bucket_balance,
                                            t_values=t_values)
         self._samples: list | None = None  # loaded once on first iteration, reused
-        
+
+        # After TrainTimeSampler's config validation on purpose (its errors
+        # must arrive before any DB access -- pinned by smoke tests), but
+        # before any query: v2 queries reference columns v1 doesn't have, and
+        # a migration-guidance error beats "no such column: neg_prompt".
+        if self.db_path.exists():
+            ensure_v2(self.db_path)
+
         if set_identifier is not None:
             # Resolve set ID: accept both integer ID and string name
             if isinstance(set_identifier, str):
@@ -75,11 +82,6 @@ class ManagedDatasetLoader:
             # Fetch ALL trajectories from DB
             from .db import get_trajectories
             self.trajectories = get_trajectories(self.db_path)
-            # Normalize key names to match get_training_set_trajectories if needed
-            # get_trajectories returns 'shard_path', get_training_set_trajectories returns 'file_path'
-            for t in self.trajectories:
-                if "file_path" not in t and "shard_path" in t:
-                    t["file_path"] = t["shard_path"]
         
         # Group by shard to minimize file openings
         self.shard_map = {}
@@ -90,50 +92,50 @@ class ManagedDatasetLoader:
             self.shard_map[path].append(t)
 
     def _load_all_samples(self) -> list:
-        """Load every single-latent ("lora_raw") sample into a flat list.
+        """Load every single-latent sample into a flat list.
 
         One entry per image -- ingestion stores one clean latent, so there
         is no per-timestep structure left to interleave (the docstring this
-        replaced described the retired baked-grid format). Trajectories in
-        any other format (teacher/compressed sequences, or shards written
-        by the retired run_ingestion_task) are skipped, not guessed at:
-        they are not single-latent data, and reading them as such would be
-        wrong. The list is held in RAM; for typical datasets (100-1000
-        images) this is well under 1 GB.
+        replaced described the retired baked-grid format). Shards whose
+        layout is not "single_latent" (teacher/compressed sequences, or any
+        legacy/unknown layout) are skipped as a whole, not guessed at: they
+        are not single-latent data, and reading them as such would be wrong.
+        The list is held in RAM; for typical datasets (100-1000 images) this
+        is well under 1 GB.
         """
         all_samples = []
         skipped = {}
         for path, trajs in self.shard_map.items():
+            # All rows of one shard file share its layout (one file, one key
+            # layout -- see docs/design/backend/04-dataset-format.md).
+            layout = trajs[0].get("layout") or "unknown"
+            if layout != "single_latent":
+                skipped[layout] = skipped.get(layout, 0) + len(trajs)
+                continue
             loader = ShardLoader(self.root / path)
             loader.load()
             try:
                 for t in trajs:
-                    meta = {}
-                    if t.get("metadata"):
-                        try:
-                            meta = json.loads(t["metadata"])
-                        except (json.JSONDecodeError, TypeError):
-                            meta = {}
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    if meta.get("format") != "lora_raw":
-                        fmt = meta.get("format") or (
-                            "compressed sequence" if meta.get("compressed")
-                            else "no format key")
-                        skipped[fmt] = skipped.get(fmt, 0) + 1
-                        continue
                     # Simple images+captions format (manager/builder.py's
                     # run_lora_ingestion_task): one clean latent, no
                     # noise/timestep baked in at all -- sampled fresh every
                     # __iter__() call (every epoch), not here; see
                     # __iter__/_materialize and manager/t_sampling.py.
+                    neg = t.get("neg_prompt") or ""
+                    model_type = t.get("model_type") or "eps"
+                    traj_type = t.get("type") or "good"
                     all_samples.append({
                         "x0":          loader.get_image_latent(t["shard_index"]),
                         "prompt":      t["prompt"],
-                        "neg_prompt":  meta.get("neg", ""),
+                        "neg_prompt":  neg,
                         "seed":        t["seed"],
-                        "metadata":    t["metadata"],
-                        "traj_type":   meta.get("type", "good"),
+                        "model_type":  model_type,
+                        "traj_type":   traj_type,
+                        # v2 stores these as columns; the key survives for
+                        # batch-dict contract stability (no consumer parses
+                        # it -- trainer reads neg_prompt directly).
+                        "metadata":    json.dumps({"neg": neg, "model_type": model_type,
+                                                   "type": traj_type}),
                     })
             finally:
                 loader.close()
@@ -151,10 +153,7 @@ class ManagedDatasetLoader:
         _load_all_samples (which is cached and would otherwise bake one
         fixed draw in for the loader's whole lifetime)."""
         x0 = s["x0"]
-        try:
-            model_type = json.loads(s["metadata"]).get("model_type", "eps")
-        except (json.JSONDecodeError, TypeError):
-            model_type = "eps"
+        model_type = s.get("model_type") or "eps"
 
         t_val = self._t_sampler.draw(random)
         at, st = get_alpha_sigma(t_val)

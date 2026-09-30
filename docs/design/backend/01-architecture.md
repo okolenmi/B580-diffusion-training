@@ -319,7 +319,7 @@ emits nothing -- that invariant is test-pinned).
 | M1 | Skeleton: layering, settings, SQLite + migrations, runs read-side, delete + event, error envelope, SSE, tests, boot on own port | **done** |
 | M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | **done** |
 | M3a | Config (read/PATCH/raw/options/start-options), settings store (atomic, tiered), assets (catalog/browse/mkdir/upload/inspect) | **done** |
-| M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile | next |
+| M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | next |
 | M4 | Nodegraph subsystem (registry, introspect, executor, presets) behind a `GraphRuntime` port | planned |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
 

@@ -24,7 +24,8 @@ from core.noise_schedule import get_alpha_sigma, sample_timestep, eps_to_vpred
 from core.seed import derive_seed
 from core.unet_wrapper import ComfyUNetWrapper
 from core.vae_decode import VAEDecoder
-from .db import _connect, add_source, get_trajectories, update_task_progress, update_task_status
+from .db import (_connect, add_source, ensure_v2, get_trajectories,
+                 update_task_progress, update_task_status)
 from .preview import PreviewGenerator
 from .storage import ShardWriter
 
@@ -32,11 +33,47 @@ _MAX_TRAJS_PER_SHARD = 50
 
 
 class DataTaskRunner:
-    """Manages generation of synthetic trajectories and real data encoding."""
+    """Manages generation of synthetic trajectories and real data encoding.
+
+    Task reporting is dual-channel during the v1->v2 transition:
+
+    - ``reporter`` (v2): duck-typed object with ``progress(current)``,
+      ``finished()``, ``failed(error)`` — implemented by the server that owns
+      the task row (the backend writes dataset tasks to backend.db; the
+      protocol is documented here because manager/ must not import the
+      server). This is the "fork task gateway": the child process reports
+      straight into the owner's DB (WAL makes side-by-side writes safe).
+    - ``task_id`` (legacy v1): writes progress into the dataset DB's ``tasks``
+      table for the old server's UI. Only ever meaningful on v1 datasets (v2
+      has no tasks table — create_task fails first there). Kept until the M5
+      archive of server/.
+    """
 
     def __init__(self, device: str):
         self.device = device
         self._ctx_len_mismatch_warned = False
+
+    @staticmethod
+    def _progress(dataset_root: Path, task_id, reporter, current: int):
+        if reporter is not None:
+            reporter.progress(current)
+        elif task_id:
+            update_task_progress(dataset_root / "metadata.db", task_id, current,
+                                 pid=os.getpid() if current == 0 else None)
+
+    @staticmethod
+    def _finish(dataset_root: Path, task_id, reporter):
+        if reporter is not None:
+            reporter.finished()
+        elif task_id:
+            update_task_status(dataset_root / "metadata.db", task_id, 'finished')
+
+    @staticmethod
+    def _fail(dataset_root: Path, task_id, reporter, error: str):
+        if reporter is not None:
+            reporter.failed(error)
+        elif task_id:
+            update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=error)
 
     def _prepare_keywords(self, cfg: dict) -> list[str]:
         keywords = []
@@ -106,25 +143,36 @@ class DataTaskRunner:
         return results
 
     def _finalize_shard(self, dataset_root: Path, shard_writer: ShardWriter, shard_file: Path, source_id: int,
-                        pending_trajs: list[dict] = None):
-        """Write shard to disk and insert DB records in one transaction."""
+                        pending_trajs: list[dict] = None, layout: str = "single_latent"):
+        """Write shard to disk and insert DB records in one transaction.
+
+        pending_trajs entries carry v2 columns directly (neg_prompt,
+        model_type, type, cfg, source_path, latent_h/w, extra) — there is no
+        metadata JSON blob to assemble.
+        """
         sample_count, size_bytes = shard_writer.write()
-        
+
         with _connect(dataset_root / "metadata.db") as conn:
             cur = conn.execute(
-                "INSERT INTO shards (file_path, sample_count, size_bytes, is_temporary, created_at) "
+                "INSERT INTO shards (file_path, layout, sample_count, size_bytes, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (str(shard_file.relative_to(dataset_root)), sample_count, size_bytes, 1, time.time())
+                (str(shard_file.relative_to(dataset_root)), layout, sample_count, size_bytes, time.time())
             )
             shard_id = cur.lastrowid
-            
+
             if pending_trajs:
                 for td in pending_trajs:
                     conn.execute(
-                        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, preview_path, metadata) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, "
+                        "seed, prompt, preview_path, neg_prompt, model_type, type, cfg, "
+                        "source_path, latent_h, latent_w, extra) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (source_id, shard_id, td["shard_index"], td["sample_count"],
-                         td["seed"], td["prompt"], td["preview_path"], td["metadata_json"])
+                         td["seed"], td["prompt"], td["preview_path"],
+                         td.get("neg_prompt", ""), td.get("model_type", "eps"),
+                         td.get("type", "good"), td.get("cfg"),
+                         td.get("source_path"), td.get("latent_h", 0), td.get("latent_w", 0),
+                         json.dumps(td["extra"]) if td.get("extra") else None)
                     )
             conn.commit()
 
@@ -138,15 +186,20 @@ class DataTaskRunner:
                          task_id: int = None,
                          t_mode: str = "uniform",
                          t_low: int = 20,
-                         t_high: int = 999):
+                         t_high: int = 999,
+                         reporter=None):
         """Generate synthetic trajectories from a teacher model with dual-randomized prompts.
 
         model_type: prediction type of the teacher model — "eps" or "vpred".
         Must match the checkpoint.  Getting this wrong causes the Euler denoising
         steps to walk in the wrong direction and stores targets in the wrong space.
+
+        reporter: duck-typed task reporter (see class docstring); takes
+        precedence over the legacy task_id channel.
         """
         try:
-            if task_id: update_task_progress(dataset_root / "metadata.db", task_id, 0, pid=os.getpid())
+            ensure_v2(dataset_root / "metadata.db")
+            self._progress(dataset_root, task_id, reporter, 0)
 
             source_id = add_source(dataset_root / "metadata.db", f"{model_path.name}_distill", "teacher", 
                                 str(model_path), {
@@ -190,7 +243,7 @@ class DataTaskRunner:
             existing_keys = {(t["prompt"], t["seed"]) for t in existing_trajs if t["seed"] is not None}
             dup_count = 0
 
-            shard_file = dataset_root / "staging" / f"teacher_{uuid.uuid4().hex[:12]}.safetensors"
+            shard_file = dataset_root / "shards" / f"teacher_{uuid.uuid4().hex[:12]}.safetensors"
             shard_writer = ShardWriter(shard_file)
             pending_trajs = []
             trajs_in_shard = 0
@@ -316,17 +369,25 @@ class DataTaskRunner:
                                 "seed": batch_base_seed + b,
                                 "prompt": p_text,
                                 "preview_path": str(rel_preview_path),
-                                "metadata_json": json.dumps({"cfg": cfg_val, "neg": n_text, "batch_idx": b, "compressed": True, "type": "good", "model_type": model_type})
+                                "neg_prompt": n_text,
+                                "model_type": model_type,
+                                "type": "good",
+                                "cfg": cfg_val,
+                                "source_path": None,
+                                "latent_h": xt_seq.shape[-2],
+                                "latent_w": xt_seq.shape[-1],
+                                "extra": {"batch_idx": b},
                             })
                             
                             traj_idx += 1
                             pbar.update(1)
-                            if task_id: update_task_progress(dataset_root / "metadata.db", task_id, traj_idx)
+                            self._progress(dataset_root, task_id, reporter, traj_idx)
                         
                         trajs_in_shard += this_bs
                         if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
-                            self._finalize_shard(dataset_root, shard_writer, shard_file, source_id, pending_trajs)
-                            shard_file = dataset_root / "staging" / f"teacher_{uuid.uuid4().hex[:12]}.safetensors"
+                            self._finalize_shard(dataset_root, shard_writer, shard_file, source_id,
+                                                 pending_trajs, layout="compressed_traj")
+                            shard_file = dataset_root / "shards" / f"teacher_{uuid.uuid4().hex[:12]}.safetensors"
                             shard_writer = ShardWriter(shard_file)
                             pending_trajs = []
                             trajs_in_shard = 0
@@ -338,7 +399,8 @@ class DataTaskRunner:
                       f"Consider stopping if this is unintended.")
 
             if pending_trajs:
-                self._finalize_shard(dataset_root, shard_writer, shard_file, source_id, pending_trajs)
+                self._finalize_shard(dataset_root, shard_writer, shard_file, source_id,
+                                     pending_trajs, layout="compressed_traj")
 
             # Batch generate previews after the main loop
             if preview_tasks:
@@ -346,10 +408,10 @@ class DataTaskRunner:
                 for latent, preview_path in preview_tasks:
                     previewer.generate_preview(latent, preview_path)
             previewer.free(); del teacher, text_cache, previewer; xpu_empty_cache(); gc.collect()
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'finished')
+            self._finish(dataset_root, task_id, reporter)
 
         except Exception as e:
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
+            self._fail(dataset_root, task_id, reporter, str(e))
             raise e
 
     def _fit_crop_boxes(self, w: int, h: int, px: int, max_aspect_ratio: float):
@@ -501,7 +563,8 @@ class DataTaskRunner:
                                 model_type: str = "eps",
                                 seed: int = 42,
                                 max_aspect_ratio: float = 2.0,
-                                task_id: int = None):
+                                task_id: int = None,
+                                reporter=None):
         """VAE-encode real images to clean latents, one per image -- the
         "just images and captions" LoRA format, the project's only
         real-image ingestion path (no distillation machinery involved at
@@ -510,7 +573,7 @@ class DataTaskRunner:
         Stores only x0. Noise and timestep are sampled fresh every time a
         sample is actually drawn for training (manager/loader.py's
         ManagedDatasetLoader via manager/t_sampling.py's TrainTimeSampler,
-        gated on this trajectory's metadata["format"] == "lora_raw") --
+        gated on the shard's layout == "single_latent") --
         standard practice (kohya-ss/diffusers/OneTrainer all do this),
         and specifically avoids fixed-grid regularity: the retired
         run_ingestion_task path baked one timestep/noise grid at ingestion
@@ -537,9 +600,13 @@ class DataTaskRunner:
         gets split into multiple same-caption crops instead of one
         oversized sample) -- a starting point, not independently tuned
         against this project's own real datasets yet.
+
+        reporter: duck-typed task reporter (see class docstring); takes
+        precedence over the legacy task_id channel.
         """
         try:
-            if task_id: update_task_progress(dataset_root / "metadata.db", task_id, 0, pid=os.getpid())
+            ensure_v2(dataset_root / "metadata.db")
+            self._progress(dataset_root, task_id, reporter, 0)
 
             source_id = add_source(dataset_root / "metadata.db", f"{image_dir.name}_lora", "real",
                                 str(model_path), {
@@ -571,7 +638,7 @@ class DataTaskRunner:
                 cap_path = img_path.with_suffix(".txt")
                 image_prompts.append(cap_path.read_text().strip() if cap_path.exists() else "")
 
-            shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
+            shard_file = dataset_root / "shards" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
             shard_writer = ShardWriter(shard_file)
             pending_trajs = []
             trajs_in_shard = 0
@@ -605,34 +672,37 @@ class DataTaskRunner:
                             "seed": seed + sample_count,
                             "prompt": image_prompts[i],
                             "preview_path": rel_preview,
-                            "metadata_json": json.dumps({
-                                "neg": neg_prompt, "format": "lora_raw",
-                                "model_type": model_type, "type": "good",
-                            }),
+                            "neg_prompt": neg_prompt,
+                            "model_type": model_type,
+                            "type": "good",
+                            "source_path": str(img_path.relative_to(image_dir)),
+                            "latent_h": int(x0_cpu.shape[-2]),
+                            "latent_w": int(x0_cpu.shape[-1]),
+                            "extra": {"crop_idx": crop_idx},
                         })
                         sample_count += 1
                         trajs_in_shard += 1
                         if trajs_in_shard >= _MAX_TRAJS_PER_SHARD:
                             self._finalize_shard(dataset_root, shard_writer, shard_file,
-                                                 source_id, pending_trajs)
-                            shard_file = dataset_root / "staging" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
+                                                 source_id, pending_trajs, layout="single_latent")
+                            shard_file = dataset_root / "shards" / f"lora_{uuid.uuid4().hex[:12]}.safetensors"
                             shard_writer = ShardWriter(shard_file)
                             pending_trajs = []
                             trajs_in_shard = 0
                         del x0
-                    if task_id: update_task_progress(dataset_root / "metadata.db", task_id, i + 1)
+                    self._progress(dataset_root, task_id, reporter, i + 1)
 
                 except Exception as e:
                     print(f"    Failed {img_path.name}: {e}")
 
             if pending_trajs:
                 self._finalize_shard(dataset_root, shard_writer, shard_file,
-                                     source_id, pending_trajs)
+                                     source_id, pending_trajs, layout="single_latent")
 
             if split_image_count:
                 print(f"  {split_image_count}/{len(image_files)} image(s) split "
-                     f"into multiple crops ({sample_count} total sample(s) "
-                     f"from {len(image_files)} source image(s))")
+                      f"into multiple crops ({sample_count} total sample(s) "
+                      f"from {len(image_files)} source image(s))")
 
             if preview_tasks:
                 print(f"  Generating {len(preview_tasks)} previews...")
@@ -641,9 +711,8 @@ class DataTaskRunner:
 
             vae.free(); previewer.free(); del vae, previewer
             xpu_empty_cache(); gc.collect()
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'finished')
+            self._finish(dataset_root, task_id, reporter)
 
         except Exception as e:
-            if task_id: update_task_status(dataset_root / "metadata.db", task_id, 'failed', error=str(e))
+            self._fail(dataset_root, task_id, reporter, str(e))
             raise e
-

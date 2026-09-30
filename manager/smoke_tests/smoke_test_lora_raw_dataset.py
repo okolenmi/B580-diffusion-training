@@ -51,7 +51,7 @@ def check_fresh_resampling_each_iteration(tmpdir: Path):
     init_local_db(db_path)
 
     x0 = torch.randn(1, 4, 8, 8)
-    shard_file = dataset_root / "staging" / "shard.safetensors"
+    shard_file = dataset_root / "shards" / "shard.safetensors"
     writer = ShardWriter(shard_file)
     idx = writer.add_image_latent(x0)
     count, size = writer.write()
@@ -62,10 +62,9 @@ def check_fresh_resampling_each_iteration(tmpdir: Path):
     import sqlite3
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, metadata) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (source_id, shard_id, idx, 1, 1, "a cat",
-         json.dumps({"neg": "", "format": "lora_raw", "model_type": "eps"})),
+        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, "
+        "neg_prompt, model_type, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (source_id, shard_id, idx, 1, 1, "a cat", "", "eps", "good"),
     )
     conn.commit()
     conn.close()
@@ -100,7 +99,7 @@ def _make_one_sample_dataset(tmpdir: Path, name: str = "dataset_single") -> Path
     init_local_db(db_path)
 
     x0 = torch.randn(1, 4, 8, 8)
-    shard_file = dataset_root / "staging" / "shard.safetensors"
+    shard_file = dataset_root / "shards" / "shard.safetensors"
     writer = ShardWriter(shard_file)
     idx = writer.add_image_latent(x0)
     count, size = writer.write()
@@ -111,10 +110,9 @@ def _make_one_sample_dataset(tmpdir: Path, name: str = "dataset_single") -> Path
     import sqlite3
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, metadata) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (source_id, shard_id, idx, 1, 1, "a cat",
-         json.dumps({"neg": "", "format": "lora_raw", "model_type": "eps"})),
+        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, "
+        "neg_prompt, model_type, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (source_id, shard_id, idx, 1, 1, "a cat", "", "eps", "good"),
     )
     conn.commit()
     conn.close()
@@ -178,20 +176,27 @@ def check_exact_mode_round_trip(tmpdir: Path):
 
 
 def check_non_single_latent_trajectories_skipped(tmpdir: Path):
-    print("[ManagedDatasetLoader: non-lora_raw trajectories are skipped, not misread]")
+    print("[ManagedDatasetLoader: non-single-latent shards are skipped, not misread]")
     dataset_root = _make_one_sample_dataset(tmpdir, name="dataset_mixed")
     db_path = dataset_root / "metadata.db"
-    # A teacher/compressed trajectory in the same dataset: not single-latent
-    # data. The loader must skip it (honestly reported) instead of trying to
-    # read it as a clean latent -- and the single real sample still trains.
+    # A teacher/compressed trajectory in its own shard (v2: layout is a
+    # per-shard property, one file = one layout). The loader must skip the
+    # whole shard (honestly reported) instead of trying to read it as a
+    # clean latent -- and the single real sample still trains.
     import sqlite3
+    writer = ShardWriter(dataset_root / "shards" / "teacher.safetensors")
+    traj_id = writer.add_compressed_trajectory(
+        torch.randn(3, 4, 8, 8), torch.randn(3, 4, 8, 8), torch.randn(3, 4, 8, 8),
+        [999, 500, 1], [{"at": 1.0, "st": 0.0}] * 3)
+    count, size = writer.write()
     conn = sqlite3.connect(str(db_path))
-    row = conn.execute("SELECT source_id, shard_id, shard_index FROM trajectories").fetchone()
+    row = conn.execute("SELECT source_id FROM trajectories").fetchone()
+    shard2 = add_shard(db_path, "shards/teacher.safetensors", count, size,
+                       layout="compressed_traj")
     conn.execute(
-        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, metadata) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (row[0], row[1], 1, 5, 1, "a cat",
-         json.dumps({"compressed": True, "format": "teacher"})),
+        "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, prompt, "
+        "neg_prompt, model_type, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (row[0], shard2, traj_id, 3, 1, "a cat", "", "eps", "good"),
     )
     conn.commit()
     conn.close()
@@ -200,7 +205,7 @@ def check_non_single_latent_trajectories_skipped(tmpdir: Path):
     batches = list(loader)
     assert len(batches) == 1, \
         f"expected only the single-latent sample to survive, got {len(batches)} batches"
-    print("    PASS: the compressed/teacher trajectory was skipped; the "
+    print("    PASS: the compressed/teacher shard was skipped; the "
           "single-latent sample still yields its batch")
 
 

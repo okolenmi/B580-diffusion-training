@@ -1,19 +1,15 @@
 """Unified Dataset Core — managed state, storage, and curation lifecycle."""
 
-import json
-import os
 import shutil
 import time
-import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from .db import (
     _connect, init_local_db, set_dataset_info,
     get_trajectories, delete_trajectory, delete_shard, get_training_sets,
-    get_active_tasks, update_task_status
+    get_active_tasks
 )
-from .storage import ShardLoader, ShardWriter
 
 
 class ManagedDataset:
@@ -22,14 +18,13 @@ class ManagedDataset:
     def __init__(self, root: Path):
         self.root = root
         self.db_path = root / "metadata.db"
-        self.staging_dir = root / "staging"
-        self.archive_dir = root / "archive"
+        self.shards_dir = root / "shards"
         self.preview_dir = root / "previews"
-        
+
         # Ensure directory structure
-        for d in [self.staging_dir, self.archive_dir, self.preview_dir]:
+        for d in [self.shards_dir, self.preview_dir]:
             d.mkdir(parents=True, exist_ok=True)
-            
+
         if not self.db_path.exists():
             init_local_db(self.db_path)
 
@@ -49,48 +44,46 @@ class ManagedDataset:
                 }
             return {"name": self.name, "description": "", "created_at": 0}
 
-    # --- Staging (Inbox) ---
+    # --- Views (v2: pending vs. committed is membership, not location) ---
 
     def get_staging_trajectories(self, source_id: int = None) -> List[dict]:
-        """Get all trajectories currently in the staging area."""
-        return get_trajectories(self.db_path, is_temp=True, source_id=source_id)
+        """Legacy view name: trajectories not yet in any training set."""
+        return get_trajectories(self.db_path, committed=False, source_id=source_id)
 
     def get_archived_trajectories(self, source_id: int = None) -> List[dict]:
-        """Get all trajectories that have been committed to the archive."""
-        return get_trajectories(self.db_path, is_temp=False, source_id=source_id)
+        """Legacy view name: trajectories committed to at least one training set."""
+        return get_trajectories(self.db_path, committed=True, source_id=source_id)
+
+    def list_trajectories(self, source_id: int = None, committed: bool = None) -> List[dict]:
+        """All trajectories (committed=None), or filtered by set membership."""
+        return get_trajectories(self.db_path, committed=committed, source_id=source_id)
 
     # --- Curation ---
 
     def toggle_trajectory_type(self, traj_id: int):
         """Toggle trajectory type between 'good' and 'bad'."""
         with _connect(self.db_path) as conn:
-            row = conn.execute("SELECT metadata FROM trajectories WHERE id = ?", (traj_id,)).fetchone()
+            row = conn.execute("SELECT type FROM trajectories WHERE id = ?", (traj_id,)).fetchone()
             if not row:
                 raise ValueError(f"Trajectory {traj_id} not found")
-            meta = json.loads(row["metadata"]) if row["metadata"] else {}
-            current = meta.get("type", "good")
-            meta["type"] = "bad" if current == "good" else "good"
-            conn.execute("UPDATE trajectories SET metadata = ? WHERE id = ?",
-                         (json.dumps(meta), traj_id))
+            new_type = "bad" if (row["type"] or "good") == "good" else "good"
+            conn.execute("UPDATE trajectories SET type = ? WHERE id = ?", (new_type, traj_id))
             conn.commit()
 
     def update_trajectory(self, traj_id: int, prompt: str = None, neg_prompt: str = None, cfg: float = None):
-        """Update trajectory prompt, negative prompt, and/or CFG in metadata."""
+        """Update trajectory prompt, negative prompt, and/or CFG columns."""
         with _connect(self.db_path) as conn:
-            row = conn.execute("SELECT prompt, metadata FROM trajectories WHERE id = ?", (traj_id,)).fetchone()
+            row = conn.execute("SELECT prompt, neg_prompt, cfg FROM trajectories WHERE id = ?", (traj_id,)).fetchone()
             if not row:
                 raise ValueError(f"Trajectory {traj_id} not found")
-            
-            new_prompt = prompt if prompt is not None else row["prompt"]
-            meta = json.loads(row["metadata"]) if row["metadata"] else {}
-            
-            if neg_prompt is not None:
-                meta["neg"] = neg_prompt
-            if cfg is not None:
-                meta["cfg"] = cfg
-                
-            conn.execute("UPDATE trajectories SET prompt = ?, metadata = ? WHERE id = ?",
-                         (new_prompt, json.dumps(meta), traj_id))
+
+            conn.execute(
+                "UPDATE trajectories SET prompt = ?, neg_prompt = ?, cfg = ? WHERE id = ?",
+                (prompt if prompt is not None else row["prompt"],
+                 neg_prompt if neg_prompt is not None else row["neg_prompt"],
+                 cfg if cfg is not None else row["cfg"],
+                 traj_id)
+            )
             conn.commit()
 
     def update_trajectories_bulk(self, traj_ids: List[int], prompt: str = None, prompt_mode: str = "set",
@@ -119,7 +112,7 @@ class ManagedDataset:
         with _connect(self.db_path) as conn:
             placeholders = ",".join("?" * len(traj_ids))
             rows = conn.execute(
-                f"SELECT id, prompt, metadata FROM trajectories WHERE id IN ({placeholders})",
+                f"SELECT id, prompt, neg_prompt, cfg FROM trajectories WHERE id IN ({placeholders})",
                 traj_ids
             ).fetchall()
             for row in rows:
@@ -131,14 +124,13 @@ class ManagedDataset:
                     else:  # "set"
                         new_prompt = prompt
 
-                meta = json.loads(row["metadata"]) if row["metadata"] else {}
-                if neg_prompt:
-                    meta["neg"] = neg_prompt
-                if cfg is not None:
-                    meta["cfg"] = cfg
-
-                conn.execute("UPDATE trajectories SET prompt = ?, metadata = ? WHERE id = ?",
-                             (new_prompt, json.dumps(meta), row["id"]))
+                conn.execute(
+                    "UPDATE trajectories SET prompt = ?, neg_prompt = ?, cfg = ? WHERE id = ?",
+                    (new_prompt,
+                     neg_prompt if neg_prompt else row["neg_prompt"],
+                     cfg if cfg is not None else row["cfg"],
+                     row["id"])
+                )
                 updated += 1
             conn.commit()
         return updated
@@ -165,159 +157,47 @@ class ManagedDataset:
             delete_shard(self.db_path, shard_id)
 
     def commit_to_set(self, traj_ids: List[int], set_name: str) -> int:
-        """Physically move trajectories from Staging to Archive and create a training set."""
+        """Commit trajectories to a named training set (membership only).
+
+        v2: no files move. A shard is written once at ingestion and stays put;
+        "committed" means "member of at least one training set". Re-committing
+        to an existing set name adds members to that set instead of creating a
+        duplicate name (the loader resolves sets by name, so uniqueness is a
+        correctness requirement, not cosmetics).
+        """
         if not traj_ids:
             return 0
 
-        # 1. Fetch trajectory + shard info
         with _connect(self.db_path) as conn:
-            rows = conn.execute(f"""
-                SELECT t.id, t.shard_id, t.shard_index, t.sample_count, t.seed,
-                       t.prompt, t.preview_path, t.metadata,
-                       s.file_path as shard_path, s.is_temporary
-                FROM trajectories t
-                JOIN shards s ON t.shard_id = s.id
-                WHERE t.id IN ({','.join(['?']*len(traj_ids))})
-            """, traj_ids).fetchall()
-            trajs = [dict(r) for r in rows]
+            row = conn.execute(
+                "SELECT id FROM trajectories WHERE id IN (%s)" % ",".join("?" * len(traj_ids)),
+                traj_ids
+            ).fetchall()
+            if len(row) != len(traj_ids):
+                print(f"  Warning: {len(traj_ids) - len(row)} trajectory(s) not found, "
+                      f"committing {len(row)}.")
 
-        if len(trajs) != len(traj_ids):
-            print(f"  Warning: {len(traj_ids) - len(trajs)} trajectory(s) not found, continuing with {len(trajs)}.")
-
-        # Group by source shard
-        shard_traj_map: dict[int, list[dict]] = {}
-        for t in trajs:
-            shard_traj_map.setdefault(t["shard_id"], []).append(t)
-        source_shard_ids = set(shard_traj_map.keys())
-
-        # Check if ALL trajectories in each source shard are being committed
-        can_move = True
-        with _connect(self.db_path) as conn:
-            for sid, group in shard_traj_map.items():
-                total = conn.execute(
-                    "SELECT COUNT(*) FROM trajectories WHERE shard_id = ?", (sid,)
-                ).fetchone()[0]
-                if total != len(group):
-                    can_move = False
-                    break
-
-        if can_move:
-            # --- MOVE PATH: rename file, no tensor rewrite ---
-            new_rel_paths: dict[int, str] = {}
-            for sid in source_shard_ids:
-                t = shard_traj_map[sid][0]
-                old_rel = t["shard_path"]
-                new_rel = f"archive/set_{uuid.uuid4().hex[:16]}.safetensors"
-                old_abs = self.root / old_rel
-                new_abs = self.root / new_rel
-                new_abs.parent.mkdir(parents=True, exist_ok=True)
-                os.rename(str(old_abs), str(new_abs))
-                new_rel_paths[sid] = new_rel
-
-            with _connect(self.db_path) as conn:
-                for sid, new_rel in new_rel_paths.items():
-                    conn.execute(
-                        "UPDATE shards SET file_path = ?, is_temporary = 0 WHERE id = ?",
-                        (new_rel, sid)
-                    )
-
-                now = time.time()
+            existing = conn.execute(
+                "SELECT id FROM training_sets WHERE name = ?", (set_name,)
+            ).fetchone()
+            if existing:
+                set_id = existing["id"]
+            else:
                 cur = conn.execute(
                     "INSERT INTO training_sets (name, description, created_at) VALUES (?, ?, ?)",
-                    (set_name, None, now)
+                    (set_name, None, time.time())
                 )
                 set_id = cur.lastrowid
 
-                for t in trajs:
-                    conn.execute(
-                        "INSERT INTO set_members (set_id, trajectory_id) VALUES (?, ?)",
-                        (set_id, t["id"])
-                    )
-                conn.commit()
-            return set_id
-
-        # --- COPY PATH: extract, rewrite, cleanup ---
-        shard_rel_path = f"archive/set_{uuid.uuid4().hex[:16]}.safetensors"
-        shard_abs_path = self.root / shard_rel_path
-        writer = ShardWriter(shard_abs_path)
-
-        updated_data = []
-        loaders = {}
-
-        try:
-            for t in trajs:
-                path = self.root / t["shard_path"]
-                if path not in loaders:
-                    loaders[path] = ShardLoader(path)
-
-                samples = []
-                m_raw = t["metadata"]
-                is_compressed = False
-                if m_raw:
-                    try:
-                        m_data = json.loads(m_raw)
-                        is_compressed = m_data.get("compressed", False)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                if is_compressed:
-                    raw_samples = loaders[path].get_compressed_trajectory(t["shard_index"])
-                    samples = []
-                    for s in raw_samples:
-                        s["target"] = s["target_p"]
-                        samples.append(s)
-                else:
-                    samples = loaders[path].get_trajectory_samples(t["shard_index"], t["sample_count"])
-
-                new_idx = writer.add_trajectory(samples)
-                updated_data.append((new_idx, t["id"]))
-        finally:
-            for l in loaders.values(): l.close()
-
-        sample_count, size_bytes = writer.write()
-
-        with _connect(self.db_path) as conn:
-            cur = conn.execute(
-                "INSERT INTO shards (file_path, sample_count, size_bytes, is_temporary, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (shard_rel_path, sample_count, size_bytes, 0, time.time())
-            )
-            new_shard_id = cur.lastrowid
-
-            now = time.time()
-            cur = conn.execute(
-                "INSERT INTO training_sets (name, description, created_at) VALUES (?, ?, ?)",
-                (set_name, None, now)
-            )
-            set_id = cur.lastrowid
-
-            for new_idx, traj_id in updated_data:
+            for r in row:
                 conn.execute(
-                    "UPDATE trajectories SET shard_id = ?, shard_index = ? WHERE id = ?",
-                    (new_shard_id, new_idx, traj_id)
+                    "INSERT OR IGNORE INTO set_members (set_id, trajectory_id) VALUES (?, ?)",
+                    (set_id, r["id"])
                 )
-                conn.execute(
-                    "INSERT INTO set_members (set_id, trajectory_id) VALUES (?, ?)",
-                    (set_id, traj_id)
-                )
-
-            for sid in source_shard_ids:
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM trajectories WHERE shard_id = ?", (sid,)
-                ).fetchone()[0]
-                if count == 0:
-                    row = conn.execute(
-                        "SELECT file_path FROM shards WHERE id = ?", (sid,)
-                    ).fetchone()
-                    if row:
-                        file_path = self.root / row["file_path"]
-                        if file_path.exists():
-                            file_path.unlink()
-                        conn.execute("DELETE FROM shards WHERE id = ?", (sid,))
-
             conn.commit()
 
         return set_id
+
 
     # --- Training Sets ---
 

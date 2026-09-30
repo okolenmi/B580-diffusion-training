@@ -47,7 +47,7 @@ def _make_dataset(tmpdir: Path, latents: list) -> Path:
     root.mkdir()
     db = root / "metadata.db"
     init_local_db(db)
-    shard_file = root / "staging" / "shard.safetensors"
+    shard_file = root / "shards" / "shard.safetensors"
     writer = ShardWriter(shard_file)
     idxs = [writer.add_image_latent(x0) for x0 in latents]
     count, size = writer.write()
@@ -57,9 +57,8 @@ def _make_dataset(tmpdir: Path, latents: list) -> Path:
     for i, (idx, prompt) in enumerate(zip(idxs, PROMPTS)):
         conn.execute(
             "INSERT INTO trajectories (source_id, shard_id, shard_index, sample_count, seed, "
-            "prompt, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (source_id, shard_id, idx, 1, i, prompt,
-             json.dumps({"neg": "", "format": "lora_raw", "model_type": "eps"})))
+            "prompt, neg_prompt, model_type, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (source_id, shard_id, idx, 1, i, prompt, "", "eps", "good"))
     conn.commit()
     conn.close()
     return root

@@ -529,19 +529,14 @@ class Trainer:
             unique_prompts = {""}
             for t in self.dataset_loader.trajectories:
                 unique_prompts.add(t["prompt"])
-                if t.get("metadata"):
-                    try:
-                        meta = json.loads(t["metadata"])
-                        # is not None, not a truthy check: an explicitly-set
-                        # empty negative prompt ("") is a real, common value
-                        # -- a truthy check would silently exclude it from
-                        # the cache, forcing an uncached (slow) CLIP encode
-                        # of "" on every single step that uses it.
-                        if isinstance(meta, dict) and meta.get("neg") is not None:
-                            unique_prompts.add(meta["neg"])
-                    except (json.JSONDecodeError, TypeError, ValueError) as e:
-                        print(f"    [WARN] Skipping malformed metadata for prompt "
-                              f"'{t.get('prompt', '')[:40]}': {e}")
+                # is not None, not a truthy check: an explicitly-set empty
+                # negative prompt ("") is a real, common value -- a truthy
+                # check would silently exclude it from the cache, forcing an
+                # uncached (slow) CLIP encode of "" on every single step that
+                # uses it.
+                neg = t.get("neg_prompt")
+                if neg is not None:
+                    unique_prompts.add(neg)
 
             self.prompt_cache = {}
             for prompt in tqdm(list(unique_prompts), desc="Encoding Prompts"):

@@ -12,6 +12,7 @@ from datetime import datetime
 
 from ..domain.entities.run import Run
 from ..domain.value_objects import RunStatus
+from .ports.config_inspector import StartOption
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,3 +123,35 @@ class ReconcileResult:
     """Outcome of the startup sweep: rows moved out of unfinished."""
 
     cleaned: int
+
+
+@dataclass(frozen=True, slots=True)
+class RawConfig:
+    """A config file's exact text (raw editor round-trip)."""
+
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class LastFinishedRun:
+    """Most recent run that reached a terminal state (oldest-first
+    queries never surface one: the caller scans newest-first)."""
+
+    id: int
+    config_path: str
+    mode: str
+    done_steps: int
+    total_steps: int
+    avg_loss: float | None
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class StartOptionsResult:
+    """The "continue from" picker's data: what each option would use
+    and whether it exists, plus enough run history to warn about
+    unfinished work."""
+
+    start_from: dict[str, StartOption]
+    has_unfinished_run: bool
+    last_finished: LastFinishedRun | None

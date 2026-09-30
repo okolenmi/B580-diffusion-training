@@ -60,7 +60,7 @@ def _launch(config_path: Path, tmp: str, **overrides) -> TrainingLaunch:
 def test_real_inspector() -> None:
     print("\n== CoreConfigInspector over the real config model ==")
     with tempfile.TemporaryDirectory() as tmp:
-        inspector = CoreConfigInspector()
+        inspector = CoreConfigInspector(WorkspaceLayout(Path(tmp)))
         good = _write_config(tmp)
         summary = inspector.summarize(good)
         check(

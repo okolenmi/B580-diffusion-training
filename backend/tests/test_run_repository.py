@@ -188,9 +188,18 @@ def test_persistence_across_instances() -> None:
                 row["version"]
                 for row in conn.execute("SELECT version FROM schema_migrations")
             ]
+        # The invariant: every migration file on disk is recorded, in order.
+        migrations_dir = (
+            Path(__file__).resolve().parents[1]
+            / "infrastructure"
+            / "persistence"
+            / "migrations"
+        )
+        expected = sorted(p.stem for p in migrations_dir.glob("*.sql"))
         check(
-            applied == ["001_initial", "002_cache_progress"],
-            f"schema_migrations records both migrations (got {applied})",
+            applied == expected,
+            f"schema_migrations records every migration file (got {applied}, "
+            f"expected {expected})",
         )
 
 

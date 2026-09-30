@@ -1,15 +1,20 @@
-"""WorkspaceLayout -- repo conventions (venv, dirs, run artifacts).
+"""WorkspaceLayout -- repo conventions (dirs, venv, run artifacts).
 
-Bridging note (deliberate, not laziness): production run-artifact
-paths are delegated to the repo's ``paths`` module -- the *child*
-trainer derives its progress file from ``paths.get_progress_path``, so
+Path *policy* lives in ``path_tiers``; this class binds it to the
+process's project root and adds the run-artifact conventions.
+
+Bridging note (deliberate, not laziness): production paths are
+delegated to the repo's ``paths`` module -- the *child* trainer
+derives its progress file from ``paths.get_progress_path``, so
 parent and child cannot drift. Importing ``paths`` performs its
-documented .env fill-on-import (the same thing ``run_server.sh`` does
-for the shell); this happens once at composition time, never as an
-accidental import side effect of a backend module.
+documented .env fill-on-import (the same thing ``run_server.sh``
+does for the shell); this happens once at composition time, never as
+an accidental import side effect of a backend module.
 
-The old server's DB-backed setting overrides ("venv_python",
-"default_config", ...) are an M3 concern; here only env + defaults
+``settings_kv=`` is the settings store's raw getter: with it, the
+DB-tier overrides join path resolution (getters read it fresh on
+every access, so a settings change is visible immediately, with no
+cache to invalidate). Without it (tests), only env + defaults
 resolve.
 
 ``runs_dir=`` overrides the artifact root for tests: paths are then
@@ -20,26 +25,32 @@ importing the repo module.
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
+from typing import Callable
+
+from . import path_tiers
+
+GetSetting = Callable[[str, str], str]
 
 
 class WorkspaceLayout:
     def __init__(
-        self, project_root: Path, *, runs_dir: Path | None = None
+        self,
+        project_root: Path,
+        *,
+        runs_dir: Path | None = None,
+        settings_kv: GetSetting | None = None,
     ) -> None:
         self._root = project_root
         self._runs_dir = runs_dir
+        self._settings_kv = settings_kv
 
-    # -- repo bridge ---------------------------------------------------
+    # -- settings tier -------------------------------------------------
 
-    def _paths(self):
-        if str(self._root) not in sys.path:
-            sys.path.insert(0, str(self._root))
-        import paths  # noqa: PLC0415 -- explicit bridge, see module doc
-
-        return paths
+    def _setting(self, key: str, default: str = "") -> str:
+        if self._settings_kv is None:
+            return default
+        return self._settings_kv(key, default)
 
     # -- dirs ----------------------------------------------------------
 
@@ -49,27 +60,29 @@ class WorkspaceLayout:
 
     @property
     def comfy_dir(self) -> Path:
-        """Working directory for the trainer (cwd of the subprocess)."""
-        return self._paths().get_comfy_dir()
+        """Working directory for the trainer (cwd of the subprocess).
+
+        May raise ``RuntimeError`` when no ComfyUI install can be
+        identified and no setting overrides one -- reported as
+        ``null`` by the settings endpoint rather than hidden.
+        """
+        return path_tiers.comfy_dir(self._root, self._setting)
 
     @property
     def venv_python(self) -> str:
-        """Interpreter for the trainer (env tier; M3 adds settings)."""
-        self._paths()  # ensure repo .env is loaded before reading env
-        env = os.environ.get("VENV_PYTHON", "")
-        if env:
-            return env
-        workspace = self._root.parent  # venv sits beside the project
-        candidate = workspace / "venv" / "bin" / "python"
-        return str(candidate) if candidate.exists() else "python"
+        return path_tiers.venv_python(self._root, self._setting)
 
     @property
     def checkpoints_dir(self) -> Path:
-        return self._paths().get_checkpoints_dir()
+        return path_tiers.checkpoints_dir(self._root, self._setting)
 
     @property
     def loras_dir(self) -> Path:
-        return self._paths().get_loras_dir()
+        return path_tiers.loras_dir(self._root, self._setting)
+
+    @property
+    def datasets_dir(self) -> Path:
+        return path_tiers.datasets_dir(self._root)
 
     # -- run artifacts -------------------------------------------------
 
@@ -77,14 +90,14 @@ class WorkspaceLayout:
     def runs_dir(self) -> Path:
         if self._runs_dir is not None:
             return self._runs_dir
-        return self._paths().get_runs_dir()
+        return path_tiers.import_paths(self._root).get_runs_dir()
 
     def run_dir(self, run_id: int) -> Path:
         return self.runs_dir / f"run_{run_id}"
 
     def log_path(self, run_id: int) -> Path:
         if self._runs_dir is None:
-            return self._paths().get_log_path(run_id)  # mkdirs itself
+            return path_tiers.import_paths(self._root).get_log_path(run_id)  # mkdirs itself
         path = self.run_dir(run_id) / "log.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
@@ -92,7 +105,7 @@ class WorkspaceLayout:
     def progress_path(self, run_id: int) -> Path:
         """Must equal what the child derives (``paths.get_progress_path``)."""
         if self._runs_dir is None:
-            return self._paths().get_progress_path(run_id)  # mkdirs itself
+            return path_tiers.import_paths(self._root).get_progress_path(run_id)  # mkdirs itself
         path = self.run_dir(run_id) / "log.progress.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path

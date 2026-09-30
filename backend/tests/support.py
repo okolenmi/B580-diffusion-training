@@ -18,8 +18,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.ports.config_inspector import (
+    ConfigDescription,
     ConfigInspector,
     ConfigSummary,
+    StartOption,
 )
 from backend.application.ports.run_repository import RunRepository
 from backend.application.ports.training_gateway import (
@@ -27,25 +29,49 @@ from backend.application.ports.training_gateway import (
     TrainingLaunch,
 )
 from backend.application.errors import ConfigNotFoundError
-from backend.application.services import ApplicationServices
+from backend.application.services import (
+    ApplicationServices,
+    AssetServices,
+    ConfigServices,
+    SettingsServices,
+)
 from backend.application.supervisor import RunSupervisor
 from backend.application.use_cases import (
+    BrowseAssets,
     DeleteRuns,
     GetActiveRun,
+    GetConfig,
+    GetConfigOptions,
     GetRun,
     GetRunLog,
+    GetSettings,
+    GetStartOptions,
+    InspectAsset,
+    ListAssets,
     ListRuns,
+    MakeAssetFolder,
+    ReadConfigRaw,
     ReconcileRuns,
     StartTraining,
     StopTraining,
+    UpdateConfig,
+    UpdateSettings,
+    UploadAsset,
+    WriteConfigRaw,
 )
 from backend.domain.entities.run import Run
 from backend.domain.events import DomainEvent
 from backend.domain.exceptions import DomainError
 from backend.domain.value_objects import RunId, RunStatus
+from backend.infrastructure.config_options import PydanticConfigOptions
+from backend.infrastructure.core_config_files import CoreConfigFiles
+from backend.infrastructure.core_config_inspector import CoreConfigInspector
 from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
+from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.jsonl_progress_source import JsonlProgressSource as _Jsonl
+from backend.infrastructure.persistence.sqlite import SqliteDatabase
+from backend.infrastructure.settings_store import SqliteSettingsStore
 from backend.infrastructure.workspace import WorkspaceLayout
 
 FAILURES: list[str] = []
@@ -238,24 +264,42 @@ class FakeTrainingGateway(TrainingGateway):
 
 
 class FakeConfigInspector(ConfigInspector):
-    """Existence check is real; summaries are scripted.
+    """Existence check is real; summaries/descriptions are scripted.
 
     ``invalid`` maps a path string to an exception to raise (for
-    config_invalid tests); everything else resolves to ``default``.
+    config_invalid tests); everything else resolves to the defaults.
     """
 
     def __init__(self) -> None:
         self.default = ConfigSummary(mode="distillation", total_steps=100)
         self.summaries: dict[str, ConfigSummary] = {}
+        self.descriptions: dict[str, ConfigDescription] = {}
+        self.default_description = ConfigDescription(
+            mode="distillation",
+            total_steps=100,
+            start_from={
+                "teacher": StartOption(path="", available=False, label="Base Model"),
+                "student": StartOption(path="", available=False, label="Student"),
+                "resume": StartOption(path="", available=False, label="Resume"),
+            },
+        )
         self.invalid: dict[str, Exception] = {}
 
-    def summarize(self, config_path: Path) -> ConfigSummary:
+    def _guard(self, config_path: Path) -> str:
         key = str(config_path)
         if key in self.invalid:
             raise self.invalid[key]
         if not config_path.exists():
             raise ConfigNotFoundError(f"config file not found: {config_path}")
+        return key
+
+    def summarize(self, config_path: Path) -> ConfigSummary:
+        key = self._guard(config_path)
         return self.summaries.get(key, self.default)
+
+    def describe(self, config_path: Path) -> ConfigDescription:
+        key = self._guard(config_path)
+        return self.descriptions.get(key, self.default_description)
 
 
 def build_services(
@@ -270,8 +314,18 @@ def build_services(
     project_root: Path | None = None,
     runs_dir: Path | None = None,
     poll_interval: float = 0.05,
+    settings_store: SqliteSettingsStore | None = None,
+    config_files: CoreConfigFiles | None = None,
+    config_options: PydanticConfigOptions | None = None,
+    assets: FileSystemAssetStore | None = None,
 ) -> ApplicationServices:
-    """Wire the use cases against fakes (the composition root's twin)."""
+    """Wire the use cases against fakes (the composition root's twin).
+
+    The runs domain uses fakes (scriptable lifecycle); the config /
+    settings / assets domains default to the *real* adapters over
+    temp locations -- they are cheap, and exercising the real TOML /
+    SQLite / filesystem code paths is the point of these tests.
+    """
     runs = runs if runs is not None else InMemoryRunRepository()
     events = events if events is not None else RecordingEventBus()
     gateway = gateway if gateway is not None else FakeTrainingGateway()
@@ -283,10 +337,21 @@ def build_services(
     runs_dir = runs_dir if runs_dir is not None else Path(
         tempfile.mkdtemp(prefix="backend-runs-")
     )
+    if settings_store is None:
+        database = SqliteDatabase(project_root / "test-settings.db")
+        database.initialize()
+        settings_store = SqliteSettingsStore(database, project_root)
+    layout = WorkspaceLayout(
+        project_root, runs_dir=runs_dir, settings_kv=settings_store.get
+    )
     if artifacts is None:
-        artifacts = DirectoryRunArtifacts(
-            WorkspaceLayout(project_root, runs_dir=runs_dir)
-        )
+        artifacts = DirectoryRunArtifacts(layout)
+    if assets is None:
+        assets = FileSystemAssetStore(layout)
+    if config_files is None:
+        config_files = CoreConfigFiles()
+    if config_options is None:
+        config_options = PydanticConfigOptions()
     if supervisor is None:
         supervisor = RunSupervisor(
             runs=runs,
@@ -318,6 +383,27 @@ def build_services(
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
             runs=runs, events=events, gateway=gateway, clock=clock
+        ),
+        config=ConfigServices(
+            read=GetConfig(files=config_files, project_root=project_root),
+            update=UpdateConfig(files=config_files, project_root=project_root),
+            read_raw=ReadConfigRaw(files=config_files, project_root=project_root),
+            write_raw=WriteConfigRaw(files=config_files, project_root=project_root),
+            options=GetConfigOptions(options=config_options),
+            start_options=GetStartOptions(
+                inspector=inspector, runs=runs, project_root=project_root
+            ),
+        ),
+        settings=SettingsServices(
+            read=GetSettings(settings=settings_store),
+            update=UpdateSettings(settings=settings_store),
+        ),
+        assets=AssetServices(
+            list=ListAssets(assets=assets),
+            browse=BrowseAssets(assets=assets),
+            make_folder=MakeAssetFolder(assets=assets),
+            upload=UploadAsset(assets=assets),
+            inspect=InspectAsset(assets=assets),
         ),
         event_bus=events,
     )
@@ -352,14 +438,28 @@ def seed_run(
 # --------------------------------------------------------------------------
 
 
-async def _asgi_call(app, path: str, *, method: str = "GET", json_body=None):
+async def _asgi_call(
+    app,
+    path: str,
+    *,
+    method: str = "GET",
+    json_body=None,
+    body_bytes: bytes | None = None,
+    content_type: str | None = None,
+):
     method = method or "GET"
     raw_path, _, query = path.partition("?")
     start: dict = {}
     chunks: list[bytes] = []
     body = b""
     headers = [(b"host", b"localhost")]
-    if json_body is not None:
+    if body_bytes is not None:
+        body = body_bytes
+        headers.append(
+            (b"content-type", (content_type or "application/octet-stream").encode())
+        )
+        headers.append((b"content-length", str(len(body)).encode()))
+    elif json_body is not None:
         body = json.dumps(json_body).encode("utf-8")
         headers.append((b"content-type", b"application/json"))
         headers.append((b"content-length", str(len(body)).encode()))
@@ -393,7 +493,13 @@ async def _asgi_call(app, path: str, *, method: str = "GET", json_body=None):
 
 
 def asgi_request(
-    app, path: str, *, method: str = "GET", json_body=None
+    app,
+    path: str,
+    *,
+    method: str = "GET",
+    json_body=None,
+    body_bytes: bytes | None = None,
+    content_type: str | None = None,
 ) -> tuple[int, dict, object]:
     """One request through the whole app; returns (status, headers, body).
 
@@ -401,7 +507,14 @@ def asgi_request(
     else ``None``.
     """
     status, headers, raw = asyncio.run(
-        _asgi_call(app, path, method=method, json_body=json_body)
+        _asgi_call(
+            app,
+            path,
+            method=method,
+            json_body=json_body,
+            body_bytes=body_bytes,
+            content_type=content_type,
+        )
     )
     text = raw.decode("utf-8", errors="replace")
     body: object = None

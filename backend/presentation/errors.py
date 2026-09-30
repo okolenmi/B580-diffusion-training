@@ -33,10 +33,13 @@ _STATUS_BY_CODE: dict[str, int] = {
     "run_not_running": 409,
     "no_active_run": 404,
     "training_launch_failed": 500,
+    "settings_invalid": 400,
 }
 
 
-def error_body(code: str, message: str, details: list | None = None) -> dict:
+def error_body(
+    code: str, message: str, details: dict | list | None = None
+) -> dict:
     body: dict = {"code": code, "message": message}
     if details is not None:
         body["details"] = details
@@ -47,7 +50,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApplicationError)
     async def _application_error(request: Request, exc: ApplicationError) -> JSONResponse:
         status = _STATUS_BY_CODE.get(exc.code, 400)
-        return JSONResponse(status_code=status, content=error_body(exc.code, str(exc)))
+        return JSONResponse(
+            status_code=status,
+            content=error_body(exc.code, str(exc), exc.details),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(

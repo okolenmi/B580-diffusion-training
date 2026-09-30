@@ -1,7 +1,7 @@
 # 01 -- Backend architecture
 
-Status: **M1 + M2 implemented and tested** (2026-09-30). This doc is
-the blueprint `backend/` was built from and the contract later
+Status: **M1, M2 and M3a implemented and tested** (2026-09-30). This
+doc is the blueprint `backend/` was built from and the contract later
 milestones must keep.
 
 ## 1. Why this exists: the evaluation of `server/`
@@ -123,7 +123,7 @@ Rules (each is enforced by review and by the tests):
     file for integration, raw-ASGI calls for end-to-end -- including
     the SSE stream, which must not deadlock through the loop hop.
 
-## 4. File structure (as of M2)
+## 4. File structure (as of M3a)
 
 ```
 backend/
@@ -137,20 +137,30 @@ backend/
 │   ├── events.py             # DomainEvent + lifecycle + RunProgressed telemetry
 │   └── entities/run.py       # Run: state machine + event buffer
 ├── application/
-│   ├── errors.py             # 8 errors, each with a code -> HTTP status
-│   ├── dto.py                # RunDTO + command/result shapes + mapping
-│   ├── services.py           # ApplicationServices (frozen aggregate)
+│   ├── errors.py             # 9 errors, each with a code -> HTTP status
+│   ├── dto.py                # RunDTO + config/settings/asset shapes + mapping
+│   ├── services.py           # ApplicationServices + Config/Settings/Asset groups
 │   ├── supervisor.py         # RunSupervisor: one daemon thread per run
 │   ├── ports/                # ABCs: RunRepository, EventBus, Clock,
-│   │                         # TrainingGateway, ConfigInspector,
+│   │                         # TrainingGateway, ConfigInspector, ConfigFiles,
+│   │                         # ConfigOptions, SettingsStore, AssetStore,
 │   │                         # RunArtifacts, ProgressSource
-│   └── use_cases/            # ListRuns, GetRun, DeleteRuns, StartTraining,
-│                             # StopTraining, GetActiveRun, GetRunLog, ReconcileRuns
+│   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
+│                             # raw x2/options/start-options); settings (Get/
+│                             # Update); assets (List/Browse/MakeFolder/Upload/
+│                             # Inspect)
 ├── infrastructure/
 │   ├── clock.py              # SystemClock
-│   ├── workspace.py          # WorkspaceLayout (bridges repo paths.py)
+│   ├── workspace.py          # WorkspaceLayout (settings_kv tier + paths bridge)
+│   ├── path_tiers.py         # shared resolution policy (layout == settings view)
 │   ├── subprocess_gateway.py # SubprocessTrainingGateway (spawn/signal/reap)
-│   ├── core_config_inspector.py  # CoreConfigInspector (core.config_io)
+│   ├── core_config_inspector.py  # summarize/describe (core.config_io)
+│   ├── core_config_files.py  # read/merge/replace (core.config_io/model)
+│   ├── config_schema.py      # TrainingConfig introspection -> option metadata
+│   ├── config_ui_data.py     # hand-authored labels/groups/visibility (data)
+│   ├── config_options.py     # PydanticConfigOptions: schema + metadata merged
+│   ├── settings_store.py     # SqliteSettingsStore (validate-then-write, atomic)
+│   ├── file_asset_store.py   # FileSystemAssetStore (sandboxed client paths)
 │   ├── directory_run_artifacts.py
 │   ├── jsonl_progress_source.py  # offset-tailed progress reader
 │   ├── persistence/          # SqliteDatabase + SqliteRunRepository + migrations/
@@ -161,23 +171,27 @@ backend/
 │   ├── errors.py             # the one error envelope (4 handlers)
 │   ├── schemas.py            # pydantic response models + *_out mappers
 │   ├── sse.py                # EventBus -> text/event-stream bridge
-│   └── api/                  # health.py, runs.py, events.py
+│   └── api/                  # health.py, runs.py, config.py, settings.py,
+│                             # assets.py, events.py
 └── tests/                    # standalone check() scripts + run_all.py
 ```
 
-Later milestones add: config/settings/datasets domains (M3), the
-nodegraph subsystem behind a `GraphRuntime` port (M4).
+Later milestones add: datasets (M3b), the nodegraph subsystem behind a
+`GraphRuntime` port (M4).
 
-Two deliberate bridges to the repo (adapter-owned, never leaked past
-infrastructure): `workspace.py` imports `paths` so parent and *child*
-agree on `runs/run_<id>/log.progress.jsonl` exactly (its documented
-.env fill-on-import equals what `run_server.sh` does for the shell),
-and the gateway/inspector import `core.config_io` for argv/config
-parsing. Import purity holds for every backend module itself.
+Deliberate bridges to the repo (adapter-owned, never leaked past
+infrastructure): `workspace.py`/`path_tiers.py` import `paths` so
+parent and *child* agree on `runs/run_<id>/log.progress.jsonl` exactly
+(its documented .env fill-on-import equals what `run_server.sh` does
+for the shell); the gateway/inspector/config-files adapters import
+`core.config_io`/`core.config_model` for argv/config parsing; the
+asset store imports `nodes.model.resource_inspection` lazily inside
+`inspect()` (it pulls torch -- catalog/browse stay torch-free).
+Import purity holds for every backend module itself.
 
 ## 5. API contract (v1, clean-break)
 
-Endpoints as of M2:
+Endpoints as of M3a:
 
 | Method | Path | Use case |
 |--------|------|----------|
@@ -189,12 +203,59 @@ Endpoints as of M2:
 | POST | `/api/v1/runs/{id}/stop` | `StopTraining` (body: `force`) |
 | GET | `/api/v1/runs/{id}/log?lines=` | `GetRunLog` (1..500, tail text) |
 | DELETE | `/api/v1/runs` | `DeleteRuns` |
+| GET | `/api/v1/config?path=` | `GetConfig` -- validated config as nested JSON |
+| PATCH | `/api/v1/config` | `UpdateConfig` (body: `path`, `overrides` deep-merge) |
+| GET | `/api/v1/config/raw?path=` | `ReadConfigRaw` (`{content}`) |
+| PUT | `/api/v1/config/raw` | `WriteConfigRaw` (body: `path`, `content`; create-or-replace) |
+| GET | `/api/v1/config/options` | `GetConfigOptions` -- field schema, no config read |
+| GET | `/api/v1/config/start-options?path=` | `GetStartOptions` |
+| GET | `/api/v1/settings` | `GetSettings` (`{stored, resolved}`) |
+| POST | `/api/v1/settings` | `UpdateSettings` (partial; `""` clears) |
+| GET | `/api/v1/assets/{kind}` | `ListAssets` (kind: `checkpoint`, `lora`) |
+| GET | `/api/v1/assets/{kind}/browse?path=` | `BrowseAssets` |
+| GET | `/api/v1/assets/{kind}/inspect?path=` | `InspectAsset` (header-only safetensors) |
+| PUT | `/api/v1/assets/{kind}/folders/{path}` | `MakeAssetFolder` -> 201 |
+| PUT | `/api/v1/assets/{kind}/files/{path}` | `UploadAsset` (raw bytes body) -> 201 |
 | GET | `/api/v1/events` | SSE stream of domain events |
 
 `/runs/active` is registered before `/runs/{id}` so the path param
 never swallows it. Request bodies are thin: validation that matters
-(`start_from` values, `lines` range, config resolution) lives in the
-use cases, not in pydantic/`Query` -- one source of truth.
+(`start_from` values, `lines` range, config resolution, non-empty
+path params) lives in the use cases, not in pydantic/`Query` -- one
+source of truth.
+
+**Config contract (M3a, clean break)**: `PATCH` merges a *nested*
+partial object (dotted/flat keys and string coercion do not exist
+here); the file must already exist (`PUT /raw` is the
+create-or-replace path) and validation precedes every write, so a
+rejected update never touches the file. Unknown override keys are
+ignored (`TrainingConfig` is permissive by design). Saving never
+mutates launch state and launching never mutates the config:
+launch options (`start_from`, `reset_optimizer`) ride the
+`POST /runs` body, not the config file. `GET .../options` is a pure
+function of the config model + UI metadata (values come from
+`GET .../`), and `start-options` reports availability as
+configured-path + actual-existence, with `lora_checkpoint` absent
+(not faked as unavailable) for non-LoRA configs; a broken config
+propagates its error instead of degrading to an empty 200.
+
+**Settings contract (M3a)**: `{stored, resolved}` -- raw KV values
+vs. what the resolution policy currently points at (`null` only for
+`comfy_dir`, which has no fallback). Updates are atomic: every
+provided value validates first, then all persist in one transaction;
+a rejection carries the full `{key: message}` map under `details`
+and writes nothing. Tier order lives in exactly one place
+(`path_tiers.py`), shared by the API view and `WorkspaceLayout`, and
+a *configured* `venv_python` is used as-is -- a stale value fails
+loudly at spawn rather than silently running another interpreter.
+
+**Assets contract (M3a)**: client paths are untrusted -- sandboxed
+against the kind's base dir (no absolute paths, no `..`, final
+target inside the base); listings exclude `resume/` and dotfiles in
+both catalog and browse; `inspect` returns the fixed per-kind shape
+(`{kind, path, components}` for checkpoints,
+`{kind, path, dtype, rank, key_count}` for LoRAs), never a raw
+header dump.
 
 **Error envelope** -- every non-2xx response, no exceptions (unknown
 routes, method-not-allowed, and framework validation included):
@@ -207,8 +268,9 @@ Codes map to statuses centrally: `run_not_found` 404,
 `invalid_query` 422, `validation_error` 422 (FastAPI/pydantic input),
 `config_not_found` 404, `config_invalid` 422, `run_already_active`
 409, `run_not_running` 409, `no_active_run` 404,
-`training_launch_failed` 500, `http_{status}` for transport-level
-errors, `internal_error` 500 (traceback logged, message generic).
+`training_launch_failed` 500, `settings_invalid` 400 (`details` is a
+`{key: message}` map), `http_{status}` for transport-level errors,
+`internal_error` 500 (traceback logged, message generic).
 
 **SSE**: `data: {json}` frames where json carries `type`
 (`stream_opened`, `run_created`, `run_started`, `run_completed`,
@@ -256,7 +318,8 @@ emits nothing -- that invariant is test-pinned).
 |---|-------|--------|
 | M1 | Skeleton: layering, settings, SQLite + migrations, runs read-side, delete + event, error envelope, SSE, tests, boot on own port | **done** |
 | M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | **done** |
-| M3 | Config file, settings store, assets (checkpoints/loras), datasets domains | next |
+| M3a | Config (read/PATCH/raw/options/start-options), settings store (atomic, tiered), assets (catalog/browse/mkdir/upload/inspect) | **done** |
+| M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile | next |
 | M4 | Nodegraph subsystem (registry, introspect, executor, presets) behind a `GraphRuntime` port | planned |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
 
@@ -266,7 +329,8 @@ emits nothing -- that invariant is test-pinned).
 # server (own port; old server keeps 8765)
 python -m backend.cli --port 8766
 
-# tests (5 files: domain, repository, use cases, bus, end-to-end API+SSE)
+# tests (11 files: domain, repository, use cases, supervisor, event bus,
+# training adapter, start/stop, end-to-end API+SSE, config, settings, assets)
 python backend/tests/run_all.py
 ```
 

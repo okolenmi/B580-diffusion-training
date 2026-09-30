@@ -4,8 +4,9 @@ Order of business:
 
 1. ``Settings`` arrive fully built (from the CLI);
 2. infrastructure objects are constructed (database + migrations,
-   repository, event bus, clock, workspace layout, training gateway,
-   config inspector, artifacts, progress source);
+   repository, event bus, clock, settings store, workspace layout,
+   training gateway, config inspector/files/options, assets store,
+   artifacts, progress source);
 3. the supervisor and use cases are constructed with those ports;
 4. ``ReconcileRuns`` sweeps rows left unfinished by a previous process
    (before any request can race it);
@@ -23,26 +24,48 @@ from dataclasses import dataclass
 
 from .application.ports.clock import Clock
 from .application.ports.training_gateway import TrainingGateway
-from .application.services import ApplicationServices
+from .application.services import (
+    ApplicationServices,
+    AssetServices,
+    ConfigServices,
+    SettingsServices,
+)
 from .application.supervisor import RunSupervisor
 from .application.use_cases import (
+    BrowseAssets,
     DeleteRuns,
     GetActiveRun,
+    GetConfig,
+    GetConfigOptions,
     GetRun,
     GetRunLog,
+    GetSettings,
+    GetStartOptions,
+    InspectAsset,
+    ListAssets,
     ListRuns,
+    MakeAssetFolder,
+    ReadConfigRaw,
     ReconcileRuns,
     StartTraining,
     StopTraining,
+    UpdateConfig,
+    UpdateSettings,
+    UploadAsset,
+    WriteConfigRaw,
 )
 from .config import Settings
 from .infrastructure.clock import SystemClock
+from .infrastructure.config_options import PydanticConfigOptions
+from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.core_config_inspector import CoreConfigInspector
 from .infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from .infrastructure.events.callback_event_bus import CallbackEventBus
+from .infrastructure.file_asset_store import FileSystemAssetStore
 from .infrastructure.jsonl_progress_source import JsonlProgressSource
 from .infrastructure.persistence.run_repository import SqliteRunRepository
 from .infrastructure.persistence.sqlite import SqliteDatabase
+from .infrastructure.settings_store import SqliteSettingsStore
 from .infrastructure.subprocess_gateway import SubprocessTrainingGateway
 from .infrastructure.workspace import WorkspaceLayout
 
@@ -70,11 +93,20 @@ def build_container(settings: Settings) -> Container:
     event_bus = CallbackEventBus()
     clock = SystemClock()
 
-    layout = WorkspaceLayout(settings.project_root)
+    # Settings first: the workspace layout resolves its override tier
+    # through the store, and the store resolves its reported view
+    # through the same policy (path_tiers) -- one definition each.
+    settings_store = SqliteSettingsStore(database, settings.project_root)
+    layout = WorkspaceLayout(
+        settings.project_root, settings_kv=settings_store.get
+    )
     artifacts = DirectoryRunArtifacts(layout)
     progress = JsonlProgressSource()
     gateway = SubprocessTrainingGateway(layout)
-    inspector = CoreConfigInspector()
+    inspector = CoreConfigInspector(layout)
+    config_files = CoreConfigFiles()
+    config_options = PydanticConfigOptions()
+    assets = FileSystemAssetStore(layout)
 
     supervisor = RunSupervisor(
         runs=run_repository,
@@ -112,6 +144,29 @@ def build_container(settings: Settings) -> Container:
             events=event_bus,
             gateway=gateway,
             clock=clock,
+        ),
+        config=ConfigServices(
+            read=GetConfig(files=config_files, project_root=settings.project_root),
+            update=UpdateConfig(files=config_files, project_root=settings.project_root),
+            read_raw=ReadConfigRaw(files=config_files, project_root=settings.project_root),
+            write_raw=WriteConfigRaw(files=config_files, project_root=settings.project_root),
+            options=GetConfigOptions(options=config_options),
+            start_options=GetStartOptions(
+                inspector=inspector,
+                runs=run_repository,
+                project_root=settings.project_root,
+            ),
+        ),
+        settings=SettingsServices(
+            read=GetSettings(settings=settings_store),
+            update=UpdateSettings(settings=settings_store),
+        ),
+        assets=AssetServices(
+            list=ListAssets(assets=assets),
+            browse=BrowseAssets(assets=assets),
+            make_folder=MakeAssetFolder(assets=assets),
+            upload=UploadAsset(assets=assets),
+            inspect=InspectAsset(assets=assets),
         ),
         event_bus=event_bus,
     )

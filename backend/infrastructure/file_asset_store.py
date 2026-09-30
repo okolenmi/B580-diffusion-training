@@ -26,19 +26,30 @@ from ..application.ports.asset_store import (
     AssetOption,
     AssetStore,
 )
+from ..application.ports.dataset_library import DatasetLibrary
 from . import path_tiers
 from .workspace import WorkspaceLayout
 
-KINDS = ("checkpoint", "lora")
+KINDS = ("checkpoint", "lora", "dataset")
+
+# Kinds that are catalog-only: names appear in pickers, but browsing,
+# uploading, folder-making, and inspection are rejected with guidance
+# toward the datasets API (which owns the real semantics).
+CATALOG_ONLY_KINDS = ("dataset",)
 
 
 class FileSystemAssetStore(AssetStore):
-    def __init__(self, layout: WorkspaceLayout) -> None:
+    def __init__(
+        self, layout: WorkspaceLayout, *, datasets: DatasetLibrary | None = None
+    ) -> None:
         self._layout = layout
+        self._datasets = datasets
 
     # -- capabilities ---------------------------------------------------
 
     def catalog(self, kind: str) -> AssetCatalog:
+        if kind == "dataset":
+            return self._dataset_catalog()
         base = self._base(kind)
         files = self._list_model_files(base)
         return AssetCatalog(
@@ -49,7 +60,29 @@ class FileSystemAssetStore(AssetStore):
             browse_supported=True,
         )
 
+    def _dataset_catalog(self) -> AssetCatalog:
+        """Dataset names as picker options (M3b: the catalog-only kind).
+
+        Read from the library so the list applies the same visibility
+        rules as the datasets API (dot-prefixed dirs skipped, no
+        metadata.db skipped); no files are ever surfaced here."""
+        if self._datasets is None:  # pragma: no cover - composition bug
+            raise InvalidQueryError("dataset catalog is not wired")
+        names = [summary.info.name for summary in self._datasets.list()]
+        return AssetCatalog(
+            kind="dataset",
+            base_dir=str(self._layout.datasets_dir),
+            options=tuple(AssetOption(value=name, label=name) for name in names),
+            upload_supported=False,
+            browse_supported=False,
+        )
+
     def browse(self, kind: str, path: str = "") -> AssetBrowse:
+        if kind in CATALOG_ONLY_KINDS:
+            raise InvalidQueryError(
+                f"asset kind {kind!r} is catalog-only; "
+                f"use the datasets API instead"
+            )
         base = self._base(kind).resolve()
         target = self._safe_resolve(kind, path) if path else base
         if not target.exists():
@@ -73,17 +106,20 @@ class FileSystemAssetStore(AssetStore):
         )
 
     def make_folder(self, kind: str, relative_path: str) -> str:
+        self._reject_catalog_only(kind, "create folders in")
         resolved = self._safe_resolve(kind, relative_path)
         resolved.mkdir(parents=True, exist_ok=True)
         return str(resolved)
 
     def save_upload(self, kind: str, relative_path: str, content: bytes) -> str:
+        self._reject_catalog_only(kind, "upload into")
         resolved = self._safe_resolve(kind, relative_path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(content)
         return str(resolved)
 
     def inspect(self, kind: str, relative_path: str) -> dict[str, Any]:
+        self._reject_catalog_only(kind, "inspect files in")
         self._base(kind)  # kind whitelist (checkpoint/lora only)
         resolved = self._safe_resolve(kind, relative_path)
         if not resolved.exists():
@@ -138,11 +174,21 @@ class FileSystemAssetStore(AssetStore):
 
     # -- internals ------------------------------------------------------
 
+    @staticmethod
+    def _reject_catalog_only(kind: str, action: str) -> None:
+        if kind in CATALOG_ONLY_KINDS:
+            raise InvalidQueryError(
+                f"asset kind {kind!r} is catalog-only; use the datasets API "
+                f"to {action} datasets"
+            )
+
     def _base(self, kind: str) -> Path:
         if kind == "checkpoint":
             return self._layout.checkpoints_dir
         if kind == "lora":
             return self._layout.loras_dir
+        if kind == "dataset":
+            return self._layout.datasets_dir
         raise InvalidQueryError(
             f"unknown asset kind {kind!r}; expected one of {list(KINDS)}"
         )

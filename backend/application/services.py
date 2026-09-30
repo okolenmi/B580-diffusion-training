@@ -8,7 +8,7 @@ layer depends on application, never the other way around.
 
 Use cases are grouped by domain so the aggregate stays navigable as
 it grows: ``runs`` (the original flat fields, kept flat for
-continuity), ``config``, ``settings``, ``assets``.
+continuity), ``config``, ``settings``, ``assets``, ``datasets``.
 """
 
 from __future__ import annotations
@@ -17,23 +17,37 @@ from dataclasses import dataclass
 
 from .ports.event_bus import EventBus
 from .use_cases.browse_assets import BrowseAssets
+from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
+from .use_cases.commit_dataset_items import CommitDatasetItems
+from .use_cases.create_dataset import CreateDataset
+from .use_cases.delete_dataset import DeleteDataset
 from .use_cases.delete_runs import DeleteRuns
+from .use_cases.discard_dataset_items import DiscardDatasetItems
 from .use_cases.get_active_run import GetActiveRun
 from .use_cases.get_config import GetConfig
 from .use_cases.get_config_options import GetConfigOptions
+from .use_cases.get_dataset import GetDataset
 from .use_cases.get_run import GetRun
 from .use_cases.get_run_log import GetRunLog
 from .use_cases.get_settings import GetSettings
 from .use_cases.get_start_options import GetStartOptions
 from .use_cases.inspect_asset import InspectAsset
 from .use_cases.list_assets import ListAssets
+from .use_cases.list_dataset_items import ListDatasetItems
+from .use_cases.list_dataset_sets import ListDatasetSets
+from .use_cases.list_dataset_tasks import ListDatasetTasks
+from .use_cases.list_datasets import ListDatasets
 from .use_cases.list_runs import ListRuns
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.read_config_raw import ReadConfigRaw
+from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_runs import ReconcileRuns
+from .use_cases.start_dataset_task import StartDatasetTask
 from .use_cases.start_training import StartTraining
+from .use_cases.stop_dataset_task import StopDatasetTask
 from .use_cases.stop_training import StopTraining
 from .use_cases.update_config import UpdateConfig
+from .use_cases.update_dataset_item import UpdateDatasetItem
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
 from .use_cases.write_config_raw import WriteConfigRaw
@@ -67,6 +81,26 @@ class AssetServices:
 
 
 @dataclass(frozen=True, slots=True)
+class DatasetServices:
+    """Dataset library, curation, training sets, and task lifecycle (M3b)."""
+
+    list: ListDatasets
+    get: GetDataset
+    create: CreateDataset
+    delete: DeleteDataset
+    items: ListDatasetItems
+    update_item: UpdateDatasetItem
+    bulk_update: BulkUpdateDatasetItems
+    discard: DiscardDatasetItems
+    sets: ListDatasetSets
+    commit: CommitDatasetItems
+    tasks: ListDatasetTasks
+    start_task: StartDatasetTask
+    stop_task: StopDatasetTask
+    reconcile_tasks: ReconcileDatasetTasks
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationServices:
     # runs domain (M1/M2)
     list_runs: ListRuns
@@ -81,5 +115,7 @@ class ApplicationServices:
     config: ConfigServices
     settings: SettingsServices
     assets: AssetServices
+    # dataset domain (M3b)
+    datasets: DatasetServices
     # shared
     event_bus: EventBus

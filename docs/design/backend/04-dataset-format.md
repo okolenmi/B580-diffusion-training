@@ -109,7 +109,7 @@ Connection PRAGMAs on every open: `journal_mode=WAL`, `busy_timeout=5000`,
 | actor \ dataset | v1 (legacy) | v2 |
 |---|---|---|
 | legacy server `server/` curation UI | works unchanged | works (staging/archived views are membership-based aliases; rows carry a synthesized `metadata` JSON string projected from columns for the UI) |
-| legacy server ingestion/tasks | works, but `ensure_v2` in the builder refuses → task marked `failed` with migration hint | refuses at `create_task` (`no such table: tasks`) — replaced by M3b |
+| legacy server ingestion/tasks | works, but `ensure_v2` in the builder refuses → task marked `failed` with migration hint | refuses at `create_task` (`no such table: tasks`) — replaced by the backend's dataset tasks (M3b, implemented) |
 | training (`core.cli` → `manager.loader`) | refuses via `ensure_v2` with migration hint | works |
 | new backend `backend/` | refuses via `ensure_v2` at the port boundary | works |
 
@@ -124,11 +124,13 @@ Removed on purpose from v1 → v2: dedup on re-ingest (recorded provenance
 `source_path` makes it possible later), mixed-caption batching (trainer-side,
 separate concern), loader RAM strategy (future work, enabled by size columns).
 
-## M3b contract implications
+## M3b contract implications (implemented)
 
 - `DatasetLibrary` port reads with its own SQL over the v2 columns (no
-  `json_extract`), torch-free.
+  `json_extract`), torch-free; `create`/`commit` bridge to `manager`
+  lazily (byte-identical schema, one definition of membership).
 - Dataset task lifecycle lives in `backend.db` (migration `004`); ingestion
   children report through a duck-typed reporter (`progress/finished/failed`)
   instead of writing a dataset DB `tasks` table — the "fork task gateway".
-- Startup reconciliation of dataset tasks mirrors `ReconcileRuns`.
+- Startup reconciliation of dataset tasks mirrors `ReconcileRuns`; the
+  task list additionally sweeps rows whose child died unreported.

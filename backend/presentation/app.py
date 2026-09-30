@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from .. import __version__
 from ..application.services import ApplicationServices
-from .api import assets, config, events, health, runs, settings
+from .api import assets, config, datasets, events, health, runs, settings
 from .errors import register_error_handlers
 
 
@@ -31,5 +31,6 @@ def create_app(services: ApplicationServices) -> FastAPI:
     app.include_router(config.router)
     app.include_router(settings.router)
     app.include_router(assets.router)
+    app.include_router(datasets.router)
     app.include_router(events.router)
     return app

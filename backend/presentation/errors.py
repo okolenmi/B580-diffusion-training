@@ -34,6 +34,15 @@ _STATUS_BY_CODE: dict[str, int] = {
     "no_active_run": 404,
     "training_launch_failed": 500,
     "settings_invalid": 400,
+    # datasets (M3b)
+    "dataset_not_found": 404,
+    "dataset_item_not_found": 404,
+    "dataset_exists": 409,
+    "dataset_not_migrated": 409,
+    "dataset_task_active": 409,
+    "dataset_task_not_found": 404,
+    "dataset_task_not_active": 409,
+    "dataset_task_launch_failed": 500,
 }
 
 

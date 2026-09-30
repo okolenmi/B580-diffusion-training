@@ -1,8 +1,8 @@
 # 01 -- Backend architecture
 
-Status: **M1, M2 and M3a implemented and tested** (2026-09-30). This
-doc is the blueprint `backend/` was built from and the contract later
-milestones must keep.
+Status: **M1, M2, M3a and M3b implemented and tested** (2026-09-30).
+This doc is the blueprint `backend/` was built from and the contract
+later milestones must keep.
 
 ## 1. Why this exists: the evaluation of `server/`
 
@@ -123,7 +123,7 @@ Rules (each is enforced by review and by the tests):
     file for integration, raw-ASGI calls for end-to-end -- including
     the SSE stream, which must not deadlock through the loop hop.
 
-## 4. File structure (as of M3a)
+## 4. File structure (as of M3b)
 
 ```
 backend/
@@ -137,30 +137,39 @@ backend/
 │   ├── events.py             # DomainEvent + lifecycle + RunProgressed telemetry
 │   └── entities/run.py       # Run: state machine + event buffer
 ├── application/
-│   ├── errors.py             # 9 errors, each with a code -> HTTP status
-│   ├── dto.py                # RunDTO + config/settings/asset shapes + mapping
-│   ├── services.py           # ApplicationServices + Config/Settings/Asset groups
+│   ├── errors.py             # 17 errors, each with a code -> HTTP status
+│   ├── dto.py                # RunDTO + config/settings/asset/dataset shapes
+│   ├── services.py           # ApplicationServices + Config/Settings/Asset/
+│   │                         # Dataset groups
 │   ├── supervisor.py         # RunSupervisor: one daemon thread per run
 │   ├── ports/                # ABCs: RunRepository, EventBus, Clock,
 │   │                         # TrainingGateway, ConfigInspector, ConfigFiles,
 │   │                         # ConfigOptions, SettingsStore, AssetStore,
-│   │                         # RunArtifacts, ProgressSource
+│   │                         # DatasetLibrary, DatasetTasks,
+│   │                         # DatasetTaskGateway, RunArtifacts, ProgressSource
 │   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
 │                             # raw x2/options/start-options); settings (Get/
 │                             # Update); assets (List/Browse/MakeFolder/Upload/
-│                             # Inspect)
+│                             # Inspect); datasets (List/Get/Create/Delete, items
+│                             # x4, sets/commit, tasks list/start/stop,
+│                             # ReconcileDatasetTasks)
 ├── infrastructure/
 │   ├── clock.py              # SystemClock
 │   ├── workspace.py          # WorkspaceLayout (settings_kv tier + paths bridge)
 │   ├── path_tiers.py         # shared resolution policy (layout == settings view)
 │   ├── subprocess_gateway.py # SubprocessTrainingGateway (spawn/signal/reap)
+│   ├── dataset_library.py    # SqliteDatasetLibrary (own-SQL reads, manager bridges)
+│   ├── dataset_tasks.py      # SqliteDatasetTasks (CAS row store for tasks)
+│   ├── dataset_task_gateway.py   # SubprocessDatasetTaskGateway (fork gateway)
+│   ├── dataset_task_worker.py    # child entry: reporter + DataTaskRunner
 │   ├── core_config_inspector.py  # summarize/describe (core.config_io)
 │   ├── core_config_files.py  # read/merge/replace (core.config_io/model)
 │   ├── config_schema.py      # TrainingConfig introspection -> option metadata
 │   ├── config_ui_data.py     # hand-authored labels/groups/visibility (data)
 │   ├── config_options.py     # PydanticConfigOptions: schema + metadata merged
 │   ├── settings_store.py     # SqliteSettingsStore (validate-then-write, atomic)
-│   ├── file_asset_store.py   # FileSystemAssetStore (sandboxed client paths)
+│   ├── file_asset_store.py   # FileSystemAssetStore (sandboxed paths; dataset
+│   │                         # kind is catalog-only)
 │   ├── directory_run_artifacts.py
 │   ├── jsonl_progress_source.py  # offset-tailed progress reader
 │   ├── persistence/          # SqliteDatabase + SqliteRunRepository + migrations/
@@ -172,12 +181,12 @@ backend/
 │   ├── schemas.py            # pydantic response models + *_out mappers
 │   ├── sse.py                # EventBus -> text/event-stream bridge
 │   └── api/                  # health.py, runs.py, config.py, settings.py,
-│                             # assets.py, events.py
+│                             # assets.py, datasets.py, events.py
 └── tests/                    # standalone check() scripts + run_all.py
 ```
 
-Later milestones add: datasets (M3b), the nodegraph subsystem behind a
-`GraphRuntime` port (M4).
+Later milestones add: the nodegraph subsystem behind a `GraphRuntime`
+port (M4).
 
 Deliberate bridges to the repo (adapter-owned, never leaked past
 infrastructure): `workspace.py`/`path_tiers.py` import `paths` so
@@ -186,12 +195,17 @@ parent and *child* agree on `runs/run_<id>/log.progress.jsonl` exactly
 for the shell); the gateway/inspector/config-files adapters import
 `core.config_io`/`core.config_model` for argv/config parsing; the
 asset store imports `nodes.model.resource_inspection` lazily inside
-`inspect()` (it pulls torch -- catalog/browse stay torch-free).
-Import purity holds for every backend module itself.
+`inspect()` (it pulls torch -- catalog/browse stay torch-free); the
+dataset library bridges to `manager.db`/`manager.dataset` lazily inside
+`create`/`commit` only (schema and membership semantics must stay
+byte-identical to what the trainer writes -- torch loads on those two
+calls, never on reads), and the dataset task worker imports
+`manager.builder` in the child process only. Import purity holds for
+every backend module itself.
 
 ## 5. API contract (v1, clean-break)
 
-Endpoints as of M3a:
+Endpoints as of M3b:
 
 | Method | Path | Use case |
 |--------|------|----------|
@@ -211,11 +225,24 @@ Endpoints as of M3a:
 | GET | `/api/v1/config/start-options?path=` | `GetStartOptions` |
 | GET | `/api/v1/settings` | `GetSettings` (`{stored, resolved}`) |
 | POST | `/api/v1/settings` | `UpdateSettings` (partial; `""` clears) |
-| GET | `/api/v1/assets/{kind}` | `ListAssets` (kind: `checkpoint`, `lora`) |
+| GET | `/api/v1/assets/{kind}` | `ListAssets` (kind: `checkpoint`, `lora`, `dataset` -- the last is catalog-only) |
 | GET | `/api/v1/assets/{kind}/browse?path=` | `BrowseAssets` |
 | GET | `/api/v1/assets/{kind}/inspect?path=` | `InspectAsset` (header-only safetensors) |
 | PUT | `/api/v1/assets/{kind}/folders/{path}` | `MakeAssetFolder` -> 201 |
 | PUT | `/api/v1/assets/{kind}/files/{path}` | `UploadAsset` (raw bytes body) -> 201 |
+| GET | `/api/v1/datasets` | `ListDatasets` -- identity + stats (`stats: null` for legacy v1) |
+| POST | `/api/v1/datasets` | `CreateDataset` (body: `name`, `description?`) -> 201 |
+| GET | `/api/v1/datasets/{name}` | `GetDataset` (409 `dataset_not_migrated` on v1) |
+| DELETE | `/api/v1/datasets/{name}` | `DeleteDataset` (any version; 409 while a task is active) |
+| GET | `/api/v1/datasets/{name}/items?committed=` | `ListDatasetItems` |
+| PATCH | `/api/v1/datasets/{name}/items` | `BulkUpdateDatasetItems` (body: `item_ids`, `prompt?`, `prompt_mode?`, `neg_prompt?`, `cfg?`) |
+| PATCH | `/api/v1/datasets/{name}/items/{id}` | `UpdateDatasetItem` (single; explicit `type` replaces the legacy toggle) |
+| POST | `/api/v1/datasets/{name}/items/discard` | `DiscardDatasetItems` (body: `item_ids`) |
+| GET | `/api/v1/datasets/{name}/sets` | `ListDatasetSets` |
+| POST | `/api/v1/datasets/{name}/sets` | `CommitDatasetItems` (body: `item_ids`, `name`) -> 201 |
+| GET | `/api/v1/datasets/{name}/tasks?active_only=` | `ListDatasetTasks` (sweeps dead rows) |
+| POST | `/api/v1/datasets/{name}/tasks` | `StartDatasetTask` (body: kind/image_dir/model/flags) -> 201; 409 `dataset_task_active` |
+| POST | `/api/v1/datasets/{name}/tasks/{id}/stop` | `StopDatasetTask` (SIGKILL; 409 if terminal) |
 | GET | `/api/v1/events` | SSE stream of domain events |
 
 `/runs/active` is registered before `/runs/{id}` so the path param
@@ -255,7 +282,33 @@ target inside the base); listings exclude `resume/` and dotfiles in
 both catalog and browse; `inspect` returns the fixed per-kind shape
 (`{kind, path, components}` for checkpoints,
 `{kind, path, dtype, rank, key_count}` for LoRAs), never a raw
-header dump.
+header dump. The `dataset` kind (M3b) is catalog-only: its options
+are dataset names (same visibility rules as the datasets API) and
+browse/upload/mkdir/inspect are refused with guidance.
+
+**Datasets contract (M3b)**: storage is format v2
+(`04-dataset-format.md`) and the API refuses anything else --
+listings *show* legacy datasets with their real `format_version` and
+`stats: null` (never fabricated counts), every other operation on one
+returns 409 `dataset_not_migrated` with the migration command in
+`details` (delete excepted: removing a legacy dataset must not require
+migrating it). Reads are torch-free own-SQL over each dataset's
+`metadata.db`; `create`/`commit` bridge to `manager` lazily (schema
+and membership semantics have exactly one implementation, the
+trainer's). Task state is *server* state: rows live in `backend.db`
+(`dataset_tasks`, migration 004) and are written by three racing
+actors -- start, the child's reporter, stop/reconcile -- through
+compare-and-swap, so exactly one final outcome wins (`pending ->
+running -> finished|failed|killed`, a late progress tick is a no-op,
+never a resurrection). One active task per dataset (409
+`dataset_task_active`); the fork gateway spawns
+`venv_python -m backend.infrastructure.dataset_task_worker` with a
+`/proc` cmdline marker guarding both kill (refuse strangers) and
+liveness (a reused pid or a zombie reads as dead, a task that
+outlives a server restart still reads as alive). Startup runs
+`ReconcileDatasetTasks`; the list endpoint additionally sweeps rows
+whose child died unreported (running+dead immediately, pending with
+no pid after 60s).
 
 **Error envelope** -- every non-2xx response, no exceptions (unknown
 routes, method-not-allowed, and framework validation included):
@@ -319,7 +372,7 @@ emits nothing -- that invariant is test-pinned).
 | M1 | Skeleton: layering, settings, SQLite + migrations, runs read-side, delete + event, error envelope, SSE, tests, boot on own port | **done** |
 | M2 | Training lifecycle: `TrainingGateway` port, command building, spawn/stop/kill, progress watching, `StartTraining`/`StopTraining` use cases, monitor telemetry on the bus | **done** |
 | M3a | Config (read/PATCH/raw/options/start-options), settings store (atomic, tiered), assets (catalog/browse/mkdir/upload/inspect) | **done** |
-| M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | next |
+| M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | **done** |
 | M4 | Nodegraph subsystem (registry, introspect, executor, presets) behind a `GraphRuntime` port | planned |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
 
@@ -329,8 +382,9 @@ emits nothing -- that invariant is test-pinned).
 # server (own port; old server keeps 8765)
 python -m backend.cli --port 8766
 
-# tests (11 files: domain, repository, use cases, supervisor, event bus,
-# training adapter, start/stop, end-to-end API+SSE, config, settings, assets)
+# tests (14 files: domain, repository, use cases, supervisor, event bus,
+# training adapter, start/stop, end-to-end API+SSE, config, settings,
+# assets, dataset library, dataset tasks, dataset API)
 python backend/tests/run_all.py
 ```
 

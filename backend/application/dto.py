@@ -155,3 +155,75 @@ class StartOptionsResult:
     start_from: dict[str, StartOption]
     has_unfinished_run: bool
     last_finished: LastFinishedRun | None
+
+
+# --------------------------------------------------------------------------
+# Datasets (M3b)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetDetail:
+    """One round-trip for a dataset page: identity, counts, sets, and
+    whatever task is currently running."""
+
+    info: "DatasetInfo"  # noqa: F821 -- application.ports.dataset_library
+    stats: "DatasetStats | None"  # noqa: F821
+    sets: tuple  # tuple[TrainingSetInfo, ...]
+    active_tasks: tuple  # tuple[DatasetTask, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetListResult:
+    datasets: tuple  # tuple[DatasetSummary, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetItemsResult:
+    items: tuple  # tuple[DatasetItem, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DiscardItemsResult:
+    deleted: int
+
+
+@dataclass(frozen=True, slots=True)
+class BulkUpdateResult:
+    updated: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommitResult:
+    set_id: int
+    set_name: str
+    added: int
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetTaskListResult:
+    tasks: tuple  # tuple[DatasetTask, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class StartDatasetTaskCommand:
+    """Launch an ingestion task. ``model`` is a checkpoint path
+    relative to the resolved checkpoints dir (validated + sandboxed by
+    the use case); ``image_dir`` is an absolute server-side source
+    directory (validated for existence, not sandboxed -- raw images
+    legitimately live outside the workspace, as in the legacy API)."""
+
+    dataset: str
+    kind: str = "ingest_lora"
+    image_dir: str = ""
+    model: str = ""
+    recursive: bool = True
+    resize_mode: str = "center_crop"
+    latent_size: int = 64
+    neg_prompt: str = ""
+    model_type: str = "eps"
+    seed: int = 42
+    max_aspect_ratio: float = 2.0

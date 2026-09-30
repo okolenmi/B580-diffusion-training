@@ -83,3 +83,55 @@ class SettingsInvalidError(ApplicationError):
     """
 
     code = "settings_invalid"
+
+
+class DatasetNotFoundError(ApplicationError):
+    """No dataset directory exists under the requested name."""
+
+    code = "dataset_not_found"
+
+
+class DatasetItemNotFoundError(ApplicationError):
+    """No trajectory row exists under the requested id in this dataset."""
+
+    code = "dataset_item_not_found"
+
+
+class DatasetAlreadyExistsError(ApplicationError):
+    """A dataset already occupies the requested name."""
+
+    code = "dataset_exists"
+
+
+class DatasetNotMigratedError(ApplicationError):
+    """The dataset is still in legacy format v1.
+
+    ``details`` carries the migration hint; every v2-only operation
+    refuses loudly rather than failing on a missing column.
+    """
+
+    code = "dataset_not_migrated"
+
+
+class DatasetTaskActiveError(ApplicationError):
+    """A pending/running task already owns the dataset (one at a time)."""
+
+    code = "dataset_task_active"
+
+
+class DatasetTaskNotFoundError(ApplicationError):
+    """No dataset task exists under the requested id."""
+
+    code = "dataset_task_not_found"
+
+
+class DatasetTaskNotActiveError(ApplicationError):
+    """The action needs a pending/running task; this one already ended."""
+
+    code = "dataset_task_not_active"
+
+
+class DatasetTaskLaunchError(ApplicationError):
+    """The ingestion child could not be started (row already failed)."""
+
+    code = "dataset_task_launch_failed"

@@ -33,28 +33,43 @@ from backend.application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
+    DatasetServices,
     SettingsServices,
 )
 from backend.application.supervisor import RunSupervisor
 from backend.application.use_cases import (
     BrowseAssets,
+    BulkUpdateDatasetItems,
+    CommitDatasetItems,
+    CreateDataset,
+    DeleteDataset,
     DeleteRuns,
+    DiscardDatasetItems,
     GetActiveRun,
     GetConfig,
     GetConfigOptions,
+    GetDataset,
     GetRun,
     GetRunLog,
     GetSettings,
     GetStartOptions,
     InspectAsset,
     ListAssets,
+    ListDatasetItems,
+    ListDatasetSets,
+    ListDatasetTasks,
+    ListDatasets,
     ListRuns,
     MakeAssetFolder,
     ReadConfigRaw,
+    ReconcileDatasetTasks,
     ReconcileRuns,
+    StartDatasetTask,
     StartTraining,
+    StopDatasetTask,
     StopTraining,
     UpdateConfig,
+    UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
     WriteConfigRaw,
@@ -63,9 +78,15 @@ from backend.domain.entities.run import Run
 from backend.domain.events import DomainEvent
 from backend.domain.exceptions import DomainError
 from backend.domain.value_objects import RunId, RunStatus
+from backend.application.ports.dataset_task_gateway import (
+    DatasetTaskGateway,
+    DatasetTaskLaunch,
+)
 from backend.infrastructure.config_options import PydanticConfigOptions
 from backend.infrastructure.core_config_files import CoreConfigFiles
 from backend.infrastructure.core_config_inspector import CoreConfigInspector
+from backend.infrastructure.dataset_library import SqliteDatasetLibrary
+from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
@@ -263,6 +284,35 @@ class FakeTrainingGateway(TrainingGateway):
         return True
 
 
+class FakeDatasetTaskGateway(DatasetTaskGateway):
+    """Scriptable fork gateway: spawn registers a fake pid as alive;
+    tests kill it by discarding from ``alive``; ``spawn_error`` fails
+    the launch (mirrors FakeTrainingGateway's posture)."""
+
+    def __init__(self) -> None:
+        self.spawned: list[DatasetTaskLaunch] = []
+        self.killed: list[int] = []
+        self.alive: set[int] = set()
+        self.spawn_error: Exception | None = None
+        self.next_pid = 7777
+
+    def spawn(self, launch: DatasetTaskLaunch) -> int:
+        if self.spawn_error is not None:
+            raise self.spawn_error
+        self.spawned.append(launch)
+        pid = self.next_pid
+        self.next_pid += 1
+        self.alive.add(pid)
+        return pid
+
+    def kill(self, pid: int) -> None:
+        self.killed.append(pid)
+        self.alive.discard(pid)
+
+    def is_alive(self, pid: int) -> bool:
+        return pid in self.alive
+
+
 class FakeConfigInspector(ConfigInspector):
     """Existence check is real; summaries/descriptions are scripted.
 
@@ -318,13 +368,18 @@ def build_services(
     config_files: CoreConfigFiles | None = None,
     config_options: PydanticConfigOptions | None = None,
     assets: FileSystemAssetStore | None = None,
+    dataset_library: SqliteDatasetLibrary | None = None,
+    dataset_tasks: SqliteDatasetTasks | None = None,
+    dataset_gateway: DatasetTaskGateway | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
     The runs domain uses fakes (scriptable lifecycle); the config /
-    settings / assets domains default to the *real* adapters over
-    temp locations -- they are cheap, and exercising the real TOML /
-    SQLite / filesystem code paths is the point of these tests.
+    settings / assets / datasets domains default to the *real* adapters
+    over temp locations -- they are cheap, and exercising the real TOML /
+    SQLite / filesystem code paths is the point of these tests. The
+    dataset *gateway* is fake by default: spawning a real child that
+    imports torch is nobody's unit test.
     """
     runs = runs if runs is not None else InMemoryRunRepository()
     events = events if events is not None else RecordingEventBus()
@@ -346,8 +401,16 @@ def build_services(
     )
     if artifacts is None:
         artifacts = DirectoryRunArtifacts(layout)
+    if dataset_library is None:
+        dataset_library = SqliteDatasetLibrary(layout)
+    if dataset_tasks is None:
+        tasks_db = SqliteDatabase(project_root / "test-dataset-tasks.db")
+        tasks_db.initialize()
+        dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
+    if dataset_gateway is None:
+        dataset_gateway = FakeDatasetTaskGateway()
     if assets is None:
-        assets = FileSystemAssetStore(layout)
+        assets = FileSystemAssetStore(layout, datasets=dataset_library)
     if config_files is None:
         config_files = CoreConfigFiles()
     if config_options is None:
@@ -405,6 +468,34 @@ def build_services(
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
+        datasets=DatasetServices(
+            list=ListDatasets(library=dataset_library),
+            get=GetDataset(library=dataset_library, tasks=dataset_tasks),
+            create=CreateDataset(library=dataset_library),
+            delete=DeleteDataset(library=dataset_library, tasks=dataset_tasks),
+            items=ListDatasetItems(library=dataset_library),
+            update_item=UpdateDatasetItem(library=dataset_library),
+            bulk_update=BulkUpdateDatasetItems(library=dataset_library),
+            discard=DiscardDatasetItems(library=dataset_library),
+            sets=ListDatasetSets(library=dataset_library),
+            commit=CommitDatasetItems(library=dataset_library),
+            tasks=ListDatasetTasks(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                gateway=dataset_gateway,
+                clock=clock,
+            ),
+            start_task=StartDatasetTask(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                gateway=dataset_gateway,
+                checkpoints_dir=layout.checkpoints_dir,
+            ),
+            stop_task=StopDatasetTask(tasks=dataset_tasks, gateway=dataset_gateway),
+            reconcile_tasks=ReconcileDatasetTasks(
+                tasks=dataset_tasks, gateway=dataset_gateway
+            ),
+        ),
         event_bus=events,
     )
 
@@ -431,6 +522,157 @@ def seed_run(
         run.mark_started(pid=pid, at=clock.now())
         repo.update(run)
     return run
+
+
+# --------------------------------------------------------------------------
+# Dataset fixtures -- raw format-v2 / v1 dirs written with plain sqlite3
+# --------------------------------------------------------------------------
+
+# Mirrors manager/db.init_local_db's v2 schema verbatim (documented
+# duplicate: these fixtures must not import manager -- that pulls torch).
+_V2_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS info (
+        name        TEXT PRIMARY KEY,
+        description TEXT,
+        created_at  REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sources (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL,
+        type        TEXT    NOT NULL,
+        model_path  TEXT,
+        config      TEXT,
+        created_at  REAL    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS shards (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path    TEXT    NOT NULL UNIQUE,
+        layout       TEXT    NOT NULL DEFAULT 'single_latent',
+        sample_count INTEGER NOT NULL DEFAULT 0,
+        size_bytes   INTEGER NOT NULL DEFAULT 0,
+        created_at   REAL    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS trajectories (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id    INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        shard_id     INTEGER NOT NULL REFERENCES shards(id) ON DELETE CASCADE,
+        shard_index  INTEGER NOT NULL,
+        sample_count INTEGER NOT NULL DEFAULT 0,
+        seed         INTEGER,
+        prompt       TEXT,
+        neg_prompt   TEXT NOT NULL DEFAULT '',
+        model_type   TEXT NOT NULL DEFAULT 'eps',
+        type         TEXT NOT NULL DEFAULT 'good',
+        cfg          REAL,
+        source_path  TEXT,
+        latent_h     INTEGER NOT NULL DEFAULT 0,
+        latent_w     INTEGER NOT NULL DEFAULT 0,
+        preview_path TEXT,
+        extra        TEXT
+    );
+    CREATE TABLE IF NOT EXISTS training_sets (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL UNIQUE,
+        description TEXT,
+        created_at  REAL    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS set_members (
+        set_id        INTEGER NOT NULL REFERENCES training_sets(id) ON DELETE CASCADE,
+        trajectory_id INTEGER NOT NULL REFERENCES trajectories(id) ON DELETE CASCADE,
+        PRIMARY KEY (set_id, trajectory_id)
+    );
+"""
+
+_EPOCH = 1767225600.0  # 2026-01-01T00:00:00Z
+
+
+def make_v2_dataset(
+    project_root: Path,
+    name: str,
+    *,
+    items: int = 4,
+    shard_file: bool = True,
+    previews: bool = True,
+) -> Path:
+    """A format-v2 dataset dir: 1 source, 1 shard, ``items`` rows.
+
+    Item i (1-based) gets prompt ``"photo i"``; the last row is type
+    ``bad``; row 1 optionally carries a real preview file. Returns the
+    dataset directory (``datasets/<name>`` under ``project_root``).
+    """
+    import sqlite3  # local: keeps this module's import surface light
+
+    directory = project_root / "datasets" / name
+    (directory / "shards").mkdir(parents=True, exist_ok=True)
+    (directory / "previews").mkdir(exist_ok=True)
+    shard_rel = "shards/x0_0.safetensors"
+    if shard_file:
+        (directory / shard_rel).write_bytes(b"\x00" * 16)
+    if previews:
+        (directory / "previews" / "p1.png").write_bytes(b"\x89PNG")
+
+    conn = sqlite3.connect(str(directory / "metadata.db"))
+    try:
+        conn.executescript(_V2_SCHEMA)
+        conn.execute(
+            "INSERT INTO info (name, description, created_at) VALUES (?, ?, ?)",
+            (name, "fixture", _EPOCH),
+        )
+        conn.execute(
+            "INSERT INTO sources (name, type, model_path, config, created_at) "
+            "VALUES (?, 'real', ?, NULL, ?)",
+            (f"{name}_lora", "ckpt/model.safetensors", _EPOCH),
+        )
+        conn.execute(
+            "INSERT INTO shards (file_path, layout, sample_count, size_bytes, "
+            "created_at) VALUES (?, 'single_latent', ?, 1024, ?)",
+            (shard_rel, items, _EPOCH),
+        )
+        for i in range(1, items + 1):
+            last = i == items
+            conn.execute(
+                "INSERT INTO trajectories (source_id, shard_id, shard_index, "
+                "sample_count, seed, prompt, neg_prompt, model_type, type, cfg, "
+                "source_path, latent_h, latent_w, preview_path, extra) "
+                "VALUES (1, 1, ?, 1, ?, ?, '', 'eps', ?, 5.0, ?, 64, 64, ?, NULL)",
+                (
+                    i - 1,
+                    100 + i,
+                    f"photo {i}",
+                    "bad" if last else "good",
+                    f"img_{i}.png",
+                    "previews/p1.png" if (previews and i == 1) else None,
+                ),
+            )
+        conn.execute(f"PRAGMA user_version = 2")
+        conn.commit()
+    finally:
+        conn.close()
+    return directory
+
+
+def make_v1_dataset(project_root: Path, name: str) -> Path:
+    """A legacy (pre-v2) dataset dir: ``info`` table only, version 0 --
+    enough for identity reads; every v2-only operation must refuse it
+    *before* touching columns this fixture doesn't have."""
+    import sqlite3  # local: keeps this module's import surface light
+
+    directory = project_root / "datasets" / name
+    directory.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(directory / "metadata.db"))
+    try:
+        conn.execute(
+            "CREATE TABLE info (name TEXT PRIMARY KEY, description TEXT, "
+            "created_at REAL NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO info (name, description, created_at) VALUES (?, ?, ?)",
+            (name, "legacy fixture", _EPOCH),
+        )
+        conn.commit()  # user_version stays 0 (legacy never set it to 1 either)
+    finally:
+        conn.close()
+    return directory
 
 
 # --------------------------------------------------------------------------

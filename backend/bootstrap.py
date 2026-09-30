@@ -8,8 +8,8 @@ Order of business:
    training gateway, config inspector/files/options, assets store,
    artifacts, progress source);
 3. the supervisor and use cases are constructed with those ports;
-4. ``ReconcileRuns`` sweeps rows left unfinished by a previous process
-   (before any request can race it);
+4. ``ReconcileRuns`` / ``ReconcileDatasetTasks`` sweep rows left
+   unfinished by a previous process (before any request can race them);
 5. the aggregate goes to ``presentation.create_app``.
 
 Nothing else in the backend may know which concrete classes exist --
@@ -28,28 +28,43 @@ from .application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
+    DatasetServices,
     SettingsServices,
 )
 from .application.supervisor import RunSupervisor
 from .application.use_cases import (
     BrowseAssets,
+    BulkUpdateDatasetItems,
+    CommitDatasetItems,
+    CreateDataset,
+    DeleteDataset,
     DeleteRuns,
+    DiscardDatasetItems,
     GetActiveRun,
     GetConfig,
     GetConfigOptions,
+    GetDataset,
     GetRun,
     GetRunLog,
     GetSettings,
     GetStartOptions,
     InspectAsset,
     ListAssets,
+    ListDatasetItems,
+    ListDatasetSets,
+    ListDatasetTasks,
+    ListDatasets,
     ListRuns,
     MakeAssetFolder,
     ReadConfigRaw,
+    ReconcileDatasetTasks,
     ReconcileRuns,
+    StartDatasetTask,
     StartTraining,
+    StopDatasetTask,
     StopTraining,
     UpdateConfig,
+    UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
     WriteConfigRaw,
@@ -59,6 +74,9 @@ from .infrastructure.clock import SystemClock
 from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.core_config_inspector import CoreConfigInspector
+from .infrastructure.dataset_library import SqliteDatasetLibrary
+from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
+from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
@@ -106,7 +124,16 @@ def build_container(settings: Settings) -> Container:
     inspector = CoreConfigInspector(layout)
     config_files = CoreConfigFiles()
     config_options = PydanticConfigOptions()
-    assets = FileSystemAssetStore(layout)
+
+    # Dataset domain (M3b): library reads each dataset's own metadata.db,
+    # task rows live in backend.db, and the fork gateway spawns children
+    # through the same layout the settings resolve. The library is built
+    # before the asset store so the catalog-only `dataset` kind can
+    # list names through the same visibility rules as the API.
+    dataset_library = SqliteDatasetLibrary(layout)
+    dataset_tasks = SqliteDatasetTasks(database, clock)
+    dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
+    assets = FileSystemAssetStore(layout, datasets=dataset_library)
 
     supervisor = RunSupervisor(
         runs=run_repository,
@@ -168,6 +195,36 @@ def build_container(settings: Settings) -> Container:
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
+        datasets=DatasetServices(
+            list=ListDatasets(library=dataset_library),
+            get=GetDataset(library=dataset_library, tasks=dataset_tasks),
+            create=CreateDataset(library=dataset_library),
+            delete=DeleteDataset(library=dataset_library, tasks=dataset_tasks),
+            items=ListDatasetItems(library=dataset_library),
+            update_item=UpdateDatasetItem(library=dataset_library),
+            bulk_update=BulkUpdateDatasetItems(library=dataset_library),
+            discard=DiscardDatasetItems(library=dataset_library),
+            sets=ListDatasetSets(library=dataset_library),
+            commit=CommitDatasetItems(library=dataset_library),
+            tasks=ListDatasetTasks(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                gateway=dataset_gateway,
+                clock=clock,
+            ),
+            start_task=StartDatasetTask(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                gateway=dataset_gateway,
+                checkpoints_dir=layout.checkpoints_dir,
+            ),
+            stop_task=StopDatasetTask(
+                tasks=dataset_tasks, gateway=dataset_gateway
+            ),
+            reconcile_tasks=ReconcileDatasetTasks(
+                tasks=dataset_tasks, gateway=dataset_gateway
+            ),
+        ),
         event_bus=event_bus,
     )
 
@@ -176,6 +233,12 @@ def build_container(settings: Settings) -> Container:
     reconciled = services.reconcile_runs.execute()
     if reconciled.cleaned:
         logger.info("reconciled %d unfinished run(s) at startup", reconciled.cleaned)
+    dataset_reconciled = services.datasets.reconcile_tasks.execute()
+    if dataset_reconciled.cleaned:
+        logger.info(
+            "reconciled %d unfinished dataset task(s) at startup",
+            dataset_reconciled.cleaned,
+        )
 
     return Container(
         settings=settings,

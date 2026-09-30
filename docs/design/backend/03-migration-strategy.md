@@ -17,11 +17,13 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 
 ```
 frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
-├── index.html                # app shell: sidebar nav + training controls
+├── index.html                # app shell: sidebar nav + state-driven training page
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
 ├── graph.html                # graph editor page (/graph)
 ├── css/
-│   ├── style.css             # design system (ported from the legacy visuals)
+│   ├── style.css             # shared design system: tokens, shell, buttons, inputs,
+│   │                         # badges, console, card (legacy dead weight removed)
+│   ├── training.css          # training page: topbar, state hero, history/log grid
 │   ├── monitor.css           # monitor page block
 │   └── editor.css            # editor layout, canvas plane, node visuals
 └── js/

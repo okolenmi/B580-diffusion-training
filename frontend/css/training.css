@@ -1,0 +1,370 @@
+/* ---------------------------------------------------------------------------
+   training.css -- the Training page only (index.html).
+
+   Follows the language monitor.html established: a topbar for identity,
+   ONE anchor hero block that owns the page's current state, then a
+   gap-driven two-column body (past runs + log). No equal-weight card
+   soup -- the layout itself tells you what matters right now.
+
+   Shared pieces (buttons, inputs, badges, .card, .console-line) come
+   from style.css; everything here is page-specific.
+   --------------------------------------------------------------------------- */
+
+/* ---- topbar: page identity + run state, one glanceable row ---- */
+
+.page-topbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 4px;
+}
+.page-topbar h1 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+}
+.page-topbar .status-badge { margin-top: 0; }
+.page-sub {
+    color: var(--text-dim);
+    font-size: 13px;
+    flex: 1;
+}
+
+/* ---- body: one column, gap-driven spacing (no per-card margins) ---- */
+
+.page-body {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1480px;
+    margin-top: 16px;
+}
+.page-body .card { margin-bottom: 0; }
+
+/* ---- hero: exactly one of two states, the page's anchor block ---- */
+
+.hero {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px 24px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+}
+.page-body .hero { flex-shrink: 0; }
+
+/* -- running state -- */
+
+.hero-run { display: flex; flex-direction: column; gap: 16px; }
+
+.hero-run-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.hero-run-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+.hero-run-id {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent);
+}
+.hero-run-phase {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--green);
+}
+.hero-run-elapsed {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 3px 9px;
+    white-space: nowrap;
+}
+.hero-run-meta {
+    color: var(--text-dim);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.hero-actions { display: flex; gap: 10px; flex-shrink: 0; }
+
+.hero-progress {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 14px;
+    align-items: center;
+}
+/* progress primitives (index-only: the old shared copies were removed
+   from style.css during the redesign) */
+.progress-bar {
+    width: 100%;
+    height: 14px;
+    background: var(--bg);
+    border-radius: 7px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--border);
+}
+.progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), #60a5fa);
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 0 15px var(--accent-glow);
+}
+.progress-sub {
+    display: none;
+    animation: slideDown 0.3s ease-out;
+}
+.progress-sub.active { display: block; }
+.progress-bar-secondary { height: 6px; border-radius: 3px; }
+.progress-fill-cache { background: #8b5cf6; box-shadow: 0 0 10px rgba(139, 92, 246, 0.4); }
+.progress-labels-sub {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #8b5cf6;
+    margin-top: 0.25rem;
+    display: block;
+    text-transform: uppercase;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.hero-progress-label {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+}
+/* cache sub-bar spans the whole grid, appears only while caching */
+#cache-progress-wrap { grid-column: 1 / -1; }
+
+.hero-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 48px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+}
+.hero-metric { display: flex; flex-direction: column; gap: 2px; }
+.hero-metric-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.hero-metric-value {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.hero-metric-value.accent { color: var(--accent); }
+
+/* -- idle state -- */
+
+.hero-idle { display: flex; flex-direction: column; gap: 16px; }
+.hero-idle-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.hero-idle-head h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+}
+.hero-last {
+    font-size: 13px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.hero-last .mono { font-family: var(--font-mono); }
+.link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+}
+.link-btn:hover { text-decoration: underline; }
+
+.start-form { display: flex; flex-direction: column; gap: 14px; }
+.start-row {
+    display: flex;
+    gap: 14px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 220px;
+}
+.field.field-grow { flex: 1; }
+.field > label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+}
+.check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.check input { width: 16px; height: 16px; }
+.start-error {
+    flex: 1;
+    color: var(--red);
+    font-size: 13px;
+    min-width: 0;
+}
+#btn-start { margin-left: auto; }
+
+/* ---- past: history table + log pane, side by side ---- */
+
+.runs-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr);
+    gap: 20px;
+    align-items: stretch;
+}
+/* both cards share the row height; the log fills what history doesn't */
+.runs-grid .card { display: flex; flex-direction: column; }
+
+.runs-table-wrap { overflow-x: auto; }
+.runs-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+}
+.runs-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.runs-table td {
+    padding: 11px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    vertical-align: middle;
+}
+.runs-table tbody tr { cursor: pointer; transition: background 0.15s; }
+.runs-table tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+.runs-table tbody tr.selected {
+    background: rgba(59, 130, 246, 0.08);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+.runs-table tbody tr:last-child td { border-bottom: none; }
+.runs-table td.empty {
+    color: var(--text-dim);
+    text-align: center;
+    padding: 28px 16px;
+    cursor: default;
+}
+.runs-table tbody tr.empty-row:hover { background: none; }
+
+.col-id {
+    font-family: var(--font-mono);
+    font-weight: 800;
+    color: var(--accent);
+    white-space: nowrap;
+}
+.col-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    white-space: nowrap;
+}
+.col-dim { color: var(--text-dim); white-space: nowrap; }
+.col-config {
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.runs-table .status-badge { margin-top: 0; }
+
+.log-pane {
+    flex: 1;
+    min-height: 320px;
+    overflow-y: auto;
+    background: #000;
+    padding: 14px 16px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #c9d1d9;
+    /* sit flush in the card without spilling square corners */
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.log-pane:empty::before { content: attr(data-empty); color: var(--text-dim); }
+
+/* ---- sidebar tool group (monitor hand-off) ---- */
+
+.sidebar-tool {
+    margin-top: 12px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.sidebar-tool-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+}
+.sidebar-tool .cfg-input {
+    font-size: 0.85rem;
+    padding: 0.6rem 0.7rem;
+}
+.nav-item-disabled { opacity: 0.45; cursor: default; }
+.nav-item-disabled:hover { background: none; color: var(--text-dim); }
+
+/* ---- narrow panes (the Review pane can be small) ---- */
+
+@media (max-width: 1400px) {
+    .runs-grid { grid-template-columns: 1fr; }
+}

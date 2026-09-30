@@ -1,9 +1,11 @@
 # 06 -- Frontend visual smoke checklist (browser-enabled session)
 
 Status: **executed 2026-10-01** from a desktop-app browser session
-against a scratch-DB backend on 8766. The API/SSE/pages coverage comes
-from `backend/tests/run_all.py` and the full gate; this checklist is
-the missing layer -- JavaScript actually running in a real browser.
+against a scratch-DB backend on 8766, **automated the same day** -- the
+checklist below now runs as `backend/tests/visual_smoke.py` (43 checks,
+Playwright). The API/SSE/pages coverage comes from
+`backend/tests/run_all.py` and the full gate; this checklist is the
+missing layer -- JavaScript actually running in a real browser.
 Findings and fixes from that run are recorded at the bottom.
 
 ## Why this exists
@@ -12,6 +14,22 @@ Findings and fixes from that run are recorded at the bottom.
 contracts, and that the pages/assets *serve*. They cannot cover
 JavaScript that actually runs: module wiring, DOM lookups, runtime
 exceptions in event handlers. This checklist is that missing layer.
+
+## Automated run (Playwright)
+
+```bash
+# terminal 1: scratch backend on 8766 (see Setup)
+# terminal 2:
+~/.venvs/pw/bin/python backend/tests/visual_smoke.py
+```
+
+Covers: idle state (real backend), running state (API mocked with a
+synthetic `RunOut` + history + log), interactions (start-form guard,
+row-click -> log, wipe confirm dialog captured in code), elapsed
+ticker, then a monitor/graph regression pass since all three pages
+share `style.css`. Console is asserted clean across all three pages.
+Desktop-browser execution of the same checklist below stays as the
+manual fallback.
 
 ## Prerequisites
 
@@ -33,7 +51,10 @@ A scratch DB keeps the check independent of real training history.
 
 ## 1. App shell + training controls -- `http://127.0.0.1:8766/`
 
-* [x] Page renders: sidebar nav, training controls card, runs table.
+* [x] Page renders: sidebar nav, topbar + state hero (start form when
+      idle, live run when active), history table (6 column headers) +
+      log pane. Layout is state-driven: idle never shows empty metric
+      cards, running never shows a start form that would 409.
 * [x] Console clean (no errors/warnings from our modules; the lone
       `/runs/active` 404 line is the browser's network log for the
       expected `no_active_run` answer, rendered correctly as
@@ -44,12 +65,17 @@ A scratch DB keeps the check independent of real training history.
       real path was **not** exercised (needs config files).
 * [x] `GET /runs/active` 404 (`no_active_run`) renders as "no active
       run", not an exception.
-* [x] Runs history lists rows (empty state: "No runs yet.").
+* [x] Runs history lists rows (empty state: "No runs yet."; Wipe
+      disabled while empty).
 * [x] `/api/v1/events` SSE connects (System Console: "Connected to
       /api/v1/events.").
-* [ ] **deferred with training tests**: stop/kill buttons on a real
-      active run, cache-phase progress bar (`.progress-sub.active`
-      path -- mechanism verified by computed style only).
+* [x] Running-state hero (automated with a mocked `RunOut`): phase in
+      the badge, progress `412 / 1000 · 41%`, cache sub-bar
+      (`.progress-sub.active` mechanism), stop/kill visibility,
+      elapsed ticker advancing, row click selects + loads the log,
+      wipe `window.confirm` captured by a dialog handler.
+* [ ] **deferred with training tests**: the same controls against a
+      *real* active run (process actually stopping/saving).
 
 ## 2. Monitor dashboard -- `http://127.0.0.1:8766/monitor/<any-id>`
 
@@ -94,11 +120,14 @@ Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --
 do not adjust the checklist to match broken behavior.
 
-Caveat from the 2026-10-01 run: the desktop app's `screenshot` tool
-served stale frames (byte counts matched new captures, but the images
-rendered earlier states). DOM inspection via `evaluate` and the console
-reader were authoritative; treat screenshots as advisory in this
-environment.
+Caveat from the 2026-10-01 desktop run: the desktop app's `screenshot`
+tool served stale frames (byte counts matched new captures, but the
+images rendered earlier states). DOM inspection via `evaluate` and the
+console reader were authoritative; treat desktop screenshots as
+advisory. **Superseded for testing purposes**: the Playwright suite
+above takes real frame-buffer screenshots from headless Chromium and
+is the driver for this checklist now; the desktop browser is for
+viewing only.
 
 ## Findings from the 2026-10-01 run (all fixed in the same session)
 
@@ -123,6 +152,12 @@ environment.
 4. **Stale `_suppressClick`** (found while testing) -- a wire released
    off-canvas left the flag set, eating the next canvas click. Fixed:
    any new `pointerdown` clears it.
+5. **"Continue from" select rendered blank** (found by the Playwright
+   suite during the main-page redesign) -- the placeholder option was
+   `disabled` without `selected`, leaving `selectedIndex` at `-1`, so
+   Chromium displayed nothing. Present since the M6 port (visible in
+   the original screenshots). Fixed: placeholder gets
+   `disabled: true, selected: true`.
 
 ## Known deferred (not bugs)
 

@@ -29,6 +29,7 @@ ASSETS = (
     "/ui/css/style.css",
     "/ui/css/monitor.css",
     "/ui/css/editor.css",
+    "/ui/css/training.css",
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",

@@ -1,0 +1,133 @@
+# 03 -- Migration strategy: frontend, cutover, decommissioning `server/`
+
+Status: **decisions made** (2026-09-30), implementation phased as in
+section 6. Companion to `01-architecture.md` (backend contract) and
+`02-api-reference.md` (the API the frontend targets).
+
+## 1. Frontend decisions
+
+| Question | Decision |
+|---|---|
+| Stack | **Vanilla ES modules, no framework, no build step.** Performance first, structured, easy to expand -- no npm/node toolchain enters this repo. The legacy frontend (7,576 lines across 18 JS + 6 HTML files in `server/static/`) is the reference, not the base: it is rewritten. |
+| What carries over | The **monitor dashboard's visualization** -- charts, series selection, CSV export, replay-on-reload -- is good enough to keep. Its data contract (SSE stream shapes below) is treated as pinned; the code is restructured into modules while the visuals stay. |
+| Who serves it | **The backend serves its own static files** (one origin on 8766: no CORS, no proxy, SSE and API same-origin). The legacy server keeps 8765 untouched until decommission. |
+| Build order | **Monitor + training controls first** (the daily driver -- a usable tool after every step), then the graph editor, then dataset manager + config/history tabs. |
+
+## 2. New frontend layout (planned)
+
+```
+frontend/
+├── index.html            # app shell: nav + view mount
+├── monitor.html          # standalone monitor dashboard (/monitor/{monitor_id})
+├── css/                  # one stylesheet, custom properties, no preprocessor
+└── js/
+    ├── api.js            # fetch wrapper: one error-envelope decoder, JSON in/out
+    ├── sse.js            # EventSource helper: reconnect, heartbeat awareness
+    ├── views/            # one module per view (monitor, controls, editor, ...)
+    └── lib/              # charts (ported visuals), dom helpers, state store
+```
+
+Rules that keep it fast and expandable:
+
+* zero globals -- each view is an ES module exporting one `mount(root)`;
+* no framework, no virtual DOM -- direct DOM with targeted re-renders
+  (the monitor's charts already work this way and stay at 60fps with
+  100k records);
+* one API module -- handlers never hand-roll `fetch`, so the error
+  envelope and status codes are decoded in exactly one place;
+* state lives in one small store per view; SSE is the source of truth
+  for anything live, polling only where the API is the source of truth.
+
+## 3. Parity audit: legacy surface vs backend API
+
+51 legacy endpoints vs 47 backend endpoints -- and they are not a
+1:1 mapping. Families:
+
+| Legacy family | Backend equivalent | Status |
+|---|---|---|
+| config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | `GET/PATCH /config`, `GET/PUT /config/raw`, `GET /config/options`, `GET /config/start-options` | **parity** (PATCH merges nested partials; tree shape improved) |
+| training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | `POST /runs`, `POST /runs/{id}/stop`, `GET /runs/active`, `GET /runs/{id}/log` | **parity** (start is JSON, not multipart form) |
+| `/run/reset` | -- | **dropped**: legacy in-memory service reset; backend state lives in the DB (delete + restart covers it) |
+| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | list/get/log + `DELETE /runs` | **gaps**: per-run `events` history, `previews` manifest+images, `logs/clear` (see 3.1) |
+| `/sse` | `GET /events` | **parity+** (all domain events, generic encoder, heartbeat) |
+| settings (`GET/POST /settings`, `/files/{kind}`) | `GET/POST /settings` | **gap**: `/files/{kind}` file browser (3.1) |
+| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`) |
+| nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
+| nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
+| **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | -- | **gap -- first backend slice** (section 4) |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | static serving + view routes (section 2) | planned in the frontend build |
+
+### 3.1 Gaps and their resolutions
+
+| Gap | Resolution |
+|---|---|
+| Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. |
+| Run previews (`runs/run_{id}/previews/` manifest + images) | **Port with the graph/config views** (phase 3): the training pipeline still writes the files; the backend needs a read route + static image serving for `runs/`. Not needed by the monitor page. |
+| Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs. |
+| `/runs/logs/clear` | **Drop**: `DELETE /runs` (history wipe) plus per-run artifacts on disk cover the intent. |
+| `/files/{kind}` (settings file browser) | **Port with the config view** (phase 4) if the new config UI wants it; otherwise drop with the settings tab's redesign. |
+| `/run/reset` | **Dropped** (table above). |
+
+## 4. Monitor data path (pinned contract)
+
+Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
+`server/routes_monitor.py`, `server/static/monitor_dashboard.js`):
+
+* `MonitorBus` (repo root): thread-safe pub-sub keyed by **`monitor_id`**,
+  `report(monitor_id, dict)` appends *unwrapped* dicts to a per-id
+  history (`HISTORY_LIMIT = 100000`, matched to the dashboard's
+  `MAX_RECORDS`), `clear(monitor_id)` empties it and broadcasts a
+  `{"type": "clear"}` frame, `subscribe()` replays history to a new
+  queue (a reload restores the full chart). No module-level singleton:
+  one instance per server process.
+* **`monitor_id` is a node input param** (`mon-` + 8 base36 chars,
+  generated by the editor), deliberately *not* the execution id -- it
+  outlives runs; the monitor node clears it at the start of each run.
+* Stream frames: `{"type": "connected"}` first, then raw step-report
+  dicts (`step`, `total_steps`, `loss`, `lr`, `t`, `weight_t_*`,
+  `prob_t_*`, `*_ms` timings, `vram_*`, `resident_*_mb`, ...),
+  `{"type": "clear"}`, and terminal `{"type": "run_end", "step",
+  "cancelled"}`. The dashboard ignores anything without `step` it
+  doesn't recognize.
+* Backend wiring (M5 slice 1): an application port over this contract;
+  the infrastructure adapter wraps the repo-root `MonitorBus` (same
+  class the legacy server and `nodes/` use -- payload and replay
+  semantics stay byte-identical); `ReflectedGraphRuntime` passes the
+  instance into `ExecutionContext(monitor_bus=...)` instead of
+  `None` (doc 05's deferred item); presentation exposes
+  `GET /api/v1/monitor/{monitor_id}/stream` mirroring the legacy
+  frame sequence. Nodes are untouched -- they already duck-type
+  `report`/`clear` and no-op on `None`.
+
+## 5. Data cutover
+
+* **Saved graphs**: legacy graphs live in browser `localStorage`
+  (`ng_graph_v1`). The new editor offers a one-click *import* that
+  POSTs them into `/api/v1/graphs/library` (payloads are
+  shape-compatible; class names are validated at run time, not save).
+  No server-side migration is possible or needed -- the data is
+  per-browser.
+* **Runs history**: not imported. Legacy history remains readable
+  through the legacy server until decommission; log files on disk stay
+  untouched either way. The new backend starts with an empty history.
+* **Datasets**: already server-side and format-versioned (`04`); both
+  servers can read them -- nothing to move.
+* **Settings/config**: backend reads the same project config files and
+  settings tiers; no copy.
+
+## 6. Decommission plan for `server/`
+
+Phases, each with an entry criterion -- the legacy server keeps
+serving until the criterion for flipping the default is met. Phase
+numbers match the milestone table in `01-architecture.md`:
+
+| Phase | Scope | Entry criterion |
+|---|---|---|
+| M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | Backend serves the monitor page; live training observable through it on 8766 |
+| M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | A real graph can be built, validated, run, and observed end to end on 8766 |
+| M8 | Dataset manager + config editor + run history views | Every page in section 3's table has a backend-backed equivalent |
+| M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
+
+Both servers run side by side until M8 (8765 legacy, 8766 backend) --
+they share data files read-only, so there is no cutover day, only the
+flip of the default entry point.

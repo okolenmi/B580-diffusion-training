@@ -1,6 +1,8 @@
 # 01 -- Backend architecture
 
-Status: **M1, M2, M3a, M3b and M4 implemented and tested** (2026-09-30).
+Status: **M1, M2, M3a, M3b and M4 implemented and tested; M5
+(frontend decision, parity audit, migration strategy) decided and
+documented** (2026-09-30).
 This doc is the blueprint `backend/` was built from and the contract
 later milestones must keep.
 
@@ -424,7 +426,11 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M3a | Config (read/PATCH/raw/options/start-options), settings store (atomic, tiered), assets (catalog/browse/mkdir/upload/inspect) | **done** |
 | M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | **done** |
 | M4 | Graph subsystem: auto-discovery (`pkgutil` -> `NodeRegistry`), reflection palette, authoritative `validate` (issue-code table), threaded executor + CAS history, single-active runs, server-side saved-graph library (`05-graph-runtime.md`) | **done** |
-| M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | planned |
+| M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | **done** |
+| M6 | Frontend slice 1: `frontend/` shell served by the backend, monitor-bus port + `GET /monitor/{id}/stream`, monitor dashboard + training controls | planned |
+| M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | planned |
+| M8 | Frontend slice 3: dataset manager + config editor + run history views | planned |
+| M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
 
 ## 8. Running it
 

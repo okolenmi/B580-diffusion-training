@@ -232,5 +232,7 @@ real `Node`.
   into `ExecutionContext`, stream at `GET /api/v1/monitor/{id}/stream`.
 * **Assets**: already served by `/api/v1/assets/*`; not duplicated here.
 * **Frontend**: monitor slice shipped in M6 (`frontend/`); the graph
-  editor's mapping onto this contract (localStorage -> library, poll ->
-  SSE, local type check -> validate endpoint) is M7.
+  editor shipped in M7 (`/graph`): localStorage -> library import,
+  local type check -> validate endpoint, lifecycle live via `/events`
+  SSE with API polling as the fallback while executions are active.
+  Dataset/config/run-history views are M8.

@@ -41,4 +41,8 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
         # the client script reads it (mirrors server/main.py's route).
         return FileResponse(static_dir / "monitor.html")
 
+    @app.get("/graph", include_in_schema=False)
+    def graph_page() -> FileResponse:
+        return FileResponse(static_dir / "graph.html")
+
     app.mount("/ui", StaticFiles(directory=static_dir), name="ui")

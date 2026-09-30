@@ -1,8 +1,8 @@
-"""Frontend serving tests -- page routes + /ui asset mount (M6).
+"""Frontend serving tests -- page routes + /ui asset mount (M6/M7).
 
 Pins register_frontend's contract: pages serve when ``static_dir`` is
-given, every asset the two pages reference resolves, and the mount can
-never shadow the API's error envelope (02-api-reference.md section 1).
+given, every asset the shipped pages reference resolves, and the mount
+can never shadow the API's error envelope (02-api-reference.md section 1).
 
 Run directly: python backend/tests/test_pages.py
 """
@@ -22,14 +22,22 @@ from backend.tests.support import asgi_request, check, finish
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
-# Every asset the two shipped pages reference.
+# Every asset the shipped pages reference.
 ASSETS = (
     "/ui/css/style.css",
     "/ui/css/monitor.css",
+    "/ui/css/editor.css",
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",
     "/ui/js/views/dashboard.js",
+    "/ui/js/editor.js",
+    "/ui/js/editor/state.js",
+    "/ui/js/editor/canvas.js",
+    "/ui/js/editor/inspector.js",
+    "/ui/js/editor/palette.js",
+    "/ui/js/editor/executions.js",
+    "/ui/js/editor/library.js",
 )
 
 
@@ -58,6 +66,12 @@ def test_pages_and_assets() -> None:
         check(
             status == 200 and isinstance(body, str) and "mon-loss-chart" in body,
             f"/monitor/{id} serves the monitor page (got {status})",
+        )
+
+        status, _, body = asgi_request(app, "/graph")
+        check(
+            status == 200 and isinstance(body, str) and "graph-canvas" in body,
+            f"/graph serves the editor page (got {status})",
         )
 
         for asset in ASSETS:

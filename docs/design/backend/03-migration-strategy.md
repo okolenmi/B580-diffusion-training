@@ -16,16 +16,22 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 ## 2. New frontend layout (planned)
 
 ```
-frontend/                     # shipped slice 1 (M6); views grow in M7/M8
+frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
 ├── index.html                # app shell: sidebar nav + training controls
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
+├── graph.html                # graph editor page (/graph)
 ├── css/
 │   ├── style.css             # design system (ported from the legacy visuals)
-│   └── monitor.css           # monitor page block
+│   ├── monitor.css           # monitor page block
+│   └── editor.css            # editor layout, canvas plane, node visuals
 └── js/
     ├── api.js                # THE fetch wrapper: error envelope decoded once, + sse()
     ├── monitor.js            # monitor page entry (ported visual, new stream URL)
+    ├── editor.js             # editor page entry: catalog, GraphDoc, toolbar, /events
     ├── views/dashboard.js    # training controls (runs REST + /events SSE)
+    ├── editor/               # state.js (GraphDoc + wire forms), canvas.js (render/
+    │                         # drag/connect), inspector.js (params form), palette.js,
+    │                         # executions.js (run lifecycle), library.js (+ legacy import)
     └── lib/loss_chart.js     # chart lib as an ES module (visuals untouched)
 ```
 
@@ -127,7 +133,7 @@ numbers match the milestone table in `01-architecture.md`:
 | Phase | Scope | Entry criterion |
 |---|---|---|
 | M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | **shipped 2026-09-30**: backend serves the monitor page on 8766; the stream's replay/live/clear frames are test-pinned (`test_api_monitor.py`) |
-| M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | A real graph can be built, validated, run, and observed end to end on 8766 |
+| M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | **shipped 2026-10-01**: `/graph` page; validate/run/library round-trip (incl. `layout` extras) smoke-tested on 8766; every frontend module passes `node --check` |
 | M8 | Dataset manager + config editor + run history views | Every page in section 3's table has a backend-backed equivalent |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
 

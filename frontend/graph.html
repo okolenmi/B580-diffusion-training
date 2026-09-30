@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph Editor</title>
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/editor.css">
+</head>
+<body class="editor-body">
+
+    <!-- Left: palette (node catalog) + saved-graph library. -->
+    <aside class="ed-palette">
+        <div class="ed-topbar">
+            <a class="btn btn-secondary btn-small" href="/">&#8592; Training</a>
+            <span class="ed-brand">Graph Editor</span>
+        </div>
+        <input id="palette-search" class="cfg-input ed-search" type="search"
+               placeholder="Search nodes&hellip;">
+        <div id="palette" class="ed-scroll">
+            <div class="console-line info">Loading catalog&hellip;</div>
+        </div>
+
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Library</span></div>
+            <div class="ed-save-row">
+                <input id="lib-name" class="cfg-input" type="text"
+                       placeholder="graph name" maxlength="120">
+                <button id="lib-save" class="btn btn-small">Save</button>
+            </div>
+            <button id="lib-import" class="btn btn-secondary btn-small btn-block">
+                Import legacy draft (localStorage)
+            </button>
+            <div id="lib-list" class="ed-list">
+                <div class="console-line info">Loading&hellip;</div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Center: toolbar, canvas, execution history. -->
+    <main class="ed-main">
+        <div class="ed-toolbar">
+            <button id="btn-validate" class="btn btn-secondary btn-small">Validate</button>
+            <button id="btn-run" class="btn btn-small">&#9654; Run</button>
+            <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
+            <span id="ed-selection" class="ed-hint"></span>
+            <span class="ed-spacer"></span>
+            <button id="btn-clear" class="btn btn-secondary btn-small">Clear canvas</button>
+        </div>
+
+        <div id="graph-canvas" class="ed-canvas">
+            <div id="canvas-inner" class="ed-canvas-inner">
+                <svg id="edge-layer" class="ed-edges"></svg>
+            </div>
+        </div>
+
+        <div class="ed-section ed-executions">
+            <div class="ed-section-head">
+                <span>Executions</span>
+                <button id="btn-wipe-exec" class="btn btn-secondary btn-small">Wipe history</button>
+            </div>
+            <div id="exec-list" class="ed-list">
+                <div class="console-line info">No executions yet.</div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Right: validate issues, node inspector, page console. -->
+    <aside class="ed-right">
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Issues</span></div>
+            <div id="issues" class="ed-list">
+                <div class="console-line info">Not validated yet.</div>
+            </div>
+        </div>
+
+        <div class="ed-section ed-inspector-section">
+            <div class="ed-section-head"><span>Inspector</span></div>
+            <div id="inspector" class="ed-inspector">
+                <div class="console-line info">Select a node.</div>
+            </div>
+        </div>
+
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Console</span></div>
+            <div id="ed-log" class="console-lines ed-log">
+                <div class="console-line info">Ready.</div>
+            </div>
+        </div>
+    </aside>
+
+    <script type="module" src="/ui/js/editor.js"></script>
+</body>
+</html>

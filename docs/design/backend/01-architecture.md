@@ -1,8 +1,8 @@
 # 01 -- Backend architecture
 
 Status: **M1-M4 (API domains), M5 (frontend decision + migration
-strategy docs) and M6 (monitor frontend slice) implemented and
-tested** (2026-09-30).
+strategy docs), M6 (monitor frontend slice) and M7 (graph editor
+slice) implemented and tested** (2026-10-01).
 This doc is the blueprint `backend/` was built from and the contract
 later milestones must keep.
 
@@ -281,9 +281,10 @@ Endpoints as of M4:
 | GET | `/api/v1/events` | SSE stream of domain events |
 | GET | `/api/v1/monitor/{monitor_id}/stream` | SSE monitor telemetry -- legacy frame contract pinned in `03-migration-strategy.md` §4 (M6) |
 
-Page routes (M6, no schema): `GET /` serves `frontend/index.html`,
+Page routes (M6/M7, no schema): `GET /` serves `frontend/index.html`,
 `GET /monitor/{monitor_id}` serves `frontend/monitor.html` (the id is
-the page's own URL segment), `/ui/*` mounts the frontend directory.
+the page's own URL segment), `GET /graph` serves `frontend/graph.html`
+(the editor), `/ui/*` mounts the frontend directory.
 Registered after the API and never under `/api/`, so unknown API
 routes keep the JSON error envelope.
 
@@ -439,7 +440,7 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M4 | Graph subsystem: auto-discovery (`pkgutil` -> `NodeRegistry`), reflection palette, authoritative `validate` (issue-code table), threaded executor + CAS history, single-active runs, server-side saved-graph library (`05-graph-runtime.md`) | **done** |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | **done** |
 | M6 | Frontend slice 1: `frontend/` shell served by the backend, monitor-bus port + `GET /monitor/{id}/stream`, monitor dashboard + training controls | **done** |
-| M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | planned |
+| M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | **done** |
 | M8 | Frontend slice 3: dataset manager + config editor + run history views | planned |
 | M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
 
@@ -452,7 +453,8 @@ python -m backend.cli --port 8766
 # tests (21 files: domain, repositories, use cases, supervisors, event
 # bus, training adapter, start/stop, end-to-end API+SSE, config,
 # settings, assets, dataset library/tasks/API, graph discovery/catalog/
-# runtime/execution/API, monitor stream, frontend pages)
+# runtime/execution/API, monitor stream, frontend pages (dashboard,
+# monitor, graph editor + their assets))
 python backend/tests/run_all.py
 ```
 

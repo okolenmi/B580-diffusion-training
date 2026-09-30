@@ -165,8 +165,8 @@ Submission body for `validate`/`run` (`GraphRunIn`):
 `nodes: [{id, class_name, params}]`, `edges: [{from_node, from_port,
 to_node, to_port}]`. A structurally bad submission is **not** a body
 rejection — the endpoint validates and answers 422 `graph_invalid`
-with the complete issue list in `details.issues`
-(`{severity, code, message, node_id, edge_index, param}`), so the
+with the complete issue list in `details`
+(`[{severity, code, message, node_id, edge_index, param}]`, so the
 editor can localise every problem in one round trip.
 
 | Method | Path | Query / body | Response |
@@ -211,6 +211,7 @@ Client-side legacy `localStorage` graphs (`ng_graph_v1`) import through
 | GET | `/monitor/{monitor_id}/stream` | SSE (below) |
 | GET | `/` | serves `frontend/index.html` (app shell) |
 | GET | `/monitor/{monitor_id}` | serves `frontend/monitor.html` (id read client-side) |
+| GET | `/graph` | serves `frontend/graph.html` (editor, M7) |
 | GET | `/ui/*` | frontend ES modules + css |
 
 **Monitor SSE frames**: `{"type": "connected"}` opener, then the

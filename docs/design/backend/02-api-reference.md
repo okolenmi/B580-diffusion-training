@@ -5,9 +5,10 @@ Source of truth for request/response *field* level detail is
 contract (endpoint, params, envelope, error codes) the frontend is
 written against. Route table also mirrored in `01-architecture.md` §API.
 
-Status: **shipped through M4** (47 endpoints under `/api/v1`).
-Section 10 (monitor stream) is the M5 slice described in
-`03-migration-strategy.md` §4 and is not yet served.
+Status: **shipped through M6** (48 endpoints under `/api/v1`, plus the
+static page routes in section 10).
+Section 10 (monitor stream + static pages) is the M6 slice whose
+pinned frame contract lives in `03-migration-strategy.md` §4.
 
 ## 1. Conventions
 
@@ -98,7 +99,7 @@ project config dir; `path` selects the file.
 
 | Method | Path | Query / body | Response |
 |---|---|---|---|
-| GET | `/config` | `path` (default: default config) | nested JSON mirroring `TrainingConfig` |
+| GET | `/config` | `path` (**required** -- empty is 422 `invalid_query`) | nested JSON mirroring `TrainingConfig` |
 | PATCH | `/config` | `ConfigPatchIn{path, overrides}` deep-merge | merged config JSON; file untouched unless merged config validates (422 `config_invalid`) |
 | GET | `/config/raw` | `path` | `{"content": "<toml text>"}` |
 | PUT | `/config/raw` | `ConfigRawIn{path, content}` | `{"ok": true}` (create-or-replace; 422 on invalid TOML) |
@@ -203,11 +204,25 @@ hand-edited payloads load fine and fail loudly only when executed.
 Client-side legacy `localStorage` graphs (`ng_graph_v1`) import through
 `PUT /graphs/library/{name}` (see `03-migration-strategy.md` §5).
 
-## 10. Monitor stream (M5 slice — planned, not yet served)
+## 10. Monitor stream + static pages (M6)
 
-`GET /api/v1/monitor/{monitor_id}/stream` — mirrors the legacy
-`/api/nodegraph/monitor/{id}/stream` frame contract exactly
-(`{"type": "connected"}` first, then unwrapped step-report dicts,
-`{"type": "clear"}`, terminal `{"type": "run_end"}`; history replay on
-subscribe). Full facts and the port/wiring plan:
-`03-migration-strategy.md` §4.
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/monitor/{monitor_id}/stream` | SSE (below) |
+| GET | `/` | serves `frontend/index.html` (app shell) |
+| GET | `/monitor/{monitor_id}` | serves `frontend/monitor.html` (id read client-side) |
+| GET | `/ui/*` | frontend ES modules + css |
+
+**Monitor SSE frames**: `{"type": "connected"}` opener, then the
+bus's pre-rendered `data: {json}` frames -- history replay first (a
+dashboard opened mid-run restores its chart), then live step reports,
+plus `{"type": "clear"}` broadcasts when a new run claims the id and
+the terminal `{"type": "run_end", "step", "cancelled"}`. Payload keys
+are the trainer's report dict verbatim (`step`, `total_steps`,
+`loss`, `lr`, `t`, `weight_t_*`, `prob_t_*`, `*_ms`, `vram_*`,
+`resident_*_mb`, ...); frames without `step` that the page doesn't
+recognise are ignored, never guessed at. The frame contract and the
+port/wiring facts are pinned in `03-migration-strategy.md` §4.
+
+Page routes are registered after the API and never under `/api/`, so
+unknown API routes keep the JSON error envelope (section 1).

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distillation Converter</title>
+    <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-name">Distillation</span>
+            </div>
+            <div id="status-badge" class="status-badge status-idle">Idle</div>
+        </div>
+
+        <div class="sidebar-controls">
+            <button id="btn-start" class="btn btn-start btn-block">▶ START RUN</button>
+            <button id="btn-stop" class="btn btn-secondary btn-block" hidden>⏸ STOP &amp; SAVE</button>
+            <button id="btn-kill" class="btn btn-kill btn-block" hidden>⏹ FORCE KILL</button>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" id="nav-training">Training</button>
+            <input id="monitor-id-input" class="cfg-input" type="text"
+                   placeholder="monitor id (mon-…)"
+                   title="Paste a monitor id to open its live dashboard">
+            <button class="nav-item" id="btn-open-monitor">Open Monitor →</button>
+            <span class="nav-item" style="opacity: 0.45; cursor: default;"
+                  title="M7 -- graph editor against /api/v1/graphs">Graph Editor — soon</span>
+            <span class="nav-item" style="opacity: 0.45; cursor: default;"
+                  title="M8 -- dataset manager views">Datasets — soon</span>
+            <span class="nav-item" style="opacity: 0.45; cursor: default;"
+                  title="M8 -- config editor + full logs">Config Editor — soon</span>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="system-console">
+                <div class="console-header">System Console</div>
+                <div class="console-lines" id="console-output">
+                    <div class="console-line info">Ready.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="content-area">
+        <!-- Active run: progress bars + live metrics (fed by /events). -->
+        <section class="dashboard-header">
+            <div class="progress-section">
+                <div class="progress-container">
+                    <div class="progress-main" id="progress-main">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-labels" id="progress-text">no active run</div>
+                    </div>
+                    <div class="progress-sub" id="cache-progress-wrap" hidden>
+                        <div class="progress-bar progress-bar-secondary">
+                            <div class="progress-fill progress-fill-cache" id="cache-fill"></div>
+                        </div>
+                        <span class="progress-labels-sub" id="cache-text"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="metrics-grid" id="metrics">
+                <div class="metric-card">
+                    <div class="metric-label">Current Loss</div>
+                    <div class="metric-value" id="metric-loss">—</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Avg Loss</div>
+                    <div class="metric-value" id="metric-avg">—</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Learning Rate</div>
+                    <div class="metric-value" id="metric-lr">—</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Step</div>
+                    <div class="metric-value" id="metric-step">—</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Start parameters (the full config editor lands in M8; the
+             backend start contract is config_path + start_from + reset). -->
+        <div class="card">
+            <div class="card-header"><span>New run</span></div>
+            <div style="padding: 1.5rem; display: grid; grid-template-columns: 2fr 1fr auto; gap: 1rem; align-items: end;">
+                <div class="option-row" style="margin: 0;">
+                    <label class="option-label" for="cfg-path">Config</label>
+                    <input id="cfg-path" class="cfg-input" type="text" placeholder="configs/distill.toml">
+                </div>
+                <div class="option-row" style="margin: 0;">
+                    <label class="option-label" for="start-from">Continue from</label>
+                    <select id="start-from"></select>
+                </div>
+                <label class="preview-field preview-field-checkbox">
+                    <input type="checkbox" id="reset-optimizer">
+                    <span>Reset optimizer</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Run history (newest first, 20). -->
+        <div class="card">
+            <div class="card-header">
+                <span>Run history</span>
+                <button id="btn-wipe" class="btn btn-danger btn-small">Wipe history</button>
+            </div>
+            <div class="history-list" id="history-list">
+                <div class="console-line info">Loading…</div>
+            </div>
+        </div>
+
+        <!-- Run log tail (per-run, 200 lines). -->
+        <div class="card">
+            <div class="card-header">
+                <span>Run log <span id="log-title" style="color: var(--text-dim); font-weight: 400;"></span></span>
+                <button id="btn-refresh-log" class="btn btn-secondary btn-small">Refresh</button>
+            </div>
+            <div class="console-lines" id="log-body" style="height: 320px; white-space: pre-wrap; overflow-y: auto;">
+                <div class="console-line info">No run selected.</div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/views/dashboard.js"></script>
+</body>
+</html>

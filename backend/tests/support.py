@@ -30,6 +30,7 @@ from backend.application.ports.graph_execution_repository import (
 )
 from backend.application.ports.graph_library import GraphLibrary
 from backend.application.ports.graph_runtime import GraphRuntime
+from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
 from backend.application.ports.run_repository import RunRepository
 from backend.application.ports.training_gateway import (
     TrainingGateway,
@@ -116,6 +117,7 @@ from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.jsonl_progress_source import JsonlProgressSource as _Jsonl
+from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
@@ -575,6 +577,47 @@ class EmitSubHandleNode(Node):
         return {"handle": SubHandle()}
 
 
+class MonitorProbeNode(Node):
+    """Touches the execution context's monitor bus (M6 wiring proof).
+
+    Mirrors what MonitorNode does at build start: clear the id, then
+    hand a handle-like report through. ``seen`` says whether a bus was
+    actually injected (None = the runtime was built without one).
+    """
+
+    INPUTS = {
+        "monitor_id": Port(name="monitor_id", type=str, required=False, default="mon-test")
+    }
+    OUTPUTS = {"seen": Port(name="seen", type=bool)}
+
+    def build(self, monitor_id="mon-test"):
+        bus = self.context.monitor_bus
+        if bus is not None:
+            bus.clear(monitor_id)
+            bus.report(monitor_id, {"step": 1, "loss": 0.5})
+        return {"seen": bus is not None}
+
+
+class RecordingMonitorBus(MonitorBusPort):
+    """Port test double: records thread-side calls; no queues/loops."""
+
+    def __init__(self) -> None:
+        self.reports: list[tuple[str, dict]] = []
+        self.cleared: list[str] = []
+
+    def report(self, monitor_id: str, data: dict) -> None:
+        self.reports.append((monitor_id, dict(data)))
+
+    def clear(self, monitor_id: str) -> None:
+        self.cleared.append(monitor_id)
+
+    def subscribe(self, monitor_id: str):  # pragma: no cover - not loop-bound
+        raise NotImplementedError("RecordingMonitorBus has no subscriber side")
+
+    def unsubscribe(self, monitor_id: str, queue) -> None:  # pragma: no cover
+        raise NotImplementedError("RecordingMonitorBus has no subscriber side")
+
+
 class TakeHandleNode(Node):
     """Class-typed input (Handle) -- accepts SubHandle outputs."""
 
@@ -602,6 +645,7 @@ FIXTURE_NODES: dict[str, type] = {
         EmitHandleNode,
         EmitSubHandleNode,
         TakeHandleNode,
+        MonitorProbeNode,
     )
 }
 
@@ -636,6 +680,7 @@ def build_services(
     graph_executions: GraphExecutionRepository | None = None,
     graph_library: GraphLibrary | None = None,
     graph_supervisor: GraphExecutionSupervisor | None = None,
+    monitor_bus: MonitorBusPort | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
@@ -687,9 +732,12 @@ def build_services(
     if graph_registry is None:
         graph_registry = fixture_graph_registry()
     graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    # Default to the real adapter (replay/clear semantics under test);
+    # the API tests exercise it, the runtime test swaps in a recorder.
+    monitor_bus = monitor_bus if monitor_bus is not None else SharedMonitorBus()
     if graph_runtime is None:
         graph_runtime = ReflectedGraphRuntime(
-            graph_registry, memory_releaser=lambda: None
+            graph_registry, memory_releaser=lambda: None, monitor_bus=monitor_bus
         )
     if graph_executions is None or graph_library is None:
         graphs_db = SqliteDatabase(project_root / "test-graphs.db")
@@ -817,6 +865,7 @@ def build_services(
             delete_graph=DeleteGraph(library=graph_library),
         ),
         event_bus=events,
+        monitor_bus=monitor_bus,
     )
 
 

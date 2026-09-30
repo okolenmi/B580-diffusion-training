@@ -16,20 +16,23 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 ## 2. New frontend layout (planned)
 
 ```
-frontend/
-├── index.html            # app shell: nav + view mount
-├── monitor.html          # standalone monitor dashboard (/monitor/{monitor_id})
-├── css/                  # one stylesheet, custom properties, no preprocessor
+frontend/                     # shipped slice 1 (M6); views grow in M7/M8
+├── index.html                # app shell: sidebar nav + training controls
+├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
+├── css/
+│   ├── style.css             # design system (ported from the legacy visuals)
+│   └── monitor.css           # monitor page block
 └── js/
-    ├── api.js            # fetch wrapper: one error-envelope decoder, JSON in/out
-    ├── sse.js            # EventSource helper: reconnect, heartbeat awareness
-    ├── views/            # one module per view (monitor, controls, editor, ...)
-    └── lib/              # charts (ported visuals), dom helpers, state store
+    ├── api.js                # THE fetch wrapper: error envelope decoded once, + sse()
+    ├── monitor.js            # monitor page entry (ported visual, new stream URL)
+    ├── views/dashboard.js    # training controls (runs REST + /events SSE)
+    └── lib/loss_chart.js     # chart lib as an ES module (visuals untouched)
 ```
 
 Rules that keep it fast and expandable:
 
-* zero globals -- each view is an ES module exporting one `mount(root)`;
+* zero globals -- each page boots from one ES module entry
+  (``type=module`` is deferred, so DOM is ready at evaluation);
 * no framework, no virtual DOM -- direct DOM with targeted re-renders
   (the monitor's charts already work this way and stay at 60fps with
   100k records);
@@ -54,14 +57,14 @@ Rules that keep it fast and expandable:
 | datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`) |
 | nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
 | nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
-| **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | -- | **gap -- first backend slice** (section 4) |
-| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | static serving + view routes (section 2) | planned in the frontend build |
+| **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `/ui/*` (section 2) | **shipped M6** for the shell + monitor page; `/nodegraph` and `/datasets` views follow their phases |
 
 ### 3.1 Gaps and their resolutions
 
 | Gap | Resolution |
 |---|---|
-| Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. |
+| Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. **Shipped in M6.** |
 | Run previews (`runs/run_{id}/previews/` manifest + images) | **Port with the graph/config views** (phase 3): the training pipeline still writes the files; the backend needs a read route + static image serving for `runs/`. Not needed by the monitor page. |
 | Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs. |
 | `/runs/logs/clear` | **Drop**: `DELETE /runs` (history wipe) plus per-run artifacts on disk cover the intent. |
@@ -89,7 +92,7 @@ Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
   `{"type": "clear"}`, and terminal `{"type": "run_end", "step",
   "cancelled"}`. The dashboard ignores anything without `step` it
   doesn't recognize.
-* Backend wiring (M5 slice 1): an application port over this contract;
+* Backend wiring (M6 slice 1): an application port over this contract;
   the infrastructure adapter wraps the repo-root `MonitorBus` (same
   class the legacy server and `nodes/` use -- payload and replay
   semantics stay byte-identical); `ReflectedGraphRuntime` passes the
@@ -123,7 +126,7 @@ numbers match the milestone table in `01-architecture.md`:
 
 | Phase | Scope | Entry criterion |
 |---|---|---|
-| M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | Backend serves the monitor page; live training observable through it on 8766 |
+| M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | **shipped 2026-09-30**: backend serves the monitor page on 8766; the stream's replay/live/clear frames are test-pinned (`test_api_monitor.py`) |
 | M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | A real graph can be built, validated, run, and observed end to end on 8766 |
 | M8 | Dataset manager + config editor + run history views | Every page in section 3's table has a backend-backed equivalent |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |

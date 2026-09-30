@@ -149,9 +149,13 @@ class ReflectedGraphRuntime(GraphRuntime):
         registry: NodeRegistry,
         *,
         memory_releaser=_default_memory_releaser,
+        monitor_bus=None,
     ) -> None:
         self._registry = registry
         self._memory_releaser = memory_releaser
+        # None is legal (tests/direct calls: nodes no-op on it) but the
+        # real composition root always passes the SharedMonitorBus.
+        self._monitor_bus = monitor_bus
 
     # ------------------------------------------------------------------
     # GraphRuntime port
@@ -347,9 +351,14 @@ class ReflectedGraphRuntime(GraphRuntime):
         except ValueError as exc:  # unreachable post-validate; defensive
             return GraphOutcome(results=(), error=str(exc))
 
-        # monitor_bus=None: live-monitor streaming is M5's frontend
-        # decision (nodes handle None -- see nodes/monitor/training_progress).
-        context = ExecutionContext(monitor_bus=None, cancel_event=cancel_event)
+        # The live-monitor bridge (M6): whatever the composition root
+        # wired (the SharedMonitorBus in production) reaches MonitorNode
+        # and the trainer's report handles through the context; None
+        # stays legal for direct calls -- nodes handle it (see
+        # nodes/monitor/training_progress).
+        context = ExecutionContext(
+            monitor_bus=self._monitor_bus, cancel_event=cancel_event
+        )
         outputs_by_node: dict[str, dict] = {}
         results: list[NodeResult] = []
 

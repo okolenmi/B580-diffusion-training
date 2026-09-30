@@ -19,7 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
-from backend.tests.support import check, finish, fixture_graph_registry
+from backend.tests.support import (
+    RecordingMonitorBus,
+    check,
+    finish,
+    fixture_graph_registry,
+)
 
 releases = {"n": 0}
 
@@ -344,5 +349,37 @@ check(
 # release_memory delegates to the injected releaser.
 runtime.release_memory()
 check(releases["n"] == 1, "release_memory calls the injected releaser")
+
+# ==========================================================================
+# Monitor bus wiring (M6) -- the injected bus reaches the node's context
+# ==========================================================================
+
+recorder = RecordingMonitorBus()
+wired = ReflectedGraphRuntime(
+    fixture_graph_registry(), memory_releaser=lambda: None, monitor_bus=recorder
+)
+probe = wired.execute(
+    make(node("m", "MonitorProbeNode")),
+    cancel_event=threading.Event(),
+)
+check(
+    probe.error is None and probe.results[0].outputs["seen"] is True,
+    "the injected monitor bus reaches the node through the context",
+)
+check(recorder.cleared == ["mon-test"], "node cleared its monitor_id at build start")
+check(
+    recorder.reports == [("mon-test", {"step": 1, "loss": 0.5})],
+    f"node reported through the bus (got {recorder.reports!r})",
+)
+
+# The default runtime (nothing wired) still runs: nodes no-op on None.
+unwired = runtime.execute(
+    make(node("m", "MonitorProbeNode")),
+    cancel_event=threading.Event(),
+)
+check(
+    unwired.error is None and unwired.results[0].outputs["seen"] is False,
+    "no bus wired: context.monitor_bus is None and the node survives",
+)
 
 finish()

@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .ports.event_bus import EventBus
+from .ports.monitor_bus import MonitorBus
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
 from .use_cases.commit_dataset_items import CommitDatasetItems
@@ -153,3 +154,4 @@ class ApplicationServices:
     graphs: GraphServices
     # shared
     event_bus: EventBus
+    monitor_bus: MonitorBus

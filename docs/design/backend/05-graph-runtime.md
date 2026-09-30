@@ -21,7 +21,7 @@ Every adaptivity mechanism below names the legacy pain point it removes.
 | No params-aware shape resolution (documented gap, phase-3 doc) | `Node.resolve_inputs(params)` / `Node.resolve_outputs(params)` classmethod hooks (default: static `INPUTS`/`OUTPUTS`); validator and edge-compat checks call them, so a future dynamic-shape node needs zero backend changes |
 | Memory-only execution state, unbounded, lost on restart | `graph_executions` table (migration 005): status machine with CAS, per-node results + timings, graph snapshot, startup reconcile |
 | Poll-only progress | Lifecycle events on the existing `EventBus` (`/api/v1/events` SSE): started / progressed (per node) / finished / failed / stopped, alongside polling endpoints |
-| Assets + monitor endpoints riding the nodegraph router | Assets already exist as `/api/v1/assets/*` (not duplicated). Monitor-bus bridging is deferred to M5 (frontend decision) |
+| Assets + monitor endpoints riding the nodegraph router | Assets already exist as `/api/v1/assets/*` (not duplicated). Monitor stream served by `GET /api/v1/monitor/{id}/stream` over the application `MonitorBus` port (M6, wrapping the repo-root bus) |
 
 ## 2. Ports (application-owned)
 
@@ -227,10 +227,10 @@ real `Node`.
 
 ## 9. Deferrals
 
-* **Monitor bus**: `ExecutionContext(monitor_bus=None)` -- nodes handle
-  `None`; live-monitor streaming belongs to the M5 frontend decision
-  (legacy `/nodegraph/monitor/{id}/stream` is not ported).
+* **Monitor bus**: shipped in M6 -- application `MonitorBus` port,
+  infrastructure adapter wrapping the repo-root bus, runtime passes it
+  into `ExecutionContext`, stream at `GET /api/v1/monitor/{id}/stream`.
 * **Assets**: already served by `/api/v1/assets/*`; not duplicated here.
-* **Frontend**: no JS changes in M4; M5 decides how `nodegraph.js` maps
-  onto this contract (localStorage -> library, poll -> SSE, local type
-  check -> validate endpoint).
+* **Frontend**: monitor slice shipped in M6 (`frontend/`); the graph
+  editor's mapping onto this contract (localStorage -> library, poll ->
+  SSE, local type check -> validate endpoint) is M7.

@@ -1,0 +1,242 @@
+  html, body { height: 100%; margin: 0; }
+
+  /* ---- topbar: identity chip + actions, one compact row ---- */
+  .mon-topbar {
+    padding: 12px 24px; display: flex; align-items: center; gap: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mon-topbar h1 { font-size: 15px; margin: 0; color: var(--text); }
+  .mon-id {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim);
+    background: var(--surface-alt); padding: 3px 9px; border-radius: 4px; cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .mon-id:hover { color: var(--text); border-color: var(--border); }
+  .mon-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .mon-action {
+    font-size: 12px; color: var(--text-dim); cursor: pointer;
+    background: var(--surface-alt); border: 1px solid var(--border); border-radius: 4px;
+    padding: 5px 11px; font-family: inherit;
+  }
+  .mon-action:hover { color: var(--text); border-color: var(--accent); }
+  /* Status as a pill: connection + run state in one glanceable chip.
+     `.ended` (cancelled run) is amber -- distinct from live green and
+     disconnected red, because a cancelled run is neither. */
+  .mon-status {
+    display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-dim);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 12px; font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+  }
+  .mon-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  .mon-status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .mon-status-dot.disconnected { background: var(--red); }
+  .mon-status-dot.ended { background: #ffb300; }
+
+  /* ---- body: one column, gap-driven spacing (no per-card margins) ---- */
+  .mon-body {
+    padding: 20px 24px 44px; max-width: 1480px; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .mon-body .card { margin-bottom: 0; }
+
+  /* ---- hero: the four numbers that matter, progress, meta row.
+         Deliberately NOT another metric card -- it's the page's anchor
+         block, bigger type on the page background's own surface. ---- */
+  .mon-hero {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 18px 24px 14px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  }
+  .mon-hero-row { display: flex; flex-wrap: wrap; gap: 20px 48px; }
+  .mon-hero-label {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-dim); margin-bottom: 5px;
+  }
+  .mon-hero-value {
+    font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700;
+    line-height: 1.1; color: var(--text); white-space: nowrap;
+  }
+  .mon-hero-value.accent { color: #6c8cff; }
+  .mon-hero-item.eta .mon-hero-value { color: var(--text-dim); }
+
+  .mon-progress-row { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .mon-progress-track {
+    flex: 1; height: 8px; border-radius: 4px; background: var(--surface-alt); overflow: hidden;
+  }
+  .mon-progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+  .mon-progress-pct {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim);
+    min-width: 40px; text-align: right;
+  }
+  .mon-meta-row {
+    display: flex; align-items: center; gap: 24px; margin-top: 11px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);
+  }
+  .mon-meta-k {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    opacity: 0.75; margin-right: 5px;
+  }
+  /* Optimizer id (whatever the trainer's report carried) -- which concrete
+     implementation produced these numbers belongs next to the numbers. */
+  .mon-runinfo {
+    margin-left: auto; max-width: 50%; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ---- graph controls: freeze + visible-items count centered in the loss
+         card header (title + window readout left, legend hint right), pan
+         slider alone directly under the chart. One set drives all three
+         charts (shared step domain); reports keep recording while frozen,
+         only the view window is locked. ---- */
+  .card-header.mon-loss-head {
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px;
+  }
+  .mon-ctl-group {
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px; flex-wrap: wrap;
+  }
+  .mon-loss-head .mon-hint { justify-self: end; text-align: right; }
+  /* Title + window readout share the header's first grid cell. Keeping the
+     readout OUT of the slider row matters: its text width changes every
+     report (`/ 1000` appearing, step digits growing), and a readout next to
+     a flex-grown slider resizes the track under the held thumb -- that
+     alone teleports the thumb even with slider writes frozen. */
+  .mon-loss-title {
+    display: flex; align-items: baseline; gap: 12px; min-width: 0;
+  }
+  .mon-scrub { padding: 0 1.5rem 1.5rem; }
+  .mon-action.mon-freeze { min-width: 78px; text-align: center; }
+  /* Frozen state: amber, matching the status pill's "ended" tone --
+     a held view is neither live nor broken. */
+  .mon-action.mon-freeze.mon-freeze-on { color: #ffb300; border-color: #ffb300; }
+  .mon-ctl-label {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .mon-counts { display: flex; gap: 4px; }
+  .mon-count {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 3px 9px;
+    background: var(--surface-alt); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  }
+  .mon-count:hover { color: var(--text); border-color: var(--accent); }
+  .mon-count.active {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--bg); font-weight: 700;
+  }
+  /* Slider with a uniform track: the default accent-color styling fills
+     the track from the left edge to the thumb with accent blue, which
+     reads as a progress bar but means nothing here (the window can start
+     anywhere, it has no "completion" semantics). Track stays neutral;
+     only the thumb carries the accent. */
+  .mon-slider {
+    display: block; width: 100%; height: 20px;
+    -webkit-appearance: none; appearance: none;
+    background: transparent; cursor: pointer;
+  }
+  .mon-slider::-webkit-slider-runnable-track {
+    height: 6px; background: var(--surface-alt);
+    border: 1px solid var(--border); border-radius: 3px;
+  }
+  /* 18px thumb (border-box, so the track-centering math stays
+     (8 - 18) / 2 = -5px): 14px read as a speck on a full-width track. */
+  .mon-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; box-sizing: border-box; margin-top: -5px;
+    background: var(--accent); border: 2px solid var(--surface);
+    border-radius: 50%;
+  }
+  .mon-slider::-moz-range-track {
+    height: 6px; background: var(--surface-alt);
+    border: 1px solid var(--border); border-radius: 3px;
+  }
+  .mon-slider::-moz-range-progress { background: transparent; }
+  .mon-slider::-moz-range-thumb {
+    width: 18px; height: 18px; box-sizing: border-box;
+    background: var(--accent); border: 2px solid var(--surface);
+    border-radius: 50%;
+  }
+  .mon-slider:disabled { opacity: 0.4; cursor: default; }
+  .mon-window {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--text-dim); white-space: nowrap;
+  }
+
+  /* ---- main grid: loss chart (fluid) + run-stats rail (fixed) ---- */
+  .mon-main { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 20px; align-items: start; }
+
+  .mon-rail-body { padding: 4px 20px 14px; }
+  .mon-stat {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .mon-stat-label {
+    font-size: 11px; font-weight: 700; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .mon-stat-value {
+    font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text);
+    text-align: right;
+  }
+  .mon-section {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-dim); padding: 15px 0 7px; border-bottom: 1px solid var(--border);
+  }
+  /* Per-t bucket rows: bar length = the displayed value relative to the
+     largest of the three (same target, same scale, so magnitudes compare
+     honestly). When a range was not sampled this step, the rail carries the
+     latest measured value instead of an em dash -- dimmed + tagged @step so
+     a carried number never claims to be this step's measurement; a range
+     never measured this run keeps the em dash and an empty bar. */
+  .mon-bar-row {
+    display: grid; grid-template-columns: 54px minmax(0, 1fr) 96px; gap: 10px;
+    align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .mon-bar-label { font-size: 11px; font-weight: 700; }
+  .mon-bar-track { height: 6px; background: var(--surface-alt); border-radius: 3px; overflow: hidden; }
+  .mon-bar-fill { height: 100%; width: 0%; border-radius: 3px; transition: width 0.3s; }
+  .mon-bar-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: right; }
+  /* Carried (last-measured, not from this step) readout: visually quiet so
+     it reads as provenance-marked rather than current. */
+  .mon-stale { opacity: 0.6; }
+
+  /* Budget-utilization meter: fill color = pressure band (accent below
+     90%, amber 90-99%, red at/over the stated budget). */
+  .mon-meter {
+    height: 8px; background: var(--surface-alt); border-radius: 4px;
+    overflow: hidden; margin: 9px 0 6px;
+  }
+  .mon-meter-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+  .mon-sub {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);
+    padding: 0 0 10px; border-bottom: 1px solid var(--border);
+  }
+
+  /* ---- bottom grid: VRAM + timing charts, side by side; auto-fit so a
+         lone visible card takes the full row. An all-hidden grid has no
+         tracks, so it collapses to zero height -- no phantom gap. ---- */
+  .mon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+  .mon-grid .card { min-width: 0; }
+
+  .mon-hint { font-size: 11px; font-weight: normal; color: var(--text-dim); }
+
+  /* Cards/sections whose data only exists for some run configurations (VRAM
+     keys on an XPU run, *_ms keys under TRAIN_STEP_TIMING/profile, grad
+     norm under clipping) stay out of sight until the first report actually
+     carries them -- a CPU run should not show permanently-empty blocks.
+     Keep this rule LAST: it must win over the display rules above. */
+  .mon-hidden { display: none; }
+
+  /* The canvas element has no intrinsic size of its own -- without this it
+     falls back to the browser default (~300x150 CSS px) regardless of how
+     large .chart-container is. */
+  .chart-container canvas { width: 100%; height: 100%; display: block; }
+
+  @media (max-width: 1120px) {
+    .mon-main { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    .mon-hero-value { font-size: 21px; }
+    .mon-meta-row { flex-wrap: wrap; gap: 10px 18px; }
+    .mon-runinfo { margin-left: 0; max-width: 100%; text-align: left; }
+  }

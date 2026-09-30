@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import replace
+from pathlib import Path
 
 from .bootstrap import build_container
 from .config import Settings
@@ -40,14 +41,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.port is not None:
         overrides["port"] = args.port
     if args.db is not None:
-        from pathlib import Path
-
         overrides["db_path"] = Path(args.db)
     if overrides:
         settings = replace(settings, **overrides)
 
     container = build_container(settings)
-    app = create_app(container.services)
+    # The frontend ships with the repo (not with the user's project
+    # root): one directory above this package.
+    static_dir = Path(__file__).resolve().parent.parent / "frontend"
+    app = create_app(container.services, static_dir=static_dir)
 
     import uvicorn
 

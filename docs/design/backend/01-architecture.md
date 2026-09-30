@@ -1,8 +1,8 @@
 # 01 -- Backend architecture
 
-Status: **M1, M2, M3a, M3b and M4 implemented and tested; M5
-(frontend decision, parity audit, migration strategy) decided and
-documented** (2026-09-30).
+Status: **M1-M4 (API domains), M5 (frontend decision + migration
+strategy docs) and M6 (monitor frontend slice) implemented and
+tested** (2026-09-30).
 This doc is the blueprint `backend/` was built from and the contract
 later milestones must keep.
 
@@ -152,7 +152,8 @@ backend/
 │   │                         # ConfigOptions, SettingsStore, AssetStore,
 │   │                         # DatasetLibrary, DatasetTasks, DatasetTaskGateway,
 │   │                         # RunArtifacts, ProgressSource, GraphCatalog,
-│   │                         # GraphRuntime, GraphExecutionRepository, GraphLibrary
+│   │                         # GraphRuntime, GraphExecutionRepository, GraphLibrary,
+│   │                         # MonitorBus (M6)
 │   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
 │                             # raw x2/options/start-options); settings (Get/
 │                             # Update); assets (List/Browse/MakeFolder/Upload/
@@ -188,15 +189,18 @@ backend/
 │   ├── persistence/          # SqliteDatabase + SqliteRunRepository +
 │   │                         # SqliteGraphExecutionRepository/SqliteGraphLibrary
 │   │                         # + migrations/ (001..005_graphs.sql)
+│   ├── monitor_bus.py         # SharedMonitorBus: wraps repo-root monitor_bus.MonitorBus
 │   └── events/               # CallbackEventBus (thread-safe)
 ├── presentation/
-│   ├── app.py                # create_app(services) factory
+│   ├── app.py                # create_app(services, *, static_dir) factory
 │   ├── deps.py               # get_services request dependency
 │   ├── errors.py             # the one error envelope (4 handlers)
 │   ├── schemas.py            # pydantic response models + *_out mappers
 │   ├── sse.py                # EventBus -> text/event-stream bridge
+│   ├── frontend.py           # register_frontend: page routes + /ui mount
 │   └── api/                  # health.py, runs.py, config.py, settings.py,
-│                             # assets.py, datasets.py, graphs.py, events.py
+│                             # assets.py, datasets.py, graphs.py, events.py,
+│                             # monitor.py (M6)
 └── tests/                    # standalone check() scripts + run_all.py
 ```
 
@@ -275,6 +279,13 @@ Endpoints as of M4:
 | GET | `/api/v1/graphs/library/{name}` | `GetGraph` (404 `graph_not_found`) |
 | DELETE | `/api/v1/graphs/library/{name}` | `DeleteGraph` (404 `graph_not_found`) |
 | GET | `/api/v1/events` | SSE stream of domain events |
+| GET | `/api/v1/monitor/{monitor_id}/stream` | SSE monitor telemetry -- legacy frame contract pinned in `03-migration-strategy.md` §4 (M6) |
+
+Page routes (M6, no schema): `GET /` serves `frontend/index.html`,
+`GET /monitor/{monitor_id}` serves `frontend/monitor.html` (the id is
+the page's own URL segment), `/ui/*` mounts the frontend directory.
+Registered after the API and never under `/api/`, so unknown API
+routes keep the JSON error envelope.
 
 `/runs/active` is registered before `/runs/{id}` so the path param
 never swallows it. Request bodies are thin: validation that matters
@@ -427,7 +438,7 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M3b | Datasets: `DatasetLibrary` + `DatasetTasks` ports, own-SQL reads, lazy `manager` bridges, fork task gateway, startup task reconcile (storage format already changed to v2 first -- see `04-dataset-format.md`) | **done** |
 | M4 | Graph subsystem: auto-discovery (`pkgutil` -> `NodeRegistry`), reflection palette, authoritative `validate` (issue-code table), threaded executor + CAS history, single-active runs, server-side saved-graph library (`05-graph-runtime.md`) | **done** |
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | **done** |
-| M6 | Frontend slice 1: `frontend/` shell served by the backend, monitor-bus port + `GET /monitor/{id}/stream`, monitor dashboard + training controls | planned |
+| M6 | Frontend slice 1: `frontend/` shell served by the backend, monitor-bus port + `GET /monitor/{id}/stream`, monitor dashboard + training controls | **done** |
 | M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | planned |
 | M8 | Frontend slice 3: dataset manager + config editor + run history views | planned |
 | M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
@@ -438,10 +449,10 @@ the graph supervisor after the row CAS lands, not by the entity.
 # server (own port; old server keeps 8765)
 python -m backend.cli --port 8766
 
-# tests (19 files: domain, repositories, use cases, supervisors, event
+# tests (21 files: domain, repositories, use cases, supervisors, event
 # bus, training adapter, start/stop, end-to-end API+SSE, config,
 # settings, assets, dataset library/tasks/API, graph discovery/catalog/
-# runtime/execution/API)
+# runtime/execution/API, monitor stream, frontend pages)
 python backend/tests/run_all.py
 ```
 

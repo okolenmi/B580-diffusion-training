@@ -99,6 +99,7 @@ from .infrastructure.graph.catalog import DiscoveredGraphCatalog
 from .infrastructure.graph.discovery import NodeRegistry
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
 from .infrastructure.jsonl_progress_source import JsonlProgressSource
+from .infrastructure.monitor_bus import SharedMonitorBus
 from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
@@ -165,7 +166,10 @@ def build_container(settings: Settings) -> Container:
     # driver after every run.
     graph_registry = NodeRegistry()
     graph_catalog = DiscoveredGraphCatalog(graph_registry)
-    graph_runtime = ReflectedGraphRuntime(graph_registry)
+    # One bus per process: the runtime hands it to MonitorNode through
+    # ExecutionContext, the SSE endpoint reads the same instance (M6).
+    monitor_bus = SharedMonitorBus()
+    graph_runtime = ReflectedGraphRuntime(graph_registry, monitor_bus=monitor_bus)
     graph_executions = SqliteGraphExecutionRepository(database)
     graph_library = SqliteGraphLibrary(database)
     graph_supervisor = GraphExecutionSupervisor(
@@ -295,7 +299,9 @@ def build_container(settings: Settings) -> Container:
             list_graphs=ListGraphs(library=graph_library),
             delete_graph=DeleteGraph(library=graph_library),
         ),
+        # shared
         event_bus=event_bus,
+        monitor_bus=monitor_bus,
     )
 
     # Startup sweep: nothing may observe an unfinished row from a dead

@@ -9,15 +9,30 @@ fakes and a temp database.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from .. import __version__
 from ..application.services import ApplicationServices
-from .api import assets, config, datasets, events, graphs, health, runs, settings
+from .api import (
+    assets,
+    config,
+    datasets,
+    events,
+    graphs,
+    health,
+    monitor,
+    runs,
+    settings,
+)
 from .errors import register_error_handlers
+from .frontend import register_frontend
 
 
-def create_app(services: ApplicationServices) -> FastAPI:
+def create_app(
+    services: ApplicationServices, *, static_dir: Path | None = None
+) -> FastAPI:
     app = FastAPI(
         title="Training Backend",
         version=__version__,
@@ -34,4 +49,9 @@ def create_app(services: ApplicationServices) -> FastAPI:
     app.include_router(datasets.router)
     app.include_router(graphs.router)
     app.include_router(events.router)
+    app.include_router(monitor.router)
+    # Page/asset routes last: they never shadow the API, and API misses
+    # keep their JSON error envelope (no static 404 HTML under /api/).
+    if static_dir is not None:
+        register_frontend(app, static_dir)
     return app

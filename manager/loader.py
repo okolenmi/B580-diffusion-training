@@ -18,7 +18,8 @@ class ManagedDatasetLoader:
     def __init__(self, dataset_root: Path, set_identifier: Optional[Union[int, str]] = None,
                  shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True,
                  t_low: int = 1, t_high: int = 999, t_mode: str = "uniform",
-                 bucket_balance=None, t_values: str = ""):
+                 bucket_balance=None, t_values: str = "",
+                 keep_incomplete: bool = False):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
@@ -28,6 +29,15 @@ class ManagedDatasetLoader:
         # blending) went out with that format -- single-latent batches carry
         # no stored target_p/target_n for it to gate.
         self.use_dataset_cfg = use_dataset_cfg
+        # Batches are formed per (prompt, neg_prompt, size) group, and with
+        # shuffle=True an incomplete last chunk of each group is dropped
+        # (see __iter__). With per-image captions that silently removes
+        # whole groups: a group smaller than batch_size never produces a
+        # batch, so its images are never trained on. keep_incomplete=True
+        # emits those chunks as smaller batches instead. Default False =
+        # the historical behavior, unchanged (and announced once, below).
+        self.keep_incomplete = keep_incomplete
+        self._warned_dropping = False
         # Single-latent datasets: every t is chosen at draw time, so this is
         # the whole of a run's t configuration. Interpreted and validated in
         # one place (manager/t_sampling.py) before any DB access, so a
@@ -204,6 +214,22 @@ class ManagedDatasetLoader:
                 buckets[key] = []
             buckets[key].append(s)
 
+        if (self.shuffle and not self.keep_incomplete and self.batch_size > 1
+                and not self._warned_dropping):
+            self._warned_dropping = True
+            never = sum(len(v) for v in buckets.values() if len(v) < self.batch_size)
+            partial = sum(len(v) % self.batch_size for v in buckets.values()
+                          if len(v) >= self.batch_size)
+            if never or partial:
+                total = len(self._samples)
+                print(f"  [DataLoader] WARNING: batch_size={self.batch_size} with shuffle "
+                      f"drops incomplete (prompt, size) groups: {never} of {total} samples "
+                      f"sit in groups smaller than a batch and are NEVER trained on, and "
+                      f"{partial} more are skipped (a random subset) each epoch -- only "
+                      f"{total - never - partial} of {total} are used per epoch. Set "
+                      f"keep_incomplete_batches=True to train on all of them (as smaller "
+                      f"batches), or use batch_size=1.")
+
         # 2. Shuffle within buckets and form batches
         all_batches = []
         for key, samples in buckets.items():
@@ -213,7 +239,7 @@ class ManagedDatasetLoader:
             for i in range(0, len(samples), self.batch_size):
                 chunk = samples[i : i + self.batch_size]
                 # Drop incomplete last batch if shuffling (common training practice)
-                if len(chunk) < self.batch_size and self.shuffle:
+                if len(chunk) < self.batch_size and self.shuffle and not self.keep_incomplete:
                     continue
                 # Fresh noise + TrainTimeSampler t per sample, every batch
                 # (see _materialize).

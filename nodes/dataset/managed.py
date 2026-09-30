@@ -89,6 +89,16 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "nothing to report yet), t_values stays the plain pinned cycle. "
                 "None with any static t_mode = today's behavior, unchanged.",
             visible_when=("t_mode", ("adaptive", "exact"))),
+        "keep_incomplete_batches": Port(
+            name="keep_incomplete_batches", type=bool, required=False, default=False,
+            doc="Batches are formed per identical (caption, image size) group. With "
+                "shuffle on, an incomplete last batch of each group is dropped -- so with "
+                "per-image captions and batch_size > 1, any image whose caption is unique "
+                "(or whose group is smaller than batch_size) is never trained on, silently. "
+                "False = that historical behavior (a warning with the exact counts is "
+                "printed at the first epoch). True = keep those samples as smaller batches "
+                "so every image is trained every epoch; the cost is extra batch shapes "
+                "(one more per resolution), which can add a one-time kernel-warmup stall."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
@@ -133,6 +143,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
             t_mode=t_mode,
             bucket_balance=bucket_balance,
             t_values=t_values,
+            keep_incomplete=inputs.get(
+                "keep_incomplete_batches", self.INPUTS["keep_incomplete_batches"].default),
         )
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)

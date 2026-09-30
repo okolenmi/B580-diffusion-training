@@ -286,7 +286,12 @@ Page routes (M6/M7, no schema): `GET /` serves `frontend/index.html`,
 the page's own URL segment), `GET /graph` serves `frontend/graph.html`
 (the editor), `/ui/*` mounts the frontend directory.
 Registered after the API and never under `/api/`, so unknown API
-routes keep the JSON error envelope.
+routes keep the JSON error envelope. Pages and `/ui/*` assets always
+send `Cache-Control: no-cache` (revalidate on every reload) -- ported
+from legacy `server/main.py`'s middleware after the visual smoke found
+heuristic freshness serving stale JS; `/api/*` responses are untouched
+so the SSE streams keep their own semantics. Pinned by
+`test_pages.py`.
 
 `/runs/active` is registered before `/runs/{id}` so the path param
 never swallows it. Request bodies are thin: validation that matters

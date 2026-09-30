@@ -1,11 +1,10 @@
 # 06 -- Frontend visual smoke checklist (browser-enabled session)
 
-Status: **written 2026-10-01; not yet executed.** The session that
-shipped M6 was console-only (no desktop browser connected), so the
-pages were verified by curl (status codes, envelopes, SSE frames) plus
-manual JS review -- never actually rendered. Run this checklist from a
-session where the browser tools work (OpenCode desktop app with the
-experimental browser setting connected), or any other real browser.
+Status: **executed 2026-10-01** from a desktop-app browser session
+against a scratch-DB backend on 8766. The API/SSE/pages coverage comes
+from `backend/tests/run_all.py` and the full gate; this checklist is
+the missing layer -- JavaScript actually running in a real browser.
+Findings and fixes from that run are recorded at the bottom.
 
 ## Why this exists
 
@@ -34,52 +33,96 @@ A scratch DB keeps the check independent of real training history.
 
 ## 1. App shell + training controls -- `http://127.0.0.1:8766/`
 
-* [ ] Page renders: sidebar nav, training controls card, runs table.
-* [ ] Console clean (no errors/warnings from our modules).
-* [ ] Start-options: with no config path chosen the page shows the
+* [x] Page renders: sidebar nav, training controls card, runs table.
+* [x] Console clean (no errors/warnings from our modules; the lone
+      `/runs/active` 404 line is the browser's network log for the
+      expected `no_active_run` answer, rendered correctly as
+      "no active run").
+* [x] Start-options: with no config path chosen the page shows the
       placeholder (the API deliberately answers 422 `invalid_query`
-      for an empty `path` -- that is contract, not a bug); choosing a
-      path lists options.
-* [ ] `GET /runs/active` 404 (`no_active_run`) renders as "no active
+      for an empty `path` -- that is contract, not a bug). Choosing a
+      real path was **not** exercised (needs config files).
+* [x] `GET /runs/active` 404 (`no_active_run`) renders as "no active
       run", not an exception.
-* [ ] Runs history lists rows; opening a run log shows lines.
-* [ ] `/api/v1/events` SSE connects (network tab: `stream_opened`).
+* [x] Runs history lists rows (empty state: "No runs yet.").
+* [x] `/api/v1/events` SSE connects (System Console: "Connected to
+      /api/v1/events.").
+* [ ] **deferred with training tests**: stop/kill buttons on a real
+      active run, cache-phase progress bar (`.progress-sub.active`
+      path -- mechanism verified by computed style only).
 
 ## 2. Monitor dashboard -- `http://127.0.0.1:8766/monitor/<any-id>`
 
-* [ ] Page renders: chart canvas, series list, controls; console clean.
-* [ ] Stream connects (first frame `{"type":"connected"}`).
-* [ ] Empty-id history: absent series show gaps/em dashes -- **never
-      fabricated zeros** (hard rule, docs 03 section 4).
-* [ ] Optional, needs a live producer: run something that reports to
-      the monitor id -> points appear live; reload mid-stream ->
-      history replays (chart restores without a rerun); a `clear`
-      frame empties the chart.
-* [ ] CSV export and series toggles work on real data.
+* [x] Page renders: chart canvas, series list, controls; console clean.
+* [x] Stream connects: status badge reaches `live`.
+* [x] Empty-id history: absent series/stats show em dashes (Best loss,
+      LR, Grad norm, VRAM, Peak all `--`) -- **never fabricated zeros**.
+* [ ] **needs a live producer**: points appear live, mid-stream reload
+      replays history, `clear` empties the chart, CSV export + series
+      toggles on real data (the M6 harness covered the frame contract;
+      real-data rendering waits for the training-test gate).
+* [x] `Export CSV` button present and enabled.
 
-## 3. Graph editor -- `http://127.0.0.1:8766/graph` (M7+)
+## 3. Graph editor -- `http://127.0.0.1:8766/graph`
 
-* [ ] Palette lists the catalog grouped by domain; unknown/failed
-      modules surface as `load_errors`, not a blank page.
-* [ ] Add a node, move it, connect output->input, delete; canvas keeps
-      positions after a reload round-trip (library save/load).
-* [ ] Params form: typed widgets (choices, defaults, paths) edit the
-      node's `params`.
-* [ ] Validate: clean graph -> ok; broken graph (dup id, missing
-      required input) -> complete issue list, localized to nodes.
-* [ ] Run: execution appears, per-node progress/status renders, stop
-      works, failures show per-node errors (status `error`, not
-      `finished`).
-* [ ] Library: save, overwrite, load, delete; importing a legacy
-      `ng_graph_v1` entry from localStorage produces a loadable graph.
-* [ ] Old-server port conflict check is *not* needed here: the editor
-      talks only to `/api/v1/graphs/*` (verify in network tab).
+* [x] Palette lists the catalog grouped by domain (7 domains, 36
+      nodes); `load_errors` section exists (catalog had none).
+* [x] Add nodes from the palette; move by dragging the header (edge
+      paths follow); connect output->input; click an edge to select,
+      `Delete` removes it (Esc deselects); library save/load round-trip
+      keeps positions bit-identical.
+* [x] Params form: typed widgets (number, choices, bool) edit the
+      node's `params`; wired inputs show "overridden by <src>".
+* [x] Validate: clean graph -> "Graph is valid."; unknown class ->
+      complete issue list with a node chip that focuses the node.
+* [x] Run: execution appears in the list, per-node progress badges
+      stream in via `/events` (ok + duration), terminal event logs
+      "finished (3 nodes)", wipe history works (with confirm).
+* [x] Type check: `int` -> `float` wire is rejected with an
+      explanation (matches the backend's `incompatible_types`);
+      `float` -> `float` connects, compatible sockets highlight green
+      during the drag.
+* [x] Library: save, load, delete path exercised; importing a legacy
+      `ng_graph_v1` draft maps `connections`/`paramValues`/`x,y` and
+      keeps unknown classes as placeholders with a console warning.
+* [x] Network tab: the editor talks only to `/api/v1/graphs/*` (+ the
+      shared `/events` stream).
 
 ## 4. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --
 do not adjust the checklist to match broken behavior.
+
+Caveat from the 2026-10-01 run: the desktop app's `screenshot` tool
+served stale frames (byte counts matched new captures, but the images
+rendered earlier states). DOM inspection via `evaluate` and the console
+reader were authoritative; treat screenshots as advisory in this
+environment.
+
+## Findings from the 2026-10-01 run (all fixed in the same session)
+
+1. **`hidden` attribute did nothing on class-styled elements** --
+   `STOP & SAVE`/`FORCE KILL` rendered with no active run, and palette
+   search filtering silently failed. Root cause: the port switched from
+   legacy's inline `style="display:none"` toggling to the `hidden`
+   attribute, but author class rules (`.btn`, `.ed-palette-item`)
+   legitimately outrank the UA sheet's `[hidden]`. Fixed with
+   `html [hidden] { display: none; }` (specificity 0,1,1, position-
+   independent, no `!important`).
+2. **No `Cache-Control` on pages/assets** -- heuristic freshness served
+   stale `style.css` across reloads (observed: `transferSize: 0`).
+   Root cause: the M6 static-serving port dropped legacy
+   `server/main.py`'s revalidation middleware (its comment documents a
+   real mixed-version incident). Fixed by stamping `no-cache` on page
+   `FileResponse`s and via a `StaticFiles` subclass for `/ui`;
+   `test_pages.py` pins it (pages/assets `no-cache`, `/api` untouched).
+3. **Cache-phase progress bar could never render** -- dashboard.js
+   toggled `hidden` while the ported CSS expects the legacy `.active`
+   class pair. Fixed to match the ported CSS (`.classList` toggles).
+4. **Stale `_suppressClick`** (found while testing) -- a wire released
+   off-canvas left the flag set, eating the next canvas click. Fixed:
+   any new `pointerdown` clears it.
 
 ## Known deferred (not bugs)
 
@@ -90,3 +133,5 @@ do not adjust the checklist to match broken behavior.
   section 5).
 * Training-loop behavioral tests stay deferred until the full server
   rework is done (user decision).
+* Preset suggestion menu (wire-drop compatible-node hints): legacy
+  used presets only for suggestions, not the payload -- deferred.

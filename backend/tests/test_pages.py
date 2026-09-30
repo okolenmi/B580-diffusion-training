@@ -1,8 +1,10 @@
 """Frontend serving tests -- page routes + /ui asset mount (M6/M7).
 
 Pins register_frontend's contract: pages serve when ``static_dir`` is
-given, every asset the shipped pages reference resolves, and the mount
-can never shadow the API's error envelope (02-api-reference.md section 1).
+given, every asset the shipped pages reference resolves, the mount
+can never shadow the API's error envelope (02-api-reference.md section 1),
+and page/asset responses carry ``Cache-Control: no-cache`` so a plain
+reload never serves stale JS (port of server/main.py's fix).
 
 Run directly: python backend/tests/test_pages.py
 """
@@ -99,6 +101,30 @@ def test_no_static_dir_means_api_only() -> None:
         check(
             status == 404 and isinstance(body, dict) and "error" in body,
             f"monitor page 404s the same way (got {status})",
+        )
+
+
+def test_static_cache_headers() -> None:
+    print("\n== pages + assets revalidate (Cache-Control: no-cache) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        app = create_app(_container(tmp).services, static_dir=FRONTEND)
+
+        for path in ("/", "/graph", "/monitor/mon-test",
+                     "/ui/css/style.css", "/ui/js/editor.js"):
+            status, headers, _ = asgi_request(app, path)
+            check(
+                status == 200 and headers.get("cache-control") == "no-cache",
+                f"{path} sends Cache-Control: no-cache "
+                f"(got {status}, {headers.get('cache-control')!r})",
+            )
+
+        # /api keeps default semantics -- the monitor SSE stream lives there
+        # and must not inherit asset caching headers.
+        status, headers, _ = asgi_request(app, "/api/v1/health")
+        check(
+            status == 200 and "cache-control" not in headers,
+            f"/api/v1/health has no Cache-Control override (got "
+            f"{status}, {headers.get('cache-control')!r})",
         )
 
 

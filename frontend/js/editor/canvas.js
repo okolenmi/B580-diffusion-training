@@ -246,6 +246,9 @@ export class Canvas {
   }
 
   _pointerDown(e) {
+    // Any new press supersedes a pending suppress flag (e.g. a wire
+    // released off-canvas never produces the trailing canvas click).
+    this._suppressClick = false;
     const socket = e.target.closest(".gport");
     if (socket) {
       e.preventDefault();

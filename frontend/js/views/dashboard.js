@@ -63,7 +63,7 @@ function renderActive() {
     badge.textContent = "Idle";
     el("progress-fill").style.width = "0%";
     el("progress-text").textContent = "no active run";
-    el("cache-progress-wrap").hidden = true;
+    el("cache-progress-wrap").classList.remove("active");
     for (const id of ["metric-loss", "metric-avg", "metric-lr", "metric-step"]) {
       el(id).textContent = "—";
     }
@@ -94,12 +94,12 @@ function renderProgress(run) {
 
   const wrap = el("cache-progress-wrap");
   if (run.cache_total) {
-    wrap.hidden = false;
+    wrap.classList.add("active");
     const cachePct = Math.min(100, (run.cache_done / run.cache_total) * 100);
     el("cache-fill").style.width = cachePct + "%";
     el("cache-text").textContent = `cache ${run.cache_done}/${run.cache_total}`;
   } else {
-    wrap.hidden = true;
+    wrap.classList.remove("active");
   }
 }
 

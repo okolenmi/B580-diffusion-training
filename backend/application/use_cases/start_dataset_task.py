@@ -38,13 +38,27 @@ from ..errors import (
 from ..ports.dataset_library import DatasetLibrary
 from ..ports.dataset_task_gateway import DatasetTaskGateway, DatasetTaskLaunch
 from ..ports.dataset_tasks import (
-    KIND_GENERATE_TEACHER,
-    KIND_INGEST_LORA,
     DatasetTask,
     DatasetTasks,
-    TASK_KINDS,
+    TaskKind,
+    TaskStatus,
 )
 from ..teacher_prompts import MODEL_TYPES, teacher_payload
+
+def _task_kind(raw: str) -> TaskKind:
+    """Unknown kind is a 422 naming the vocabulary, not a raw ValueError.
+
+    The enum decides what a kind *is*; this decides how an unknown one is
+    reported (docs 08 S-24).
+    """
+    try:
+        return TaskKind(raw)
+    except ValueError:
+        raise InvalidQueryError(
+            f"unknown task kind {raw!r}; expected one of "
+            f"{[k.value for k in TaskKind]}"
+        ) from None
+
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 _RESIZE_MODES: tuple[str, ...] = ("fit", "center_crop", "pad", "resize")
@@ -75,17 +89,13 @@ class StartDatasetTask:
     def execute(self, command: StartDatasetTaskCommand) -> DatasetTask:
         with self._lock:
             root = self._library.root(command.dataset)  # exists + validated
-            if command.kind not in TASK_KINDS:
-                raise InvalidQueryError(
-                    f"unknown task kind {command.kind!r}; "
-                    f"expected one of {list(TASK_KINDS)}"
-                )
+            kind = _task_kind(command.kind)
             model_rel = self._validate_model(command.model)
 
             # Per-kind validation + honest total, before the active-task
             # check: a bad request stays a bad request even while
             # another task runs (422 beats 409, as before M8e).
-            if command.kind == KIND_INGEST_LORA:
+            if kind is TaskKind.INGEST_LORA:
                 image_dir = self._validate_image_dir(command.image_dir)
                 total = self._count_images(image_dir, command.recursive)
                 if total == 0:
@@ -94,7 +104,7 @@ class StartDatasetTask:
                         f"found in '{image_dir}'"
                     )
                 params = self._ingest_params(command, model_rel)
-            else:  # KIND_GENERATE_TEACHER
+            else:  # TaskKind.GENERATE_TEACHER
                 teacher = self._require_teacher(command)
                 total = teacher.n_conditions * teacher.n_samples_per_cond
                 params = self._teacher_params(teacher, model_rel)
@@ -109,13 +119,16 @@ class StartDatasetTask:
             if active is not None:
                 raise DatasetTaskActiveError(
                     f"dataset '{command.dataset}' already has task "
-                    f"{active.id} {active.status}",
-                    details={"task_id": active.id, "status": active.status},
+                    f"{active.id} {TaskStatus(active.status).value}",
+                    details={
+                        "task_id": active.id,
+                        "status": TaskStatus(active.status).value,
+                    },
                 )
 
             task = self._tasks.add(
                 dataset=command.dataset,
-                kind=command.kind,
+                kind=kind,
                 total=total,
                 params=params,
             )
@@ -124,7 +137,7 @@ class StartDatasetTask:
                     DatasetTaskLaunch(
                         task_id=task.id,
                         dataset_root=root,
-                        kind=command.kind,
+                        kind=kind,
                         params=dict(params, model=str(self._model_path(command.model))),
                     )
                 )

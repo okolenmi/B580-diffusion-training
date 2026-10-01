@@ -36,7 +36,7 @@ from ..events import (
 )
 from ..exceptions import DomainError
 from ..lifecycle import StatusMachine
-from ..value_objects import RUN_TRANSITIONS, RunId, RunStatus
+from ..value_objects import RUN_TRANSITIONS, RunId, RunStatus, TrainingMode
 
 
 class Run:
@@ -57,7 +57,7 @@ class Run:
         *,
         status: RunStatus,
         config_path: str,
-        mode: str,
+        mode: TrainingMode | str,
         created_at: datetime,
         updated_at: datetime | None = None,
         id: RunId | None = None,
@@ -79,6 +79,14 @@ class Run:
             raise DomainError("config_path is required")
         if not mode:
             raise DomainError("mode is required")
+        if not isinstance(mode, TrainingMode):
+            try:
+                mode = TrainingMode(mode)
+            except ValueError as exc:
+                raise DomainError(
+                    f"unknown training mode {mode!r}; expected one of "
+                    f"{[m.value for m in TrainingMode]}"
+                ) from exc
         if total_steps < 0:
             raise DomainError("total_steps cannot be negative")
         if done_steps < 0:
@@ -90,7 +98,7 @@ class Run:
             transitions=RUN_TRANSITIONS, status=status, label="run", entity_id=id
         )
         self._config_path = config_path
-        self._mode = mode
+        self._mode: TrainingMode = mode
         self._total_steps = total_steps
         self._done_steps = done_steps
         self._current_loss = current_loss
@@ -116,7 +124,7 @@ class Run:
         cls,
         *,
         config_path: str,
-        mode: str,
+        mode: TrainingMode | str,
         total_steps: int,
         created_at: datetime,
     ) -> Run:
@@ -164,7 +172,9 @@ class Run:
         return self._config_path
 
     @property
-    def mode(self) -> str:
+    def mode(self) -> TrainingMode:
+        """The tuning method this run trains (``str``-valued, so it
+        serialises as the word the config used)."""
         return self._mode
 
     @property

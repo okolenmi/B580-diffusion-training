@@ -34,7 +34,7 @@ from typing import Any
 from nodes.core import ExecutionContext
 
 from ...application.ports.graph_runtime import (
-    ISSUE_ERROR,
+    IssueSeverity,
     GraphIssue,
     GraphOutcome,
     GraphRuntime,
@@ -172,12 +172,12 @@ class ReflectedGraphRuntime(GraphRuntime):
         for node in graph.nodes:
             if not node.id:
                 issues.append(
-                    GraphIssue(ISSUE_ERROR, "invalid_node_id", "node id must not be empty")
+                    GraphIssue(IssueSeverity.ERROR, "invalid_node_id", "node id must not be empty")
                 )
             elif node.id in seen:
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "duplicate_node_id",
                         f"node id {node.id!r} appears more than once",
                         node_id=node.id,
@@ -189,7 +189,7 @@ class ReflectedGraphRuntime(GraphRuntime):
             if cls is None:
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "unknown_class",
                         f"no node class named {node.class_name!r} is registered",
                         node_id=node.id,
@@ -214,7 +214,7 @@ class ReflectedGraphRuntime(GraphRuntime):
                 if port.required and not provided and name not in fed:
                     issues.append(
                         GraphIssue(
-                            ISSUE_ERROR,
+                            IssueSeverity.ERROR,
                             "missing_required_input",
                             f"{node.class_name}.{name} is required but neither a "
                             f"param nor an edge provides it",
@@ -231,7 +231,7 @@ class ReflectedGraphRuntime(GraphRuntime):
                     ):
                         issues.append(
                             GraphIssue(
-                                ISSUE_ERROR,
+                                IssueSeverity.ERROR,
                                 "invalid_choice",
                                 f"{node.class_name}.{name}={value!r} is not one of "
                                 f"{list(port.choices)}",
@@ -243,7 +243,7 @@ class ReflectedGraphRuntime(GraphRuntime):
                         type_name = getattr(port.type, "__name__", str(port.type))
                         issues.append(
                             GraphIssue(
-                                ISSUE_ERROR,
+                                IssueSeverity.ERROR,
                                 "type_mismatch",
                                 f"{node.class_name}.{name} expects {type_name}, "
                                 f"got {type(value).__name__}",
@@ -255,7 +255,7 @@ class ReflectedGraphRuntime(GraphRuntime):
                 if key not in inputs:
                     issues.append(
                         GraphIssue(
-                            ISSUE_ERROR,
+                            IssueSeverity.ERROR,
                             "unknown_param",
                             f"{node.class_name} has no input named {key!r}",
                             node_id=node.id,
@@ -271,7 +271,7 @@ class ReflectedGraphRuntime(GraphRuntime):
                 missing = edge.from_node if from_spec is None else edge.to_node
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "edge_unknown_node",
                         f"edge references node {missing!r}, which is not in the graph",
                         node_id=missing,
@@ -286,7 +286,7 @@ class ReflectedGraphRuntime(GraphRuntime):
             if outputs is not None and out_port is None:
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "unknown_output_port",
                         f"{from_spec.class_name} has no output port {edge.from_port!r}",
                         node_id=from_spec.id,
@@ -296,7 +296,7 @@ class ReflectedGraphRuntime(GraphRuntime):
             if inputs is not None and in_port is None:
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "unknown_input_port",
                         f"{to_spec.class_name} has no input port {edge.to_port!r}",
                         node_id=to_spec.id,
@@ -308,7 +308,7 @@ class ReflectedGraphRuntime(GraphRuntime):
             ):
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "incompatible_types",
                         f"{from_spec.class_name}.{edge.from_port} "
                         f"({getattr(out_port.type, '__name__', out_port.type)}) does "
@@ -326,7 +326,7 @@ class ReflectedGraphRuntime(GraphRuntime):
             except ValueError as exc:
                 issues.append(
                     GraphIssue(
-                        ISSUE_ERROR,
+                        IssueSeverity.ERROR,
                         "cycle",
                         str(exc).replace("ValueError: ", ""),
                     )
@@ -340,7 +340,7 @@ class ReflectedGraphRuntime(GraphRuntime):
         cancel_event: threading.Event,
         on_node_done: NodeDoneCallback | None = None,
     ) -> GraphOutcome:
-        errors = [i for i in self.validate(graph) if i.severity == ISSUE_ERROR]
+        errors = [i for i in self.validate(graph) if i.severity == IssueSeverity.ERROR]
         if errors:
             extra = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
             return GraphOutcome(results=(), error=f"graph invalid: {errors[0].message}{extra}")
@@ -424,7 +424,7 @@ class ReflectedGraphRuntime(GraphRuntime):
         except Exception as exc:  # noqa: BLE001 -- node's own bug, reported not raised
             issues.append(
                 GraphIssue(
-                    ISSUE_ERROR,
+                    IssueSeverity.ERROR,
                     "shape_resolution_failed",
                     f"{node.class_name}.resolve_{label} raised "
                     f"{type(exc).__name__}: {exc}",

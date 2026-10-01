@@ -152,9 +152,9 @@ def test_invariants() -> None:
     clock = FakeClock()
 
     for kwargs, label in (
-        (dict(config_path="", mode="m", total_steps=1, created_at=clock.now()), "empty config_path"),
+        (dict(config_path="", mode="lora", total_steps=1, created_at=clock.now()), "empty config_path"),
         (dict(config_path="c", mode="", total_steps=1, created_at=clock.now()), "empty mode"),
-        (dict(config_path="c", mode="m", total_steps=-1, created_at=clock.now()), "negative total_steps"),
+        (dict(config_path="c", mode="lora", total_steps=-1, created_at=clock.now()), "negative total_steps"),
     ):
         try:
             Run.create(**kwargs)
@@ -166,7 +166,7 @@ def test_invariants() -> None:
         Run(
             status=RunStatus.CREATED,
             config_path="c",
-            mode="m",
+            mode="lora",
             total_steps=1,
             done_steps=-2,
             created_at=clock.now(),
@@ -176,7 +176,7 @@ def test_invariants() -> None:
         check(True, "create with negative done_steps rejected")
 
     unpersisted = Run.create(
-        config_path="c", mode="m", total_steps=1, created_at=clock.now()
+        config_path="c", mode="lora", total_steps=1, created_at=clock.now()
     )
     try:
         unpersisted.mark_started(pid=1, at=clock.now())
@@ -303,7 +303,7 @@ def test_restore_checks_cross_field_rules() -> None:
 
     # The constructor still accepts what the mappers pass, so a *new*
     # aggregate is never built through the stricter door by accident.
-    fresh = Run(status=RunStatus.CREATED, config_path="c", mode="m",
+    fresh = Run(status=RunStatus.CREATED, config_path="c", mode="lora",
                 total_steps=1, created_at=now)
     check(fresh.id is None, "the constructor is unchanged for new runs")
 

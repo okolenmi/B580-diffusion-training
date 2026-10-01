@@ -9,7 +9,7 @@ errors -- one validation path, not two.
 from __future__ import annotations
 
 from ..dto import GraphValidationResult
-from ..ports.graph_runtime import ISSUE_ERROR, GraphRuntime
+from ..ports.graph_runtime import GraphRuntime, IssueSeverity
 from ...domain.graph import GraphDefinition
 
 
@@ -19,5 +19,5 @@ class ValidateGraph:
 
     def execute(self, graph: GraphDefinition) -> GraphValidationResult:
         issues = self._runtime.validate(graph)
-        ok = not any(issue.severity == ISSUE_ERROR for issue in issues)
+        ok = not any(IssueSeverity(issue.severity).blocks for issue in issues)
         return GraphValidationResult(ok=ok, issues=issues)

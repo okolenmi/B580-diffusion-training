@@ -32,7 +32,7 @@ from ..application.ports.dataset_library import (
     DatasetSummary,
     TrainingSetInfo,
 )
-from ..application.ports.dataset_tasks import KIND_GENERATE_TEACHER, DatasetTask
+from ..application.ports.dataset_tasks import DatasetTask, TaskKind
 from ..application.ports.settings_store import SettingsChanges, SettingsView
 from ..domain.value_objects import GraphStatus, RunStatus
 
@@ -491,7 +491,11 @@ class StartDatasetTaskIn(BaseModel):
 
     def to_command(self, dataset: str) -> StartDatasetTaskCommand:
         teacher: TeacherTaskParams | None = None
-        if self.kind == KIND_GENERATE_TEACHER:
+        # Compared by value, never coerced: the wire type is a plain str
+        # precisely so an unknown kind stays a *use case* 422 with the
+        # vocabulary in the message, instead of a ValueError here (the
+        # enum is str-valued, so this is the same comparison).
+        if self.kind == TaskKind.GENERATE_TEACHER.value:
             teacher = TeacherTaskParams(
                 prompt_mode=self.prompt_mode,
                 prompts=self.prompts,

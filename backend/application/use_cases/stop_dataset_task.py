@@ -10,11 +10,7 @@ from __future__ import annotations
 
 from ..errors import DatasetTaskNotFoundError, DatasetTaskNotActiveError
 from ..ports.dataset_task_gateway import DatasetTaskGateway
-from ..ports.dataset_tasks import (
-    ACTIVE_TASK_STATUSES,
-    DatasetTask,
-    DatasetTasks,
-)
+from ..ports.dataset_tasks import DatasetTask, DatasetTasks, TaskStatus
 
 
 class StopDatasetTask:
@@ -26,9 +22,9 @@ class StopDatasetTask:
         task = self._tasks.get(task_id)
         if task is None:
             raise DatasetTaskNotFoundError(f"no dataset task {task_id}")
-        if task.status not in ACTIVE_TASK_STATUSES:
+        if not TaskStatus(task.status).is_active:
             raise DatasetTaskNotActiveError(
-                f"task {task_id} already {task.status}"
+                f"task {task_id} already {TaskStatus(task.status).value}"
             )
         if task.pid is not None:
             self._gateway.kill(task.pid)

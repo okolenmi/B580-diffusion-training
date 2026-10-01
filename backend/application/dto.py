@@ -13,7 +13,7 @@ from datetime import datetime
 from ..domain.entities.graph_execution import GraphExecution
 from ..domain.graph import NodeResult
 from ..domain.entities.run import Run
-from ..domain.value_objects import GraphStatus, RunStatus
+from ..domain.value_objects import GraphStatus, RunStatus, StartFrom
 from .ports.config_inspector import StartOption
 from .ports.dataset_library import (
     DatasetInfo,
@@ -104,22 +104,18 @@ class DeleteRunsResult:
     deleted: int
 
 
-# Valid values for StartTrainingCommand.start_from (validated by the
-# use case -- one source of truth, not duplicated into pydantic).
-START_FROM_OPTIONS: tuple[str, ...] = (
-    "teacher",
-    "student",
-    "resume",
-    "lora_checkpoint",
-)
-
-
 @dataclass(frozen=True, slots=True)
 class StartTrainingCommand:
-    """Launch request; relative ``config_path`` anchors at project root."""
+    """Launch request; relative ``config_path`` anchors at project root.
+
+    ``start_from`` stays a plain ``str`` on purpose: the wire schema is
+    where an unknown value must still arrive as a 422 with the
+    vocabulary in the message, which the use case does against the
+    ``StartFrom`` enum (docs 08 S-24).
+    """
 
     config_path: str
-    start_from: str = "teacher"
+    start_from: str = StartFrom.TEACHER.value
     reset_optimizer: bool = False
 
 

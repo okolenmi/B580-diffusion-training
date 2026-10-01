@@ -6,7 +6,7 @@ import logging
 import threading
 from pathlib import Path
 
-from ..dto import RunDTO, StartTrainingCommand, to_run_dto, START_FROM_OPTIONS
+from ..dto import RunDTO, StartTrainingCommand, to_run_dto
 from ..errors import (
     InvalidQueryError,
     RunAlreadyActiveError,
@@ -21,7 +21,7 @@ from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
 from ..ports.training_gateway import TrainingGateway, TrainingLaunch
 from ...domain.entities.run import Run
-from ...domain.value_objects import RunStatus
+from ...domain.value_objects import RunStatus, StartFrom
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +64,13 @@ class StartTraining:
                 raise RunAlreadyActiveError(
                     f"run {active.id} is still {active.status.value}"
                 )
-            if command.start_from not in START_FROM_OPTIONS:
+            try:
+                start_from = StartFrom(command.start_from)
+            except ValueError:
                 raise InvalidQueryError(
                     f"unknown start_from {command.start_from!r}; "
-                    f"expected one of {list(START_FROM_OPTIONS)}"
-                )
+                    f"expected one of {[s.value for s in StartFrom]}"
+                ) from None
 
             config_path = self._paths.config(command.config_path)
             summary = self._inspector.summarize(config_path)
@@ -94,7 +96,7 @@ class StartTraining:
                     config_path=config_path,
                     mode=summary.mode,
                     total_steps=summary.total_steps,
-                    start_from=command.start_from,
+                    start_from=start_from,
                     reset_optimizer=command.reset_optimizer,
                     log_path=paths.log,
                     progress_path=paths.progress,

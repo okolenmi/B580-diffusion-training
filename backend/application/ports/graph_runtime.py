@@ -27,16 +27,31 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 
 from ...domain.graph import GraphDefinition, NodeResult
 
-ISSUE_ERROR = "error"
-ISSUE_WARNING = "warning"
+class IssueSeverity(str, Enum):
+    """How much a validation finding matters.
+
+    ``ERROR`` blocks a run (the graph would misbehave); ``WARNING`` is
+    advice the submitter may ignore. ``str``-valued, so the wire shape is
+    unchanged and the editor's ``issue.severity === "error"`` keeps
+    working (docs 08 S-24).
+    """
+
+    ERROR = "error"
+    WARNING = "warning"
+
+    @property
+    def blocks(self) -> bool:
+        return self is IssueSeverity.ERROR
 
 
 @dataclass(frozen=True, slots=True)
 class GraphIssue:
-    """One validation finding; ``severity == ISSUE_ERROR`` blocks a run.
+    """One validation finding; ``severity.blocks`` says whether it stops
+    the run.
 
     ``node_id``/``edge_index``/``param`` localize the finding when they
     apply (each is None otherwise); ``message`` is human-readable and
@@ -44,7 +59,7 @@ class GraphIssue:
     see doc 05 section 4 for the full table.
     """
 
-    severity: str
+    severity: IssueSeverity | str
     code: str
     message: str
     node_id: str | None = None
@@ -56,7 +71,7 @@ def issue_to_dict(issue: GraphIssue) -> dict:
     """JSON-safe form of an issue (one converter for the API's validate
     response *and* the run-rejection ``details`` -- same shape twice)."""
     return {
-        "severity": issue.severity,
+        "severity": str(issue.severity),
         "code": issue.code,
         "message": issue.message,
         "node_id": issue.node_id,

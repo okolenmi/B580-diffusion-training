@@ -52,6 +52,44 @@ class RunStatus(str, Enum):
         return not RUN_TRANSITIONS[self]
 
 
+class TrainingMode(str, Enum):
+    """``tuning.method`` -- what a run actually trains.
+
+    The four values are the ones ``core.config_model`` declares (four
+    ``Literal`` unions, one per tuning strategy). ``Run.mode`` used to
+    be a bare ``str``, so a typo or a fifth strategy reached the database
+    as a run that could never be read back as anything meaningful; a
+    ``str``-valued enum keeps every existing comparison and JSON
+    round-trip working while making the vocabulary a type
+    (docs 08 S-24).
+
+    Not a ``training_mode`` naming: it *is* the tuning method, and the
+    config inspector is what produces it.
+    """
+
+    LORA = "lora"
+    CYCLIC = "cyclic"
+    DISTILLATION = "distillation"
+    FULL = "full"
+
+
+class StartFrom(str, Enum):
+    """What a launch starts from -- a checkpoint, a teacher run, or a
+    previous run's own state.
+
+    The values are exactly the keys ``ConfigInspector.describe`` returns
+    in its ``start_from`` map (the options a config actually offers), so
+    the launch vocabulary and the offered one cannot drift apart: the
+    UI sends a key the inspector produced, or the use case refuses it
+    with the list (docs 08 S-24).
+    """
+
+    TEACHER = "teacher"
+    STUDENT = "student"
+    RESUME = "resume"
+    LORA_CHECKPOINT = "lora_checkpoint"
+
+
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     # FAILED is reachable from CREATED: a launch can fail before the
     # process ever starts (missing interpreter, unreadable config), and

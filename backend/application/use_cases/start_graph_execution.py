@@ -23,7 +23,7 @@ from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
 from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
-from ..ports.graph_runtime import ISSUE_ERROR, GraphRuntime, issue_to_dict
+from ..ports.graph_runtime import GraphRuntime, IssueSeverity, issue_to_dict
 from ...domain.entities.graph_execution import GraphExecution
 from ...domain.events import DomainEvent
 from ...domain.graph import GraphDefinition
@@ -51,7 +51,7 @@ class StartGraphExecution:
     def execute(self, graph: GraphDefinition) -> GraphExecutionSummaryDTO:
         with self._lock:
             issues = self._runtime.validate(graph)
-            errors = [issue for issue in issues if issue.severity == ISSUE_ERROR]
+            errors = [issue for issue in issues if IssueSeverity(issue.severity).blocks]
             if errors:
                 raise GraphInvalidError(
                     f"graph has {len(errors)} validation error(s)",

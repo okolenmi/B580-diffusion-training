@@ -18,23 +18,62 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 
-ACTIVE_TASK_STATUSES: tuple[str, ...] = ("pending", "running")
-TERMINAL_TASK_STATUSES: tuple[str, ...] = ("finished", "failed", "killed")
 
-KIND_INGEST_LORA = "ingest_lora"
-KIND_GENERATE_TEACHER = "generate_teacher"
-TASK_KINDS: tuple[str, ...] = (KIND_INGEST_LORA, KIND_GENERATE_TEACHER)
+class TaskStatus(str, Enum):
+    """Lifecycle of one dataset task row.
+
+    The vocabulary used to be two module constants plus two tuples of
+    strings (``ACTIVE_TASK_STATUSES``, ``TERMINAL_TASK_STATUSES``), and
+    the adapter wrote the values as SQL literals -- so "is this row
+    still running" was a question four files could answer differently.
+    Active-ness is now a property of the status, and the adapter's SQL
+    predicate is generated from it (docs 08 S-24).
+
+    ``str``-valued: the column is TEXT and every JSON body reports the
+    word, so nothing downstream changes shape.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    FINISHED = "finished"
+    FAILED = "failed"
+    KILLED = "killed"
+
+    @property
+    def is_active(self) -> bool:
+        """Pending or running: the row still has a process or is about to."""
+        return self in _ACTIVE
+
+    @property
+    def is_terminal(self) -> bool:
+        """Ended for good -- kept forever as task history."""
+        return not self.is_active
+
+
+_ACTIVE = frozenset({TaskStatus.PENDING, TaskStatus.RUNNING})
+
+
+class TaskKind(str, Enum):
+    """Which kind of work a task row is running."""
+
+    INGEST_LORA = "ingest_lora"
+    GENERATE_TEACHER = "generate_teacher"
 
 
 @dataclass(frozen=True, slots=True)
 class DatasetTask:
-    """One task row (``params`` is the decoded JSON launch payload)."""
+    """One task row (``params`` is the decoded JSON launch payload).
+
+    ``status`` and ``kind`` are the enums above; repositories convert the
+    stored words once, at the edge, so nothing in between re-parses them.
+    """
 
     id: int
     dataset: str
-    kind: str
-    status: str
+    kind: TaskKind | str
+    status: TaskStatus | str
     pid: int | None
     current: int
     total: int

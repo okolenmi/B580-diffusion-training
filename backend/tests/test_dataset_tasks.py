@@ -22,7 +22,7 @@ from backend.application.errors import (
     DatasetTaskNotFoundError,
     InvalidQueryError,
 )
-from backend.application.ports.dataset_tasks import KIND_INGEST_LORA
+from backend.application.ports.dataset_tasks import TaskKind
 from backend.application.use_cases import (
     ListDatasetTasks,
     ReconcileDatasetTasks,
@@ -62,7 +62,7 @@ def expect(exc_type, fn, label):
 
 # -- repository: add / CAS transitions --------------------------------------
 
-task = repo.add(dataset="d", kind=KIND_INGEST_LORA, total=10, params={"seed": 42})
+task = repo.add(dataset="d", kind=TaskKind.INGEST_LORA, total=10, params={"seed": 42})
 check(task.status == "pending" and task.pid is None, "add creates a pending row")
 check(task.total == 10 and task.params == {"seed": 42}, "payload round-trips")
 check(repo.find_active("d").id == task.id, "find_active sees it")
@@ -80,7 +80,7 @@ check(repo.find_active("d") is None, "terminal row is not active")
 check(len(repo.list_for("d", active_only=True)) == 0, "active_only hides it")
 check(len(repo.list_for("d")) == 1, "history kept")
 
-t2 = repo.add(dataset="d", kind=KIND_INGEST_LORA, total=5, params={})
+t2 = repo.add(dataset="d", kind=TaskKind.INGEST_LORA, total=5, params={})
 check(repo.kill_if_active(t2.id) is True, "kill wins on pending")
 check(repo.update_progress(t2.id, 1, pid=7) is False, "progress cannot resurrect")
 check(repo.get(t2.id).status == "killed", "row stays killed")
@@ -110,7 +110,7 @@ check(first.status == "running" and first.pid == 7777,
 check(first.total == 3, "total counts images by the legacy rule")
 check(len(gateway.spawned) == 1, "gateway spawned once")
 launch = gateway.spawned[0]
-check(launch.kind == KIND_INGEST_LORA, "launch carries kind")
+check(launch.kind == TaskKind.INGEST_LORA, "launch carries kind")
 check(launch.params["image_dir"] == str(imgs), "launch carries image_dir")
 check(launch.params["model"] == str(ckpt / "model.safetensors"),
       "model resolved to an absolute path inside checkpoints")
@@ -175,13 +175,13 @@ check(len(gateway.spawned) == 1, "no spawns from rejected commands")
 
 # -- ReconcileDatasetTasks ---------------------------------------------------
 
-dead = repo.add(dataset="rec", kind=KIND_INGEST_LORA, total=9, params={})
+dead = repo.add(dataset="rec", kind=TaskKind.INGEST_LORA, total=9, params={})
 repo.update_progress(dead.id, 4, pid=8888)  # gateway does not know 8888
-zombie = repo.add(dataset="rec", kind=KIND_INGEST_LORA, total=9, params={})
+zombie = repo.add(dataset="rec", kind=TaskKind.INGEST_LORA, total=9, params={})
 repo.update_progress(zombie.id, 1, pid=gateway.next_pid)
 gateway.alive.add(gateway.next_pid)
 gateway.next_pid += 1
-never = repo.add(dataset="rec", kind=KIND_INGEST_LORA, total=9, params={})  # pending, no pid
+never = repo.add(dataset="rec", kind=TaskKind.INGEST_LORA, total=9, params={})  # pending, no pid
 
 reconciled = ReconcileDatasetTasks(
     sweeper=DatasetTaskSweeper(tasks=repo, gateway=gateway, clock=clock)
@@ -198,9 +198,9 @@ make_v2_dataset(root, "sweep")
 listing = ListDatasetTasks(library=library, tasks=repo)
 sweeper = DatasetTaskSweeper(tasks=repo, gateway=gateway, clock=clock)
 
-gone = repo.add(dataset="sweep", kind=KIND_INGEST_LORA, total=1, params={})
+gone = repo.add(dataset="sweep", kind=TaskKind.INGEST_LORA, total=1, params={})
 repo.update_progress(gone.id, 1, pid=6666)  # dies without reporting
-fresh = repo.add(dataset="sweep", kind=KIND_INGEST_LORA, total=1, params={})  # just spawned
+fresh = repo.add(dataset="sweep", kind=TaskKind.INGEST_LORA, total=1, params={})  # just spawned
 
 # A read is a read: listing rows must not rewrite any row, least of all
 # one belonging to another dataset (docs 08 S-03).

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -42,8 +43,16 @@ from backend.application.requests import (  # noqa: E402
     ItemSelection,
 )
 from backend.application.lifecycle_writer import LifecycleWriter  # noqa: E402
+from backend.application.ports.dataset_tasks import TaskKind, TaskStatus  # noqa: E402
+from backend.application.ports.graph_runtime import IssueSeverity  # noqa: E402
 from backend.application.ports.progress_source import ProgressSample  # noqa: E402
+from backend.domain.entities.run import Run  # noqa: E402
 from backend.domain.events import DomainEvent, RunStarted  # noqa: E402
+from backend.domain.exceptions import DomainError  # noqa: E402
+from backend.domain.value_objects import (  # noqa: E402
+    StartFrom,
+    TrainingMode,
+)
 from backend.tests.support import check, finish  # noqa: E402
 
 
@@ -386,6 +395,82 @@ def test_progress_sample_terminal_only() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# S-24: closed vocabularies are types, not strings that happen to match
+# ---------------------------------------------------------------------------
+
+
+def test_training_mode() -> None:
+    print("\n== TrainingMode: tuning.method is a vocabulary (S-24) ==")
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    run = Run.create(config_path="c.toml", mode="distillation", total_steps=10, created_at=now)
+    check(run.mode is TrainingMode.DISTILLATION, "the string is coerced to the enum")
+    check(run.mode == "distillation", "and still compares equal to the wire word")
+    check(
+        Run.create(config_path="c.toml", mode=TrainingMode.LORA, total_steps=1, created_at=now).mode
+        is TrainingMode.LORA,
+        "an enum member is accepted as-is",
+    )
+    _expect_error(
+        lambda: Run.create(config_path="c.toml", mode="typo", total_steps=1, created_at=now),
+        DomainError,
+        "unknown training mode",
+        "a mode outside the vocabulary is a domain error",
+    )
+    check(
+        [m.value for m in TrainingMode] == ["lora", "cyclic", "distillation", "full"],
+        "the four strategies core.config_model declares",
+    )
+
+
+def test_start_from() -> None:
+    print("\n== StartFrom: what a launch can start from ==")
+    check(
+        [s.value for s in StartFrom]
+        == ["teacher", "student", "resume", "lora_checkpoint"],
+        "the four launch sources",
+    )
+    check(StartFrom.TEACHER == "teacher", "str-valued, so the wire word is the value")
+    try:
+        StartFrom("from_scratch")
+        check(False, "an unknown launch source must not resolve")
+    except ValueError:
+        check(True, "an unknown launch source does not resolve")
+
+
+def test_task_status() -> None:
+    print("\n== TaskStatus: active and terminal derived (S-24) ==")
+    check(TaskStatus.PENDING.is_active and TaskStatus.RUNNING.is_active,
+          "pending/running are active")
+    check(
+        all(
+            not s.is_active and s.is_terminal
+            for s in (TaskStatus.FINISHED, TaskStatus.FAILED, TaskStatus.KILLED)
+        ),
+        "finished/failed/killed are terminal",
+    )
+    check(
+        all(not s.is_terminal for s in TaskStatus if s.is_active),
+        "an active status is never terminal",
+    )
+    check(len(list(TaskStatus)) == 5, "the vocabulary is closed")
+    check(
+        [k.value for k in TaskKind] == ["ingest_lora", "generate_teacher"],
+        "two task kinds",
+    )
+
+
+def test_issue_severity() -> None:
+    print("\n== IssueSeverity: what blocks a run ==")
+    check(IssueSeverity.ERROR.blocks, "an error blocks")
+    check(not IssueSeverity.WARNING.blocks, "a warning does not")
+    check(IssueSeverity.ERROR == "error", "str-valued for the wire")
+    check(
+        IssueSeverity("error") is IssueSeverity.ERROR,
+        "the stored word resolves to the member",
+    )
+
+
 def main() -> None:
     test_project_paths()
     test_event_publisher()
@@ -395,6 +480,10 @@ def main() -> None:
     test_item_changes_request()
     test_lifecycle_writer()
     test_progress_sample_terminal_only()
+    test_training_mode()
+    test_start_from()
+    test_task_status()
+    test_issue_severity()
     finish()
 
 

@@ -243,12 +243,24 @@ wrote it rather than three transitions later.
 ### S-24
 Closed vocabularies as bare strings
 
-`Run.mode` accepted any truthy string; dataset-task status, graph issue
-severity, `start_from`, prompt/model/resize/text modes and the item
-verdict were all `str`. `TrainingMode`, `TaskStatus`, `IssueSeverity`
-and friends are `str`-valued enums in the domain now, so `mode="typo"`
-is a type error and the active/terminal task sets are derived from the
-enum rather than string tuples.
+`Run.mode` accepted any truthy string; dataset-task status and kind,
+graph issue severity and `start_from` were all `str`, with the task
+adapter writing SQL literals and the port keeping two tuples of strings
+beside them. They are `str`-valued enums now -- `TrainingMode` (the four
+strategies `core.config_model` declares), `TaskStatus` (+ `is_active` /
+`is_terminal`), `TaskKind`, `IssueSeverity` (+ `blocks`), `StartFrom` --
+so `mode="typo"` is a domain error, the active SQL predicate is
+*generated* from the enum, and "does this row still run" has one answer.
+
+Every one is `str`-valued: the columns are TEXT and the JSON bodies
+report the word, so nothing downstream changes shape. The wire schemas
+deliberately keep plain `str` and compare by value -- an unknown `kind`
+or `start_from` must still arrive as a 422 that names the vocabulary,
+not as a `ValueError` from an enum constructor.
+
+The teacher-prompt / resize / text-mode vocabularies stay as the
+constants in `application/requests.py` (S-09): they are request-scoped,
+already centralized in one place, and not persisted.
 
 ### S-25 / S-26
 Dead code and unresolvable annotations

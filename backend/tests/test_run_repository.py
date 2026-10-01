@@ -124,7 +124,7 @@ def test_find_active_and_delete() -> None:
         repo = SqliteRunRepository(_open(tmp))
         clock = FakeClock()
         run = Run.create(
-            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=1, created_at=clock.now()
         )
         repo.add(run)
         active = repo.find_active()
@@ -153,13 +153,13 @@ def test_update_edge_cases() -> None:
         repo = SqliteRunRepository(_open(tmp))
         clock = FakeClock()
         orphan = Run.create(
-            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=1, created_at=clock.now()
         )
         orphan.assign_id(999)
         check(repo.update(orphan) is False, "update of a missing id returns False")
 
         fresh = Run.create(
-            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=1, created_at=clock.now()
         )
         try:
             repo.update(fresh)
@@ -175,7 +175,7 @@ def test_persistence_across_instances() -> None:
         repo1 = SqliteRunRepository(db1)
         clock = FakeClock()
         run = Run.create(
-            config_path="c", mode="m", total_steps=3, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=3, created_at=clock.now()
         )
         repo1.add(run)
 
@@ -210,7 +210,7 @@ def test_update_if_status() -> None:
         repo = SqliteRunRepository(_open(tmp))
         clock = FakeClock()
         run = Run.create(
-            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=1, created_at=clock.now()
         )
         repo.add(run)
 
@@ -251,7 +251,7 @@ def test_update_if_status() -> None:
         )
         try:
             repo.update_if_status(
-                Run.create(config_path="c", mode="m", total_steps=1, created_at=clock.now()),
+                Run.create(config_path="c", mode="lora", total_steps=1, created_at=clock.now()),
                 expected=RunStatus.CREATED,
             )
             check(False, "CAS of an unpersisted run must be rejected")
@@ -265,17 +265,17 @@ def test_list_unfinished() -> None:
         repo = SqliteRunRepository(_open(tmp))
         clock = FakeClock()
         created = Run.create(
-            config_path="a", mode="m", total_steps=1, created_at=clock.now()
+            config_path="a", mode="lora", total_steps=1, created_at=clock.now()
         )
         repo.add(created)
         running = Run.create(
-            config_path="b", mode="m", total_steps=1, created_at=clock.now()
+            config_path="b", mode="lora", total_steps=1, created_at=clock.now()
         )
         repo.add(running)
         running.mark_started(pid=3, at=clock.now())
         repo.update(running)
         done = Run.create(
-            config_path="c", mode="m", total_steps=1, created_at=clock.now()
+            config_path="c", mode="lora", total_steps=1, created_at=clock.now()
         )
         repo.add(done)
         done.mark_started(pid=4, at=clock.now())

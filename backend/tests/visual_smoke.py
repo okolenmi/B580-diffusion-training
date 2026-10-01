@@ -324,6 +324,108 @@ def main():
                     }""")
                 check(grow > 0.85,
                       f"graph: canvas fills most of the viewport ({grow:.0%})")
+
+                # infinite plane (canvas redesign): the viewport never
+                # scrolls, a dashed circle marks the center of the plane,
+                # and pan comes from wheel + background drags
+                st = page.evaluate(
+                    """() => {
+                        const v = document.getElementById('graph-canvas');
+                        const cs = getComputedStyle(v);
+                        return { ox: cs.overflowX, oy: cs.overflowY,
+                                 sb: (v.offsetWidth - v.clientWidth)
+                                   + (v.offsetHeight - v.clientHeight) };
+                    }""")
+                check(st["ox"] == "hidden" and st["oy"] == "hidden"
+                          and st["sb"] == 0,
+                      f"graph: viewport never scrolls ({st['sb']}px chrome)")
+                origin = page.evaluate(
+                    """() => {
+                        const o = document.getElementById('ed-origin')
+                                      .getBoundingClientRect();
+                        const v = document.getElementById('graph-canvas')
+                                      .getBoundingClientRect();
+                        return Math.hypot(
+                            (o.left + o.width/2) - (v.left + v.width/2),
+                            (o.top + o.height/2) - (v.top + v.height/2));
+                    }""")
+                check(origin <= 2,
+                      f"graph: center circle sits in the middle ({origin:.1f}px)")
+                cbox = page.locator("#graph-canvas").bounding_box()
+                mid = (cbox["x"] + cbox["width"] / 2,
+                       cbox["y"] + cbox["height"] / 2)
+                get_pan = lambda: page.evaluate(
+                    "document.getElementById('canvas-inner').style.transform")
+                page.mouse.move(*mid)
+                t0 = get_pan()
+                page.mouse.wheel(80, 40)
+                page.wait_for_timeout(80)
+                t1 = get_pan()
+                check(t0 != t1, f"graph: wheel pans the plane ({t1})")
+                page.mouse.down()
+                page.mouse.move(mid[0] - 80, mid[1] - 60, steps=6)
+                page.mouse.up()
+                check(t1 != get_pan(), "graph: background drag pans the plane")
+
+                # drops cascade side by side (stacked nodes make wire
+                # starts ambiguous) and land inside the viewport
+                page.click(".ed-domain summary >> nth=0")
+                page.click(".ed-palette-item >> nth=0")
+                page.wait_for_timeout(120)
+                page.click(".ed-palette-item >> nth=1")
+                page.wait_for_timeout(220)
+                pos = page.evaluate(
+                    "[...document.querySelectorAll('.gnode')]"
+                    ".map(n => [n.style.left, n.style.top])")
+                check(len(pos) == 2 and pos[0] != pos[1],
+                      f"graph: drops cascade instead of stacking ({pos})")
+                in_view = page.evaluate(
+                    """() => {
+                        const v = document.getElementById('graph-canvas')
+                                      .getBoundingClientRect();
+                        return [...document.querySelectorAll('.gnode')]
+                            .every(n => {
+                                const r = n.getBoundingClientRect();
+                                return r.left >= v.left - 1
+                                    && r.top >= v.top - 1
+                                    && r.right <= v.right + 1
+                                    && r.bottom <= v.bottom + 1;
+                            });
+                    }""")
+                check(in_view, "graph: drops land inside the viewport")
+                # wiring must survive the transformed plane
+                a = page.evaluate(
+                    """() => {
+                        const p = document.querySelectorAll('.gnode')[0]
+                                      .querySelector('.gport.out');
+                        const r = p.getBoundingClientRect();
+                        return { x: r.x + r.width/2, y: r.y + r.height/2 };
+                    }""")
+                t = page.evaluate(
+                    """() => {
+                        const p = document.querySelectorAll('.gnode')[1]
+                                      .querySelector('.gport.in');
+                        const r = p.getBoundingClientRect();
+                        return { x: r.x + r.width/2, y: r.y + r.height/2 };
+                    }""")
+                page.mouse.move(a["x"], a["y"])
+                page.mouse.down()
+                page.mouse.move(t["x"], t["y"], steps=8)
+                page.mouse.up()
+                page.wait_for_timeout(250)
+                check(page.locator("path.edge").count() >= 1,
+                      "graph: wire connects across the transformed plane")
+                # the plane extends past the origin (no non-negative clamp)
+                hb = page.locator(".gnode-head").first.bounding_box()
+                page.mouse.move(hb["x"] + 40, hb["y"] + 8)
+                page.mouse.down()
+                page.mouse.move(hb["x"] - 500, hb["y"] - 400, steps=6)
+                page.mouse.up()
+                lefts = page.evaluate(
+                    "[...document.querySelectorAll('.gnode')]"
+                    ".map(n => n.style.left)")
+                check(any(int(p.replace("px", "")) < 0 for p in lefts),
+                      f"graph: plane extends past the origin ({lefts})")
             ctx.close()
 
         # ---------- D: config editor (loads read-only; the save step

@@ -7,8 +7,10 @@
    Both rails are collapsible (toolbar toggles, persisted in
    localStorage) so the canvas can take the full viewport; the
    executions history is a <details> drawer collapsed by default.
-   The canvas is a scrollable plane; nodes are absolutely positioned DOM,
-   edges are one SVG layer sized to the plane.
+   The canvas is an INFINITE plane: the viewport never scrolls (no
+   scrollbars -- wheel / background-drag pan it), nodes are absolutely
+   positioned DOM translated as one layer, edges are one SVG layer, and
+   a dashed circle marks the origin so the center stays visible.
    --------------------------------------------------------------------------- */
 
 body.editor-body {
@@ -182,17 +184,60 @@ body.editor-body {
     position: relative;
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden; /* infinite plane: no scrollbars, JS pans instead */
+    cursor: grab;
     background-color: var(--bg);
     background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
-    background-size: 24px 24px;
+    background-size: 24px 24px; /* background-position tracks the pan */
+}
+.ed-canvas.panning { cursor: grabbing; }
+.ed-canvas.glide,
+.ed-canvas.glide .ed-canvas-inner {
+    transition: background-position 0.25s ease, transform 0.25s ease;
 }
 .ed-canvas-inner {
     position: relative;
     width: 100%;
-    min-width: 2400px;
     height: 100%;
-    min-height: 1600px;
+    will-change: transform;
+}
+
+/* Origin marker: the visible "center" of the infinite plane (0, 0). */
+.ed-origin {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 76px;
+    height: 76px;
+    transform: translate(-50%, -50%);
+    border: 1px dashed var(--text-dim);
+    border-radius: 50%;
+    opacity: 0.6;
+    pointer-events: none;
+}
+.ed-origin::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    transform: translate(-50%, -50%);
+    background: var(--accent);
+    border-radius: 50%;
+}
+.ed-origin::before {
+    content: "center";
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    white-space: nowrap;
 }
 .ed-edges {
     position: absolute;
@@ -226,6 +271,7 @@ body.editor-body {
     border-radius: var(--radius);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
     user-select: none;
+    cursor: default; /* only the head grabs; the plane behind grabs too */
 }
 .gnode.selected {
     border-color: var(--accent);
@@ -452,4 +498,6 @@ body.editor-body.ed-right-off .ed-right { border-left-width: 0; }
 
 @media (prefers-reduced-motion: reduce) {
     body.editor-body { transition: none; }
+    .ed-canvas.glide,
+    .ed-canvas.glide .ed-canvas-inner { transition: none; }
 }

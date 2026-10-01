@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (196
+checklist below now runs as `backend/tests/visual_smoke.py` (204
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -147,6 +147,15 @@ A scratch DB keeps the check independent of real training history.
       persisted in `localStorage`), the Executions history is a
       `<details>` drawer collapsed by default (expands in place), and
       the canvas fills ~91% of the viewport.
+* [x] Infinite canvas (canvas redesign): the viewport never scrolls
+      (`overflow: hidden`, no scrollbars -- wheel and background-drag
+      pan the plane and the dot grid rides along), a dashed circle
+      labeled "center" marks the origin (0, 0) and opens centered in
+      the view, double-clicking empty space glides back to it (a
+      double-click on a node does not), node drops cascade side by
+      side instead of stacking, negative coordinates are legal (drag a
+      node past the origin), a library load re-frames the graph around
+      its content, and wiring works across the transformed plane.
 
 ## 4. Config editor -- `http://127.0.0.1:8766/config`
 
@@ -419,6 +428,29 @@ Reported from a live desktop session; reproduced first with
     canvas truly grows; state persisted), and turned Executions into a
     drawer collapsed by default -- canvas went from ~66% to 91% of the
     viewport height.
+
+## Findings from the 2026-10-01 infinite-canvas pass (all fixed same day)
+
+12. **Consecutive palette drops stacked on one point, making wire
+    starts ambiguous** (found while probing the infinite canvas) -- with
+    the view centered on the origin, `dropPosition` produced negative
+    coordinates and `state.addNode` clamped them with `Math.max(0, ...)`,
+    so every drop landed at exactly (0, 0); a wire dragged from that
+    stack resolved to the *topmost* overlapping node and rejected itself
+    as "same node". Even without the clamp the old 30px jitter kept
+    230px-wide nodes ~87% overlapped. Fixed: the clamp is gone (the
+    plane is infinite in all directions, matching the drag path and the
+    free-form library layout), and drops cascade 260px apart in a
+    3-column grid, always landing inside the viewport. Related fix in
+    the same pass: pointer/click/dblclick handlers moved from
+    `#canvas-inner` to the viewport -- once the plane is panned, strips
+    of the viewport are no longer covered by inner's box and must still
+    pan, deselect, and recenter like empty plane. Smoke pins: overflow
+    hidden with 0px scrollbar chrome, the origin circle centered (0px
+    off), wheel and background-drag pans changing the transform, the
+    drop cascade + in-view landing, a wire forming across the
+    transformed plane, and a negative `left` after dragging past the
+    origin.
 
 ## Known deferred (not bugs)
 

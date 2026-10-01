@@ -84,8 +84,8 @@ export class GraphDoc {
     const node = {
       id,
       class_name: className,
-      x: Math.max(0, Math.round(x)),
-      y: Math.max(0, Math.round(y)),
+      x: Math.round(x), // infinite plane: negative coordinates allowed
+      y: Math.round(y),
       params: {},
     };
     this.nodes.set(id, node);

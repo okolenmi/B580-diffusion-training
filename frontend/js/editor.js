@@ -176,7 +176,7 @@ async function boot() {
   };
   el("btn-run").disabled = true;
 
-  // palette: drop at the canvas viewport center, jittered per drop
+  // palette: drop at the plane point under the viewport center
   const palette = new Palette(el("palette"), el("palette-search"), {
     onNote: log,
     onAdd: (className, x, y) => {
@@ -185,16 +185,21 @@ async function boot() {
       return node;
     },
   });
-  const scroller = el("graph-canvas");
   let dropCount = 0;
   palette.dropPosition = () => {
-    const jitter = (dropCount++ % 5) * 30;
+    // cascade side by side (3 columns) so successive nodes never stack --
+    // stacked nodes make wire starts ambiguous (topmost port wins the hit)
+    const c = canvas.viewportCenter();
+    const i = dropCount++;
     return {
-      x: scroller.scrollLeft + scroller.clientWidth / 2 - 115 + jitter,
-      y: scroller.scrollTop + scroller.clientHeight / 2 - 60 + jitter,
+      x: c.x - 115 + (i % 3) * 260,
+      y: c.y - 60 + (Math.floor(i / 3) % 3) * 170,
     };
   };
   if (catalog) palette.load(catalog);
+
+  // infinite plane: open on the origin circle at the viewport center
+  canvas.centerOn(0, 0);
 
   // executions + library
   const executions = new Executions(el("exec-list"), canvas, {
@@ -215,6 +220,8 @@ async function boot() {
     {
       onNote: log,
       onLoaded: () => {
+        // bring the loaded graph into view (origin circle when empty)
+        canvas.frameAll();
         const first = doc.nodes.keys().next();
         if (!first.done) canvas.selectNode(first.value);
         else inspector.select(null);

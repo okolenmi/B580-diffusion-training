@@ -1,7 +1,13 @@
 /* ---------------------------------------------------------------------------
    editor/canvas.js -- graph surface rendering + interaction (M7).
 
-   DOM nodes absolutely positioned on a scrollable plane, edges in one SVG
+   An INFINITE plane: the viewport never scrolls (overflow: hidden, no
+   scrollbars); pan comes from wheel + dragging the empty background, and
+   the view translates via one CSS transform on #canvas-inner. A dashed
+   circle marks the origin (0, 0) so "infinite" still has a visible
+   center; nodes may live anywhere, including negative coordinates.
+
+   DOM nodes absolutely positioned on the plane, edges in one SVG
    layer. Structural change -> full re-render; a node drag moves the element
    directly and only touches the `d` of the edges that node participates in
    (socket offsets are node-relative, so they don't shift while it moves).
@@ -11,7 +17,7 @@
    absolute edge coords are node.x/y + offset.
 
    Callbacks: onSelect(selection | null) with {kind:"node", id} or
-   {kind:"edge", edge}; onNote(message, kind) for the page console.
+   {kind:"edge", edge}; onNote(message, kind) for the floating console.
    --------------------------------------------------------------------------- */
 
 import { hasSocket, typesCompatible } from "./state.js";
@@ -21,15 +27,18 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 export class Canvas {
   constructor(inner, doc, { onSelect, onNote } = {}) {
     this.inner = inner;   // #canvas-inner -- nodes + <svg> live here
+    this.viewport = inner.parentElement; // #graph-canvas -- the fixed window
     this.svg = inner.querySelector("#edge-layer");
     this.doc = doc;
     this.onSelect = onSelect || (() => {});
     this.onNote = onNote || (() => {});
     this.selection = null;          // {kind, id | edge}
+    this.pan = { x: 0, y: 0 };      // translate of the plane (px)
     this._sockets = new Map();      // nodeId -> Map("dir:port" -> {x, y})
     this._badges = new Map();       // nodeId -> {kind, text} execution status
     this._connect = null;           // active wire drag
     this._drag = null;              // active node drag
+    this._panDrag = null;           // active background pan
     this._suppressClick = false;    // set after a wire drop, eats the click
     this._bind();
   }
@@ -197,9 +206,66 @@ export class Canvas {
   }
 
   focusNode(id) {
+    const node = this.doc.nodes.get(id);
     const el = [...this.inner.querySelectorAll(".gnode")].find((n) => n.dataset.id === id);
-    if (el) el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    if (node && el) {
+      // glide, not scrollIntoView: the viewport itself never scrolls
+      this.centerOn(node.x + el.offsetWidth / 2, node.y + el.offsetHeight / 2, true);
+    }
     this.selectNode(id);
+  }
+
+  /* ================= panning (infinite plane) ================= */
+
+  /** Plane coordinates of the viewport center (where drops land). */
+  viewportCenter() {
+    const r = this.viewport.getBoundingClientRect();
+    const ir = this.inner.getBoundingClientRect();
+    return { x: r.left + r.width / 2 - ir.left, y: r.top + r.height / 2 - ir.top };
+  }
+
+  /** Put a plane point at the viewport center; glide animates the move. */
+  centerOn(x, y, glide = false) {
+    const r = this.viewport.getBoundingClientRect();
+    this._setPan(r.width / 2 - x, r.height / 2 - y, glide);
+  }
+
+  /** Frame every node (or the origin when the canvas is empty). */
+  frameAll(glide = false) {
+    const els = [...this.inner.querySelectorAll(".gnode")];
+    if (!els.length) { this.centerOn(0, 0, glide); return; }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const el of els) {
+      const l = parseFloat(el.style.left) || 0;
+      const t = parseFloat(el.style.top) || 0;
+      x0 = Math.min(x0, l); y0 = Math.min(y0, t);
+      x1 = Math.max(x1, l + el.offsetWidth);
+      y1 = Math.max(y1, t + el.offsetHeight);
+    }
+    this.centerOn((x0 + x1) / 2, (y0 + y1) / 2, glide);
+  }
+
+  panBy(dx, dy) {
+    this._endGlide();
+    this._setPan(this.pan.x + dx, this.pan.y + dy);
+  }
+
+  _setPan(x, y, glide = false) {
+    this.pan.x = x;
+    this.pan.y = y;
+    if (glide) {
+      this.viewport.classList.add("glide");
+      clearTimeout(this._glideTimer);
+      this._glideTimer = setTimeout(() => this._endGlide(), 320);
+    }
+    this.inner.style.transform = `translate(${x}px, ${y}px)`;
+    // the dot grid rides the plane, so panning reads as movement
+    this.viewport.style.backgroundPosition = `${x}px ${y}px`;
+  }
+
+  _endGlide() {
+    clearTimeout(this._glideTimer);
+    this.viewport.classList.remove("glide");
   }
 
   /* ================= execution status badges ================= */
@@ -233,11 +299,22 @@ export class Canvas {
   /* ================= interaction ================= */
 
   _bind() {
-    this.inner.addEventListener("pointerdown", (e) => this._pointerDown(e));
-    this.inner.addEventListener("click", (e) => this._click(e));
+    // bound on the VIEWPORT, not #canvas-inner: once the plane is panned,
+    // strips of the viewport are no longer covered by inner's box and must
+    // still pan / deselect / recenter like empty plane
+    this.viewport.addEventListener("pointerdown", (e) => this._pointerDown(e));
+    this.viewport.addEventListener("click", (e) => this._click(e));
+    this.viewport.addEventListener("dblclick", (e) => this._doubleClick(e));
     document.addEventListener("pointermove", (e) => this._pointerMove(e));
     document.addEventListener("pointerup", (e) => this._pointerUp(e));
     document.addEventListener("keydown", (e) => this._keyDown(e));
+    // wheel = pan the plane (passive:false: the viewport must not scroll)
+    this.viewport.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this._endGlide();
+      if (e.shiftKey && e.deltaX === 0) this.panBy(-e.deltaY, 0);
+      else this.panBy(-e.deltaX, -e.deltaY);
+    }, { passive: false });
   }
 
   _pointInInner(e) {
@@ -249,6 +326,7 @@ export class Canvas {
     // Any new press supersedes a pending suppress flag (e.g. a wire
     // released off-canvas never produces the trailing canvas click).
     this._suppressClick = false;
+    this._endGlide();
     const socket = e.target.closest(".gport");
     if (socket) {
       e.preventDefault();
@@ -265,15 +343,25 @@ export class Canvas {
         const start = this._pointInInner(e);
         this._drag = { node, el: nodeEl, startX: start.x, startY: start.y, origX: node.x, origY: node.y };
       }
+      return;
     }
+    // empty plane: left-button drag pans the view
+    if (e.button !== 0) return;
+    e.preventDefault();
+    this._panDrag = {
+      sx: e.clientX, sy: e.clientY,
+      ox: this.pan.x, oy: this.pan.y, moved: false,
+    };
+    this.viewport.classList.add("panning");
   }
 
   _pointerMove(e) {
     if (this._drag) {
       const p = this._pointInInner(e);
       const node = this._drag.node;
-      node.x = Math.max(0, Math.round(this._drag.origX + (p.x - this._drag.startX)));
-      node.y = Math.max(0, Math.round(this._drag.origY + (p.y - this._drag.startY)));
+      // infinite plane: negative coordinates are allowed
+      node.x = Math.round(this._drag.origX + (p.x - this._drag.startX));
+      node.y = Math.round(this._drag.origY + (p.y - this._drag.startY));
       this._drag.el.style.left = node.x + "px";
       this._drag.el.style.top = node.y + "px";
       this._updateEdgesFor(node.id);
@@ -282,6 +370,13 @@ export class Canvas {
     if (this._connect) {
       const p = this._pointInInner(e);
       this._connect.temp.setAttribute("d", this._curve(this._connect.origin, p));
+      return;
+    }
+    if (this._panDrag) {
+      const dx = e.clientX - this._panDrag.sx;
+      const dy = e.clientY - this._panDrag.sy;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this._panDrag.moved = true;
+      this._setPan(this._panDrag.ox + dx, this._panDrag.oy + dy);
     }
   }
 
@@ -296,7 +391,20 @@ export class Canvas {
       const target = document.elementFromPoint(e.clientX, e.clientY);
       const socket = target && target.closest ? target.closest(".gport") : null;
       this._finishConnect(socket);
+      return;
     }
+    if (this._panDrag) {
+      // a real pan eats the click that follows (no accidental deselect)
+      if (this._panDrag.moved) this._suppressClick = true;
+      this._panDrag = null;
+      this.viewport.classList.remove("panning");
+    }
+  }
+
+  /** Double-click on the empty plane glides back to the origin circle. */
+  _doubleClick(e) {
+    if (e.target.closest(".gnode") || e.target.closest("path.edge")) return;
+    this.centerOn(0, 0, true);
   }
 
   /* ---- wire dragging ---- */

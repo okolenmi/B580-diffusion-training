@@ -1,25 +1,21 @@
-"""Correctness check for the new DeviceResident.footprint_bytes() on every
-concrete OptimizerHandle -- this is new behavior with no legacy equivalent
-to compare against (not an equivalence test), so what's checked is: sane
-values, and specifically the release()-then-footprint_bytes() round trip,
-since the wrapped legacy class tested here (ChunkedXPUAdafactor) `del`s
-its state attributes entirely in free_states() rather than clearing them
--- confirmed by reading core/optimizers.py directly, not assumed.
+"""Correctness check for DeviceResident.footprint_bytes() on the
+optimizer handles that remain -- this is new behavior with no legacy
+equivalent to compare against (not an equivalence test), so what's
+checked is: sane values, plus the release()-then-footprint_bytes() round
+trip, since some of these classes drop their state attributes entirely
+rather than clearing them, and a footprint_bytes() that raised (or
+reported a stale non-zero) after release() would be a real leak-shaped
+bug in the VRAM accounting.
 
-AdamWOptimizerHandle/SimpleAdamWOptimizerHandle/CAMEOptimizerHandle/
-ForeachCAMEOptimizerHandle/ForeachAdafactorOptimizerHandle/
-FusedAdafactorOptimizerHandle used to be covered here too -- removed
-along with adamw.py/came.py/foreach_came.py/foreach_adafactor.py/
-fused_adafactor.py once each was proven equivalent to its
-ComposedXOptimizerNode replacement -- the
-Foreach/Fused-Adafactor removals are the ones backed by an actual torch
-run rather than static reading -- see
-smoke_test_adafactor_tiny_parameter_gap.py and
-smoke_test_fused_adafactor_equivalence.py). AdafactorOptimizerHandle
-stays: it still has real, unreplicated tiny-parameter behavior
-(ChunkedXPUAdafactor's cross-parameter batching, confirmed the same
-way) that Composed doesn't cover yet -- see
-docs/design/09-prioritized-backlog.md.
+The wrapped-legacy-optimizer handles this used to cover have all been
+retired as each was proven equivalent to its Composed* replacement, or
+-- in AdafactorOptimizerHandle's case (2026-10-02) -- retired the other
+way round, by deleting it once it turned out its only unreplicated
+behavior was the cross-parameter batching that
+smoke_test_adafactor_tiny_parameter_gap.py Part C measured to be
+*contamination* rather than a pure optimization. See
+docs/known-issues/open.md. So the classes checked now are the composed
+handles, which own their state directly and need no such allowance.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_device_resident_retrofit.py`
 """
@@ -31,9 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import ChunkedXPUAdafactor
 from nodes.memory.handle import DeviceResident
-from nodes.optimizer.adafactor import AdafactorOptimizerHandle
+from nodes.optimizer.algorithms.adafactor import AdafactorAlgorithm
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy
@@ -81,35 +76,44 @@ def check_eager_family():
            "ComposedOptimizerHandle.footprint_bytes() == 0 after release()")
 
 
-def check_lazy_family():
-    """Adafactor: state is None until the first step() lazily allocates
-    it, and free_states() `del`s the attributes entirely --
-    footprint_bytes() must handle both."""
-    print("\n=== Lazily-allocated state: 0 before step(), >0 after, 0 again after release() ===")
+def check_release_family():
+    """release() drops state outright rather than moving it to cpu, so
+    footprint_bytes() has to report 0 afterwards without raising.
 
-    cases = [
-        ("AdafactorOptimizerHandle",
-         lambda p: AdafactorOptimizerHandle(ChunkedXPUAdafactor(p, lr=1e-3, device=DEVICE))),
-    ]
-    for name, build in cases:
-        params = _params()
-        handle = build(params)
-        record(isinstance(handle, DeviceResident), f"{name} is a DeviceResident")
-        record(handle.footprint_bytes() == 0, f"{name}.footprint_bytes() == 0 before any step()",
-               detail=f"got {handle.footprint_bytes()}")
-        _step(handle, params)
-        fp_after_step = handle.footprint_bytes()
-        record(fp_after_step > 0, f"{name}.footprint_bytes() > 0 after step()",
-               detail=f"got {fp_after_step}")
-        try:
-            handle.release()
-            fp_after_release = handle.footprint_bytes()
-            ok = fp_after_release == 0
-        except AttributeError as e:
-            ok = False
-            fp_after_release = f"raised {e!r}"
-        record(ok, f"{name}.footprint_bytes() == 0 after release() (no AttributeError)",
-               detail=str(fp_after_release))
+    Retargeted 2026-10-02 from the AdafactorOptimizerHandle case, which
+    went away with nodes/optimizer/adafactor.py. That case was here for a
+    real reason and the reason did not expire with the class:
+    ChunkedXPUAdafactor routed every parameter under 10,000 elements
+    through a separate batched fast path with its own single shared state
+    tensor, which that Handle's footprint_bytes() missed -- it silently
+    reported 0 for an all-small-parameters optimizer, which is how this
+    test found it. The invariant is the under-reporting, not the class it
+    was found in, so it is checked here against the handle that remains,
+    on the same all-small-parameter shapes that caught it (a 32x32 and a
+    16-element parameter, both under the threshold, with the threshold
+    actually set so the tiny path is the one exercised).
+    """
+    print("\n=== release() drops state: footprint_bytes() == 0, no AttributeError ===")
+
+    name = "ComposedOptimizerHandle(AdafactorAlgorithm, all-small params)"
+    params = _params()
+    handle = ComposedOptimizerHandle(
+        algorithm=AdafactorAlgorithm(tiny_parameter_threshold=10_000),
+        strategy=SimpleLoopStrategy(), params=params, lr=1e-3, device=DEVICE)
+    record(isinstance(handle, DeviceResident), f"{name} is a DeviceResident")
+    _step(handle, params)
+    fp_after_step = handle.footprint_bytes()
+    record(fp_after_step > 0, f"{name}.footprint_bytes() > 0 after step()",
+           detail=f"got {fp_after_step}")
+    try:
+        handle.release()
+        fp_after_release = handle.footprint_bytes()
+        ok = fp_after_release == 0
+    except AttributeError as e:
+        ok = False
+        fp_after_release = f"raised {e!r}"
+    record(ok, f"{name}.footprint_bytes() == 0 after release() (no AttributeError)",
+           detail=str(fp_after_release))
 
 
 def check_offload_reload_alias_delegates():
@@ -138,7 +142,7 @@ def check_offload_reload_alias_delegates():
 def main():
     print("Device: cpu")
     check_eager_family()
-    check_lazy_family()
+    check_release_family()
     check_offload_reload_alias_delegates()
 
     print("\n" + "=" * 60)

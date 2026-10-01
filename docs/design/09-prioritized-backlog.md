@@ -55,20 +55,24 @@ missing is a real run:**
   `.dora_scale` magnitude + alpha) is real now for the common, unsplit
   case -- see 9.1/9.2 -- so this item is validation-only, same as the
   others in this list.
-- **A tiny-parameter (`< 10,000` element) `ExecutionStrategy` for
-  Adafactor's cross-parameter batching case** (11.1). Found while
-  retiring the redundant legacy Adafactor nodes: `ChunkedXPUAdafactor`
-  ties every tiny parameter in the whole optimizer together into one
-  shared clip/EMA state, which is a batching-strategy concern, not a
-  per-parameter algorithm one -- `AdafactorAlgorithm` has no way to see
-  other parameters in the same optimizer by design (see
-  `algorithms/base.py`). Would need something like
-  `ShapeGroupedBatchStrategy`, but grouping "every parameter under a
-  size threshold, any shape" instead of "same shape" -- real, separate,
-  feature work, not a formula fix. `AdafactorOptimizerNode` stays
-  registered until this lands (see `docs/known-issues/resolved.md` and
-  `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py` for
-  the confirmed, measured gap this would close).
+- ~~**A tiny-parameter (`< 10,000` element) `ExecutionStrategy` for
+  Adafactor's cross-parameter batching case** (11.1)~~ -- **closed
+  2026-10-02 by retiring the wrapper instead of building it.**
+  `nodes/optimizer/adafactor.py` is deleted; `ComposedAdafactorOptimizerNode`
+  is the only Adafactor node. `ChunkedXPUAdafactor` tied every tiny
+  parameter in the optimizer together into one shared clip/EMA state --
+  a batching-strategy concern no `Algorithm` can see (by design, see
+  `algorithms/base.py`) -- and the proposed fix was a
+  `ShapeGroupedBatchStrategy` variant grouping "under a size threshold,
+  any shape". Part C of `smoke_test_adafactor_tiny_parameter_gap.py` had
+  already measured that the shared state *contaminates*: a parameter's
+  update depends on unrelated parameters' gradients sharing its batch. So
+  the strategy would have existed to reintroduce coupling the canonical
+  math deliberately lacks. The formula gap that was real is closed
+  (`AdafactorAlgorithm.tiny_parameter_threshold`, Fused's per-parameter
+  mechanism). What remains is one unmeasured performance delta -- see
+  `docs/known-issues/open.md`, which also carries the B580 measurement
+  that should precede writing any such strategy.
 - **`core`/`manager` coupling in the model and dataset domains** (new
   section, not yet numbered above -- see `docs/architecture.md`). The
   `optimizer/` domain's `Algorithm`/`ExecutionStrategy` split proved a

@@ -52,10 +52,14 @@ not yet run.**
     batching contaminates even the 1D parameter's result, since
     `ChunkedXPUAdafactor` concatenates every tiny parameter (regardless
     of shape) into one shared clip/state, unlike Fused's genuinely
-    independent per-parameter hooks. `adafactor.py`/`AdafactorOptimizerNode`
-    stays registered regardless of Part D's outcome; closing this one
-    needs new ExecutionStrategy-level machinery, not an algorithm
-    change -- see `docs/design/09-prioritized-backlog.md`.
+    independent per-parameter hooks. This measurement is what ultimately
+    ended the `adafactor.py`/`AdafactorOptimizerNode` question: because
+    the shared state *contaminates* rather than merely optimizing,
+    reproducing it would have meant putting the coupling back into the
+    canonical math on purpose, so on 2026-10-02 the node was retired
+    instead of given the new ExecutionStrategy-level machinery. See
+    `docs/known-issues/open.md` for the performance trade that accepted,
+    which is the only part of this still outstanding.
 
   - **Part D was run 2026-09-17: mixed-looking numbers, fully explained,
     fix confirmed.** float32 no-momentum matched the Part A noise floor

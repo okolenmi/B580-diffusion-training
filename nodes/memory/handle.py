@@ -62,14 +62,18 @@ class DeviceResident(ABC):
 
 def sum_tensor_bytes(*tensor_lists) -> int:
     """sum(t.numel() * t.element_size()) over every real tensor across any
-    number of iterables, skipping None entries. Pulled out here because
-    it's the same small loop every legacy-optimizer-wrapping Handle below
-    needs for footprint_bytes() -- several of those wrapped optimizers
-    (core.optimizers.ChunkedXPUAdafactor/ChunkedXPUCAME/ForeachXPUAdafactor/
-    ForeachXPUCAME/FusedXPUAdafactor) hold their per-parameter state as
-    lists of Optional[Tensor] (None until that parameter's state is
-    lazily allocated on its first real step), confirmed by reading their
-    __init__ methods directly rather than assumed."""
+    number of iterables, skipping None entries.
+
+    Every optimizer Handle that wrapped a core/optimizers.py class needed
+    this, because those classes hold their per-parameter state as
+    separate lists of Optional[Tensor] (None until that parameter's state
+    is lazily allocated on its first real step) rather than one dict, so
+    a Handle summing them has to visit each list in turn. All of those
+    wrappers are gone as of 2026-10-02; the composed handles sum their own
+    state generically, in ComposedOptimizerHandle.footprint_bytes(). What
+    still uses this is nodes/model/lora_training_resources.py, summing
+    the several separate safetensors dicts it holds (vae_sd, unet_sd,
+    continue_lora_sd) -- the same shape-of-data reason."""
     total = 0
     for tensors in tensor_lists:
         for t in tensors:

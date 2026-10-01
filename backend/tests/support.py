@@ -148,6 +148,64 @@ def check(condition: bool, message: str) -> None:
         FAILURES.append(message)
 
 
+def concrete_node_classes() -> set[str]:
+    """Names of the node classes discovery *should* expose, derived from
+    ``nodes/``'s own source rather than hardcoded.
+
+    Discovery itself can't answer this -- it needs an expected value to
+    be checked against, and a hardcoded number is a tripwire that goes
+    off on every legitimate node addition or retirement (it did, twice
+    over the 2026-10 optimizer retirements) while catching nothing that
+    the structural checks around it don't already catch better.
+
+    The rule: a class under ``nodes/`` belongs in the palette if it is a
+    ``Node`` subclass and no *other* class under ``nodes/`` inherits from
+    it. Inheriting-from is how the abstract bases are spelled in this
+    codebase -- ``OptimizerNode``, ``TrainerNode``, ``DataSourceNode``,
+    ``TextEncoderNode``, ``MonitorNode``, ``LRScheduleNode``,
+    ``CheckpointSaverNode``, ``LoRAInjectorNode``, ``ModelProviderNode``,
+    ``LossWeightingNode`` and ``Node`` itself are all bases, never
+    palette entries. Filtering by that (rather than by name suffix or by
+    re-implementing ``inspect.isabstract``) keeps the two in step when a
+    new base or a new leaf is added.
+
+    Uses AST only to learn *inheritance*, and imports nothing it wouldn't
+    otherwise import, so it cannot mask a module that fails to import.
+    """
+    import ast
+    import importlib
+    import pkgutil
+    from pathlib import Path
+
+    import nodes
+    from nodes.core import Node
+
+    root = Path(nodes.__path__[0])
+    inherited_from: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        if "smoke_tests" in path.parts:
+            continue
+        for stmt in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(stmt, ast.ClassDef):
+                for base in stmt.bases:
+                    inherited_from.add(ast.unparse(base).split("(")[0].split(".")[-1])
+
+    discovered: set[str] = set()
+    for module_info in pkgutil.walk_packages(nodes.__path__, prefix="nodes."):
+        if "smoke_tests" in module_info.name:
+            continue
+        module = importlib.import_module(module_info.name)
+        for attribute in dir(module):
+            candidate = getattr(module, attribute, None)
+            if (
+                isinstance(candidate, type)
+                and issubclass(candidate, Node)
+                and candidate.__module__.startswith("nodes.")
+            ):
+                discovered.add(candidate.__name__)
+    return {name for name in discovered if name not in inherited_from}
+
+
 def finish() -> None:
     print()
     print("=" * 60)

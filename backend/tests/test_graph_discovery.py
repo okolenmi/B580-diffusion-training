@@ -19,13 +19,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry, scan_nodes
 from backend.presentation.schemas import graph_catalog_out, graph_node_out
-from backend.tests.support import check, finish
+from backend.tests.support import check, concrete_node_classes, finish
 from nodes.core import Node
 
 classes, errors = scan_nodes()
 
 check(not errors, f"no module failed to import ({[e.module for e in errors]})")
-check(len(classes) == 36, f"36 node classes discovered (got {len(classes)})")
+
+# Derived from nodes/'s own class definitions rather than hardcoded: the
+# palette is supposed to be every concrete Node subclass, so that is the
+# invariant worth asserting. A literal number here only ever needed
+# editing when someone legitimately added or retired a node, and caught
+# nothing the structural checks below didn't catch directly.
+expected = concrete_node_classes()
+check(
+    set(classes) == expected,
+    f"every concrete Node subclass is discovered and nothing else "
+    f"(discovered {len(classes)}, expected {len(expected)}; "
+    f"missing {sorted(expected - set(classes))}, extra {sorted(set(classes) - expected)})",
+)
+check(len(classes) >= 30, f"palette is non-trivially populated ({len(classes)} classes)")
 check(
     all(isinstance(c, type) and issubclass(c, Node) for c in classes.values()),
     "every discovered class is a Node subclass",
@@ -72,7 +85,7 @@ check(
 )
 payload = graph_catalog_out(snapshot).model_dump()
 json.dumps(payload)  # raises if anything escaped JSON safety
-check(payload["count"] == 36, "catalog payload serializes and counts 36")
+check(payload["count"] == len(expected), f"catalog payload counts the same set ({payload['count']})")
 check(payload["load_errors"] == [], "no load errors reported")
 check(
     payload["domains"] and all(domain for domain in payload["domains"]),

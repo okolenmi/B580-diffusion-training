@@ -1,0 +1,358 @@
+From 472d24564ee45abb991381ae7bb54f532580b5e9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 1 Oct 2026 21:14:09 +0000
+Subject: [PATCH] Docs: second review of the backend/frontend redesign (round
+ 2, 12 new findings)
+
+Adds docs/design/backend/08-review-2026-10-02.md. Re-ran all round-1
+reproductions against 5b7724f (17 findings: 12 fixed, the rest mostly fixed,
+one open by design), then reviewed the ~10.6k new lines.
+
+New findings, most important first: a run that finished while the server was
+down is recorded failed with 0/100 (reconcile ignores the progress file that
+adoption trusts); the upload handler blocks the event loop and holds ~2x the
+file in RAM; SSE coalescing treats per-node graph deltas as supersedable (6
+sent, 1 delivered); the dataset file endpoint serves any file in the dataset
+dir (db, shards, svg) without hardening headers; the run-detail page
+re-introduces the resync / non-finite / silent-catch defects.
+
+Also: rules for contributors, and 12 code-quality recommendations (quality
+gate with ruff+mypy, supervisor abstraction, event contract with sequence
+numbers, parse-at-boundary, process isolation for graph training, frontend
+shared core, contract tests for fakes, resource budgets, ADRs, mutation
+testing).
+
+Docs only. Linked from docs/design/backend/README.md.
+---
+ docs/design/backend/08-review-2026-10-02.md | 309 ++++++++++++++++++++
+ docs/design/backend/README.md               |   1 +
+ 2 files changed, 310 insertions(+)
+ create mode 100644 docs/design/backend/08-review-2026-10-02.md
+
+diff --git a/docs/design/backend/08-review-2026-10-02.md b/docs/design/backend/08-review-2026-10-02.md
+new file mode 100644
+index 0000000..184314a
+--- /dev/null
++++ b/docs/design/backend/08-review-2026-10-02.md
+@@ -0,0 +1,309 @@
++*[← backend design docs](README.md)*
++
++# Backend/frontend redesign: second review (2026-10-02)
++
++Reviewed at commit `5b7724f` (after M8b-M8f, the M9 flip, and review batches
++1-6 that answered [`07-review-2026-10-01.md`](07-review-2026-10-01.md)).
++Method: re-ran every reproduction from round 1 against the new code, read
++all code that changed (about 10.6k lines added across 117 files), reproduced
++new suspicions by running project code, and measured with `mypy` and `ruff`
++(neither is part of the project).
++
++**Evidence legend.** `[R]` reproduced by running real project code (CPU only,
++no XPU, no real SDXL, no browser). `[C]` read from the source, not executed.
++**Severity.** High = data loss, state that blocks the app, or unauthenticated
++write/exec. Medium = wrong behaviour in a plausible situation. Low = latent,
++cosmetic, or hygiene.
++
++Not run: the Playwright visual smoke, the editor/canvas in a browser, anything
++on XPU. The full repository suite passes (68 files via `run_tests.py`); the
++backend suite passes 21 of 22 files on a fresh checkout (see N-01).
++
++## 1. Status of the round-1 findings
++
++Every original reproduction was re-run. "Fixed [R]" means the script now shows
++the safe behaviour.
++
++| ID | Round-1 problem | Now |
++|---|---|---|
++| F-01 | Malformed progress line kills supervisor | **Fixed [R]**: later lines still applied, run finalises, crash repair path added |
++| F-02 | Failure strands a `created` row | **Fixed [R]**: row becomes `failed`, next start succeeds |
++| F-03 | NaN/inf emitted as invalid JSON | **Fixed on the server [R]** (`json_safe`, strict dumps); dashboard and monitor consume the marker; **run page does not** (N-06) |
++| F-04 | New runs truncate legacy logs | **Fixed [R]** in three layers (id sequence seeded above `runs/run_*`, `StartTraining` refuses an occupied dir, gateway refuses to open over content) |
++| F-05 | `discard()` deletes files before commit | **Fixed [R]**: rows committed first, files removed after, leftovers logged (orphan shards are not swept, see N-12) |
++| F-06 | No auth/Host/Origin check, write chain | **Mostly fixed**: Host + Origin guard (raw ASGI, no SSE deadlock), `.safetensors`-only uploads, size cap, executable check on `venv_python`, no mkdir before validation. No authentication by documented decision. Residuals: N-02, N-14 |
++| F-07 | Lost final / half-written progress lines | **Fixed [R]** |
++| F-08 | "Raw" TOML save lossy | **Fixed [R]**: text, comments and unknown keys preserved |
++| F-09 | No resync after SSE reconnect, newest event dropped | **Fixed for dashboard and editor [C]**; the run page was missed (N-06); coalescing introduced a new bug (N-04) |
++| F-10 | `create()` deletes foreign directories | **Fixed [R]**: 409, user files intact |
++| F-11 | Restart SIGKILLs live trainer | **Fixed [C]** by adoption; a gap remains when the trainer finishes while the server is down (N-03) |
++| F-12 | `stop()` unguarded, 3 s grace | **Fixed [C]**: shared `process_identity`, all signals guarded, grace 15 s; residual N-07 |
++| F-13 | In-process graph training | **Open, by design** |
++| F-14 | Unbounded work | **Partly fixed**: log tail is seek-based [C], uploads capped (but N-02). Dataset items still return every row by default and the UI asks for all of them [C] |
++| F-15 | Settings validation mkdirs | **Fixed [R]** |
++| F-16 | Non-atomic migrations | **Fixed [R]**: failed migration leaves no tables behind |
++| F-17 | Duplication, docs, gate | **Partly**: README/architecture/setup/progress now mention the backend; legacy server archived; two test runners remain (`run_tests.py`, `backend/tests/run_all.py`) |
++
++The fixes are well documented (each cites its finding) and most came with
++tests. That is the main reason the new problems below are mostly
++*second-order*: places where a fix was applied to one instance of a pattern
++and not to its siblings, or where a fix introduced a new assumption.
++
++## 2. New findings
++
++| ID | Sev | Ev | Problem |
++|---|---|---|---|
++| N-03 | Med-High | R | A run that finished while the server was down is recorded `failed`, 0/100 |
++| N-02 | Med | R | Upload handler blocks the event loop and holds about 2x the file in RAM; the "bounded" claim is false at the cap |
++| N-04 | Med | R | SSE coalescing drops per-node graph events (6 sent, 1 delivered) and evicts across event kinds |
++| N-05 | Med | R | `GET /datasets/{name}/files/...` serves any file in the dataset dir (db, shards, svg) with no hardening headers |
++| N-06 | Med | C | Run-detail page re-introduces F-03, F-09 and the silent-catch pattern |
++| N-07 | Low-Med | C | Liveness of an adopted pid is checked by number only; a recycled pid keeps a run `running` and `stop` is then refused |
++| N-01 | Low | R | `test_training_adapter.py` is not hermetic (fails without a ComfyUI dir) |
++| N-08 | Low | C | Monitor bus serializes on the training thread without a guard |
++| N-09 | Low | R | User-visible log note is garbled ("REAPTIED", dangling "RUN") |
++| N-11 | Low | R | No linter/type checker is run: 50 mypy errors in `backend/`, 92 ruff findings, dormant name errors |
++| N-12 | Low | C | `discard()` can leave orphan shard files; nothing sweeps them |
++| N-14 | Low | C | Upload silently overwrites an existing `.safetensors` |
++
++### N-03 Finished while the server was down is recorded as failed [R]
++`ReconcileRuns` adopts a trainer only if its pid is alive. For a dead pid it
++calls `kill()` (False) and marks the run `failed` with "process already gone".
++It never looks at the progress file. Reproduced: a progress file containing
++steps 1-100 and the trainer's `{"phase":"finished"}` line produced
++`status=failed done=0/100`. The adoption path already treats that terminal
++line as authoritative, so the information and the logic exist; they are only
++not applied here. This is the common case after a crash or an overnight
++restart, and it makes a successful run look failed.
++**Fix.** For a dead pid, drain the progress file, apply the last sample, and
++decide with the same terminal-line rule (`finished` completes; `error` or no
++terminal line fails, with the real `done_steps`).
++**Test.** Seed a `running` row with a dead pid and a finished progress file;
++expect `completed` and `done_steps == total_steps`. Add the `error` and
++no-terminal-line variants.
++
++### N-02 Upload: blocking and double buffering [R]
++`upload_asset` is `async def`, reads the body into a list of chunks, then
++`b"".join(...)`, then `write_bytes` on the event loop. Measured on a real
++uvicorn server with a 600 MB upload: a trivial request took up to 739 ms
++(17 ms idle) and process memory rose by about 1.2 GB, i.e. 2x the file. The
++cap is 8 GiB (`MAX_UPLOAD_BYTES`), so the peak at the cap is about 16 GiB
++(extrapolated, not run). The docstring's claim that neither request style can
++"buffer the server into swap" does not hold at the cap.
++**Fix.** Stream chunks to the `.part` file (in a worker thread or with an
++async file API) and rename; hash/size-check while writing; never hold the body.
++Make the handler `def` or offload the blocking call.
++**Test.** Upload N MB and assert peak memory growth is bounded by a small
++constant, and that a concurrent request is served during the upload.
++
++### N-04 Coalescing drops per-node graph events [R]
++`ClientBuffer` treats `graph_execution_progressed` like `run_progressed`: a new
++progress frame evicts every older queued one. But `run_progressed` carries
++absolute state (newest wins) while `graph_execution_progressed` carries a
++*delta* (`node_id`, `ok`, `duration_ms`). Reproduced: six node frames put
++back-to-back, one delivered (`F`); a queued graph frame is also evicted by a
++`run_progressed`. The editor sets each node's status from these frames
++(`editor/executions.js:166`), so live node status is wrong for fast graphs
++until the final refetch.
++**Fix.** Coalesce per key (`run_id`, or `(execution_id, node_id)`), never across
++kinds; or make graph progress absolute (send the full node-status map).
++**Test.** N distinct node frames queued together are all delivered; a run frame
++never evicts a graph frame.
++
++### N-05 Dataset file endpoint is a general file reader [R]
++The route is documented as "preview image bytes", but any path inside the
++dataset directory is served. Reproduced: `metadata.db` (57 KB), a 5 MB
++`.safetensors` shard (read fully into memory with `read_bytes`) and an `.svg`
++(`image/svg+xml`, same origin) all returned 200 with no `nosniff`, CSP or
++`Content-Disposition`. Traversal is correctly blocked; the problem is scope.
++An SVG opened directly runs script on the app's origin, and the same-origin
++Origin check would then pass for that script.
++**Fix.** Allowlist preview extensions (`.png .jpg .jpeg .webp`), drop `.svg`,
++use a streaming `FileResponse`, add `X-Content-Type-Options: nosniff` and a
++restrictive CSP for this route.
++**Test.** `metadata.db`, shards and `.svg` return 404/415; images stream.
++
++### N-06 Run-detail page repeats fixed mistakes [C]
++`frontend/js/views/run.js` subscribes with `sse("/events", { onMessage: ... })`:
++no `onOpen` resync (F-09), no use of the `nonfinite` marker (so a diverged
++loss shows an em dash on the page you open to inspect a diverged run, F-03),
++and `catch { return; }` on parse (the pattern the review forbade). It also
++copies `fmtDuration`/`fmtRel` ("same helpers as dashboard.js") instead of
++importing them. The three SSE subscribers each re-implement event handling.
++**Fix.** One shared event-stream module that owns reconnect, resync, parse
++errors and non-finite handling, used by dashboard, run page and editor.
++
++### N-07 Adopted-run liveness by pid number [C]
++`is_alive` is `os.kill(pid, 0)` for any pid not spawned by this process. After
++adoption, if the trainer dies and the number is reused, the supervisor keeps
++seeing "alive", the run stays `running`, and `stop()` is then refused as
++"not our trainer", so the user cannot clear it until a restart. Rare, but the
++failure mode is a stuck app. `PermissionError` is also read as alive.
++**Fix.** For adopted pids, re-check `owns(pid)` each tick (a recycled pid
++fails the cmdline check) and treat "not ours" as "trainer gone".
++
++### N-01, N-08, N-09, N-11, N-12, N-14 (shorter)
++- **N-01** `test_training_adapter.py::test_signal_safety` spawns the real
++  gateway and needs a ComfyUI directory; on a fresh clone the suite reports
++  1/22 failed. It passes with `COMFY_DIR` set. Tests must create their own
++  environment.
++- **N-08** `monitor_bus.report` does `json.dumps` on the *calling* (training)
++  thread; an unserializable value would raise into the trainer, and only when
++  a dashboard has connected. Guard it (log and drop the frame).
++- **N-09** `_start` writes `--- RUN  -- server watching pid N ---` for a normal
++  start and `--- RUN REAPTIED (adopted ...` after adoption. Users read this
++  log. Fix the text and add a test that pins it.
++- **N-11** Neither `mypy` nor `ruff` is configured, yet the code carries
++  `# noqa: BLE001` and `# type: ignore` markers for them. Measured: 50 mypy
++  errors in `backend/` (arg-type 14, attr-defined 10, name-defined 5,
++  union-attr 5, and 10 "`list` is not a valid type" errors caused by methods
++  named `list` shadowing the builtin inside their own class) and 92 ruff
++  findings (8 over the complexity limit, 3 unused imports, 2 undefined names).
++  The undefined names (`GraphExecution`, `DatasetInfo`, `DatasetStats` in
++  `dto.py` annotations) are harmless only because annotations are deferred.
++- **N-12** After a failed `discard()` the shard files that could not be
++  removed stay on disk with no sweep. The trade-off (orphan file over dangling
++  row) is right; add a periodic or on-demand orphan sweep.
++- **N-14** `PUT /assets/.../x.safetensors` replaces an existing file
++  unconditionally. Make overwrite explicit (`?overwrite=true` or 409).
++
++## 3. What the fixes got right (keep doing this)
++- Each fix cites its finding and states the invariant it protects.
++- `security.py` is correct: raw ASGI (avoids the SSE deadlock), Origin compared
++  with the validated Host, `null` origin refused. No bypass found.
++- `json_safe` ends in `allow_nan=False`, so a missed value fails loudly in tests
++  instead of in the browser.
++- Layering still holds (no inward/outward import violations).
++- The frontend has no HTML-injection sinks (`shell.js` templates are constants).
++- Failed migrations are now atomic; `discard` ordering is right; adoption is
++  conservative (progress history consumed without applying, exit code never
++  guessed).
++
++## 4. Rules for the coding AI (additions to round 1)
++1. **Fix the pattern, not the instance.** After fixing a defect, search the
++   repository for every sibling of it and fix or test each one. Round 1 fixed
++   resync and non-finite handling in two views and left the third (N-06).
++2. **State vs delta is a design property.** Before coalescing, dropping or
++   replaying events, classify each kind as *state* (newest wins), *delta*
++   (must all arrive) or *lifecycle* (never drop), and key the policy on that
++   (N-04).
++3. **Comments are claims; test them.** "Bounded", "atomic", "never truncates",
++   "safe" must each have a test that would fail if untrue (N-02).
++4. **Handlers must not block.** An `async def` route may not call blocking
++   file or DB code; use `def` routes or offload (N-02).
++5. **A recovery path must use every piece of evidence the normal path uses.**
++   If adoption trusts the progress file, so must reconcile (N-03).
++6. **Tests create their own world.** No dependence on the developer's
++   directory layout, environment variables or ports (N-01).
++7. **Endpoints do one thing.** A route named "preview" serves previews, and
++   only those (N-05).
++8. **Run the tools the code already references.** If a `noqa`/`type: ignore`
++   marker exists, the corresponding tool belongs in the gate (N-11).
++
++## 5. Code-quality recommendations (including large changes)
++
++Ordered by leverage. Effort: S = hours, M = days, L = a week or more.
++
++**Q1. Put a quality gate in front of everything (S-M).** Add `pyproject.toml`
++with ruff (rules `E,F,B,BLE,UP,SIM,C901,RET,ARG,ASYNC`) and mypy (strict for
++`backend/domain` and `backend/application`, normal elsewhere); commit a
++baseline so only *new* findings fail; one command (`scripts/check`) that runs
++ruff, mypy, backend tests, repo tests and the frontend checks; run it in CI
++(even CPU-only) and in `full_gate.sh`. This alone would have caught N-11 and
++the dormant name errors.
++
++**Q2. Make illegal states unrepresentable (M).** `Run.id` is
++`RunId | None`, hence five `# type: ignore[arg-type]`; split into `NewRun` and
++`PersistedRun` (or allocate ids before construction). `ProgressSample` has
++every field optional and `_apply_sample` tests "all fields None"; replace it
++with a tagged union (`StepSample`, `PhaseSample`, `TerminalSample`). Rename
++repository methods called `list` (`list_runs`, `list_datasets`). Express run
++status transitions as one table and test it exhaustively.
++
++**Q3. One supervisor abstraction (M-L).** Two components hand-roll the same
++lifecycle: thread, guard, crash repair, drain, terminal-state CAS
++(`RunSupervisor`, `GraphExecutionSupervisor`). Round 1's F-01 and F-02 existed
++because one copy lacked what the other had, and N-03 is the same shape
++(recovery and normal paths disagree). Extract
++a `Supervised` base (or composition helper) with the crash-repair and
++final-drain steps built in, and one `ProcessGateway` base for signalling,
++identity and escalation (the two gateways already share `process_identity`).
++Fixes then land once.
++
++**Q4. A real event contract (M).** Today the event shapes live in Python
++dataclasses, are re-described by hand in `schemas.py`, and re-parsed by hand in
++three JS files. Generate the event schema (JSON Schema or JSDoc types) from the
++dataclasses, give every event a sequence number and support `Last-Event-ID`
++replay for lifecycle events, and declare each kind's delivery class (state /
++delta / lifecycle). That replaces "refetch on every open" workarounds with a
++property of the protocol, and makes N-04 impossible by construction.
++
++**Q5. Parse, do not validate, at every boundary (M).** Everything from outside
++(progress JSONL, TOML, legacy dataset rows, uploaded names, query strings)
++should enter through one parsing step that returns a typed value or a typed
++error. Add property-based tests (`hypothesis`) for the progress reader, the
++path sandbox, `json_safe`, `host_name` and the Host/Origin guard; fuzz the
++progress reader with truncation at every byte offset.
++
++**Q6. Process isolation for node-graph training (L).** Graph execution runs
++inside the API server (F-13), so a device fault, OOM kill or restart takes the
++server and the run with it, and the event loop competes with training. The
++dataset-task gateway is a working template: run the `GraphRuntime` in a child
++process behind the same port, stream events over a pipe or file, and let the
++adoption machinery already built for `core.cli` cover restarts. This is the
++largest single robustness gain for a single-GPU, long-run workflow.
++
++**Q7. Split the large units (M).** `schemas.py` (997 lines) by router;
++`dataset_library.py` (534) into queries/commands/files; `GraphRuntime.validate`
++(171 lines, complexity about 32) into one function per pass; `datasets.js`
++(1339 lines) into modules with a small state store; `visual_smoke.py` (1287)
++and `support.py` (1197) by domain. Target: no file over about 400 lines, no
++function over about 60 or complexity over about 12, enforced by ruff `C901`.
++
++**Q8. A shared frontend core (M).** Twelve helper names are defined in more
++than one file (`boot`, `log`, `logError`, `fmtDuration`, `fmtRel`,
++`errText`, ...). Create `lib/` modules for formatting, logging, errors and the
++event-stream subscription (N-06). Add `// @ts-check` with JSDoc types and run
++`tsc --noEmit --checkJs`; unit-test the pure logic with `node:test` (formatters,
++event reducers, non-finite rendering), and put the Playwright smoke into the
++scheduled CI job.
++
++**Q9. Contract tests for fakes (S-M).** `InMemoryRunRepository` and friends in
++`support.py` can drift from the SQLite adapters. Write each repository contract
++once and run it against both. Do the same for the gateway port (fake vs real
++subprocess, using a trivial child).
++
++**Q10. Resource budgets in one place (S).** Upload cap, page sizes, queue
++sizes, history caps and grace periods are scattered constants. Put them in
++`backend/limits.py`, give every list endpoint a default page size, stream every
++large body (`FileResponse` for files, chunked writes for uploads), and add an
++integration test per budget.
++
++**Q11. Decisions as ADRs (S).** Record the standing decisions with their
++consequences: no authentication (and what the Host/Origin guard does and does
++not cover), in-process training, "legacy parity" exceptions, B580-only device
++hardcoding. Tie each to the test that pins it. Add a doc check that fails when
++a documented number (endpoint count, file count) is stale.
++
++**Q12. Measure test quality (S).** Run mutation testing (`mutmut`) on
++`supervisor.py`, `jsonl_progress_source.py`, `reconcile_runs.py` and
++`sse.py`; add branch-coverage reporting for `application/` and
++`infrastructure/`; treat survivors as missing tests. The suite is large
++(about 1,000 checks) but round 1 showed it missed the defects that mattered.
++
++**Suggested order.** Q1 first (cheap, protects everything after). Then fix
++N-03, N-04, N-06 and N-05 (small, high value). Then Q2 and Q3 together, since
++they touch the same code. Q4/Q5 next, Q6 as its own project, Q7-Q12 alongside.
++
++## 6. Not reviewed
++The editor canvas and graph library UI in a browser, `visual_smoke`,
++`datasets.js` behaviour beyond the injection and resync scan, the node
++registry/introspection internals, `teacher_prompts`, and the training nodes
++themselves (this review is about the server).
++
++## Appendix: reproductions
++New scripts (all outside the repo, same style as round 1):
++`r9_upload_blocking.py` (N-02), `r10_finished_while_down.py` (N-03),
++`r11_dataset_file_endpoint.py` (N-05), `r12_verify_fixes.py` (F-10 check).
++N-04 was demonstrated with a 10-line `ClientBuffer` script, included in the
++archive as `r13_sse_coalescing.py`. Run them from the repo root.
+diff --git a/docs/design/backend/README.md b/docs/design/backend/README.md
+index eaf99c5..a1185cb 100644
+--- a/docs/design/backend/README.md
++++ b/docs/design/backend/README.md
+@@ -15,3 +15,4 @@ and the setup/architecture docs now point at `backend/`.
+ | 5 | [`05-graph-runtime.md`](05-graph-runtime.md) | Graph subsystem (M4): `GraphCatalog`/`GraphRuntime` ports, auto-discovery, the validation issue-code table, execution lifecycle + CAS, API surface, deliberate divergences from legacy, deferrals. |
+ | 6 | [`06-visual-smoke.md`](06-visual-smoke.md) | Frontend visual smoke checklist for a browser-enabled session: what curl/tests cannot cover (JS actually running), per-page steps, known deferred items. Executed 2026-10-01; findings + fixes recorded in the doc. |
+ | 7 | [`07-review-2026-10-01.md`](07-review-2026-10-01.md) | Review of the M8a redesign: 17 findings (F-01..F-17) with severity, evidence level (reproduced vs read), locations, fix direction and regression tests, plus quality rules for contributors. Section 7 records a verification pass at `c1dc136` (all findings live there; F-06's upload half was closed by the next batch, marked in the table); reproductions live in `scripts/repro/`. Read before changing supervisors, the progress reader, dataset deletion or the SSE/monitor path. |
++| 8 | [`08-review-2026-10-02.md`](08-review-2026-10-02.md) | Second review (round 2): status of every round-1 finding re-verified by re-running the reproductions, 12 new findings (N-01..N-14) with evidence level, rules for contributors, and 12 code-quality recommendations (Q1..Q12) including large refactors. |
+-- 
+2.43.0
+

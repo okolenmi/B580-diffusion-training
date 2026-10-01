@@ -23,6 +23,7 @@ from backend.tests.support import (
     asgi_request,
     build_services,
     check,
+    concrete_node_classes,
     finish,
     wait_until,
 )
@@ -66,7 +67,10 @@ app_a = create_app(container.services)
 
 status, _, body = asgi_request(app_a, f"{GRAPH}/nodes")
 check(status == 200, "real container serves the palette")
-check(body["count"] == 36, f"36 real nodes (got {body['count']})")
+check(
+    body["count"] == len(concrete_node_classes()),
+    f"palette serves every concrete Node subclass (got {body['count']})",
+)
 check(body["load_errors"] == [], "no discovery failures reported")
 check("optimizer" in body["domains"] and "dataset" in body["domains"],
       "domains grouped from module paths")

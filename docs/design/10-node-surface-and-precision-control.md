@@ -6,7 +6,9 @@ Real, user-reported ground for this section, not a self-directed
 exercise: real-hardware testing found individual optimizer nodes
 (`AdafactorOptimizerNode`, `CAMEOptimizerNode`, etc.) performing within
 ~10% of their `Composed*` equivalents -- "legacy LoRA handling should be
-replaced with new one for sure" -- plus no coherent way to control
+replaced with new one for sure" (both named nodes are now deleted; this
+section's 11.1 records how each went, including the one that went the
+other way) -- plus no coherent way to control
 compute/storage/optimizer-state precision, plus (found live, mid-session,
 the hard way) a real duplication bug: `strategy="shape_grouped"` was
 registered on `ComposedCAMEOptimizerNode` but not on
@@ -48,23 +50,40 @@ point this section's original version called "genuinely different...
 stays regardless" turned out to have no actual consumer anywhere in the
 codebase to be different *for*.
 
-**Not retired, a real gap, confirmed on an actual torch run (not just
-static reading):** `AdafactorOptimizerNode` alone now -- differs from
-`ComposedAdafactorOptimizerNode` for small (< 10,000 element)
-parameters, for a reason this section's original version got wrong (a
-single, uniform `TINY_NUMEL` special case shared with the other two
-Adafactor variants -- it wasn't shared, see the "Retired" entry above).
+**`AdafactorOptimizerNode` -- retired 2026-10-02, the opposite decision
+from the rest of this list.** This section originally held it back as a
+real gap confirmed on an actual torch run: it differs from
+`ComposedAdafactorOptimizerNode` for small (< 10,000 element) parameters,
+for a reason this section's own earlier version got wrong (a single,
+uniform `TINY_NUMEL` special case shared with the other two Adafactor
+variants -- it wasn't shared, see the "Retired" entry above).
 `ChunkedXPUAdafactor` batches every tiny parameter across the whole
 optimizer into one shared clip/EMA state -- a cross-parameter,
 execution-strategy-level concern, not a per-parameter algorithm one
 (unlike `FusedXPUAdafactor`'s tiny-parameter mechanism, which *was*
-per-parameter and got closed the same way the rest of this list did);
-closing it needs new `ExecutionStrategy` machinery (something like
-`ShapeGroupedBatchStrategy`, but grouping "under a size threshold"
-instead of "same shape"), not an `AdafactorAlgorithm` change -- real,
-separate, sized future work, tracked in
-`docs/design/09-prioritized-backlog.md`, not something this pass
-attempted.
+per-parameter and got closed the same way the rest of this list did).
+
+This section then recommended building the matching `ExecutionStrategy`
+("something like `ShapeGroupedBatchStrategy`, but grouping 'under a size
+threshold' instead of 'same shape'"). That recommendation is withdrawn.
+Part C of `smoke_test_adafactor_tiny_parameter_gap.py` had already
+measured that the shared state is not merely a different optimization
+but *contamination*: a parameter's update depends on unrelated
+parameters' gradients sharing its batch. Closing the gap that way would
+have meant writing a strategy whose specific purpose is to reintroduce
+cross-parameter coupling into math that is canonical precisely because
+it doesn't have any. The node was deleted instead, and
+`ComposedAdafactorOptimizerNode` is the only Adafactor node.
+
+The cost is real and one part of it is unmeasured: the batching was a
+genuine optimization, and `strategy="foreach"` recovers much of it
+without contaminating. Whether it recovers enough on the B580 has not
+been tested -- that measurement, and the reasoning, are in
+`docs/known-issues/open.md`. Worth noting against this section's own
+framing above: the original ground for consolidation was "legacy LoRA
+handling should be replaced with new one for sure," and that is what
+this is -- with the honest caveat that "for sure" covered correctness,
+not speed.
 
 **A real, two-directional capability difference, not one-directional
 redundancy -- flagged, not yet acted on:** `SimpleAdamWOptimizerNode`

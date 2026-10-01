@@ -15,9 +15,9 @@ than full core.clip_encode.SDXLClipEncoder/core.unet_wrapper.ComfyUNetWrapper
 objects (heavier, legacy, ComfyUI-adjacent classes) -- the fakes satisfy
 exactly the attributes/methods each footprint_bytes()/offload()/reload()
 actually touches, confirmed by reading each directly, not guessed. The
-other two (ComposedOptimizerHandle, AdafactorOptimizerHandle) reuse the
-same real, already-proven construction patterns from
-smoke_test_device_resident_retrofit.py.
+other two (ComposedOptimizerHandle with AdamW and with Adafactor on
+all-small parameters) reuse the same real, already-proven construction
+patterns from smoke_test_device_resident_retrofit.py.
 
 Now a permanent regression check, not just the original investigation
 -- a real divergence here would mean one of the four implementations
@@ -71,17 +71,34 @@ def check_composed_optimizer_handle():
            detail=f"got {after_reload}, expected {before}")
 
 
-def check_adafactor_optimizer_handle():
-    print("\n=== AdafactorOptimizerHandle ===")
-    from core.optimizers import ChunkedXPUAdafactor
-    from nodes.optimizer.adafactor import AdafactorOptimizerHandle
+def check_composed_adafactor_small_params():
+    """Same offload/reload/footprint invariant, on an all-small-parameter
+    Adafactor.
+
+    Retargeted 2026-10-02 from the AdafactorOptimizerHandle case, which
+    went away with nodes/optimizer/adafactor.py. The shape choice is the
+    part that matters and it is unchanged: 8x8 is 64 elements, far under
+    the 10,000-element tiny-parameter threshold, and the threshold is
+    explicitly set so the tiny path is genuinely the one exercised. That
+    path is exactly where the old Handle's footprint_bytes() used to
+    under-report -- ChunkedXPUAdafactor kept its tiny parameters' state
+    in a separate single shared tensor rather than in the per-parameter
+    vr/vc/vs/exp_avg lists the old implementation summed, so it reported
+    0 for an all-small optimizer. A regression there would read as
+    "state is free" and nobody would notice until it ran out of memory.
+    """
+    print("\n=== ComposedOptimizerHandle + AdafactorAlgorithm, all-small params ===")
+    from nodes.optimizer.algorithms.adafactor import AdafactorAlgorithm
+    from nodes.optimizer.composed import ComposedOptimizerHandle
+    from nodes.optimizer.strategies.simple import SimpleLoopStrategy
 
     params = [torch.randn(8, 8, requires_grad=True)]
-    legacy = ChunkedXPUAdafactor(params, lr=1e-3, device=DEVICE)
-    handle = AdafactorOptimizerHandle(legacy)
+    handle = ComposedOptimizerHandle(
+        algorithm=AdafactorAlgorithm(tiny_parameter_threshold=10_000),
+        strategy=SimpleLoopStrategy(), params=params, lr=1e-3, device=DEVICE)
     for p in params:
         p.grad = torch.randn_like(p)
-    handle.step()  # lazily allocates state -- footprint_bytes() is 0 before this
+    handle.step()
 
     before = handle.footprint_bytes()
     record(before > 0, "footprint_bytes() > 0 before offload", detail=f"got {before}")
@@ -198,7 +215,7 @@ def check_comfy_unet_trainable_model():
 
 def main():
     check_composed_optimizer_handle()
-    check_adafactor_optimizer_handle()
+    check_composed_adafactor_small_params()
     check_sdxl_text_encoder()
     check_comfy_unet_trainable_model()
 

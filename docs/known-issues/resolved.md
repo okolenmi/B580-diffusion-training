@@ -235,11 +235,13 @@ through 2026-09, with no hardware run.
   strategies would have broken the just-confirmed Foreach match -- within
   this project's established tolerances for this pair (`1e-4` float32,
   `1e-2` bf16), and both Fused files were deleted too. `ChunkedXPUAdafactor`'s
-  cross-parameter-batching version is a different, bigger problem (new
-  `ExecutionStrategy`-level machinery) and is *not* resolved;
-  `AdafactorOptimizerNode` stays registered for it, tracked in
-  `docs/design/09-prioritized-backlog.md` -- a capability gap, not a
-  broken thing.
+  cross-parameter-batching version was a different, bigger problem, and
+  `AdafactorOptimizerNode` stayed registered for it as a capability gap
+  rather than a broken thing -- until 2026-10-02, when the decision was
+  made to retire the node instead of building the machinery
+  (`nodes/optimizer/adafactor.py` deleted). The reasoning, and the one
+  unmeasured performance consequence, are recorded in
+  `docs/known-issues/open.md`.
 
 - **[2026-08] 8 real, working Node classes existed but weren't selectable
   in the graph editor -- the nodegraph registry's list was stale.** Found

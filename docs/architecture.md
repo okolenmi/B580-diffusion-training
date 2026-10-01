@@ -30,15 +30,15 @@ built its own independent, verified-equivalent version of something
 `core/` does (the `optimizer/` domain's `Algorithm`+`ExecutionStrategy`
 split; `components/diffusion.py`'s noise-schedule/parameterization
 objects), that version is canonical and the old `core/`-wrapping `Node`
-gets retired. The `optimizer/` domain is fully unified this way except
-one node (`AdafactorOptimizerNode`, `core.optimizers.ChunkedXPUAdafactor`'s
-cross-parameter tiny-batching behavior -- real, separate
-`ExecutionStrategy`-level work, tracked in
-`docs/design/09-prioritized-backlog.md`, not yet started). LoRA/UNet
-injection, text encoding, and dataset ingestion haven't been started at
-all -- still wrap `core/`/`manager/` directly, with no independent
-alternative built (also tracked in that same backlog doc). Wrapping is
-the fallback for a domain nobody's rewritten yet, not a destination.
+gets retired. The `optimizer/` domain is fully unified this way as of
+2026-10-02: the last holdout, `AdafactorOptimizerNode`, is deleted, and
+`nodes/optimizer/` now imports nothing from `core.optimizers` (see
+`docs/known-issues/open.md` for the one unmeasured performance trade that
+retirement accepted). LoRA/UNet injection, text encoding, and dataset
+ingestion still wrap `core/`/`manager/` directly, with no independent
+alternative built (tracked in `docs/design/09-prioritized-backlog.md`).
+Wrapping is the fallback for a domain nobody's rewritten yet, not a
+destination.
 
 ## Design principles, in short
 

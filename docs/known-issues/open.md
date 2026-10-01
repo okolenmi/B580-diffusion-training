@@ -48,6 +48,36 @@
   generation's VAE decode, the reported trigger) remains the next
   concrete step here.
 
+- **[2026-10] Retiring `AdafactorOptimizerNode` traded an unmeasured
+  batched-tiny-parameter optimization for canonical per-parameter math;
+  nobody has measured what that cost.** `nodes/optimizer/adafactor.py` is
+  deleted, so `ComposedAdafactorOptimizerNode` is the only Adafactor node
+  (2026-10-02). It was retired rather than its behavior reimplemented, on
+  purpose: `ChunkedXPUAdafactor`'s tiny-parameter path concatenates every
+  parameter under 10,000 elements into one shared clip/EMA state, and
+  Part C of `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
+  measured that this *contaminates* results -- a parameter's update
+  depends on unrelated parameters' gradients sharing its batch. Adopting
+  it would mean putting that coupling back deliberately.
+
+  What is genuinely lost is performance, not correctness: that
+  concatenation turned hundreds of small parameters' clip/EMA/normalize
+  into one kernel launch each. `strategy="foreach"` recovers much of the
+  launch-overhead win through `torch._foreach_*` without contaminating
+  anything, and is what to reach for on a graph with many small LoRA
+  matrices. **Unmeasured: whether that is in fact fast enough on the
+  B580.** Nothing here has run on hardware -- every equivalence result in
+  that smoke test is CPU torch.
+
+  To settle it: train the same config and seed twice, once with
+  `strategy="foreach"` and once with `strategy="simple"`, on a graph with
+  the realistic number of small LoRA matrices, and compare wall-clock
+  per step. Then, if foreach is short of the old behavior, the remaining
+  work is a `TinyBatchedStrategy` grouping "every parameter under a size
+  threshold, any shape" -- but it should be written only with that
+  measurement in hand, since writing it blind is exactly what this
+  project's own rule against unevidenced techniques forbids.
+
 ## Measured and closed
 
 Recorded here rather than in [`resolved.md`](resolved.md) because there

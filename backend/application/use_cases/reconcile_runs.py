@@ -28,7 +28,6 @@ import logging
 
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
-from ..event_publisher import EventPublisher
 from ..lifecycle_writer import RunLifecycleWriter
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository

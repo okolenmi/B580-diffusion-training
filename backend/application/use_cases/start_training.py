@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 
 from ..dto import RunDTO, StartTrainingCommand, to_run_dto
 from ..errors import (

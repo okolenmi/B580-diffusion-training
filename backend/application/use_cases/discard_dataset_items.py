@@ -9,7 +9,6 @@ file, per the format contract.
 from __future__ import annotations
 
 from ..dto import DiscardItemsResult
-from ..errors import InvalidQueryError
 from ..requests import ItemSelection
 from ..ports.dataset_library import DatasetLibrary
 

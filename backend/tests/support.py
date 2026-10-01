@@ -118,7 +118,6 @@ from backend.application.ports.dataset_task_gateway import (
 )
 from backend.infrastructure.config_options import PydanticConfigOptions
 from backend.infrastructure.core_config_files import CoreConfigFiles
-from backend.infrastructure.core_config_inspector import CoreConfigInspector
 from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_previews import SqliteDatasetPreviews
@@ -1067,7 +1066,7 @@ def make_v2_dataset(
                     "previews/p1.png" if (previews and i == 1) else None,
                 ),
             )
-        conn.execute(f"PRAGMA user_version = 2")
+        conn.execute("PRAGMA user_version = 2")
         conn.commit()
     finally:
         conn.close()

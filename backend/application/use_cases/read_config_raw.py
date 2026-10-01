@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from ..dto import RawConfig
 from ..ports.config_files import ConfigFiles

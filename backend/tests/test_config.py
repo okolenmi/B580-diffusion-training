@@ -20,7 +20,6 @@ from backend.application.project_paths import ProjectPaths
 from backend.application.use_cases import (
     GetConfig,
     GetConfigOptions,
-    GetStartOptions,
     ReadConfigRaw,
     UpdateConfig,
     WriteConfigRaw,
@@ -77,7 +76,7 @@ def main() -> None:
     paths = ProjectPaths(root=root)
 
     # -- read -----------------------------------------------------------
-    cfg = _write(root, "cfg/test.toml", LORA_TOML)
+    _write(root, "cfg/test.toml", LORA_TOML)
     read = GetConfig(files=files, paths=paths)
     data = read.execute("cfg/test.toml")
     check(data["common"]["steps"] == 321, "read returns nested config")
@@ -96,7 +95,7 @@ def main() -> None:
     except ConfigNotFoundError:
         check(True, "missing config rejected")
 
-    bad = _write(root, "cfg/bad.toml", "[common]\nsteps = 3\n")
+    _write(root, "cfg/bad.toml", "[common]\nsteps = 3\n")
     try:
         read.execute("cfg/bad.toml")
         check(False, "invalid config rejected")

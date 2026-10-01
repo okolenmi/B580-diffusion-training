@@ -15,10 +15,8 @@ a launch would fail rather than an empty picker.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from ..dto import LastFinishedRun, StartOptionsResult
-from ..errors import InvalidQueryError
 from ..ports.config_inspector import ConfigInspector
 from ..project_paths import ProjectPaths
 from ..ports.run_repository import RunRepository

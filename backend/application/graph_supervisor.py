@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from ..domain.events import DomainEvent, GraphExecutionProgressed
+from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .event_publisher import EventPublisher

@@ -9,7 +9,6 @@ saving never clears, migrates, or reinterprets fields.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from ..errors import InvalidQueryError

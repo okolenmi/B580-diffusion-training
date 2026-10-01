@@ -7,7 +7,6 @@ never truncates an existing file.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from ..errors import InvalidQueryError
 from ..ports.config_files import ConfigFiles

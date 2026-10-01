@@ -5,7 +5,6 @@ from __future__ import annotations
 from ..dto import RunDTO, to_run_dto
 from ..errors import RunNotFoundError, RunNotRunningError
 from ..ports.clock import Clock
-from ..event_publisher import EventPublisher
 from ..lifecycle_writer import RunLifecycleWriter
 from ..ports.run_repository import RunRepository
 from ..ports.training_gateway import TrainingGateway

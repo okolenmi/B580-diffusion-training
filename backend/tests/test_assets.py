@@ -110,7 +110,7 @@ def main() -> None:
         check(True, "browse of a file rejected")
 
     # -- writes ------------------------------------------------------------
-    made = store.make_folder("checkpoint", "new/deep")
+    store.make_folder("checkpoint", "new/deep")
     check((ckpt / "new" / "deep").is_dir(), "make_folder creates nested folders")
 
     saved = store.save_upload("lora", "sub/up.safetensors", b"payload-bytes")

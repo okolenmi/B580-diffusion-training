@@ -18,7 +18,6 @@ from backend.bootstrap import Container, build_container
 from backend.config import Settings
 from backend.domain.entities.run import Run
 from backend.domain.events import RunsDeleted
-from backend.domain.value_objects import RunStatus
 from backend.infrastructure.persistence.run_repository import SqliteRunRepository
 from backend.presentation.app import create_app
 from backend.tests.support import (

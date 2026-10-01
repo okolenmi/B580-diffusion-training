@@ -25,7 +25,6 @@ from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import GraphRuntime, IssueSeverity, issue_to_dict
 from ...domain.entities.graph_execution import GraphExecution
-from ...domain.events import DomainEvent
 from ...domain.graph import GraphDefinition
 
 

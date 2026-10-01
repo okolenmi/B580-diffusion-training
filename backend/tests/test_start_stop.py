@@ -422,10 +422,10 @@ def test_reconcile_runs() -> None:
         survivor = seed_run(env.repo, env.clock, start=True, pid=777)  # id 2
         env.gateway.alive.add(777)  # still training when the server died
 
-        gone = seed_run(env.repo, env.clock, start=True, pid=888)  # id 3
+        seed_run(env.repo, env.clock, start=True, pid=888)  # id 3
         check(888 not in env.gateway.alive, "pid 888 is already gone")
 
-        stranger = seed_run(env.repo, env.clock, start=True, pid=999)  # id 4
+        seed_run(env.repo, env.clock, start=True, pid=999)  # id 4
         env.gateway.alive.add(999)  # a live process...
         env.gateway.foreign.add(999)  # ...that is not our trainer (pid reuse)
 

@@ -33,4 +33,17 @@ for f in $(find frontend/js -name '*.js'); do
 done
 echo "node --check: all modules OK"
 
+# Unused imports, undefined names, syntax errors. The structure audit
+# (docs 08 S-25) removed a pile of dead imports by hand; this keeps them
+# from coming back, and it is the same check that found them. F + E9
+# only -- the project does not adopt a style linter. Skipped with a
+# notice when the interpreter has no ruff, so the gate still runs on a
+# bare venv.
+if "$GATE_PYTHON" -c 'import ruff' 2>/dev/null; then
+  echo "== backend lint (F, E9) =="
+  "$GATE_PYTHON" -m ruff check --select F,E9 backend/
+else
+  echo "== backend lint skipped (ruff not installed in the gate interpreter) =="
+fi
+
 echo "FULL GATE: ALL GREEN"

@@ -77,17 +77,37 @@ missing is a real run:**
   section, not yet numbered above -- see `docs/architecture.md`). The
   `optimizer/` domain's `Algorithm`/`ExecutionStrategy` split proved a
   domain can be fully separated from `core/`'s legacy implementation,
-  verified equivalent, and the old wrapper retired -- `nodes/model/`
-  (LoRA/UNet injection: `core.lora`, `core.unet_wrapper`),
-  `nodes/model/text_encoder.py` (`core.clip_encode`), and
-  `nodes/dataset/managed.py` (`manager.loader`) haven't had that done at
-  all yet: single implementation, still wrapping `core`/`manager`
-  directly, no competing alternative to retire. Real future work, not
-  cleanup debt -- sized much bigger than the optimizer domain was (UNet
-  forward passes and LoRA injection are substantially more surface than
-  three optimizer formulas), or bigger than dataset ingestion, and not
-  scoped further here. Whoever picks this up should decide which
-  sub-piece (model vs. dataset) goes first.
+  verified equivalent, and the old wrapper retired; text encoding then
+  followed on 2026-10-02 (`SDXLClipEncoder` -> `nodes/model/clip_encoder.py`,
+  a relocation, `core/clip_encode.py` kept as a shim for `core/`'s and
+  `manager/`'s own use). Three sub-pieces remain, and they are not
+  equally hard:
+
+  - **`nodes/model/` LoRA/UNet injection** (`core.lora`,
+    `core.unet_wrapper`). Genuinely larger than either domain that just
+    went, and the reason is structural rather than a matter of volume:
+    `core.unet_wrapper.ComfyUNetWrapper` is the *model* every LoRA path
+    in the graph is built on, and `core.lora._inject_lora` is a tree-walk
+    that resolves `LoRALinear`/`LoRAConv2d` as module-level names at
+    call time, which is exactly what
+    `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` patches
+    in order to substitute the rewrite's own DoRA/NF4 layers. Unwiring
+    this means owning the injection walk, and that patch is load-bearing
+    for every non-plain adapter strategy -- it is not a thin import the
+    way the text encoder was.
+  - **`nodes/dataset/managed.py`** (`manager.loader`, and through it
+    `manager/t_sampling.py` -> `core.noise_schedule.sample_timestep` and
+    `core.model_io.make_init_noise`, `core.seed.derive_seed`). Note the
+    shape here is *inverted* relative to the other two: `nodes/` doesn't
+    depend on `manager/`, `manager/` is the implementation and `nodes/`
+    calls into it. Worth deciding deliberately which side should own it.
+  - **`manager/builder.py`'s own use of `core/`** (9 modules), which is
+    the backend's dataset ingestion path rather than anything `nodes/`
+    reaches.
+
+  Real future work, not cleanup debt. Start with the dataset piece: it is
+  the smallest, and unlike the model piece nothing depends on the
+  arrangement of the code it would move.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

@@ -14,7 +14,7 @@ project currently supports: UNet lives under "model.diffusion_model.",
 VAE under "first_stage_model.", and everything else is treated as
 CLIP. SDXL actually has two text encoders
 (conditioner.embedders.0./.1., CLIP-L and OpenCLIP-G); they're
-deliberately not split apart here -- core.clip_encode.SDXLClipEncoder
+deliberately not split apart here -- clip_encoder.SDXLClipEncoder
 already extracts both from this same "everything else" bucket
 internally, so downstream code only ever needs to deal with one "clip"
 component.

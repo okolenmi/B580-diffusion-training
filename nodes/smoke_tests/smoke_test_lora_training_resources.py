@@ -15,7 +15,7 @@ ordering is load-bearing and not incidental.
 Reuses smoke_test_lora_injector_extraction.py's exact _Recorder/
 _RecordingWrapper (patches ComfyUNetWrapper/adapter_strategy_scope to
 record real call args) rather than a second copy of the same mocking,
-plus a new, equally-real patch of core.clip_encode.SDXLClipEncoder for
+plus a new, equally-real patch of nodes.model.clip_encoder.SDXLClipEncoder for
 the same reason: neither is installed in this environment (same
 constraint every UNet/CLIP-touching smoke test in this project already
 has).
@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 import torch.nn as nn
 
-import core.clip_encode as clip_encode_module
+import nodes.model.clip_encoder as clip_encode_module
 from nodes.model.lora_training_resources import LoRATrainingSkeleton, SDXL_LoraTrainer
 from nodes.model.sdxl_architecture import SDXLArchitecture
 from nodes.smoke_tests.smoke_test_gradient_checkpointing import _install_stub_comfy_checkpoint_module
@@ -56,12 +56,12 @@ def _make_sdxl_checkpoint_sd():
 
 
 class _FakeClipEncoder:
-    """Stands in for core.clip_encode.SDXLClipEncoder -- records its own
+    """Stands in for nodes.model.clip_encoder.SDXLClipEncoder -- records its own
     construction args, exposes just enough (.clip_model, ._embedder,
     .device, .dtype, .unload()) for SDXLTextEncoder's real, unpatched
     offload()/reload()/release()/footprint_bytes() to work against it
     for real, not further mocked -- mirrors the real class's own
-    unload() exactly (core/clip_encode.py's SDXLClipEncoder.unload():
+    unload() exactly (nodes/model/clip_encoder.py's SDXLClipEncoder.unload():
     move clip_model to CPU, set self.device = "cpu")."""
 
     def __init__(self, clip_sd, device):

@@ -5,7 +5,7 @@ on every single call -- appropriate for unload()'s own "done with this
 encoder for the rest of the run" use, not for a per-step offload cycle;
 see that method's own docstring and docs/known-issues/pending-testing.md).
 
-A minimal stand-in for core.clip_encode.SDXLClipEncoder -- offload()/
+A minimal stand-in for nodes.model.clip_encoder.SDXLClipEncoder -- offload()/
 reload() only ever touch .clip_model/._embedder/.device, so a bare
 object with a real nn.Linear for clip_model (real .cpu()/.to() calls,
 not mocked) is enough; no need for the full checkpoint-loading machinery

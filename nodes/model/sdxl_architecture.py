@@ -13,7 +13,7 @@ Each method delegates to an existing implementation rather than
 duplicating it:
 - split_checkpoint(): resource_inspection.py's classify_key(), the
   SDXL key-prefix classifier.
-- build_text_encoder(): core.clip_encode.SDXLClipEncoder wrapped in
+- build_text_encoder(): clip_encoder.SDXLClipEncoder wrapped in
   text_encoder.py's SDXLTextEncoder, exactly as SDXLTextEncoderNode
   already builds it.
 - inject_lora(): lora_injector.py's build_lora_injected_unet().
@@ -44,11 +44,11 @@ class SDXLArchitecture:
         """A single TextEncoder masking SDXL's two real text encoders
         (CLIP-L, OpenCLIP-G) behind one object.
 
-        core.clip_encode.SDXLClipEncoder hardcodes its own dtype
+        clip_encoder.SDXLClipEncoder hardcodes its own dtype
         (float16 compute, bfloat16 output) -- there's no parameter to
         override it yet, so a dtype choice for CLIP isn't honored here,
         only whatever SDXLClipEncoder itself uses."""
-        from core.clip_encode import SDXLClipEncoder
+        from .clip_encoder import SDXLClipEncoder
 
         from .text_encoder import SDXLTextEncoder
 

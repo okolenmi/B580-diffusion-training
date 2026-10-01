@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-import core.clip_encode as clip_encode_module
+import nodes.model.clip_encoder as clip_encode_module
 from nodes.model.lora_training_config import LoRATrainingConfigNode
 from nodes.model.lora_training_resources import SDXL_LoraTrainer, SDXL_LoRATrainingResources
 from nodes.smoke_tests.smoke_test_gradient_checkpointing import _install_stub_comfy_checkpoint_module

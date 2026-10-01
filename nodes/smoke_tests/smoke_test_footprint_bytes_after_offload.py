@@ -11,7 +11,7 @@ two that didn't) and return 0 from footprint_bytes() while it's set.
 
 Two of the four (SDXLTextEncoder, ComfyUNetTrainableModel) need a real
 torch environment and are exercised here against minimal fakes rather
-than full core.clip_encode.SDXLClipEncoder/core.unet_wrapper.ComfyUNetWrapper
+than full clip_encoder.SDXLClipEncoder/core.unet_wrapper.ComfyUNetWrapper
 objects (heavier, legacy, ComfyUI-adjacent classes) -- the fakes satisfy
 exactly the attributes/methods each footprint_bytes()/offload()/reload()
 actually touches, confirmed by reading each directly, not guessed. The

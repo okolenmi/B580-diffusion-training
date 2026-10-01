@@ -34,11 +34,18 @@ gets retired. The `optimizer/` domain is fully unified this way as of
 2026-10-02: the last holdout, `AdafactorOptimizerNode`, is deleted, and
 `nodes/optimizer/` now imports nothing from `core.optimizers` (see
 `docs/known-issues/open.md` for the one unmeasured performance trade that
-retirement accepted). LoRA/UNet injection, text encoding, and dataset
-ingestion still wrap `core/`/`manager/` directly, with no independent
-alternative built (tracked in `docs/design/09-prioritized-backlog.md`).
-Wrapping is the fallback for a domain nobody's rewritten yet, not a
-destination.
+retirement accepted). Text encoding was unwired the same way on 2026-10-02: `SDXLClipEncoder`
+moved to `nodes/model/clip_encoder.py` (it was self-contained, so this
+was a relocation, not a reimplementation), and `core/clip_encode.py` is
+now a re-export shim for `core/`'s and `manager/`'s own use.
+
+LoRA/UNet injection and dataset ingestion still wrap `core/`/`manager/`
+directly (tracked in `docs/design/09-prioritized-backlog.md`), and those
+are harder than the two that just went: `core.unet_wrapper.ComfyUNetWrapper`
+is the model every LoRA path in the graph is built on, and `core.lora`'s
+`_inject_lora` is a tree-walk that `nodes/` substitutes its own layer
+classes into by patching module-level names. Wrapping is the fallback
+for a domain nobody's rewritten yet, not a destination.
 
 ## Design principles, in short
 

@@ -82,7 +82,7 @@ this codebase can act on yet.
 `ResBlock.forward()` passes its own `emb` (timestep embedding) alongside
 `x` -- not just closed over -- so a recompute rebuilds a real
 differentiable graph through it too, not only through `x`. This project
-always freezes the text encoder (`core/clip_encode.py`'s
+always freezes the text encoder (`clip_encoder.py`'s
 `SDXLClipEncoder`, unconditional `p.requires_grad_(False)` -- checked
 directly), so `context.requires_grad` is `False` in every real run
 today and this makes no observable difference now -- included anyway

@@ -12,10 +12,10 @@ expected, and a more important one attached.
 
 | Consumer | How it reaches `core/` | Breaks if `core/` goes |
 |---|---|---|
-| `convert.py` (CLI) | `from core.cli import main` | The command-line trainer, entirely |
+| `python -m core.cli` (CLI) | direct; also the backend's spawned subprocess | The command-line trainer, entirely |
 | `backend/` (web) | **spawns `<venv python> -m core.cli --config ...`** as the training subprocess (`infrastructure/subprocess_gateway.py:124`) | Every run started from the UI |
-| `manager/builder.py` | imports 9 modules (`lora`, `clip_encode`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`) | Dataset ingestion, and therefore every run that has data |
-| `nodes/` (rewrite) | lazy imports of `core.lora`, `core.optimizers`, `core.clip_encode`, `core.unet_wrapper` | LoRA injection, the text encoder, the UNet wrapper, one optimizer node |
+| `manager/builder.py` | imports 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, and `clip_encode` via its shim) | Dataset ingestion, and therefore every run that has data |
+| `nodes/` (rewrite) | lazy imports of `core.lora` and `core.unet_wrapper` only | LoRA injection and the UNet wrapper |
 
 The second row is the one that surprises people. The node-graph rewrite
 is a *graph around* the trainer, not a replacement for it: pressing
@@ -24,13 +24,25 @@ process and then supervises it. The dataset path is the same shape --
 the backend's ingest worker calls `manager.builder.DataTaskRunner`,
 which calls into `core/`.
 
-23 of the 66 `nodes/` smoke tests import `core.*` directly (every LoRA
-test, every optimizer equivalence test, the diffusion equivalence test),
-so the test suite would go red immediately.
+**Shrinking, as of 2026-10-02.** The optimizer domain and text encoding
+have been unwired -- `nodes/optimizer/` imports nothing from
+`core.optimizers`, and `SDXLClipEncoder` lives in `nodes/model/`. What
+remains is `core.lora` and `core.unet_wrapper`, and both are load-bearing
+for more than one consumer: `core.unet_wrapper.ComfyUNetWrapper` is the
+model that `nodes/model/lora_injector.py:228` wraps for every LoRA path in
+the graph, and `core.lora._inject_lora` is the tree-walk whose
+module-level `LoRALinear`/`LoRAConv2d` names
+`nodes/model/adapter_injection.py` patches in place to substitute the
+rewrite's own DoRA/NF4 layers. Neither is a thin import; see
+`docs/design/09-prioritized-backlog.md`.
+
+Smoke tests still import `core.*` directly as *reference
+implementations* -- that is the point of an equivalence test, and those
+references remain valid precisely because `core/` is unchanged.
 
 ## Module by module
 
-### Reimplemented in `nodes/` (legacy-only copies remain)
+### Reimplemented or relocated into `nodes/` (legacy-only copies remain)
 
 Only the optimizer *algorithms* got this treatment, and the design docs
 are right about it: `nodes/optimizer/algorithms/` holds pure
@@ -39,7 +51,7 @@ equivalence-tested against the `core/` version it replaces.
 
 | `core/` module | Replacement | Notes |
 |---|---|---|
-| `optimizers.py` (1,410 lines) | `nodes/optimizer/algorithms/{adafactor,came,adamw}.py` | Algorithm math only. The *batching* and *fused* strategies still live in `core/` and are still wrapped. |
+| `optimizers.py` (1,410 lines) | `nodes/optimizer/` (Algorithm + ExecutionStrategy) | **Fully unwired 2026-10-02.** `nodes/optimizer/` imports nothing from `core.optimizers`; the last holdout node is deleted. |
 | `noise_schedule.py` (schedule + conversions only) | `nodes/components/diffusion.py` | A fresh `NoiseSchedule`/`Parameterization` pair, and the rewrite is strictly *ahead* -- `RescaledZeroTerminalSNRSchedule` has no `core/` equivalent. `sample_timestep` and `T_MODES` did **not** move. |
 | `schedules.py` (cosine/constant/warmup only) | `nodes/train/schedule.py` | `make_poly_lr` did not move. |
 
@@ -49,10 +61,10 @@ equivalence-tested against the `core/` version it replaces.
 |---|---|
 | `lora.py` (556) | `nodes/model/adapter_injection.py` **monkeypatches `core.lora.LoRALinear`/`LoRAConv2d`** to swap in the rewrite's own layer classes; `lora_class_cache.py`, `lora_gate.py`, `lora_injector.py`, `lora_checkpoint_loader.py`, `train/step_pipeline.py`, `train/managed.py`, `train/t_probe.py` all import from it. 150 references. |
 | `unet_wrapper.py` | `nodes/model/lora_injector.py:228`, `manager/builder.py:25` -- the ComfyUI UNet adapter itself |
-| `clip_encode.py` | `nodes/model/text_encoder.py:168`, `sdxl_architecture.py:51`, `manager/builder.py:20` -- the SDXL text encoder |
-| `optimizers.py` (strategies) | `nodes/optimizer/adafactor.py:103` still builds a `ChunkedXPUAdafactor`; that node is the last un-retired legacy wrapper (tracked in `docs/design/09-prioritized-backlog.md`), and it is still graph-reachable via `pkgutil` discovery |
+| `clip_encode.py` | **unwired 2026-10-02** -- the implementation now lives at `nodes/model/clip_encoder.py`; `core/clip_encode.py` is a re-export shim for `core/`'s and `manager/`'s own use. `manager/builder.py:20` is the remaining non-`core/` caller |
+| ~~`optimizers.py` (strategies)~~ | **No longer wrapped.** The `AdafactorOptimizerNode` that built a `ChunkedXPUAdafactor` is deleted; see `docs/known-issues/open.md` for the one unmeasured performance trade that retirement accepted |
 | `config_io.py`, `config_model.py` | `backend/infrastructure/{core_config_inspector,subprocess_gateway,config_schema}.py` -- the backend reads and validates configs through them |
-| `comfy_setup.py` | `backend/infrastructure/graph/runtime.py:62` (`xpu_empty_cache` as the graph runtime's memory releaser), `manager/builder.py` |
+| `comfy_setup.py` | `backend/infrastructure/graph/runtime.py:62` (`xpu_empty_cache` as the graph runtime's memory releaser), `manager/builder.py`. `nodes/` does **not** use this -- `nodes/components/device.py`'s `_XPUDeviceContext` is the rewrite, and `smoke_test_device_context_equivalence.py` proves the two agree |
 | `xpu_env.py` | `backend/cli.py:41` -- the backend calls this before anything spawns a child, because SYCL reads these at its own runtime init |
 | `noise_schedule.py` (partly) | the schedule and eps/vpred conversions **are** reimplemented in `nodes/components/diffusion.py`; but `sample_timestep` and the five `T_MODES` distributions are **not**, and they reach the rewrite one hop away through `manager/t_sampling.py` (see below) |
 | `model_io.py` (partly) | the transforms are reimplemented as `KarrasInputScaler` / `Parameterization` objects; `make_init_noise` is not, and `manager/builder.py` uses it |
@@ -76,7 +88,7 @@ the rewrite *through* `manager/` as well:
 A plan of "delete `core/`, keep the rewrite" therefore breaks dataset
 ingestion and dataset `t_mode`, not just the node graph.
 
-### Legacy-only (reachable only via `convert.py` -> `core.cli`, or `manager/` alone)
+### Legacy-only (reachable only via `core.cli`, or `manager/` alone)
 
 These are *not* imported by the rewrite: `trainer.py`, `train_step.py`,
 `optimizer_builder.py`, `progress_writer.py`, `save.py`, `timer.py`,
@@ -223,12 +235,13 @@ could regress.
 
 Not "removing a dead folder". It would mean:
 
-1. `convert.py` stops working, and `run_server.sh`'s Start button stops
-   producing a training run.
+1. The TOML trainer stops working (`python -m core.cli`, which is also
+   what `run_server.sh`'s Start button spawns), so no run is produced at
+   all.
 2. Dataset ingestion stops, so no run has data.
-3. The rewrite loses LoRA injection, the text encoder, the UNet wrapper
-   and one optimizer node -- roughly the domains the design docs list as
-   "not yet rewritten".
+3. The rewrite loses LoRA injection and the UNet wrapper -- the two
+   domains the design docs list as "not yet rewritten". Text encoding
+   and the whole optimizer domain are already clear of `core/`.
 4. 23 of 66 smoke tests fail.
 
 Removing it is only meaningful as a *migration* -- port the remaining

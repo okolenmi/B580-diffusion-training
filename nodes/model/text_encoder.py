@@ -83,7 +83,7 @@ class SDXLTextEncoder(TextEncoder):
         self._legacy.unload()
 
     def footprint_bytes(self) -> int:
-        """core.clip_encode.SDXLClipEncoder has no footprint accessor of
+        """clip_encoder.SDXLClipEncoder has no footprint accessor of
         its own -- summed here directly from clip_model's (always real)
         and _embedder's (None until encode_for_unet()'s first real call,
         via _get_embedder()'s lazy construction) parameters/buffers.
@@ -106,7 +106,7 @@ class SDXLTextEncoder(TextEncoder):
         return total
 
     def offload(self) -> None:
-        """A direct move, not unload() -- unload() (core.clip_encode.
+        """A direct move, not unload() -- unload() (clip_encoder.
         SDXLClipEncoder.unload()) also calls gc.collect() +
         empty_cache() internally, appropriate for a one-time "done with
         this encoder for the rest of the run" call, real, avoidable cost
@@ -165,7 +165,7 @@ class SDXLTextEncoderNode(TextEncoderNode):
 
     def build(self, **inputs) -> dict[str, TextEncoder]:
         self.validate_inputs(inputs)
-        from core.clip_encode import SDXLClipEncoder
+        from .clip_encoder import SDXLClipEncoder
 
         weights: ModelWeights = inputs["weights"]
         legacy = SDXLClipEncoder(weights.non_unet_sd,

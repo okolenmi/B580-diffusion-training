@@ -5,9 +5,9 @@ The only fused Adafactor node in nodes/optimizer/ now -- the legacy
 fused_adafactor.py (FusedAdafactorOptimizerNode, wrapped
 core.optimizers.FusedXPUAdafactor) was deleted once this Node was
 confirmed equivalent, including for small (< 10,000 element)
-parameters -- see below (docs/CLEANUP_TODO.md, where this was tracked
-during development, has since been deleted; the full history is in git
-log for this file and nodes/optimizer/algorithms/adafactor.py).
+parameters (the tracking doc for that work was deleted once nothing was
+left in it; git log for this file and
+nodes/optimizer/algorithms/adafactor.py has the full history).
 
 **Matches FusedXPUAdafactor's small-parameter formula, not just its
 large-parameter one -- confirmed on real torch, not just reasoned

@@ -131,11 +131,10 @@ two concerns that were ever exercised in practice (`checkpointing_strategy`,
 anything outside that same smoke test either, `group_policy` being
 separate as described above. Removed along with its smoke test.
 
-`ResourceBudget` itself is implemented but still inert -- nothing
-constructs or consumes one in a live path yet. `CheckpointPlacementPolicy`
-(2.3) is its first designed consumer, still blocked on the per-block
-profiling instrumentation described there, not on `ResourceBudget`
-itself.
+`ResourceBudget` survived them and is now **live**:
+`VRAMBudgetControllerNode` constructs one and
+`BudgetedResourceControlHandle` consumes it (a `ResourceBudget.strict`
+mode was added later -- offload-then-continue versus refuse outright).
 
 ## 2.3 Activation checkpointing: strategy and placement
 
@@ -270,8 +269,8 @@ usage was invisible to anything outside itself.
 conformance gap left open once `ResourceCoordinator`/`OffloadOrchestrator`
 (5.1, 5.2) actually needed a second real `DeviceResident` besides the
 model to coordinate anything meaningful. The aggregate "where did my
-memory go" report this enables (5.5, `ResourceProfile`) is itself still
-not built -- see that section.
+memory go" report this enables (5.5, `ResourceProfile`) was built with
+it.
 
 ## 2.5 Dataset prefetching, kept honest about what it does and doesn't save
 

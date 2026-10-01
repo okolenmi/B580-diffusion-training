@@ -174,7 +174,7 @@ than inventing a second deprecation story.
 logic; `ComfyUNetLoRANode.build()` is a thin wrapper resolving its own
 `Port` defaults into it -- `weights`/`device`/`dtype`/`rank`/`alpha`/
 `scaling_policy`/`dropout`/`target_modules`/`use_checkpoint`/
-`resource_policy`/`adapter_strategy`/`frozen_weight_store_factory`, one
+`adapter_strategy`/`frozen_weight_store_factory`, one
 real signature, one real source of truth for what "the default LoRA
 injection" means. Verified,
 `nodes/smoke_tests/smoke_test_lora_injector_extraction.py` (patches
@@ -187,7 +187,7 @@ resolution into the extracted function is correct for both defaults
 and explicit overrides -- a real behavior-preservation proof, not just
 "doesn't crash." Adjacent tests
 (`smoke_test_gradient_checkpointing.py`, `smoke_test_adapter_injection.py`,
-`smoke_test_dataset_model_contracts.py`, `smoke_test_resource_policy.py`)
+`smoke_test_dataset_model_contracts.py`)
 still pass.
 
 ---

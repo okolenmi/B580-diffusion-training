@@ -57,8 +57,13 @@ class SDXLArchitecture:
     def inject_lora(self, unet_sd: dict, **kwargs):
         """LoRA injection -- delegates to build_lora_injected_unet();
         kwargs (device/dtype/rank/alpha/scaling_policy/dropout/
-        target_modules/use_checkpoint/resource_policy/adapter_strategy/
-        frozen_weight_store_factory) pass straight through to it."""
+        target_modules/use_checkpoint/adapter_strategy/
+        frozen_weight_store_factory) pass straight through to it.
+
+        No ``resource_policy``: that parameter existed while the
+        (since deleted) ResourcePolicy wrapper did, and passing it now
+        is a TypeError -- see nodes/resource_budget.py for why it went.
+        """
         from .handle import ModelWeights
         from .lora_injector import build_lora_injected_unet
 

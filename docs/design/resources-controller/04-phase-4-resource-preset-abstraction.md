@@ -81,7 +81,7 @@ happening to work. Extended (not forked) the existing `_RecordingWrapper`/
 were missing once `offload()`/`reload()`/`release()` needed to
 genuinely exercise them, rather than a second, subtly-different copy.
 Adjacent tests (`smoke_test_resource_coordinator`,
-`smoke_test_resource_policy`, `smoke_test_resource_inspection`,
+`smoke_test_resource_inspection`,
 `smoke_test_gradient_checkpointing`, `smoke_test_dataset_model_contracts`,
 and the extraction test itself after being extended) still pass. No
 non-CPU device is available in this sandbox, so the offload/reload

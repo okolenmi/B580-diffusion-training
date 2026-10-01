@@ -261,7 +261,8 @@ class AdaptiveResidencyController:
     or variable-resolution image) wasn't enough headroom on its own --
     the dominant, unmanaged cost was activation memory, which neither
     this controller nor NF4/Int8 weight quantization touches at all
-    (see docs/design/resources-controller/09-...md's own addendum for
+    (see docs/design/resources-controller/
+    09-trainer-integration-and-vram-safety.md's addendum for
     the full reasoning, including why NF4/Int8's *storage* savings
     don't translate to comparable *peak-during-compute* savings -- both
     dequantize to a real, transient full-precision buffer on every use,

@@ -23,11 +23,10 @@ rank)` structurally needs one, and the original signature omitted it),
 and an `original` parameter alongside `frozen` (`LoRALinear`/`LoRAConv2d`
 need the whole original `nn.Linear`/`nn.Conv2d` -- bias, in/out features,
 conv stride/padding/dilation/groups -- not just a weight tensor).
-`PlainLoRAAdapter` only actually honors `BF16WeightStore` today and
-checks that at `wrap()` time rather than silently ignoring `frozen` --
-see `nodes/model/adapter_strategy.py`'s own docstring for exactly why
-that's correct for `BF16WeightStore` and would not be for a real
-`NF4WeightStore` (3.3).
+Both adapters check the store at `wrap()` time rather than silently
+ignoring `frozen`, and both now honor `BF16WeightStore` *and*
+`NF4WeightStore` (3.3) -- see `nodes/model/adapter_strategy.py`. An
+unrecognized store type is refused there rather than dropped.
 
 **Implemented**: `DoRAAdapter` -- Liu et al., "DoRA: Weight-Decomposed
 Low-Rank Adaptation" (arXiv:2402.09353, ICML 2024 Oral). `nodes/model/dora_layer.py`'s
@@ -65,8 +64,11 @@ data").
 
 **Built via composition over a real `core.lora.LoRALinear`/`LoRAConv2d`**,
 not a second implementation of parameter setup -- only the forward math
-is genuinely new. Same real limit `PlainLoRAAdapter` has today: only
-`BF16WeightStore` honored (`NF4WeightStore`, 3.3, doesn't exist yet).
+is genuinely new. Same store support as `PlainLoRAAdapter`, including
+`NF4WeightStore` (3.3) via `NF4LoRALinear`/`NF4LoRAConv2d`.
+
+**Still not honored:** `DoRAAdapter` + `NF4WeightStore` together (the
+QDoRA combination) -- a real, separate follow-up, not done here.
 
 **Checkpoint save/load: now a real round-trip for the common case, one
 honestly-scoped gap left for phase-splitting.** `DoRALinear.load_lora_weights()`
@@ -225,16 +227,17 @@ itself already close to bitsandbytes' own reported number, suggesting
 the choice of second-level scheme matters less than getting the primary
 4-bit NF4 quantization right).
 
-**Not yet wired into a real forward pass.** `materialize()` exists
-specifically so an `AdapterStrategy` could call it each forward for a
-fresh dequantized tensor, but `PlainLoRAAdapter`/`DoRAAdapter` both still
-only honor `BF16WeightStore` and read `core.lora.LoRALinear`/
-`LoRAConv2d`'s own `base_weight` buffer directly -- `materialize()` is
-never actually called from a real forward path yet. That, plus the
-diffusion-specific quality caveat above (which needs an actual training
-run on this project's own UNet to check, not assumed from the LLM
-literature), are both real, separate follow-up work -- see the backlog,
-section 10.
+**Wired into a real forward path.** `materialize()` is called fresh
+inside every `NF4LoRALinear`/`NF4LoRAConv2d` `forward()` (the bf16
+result is never cached -- see the memory note above), which is what
+makes the "dequantize to a transient full-precision buffer on every use"
+cost real rather than hypothetical.
+
+**Still open, and it is validation rather than construction:** the
+diffusion-specific quality caveat above. Nobody has run this against
+this project's own UNet and looked at the pictures; the ~0.37
+bits/param measurement says the *storage* is right, not that the
+adapter is. Needs an actual training run -- see the backlog.
 
 ### 3.4 Per-parameter-group learning rates
 

@@ -110,35 +110,16 @@ class PipelineFactory:
 
 ## 5.5 `ResourceProfile`: one aggregate VRAM report
 
-**Not implemented -- still open, and cheaper to build now than when
-this was written**, since every `DeviceResident` it would aggregate
-(`OptimizerHandle`, `TrainableModel`, `TextEncoder`) is now real:
+**Built** -- `nodes/memory/profile.py`, wired into `MonitoringPhase`. It
+generalizes what `profile=True` already reports (allocated/reserved MB)
+into a per-component breakdown: "how much of my VRAM is the text
+encoder cache vs. optimizer scratch vs. the model itself," which a single
+allocator-level number cannot answer.
 
-```python
-@dataclass(frozen=True)
-class ResourceProfile:
-    per_resident_bytes: dict[str, int]
-    memory_manager_stats: dict[str, Any]
-    allocator_stats: dict[str, float] | None  # from DeviceContext.memory_stats()
-
-    @classmethod
-    def capture(cls, coordinator: ResourceCoordinator, memory: "MemoryManager",
-                device_ctx: DeviceContext) -> "ResourceProfile":
-        return cls(
-            per_resident_bytes={name: r.footprint_bytes()
-                                 for name, r in coordinator._residents.items()},
-            memory_manager_stats=memory.stats(),
-            allocator_stats=device_ctx.memory_stats(),
-        )
-```
-
-Directly generalizes what `profile=True` already reports (allocated/
-reserved MB) into a per-component breakdown -- "how much of my VRAM is
-the text encoder cache vs. optimizer scratch vs. the model itself," which
-the current single allocator-level number can't answer. Real, standing
-diagnostic value for the still-open VRAM-pressure investigation in
-`docs/known-issues/open.md` -- see the backlog,
-`docs/design/09-prioritized-backlog.md` section 10.
+One known gap, recorded where it was found rather than forgotten: there
+is still no shared `MemoryManager` reachable from
+`SupervisedLoRATrainerNode.build()`, so `memory_manager_stats` comes back
+`None` on that route.
 
 ## 5.6 Concurrency contract, stated explicitly
 

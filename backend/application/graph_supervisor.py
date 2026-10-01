@@ -22,8 +22,9 @@ races resolve deterministically):
    ``finished`` -- and CASes ``running -> final``. A lost CAS means the
    stop request already wrote ``stopped``; this thread publishes
    nothing.
-4. ``release_memory`` always runs (device memory returned to the
-   driver), and the cancel event is always unregistered.
+4. The cancel event is always unregistered. Device memory is *not*
+   this class's business: ``GraphRuntime.execute`` releases it in its
+   own ``finally``, so the supervisor cannot forget it (docs 08 S-05).
 
 A crashed supervisor thread best-effort fails its row instead of
 leaving ``running`` stuck (which would block the single-active check

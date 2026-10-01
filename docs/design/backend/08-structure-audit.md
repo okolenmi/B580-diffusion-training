@@ -33,8 +33,8 @@ deletes twenty copies of a rule outranks an item that tidies one class.
 | [S-12](#s-12) | domain | The terminal-state set is hand-maintained beside the transition table, twice per aggregate | Med | **Fixed** (S-batch 4) |
 | [S-13](#s-13) | domain | Two lifecycle machines, two supervisors, two reconcilers, no shared abstraction | Med | **Fixed** (S-batch 4, S-batch 5) |
 | [S-14](#s-14) | domain | `ProgressSample` is interrogated by field-name reflection in the supervisor | Med | **Fixed** (S-batch 5) |
-| [S-15](#s-15) | domain | Two `Run` invariants enforced in the supervisor instead of the entity | Med | **Fixed** (S-batch 5) |
-| [S-16](#s-16) | domain | Rehydration has no sanctioned factory, so a loaded row can violate cross-field rules | Med | **Fixed** (S-batch 5) |
+| [S-15](#s-15) | domain | Two `Run` invariants enforced in the supervisor instead of the entity | Med | **Fixed** (S-batch 4) |
+| [S-16](#s-16) | domain | Rehydration has no sanctioned factory, so a loaded row can violate cross-field rules | Med | **Fixed** (S-batch 4) |
 | [S-17](#s-17) | domain | `DatasetTask` has no entity: its state machine lives in a port plus SQL literals | High | Deferred |
 | [S-18](#s-18) | domain | `GraphDefinition` is shallow-frozen and its structural rules are enforced in an adapter | High | Deferred |
 | [S-19](#s-19) | ports | `MonitorBus` hands the application layer an `asyncio.Queue` of pre-rendered SSE frames | High | Deferred |
@@ -186,13 +186,17 @@ Two of everything
 
 `Run` and `GraphExecution` each carried their own `_ALLOWED`,
 `_transition`, `_require_status`, `_require_id`, `_emit` and event
-buffer; each had a supervisor with its own `_fail_leftover` and its own
-reconciler. `domain/lifecycle.py` now owns the machine (transition
-table, terminal derivation, event buffer, identifier requirement) as a
-`StatusMachine[S]` the two aggregates hold; the application-side
-"finalise through compare-and-swap, then publish" sequence is one
-`RunLifecycleWriter`/`ExecutionLifecycleWriter` pair instead of six
-hand-rolled copies.
+buffer. `domain/lifecycle.py` now owns the guard as a
+`StatusMachine[S]` the two aggregates *hold* -- deliberately not a base
+class, because what a machine does (watch a status) is smaller than what
+an aggregate is, and inheriting would couple the two lifecycles for no
+gain. The transition table stays beside its enum in `value_objects`,
+which is also what makes `status.is_terminal` derivable (S-12).
+
+The application half -- "finalise through compare-and-swap, then
+publish", hand-rolled six times across the two supervisors, two stop use
+cases and two reconcilers -- is the `RunLifecycleWriter` /
+`ExecutionLifecycleWriter` pair (S-batch 5).
 
 ### S-14
 Reflection over `ProgressSample`
@@ -211,14 +215,22 @@ Invariants enforced in a background thread
 `record_progress`, pinned in `test_domain_run.py` rather than through
 the supervisor.
 
+Moving the rule up also fixed a defect it exposed: `record_progress`
+wrote `done_steps` before checking `total_steps`, so a sample carrying
+a valid step count and an impossible total left the step count applied
+and the call rejected. It now validates everything before writing
+anything.
+
 ### S-16
 Rehydration without a factory
 
 The public constructor was the only way to load a row, and it checked
 single fields only, so a loaded aggregate could be `running` with no
 `started_at`, or carry `done_steps > total_steps`. `Run.restore()` and
-`GraphExecution.restore()` are the sanctioned rehydration paths and
-validate the cross-field rules once.
+`GraphExecution.restore()` are the sanctioned rehydration paths, they
+validate the cross-field rules once, and both persistence mappers now go
+through them -- so an impossible row is reported against the row that
+wrote it rather than three transitions later.
 
 ### S-24
 Closed vocabularies as bare strings

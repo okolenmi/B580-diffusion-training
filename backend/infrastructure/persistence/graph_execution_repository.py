@@ -47,7 +47,9 @@ def _decode_results(raw: str) -> tuple[NodeResult, ...]:
 
 
 def _row_to_execution(row) -> GraphExecution:
-    return GraphExecution(
+    # restore(), not GraphExecution(): see the run mapper's note
+    # (docs 08 S-16).
+    return GraphExecution.restore(
         id=ExecutionId(row["id"]),
         status=GraphStatus(row["status"]),
         graph=GraphDefinition.from_dict(json.loads(row["graph"])),

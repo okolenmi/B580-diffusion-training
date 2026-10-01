@@ -483,4 +483,95 @@ check(
     "deletion published its event",
 )
 
+# ==========================================================================
+# Section G: encapsulation, rehydration and derived terminal-ness
+# ==========================================================================
+print("-- encapsulation --")
+
+guard = GraphExecution.create(graph=make(node("s", "ScaleNode")), created_at=NOW)
+guard.assign_id(ExecutionId(11))
+guard.mark_running(at=NOW)
+for field, value, label in (
+    ("status", GraphStatus.FINISHED, "status"),
+    ("results", (), "results"),
+    ("finished_at", None, "finished_at"),
+    ("graph", make(node("z", "ZeroNode")), "graph"),
+    ("error", "boom", "error"),
+):
+    try:
+        setattr(guard, field, value)
+        check(False, f"{label} must not be writable from outside")
+    except AttributeError:
+        check(True, f"{label} has no setter")
+check(guard.status is GraphStatus.RUNNING, "the refused writes changed nothing")
+
+print("-- terminal-ness is derived --")
+from backend.domain.value_objects import GRAPH_TRANSITIONS  # noqa: E402
+
+check(
+    GraphStatus.FINISHED.is_terminal
+    and GraphStatus.ERROR.is_terminal
+    and GraphStatus.STOPPED.is_terminal,
+    "finished/error/stopped are terminal",
+)
+check(
+    not GraphStatus.QUEUED.is_terminal and not GraphStatus.RUNNING.is_terminal,
+    "queued/running are not",
+)
+check(
+    all(
+        status.is_terminal == (not GRAPH_TRANSITIONS[status])
+        for status in GraphStatus
+    ),
+    "terminal == 'this state has no way out', for every state",
+)
+check(
+    len(GRAPH_TRANSITIONS) == len(list(GraphStatus)),
+    "the table names every state",
+)
+
+print("-- restore() checks cross-field rules --")
+_graph = make(node("s", "ScaleNode"), node("v", "ZeroNode"))
+
+
+def _row(**overrides):
+    base = dict(
+        id=ExecutionId(12),
+        status=GraphStatus.RUNNING,
+        graph=_graph,
+        created_at=NOW,
+        updated_at=NOW,
+        started_at=NOW,
+    )
+    base.update(overrides)
+    return base
+
+
+check(
+    GraphExecution.restore(**_row()).status is GraphStatus.RUNNING,
+    "a sane row loads",
+)
+for overrides, fragment, label in (
+    (dict(status=GraphStatus.RUNNING, started_at=None), "started_at is null",
+     "running without started_at"),
+    (dict(status=GraphStatus.STOPPED, finished_at=None), "finished_at is null",
+     "terminal without finished_at"),
+    (
+        dict(
+            status=GraphStatus.ERROR,
+            finished_at=NOW,
+            results=(NodeResult(node_id="a", ok=True),
+                     NodeResult(node_id="b", ok=True),
+                     NodeResult(node_id="c", ok=True)),
+        ),
+        "results for a",
+        "more results than the graph has nodes",
+    ),
+):
+    try:
+        GraphExecution.restore(**_row(**overrides))
+        check(False, f"{label} must be rejected on load")
+    except DomainError as exc:
+        check(fragment in str(exc), f"{label} refused (got {exc})")
+
 finish()

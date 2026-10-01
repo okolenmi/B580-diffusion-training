@@ -1,4 +1,19 @@
-"""Value objects shared across the domain."""
+"""Value objects shared across the domain.
+
+Each lifecycle enum carries its own transition table, and terminal-ness
+is *derived* from that table rather than restated beside it. The two
+used to disagree by construction: adding a terminal state meant adding
+it to ``_ALLOWED`` (empty row) and to a separate ``_TERMINAL`` set, and a
+state that was terminal in one list was still allowed to move in the
+other (docs 08 S-12).
+
+    RUN_TRANSITIONS[RunStatus.CREATED]  -- where a created run may go
+    not RUN_TRANSITIONS[some_status]    -- is it terminal?
+
+The machine that enforces the table is ``domain.lifecycle.StatusMachine``;
+the table itself stays next to the enum it describes, because that is
+where a reader looks for "what are the states".
+"""
 
 from __future__ import annotations
 
@@ -33,11 +48,24 @@ class RunStatus(str, Enum):
 
     @property
     def is_terminal(self) -> bool:
-        """Terminal states never transition again."""
-        return self in _TERMINAL
+        """Terminal states never transition again (derived, see below)."""
+        return not RUN_TRANSITIONS[self]
 
 
-_TERMINAL = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
+RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
+    # FAILED is reachable from CREATED: a launch can fail before the
+    # process ever starts (missing interpreter, unreadable config), and
+    # startup reconciliation fails runs abandoned mid-launch.
+    RunStatus.CREATED: frozenset(
+        {RunStatus.RUNNING, RunStatus.CANCELLED, RunStatus.FAILED}
+    ),
+    RunStatus.RUNNING: frozenset(
+        {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+    ),
+    RunStatus.COMPLETED: frozenset(),
+    RunStatus.FAILED: frozenset(),
+    RunStatus.CANCELLED: frozenset(),
+}
 
 # --------------------------------------------------------------------------
 # Graph executions (M4)
@@ -67,10 +95,21 @@ class GraphStatus(str, Enum):
 
     @property
     def is_terminal(self) -> bool:
-        """Terminal states never transition again."""
-        return self in _TERMINAL_GRAPH
+        """Terminal states never transition again (derived, see below)."""
+        return not GRAPH_TRANSITIONS[self]
 
 
-_TERMINAL_GRAPH = frozenset(
-    {GraphStatus.FINISHED, GraphStatus.ERROR, GraphStatus.STOPPED}
-)
+GRAPH_TRANSITIONS: dict[GraphStatus, frozenset[GraphStatus]] = {
+    # ERROR is reachable from QUEUED: startup reconciliation fails rows a
+    # dead process never got to, and validation-layer surprises can fail a
+    # row before its thread claims it.
+    GraphStatus.QUEUED: frozenset(
+        {GraphStatus.RUNNING, GraphStatus.STOPPED, GraphStatus.ERROR}
+    ),
+    GraphStatus.RUNNING: frozenset(
+        {GraphStatus.FINISHED, GraphStatus.ERROR, GraphStatus.STOPPED}
+    ),
+    GraphStatus.FINISHED: frozenset(),
+    GraphStatus.ERROR: frozenset(),
+    GraphStatus.STOPPED: frozenset(),
+}

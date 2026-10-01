@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.domain.entities.run import Run
 from backend.domain.exceptions import DomainError, InvalidTransitionError
-from backend.domain.value_objects import RunStatus
+from backend.domain.value_objects import RUN_TRANSITIONS, RunId, RunStatus
 from backend.tests.support import FakeClock, check, finish
 
 
@@ -207,10 +207,127 @@ def test_invariants() -> None:
         check(run.done_steps == 0, "negative progress rejected without mutation")
 
 
+def test_encapsulation() -> None:
+    print("\n== state is read-only; the mutators are the only writers ==")
+    clock = FakeClock()
+    run = _persisted(clock)
+    run.mark_started(pid=11, at=clock.now())
+
+    for field, value, label in (
+        ("status", RunStatus.COMPLETED, "status"),
+        ("done_steps", -5, "done_steps"),
+        ("finished_at", None, "finished_at"),
+        ("config_path", "somewhere/else.toml", "config_path"),
+        ("pid", None, "pid"),
+        ("total_steps", 1, "total_steps"),
+    ):
+        try:
+            setattr(run, field, value)
+            check(False, f"{label} must not be writable from outside")
+        except AttributeError:
+            check(True, f"{label} has no setter")
+
+    check(
+        run.status is RunStatus.RUNNING and run.pid == 11,
+        "the refused writes changed nothing",
+    )
+
+
+def test_total_steps_never_shrinks() -> None:
+    print("\n== the plan only grows (docs 08 S-15) ==")
+    clock = FakeClock()
+    run = _persisted(clock)
+    run.mark_started(pid=1, at=clock.now())
+    run.record_progress(done_steps=2, at=clock.now(), total_steps=50)
+    check(run.total_steps == 50, "a larger total is adopted")
+
+    try:
+        run.record_progress(done_steps=3, at=clock.now(), total_steps=10)
+        check(False, "a smaller total must be rejected")
+    except DomainError as exc:
+        check("cannot shrink" in str(exc), f"shrinking refused (got {exc})")
+    check(
+        run.total_steps == 50 and run.done_steps == 2,
+        "the refused progress changed nothing",
+    )
+
+
+def test_restore_checks_cross_field_rules() -> None:
+    print("\n== a loaded row is validated as a whole (docs 08 S-16) ==")
+    clock = FakeClock()
+    now = clock.now()
+
+    def row(**overrides):
+        base = dict(
+            id=RunId(4),
+            status=RunStatus.RUNNING,
+            config_path="configs/x.toml",
+            mode="distillation",
+            created_at=now,
+            updated_at=now,
+            started_at=now,
+            total_steps=10,
+            done_steps=0,
+        )
+        base.update(overrides)
+        return base
+
+    loaded = Run.restore(**row())
+    check(loaded.id == 4 and loaded.status is RunStatus.RUNNING, "a sane row loads")
+
+    for overrides, fragment, label in (
+        (dict(status=RunStatus.RUNNING, started_at=None), "started_at is null",
+         "running without started_at"),
+        (dict(status=RunStatus.COMPLETED, finished_at=None), "finished_at is null",
+         "terminal without finished_at"),
+        (dict(status=RunStatus.FAILED, finished_at=now, done_steps=11), "exceeds",
+         "more steps done than planned"),
+    ):
+        try:
+            Run.restore(**row(**overrides))
+            check(False, f"{label} must be rejected on load")
+        except DomainError as exc:
+            check(fragment in str(exc), f"{label} refused (got {exc})")
+
+    # The constructor still accepts what the mappers pass, so a *new*
+    # aggregate is never built through the stricter door by accident.
+    fresh = Run(status=RunStatus.CREATED, config_path="c", mode="m",
+                total_steps=1, created_at=now)
+    check(fresh.id is None, "the constructor is unchanged for new runs")
+
+
+def test_terminal_is_derived_from_the_table() -> None:
+    print("\n== terminal-ness comes from the transition table (S-12) ==")
+    check(
+        RunStatus.COMPLETED.is_terminal and RunStatus.FAILED.is_terminal
+        and RunStatus.CANCELLED.is_terminal,
+        "the three end states are terminal",
+    )
+    check(
+        not RunStatus.CREATED.is_terminal and not RunStatus.RUNNING.is_terminal,
+        "created and running are not",
+    )
+    check(
+        all(
+            status.is_terminal == (not RUN_TRANSITIONS[status])
+            for status in RunStatus
+        ),
+        "terminal == 'this state has no way out', for every state",
+    )
+    check(
+        len(RUN_TRANSITIONS) == len(list(RunStatus)),
+        "the table names every state (a missing row would KeyError)",
+    )
+
+
 def main() -> None:
     test_happy_path()
     test_illegal_transitions()
     test_invariants()
+    test_encapsulation()
+    test_total_steps_never_shrinks()
+    test_restore_checks_cross_field_rules()
+    test_terminal_is_derived_from_the_table()
     finish()
 
 

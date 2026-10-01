@@ -46,7 +46,12 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 def _row_to_run(row) -> Run:
-    return Run(
+    # restore(), not Run(): a loaded row is checked for the cross-field
+    # rules a single column cannot carry (running without started_at, a
+    # terminal row without finished_at, more steps done than planned).
+    # An impossible row is a bug in whatever wrote it, and it says so
+    # here rather than three transitions later (docs 08 S-16).
+    return Run.restore(
         id=RunId(row["id"]),
         status=RunStatus(row["status"]),
         config_path=row["config_path"],

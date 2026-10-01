@@ -18,11 +18,11 @@ hold -- each is a place the design could have needed a revision it didn't
 turn out to need.
 
 **A stronger form of the same evidence exists now that isn't just
-about interface stability under paper study: every piece in section 9.1
-below actually got built, real-hardware-adjacent, equivalence-tested
-against the exact behavior it replaced, and landed without needing a
-design revision along the way.** That's a different, harder bar than
-"the interfaces look right on paper" -- it's "the interfaces were right
+about interface stability under paper study: every piece in this design
+actually got built, real-hardware-adjacent, equivalence-tested against
+the exact behavior it replaced, and landed without needing a design
+revision along the way.** That's a different, harder bar than "the
+interfaces look right on paper" -- it's "the interfaces were right
 when actual code had to satisfy them."
 
 ---
@@ -31,39 +31,9 @@ when actual code had to satisfy them."
 
 ### 9.1 What's implemented -- no further action needed
 
-Everything below is real, tested code, not illustrative Python.
-Everything the original section 9.1 table listed as "already matched
-independently" is included here too, since the distinction between
-"matched before this design started" and "built because of it" doesn't
-matter anymore -- both are equally done.
-
-| Design piece | Real `nodes/` location | Status |
-|---|---|---|
-| `Builder`/`Port` (1.1) | `nodes/core.py`'s `Node`/`Port` | Pre-existing, arrived at independently -- confirmed, not changed. |
-| `Algorithm` x `ExecutionStrategy` x `Handle` composition (referenced throughout) | `nodes/optimizer/` in full | Pre-existing reference implementation -- this design's generalization target, not a gap. |
-| `DeviceResident` (1.2) | `nodes/memory/handle.py`, conformed to by `OptimizerHandle`, `TrainableModel`, `TextEncoder` | Backlog items 3, 9, 12. |
-| Pooled device buffers (1.3) | `nodes/memory/manager.py`'s `MemoryManager` | Pre-existing, unchanged interface; adoption breadth closed by the `DeviceResident` rollout above. |
-| `NoiseSchedule`/`Parameterization`/`DiffusionProcess`/`DeviceContext` (1.4, 1.5) | `nodes/components/diffusion.py`, `nodes/components/device.py` | Backlog items 1-2. |
-| `ProjectLayout` (1.6) | `nodes/components/layout.py` | Backlog item 8. Bridging period still open -- see 1.6. |
-| `TrainingStepPipeline`/`StepPhase` (2.1) | `nodes/train/step_pipeline.py` | Backlog item 10. |
-| `ActivationCheckpointingStrategy` (2.3) | `nodes/model/gradient_checkpointing.py` | Backlog item 7. |
-| `BlockCost`/`CheckpointPlacementPolicy`/`EveryBlockPlacement`/`GreedyRatioPlacement` (2.3) | `nodes/model/checkpoint_placement.py` | Backlog item 1 (policy half). `GreedyRatioPlacement` unvalidated -- see 9.2. |
-| `BlockProfileCollector`/`ProfilingCheckpointing` (2.3) | `nodes/model/block_profiler.py` | Backlog item 1 (instrumentation half -- the actual blocker). Only `ResBlock` instances ever reach it in this ComfyUI version -- see 2.3. Not wired into `ComfyUNetLoRANode`'s real construction path -- see 9.2. |
-| Text encoder cache as `DeviceResident` (2.4) | `nodes/model/text_encoder.py`, `nodes/model/text_encoder_cache.py` | Landed as part of item 12. |
-| `PrefetchingBatchSource` (2.5) | `nodes/dataset/prefetch.py` | Backlog item 11. |
-| `AdapterStrategy`/`PlainLoRAAdapter`/`DoRAAdapter`, `LoRAScalingPolicy` (3.1, 3.2) | `nodes/model/adapter_strategy.py`, `nodes/model/dora_layer.py`, `nodes/model/lora_scaling.py` | Backlog item 9 (part 2), item 5, and formerly item 1. Live-wired into `ComfyUNetLoRANode`'s real construction path via `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` -- see 3.1. `DoRAAdapter` grounded directly in HuggingFace PEFT's real source. Checkpoint save/load (direction + `.dora_scale` magnitude + alpha) now real for an unsplit DoRA layer -- see 3.1 and 9.2 for the one edge case still open. Two more real, previously-silent bugs in the same "composition, not inheritance" territory found and closed while landing the checkpoint work, both severe enough that a DoRA training run through `ComfyUNetLoRANode` trained nothing at all before either was fixed -- see `nodes/model/adapter_injection.py`'s `reenable_dora_requires_grad()`/`dora_trainable_parameters()`. |
-| `adapter_strategy_scope` (3.1) | `nodes/model/adapter_injection.py` | Live-wires `AdapterStrategy` into `core.lora._inject_lora`'s real, unmodified targeting logic without modifying `core/lora.py`. See 3.1 for the mechanism and the recursion hazard it fixes. |
-| `FrozenWeightStore`/`BF16WeightStore`/`NF4WeightStore` (3.3) | `nodes/model/frozen_weight_store.py`, `nodes/model/nf4_weight_store.py`, `nodes/model/nf4_lora_layer.py` | Backlog item 9 (part 1), and formerly item 1. Wired into a real forward path via `NF4LoRALinear`/`NF4LoRAConv2d` and a `frozen_weight_store` port on `ComfyUNetLoRANode` -- see 9.2 for the remaining real-run quality check. |
-| `ParameterGroupPolicy`, `LoRAPlusGroups` (3.4) | `nodes/optimizer/composed.py` | Backlog item 4. `group_policy` port now exposed on every `Composed*OptimizerNode` (2.2) -- `LoRAPlusGroups` is real and selectable, but unvalidated -- see 9.2. |
-| `ResourceBudget` (2.2) | `nodes/resource_budget.py` | `ResourcePolicy`/`ManualResourcePolicy` (same section, originally the same file) were scoped to 3 of the design's original 7 methods -- see 2.2 for why -- then removed entirely: no `Node` ever produced a `ResourcePolicy`, so `ComfyUNetLoRANode`'s `resource_policy` port was unreachable from the graph editor. Its two exercised concerns live on `ComfyUNetLoRANode`'s own `use_checkpoint`/`scaling_policy` ports directly. `group_policy` on every `Composed*OptimizerNode` (2.2) was never routed through `ResourcePolicy` at all -- always its own separate port (`ParameterGroupPolicy`, `nodes/optimizer/composed.py`), despite this row previously implying otherwise. `ResourceBudget` itself survives, unused by any live path yet -- see 2.2. |
-| `LossWeighting`/`LRSchedule` (section 4) | `nodes/train/loss.py`/`schedule.py` | Pre-existing clean ABCs, confirmed by `P2LossWeighting` needing zero interface change; v-pred branch + `P2LossWeighting` are backlog item 6. |
-| `Algorithm.init_state()`'s state representation | `nodes/optimizer/algorithms/*.py` | Pre-existing -- contract already returns "a plain dict of named tensors," not specifically fp32; nothing structurally blocks a future quantized-state `Algorithm`. |
-| `ResourceCoordinator`/`OffloadOrchestrator` (5.1, 5.2) | `nodes/memory/coordinator.py` | Backlog item 12. Doesn't by itself fix the still-open VRAM-hang report -- see 9.3. |
-| `ResourceProfile` (5.5) | `nodes/memory/profile.py` | Backlog item 1. Wired into `SupervisedLoRATrainerNode`'s existing `profile=True` reporting (`nodes/train/step_pipeline.py`'s `MonitoringPhase`) -- `resident_<name>_mb` per-`DeviceResident` breakdown alongside the existing `tracked_footprint_mb` total, same gate, no new port. `memory_manager_stats` is `None` in a real run today -- real gap found while landing this, not fixed here: no shared `MemoryManager` instance is reachable from `SupervisedLoRATrainerNode.build()` to pass to `capture()`; `ChunkedScratchBufferStrategy` (`nodes/optimizer/strategies/chunked.py`) constructs its own private one when none is injected, and nothing upstream injects a shared one. See `nodes/memory/profile.py`'s module docstring. |
-| Injected pub/sub, not a singleton bus (5.2's reasoning) | `nodes/monitor/`'s `MonitorHandle`/`LiveMonitorHandle` | Pre-existing house reference for "no singleton" done right -- explicitly reused, not redesigned, for `OffloadOrchestrator`. |
-| Decorator-wrapped `TrainingBatchSource` (2.5) | `nodes/dataset/prefetch.py`'s `PrefetchingBatchSource` | Pattern originally established by `RenoiseBatchSource`, retired with the baked-grid format it corrected (single-latent consolidation -- doc 04 §5.5); `PrefetchingBatchSource` is the live instance this row now points at. |
-| Composition-over-mutation for stacked state (1.2) | `nodes/model/lora_phases.py`'s `LoRAGeneration` | Pre-existing, independent instance of the same principle `DeviceResident`'s offload-vs-free distinction is built on. |
-| `server/graph_executor.py` | -- | Pre-existing, already matches this design's construction-time model closely: real topological execution, real `issubclass()`-based port compatibility checking, explicit `ExecutionContext` threading. No changes recommended. |
+Deliberately one line: what's implemented is the source tree, so read
+`nodes/` rather than a table re-typing it. Section 9.2 below is the part
+still worth reading.
 
 ### 9.2 What's still missing, partial, or unvalidated
 
@@ -98,7 +68,7 @@ once enough of them had turned up to name it.
 The checkpoint gap itself is closed for the common case: `.dora_scale`
 (direction, magnitude, and alpha) now round-trips exactly through
 `LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` for a DoRA layer
-that's never been phase-split -- see 3.1 and 9.1's table.
+that's never been phase-split -- see 3.1.
 
 Found in the process, and *not* the gap that was being looked for:
 `nodes/model/lora_phases.py`'s `split_into_new_generation` (the function
@@ -193,65 +163,6 @@ None exist. Still not recommended as near-term work (see 5.3, 5.4 for
 the current reasoning -- `nodes/components/` now has real content, but
 nothing in it is graph-editor-selectable, so the side-by-side-
 registration problem these solve still hasn't materialized).
-`ResourceProfile` (5.5), the fourth item this paragraph used to list, is
-done -- see 9.1.
-
-**A live, per-step VRAM budget enforcer, new since the list above --
-genuinely different from `OffloadOrchestrator` (5.2), not a rename of
-it.** `OffloadOrchestrator` is still exactly as un-wired as this
-document already said: event-driven, for three specific, rare moments
-(cache rebuild, preview generation, checkpoint save), and nothing in
-the real training loop publishes those events yet. `ResourceControlHandle`/
-`BudgetedResourceControlHandle` (`nodes/memory/control_handle.py`) is a
-different, complementary shape for a different problem: not "react to
-a named, rare event," but "check real measured usage before every
-single step, offload whatever's marked safe to if over a stated
-`ResourceBudget` (5.5's own type, reused as-is), reload it right before
-whatever needs it next actually needs it." Built as a handle one node
-constructs (`VRAMBudgetControllerNode`) and another (the trainer) calls
-into during its own `build()`, the same shape `MonitorHandle`/
-`LiveMonitorHandle` already established for a different cross-cutting
-concern -- deliberately not a second graph node running "alongside" the
-trainer, since `server/graph_executor.py` runs nodes in topological
-order, one at a time; there's no mechanism for two nodes to run
-concurrently and exchange live signals mid-execution, so a callback
-object one node hands to another is what makes "continuous" possible at
-all here. Wired into `SupervisedLoRATrainerNode` (a new
-`resource_control` input) -- real measurement happens every step when
-one is connected. Honestly incomplete in one specific way: nothing
-registered with it (`model`/`optimizer`/`text_encoder`) is currently
-marked offloadable by default, because none of them has a genuine idle
-window in this pipeline's own current, always-synchronous design (text
-encoding, for instance, runs unconditionally every step -- see
-`EncodeConditioningPhase`, section 4). This was groundwork with a real,
-tested mechanism underneath it more than a today-provides-relief
-feature -- true for one revision, resolved the next: offloading
-something for real needs that something to have an actual idle window
-first, and `CachingTextEncoder` (`nodes/model/text_encoder_cache.py`,
-already existed, predating this specific addition) is exactly that --
-an LRU cache in front of any `TextEncoder`, skipping the inner
-model entirely on a hit. Wired together directly: `CachingTextEncoder`
-takes an optional `resource_control`; on a cache miss it calls
-`ensure_loaded()` before falling through to the inner encoder, so it's
-always safe to have been offloaded between hits. `ensure_loaded()`
-itself grew a second responsibility to make this actually safe under
-real pressure, not just a happy-path reload: it now shares a
-`_make_room()` helper with `before_step()`, so reloading one resident
-that would push measured usage over budget offloads *other* offloadable
-residents first to make room -- direct feedback describing the exact
-case this needs to handle (model/optimizer already near budget when a
-cache miss needs the text encoder loaded). `SupervisedLoRATrainerNode`
-marks `text_encoder` offloadable exactly when it's actually a
-`CachingTextEncoder` (checked via `isinstance`, matching this file's
-own existing `FusedOptimizerHandle` check, not assumed) -- a plain,
-non-caching encoder has no such self-healing and stays
-`offloadable=False`, unchanged. `model`/`optimizer` also stay
-`offloadable=False` still -- both are needed unconditionally every
-step's compute, and nothing yet calls `ensure_loaded("model")`/
-`ensure_loaded("optimizer")` at the right point in the step pipeline to
-make offloading either of them safe. `_make_room()` would already
-handle that side of a swap correctly if it existed; the wiring to
-trigger it doesn't yet.
 
 ### 9.3 What's explicitly out of scope
 

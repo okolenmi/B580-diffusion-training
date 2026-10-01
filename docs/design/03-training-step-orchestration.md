@@ -13,22 +13,15 @@ optimizer family), but it used to live as sequential code inside one
 reduction" item (CFG dual-pass, gradient accumulation, resume cadence)
 mean editing that same method rather than adding something next to it.
 
-**Implemented**, and more granular than the design's own illustrative
-7-phase list: `StepState`/`StepPhase`/`TrainingStepPipeline` plus nine
-concrete phases (`FetchBatchPhase`, `PrepareDiffusionInputsPhase`,
-`EncodeConditioningPhase`, `OptimizerBeginStepPhase`, `ForwardPhase`,
-`LossPhase`, `BackwardPhase`, `OptimizerStepPhase`, `MonitoringPhase`) and
-`TimedPhase` (the generic profiling decorator, replacing `profile: bool`
-manually wrapping five points with `xpu_synchronize()` + `perf_counter()`)
--- all in `nodes/train/step_pipeline.py`, driving
-`SupervisedLoRATrainerNode` in `nodes/train/supervised.py`.
-`update_lr()`/`zero_grad()`/`begin_step()` and diffusion-input prep
-(`x_t`/`target`/`t`/`sigma`/`xc`) each got their own phase rather than
-folding into `ForwardPhase`/`EncodeConditioningPhase`, since each is
-genuinely its own reason to change -- the same test this design was built
-around. The profiling output's *shape* genuinely changed as a result
-(checked against every real consumer before shipping, per
-`step_pipeline.py`'s own docstring) -- not a silent behavior change.
+More granular than the design's own illustrative 7-phase list
+(`nodes/train/step_pipeline.py`): `update_lr()`/`zero_grad()`/
+`begin_step()` and diffusion-input prep (`x_t`/`target`/`t`/`sigma`/`xc`)
+each got their own phase rather than folding into the forward and
+conditioning phases, since each is genuinely its own reason to change --
+the same test this design was built around. The profiling output's
+*shape* genuinely changed as a result, checked against every real
+consumer before shipping per `step_pipeline.py`'s own docstring -- not a
+silent behavior change.
 
 **Still not built, and this is the concrete, real payoff the refactor was
 for:** `SupervisedLoRATrainerNode`'s own scope note still lists no CFG
@@ -45,10 +38,9 @@ independently once actually needed.
 **Implemented, then later removed -- the record of both is worth
 keeping, since the reasoning that shaped it is still the reasoning
 behind the Ports that replaced it.** `ResourceBudget`/`ResourcePolicy`/
-`ManualResourcePolicy` (originally `nodes/resource_policy.py`; only
-`ResourceBudget` survives, in `nodes/resource_budget.py`) covered
-exactly three choices -- `checkpointing_strategy()`, `lora_scaling_policy()`,
-and `parameter_group_policy()` -- not the seven this section originally
+`ManualResourcePolicy` covered exactly three choices --
+`checkpointing_strategy()`, `lora_scaling_policy()`, and
+`parameter_group_policy()` -- not the seven this section originally
 sketched. `adapter_strategy()` was cut, and stayed cut even once
 `AdapterStrategy` became reachable from `ComfyUNetLoRANode`'s real
 construction path (3.1): it's wired as its own standalone
@@ -84,78 +76,55 @@ import annotations`, not a per-method style choice), so the module
 needed zero real cross-domain imports. That pattern is still real and
 still in use -- `nodes/resource_budget.py`'s own docstring and
 `nodes/memory/profile.py`'s `DeviceContext` example both point back to
-it. The concrete cost of the fix at the time: `ManualResourcePolicy`
-didn't compute its own sensible defaults the way this section's
-original illustration had it do (`adapter_strategy or PlainLoRAAdapter()`-
-style fallbacks) -- doing that would have needed exactly the imports
-being avoided. Instead `ManualResourcePolicy` was a pure carrier (every
-field required, nothing defaulted internally), and each consuming Node
-built its own default instance from classes it already imported -- the
-same pattern `diffusion_process` (1.4) still uses for its `None ->
-locally-constructed default` ports.
+it.
 
 **Wiring, at the time, and a second deliberate deviation from the
-original illustration:** `ComfyUNetLoRANode` had an optional
-`resource_policy` port that, when given, fully replaced its
-`use_checkpoint`/`scaling_policy` ports (both of which still worked
-unchanged when `resource_policy` was `None` -- the default). The three
-`Composed*OptimizerNode` classes got a direct `group_policy` port
-instead of a `resource_policy` one -- deliberately: routing
-`parameter_group_policy()` selection through a full `ResourcePolicy`
-there would have forced an optimizer node to also supply a
-`checkpointing_strategy`/`lora_scaling_policy` it had no use for, just to
-pick a parameter-group policy, which would have been worse ergonomics
+original illustration:** the three `Composed*OptimizerNode` classes got a
+direct `group_policy` port instead of a `ResourcePolicy` one --
+deliberately: routing `parameter_group_policy()` selection through a full
+`ResourcePolicy` there would have forced an optimizer node to also supply
+a `checkpointing_strategy`/`lora_scaling_policy` it had no use for, just
+to pick a parameter-group policy, which would have been worse ergonomics
 than the scattered-flags problem this item existed to fix. So this was
 never "one `ResourcePolicy` object, four identical consumers" -- it was
 `ResourcePolicy` where two of its three choices naturally co-located
 (`ComfyUNetLoRANode`), and a simpler, direct port where the third one
 didn't. `group_policy` was never routed through `ResourcePolicy` at
 all, in fact -- it's `ParameterGroupPolicy` on its own, a fully separate
-mechanism from the start; an earlier version of this doc (and, copying
-it, `docs/status/progress.md`) said otherwise, which was simply wrong,
-not something that changed later. A real, previously-undocumented gap
-was closed as a side effect regardless: `LoRAPlusGroups` (3.4) had
-existed since the `ParameterGroupPolicy` fix landed, but no Node ever
-exposed a way to actually select it from the graph until `group_policy`
-existed.
+mechanism from the start; an earlier version of this doc said otherwise,
+which was simply wrong, not something that changed later. A real,
+previously-undocumented gap was closed as a side effect regardless:
+`LoRAPlusGroups` (3.4) had existed since the `ParameterGroupPolicy` fix
+landed, but no Node ever exposed a way to actually select it from the
+graph until `group_policy` existed.
 
 **Why it was removed.** No `Node` in the registry ever produced a
 `ResourcePolicy` value -- `ManualResourcePolicy` was constructible only
 by hand, in Python, and the only thing that ever did was its own smoke
-test's contract check. `ComfyUNetLoRANode`'s `resource_policy` port was
+test's contract check. The `resource_policy` port that accepted one was
 therefore real, tested, and permanently unreachable from the actual
 graph editor: nothing a person building a graph in the browser could
-ever wire into it. `use_checkpoint`/`scaling_policy` already covered the
-two concerns that were ever exercised in practice (`checkpointing_strategy`,
-`lora_scaling_policy`); `parameter_group_policy()` was never called by
+ever wire into it. The two concerns that were ever exercised in
+practice (checkpointing, LoRA scaling) already had their own real
+ports; `parameter_group_policy()` was never called by
 anything outside that same smoke test either, `group_policy` being
 separate as described above. Removed along with its smoke test.
 
-`ResourceBudget` survived them and is now **live**:
-`VRAMBudgetControllerNode` constructs one and
-`BudgetedResourceControlHandle` consumes it (a `ResourceBudget.strict`
+`ResourceBudget` survived them and is now **live**: the VRAM budget
+controller node constructs one and the trainer's budgeted resource
+control handle consumes it (a `ResourceBudget.strict`
 mode was added later -- offload-then-continue versus refuse outright).
 
 ## 2.3 Activation checkpointing: strategy and placement
 
-The underlying fix (`nodes/model/gradient_checkpointing.py`) was, and
-remains, *correct*: filter `ctx.input_params` to `requires_grad=True`
-entries before `torch.autograd.grad()`, reconstruct the full gradient
-tuple with `None` at frozen positions. What was missing was that it used
-to be exposed only as a global, process-wide monkeypatch triggered by a
-bare `bool` port -- correct, but not itself an object another piece of
-code could compose with or substitute.
+What was missing from the underlying fix was that it used to be exposed
+only as a global, process-wide monkeypatch triggered by a bare `bool`
+port -- correct, but not itself an object another piece of code could
+compose with or substitute.
 
-**Implemented**, unchanged from the design: `ActivationCheckpointingStrategy`/
-`NoCheckpointing`/`FrozenParamSafeCheckpointing` (same mechanism, now with
-an `apply()` method; `NoCheckpointing` is the explicit "did nothing" case
-replacing an implicit "the if just wasn't taken") -- in
-`nodes/model/gradient_checkpointing.py`.
-`ComfyUNetLoRANode`'s existing `use_checkpoint: bool` port stayed wired to
-this internally, so nothing that already used it broke.
 `FrozenParamSafeCheckpointing` takes no `placement` parameter yet --
 deliberately: adding one with nothing real to pass it would be
-scaffolding, not a feature. That's the policy below.
+scaffolding, not a feature.
 
 All-or-nothing checkpointing (every block, or none) is correct and
 maximizes VRAM savings at maximum recompute cost. A more
@@ -170,24 +139,6 @@ memory-saved-per-recompute-cost ratio, which is the more directly
 applicable idea here since a UNet's blocks aren't uniform cost (attention
 blocks vs. plain conv/resnet blocks differ in both activation size and
 recompute time).
-
-**Implemented -- both halves, backlog item 1.** `BlockCost`/
-`CheckpointPlacementPolicy`/`EveryBlockPlacement`/`GreedyRatioPlacement`,
-essentially as sketched here originally (one real correction:
-`GreedyRatioPlacement` fits against `vram_budget_mb - vram_reserve_mb`,
-not the raw ceiling -- `vram_reserve_mb` postdates this sketch), in
-`nodes/model/checkpoint_placement.py`. The actual blocker, the per-block
-profiling instrumentation, is `nodes/model/block_profiler.py`'s
-`BlockProfileCollector`/`ProfilingCheckpointing` -- a third
-`ActivationCheckpointingStrategy`, composed with the existing correctness
-fix via a new optional `recompute_wrapper` parameter on
-`enable_frozen_param_safe_checkpointing()` rather than a second copy of
-that delicate autograd code. It measures each checkpointed block's real
-recompute (the existing backward-time re-run of the block's forward,
-already paid for by checkpointing itself -- no separate profiling-only
-pass needed): wall time directly, and activation memory via
-`DeviceContext.memory_stats()`'s `allocated_mb` delta around that same
-call.
 
 **Two real findings, confirmed against ComfyUI's actual source
 (cloned directly, not guessed) while building this:**
@@ -206,13 +157,10 @@ call.
   implementation. **Closed** (see `docs/known-issues/resolved.md` --
   confirmed on real hardware 2026-09-28: without the patch the same
   run OOMs on its first forward pass, with it the run peaks at
-  8592 MB):
-  `nodes/model/attention_checkpointing.py`'s
-  `enable_attention_block_checkpointing()` patches `BasicTransformerBlock.
-  forward()` itself to route through the same `checkpoint()`/
-  `CheckpointFunction` seam `ResBlock` already used, composed into both
-  `FrozenParamSafeCheckpointing.apply()` and `ProfilingCheckpointing.apply()`
-  -- so `use_checkpoint=True` now actually reaches SDXL's dominant
+  8592 MB): the attention-block checkpointing patch routes
+  `BasicTransformerBlock.forward()` through the same `checkpoint()`/
+  `CheckpointFunction` seam `ResBlock` already used, so
+  `use_checkpoint=True` now actually reaches SDXL's dominant
   activation cost (attention blocks, not just the two convolutions in
   each `ResBlock`), and this profiler now sees both block types. The
   checkpoint patch itself is confirmed on real hardware; the profiler
@@ -221,56 +169,14 @@ call.
 
 **Fraction knob (added 2026-09-28, hardware-measured):**
 `enable_attention_block_checkpointing(fraction=1.0)` can checkpoint a
-*subset* of blocks -- `fraction` is a density (0.75 = 75% of blocks,
-selected by floor-accumulation over each block's first-forward traversal
-index, spread across down/mid/up rather than clumped); `fraction=0.0`
-skips the patch entirely (first call wins -- the idempotency sentinel
-still guards a second call). Exposed as `scripts/hw_validate.py`'s
-`--attn-ckpt-fraction` for the VRAM-vs-recompute sweep. Measured at
-1024x1024/batch 2 on the B580: density 1.0 fits (9268 MB peak reserved),
-but 0.75 and 0.5 both OOM on step 0 (~10.7 GiB allocated mid-forward),
-and 0.75 still OOMs on the managed route with a budget-forced floor
-release -- that release only happens *after* calibration, and
-calibration already runs fully resident. With
-`ManagedLoRATrainerNode`'s `prewarm_text_encoder` Port (which unloads
-the 1561 MB text encoder *before* calibration -- see the fourth
-addendum in
-`docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`)
-the freed floor does make density 0.75
-complete: 40/40 steps, 10922 MB peak, ~300 MB under the wall -- but at
-0.759 steps/sec against density 1.0's 0.789 while adding 3.3 GB of
-activation residency. Skipping 25% of attention recompute is a net
-*loss*: recomputing these blocks is cheaper than carrying their
-activations. The knob is real and honored, but at this operating point
-the practical recommendation is the default (density 1.0). Full
-numbers and the measured floor-lever costs are in
+*subset* of blocks; `fraction=0.0` skips the patch entirely. Exposed as
+`scripts/hw_validate.py`'s `--attn-ckpt-fraction` for the VRAM-vs-
+recompute sweep. Measured at 1024x1024/batch 2 on the B580: skipping 25%
+of attention recompute is a net *loss*: recomputing these blocks is
+cheaper than carrying their activations. The knob is real and honored,
+but at this operating point the practical recommendation is the default
+(density 1.0). Full numbers and the measured floor-lever costs are in
 `docs/known-issues/open.md`.
-
-**Not wired into `ComfyUNetLoRANode`'s real construction path** (unlike
-`AdapterStrategy`'s seam, now live-wired -- see 3.1): real, tested,
-reachable by any caller that constructs a `ProfilingCheckpointing`
-directly, but `use_checkpoint` doesn't yet have a way to select it (its
-former `resource_policy` sibling port, which could have, was removed --
-see 2.2), and `GreedyRatioPlacement` isn't wired in as a real choice
-either -- `EveryBlockPlacement`'s unconditional behavior stays what
-`use_checkpoint=True` actually does. Real, separate follow-up, once a
-first real profiled run's `BlockCost` numbers exist to validate a real
-placement against -- see section 10.
-
-## 2.4 Text encoder cache becomes visible to resource accounting
-
-`CachingTextEncoder` (bounded LRU, default 512 entries, CPU-resident) was
-already real, working, and self-contained -- the gap was that its memory
-usage was invisible to anything outside itself.
-
-**Implemented**: `TextEncoder` (`nodes/model/text_encoder.py`) extends
-`DeviceResident` directly, so `CachingTextEncoder` gets `footprint_bytes()`/
-`offload()`/`release()` -- landed as part of backlog item 12, the last
-conformance gap left open once `ResourceCoordinator`/`OffloadOrchestrator`
-(5.1, 5.2) actually needed a second real `DeviceResident` besides the
-model to coordinate anything meaningful. The aggregate "where did my
-memory go" report this enables (5.5, `ResourceProfile`) was built with
-it.
 
 ## 2.5 Dataset prefetching, kept honest about what it does and doesn't save
 
@@ -279,34 +185,17 @@ it.
 is a real bottleneck was already measurable, not a guess, before this was
 built.
 
-**Implemented**, unchanged from the design: `PrefetchingBatchSource`
-(`nodes/dataset/prefetch.py`) -- a decorator over any
-`TrainingBatchSource`, the wrap-don't-reimplement pattern this domain's
-batch sources established (the original instance,
-`RenoiseBatchSource`, has since been retired together with the
-baked-grid format it corrected -- see doc 04, section 5.5). One real
-deviation worth noting: a fresh worker thread per `__iter__()` call
-rather than one shared for the object's whole lifetime, since
-`TrainingBatchSource.__iter__()` is expected to be restartable (a fresh
-pass each call) and `FetchBatchPhase` relies on exactly that to wrap to a
-new epoch. Explicitly not built: pinning the host-side buffers
-(page-locked memory) -- a real platform-specific wrinkle (pinning
-support/benefit isn't identical across CUDA and XPU), left for its own
-follow-up once this is in real use. Not wired in by default -- still an
-opt-in node, per the same "demand-driven, not speculative" reasoning as
-before.
-
-## 2.6 `MemoryManager`'s reach widens; its interface doesn't
-
-Every new device-memory consumer identified in this design
-(activation-checkpoint recompute scratch, if a future custom block needs
-it; a text-encoder cache's tensors, if it's moved to device rather than
-kept CPU-resident; a `PrefetchingBatchSource`'s pinned host buffers)
-should acquire memory through the existing `MemoryManager.get_buffer()`/
-`release()`/`free()` vocabulary, under its own tag, exactly the way
-`ChunkedScratchBufferStrategy` already does for optimizer scratch. No new
-method is being proposed on `MemoryManager` itself -- the design problem
-it solves (tagged, lazily-grown, reuse-vs-drop-tracked buffers) is
-domain-independent already; the gap is adoption, not capability.
+`PrefetchingBatchSource` (`nodes/dataset/prefetch.py`) -- a decorator
+over any `TrainingBatchSource`, the wrap-don't-reimplement pattern this
+domain's batch sources established. One real deviation worth noting: a
+fresh worker thread per `__iter__()` call rather than one shared for the
+object's whole lifetime, since `TrainingBatchSource.__iter__()` is
+expected to be restartable (a fresh pass each call) and `FetchBatchPhase`
+relies on exactly that to wrap to a new epoch. Explicitly not built:
+pinning the host-side buffers (page-locked memory) -- a real
+platform-specific wrinkle (pinning support/benefit isn't identical across
+CUDA and XPU), left for its own follow-up once this is in real use. Not
+wired in by default -- still an opt-in node, per the same
+"demand-driven, not speculative" reasoning as before.
 
 ---

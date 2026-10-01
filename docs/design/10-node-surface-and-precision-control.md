@@ -26,37 +26,24 @@ also doubling as its palette display text, "...Node" suffix included.
 
 ## 11.1 Optimizer node consolidation
 
-**Update, 2026-09-17: fully executed, not just planned any more.**
-What follows is the current, actual state, not the original plan --
-kept in one place rather than split into "the plan" and "what actually
-happened" as two separate write-ups. (Tracked during development in
-docs/CLEANUP_TODO.md, since deleted once nothing was left in it --
-see git log for the day-by-day account, including two real corrections
-made along the way that this section's original version got wrong.)
-
 Grounded in actually reading every node file, not assumed from naming
 alone -- the picture is real but uneven, not a blanket "delete the old
 ones":
 
-**Retired, confirmed equivalent:** `AdamWOptimizerNode` (wrapped
-`CPUAdamW`), `CAMEOptimizerNode`, `ForeachCAMEOptimizerNode`,
+**Retired:** `AdamWOptimizerNode` (wrapped `CPUAdamW`),
+`CAMEOptimizerNode`, `ForeachCAMEOptimizerNode`,
 `ForeachAdafactorOptimizerNode`, `FusedAdafactorOptimizerNode` -- each
 was a thin pass-through wrapper around a legacy `core.optimizers`
 class, and the matching `Composed*OptimizerNode` + `strategy=` choice
-covers the same ground. CAME/ForeachCAME were already
-equivalence-tested in `nodes/smoke_tests/` before this pass;
-Foreach-Adafactor and Fused-Adafactor each needed a new, dedicated
-real-torch run first (see `smoke_test_adafactor_tiny_parameter_gap.py`
-and `smoke_test_fused_adafactor_equivalence.py`) -- this section's own
-original version grouped Foreach with `AdafactorOptimizerNode` below as
-though they shared one mechanism, which running the actual numbers
-disproved (see next entry), and treated Fused's gap as unclosable
-algorithm work rather than the small, opt-in change
-(`AdafactorAlgorithm.tiny_parameter_threshold`) it turned out to be.
-`AdamWOptimizerNode` retired for a different reason than "proven
-numerically equivalent": `CPUAdamW`'s CPU-resident state solves a
-full-fine-tune-parameter-count problem this project has no way to
-produce at all (see `nodes/optimizer/composed_adamw.py`) -- the design
+covers the same ground. This section's own original version grouped
+Foreach with `AdafactorOptimizerNode` below as though they shared one
+mechanism, which running the actual numbers disproved (see next entry),
+and treated Fused's gap as unclosable algorithm work rather than the
+small, opt-in change (`AdafactorAlgorithm.tiny_parameter_threshold`) it
+turned out to be. `AdamWOptimizerNode` retired for a different reason
+than "proven numerically equivalent": `CPUAdamW`'s CPU-resident state
+solves a full-fine-tune-parameter-count problem this project has no way
+to produce at all -- the design
 point this section's original version called "genuinely different...
 stays regardless" turned out to have no actual consumer anywhere in the
 codebase to be different *for*.
@@ -103,9 +90,6 @@ the standard library's own kernel for something this fundamental" is a
 real, different kind of argument than the ones already weighed
 elsewhere in this cleanup, and deserves an explicit answer rather than
 inheriting one by default.
-
-**Net-new, nothing to consolidate:** `ComposedFusedAdamWOptimizerNode`/
-`ComposedFusedCAMEOptimizerNode` have no legacy equivalent at all.
 
 **Deprecation approach -- changed from the original plan, on explicit
 direction:** the original version of this section argued for marking
@@ -209,54 +193,37 @@ dtype decisions -- kept as independent choices rather than one bundled
 `ResourcePolicy` rather than absorbed into one object, back when
 `ResourcePolicy` still existed -- see 2.2 for why it was removed since):
 
-1. **`frozen_weight_store`** -- implemented: a real port on
-   `ComfyUNetLoRANode`, mirroring `adapter_strategy`'s own pattern
-   (default `None` -> `BF16WeightStore`, `NF4WeightStore` selectable,
-   works with the default `PlainLoRAAdapter`). A real gap found and
-   fixed while wiring this: `adapter_strategy_scope`'s "skip patching
-   for `PlainLoRAAdapter`" shortcut assumed that always meant bf16 --
-   wrong once `PlainLoRAAdapter` could also mean NF4 storage, which
-   would have silently done nothing under the old rule. The skip
-   condition now checks both `PlainLoRAAdapter` *and* the `BF16WeightStore`
-   factory, not `PlainLoRAAdapter` alone.
-2. **`state_dtype`, now done -- as block-wise 8-bit quantization, not
-   the plain dtype cast this item originally described.** Every
-   `Algorithm.init_state(param_shape, dtype, device)` still ignores
-   its own `dtype` argument, hardcoding float32 internally -- unchanged,
-   still correct for the same numerical-stability reason (a raw bf16
-   cast of momentum/variance was and still is a real, unvalidated
-   numerical risk, not "does it run," exactly as this item originally
-   flagged). What shipped instead answers the same underlying need
+1. **`frozen_weight_store`** -- a real port on `ComfyUNetLoRANode`.
+   A real gap found and fixed while wiring it: `adapter_strategy_scope`'s
+   "skip patching for `PlainLoRAAdapter`" shortcut assumed that always
+   meant bf16 -- wrong once `PlainLoRAAdapter` could also mean NF4
+   storage, which would have silently done nothing under the old rule.
+   The skip condition now checks both `PlainLoRAAdapter` *and* the
+   `BF16WeightStore` factory, not `PlainLoRAAdapter` alone.
+2. **`state_dtype`, done as block-wise 8-bit quantization, not the
+   plain dtype cast this item originally described.** `Algorithm.
+   init_state()` still ignores its own `dtype` argument, hardcoding
+   float32 internally -- unchanged, still correct for the same
+   numerical-stability reason (a raw bf16 cast of momentum/variance was
+   and still is a real, unvalidated numerical risk, not "does it run").
+   What shipped instead answers the same underlying need
    (configurable optimizer-state memory) a different, better-validated
-   way: `OptimizerStateStore`/`Int8BlockStateStore`
-   (`nodes/optimizer/state_store.py`) block-wise quantizes `m`/`v` to
-   8 bits between steps (dequantize to real fp32 -> `Algorithm.
-   compute_update()` runs completely unchanged, unaware this exists ->
-   requantize the result), ~4x smaller than the bf16 idea's 2x, and
-   verified end to end: a real 20-step AdamW training comparison
-   (`Float32StateStore` vs `Int8BlockStateStore`, same seed, same
-   gradients) converges to within 0.0025 max per-parameter difference,
-   not just "produces finite numbers." **One shared implementation**
-   (11.0/11.1's own lesson, applied here too): `state_precision`'s
-   choices/doc/resolver live once in `state_store.py`, the same
+   way, ~4x smaller than the bf16 idea's 2x, and verified end to end: a
+   real 20-step AdamW training comparison converges to within 0.0025 max
+   per-parameter difference, not just "produces finite numbers." **One
+   shared implementation** (11.0/11.1's own lesson, applied here too):
+   `state_precision`'s choices/doc/resolver live once, in the same
    `STRATEGIES`/`resolve_strategy()` shape `strategy_registry.py`
    already established for a different Port on the same three nodes.
-   The earlier "Update" below (superseded, kept only so this entry's
-   own history stays visible) guessed this would end up inside the
+   The earlier "Update" here guessed this would end up inside the
    Resources Controller redesign's own precision handling -- it didn't:
-   that redesign's own Phase 5 settled on `ResourcesControllerNode`
-   never touching LoRA injection or optimizer construction at all (see
-   `docs/design/resources-controller/05-phase-5-resources-controller-node.md`), so
-   optimizer state precision stayed exactly where `strategy`/`device`
+   that redesign's own Phase 5 settled on `ResourcesControllerNode` never
+   touching LoRA injection or optimizer construction at all (see
+   `docs/design/resources-controller/05-phase-5-resources-controller-node.md`),
+   so optimizer state precision stayed exactly where `strategy`/`device`
    already lived, on the `Composed*` optimizer nodes themselves --
    consistent with, not a special case of, everything else on those
-   nodes. ~~**Update:** likely belongs inside the Resources Controller
-   redesign's own precision handling rather than as an isolated port on
-   each optimizer node -- see
-   `docs/design/resources-controller/08-consolidation.md` for the
-   reasoning. Not decided; flagged
-   there so this doesn't get implemented in isolation before that's
-   settled.~~
+   nodes.
 3. **compute dtype** -- already real (`ComfyUNetLoRANode.dtype`), no new
    work needed, just clearer documentation that this *is* the
    compute-dtype axis. True autocast-based mixed precision (fp32 master
@@ -271,20 +238,6 @@ if real, explicit demand shows up, not speculatively now.
 
 ## 11.4 Port UX: string fields for closed-choice values
 
-**Implemented**, as part of
-`docs/design/resources-controller/08-consolidation.md`, exactly as this
-section's own "Update" below
-anticipated -- `Port.choices` (`nodes/core.py`), not per-node. See that
-plan for what shipped, what it's wired into today (`strategy` on the
-`Composed*OptimizerNode` classes, `t_mode` on
-`ManagedDatasetSourceNode` -- the other original consumer,
-`RenoiseBatchSourceNode`, has since been retired with the baked-grid
-format it corrected, doc 04 §5.5), and why `device` deliberately stays
-open-ended rather than getting a closed list. The original planning
-text below is kept as the
-rationale for *why*, per this document's own top-of-file rule for
-implemented sections.
-
 A real, valid complaint from this session, not specific to optimizers:
 `strategy`, `device`, and similar `Port`s are typed as bare `str`, with
 the valid choices only discoverable by reading a doc string, guessing,
@@ -293,31 +246,20 @@ gap, not a per-node one -- fixing it for `strategy` alone would just be
 another single-node patch of a structural problem, the exact mistake
 section 11.0 is about. A `Port` needs a way to declare a closed set of
 valid choices (e.g. an optional `choices: list[str] | None` field,
-`None` for genuinely open-ended strings) that server/graph-editor code
+`None` for genuinely open-ended strings) that graph-editor code
 could render as a dropdown and validate before a graph even runs, not
 just at `build()` time. Real, worth doing, but touches `core.py`'s
-`Port` dataclass and the server's node-introspection/UI code -- a larger
+`Port` dataclass and the graph-editor introspection/UI code -- a larger
 item than anything else in this section, flagged honestly as its own
 piece of work, not bundled into the optimizer-specific items above.
 
-**Update:** this and the Resources Controller redesign's
-`ResourcePreset` "parameter-value dictionary" are the same mechanism
-underneath the different names -- a `Port` with a closed set of
-choices, rendered as a dropdown, resolved to one value by build time.
-Recommend building this once as part of that redesign's Phase 3/4
-rather than as a separate, disconnected item -- see
-`docs/design/resources-controller/08-consolidation.md`.
-
 ## 11.5 Node naming: one string is doing two jobs
 
-**Implemented.** `Node.DISPLAY_NAME` (`nodes/core.py`, default `None`) and
-`NodeInfo.display_name` (`server/nodegraph_introspect.py`, computed by the
-new `_auto_display_name()`/`_display_name_for()`) exist and are wired into
-`/nodegraph/registry`'s response and the palette (`server/static/nodegraph.js`),
-exactly matching the proposal below -- `class_name` is untouched, every
-saved graph keeps resolving the same way it always did. One real
-discrepancy between the proposal and what actually shipped, found while
-implementing it, not glossed over: the proposal's own worked example
+**Implemented**, in `Node.DISPLAY_NAME` (`nodes/core.py`) and
+`NodeInfo.display_name` -- `class_name` is untouched, every saved graph
+keeps resolving the same way it always did. One real discrepancy between
+the proposal and what actually shipped, found while implementing it, not
+glossed over: the proposal's own worked example
 (`"ComfyUNetLoRANode"` -> `"Comfy UNet LoRA"`) is **not** achievable by
 literally "split on capitals" as written below -- a plain capital-boundary
 split turns that same input into `"Comfy U Net Lo R A"`, since `"UNet"`
@@ -325,27 +267,19 @@ and `"LoRA"` are each two capitals-then-lowercase runs, not one. What's
 actually implemented is a curated, closed list of this project's own
 domain tokens (`UNet`, `LoRA`, `DoRA`, `CAME`, `AdamW`, `SDXL`, `SNR`, `NF4`,
 `BF16`, `XPU`, `VRAM`, `LR`, `P2`, ...), checked longest-match-first at each
-position before falling back to a generic capital-then-lowercase word --
-see `_auto_display_name()`'s own docstring in `nodegraph_introspect.py`.
-Verified against every one of the 36 classes actually in
-`nodegraph_registry.get_registry()` today, not just the doc's one example
-(`server/smoke_tests/smoke_test_nodegraph_introspect.py`), plus the
-`DISPLAY_NAME` override path itself, via synthetic classes so the override
-check doesn't depend on any real node happening to set one yet -- none do.
-
-The original planning text below is kept as the rationale for *why*, per
-this document's own top-of-file rule for implemented sections; the
-illustrative naming detail (checked and refined during landing, per the
-paragraph above) says exactly what shipped now, not what was speculated
-before.
+position before falling back to a generic capital-then-lowercase word.
+Verified against every one of the 36 classes actually in the registry
+today, not just this doc's one example, plus the `DISPLAY_NAME` override
+path itself, via synthetic classes so the override check doesn't depend
+on any real node happening to set one yet -- none do.
 
 A second real UX point, raised alongside 11.4: every node's Python class
 name (`ComfyUNetLoRANode`, `ComposedAdafactorOptimizerNode`, ...) is used
 as *both* the stable identifier a saved graph's `class_name` references
-and resolves against (`server/nodegraph_registry.py`'s `get_registry()`
-returns `{cls.__name__: cls for cls in classes}`, one dict, deliberately
-"so those two things can never silently disagree" -- but that's *only*
-true because there's just the one string) *and* what a person sees in
+and resolves against (`get_registry()` returns `{cls.__name__: cls for
+cls in classes}`, one dict, deliberately "so those two things can never
+silently disagree" -- but that's *only* true because there's just the
+one string) *and* what a person sees in
 the palette -- including the "...Node" suffix on every single entry,
 which carries no information (everything in the palette is a node) and
 reads exactly as "dumb" as it was called.
@@ -360,13 +294,10 @@ and there's no way to *ever* improve the palette's wording without that
 same breakage.
 
 **Concrete, low-risk proposal, matching this module's own stated
-principle** (`server/nodegraph_introspect.py`: "UI metadata is *derived*
+principle** (UI metadata is *derived*
 from the real Python class... never hand-duplicated in a separate
-file"): add an optional `display_name` to `NodeInfo`
-(`nodegraph_introspect.py`), derived automatically (strip a trailing
-`"Node"` suffix, split on capitals -- `ComfyUNetLoRANode` ->
-`"Comfy UNet LoRA"`) with a class-level override available (e.g. a
-`DISPLAY_NAME: ClassVar[str] | None` on `Node` itself, `core.py`) for the
+file): add an optional `display_name` to `NodeInfo`,
+derived automatically, with a class-level override available for the
 cases an auto-derived name reads badly. `class_name` stays exactly what
 it is today -- the registry key, `__name__`, untouched, so nothing about
 serialization or graph resolution changes at all. Purely additive: every

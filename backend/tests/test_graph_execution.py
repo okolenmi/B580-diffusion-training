@@ -332,11 +332,28 @@ except GraphExecutionActiveError as exc:
     )
 
 # Stop: signal, then CAS. Returns the stopped row.
-stopped_dto = graphs.stop_execution.execute(slow.execution_id)
+#
+# The cancel event is set *before* the CAS on purpose, so there are two
+# correct winners: this endpoint, or the worker thread noticing the event
+# it was just given and stopping the row itself. Which one wins is a
+# genuine race -- asserting a specific winner made this check fail about
+# one run in ten. The invariant is the outcome, not the path: the
+# execution ends stopped, and the loser reports that honestly.
+try:
+    stopped_dto = graphs.stop_execution.execute(slow.execution_id)
+    check(
+        stopped_dto.status is GraphStatus.STOPPED
+        and stopped_dto.error == "stop requested",
+        "stop claims queued/running -> stopped",
+    )
+except GraphExecutionNotActiveError as exc:
+    check(
+        exc.details["status"] == "stopped",
+        f"the worker won the stop race and said so (got {exc.details})",
+    )
 check(
-    stopped_dto.status is GraphStatus.STOPPED
-    and stopped_dto.error == "stop requested",
-    "stop claims queued/running -> stopped",
+    graphs.get_execution.execute(slow.execution_id).status is GraphStatus.STOPPED,
+    "the execution ends stopped whoever wrote it",
 )
 check("graph_execution_stopped" in codes(events.published), "stopped event published")
 try:

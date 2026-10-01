@@ -1,13 +1,17 @@
-# 06 -- Frontend visual smoke checklist (browser-enabled session)
+# 06 -- Browser findings and coverage (2026-10-01)
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (236
-checks, Playwright; last full run 2026-10-01, exit 0). The
-API/SSE/pages coverage comes from
-`backend/tests/run_all.py` and the full gate; this checklist is the
-missing layer -- JavaScript actually running in a real browser.
-Findings and fixes from that run are recorded at the bottom.
+coverage now runs as `backend/tests/visual_smoke.py` (236 checks,
+Playwright; last full run 2026-10-01, exit 0). The API/SSE/pages layer
+comes from `backend/tests/run_all.py` and the full gate; a real browser
+is the missing layer -- JavaScript actually running. What that run
+found is recorded below; what it does not yet check is listed further
+down.
+
+The runnable suite is `backend/tests/visual_smoke.py`; its invocation is
+below. It needs a live server plus the Playwright venv, which is why it
+is not part of `scripts/full_gate.sh`.
 
 ## Why this exists
 
@@ -23,31 +27,6 @@ exceptions in event handlers. This checklist is that missing layer.
 # terminal 2:
 ~/.venvs/pw/bin/python backend/tests/visual_smoke.py
 ```
-
-Covers: idle state (real backend), running state (API mocked with a
-synthetic `RunOut` + history + log), interactions (start-form guard,
-row-click -> log, wipe confirm dialog captured in code), elapsed
-ticker, a monitor/graph regression pass (all three pages share
-`style.css`), the config editor (schema-driven form, visibility,
-dirty tracking, E2E save against a throwaway copy), run detail views
-(hand-off link, honest 404, completed + failed renders), and the
-dataset manager against the real library (create guard, honest empty
-states, preview bytes over the files route, filters, throwaway
-cleanup), the M8f card previews + item context menu (thumb images
-resolve on real cards, the one-option menu opens/disables/closes --
-never clicked, so the real datasets stay read-only), the M8d shell
-(icon rail inventory + active states +
-hover tips, floating console minimize/FAB/restore/persistence,
-help + settings pages), and the M8e dataset flows (add-data dialog
-option sets + local validation, Browse/Edit modes (selection is an
-edit-mode tool: browse renders no checkboxes or select-all and hides
-multi-edit mid-selection, and a selection survives the round-trip
-back to edit), the advanced item
-editor's dirty/revert/walk cycle, the multi-edit panel -- all
-read-only against the real curated datasets). Console is asserted
-clean across every page.
-Desktop-browser execution of the same checklist below stays as the
-manual fallback.
 
 Console geometry gestures (resize -> move -> resize, and item
 checkbox measurements) are exercised by
@@ -75,282 +54,46 @@ BACKEND_DB_PATH=/tmp/opencode/smoke.db \
 
 A scratch DB keeps the check independent of real training history.
 
-## 1. App shell + training controls -- `http://127.0.0.1:8766/`
+## Coverage not yet checked
 
-* [x] Page renders: icon rail (shell.js, all pages), topbar + state
-      hero (start form when idle, live run when active), the monitor
-      hand-off strip, history table (6 column headers) + log pane.
-      Layout is state-driven: idle never shows empty metric cards,
-      running never shows a start form that would 409.
-* [x] Console clean (no errors/warnings from our modules; the lone
-      `/runs/active` 404 line is the browser's network log for the
-      expected `no_active_run` answer, rendered correctly as
-      "no active run").
-* [x] Start-options: with no config path chosen the page shows the
-      placeholder (the API deliberately answers 422 `invalid_query`
-      for an empty `path` -- that is contract, not a bug). Choosing a
-      real path was **not** exercised (needs config files).
-* [x] `GET /runs/active` 404 (`no_active_run`) renders as "no active
-      run", not an exception.
-* [x] Runs history lists rows (empty state: "No runs yet."; Wipe
-      disabled while empty).
-* [x] `/api/v1/events` SSE connects (floating console: "Connected to
-      /api/v1/events.").
-* [x] Running-state hero (automated with a mocked `RunOut`): phase in
-      the badge, progress `412 / 1000 · 41%`, cache sub-bar
-      (`.progress-sub.active` mechanism), stop/kill visibility,
-      elapsed ticker advancing, row click selects + loads the log,
-      wipe `window.confirm` captured by a dialog handler.
-* [x] Diverged run (mocked `RunOut` carrying `nonfinite`): hero loss
-      reads `NaN · diverged` (avg `∞ · diverged`) with the `value-bad`
-      class, and the history row's loss cell keeps the marker -- never
-      an em dash that would claim nothing was measured (docs 07 F-03).
-* [x] Stream resync: `/runs/active` is fetched again when the event
-      stream opens (2 calls counted after boot) -- `/events` has no
-      replay, so the DB is refetched on every (re)open (docs 07 F-09).
-* [ ] **deferred with training tests**: the same controls against a
-      *real* active run (process actually stopping/saving).
+* **App shell + training controls**
+  * [ ] **deferred with training tests**: the same controls against a
+        *real* active run (process actually stopping/saving).
+* **Monitor dashboard**
+  * [ ] **needs a live producer**: points appear live, mid-stream reload
+        replays history, `clear` empties the chart, CSV export + series
+        toggles on real data (the M6 harness covered the frame contract;
+        real-data rendering waits for the training-test gate).
+* **Config editor**
+  * [ ] `PUT /config/raw` rejection (invalid TOML -> 422, file
+        untouched) is API-tested (`test_config.py`); not driven in the
+        browser.
+* **Run detail**
+  * [ ] Live active-run refresh (5s log tail + 1s duration ticker +
+        terminal-event SSE reload) is exercised only through its code
+        path; the smoke has no real running run on `/run/{id}`.
+* **Dataset manager**
+  * [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
+        apply, commit-to-set, **set card preview**) are covered by
+        `test_api_datasets.py` at the API level only -- the smoke edits
+        nothing and applies nothing; scenario H exercises the
+        editor/multi-edit UI in a read-only walk (dirty -> revert, rows
+        rendered, never saved).
+  * [ ] Task start/stop is never fired from the smoke (it would spawn a
+        real child process against user checkpoints); scenario H pins
+        that the browser sends no task POST during its walk.
+* **Shell**
+  * [ ] Dragging the console by its header and native corner-resize
+        are exercised interactively (desktop session); the automated
+        run pins persistence of whatever geometry it gets, not the
+        gestures themselves -- and `scripts/probe_ui_bugs.py` now
+        drives resize -> move -> resize automatically and asserts the
+        window keeps its size (the 2026-10-01 shrinking-window bug).
 
-## 2. Monitor dashboard -- `http://127.0.0.1:8766/monitor/<any-id>`
+## Screenshot caveat
 
-* [x] Page renders: chart canvas, series list, controls; console clean.
-* [x] Stream connects: status badge reaches `live`.
-* [x] Empty-id history: absent series/stats show em dashes (Best loss,
-      LR, Grad norm, VRAM, Peak all `--`) -- **never fabricated zeros**.
-* [ ] **needs a live producer**: points appear live, mid-stream reload
-      replays history, `clear` empties the chart, CSV export + series
-      toggles on real data (the M6 harness covered the frame contract;
-      real-data rendering waits for the training-test gate).
-* [x] `Export CSV` button present and enabled.
-
-## 3. Graph editor -- `http://127.0.0.1:8766/graph`
-
-* [x] Palette lists the catalog grouped by domain (7 domains, 36
-      nodes); `load_errors` section exists (catalog had none).
-* [x] Add nodes from the palette; move by dragging the header (edge
-      paths follow); connect output->input; click an edge to select,
-      `Delete` removes it (Esc deselects); library save/load round-trip
-      keeps positions bit-identical.
-* [x] Params form: typed widgets (number, choices, bool) edit the
-      node's `params`; wired inputs show "overridden by <src>".
-* [x] Validate: clean graph -> "Graph is valid."; unknown class ->
-      complete issue list with a node chip that focuses the node.
-* [x] Run: execution appears in the list, per-node progress badges
-      stream in via `/events` (ok + duration), terminal event logs
-      "finished (3 nodes)", wipe history works (with confirm).
-* [x] Type check: `int` -> `float` wire is rejected with an
-      explanation (matches the backend's `incompatible_types`);
-      `float` -> `float` connects, compatible sockets highlight green
-      during the drag.
-* [x] Library: save, load, delete path exercised; importing a legacy
-      `ng_graph_v1` draft maps `connections`/`paramValues`/`x,y` and
-      keeps unknown classes as placeholders with a console warning.
-* [x] Network tab: the editor talks only to `/api/v1/graphs/*` (+ the
-      shared `/events` stream).
-* [x] Layout pass (graph visibility): the node search fits its rail
-      (the `.cfg-input` width:100% + margins used to overflow it), the
-      page-local Console section is gone and every editor note lands in
-      the floating system console, both rails collapse to a true 0
-      grid track from the toolbar toggles (`Nodes` / `Inspector`,
-      persisted in `localStorage`), the Executions history is a
-      `<details>` drawer collapsed by default (expands in place), and
-      the canvas fills ~91% of the viewport.
-* [x] Infinite canvas (canvas redesign): the viewport never scrolls
-      (`overflow: hidden`, no scrollbars -- wheel and background-drag
-      pan the plane and the dot grid rides along), a dashed circle
-      labeled "center" marks the origin (0, 0) and opens centered in
-      the view, double-clicking empty space glides back to it (a
-      double-click on a node does not), node drops cascade side by
-      side instead of stacking, negative coordinates are legal (drag a
-      node past the origin), a library load re-frames the graph around
-      its content, and wiring works across the transformed plane.
-* [x] Editable node bodies (params on the card): the node's inputs
-      carry the same widgets as the inspector (one shared builder --
-      bool checkboxes commit on click and the inspector mirrors the
-      value, the dataset picker feeds from `GET /assets/dataset` and
-      mirrors back, a dataset-kind picker shows **no** upload button
-      while lora/checkpoint pickers and the Save-As text target do);
-      required inputs carry a `*` with a red unconnected socket,
-      optional ones don't, wired sockets read filled; `visible_when`
-      gates rows on the card too (checking `continue_training` reveals
-      the `continue_lora_path` picker, `t_values` stays hidden on a
-      fresh Managed Dataset Source); live diagnostics post on a 400ms
-      debounce -- empty params render **nothing** (no fabricated
-      content) and setting `checkpoint_path` to a missing file brings
-      the server's `ERROR: No such file or directory: ...` line back
-      under that input; the canvas stays unscrolled with widgets
-      present.
-
-## 4. Config editor -- `http://127.0.0.1:8766/config`
-
-* [x] Honest empty state before a config is loaded (a form rendered
-      without values would lie).
-* [x] Form renders from `GET /config/options`: 78 fields in 6 numbered
-      groups, subgroup headers, help text; `visible_when` toggling
-      works (LoRA Rank shows for `lora`, hides for `distillation`).
-* [x] Launch-only options (`start_from`, `reset_optimizer` -- both
-      `persist_locally`) are excluded: they belong to the Training
-      page's start form, are never written to the file (their contract
-      says so), and carry deliberate duplicate ids.
-* [x] Dirty tracking: edits enable Save + show the chip; Revert
-      discards edits by re-reading the file.
-* [x] E2E save against a throwaway copy (absolute path accepted):
-      PATCH merges, the form keeps the saved value, the raw tab
-      refreshes from the written file. Repo config files untouched.
-* [x] Raw tab round-trips `GET/PUT /config/raw`; buffer resync rules:
-      form saves refresh a clean raw buffer, raw writes reload the form.
-* [x] Console clean across all four scenarios (A idle, B running,
-      C monitor+graph regression, D config).
-* [ ] `PUT /config/raw` rejection (invalid TOML -> 422, file
-      untouched) is API-tested (`test_config.py`); not driven in the
-      browser.
-
-## 5. Run detail -- `http://127.0.0.1:8766/run/{id}`
-
-* [x] Hand-off from the main page: the log card's "open full ↗" link
-      appears with a selection and follows it (`/run/12` after
-      clicking run 12's row, scenario B).
-* [x] Missing run renders an honest state: probing `/run/9999`
-      against the real backend keeps the details hidden and shows a
-      "not found" message; the browser's own resource-status line for
-      this deliberate 404 is filtered noise (`is_expected_noise`).
-* [x] Completed run (mocked): title, `status-completed` badge, all 16
-      detail rows (steps, exit code 0, absolute + relative timestamps,
-      empty error as em dash), log tail fills. Line structure is
-      pinned via `white-space: pre-wrap` -- `.log-pane` moved to
-      `style.css` (both pages share it); it was missing on this page
-      until the screenshot showed run-together lines.
-* [x] Failed run (mocked): error text renders with the `error` class,
-      red (computed color differs from a normal row), exit code shown.
-* [ ] Live active-run refresh (5s log tail + 1s duration ticker +
-      terminal-event SSE reload) is exercised only through its code
-      path; the smoke has no real running run on `/run/{id}`.
-
-## 6. Dataset manager -- `http://127.0.0.1:8766/datasets`
-
-Runs against the REAL backend and the repo's real datasets (opened
-read-only; a throwaway `m8c-smoke-ds` is created and deleted inside
-the scenario, its confirmation dialog captured).
-
-* [x] Library list renders the real datasets; the icon rail links to
-      `/datasets` (M8c hand-off).
-* [x] Create guard: an empty name refuses inline, fires no request,
-      adds no card; a real create appends the card.
-* [x] Fresh-dataset detail: title follows the route, seven stat chips
-      with real zeros (API-computed, never placeholders), honest empty
-      states on all three tabs, the Add-data entry point renders on
-      the Tasks tab (the dialog itself is scenario H).
-* [x] Real curated dataset (`1024 aes` -- space in the name pins the
-      URL-encoded route): stats show the true counts, all 201 item
-      cards render, a preview image actually loads through
-      `/datasets/{name}/files/{path}` (`naturalWidth > 0`).
-* [x] Card previews (M8f): every dataset card renders a preview thumb
-      and a real card's image resolves through the files route; the
-      empty throwaway's card shows the honest `NO PREVIEW` placeholder
-      (no guessed image).
-* [x] Item `⋮` context menu (M8f): the half-transparent trigger
-      renders on the thumb; the menu opens with exactly one option
-      ("Set as dataset preview"); the item currently fronting the card
-      is honestly **disabled**, another item's option renders enabled
-      (**never clicked** -- the scenario watches requests and asserts
-      zero `PUT /preview`, so the real dataset is never mutated);
-      Escape and an outside click both close the menu; screenshot
-      `datasets_menu.png`.
-* [x] Membership filters: Pending is honestly empty on a fully
-      curated dataset (its empty state shows), Used brings the items
-      back; the training-sets tab lists the real set rows.
-* [x] Delete asks for confirmation and removes the throwaway (the
-      scenario asserts the card count returns to baseline; the repo's
-      `datasets/` directory is checked clean afterwards).
-* [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
-      apply, commit-to-set, **set card preview**) are covered by
-      `test_api_datasets.py` at the API level only -- the smoke edits
-      nothing and applies nothing; scenario H exercises the
-      editor/multi-edit UI in a read-only walk (dirty -> revert, rows
-      rendered, never saved).
-* [ ] Task start/stop is never fired from the smoke (it would spawn a
-      real child process against user checkpoints); scenario H pins
-      that the browser sends no task POST during its walk.
-
-## 7. Shell -- rail + floating console + help/settings (M8d)
-
-Exercises the shell mounted on every page (icon rail + floating
-system console) plus the two new pages.
-
-* [x] Icon rail: visible, exactly 6 items (Graph Editor, Dataset
-      manager, Pre-built workflows, System tracker, Help, Settings);
-      the workflows slot is honestly disabled (`aria-disabled`);
-      `aria-current="page"` marks the active destination, on `/` and
-      after rail navigation alike; the logo links home.
-* [x] Rail hover tips carry the label (opacity actually transitions
-      in -- `is_visible()` would pass on an unstyled tip, so the check
-      waits for `opacity > 0.9`).
-* [x] Floating console: mounted on every page (tracker and the
-      monitor/graph regression pages both assert it), natively
-      resizable (`resize: both`), minimizes to the bottom-right FAB,
-      the minimized state survives a reload (localStorage), clicking
-      the FAB restores the window.
-* [x] Rail navigation: tracker -> datasets lands on `/datasets` with
-      the destination item active; the console follows to the new
-      page.
-* [x] Help (`/help`): title, six stub sections, every stub honestly
-      marked "To be written.", the factual where-things-live table
-      lists six destinations.
-* [x] Settings (`/settings`): Design theme first -- Dark selected
-      (the theme that ships), Light honestly disabled and tagged
-      "planned"; the config editor stays reachable from here.
-* [ ] Dragging the console by its header and native corner-resize
-      are exercised interactively (desktop session); the automated
-      run pins persistence of whatever geometry it gets, not the
-      gestures themselves -- and `scripts/probe_ui_bugs.py` now
-      drives resize -> move -> resize automatically and asserts the
-      window keeps its size (the 2026-10-01 shrinking-window bug).
-
-## 8. Dataset add-data + edit modes -- scenario H (M8e)
-
-Read-only walk of the M8e flows against the real library: the dialog
-opens and validates but never posts, the editor dirties and reverts
-but never saves, the multi-edit panel renders but never applies.
-
-* [x] Card entry point: a dataset card's "Add data" opens the dialog
-      bound to that dataset; Generate is the default tab; the form
-      exposes its option set (prompt list, cfg/steps/t ranges, batch,
-      conditions/samples, latent size, prediction type); the total
-      preview computes `conditions x samples` and the latent size
-      renders its pixel equivalent.
-* [x] Local validation: an empty checkpoint refuses inline with the
-      error box visible and the dialog still open; the scenario
-      watches requests and asserts **zero** task POSTs left the
-      browser.
-* [x] Import tab: swaps panels, resize mode carries a written
-      description, the max-aspect-ratio knob is hidden until the
-      `fit` (split) mode makes it relevant; the import option set
-      (dir, recursion, resize mode, latent size, prediction type,
-      negative prompt, seed) renders.
-* [x] Edit mode: the toolbar toggle marks the grid and shows the
-      per-card edit affordance; clicking a card opens the advanced
-      editor bound to that item with read-only metadata and its
-      position in the walk.
-* [x] Dirty tracking: editing the prompt enables Save, Revert
-      restores the snapshot (Save disabled again), next moves to the
-      following item, close works from both the walk and a
-      prompt-click (Browse mode reaches the same editor).
-* [x] Multi-edit: two checkboxes raise the panel with exactly four
-      field segments; the CFG and Verdict value rows swap in on
-      demand; counts (selected / apply-target) follow the selection;
-      clearing selection hides the panel; still zero task POSTs and
-      no confirmation dialog fired (the walk deleted nothing).
-* [x] Selection is edit-mode-only: browse renders no item checkboxes
-      and hides select-all; switching to browse mid-selection hides
-      the panel without dropping the selection, and switching back
-      restores it (2 selected).
-* [x] Screenshot `datasets_edit.png` captured.
-
-## 9. Record
-
-Paste screenshots of each page into the session and list pass/fail
-per checkbox. Fix regressions in the milestone that owns the code --
-do not adjust the checklist to match broken behavior.
+Fix regressions in the milestone that owns the code -- do not adjust the
+checklist to match broken behavior.
 
 Caveat from the 2026-10-01 desktop run: the desktop app's `screenshot`
 tool served stale frames (byte counts matched new captures, but the

@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (229
+checklist below now runs as `backend/tests/visual_smoke.py` (236
 checks, Playwright; last full run 2026-10-01, exit 0). The
 API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
@@ -101,6 +101,13 @@ A scratch DB keeps the check independent of real training history.
       (`.progress-sub.active` mechanism), stop/kill visibility,
       elapsed ticker advancing, row click selects + loads the log,
       wipe `window.confirm` captured by a dialog handler.
+* [x] Diverged run (mocked `RunOut` carrying `nonfinite`): hero loss
+      reads `NaN · diverged` (avg `∞ · diverged`) with the `value-bad`
+      class, and the history row's loss cell keeps the marker -- never
+      an em dash that would claim nothing was measured (docs 07 F-03).
+* [x] Stream resync: `/runs/active` is fetched again when the event
+      stream opens (2 calls counted after boot) -- `/events` has no
+      replay, so the DB is refetched on every (re)open (docs 07 F-09).
 * [ ] **deferred with training tests**: the same controls against a
       *real* active run (process actually stopping/saving).
 

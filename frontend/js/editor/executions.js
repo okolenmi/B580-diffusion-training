@@ -33,6 +33,18 @@ export class Executions {
 
   /* ---- data ---- */
 
+  /**
+   * Refetch the authoritative state after the event stream (re)opens:
+   * /events has no replay, so anything published while this page was
+   * not subscribed -- or before the startup reconcile -- is simply
+   * never delivered (docs 07 F-09). The list and the selected
+   * execution's detail are both DB truth.
+   */
+  async resync() {
+    await this.refresh();
+    if (this.selected !== null) await this.select(this.selected);
+  }
+
   async refresh() {
     try {
       const data = await api("/graphs/executions?limit=50");

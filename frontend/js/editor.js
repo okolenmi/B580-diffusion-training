@@ -268,15 +268,24 @@ async function boot() {
     log("Canvas cleared.", "warn");
   });
 
-  // live events (SSE notifies, API stays the source of truth)
+  // live events (SSE notifies, API stays the source of truth). /events has
+  // no replay, so onOpen -- which fires on every (re)open -- is where the
+  // authoritative state is refetched (docs 07 F-09).
+  let badEventFrames = 0;
   sse("/events", {
-    onOpen: () => log("Event stream connected."),
+    onOpen: () => {
+      log("Event stream connected (state resynced).");
+      executions.resync();
+    },
     onError: () => log("Event stream reconnecting…", "warn"),
     onMessage: (msg) => {
       try {
         executions.onEvent(JSON.parse(msg.data));
       } catch {
-        /* unparsable frame: ignore, never guess */
+        // Never guess what an unreadable frame said: count it and say so
+        // out loud (a quiet drop reads like a stalled run).
+        badEventFrames += 1;
+        log(`Unreadable event frame dropped (${badEventFrames} so far).`, "error");
       }
     },
   });

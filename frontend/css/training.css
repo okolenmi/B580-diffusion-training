@@ -151,6 +151,14 @@
 }
 .hero-metric-value.accent { color: var(--accent); }
 
+/* A diverged measurement (docs 07 F-03): the wire sent null plus a
+   `nonfinite` marker, so the cell says so in red instead of showing an
+   em dash that would claim nothing was measured. Declared after .accent
+   so the diverged state outranks the normal accent colour at equal
+   specificity. */
+.hero-metric-value.value-bad,
+.col-num.value-bad { color: var(--red); }
+
 /* -- idle state -- */
 
 .hero-idle { display: flex; flex-direction: column; gap: 16px; }

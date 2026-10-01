@@ -1146,12 +1146,20 @@ def asgi_request(
     body_bytes: bytes | None = None,
     content_type: str | None = None,
     extra_headers: dict | None = None,
+    strict_json: bool = False,
 ) -> tuple[int, dict, object]:
     """One request through the whole app; returns (status, headers, body).
 
     ``body`` is parsed JSON when the response is JSON, else the text,
-    else ``None``.
+    else ``None``. ``strict_json`` parses with ``parse_constant``
+    rejecting NaN/Infinity -- the standard JSON forbids them, so a
+    response that carries one comes back as its raw text and fails the
+    assertion that expected an object (docs 07 F-03).
     """
+
+    def reject(constant: str):
+        raise ValueError(f"invalid JSON constant {constant}")
+
     status, headers, raw = asyncio.run(
         _asgi_call(
             app,
@@ -1167,7 +1175,9 @@ def asgi_request(
     body: object = None
     if text:
         try:
-            body = json.loads(text)
-        except json.JSONDecodeError:
+            body = json.loads(
+                text, parse_constant=reject if strict_json else None
+            )
+        except ValueError:  # JSONDecodeError, or a rejected NaN/Infinity
             body = text
     return status or 0, headers, body

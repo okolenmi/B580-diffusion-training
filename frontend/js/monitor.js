@@ -22,6 +22,7 @@
    --------------------------------------------------------------------------- */
 
 import { LossChart } from "./lib/loss_chart.js";
+import { nonfiniteText, setValue } from "./lib/value.js";
 
 // The managed/main trainers' per-t loss diagnostics (nodes/train/loss.py's
 // t_bucket_losses keys) plotted alongside the total, one color per series:
@@ -78,6 +79,7 @@ class MonitorDashboard {
     this.recentRates = []; // {t, step} pairs, last few, for steps/sec
     this.source = null;
     this.conn = "connecting"; // SSE connection state, for the status readout
+    this.badFrames = 0;     // frames we could not parse -- surfaced, not swallowed
     this.runEnded = null;     // null while running; {step, cancelled} after run_end
     this.rawHistory = [];     // every step report this session saw -- the CSV export
     this.budget = null;       // vram_budget_mb, once a report states one
@@ -113,27 +115,39 @@ class MonitorDashboard {
 
   /* Connection state and run state combined: a finished run's stream
      stays open, so run_end is what makes "finished vs still going"
-     answerable at all. */
+     answerable at all. Unreadable frames are counted in the readout too:
+     a silently dropped frame looks exactly like a node that stopped
+     reporting, which is the one thing this page must never suggest
+     (docs 07 F-03). */
   renderStatus() {
     const dot = this.els.statusDot, text = this.els.statusText;
+    const bad = this.badFrames
+      ? ` \u00b7 ${this.badFrames} unreadable frame${this.badFrames > 1 ? "s" : ""}`
+      : "";
     if (this.conn === "disconnected") {
       dot.className = "mon-status-dot disconnected";
-      text.textContent = "disconnected \u2014 retrying\u2026";
+      text.textContent = "disconnected \u2014 retrying\u2026" + bad;
       return;
     }
     if (this.runEnded) {
       const c = this.runEnded.cancelled;
       dot.className = "mon-status-dot " + (c ? "ended" : "live");
-      text.textContent = (c ? "cancelled at step " : "finished at step ") + this.runEnded.step;
+      text.textContent = (c ? "cancelled at step " : "finished at step ") + this.runEnded.step + bad;
       return;
     }
     dot.className = "mon-status-dot" + (this.conn === "live" ? " live" : "");
-    text.textContent = this.conn === "live" ? "live" : "connecting\u2026";
+    text.textContent = (this.conn === "live" ? "live" : "connecting\u2026") + bad;
+  }
+
+  /* Counted and shown, never swallowed (docs 07 F-03, review rule 5). */
+  noteBadFrame() {
+    this.badFrames += 1;
+    this.renderStatus();
   }
 
   handleEvent(ev) {
     let data;
-    try { data = JSON.parse(ev.data); } catch (e) { return; }
+    try { data = JSON.parse(ev.data); } catch { this.noteBadFrame(); return; }
     if (data.type === "connected") { this.setStatus("live"); return; }
     if (data.type === "clear") {
       // A fresh run just started reporting to this monitor_id -- without
@@ -267,8 +281,14 @@ class MonitorDashboard {
 
   updateMetrics(data, now) {
     const e = this.els;
-    e.step.textContent = data.total_steps ? `${data.step} / ${data.total_steps}` : String(data.step);
-    e.loss.textContent = this.fmt(data.loss);
+    const step = data.total_steps ? `${data.step} / ${data.total_steps}` : String(data.step);
+    e.step.textContent = step;
+    // A diverged loss arrives as null plus a `nonfinite` marker (docs 07
+    // F-03): say so loudly instead of the em dash this.fmt() gives null,
+    // which would read as "nothing measured here".
+    const lossKind = data.nonfinite && data.nonfinite.loss;
+    if (lossKind) setValue(e.loss, nonfiniteText(lossKind), true);
+    else setValue(e.loss, this.fmt(data.loss), false);
     e.smoothed.textContent = this.chart.points.length && this.chart.points[this.chart.points.length - 1].smoothed != null
       ? this.fmt(this.chart.points[this.chart.points.length - 1].smoothed) : "\u2014";
     if (this.stats.best != null) {

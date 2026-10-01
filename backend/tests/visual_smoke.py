@@ -250,6 +250,60 @@ def main():
         )
         ctx.close()
 
+        # ---------- B2: diverged run + resync-on-open (docs 07 F-03/F-09) ----------
+        print("== B2: diverged values + resync on stream open ==")
+        diverged = dict(
+            active_run, current_loss=None, avg_loss=None,
+            nonfinite={"current_loss": "nan", "avg_loss": "inf"},
+        )
+        active_hits: list[str] = []
+
+        def serve_active(route):
+            active_hits.append(route.request.url)
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps(diverged))
+
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "B2")
+        page.route(re.compile(r"/api/v1/runs/active"), serve_active)
+        page.route(
+            re.compile(r"/api/v1/runs\?limit=20"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"runs": [diverged, history[1]], "count": 2})),
+        )
+        page.route(
+            re.compile(r"/api/v1/runs/\d+/log"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"log": log_text, "lines": 40})),
+        )
+        page.goto(f"{BASE}/", wait_until="networkidle")
+        page.wait_for_timeout(600)
+
+        loss_text = page.locator("#metric-loss").inner_text()
+        check(
+            "NaN" in loss_text and "diverged" in loss_text,
+            f"diverged loss is loud, not an em dash ({loss_text!r})",
+        )
+        check(
+            page.locator("#metric-loss").evaluate("e => e.classList.contains('value-bad')"),
+            "diverged loss carries the loud class",
+        )
+        avg_text = page.locator("#metric-avg").inner_text()
+        check("diverged" in avg_text, f"diverged avg says so too ({avg_text!r})")
+        cell = page.locator("#history-list tr[data-run-id='13'] .col-num").nth(1)
+        check("diverged" in cell.inner_text(), f"history cell keeps the marker ({cell.inner_text()!r})")
+        check(cell.evaluate("e => e.classList.contains('value-bad')"), "history cell styled loud")
+
+        # /events has no replay: the page refetches the DB on every open.
+        check(
+            len(active_hits) >= 2,
+            f"active run refetched when the stream opened ({len(active_hits)} calls)",
+        )
+        page.screenshot(path=str(OUT / "diverged.png"), full_page=True)
+        check((OUT / "diverged.png").stat().st_size > 20000, "diverged screenshot captured")
+        ctx.close()
+
         # ---------- C: monitor + graph regression (shared CSS surgery) ----------
         for name, path, ready_sel in (
             ("monitor", "/monitor/mon-test", "canvas"),

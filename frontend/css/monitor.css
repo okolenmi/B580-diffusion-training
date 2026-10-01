@@ -178,6 +178,11 @@
     font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text);
     text-align: right;
   }
+  /* A diverged measurement (docs 07 F-03) -- the monitor sends null plus a
+     `nonfinite` marker; the readout says so instead of showing a dash that
+     would claim the range was never sampled. */
+  .mon-stat-value.value-bad,
+  .mon-hero-value.value-bad { color: var(--red); }
   .mon-section {
     font-size: 9px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--text-dim); padding: 15px 0 7px; border-bottom: 1px solid var(--border);

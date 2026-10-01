@@ -73,8 +73,22 @@ graph_executions_deleted
 `run_progressed`: `{type, occurred_at, run_id, step, total_steps,
 loss, avg_loss, lr, phase, cache_done, cache_total}` — `null`s for
 unknown fields. `graph_execution_progressed`: `execution_id`, `node_id`,
-`index`, `count`. Per-subscriber queue (bounded; overflow drops the
-event with a debug log — a slow client never blocks a run).
+`index`, `count`. **No replay**: a frame published while a client is
+disconnected is gone for good, so subscribers refetch the REST state on
+every (re)open. Per-subscriber buffer (bounded): progress frames are
+coalesced (a queued one is superseded by the newest), lifecycle frames
+are kept; only an all-lifecycle backlog gives up its oldest frame,
+which is logged and counted.
+
+**Non-finite floats** (`NaN`, `±Inf` — a diverged trainer) never reach
+the wire as JSON: every body, SSE frame and monitor frame goes through
+`backend/json_safe.py`, which sends `null` for the value and adds a
+sibling `nonfinite` map naming the keys it replaced with their kind
+(`{"current_loss": "inf", "avg_loss": "-inf"}`). The marker is attached
+per object, so a list item names its own field (`runs[i].nonfinite`).
+Note SQLite maps `NaN` to `NULL`, so `NaN` only ever reaches the stream
+frames, never a stored row. Clients must render a marker as a loud
+"diverged" state, never as "no measurement".
 
 ## 3. Runs (subprocess training)
 
@@ -91,7 +105,8 @@ event with a debug log — a slow client never blocks a run).
 `RunOut`: `id, status, config_path, mode, phase, total_steps,
 done_steps, current_loss, avg_loss, cache_done, cache_total, pid,
 exit_code, error, log_path, created_at, updated_at, started_at,
-finished_at` (nullable where listed).
+finished_at` (nullable where listed), plus the optional `nonfinite`
+marker described in section 2.
 
 ## 4. Config
 

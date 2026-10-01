@@ -133,6 +133,7 @@ Rules (each is enforced by review and by the tests):
 backend/
 ├── __init__.py               # version stamp; package docstring
 ├── config.py                 # frozen Settings; explicit Settings.load(env)
+├── json_safe.py              # non-finite float sanitizer for every JSON body
 ├── cli.py                    # entry: python -m backend.cli [--host --port --db]
 ├── bootstrap.py              # composition root -> Container (+ startup reconcile)
 ├── domain/                   # imports nothing
@@ -201,6 +202,7 @@ backend/
 │   ├── deps.py               # get_services request dependency
 │   ├── errors.py             # the one error envelope (4 handlers)
 │   ├── schemas.py            # pydantic response models + *_out mappers
+│   ├── responses.py          # SanitizingJSONResponse (app-wide default)
 │   ├── sse.py                # EventBus -> text/event-stream bridge
 │   ├── frontend.py           # register_frontend: page routes + /ui mount
 │   └── api/                  # health.py, runs.py, config.py, settings.py,

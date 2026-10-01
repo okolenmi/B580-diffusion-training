@@ -3,17 +3,23 @@
 
    Data flow: REST for state that is authoritative in the DB (active run,
    history, logs, start options), SSE /events for live progress -- polling
-   is only the fallback refresh after actions (03-migration §2 rules).
+   is only the fallback refresh after actions, plus a 30s safety poll and a
+   refetch on every (re)open, because /events has no replay (docs 07 F-09).
 
    The page is state-driven: the hero shows exactly one of two faces
    (live run / start form), so idle never shows empty metrics and
    running never shows a start form that would 409.
+
+   A diverged loss (NaN/Inf) arrives as null plus a `nonfinite` marker and
+   is rendered loud, never as an em dash (docs 07 F-03). An unparsable
+   frame is counted in the console, never dropped quietly.
 
    Everything network-shaped goes through api.js, so the error envelope
    surfaces in exactly one place (the console log below).
    --------------------------------------------------------------------------- */
 
 import { api, sse, ApiError } from "../api.js";
+import { renderMeasured } from "../lib/value.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -43,6 +49,28 @@ let activeRun = null;     // RunOut | null
 let historyRuns = [];     // newest first
 let shownLogRun = null;   // run id whose log is on screen (or null)
 let elapsedTimer = null;  // 1s ticker, only while a run is active
+let safetyTimer = null;   // slow resync, so a missed event cannot stick (F-09)
+let badFrames = 0;        // frames we could not parse -- counted, shown
+
+/* /events has no replay: a frame sent while the tab was asleep, while
+   the socket was reconnecting, or before this page subscribed (the
+   startup reconcile publishes first) is simply never delivered. So the
+   DB stays the source of truth and every (re)open refetches it, with a
+   slow poll underneath for a socket that never notices it is stale.
+   Without this the hero can sit on "running" for a finished run until
+   a manual reload (docs 07 F-09). */
+const SAFETY_POLL_MS = 30000;
+
+function resync(reason) {
+  refreshActive();
+  refreshHistory();
+  if (reason) log(reason, "info");
+}
+
+function startSafetyPoll() {
+  if (safetyTimer !== null) return;
+  safetyTimer = setInterval(() => resync(), SAFETY_POLL_MS);
+}
 
 /* ---- active run + hero state ---- */
 
@@ -78,7 +106,7 @@ function renderActive() {
     el("progress-text").textContent = "—";
     el("cache-progress-wrap").classList.remove("active");
     for (const id of ["metric-loss", "metric-avg", "metric-lr"]) {
-      el(id).textContent = "—";
+      renderMeasured(el(id), null, "current_loss", fmtNum);
     }
     return;
   }
@@ -92,9 +120,9 @@ function renderActive() {
     .filter(Boolean).join(" · ");
   startTicker();
   renderProgress(run);
-  el("metric-loss").textContent = fmtNum(run.current_loss);
-  el("metric-avg").textContent = fmtNum(run.avg_loss);
-  el("metric-lr").textContent = "—"; // lr arrives via run_progressed
+  renderMeasured(el("metric-loss"), run, "current_loss", fmtNum);
+  renderMeasured(el("metric-avg"), run, "avg_loss", fmtNum);
+  renderMeasured(el("metric-lr"), run, "lr", () => "—"); // lr arrives via run_progressed
 }
 
 function renderProgress(run) {
@@ -203,7 +231,9 @@ function renderHistory() {
 
     const loss = document.createElement("td");
     loss.className = "col-num";
-    loss.textContent = run.avg_loss != null ? fmtNum(run.avg_loss) : "—";
+    // A finished run whose loss diverged keeps the marker: an em dash
+    // in the history would hide exactly the run worth looking at.
+    renderMeasured(loss, run, "avg_loss", (v) => (v != null ? fmtNum(v) : "—"));
 
     const when = document.createElement("td");
     when.className = "col-dim";
@@ -370,28 +400,39 @@ async function loadStartOptions() {
 
 /* ---- live progress over the domain-event stream ---- */
 
+/* A frame we cannot parse is data we cannot show. It is counted and
+   said out loud, never swallowed: a silent drop looks exactly like a
+   run that stopped reporting (docs 07 F-03, review rule 5). */
+function noteBadFrame() {
+  badFrames += 1;
+  log(`Unreadable event frame dropped (${badFrames} so far).`, "error");
+}
+
 function handleEvent(raw) {
   let e;
-  try { e = JSON.parse(raw.data); } catch { return; }
+  try { e = JSON.parse(raw.data); } catch { noteBadFrame(); return; }
   switch (e.type) {
     case "run_started":
       log(`Run #${e.run_id} started.`, "success");
-      refreshActive();
-      refreshHistory();
+      resync();
       break;
     case "run_progressed": {
       if (!activeRun || e.run_id !== activeRun.id) break;
-      // Patch the hero in place -- DB state is refreshed on transitions.
+      // Patch the hero in place -- DB state is refreshed on transitions
+      // and on every resync, so a missed frame self-heals.
       activeRun.done_steps = e.step;
       activeRun.total_steps = e.total_steps;
       activeRun.current_loss = e.loss;
       activeRun.avg_loss = e.avg_loss;
       activeRun.cache_done = e.cache_done;
       activeRun.cache_total = e.cache_total;
+      if (e.nonfinite) activeRun.nonfinite = e.nonfinite;
+      else delete activeRun.nonfinite;
       renderProgress(activeRun);
-      el("metric-loss").textContent = fmtNum(e.loss);
-      el("metric-avg").textContent = fmtNum(e.avg_loss);
-      el("metric-lr").textContent = e.lr != null ? e.lr.toExponential(2) : "—";
+      renderMeasured(el("metric-loss"), e, "loss", fmtNum);
+      renderMeasured(el("metric-avg"), e, "avg_loss", fmtNum);
+      renderMeasured(el("metric-lr"), e, "lr",
+        (v) => (v != null ? v.toExponential(2) : "—"));
       break;
     }
     case "run_completed":
@@ -467,7 +508,13 @@ async function boot() {
   await refreshHistory();
   if (activeRun) await showLog(activeRun.id);
 
-  sse("/events", { onMessage: handleEvent });
+  // onOpen fires on every (re)connect, so the refetch is also the
+  // resync after a dropped connection or a backgrounded tab.
+  sse("/events", {
+    onMessage: handleEvent,
+    onOpen: () => { startSafetyPoll(); resync(); },
+    onError: () => log("Event stream reconnecting…", "warn"),
+  });
   log("Connected to /api/v1/events.", "info");
 }
 

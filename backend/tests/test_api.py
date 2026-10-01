@@ -163,6 +163,57 @@ def test_get_run_and_errors() -> None:
         )
 
 
+def test_diverged_run_body() -> None:
+    # docs 07 F-03: a non-finite loss in the row used to raise inside
+    # Starlette's allow_nan=False response and 500 the whole page.
+    # SQLite maps NaN to NULL, so +/-Inf is what survives the round
+    # trip into the DTO (NaN only ever reaches the SSE frame, pinned
+    # in test_json_safe.py).
+    print("\n== GET /api/v1/runs with a diverged (inf) loss ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        container, app = _build(tmp)
+        repo = SqliteRunRepository(container.database)
+        clock = FakeClock()
+        run = Run.create(
+            config_path="configs/diverged.toml",
+            mode="distillation",
+            total_steps=100,
+            created_at=clock.now(),
+        )
+        repo.add(run)
+        run.mark_started(pid=4242, at=clock.now())
+        repo.update(run)
+        run.record_progress(
+            done_steps=50, at=clock.now(),
+            current_loss=float("inf"), avg_loss=float("-inf"), phase="training",
+        )
+        repo.update(run)
+
+        status, _, body = asgi_request(app, "/api/v1/runs/1", strict_json=True)
+        check(status == 200, f"diverged run still serves (got {status})")
+        check(isinstance(body, dict), f"body is strict JSON (got {body!r})")
+        check(
+            body["current_loss"] is None and body["avg_loss"] is None,
+            f"non-finite floats are null (got {body['current_loss']!r})",
+        )
+        check(
+            body["nonfinite"] == {"current_loss": "inf", "avg_loss": "-inf"},
+            f"the UI can render the diverged state (got {body.get('nonfinite')})",
+        )
+        check(body["done_steps"] == 50, "the finite fields are untouched")
+
+        status, _, listing = asgi_request(app, "/api/v1/runs", strict_json=True)
+        check(
+            status == 200 and listing["runs"][0]["nonfinite"]["current_loss"] == "inf",
+            "the history page survives a diverged run too",
+        )
+        status, _, active = asgi_request(app, "/api/v1/runs/active", strict_json=True)
+        check(
+            status == 200 and active["nonfinite"]["current_loss"] == "inf",
+            "so does the active-run read the dashboard polls",
+        )
+
+
 def test_delete_runs() -> None:
     print("\n== DELETE /api/v1/runs (mutation + event) ==")
     with tempfile.TemporaryDirectory() as tmp:
@@ -374,6 +425,7 @@ def main() -> None:
     test_health()
     test_list_runs()
     test_get_run_and_errors()
+    test_diverged_run_body()
     test_delete_runs()
     test_lifecycle_endpoints()
     test_sse_stream()

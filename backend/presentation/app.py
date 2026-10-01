@@ -28,6 +28,7 @@ from .api import (
 )
 from .errors import register_error_handlers
 from .frontend import register_frontend
+from .responses import SanitizingJSONResponse
 
 
 def create_app(
@@ -37,6 +38,10 @@ def create_app(
         title="Training Backend",
         version=__version__,
         description="Clean-room replacement for the legacy training server.",
+        # Every JSON body passes the non-finite-float sanitizer
+        # (docs 07 F-03): a diverged loss becomes null + a `nonfinite`
+        # marker instead of a 500 from `allow_nan=False`.
+        default_response_class=SanitizingJSONResponse,
     )
     app.state.services = services
 

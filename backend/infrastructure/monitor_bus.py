@@ -11,6 +11,13 @@ marshalling and frame format are pinned by
 ``smoke_test_monitor_bus.py`` and the legacy dashboard, and ``nodes/``
 duck-types ``report``/``clear`` on whatever object the context carries,
 so the adapter's methods are the entire contract.
+
+One thing the adapter does add: reports are sanitized here
+(:mod:`backend.json_safe`) before they reach the bus, because the
+repo-root formatter uses plain ``json.dumps`` -- a diverged loss would
+otherwise be framed as a bare ``NaN`` that every browser refuses to
+parse, and the monitor page would silently lose the frame (docs 07
+F-03).
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ from __future__ import annotations
 import asyncio
 
 from ..application.ports.monitor_bus import MonitorBus as MonitorBusPort
+from ..json_safe import sanitize
 from monitor_bus import MonitorBus as ProcessMonitorBus
 
 
@@ -28,7 +36,7 @@ class SharedMonitorBus(MonitorBusPort):
         self._bus = ProcessMonitorBus()
 
     def report(self, monitor_id: str, data: dict) -> None:
-        self._bus.report(monitor_id, data)
+        self._bus.report(monitor_id, sanitize(data))
 
     def clear(self, monitor_id: str) -> None:
         self._bus.clear(monitor_id)

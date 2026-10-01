@@ -6,6 +6,7 @@
     <title>Graph Editor</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
     <link rel="stylesheet" href="/ui/css/editor.css">
 </head>
 <body class="editor-body">
@@ -13,7 +14,7 @@
     <!-- Left: palette (node catalog) + saved-graph library. -->
     <aside class="ed-palette">
         <div class="ed-topbar">
-            <a class="btn btn-secondary btn-small" href="/">&#8592; Training</a>
+            <a class="btn btn-secondary btn-small" href="/">&#8592; System tracker</a>
             <span class="ed-brand">Graph Editor</span>
         </div>
         <input id="palette-search" class="cfg-input ed-search" type="search"
@@ -90,6 +91,7 @@
         </div>
     </aside>
 
+    <script type="module" src="/ui/js/shell.js"></script>
     <script type="module" src="/ui/js/editor.js"></script>
 </body>
 </html>

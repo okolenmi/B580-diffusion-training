@@ -1,6 +1,8 @@
 """Visual smoke for the main pages: idle state, mocked running state,
 interactions, the config editor (schema form + raw), run detail views,
-and a regression pass over monitor/graph (they share style.css).
+a regression pass over monitor/graph (they share style.css), the
+dataset manager against the real library, and the M8d shell (icon rail,
+floating console, help/settings).
 
 Not auto-discovered by run_all.py (no ``test_`` prefix): it needs a
 LIVE backend and the Playwright venv.
@@ -127,8 +129,9 @@ def main():
         check(page.locator("#btn-stop").is_hidden(), "stop button hidden when idle")
         check(page.locator("#btn-kill").is_hidden(), "kill button hidden when idle")
         check(page.locator("#status-badge").inner_text().strip().upper() == "IDLE", "badge = Idle")
-        check(page.locator(".page-topbar h1").inner_text() == "Training", "topbar title")
-        check(page.locator(".sidebar-tool").is_visible(), "monitor tool group visible")
+        check(page.locator(".page-topbar h1").inner_text() == "System tracker",
+              "topbar title (renamed from Training)")
+        check(page.locator(".util-strip").is_visible(), "monitor hand-off strip visible")
         check(
             page.locator("table.runs-table th").count() == 6,
             "history table has 6 column headers",
@@ -262,6 +265,10 @@ def main():
             check(page.locator(ready_sel).first.is_visible() if state == "visible"
                   else page.locator(ready_sel).count() > 0,
                   f"{name}: core element renders")
+            # the shell (rail + floating console) is global, these pages too
+            check(page.locator(".rail").is_visible(), f"{name}: icon rail present")
+            check(page.locator("#fconsole").count() == 1,
+                  f"{name}: floating console mounted")
             page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
             ctx.close()
 
@@ -321,6 +328,16 @@ def main():
         # repo's own config files.
         page.fill("#cfg-path", str(smoke_cfg))
         page.click("#btn-load")
+        # loadConfig() ends with a console line AFTER it re-renders.
+        # Editing before that lands races the reload: the form silently
+        # reverts, dirty.clear() runs, and saveForm early-returns on an
+        # empty dirty set (both downstream checks then fail on the old
+        # value). Wait for the line -- the field itself already exists
+        # from the previous load, so it proves nothing about this one.
+        page.wait_for_function(
+            """p => [...document.querySelectorAll('#console-output .console-line')]"""
+            """ .some(l => l.textContent.includes('Loaded ' + p))""",
+            arg=str(smoke_cfg), timeout=15000)
         page.wait_for_selector("#f-common-steps", timeout=15000)
         cur_raw = page.input_value("#f-common-steps").strip()
         new_steps = 1200 if cur_raw == "1100" else 1100
@@ -432,10 +449,10 @@ def main():
         n0 = page.locator(".ds-card").count()
         check(n0 >= 3, f"library list renders the real datasets ({n0})")
 
-        # the M8c nav hand-off from the main page
+        # the M8d rail hands off to the dataset manager
         page.goto(f"{BASE}/", wait_until="networkidle")
-        check(page.locator("a.nav-item[href='/datasets']").count() == 1,
-              "sidebar links to /datasets")
+        check(page.locator("a.rail-item[href='/datasets']").count() == 1,
+              "rail links to /datasets")
         page.goto(f"{BASE}/datasets", wait_until="networkidle")
         page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
 
@@ -492,6 +509,8 @@ def main():
         page.wait_for_selector("#items-grid .ds-item", timeout=15000)
         n_items = page.locator("#items-grid .ds-item").count()
         check(n_items == 201, f"all items render ({n_items})")
+        # lazy thumbnails only fetch near the viewport -- bring row one in
+        page.locator("#items-grid .ds-item").first.scroll_into_view_if_needed()
         try:
             page.wait_for_function(
                 """() => { const i = document.querySelector('#items-grid .ds-thumb img');"""
@@ -534,6 +553,104 @@ def main():
               "throwaway dataset deleted (cleanup)")
         check(len(dialogs) == 1 and "m8c-smoke-ds" in dialogs[0],
               "delete asked for confirmation first")
+        ctx.close()
+
+        # ---------- G: shell -- rail + floating console + help/settings ----
+        print("== G: shell (rail, console, help, settings) ==")
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "G")
+
+        page.goto(f"{BASE}/", wait_until="networkidle")
+
+        # rail: inventory, honest disabled slot, active state, hover tips
+        check(page.locator(".rail").is_visible(), "icon rail visible")
+        n_rail = page.locator(".rail-item").count()
+        check(n_rail == 6, f"rail has 6 items (5 main + settings) ({n_rail})")
+        soon = page.locator(".rail-item.rail-soon")
+        check(soon.count() == 1 and soon.get_attribute("aria-disabled") == "true",
+              "workflows slot present and honestly disabled")
+        check(page.locator("a.rail-item[href='/']").get_attribute("aria-current")
+              == "page", "tracker marked active on /")
+        page.hover("a.rail-item[href='/graph']")
+        # is_visible() ignores opacity -- assert the tip actually faded in
+        try:
+            page.wait_for_function(
+                """() => { const t = document.querySelector(
+                    "a.rail-item[href='/graph'] .rail-tip");"""
+                """ return !!t && parseFloat(getComputedStyle(t).opacity) > 0.9; }""",
+                timeout=3000)
+            check(True, "rail tooltip actually shown on hover (opacity > 0.9)")
+        except Exception as exc:  # noqa: BLE001 -- report, don't kill the run
+            check(False, f"rail tooltip shown on hover ({type(exc).__name__})")
+        check(page.locator(".rail-logo").get_attribute("href") == "/",
+              "logo links home")
+
+        # floating console: mounted, resizable, minimizes to a FAB, persists
+        check(page.locator("#fconsole").is_visible(), "floating console visible")
+        check(page.locator("#console-output .console-line").first.is_visible(),
+              "console seeded with its first line")
+        resize_mode = page.locator("#fconsole").evaluate(
+            "e => getComputedStyle(e).resize")
+        check(resize_mode == "both", f"console is natively resizable ({resize_mode})")
+        page.click("#fconsole-min")
+        check(page.locator("#fconsole").is_hidden(), "console minimizes")
+        check(page.locator("#fconsole-fab").is_visible(),
+              "FAB appears in the bottom-right corner")
+        page.reload(wait_until="networkidle")
+        check(page.locator("#fconsole-fab").is_visible(),
+              "minimized state persists across a reload")
+        page.click("#fconsole-fab")
+        check(page.locator("#fconsole").is_visible(),
+              "clicking the FAB restores the console")
+
+        # rail navigation: tracker -> datasets, active state follows
+        page.click("a.rail-item[href='/datasets']")
+        page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
+        check(page.url.rstrip("/") == f"{BASE}/datasets",
+              f"rail link navigates to /datasets ({page.url})")
+        check(page.locator("a.rail-item[href='/datasets']").get_attribute(
+            "aria-current") == "page", "destination rail item marked active")
+        # the shell is global: console still mounted away from home
+        check(page.locator("#fconsole").is_visible(),
+              "console follows you to another page")
+
+        # help: structured placeholder, honest stubs, one factual block
+        page.click("a.rail-item[href='/help']")
+        page.wait_for_selector("#help-where", state="visible", timeout=15000)
+        check(page.locator(".page-topbar h1").inner_text() == "Help",
+              "help page title")
+        n_help = page.locator(".help-card").count()
+        check(n_help == 6, f"six stub sections on help ({n_help})")
+        check(page.locator(".help-todo").count() == n_help,
+              "every stub honestly marked 'To be written.'")
+        check(page.locator(".help-map-row").count() == 6,
+              "where-things-live lists six destinations")
+        page.screenshot(path=str(OUT / "help.png"), full_page=True)
+        check((OUT / "help.png").stat().st_size > 20000,
+              "help screenshot captured")
+
+        # settings: design theme first, light honestly disabled
+        page.click("a.rail-item[href='/settings']")
+        page.wait_for_selector("#theme-group", state="visible", timeout=15000)
+        check(page.locator(".page-topbar h1").inner_text() == "Settings",
+              "settings page title")
+        check(page.locator("input[name='theme'][value='dark']").is_checked(),
+              "design theme: dark is the current selection")
+        check(page.locator("input[name='theme'][value='light']").is_disabled(),
+              "light honestly disabled (planned)")
+        check(page.locator(".settings-link[href='/config']").count() == 1,
+              "settings links the config editor (kept reachable)")
+        page.screenshot(path=str(OUT / "settings.png"), full_page=True)
+        check((OUT / "settings.png").stat().st_size > 15000,
+              "settings screenshot captured")
+
+        # the money shot: rail + floating console over the main page
+        page.goto(f"{BASE}/", wait_until="networkidle")
+        page.wait_for_selector("#hero-idle", state="visible", timeout=15000)
+        page.screenshot(path=str(OUT / "shell.png"), full_page=True)
+        check((OUT / "shell.png").stat().st_size > 20000,
+              "shell screenshot captured")
         ctx.close()
 
         browser.close()

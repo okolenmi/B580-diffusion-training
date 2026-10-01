@@ -27,12 +27,16 @@ FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 # Every asset the shipped pages reference.
 ASSETS = (
     "/ui/css/style.css",
+    "/ui/css/shell.css",
     "/ui/css/monitor.css",
     "/ui/css/editor.css",
     "/ui/css/training.css",
     "/ui/css/config.css",
     "/ui/css/run.css",
     "/ui/css/datasets.css",
+    "/ui/css/help.css",
+    "/ui/css/settings.css",
+    "/ui/js/shell.js",
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",
@@ -107,6 +111,18 @@ def test_pages_and_assets() -> None:
             f"/datasets/{{name}} serves the same detail page (got {status})",
         )
 
+        status, _, body = asgi_request(app, "/help")
+        check(
+            status == 200 and isinstance(body, str) and "help-where" in body,
+            f"/help serves the help page (got {status})",
+        )
+
+        status, _, body = asgi_request(app, "/settings")
+        check(
+            status == 200 and isinstance(body, str) and "theme-group" in body,
+            f"/settings serves the settings page (got {status})",
+        )
+
         for asset in ASSETS:
             status, _, _ = asgi_request(app, asset)
             check(status == 200, f"{asset} serves (got {status})")
@@ -141,8 +157,8 @@ def test_static_cache_headers() -> None:
         app = create_app(_container(tmp).services, static_dir=FRONTEND)
 
         for path in ("/", "/graph", "/config", "/run/12", "/datasets",
-                     "/monitor/mon-test", "/ui/css/style.css",
-                     "/ui/js/editor.js"):
+                     "/help", "/settings", "/monitor/mon-test",
+                     "/ui/css/style.css", "/ui/js/editor.js"):
             status, headers, _ = asgi_request(app, path)
             check(
                 status == 200 and headers.get("cache-control") == "no-cache",

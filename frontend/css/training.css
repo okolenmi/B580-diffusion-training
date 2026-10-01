@@ -304,29 +304,38 @@
 }
 .log-open:hover { text-decoration: underline; }
 
-/* ---- sidebar tool group (monitor hand-off) ---- */
+/* ---- monitor hand-off strip (under the tracker topbar) ------------------- */
 
-.sidebar-tool {
-    margin-top: 12px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
+.util-strip {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    padding: 9px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    max-width: 760px; /* a utility row, not a full-width bar */
 }
-.sidebar-tool-label {
-    font-size: 10px;
+.util-label {
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-dim);
 }
-.sidebar-tool .cfg-input {
+.util-strip .cfg-input {
+    flex: 1;
+    min-width: 140px;
+    max-width: 320px;
     font-size: 0.85rem;
-    padding: 0.6rem 0.7rem;
+    padding: 0.5rem 0.7rem;
 }
-.nav-item-disabled { opacity: 0.45; cursor: default; }
-.nav-item-disabled:hover { background: none; color: var(--text-dim); }
+.util-hint { font-size: 12px; }
+
+@media (max-width: 1100px) {
+    .util-hint { display: none; }
+}
 
 /* ---- narrow panes (the Review pane can be small) ---- */
 

@@ -1,0 +1,132 @@
+/* ---------------------------------------------------------------------------
+   settings.css -- Settings page (/settings). First section: the design
+   theme picker; then link rows for project-level tools. Loaded after
+   style.css (tokens + page chrome come from there).
+
+   Sections:
+   1. .theme-options -- radio cards for the theme picker
+   2. .settings-tag  -- small state tags ("current", "planned")
+   3. .settings-link -- navigational rows (title + subtitle + arrow)
+   4. .settings-note -- explanatory prose
+--------------------------------------------------------------------------- */
+
+/* ---- 1. Theme picker ------------------------------------------------------ */
+
+.theme-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 4px 0 2px;
+}
+
+.theme-option {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition:
+        border-color var(--dur-fast) ease,
+        background var(--dur-fast) ease;
+}
+.theme-option:hover { border-color: var(--accent); }
+
+/* The native radio stays for semantics/keyboard; the card is the target. */
+.theme-option input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+}
+.theme-option:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.theme-option:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.theme-option-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.theme-option-disabled:hover { border-color: var(--border); }
+
+/* Swatches: a miniature of each theme's background/text pair. */
+.theme-swatch {
+    width: 34px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex: none;
+}
+.theme-swatch-dark { background: linear-gradient(135deg, #0b0e14 50%, #1c222d 50%); }
+.theme-swatch-light { background: linear-gradient(135deg, #f4f6f8 50%, #ffffff 50%); }
+
+.theme-name {
+    font-weight: 700;
+    font-size: 14px;
+}
+
+/* ---- 2. Tags -------------------------------------------------------------- */
+
+.settings-tag {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 9px;
+}
+.settings-tag-current {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+/* ---- 3. Link rows ---------------------------------------------------------- */
+
+.settings-link {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 6px;
+    border-bottom: 1px solid var(--border);
+    text-decoration: none;
+    color: var(--text);
+    border-radius: var(--radius);
+    transition: background var(--dur-fast) ease;
+}
+.settings-link:last-of-type { border-bottom: none; }
+.settings-link:hover { background: var(--surface-alt); }
+
+.settings-link-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+.settings-link-title { font-weight: 700; font-size: 14px; }
+.settings-link-sub { font-size: 12.5px; }
+
+.settings-link-arrow {
+    color: var(--text-dim);
+    font-size: 16px;
+}
+.settings-link:hover .settings-link-arrow { color: var(--accent); }
+
+/* ---- 4. Notes -------------------------------------------------------------- */
+
+.settings-note {
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 12px 0 0;
+}

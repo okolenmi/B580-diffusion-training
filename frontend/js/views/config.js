@@ -102,7 +102,7 @@ function renderForm() {
     let prevSub = null;
     for (const [opt] of list) {
       // persist_locally options (start_from / reset_optimizer) are the
-      // per-launch choices owned by the Training page's start form --
+      // per-launch choices owned by the System tracker's start form --
       // by contract they are never written to the config file, so this
       // editor (which edits the file) does not show them. It also
       // avoids their deliberate duplicate ids (one row per method).
@@ -494,18 +494,6 @@ function showTab(which) {
   el("panel-raw").hidden = form;
 }
 
-/* ---- monitor hand-off (same as dashboard.js) ---- */
-
-function openMonitor() {
-  const id = el("monitor-id-input").value.trim();
-  if (!id) {
-    log("Paste a monitor id first (it is in the monitor page URL).", "warn");
-    el("monitor-id-input").focus();
-    return;
-  }
-  window.location.href = `/monitor/${encodeURIComponent(id)}`;
-}
-
 /* ---- boot ---- */
 
 async function boot() {
@@ -522,10 +510,6 @@ async function boot() {
   el("raw-editor").addEventListener("input", () => {
     rawDirty = true;
     updateToolbar();
-  });
-  el("btn-open-monitor").addEventListener("click", openMonitor);
-  el("monitor-id-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") openMonitor();
   });
 
   // Schema is file-independent: fetch once, render nothing until a

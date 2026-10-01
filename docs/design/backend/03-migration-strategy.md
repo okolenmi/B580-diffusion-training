@@ -16,26 +16,38 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 ## 2. New frontend layout (planned)
 
 ```
-frontend/                     # shipped slices 1+2 (M6/M7) + M8 views
-├── index.html                # app shell: sidebar nav + state-driven training page
+frontend/                     # shipped slices 1+2 (M6/M7) + M8 views + M8d shell
+├── index.html                # System tracker page (/): state hero, history, log
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
 ├── graph.html                # graph editor page (/graph)
 ├── config.html               # config editor page (/config, M8a)
 ├── run.html                  # run detail page (/run/{id}, M8b)
 ├── datasets.html             # dataset manager (/datasets + /{name}, M8c)
+├── help.html                 # help skeleton (/help, M8d)
+├── settings.html             # settings: design theme first (/settings, M8d)
 ├── css/
-│   ├── style.css             # shared design system: tokens, shell, buttons, inputs,
-│   │                         # badges, console, card, page chrome (topbar/body,
-│   │                         # tabs, state/error blocks), log pane; dead weight
-│   │                         # removed
-│   ├── training.css          # training page: state hero, history/log grid
+│   ├── style.css             # shared design system: tokens (incl. shell tokens),
+│   │                         # buttons, inputs, badges, console-line primitive,
+│   │                         # card, page chrome (topbar/body, tabs, state/error
+│   │                         # blocks), log pane; dead weight removed
+│   ├── shell.css             # THE application shell: icon rail (frame, items,
+│   │                         # hover tips, active/disabled states) + floating
+│   │                         # console window + FAB; layout contract documented
+│   │                         # in its header (M8d)
+│   ├── training.css          # system tracker page: state hero, history/log grid,
+│   │                         # monitor hand-off strip
 │   ├── config.css            # config page: path bar, grouped form, raw editor
 │   ├── run.css               # run detail page: details grid, log card
 │   ├── datasets.css          # dataset manager: card grid, stats, item cards,
 │   │                         # bulk bar, task form
+│   ├── help.css              # help page: where-things-live rows, stub grid
+│   ├── settings.css          # settings page: theme picker, tag, link rows
 │   ├── monitor.css           # monitor page block
 │   └── editor.css            # editor layout, canvas plane, node visuals
 └── js/
+    ├── shell.js              # mounts rail + floating console on every page
+    │                         # (loaded FIRST); active item from pathname;
+    │                         # console geometry/minimized state in localStorage
     ├── api.js                # THE fetch wrapper: error envelope decoded once, + sse()
     ├── monitor.js            # monitor page entry (ported visual, new stream URL)
     ├── editor.js             # editor page entry: catalog, GraphDoc, toolbar, /events
@@ -78,7 +90,7 @@ Rules that keep it fast and expandable:
 | nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
 | nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
 | **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
-| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `GET /datasets`, `GET /datasets/{name}`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`, M8c `/datasets` |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `GET /datasets`, `GET /datasets/{name}`, `GET /help`, `GET /settings`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`, M8c `/datasets`, M8d `/help` + `/settings` |
 
 ### 3.1 Gaps and their resolutions
 
@@ -149,7 +161,8 @@ numbers match the milestone table in `01-architecture.md`:
 |---|---|---|
 | M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | **shipped 2026-09-30**: backend serves the monitor page on 8766; the stream's replay/live/clear frames are test-pinned (`test_api_monitor.py`) |
 | M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | **shipped 2026-10-01**: `/graph` page; validate/run/library round-trip (incl. `layout` extras) smoke-tested on 8766; every frontend module passes `node --check` |
-| M8 | Dataset manager + config editor + run history views | **shipped 2026-10-01**: `/config` (M8a), `/run/{id}` (M8b), `/datasets` + preview bytes (M8c); each page is smoke-covered (visual smoke: 101 checks) |
+| M8 | Dataset manager + config editor + run history views | **shipped 2026-10-01**: `/config` (M8a), `/run/{id}` (M8b), `/datasets` + preview bytes (M8c); each page is smoke-covered |
+| M8d | Shell redesign: icon rail (all pages) + floating persistent console + `/help` + `/settings` | **shipped 2026-10-01**: `shell.js`/`shell.css` mounted on all six existing pages (rail order: Graph Editor, Datasets, Workflows (soon), System tracker, Help; Settings pinned last; monitor stays workflow-attached, no rail slot); console geometry + minimized state persist in localStorage; visual smoke: 132 checks incl. scenario G |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
 
 Both servers run side by side until M8 (8765 legacy, 8766 backend) --

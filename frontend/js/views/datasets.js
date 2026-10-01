@@ -680,18 +680,6 @@ function stopPoll() {
   }
 }
 
-/* ---- monitor hand-off (same as dashboard.js) ---- */
-
-function openMonitor() {
-  const id = el("monitor-id-input").value.trim();
-  if (!id) {
-    log("Paste a monitor id first (it is in the monitor page URL).", "warn");
-    el("monitor-id-input").focus();
-    return;
-  }
-  window.location.href = `/monitor/${encodeURIComponent(id)}`;
-}
-
 /* ---- boot ---- */
 
 async function boot() {
@@ -731,10 +719,6 @@ async function boot() {
   el("btn-bulk-discard").addEventListener("click", () =>
     discardItems([...selected]));
   el("btn-start-task").addEventListener("click", startTask);
-  el("btn-open-monitor").addEventListener("click", openMonitor);
-  el("monitor-id-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") openMonitor();
-  });
   window.addEventListener("pagehide", stopPoll);
 
   // checkpoint catalog feeds the model datalist (suggestions only)

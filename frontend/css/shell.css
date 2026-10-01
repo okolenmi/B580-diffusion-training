@@ -1,0 +1,252 @@
+/* ---------------------------------------------------------------------------
+   shell.css -- application shell: the icon rail + the floating system
+   console. Loaded by EVERY page immediately after style.css (which owns
+   the tokens this file consumes: --bg, --surface, --radius*, --font-mono,
+   --text-dim, --accent, --border, and the shell tokens below).
+
+   Layout contract
+   ---------------
+   * The rail is position:fixed. shell.js adds `has-rail` to <body> and
+     `body.has-rail { padding-left: var(--rail-w) }` shifts every page's
+     layout -- grid bodies (.layout-fixed, body.editor-body) and block
+     bodies (monitor) alike resolve against the content box, so no page
+     needs to know the rail exists.
+   * The console is position:fixed and affects no layout. Its geometry
+     (x, y, w, h, minimized) persists in localStorage under one key.
+
+   Sections
+   --------
+   1. Rail: frame, logo, item states, hover tooltips
+   2. Floating console: window shell, header (drag handle), lines pane
+   3. Console FAB: the minimized state
+   4. Motion + responsive
+--------------------------------------------------------------------------- */
+
+body.has-rail { padding-left: var(--rail-w); }
+
+/* ---- 1. Rail ------------------------------------------------------------- */
+
+.rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: var(--rail-w);
+    z-index: var(--z-rail);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 0 16px;
+    gap: 8px;
+}
+
+.rail-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 10px;
+    color: #0b0f16;
+    background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+    box-shadow: 0 4px 16px var(--accent-glow);
+    transition: transform var(--dur-fast) ease;
+}
+.rail-logo svg { width: 20px; height: 20px; }
+.rail-logo:hover { transform: translateY(-1px); }
+.rail-logo:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+.rail-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+.rail-group.rail-bottom {
+    position: relative;
+    margin-top: auto;
+    padding-top: 12px;
+    width: 100%;
+}
+.rail-group.rail-bottom::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 14px;
+    right: 14px;
+    height: 1px;
+    background: var(--border);
+}
+
+.rail-item {
+    position: relative;
+    width: 42px;
+    height: 42px;
+    border: none;
+    border-radius: 12px;
+    background: none;
+    color: var(--text-dim);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    text-decoration: none;
+    transition:
+        background var(--dur-fast) ease,
+        color var(--dur-fast) ease,
+        transform var(--dur-fast) ease;
+}
+.rail-item svg { width: 21px; height: 21px; }
+.rail-item:hover { background: var(--surface-alt); color: var(--text); }
+.rail-item:active { transform: scale(0.94); }
+.rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rail-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+/* Future feature: visible, inert, honest about it. */
+.rail-item.rail-soon { opacity: 0.45; }
+.rail-item.rail-soon:hover { background: none; color: var(--text-dim); }
+
+/* Hover label: the rail is icon-only, names live here. */
+.rail-tip {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%) translateX(-4px);
+    background: var(--surface-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    padding: 5px 11px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity var(--dur-fast) ease,
+        transform var(--dur-fast) ease;
+    z-index: var(--z-tip);
+}
+.rail-item:hover .rail-tip,
+.rail-item:focus-visible .rail-tip {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+}
+
+/* ---- 2. Floating console -------------------------------------------------- */
+
+.fconsole {
+    position: fixed;
+    width: 440px;
+    height: 250px;
+    min-width: 260px;
+    min-height: 130px;
+    max-width: calc(100vw - var(--rail-w) - 40px);
+    max-height: calc(100vh - 40px);
+    z-index: var(--z-console);
+    display: flex;
+    flex-direction: column;
+    background: #06090e;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    /* native, dependency-free resizing; geometry is persisted by shell.js */
+    resize: both;
+    overflow: hidden;
+}
+
+.fconsole-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 7px 8px 7px 13px;
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+.fconsole-head:active { cursor: grabbing; }
+
+.fconsole-title {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.fconsole-btn {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 15px;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.fconsole-btn:hover { background: var(--border); color: var(--text); }
+.fconsole-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The lines pane: same primitives every view already logs into
+   (.console-line.* live in style.css); the pane itself is shell-owned. */
+.fconsole .console-lines {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 13px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* ---- 3. Console FAB (minimized) ------------------------------------------ */
+
+.fconsole-fab {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    width: 46px;
+    height: 46px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: var(--shadow-pop);
+    z-index: var(--z-console);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: transform var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.fconsole-fab svg { width: 22px; height: 22px; }
+.fconsole-fab:hover { transform: translateY(-2px); border-color: var(--accent); }
+.fconsole-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- 4. Motion + responsive ---------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+    .rail-logo, .rail-item, .rail-tip, .fconsole-fab { transition: none; }
+}
+
+@media (max-width: 760px) {
+    .fconsole {
+        /* never wider than the space right of the rail */
+        width: min(440px, calc(100vw - var(--rail-w) - 24px));
+    }
+    .rail-tip { display: none; } /* hover-only affordance on touch widths */
+}

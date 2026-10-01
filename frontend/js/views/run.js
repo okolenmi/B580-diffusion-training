@@ -182,18 +182,6 @@ function handleEvent(raw) {
   }
 }
 
-/* ---- monitor hand-off (same as dashboard.js) ---- */
-
-function openMonitor() {
-  const id = el("monitor-id-input").value.trim();
-  if (!id) {
-    log("Paste a monitor id first (it is in the monitor page URL).", "warn");
-    el("monitor-id-input").focus();
-    return;
-  }
-  window.location.href = `/monitor/${encodeURIComponent(id)}`;
-}
-
 /* ---- formatting (same helpers as dashboard.js) ---- */
 
 function fmtDuration(ms) {
@@ -225,10 +213,6 @@ async function boot() {
     return;
   }
   el("btn-refresh-log").addEventListener("click", loadLog);
-  el("btn-open-monitor").addEventListener("click", openMonitor);
-  el("monitor-id-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") openMonitor();
-  });
 
   await loadRun();
   await loadLog();

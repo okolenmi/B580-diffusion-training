@@ -7,6 +7,7 @@
     --text-dim: #94a3b8;
     --accent: #3b82f6;
     --accent-glow: rgba(59, 130, 246, 0.3);
+    --accent-soft: rgba(59, 130, 246, 0.16);
     --red: #ef4444;
     --green: #10b981;
     --radius-sm: 4px;
@@ -14,6 +15,16 @@
     --radius-lg: 12px;
     --font-sans: 'Inter', -apple-system, system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+    /* Shell (shell.css): the icon rail's width and the stacking /
+       motion scale every fixed element agrees on. */
+    --rail-w: 64px;
+    --z-rail: 40;
+    --z-console: 60;
+    --z-tip: 80;
+    --dur-fast: 120ms;
+    --dur-med: 220ms;
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,50 +46,20 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
-/* Layout */
+/* Layout: fixed-height pages (.layout-fixed bodies are 100vh grids whose
+   single column is the scrollable .content-area). The icon rail is
+   position:fixed (shell.css) and offsets the body via has-rail padding. */
 .layout-fixed {
     display: grid;
-    grid-template-columns: 300px 1fr;
+    grid-template-columns: minmax(0, 1fr);
     height: 100vh;
     overflow: hidden;
-}
-
-.sidebar {
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    padding: 1.5rem;
-    gap: 1.5rem;
 }
 
 .content-area {
     padding: 2.5rem;
     overflow-y: auto;
     background: radial-gradient(circle at top right, #1a2333 0%, var(--bg) 100%);
-}
-
-/* Brand & Sidebar Header */
-.sidebar-header {
-    margin-bottom: 0.5rem;
-}
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 0.5rem;
-}
-.brand-icon {
-    font-size: 1.5rem;
-    filter: drop-shadow(0 0 5px var(--accent-glow));
-}
-.brand-name {
-    font-size: 1.25rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    background: linear-gradient(to right, #fff, #94a3b8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
 }
 
 /* Status Badge */
@@ -98,54 +79,8 @@ body {
 .status-failed { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.3); }
 .status-cancelled { background: var(--surface-alt); color: var(--text-dim); border: 1px solid var(--border); }
 
-/* Sidebar Nav */
-.sidebar-nav {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-.nav-item {
-    background: none; border: none;
-    color: var(--text-dim);
-    padding: 0.85rem 1rem;
-    text-align: left;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.2s;
-    font-size: 0.9rem;
-    text-decoration: none;
-    display: block;
-}
-.nav-item:hover { background: var(--surface-alt); color: var(--text); }
-.nav-item.active { background: var(--surface-alt); color: var(--accent); border: 1px solid var(--border); }
-
-/* System Console */
-.sidebar-footer {
-    margin-top: auto;
-}
-.system-console {
-    background: #000;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-}
-.console-header {
-    background: var(--surface-alt);
-    padding: 0.5rem 0.75rem;
-    font-size: 0.7rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    color: var(--text-dim);
-}
-.console-lines {
-    height: 120px;
-    padding: 0.75rem;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 0.75rem;
-    overflow-y: auto;
-}
+/* System console primitives: one line of output. The console window
+   itself (head, pane, FAB) is shell.css; views only append these. */
 .console-line { margin-bottom: 0.4rem; border-left: 2px solid transparent; padding-left: 0.5rem; }
 .console-line.info { color: var(--text-dim); border-color: var(--border); }
 .console-line.success { color: var(--green); border-color: var(--green); }
@@ -304,6 +239,16 @@ input[type="checkbox"]:checked::after {
 /* Utilities */
 .text-dim { color: var(--text-dim); }
 
+/* Lines pane: the container the floating console (shell.css) and the
+   editor's execution log (.ed-log) both scroll inside. Consumers size
+   it (flex or fixed height); this owns the shared typography. */
+.console-lines {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0.75rem;
+    overflow-y: auto;
+}
+
 /* Page chrome: topbar + gap-driven body + tabs, shared by the app's
    main pages (training, config, datasets, ...). The monitor/editor
    pages bring their own shells. */
@@ -400,13 +345,6 @@ input[type="checkbox"]:checked::after {
 }
 .log-pane:empty::before { content: attr(data-empty); color: var(--text-dim); }
 
-@media (max-width: 1400px) {
-    .layout-fixed { grid-template-columns: 260px 1fr; }
-}
-
 @media (max-width: 1000px) {
-    .layout-fixed { grid-template-columns: 200px 1fr; }
-    .sidebar { padding: 1rem; gap: 1rem; }
-    .brand-name, .sidebar-tool, .sidebar-footer { display: none; }
     .content-area { padding: 1.5rem; }
 }

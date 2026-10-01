@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Help</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/help.css">
+</head>
+<body class="layout-fixed">
+    <main class="content-area">
+        <header class="page-topbar">
+            <h1>Help</h1>
+            <span class="page-sub">Guide skeleton -- headings in place, prose to be written</span>
+        </header>
+
+        <div class="page-body">
+            <!-- The only section with real content today: factual
+                 navigation help. Everything else is an honest stub. -->
+            <section class="card" id="help-where">
+                <div class="card-header"><span>Where things live</span></div>
+                <dl class="help-map">
+                    <div class="help-map-row">
+                        <dt><a href="/">System tracker</a></dt>
+                        <dd>Start, control and review runs; live log and history.</dd>
+                        <code>/</code>
+                    </div>
+                    <div class="help-map-row">
+                        <dt><a href="/graph">Graph Editor</a></dt>
+                        <dd>Build, validate and run node graphs (training workflows).</dd>
+                        <code>/graph</code>
+                    </div>
+                    <div class="help-map-row">
+                        <dt><a href="/datasets">Dataset manager</a></dt>
+                        <dd>Items, prompts, training sets, cache sweeps.</dd>
+                        <code>/datasets</code>
+                    </div>
+                    <div class="help-map-row">
+                        <dt><a href="/config">Config Editor</a></dt>
+                        <dd>Training config as a structured form or raw TOML.</dd>
+                        <code>/config</code>
+                    </div>
+                    <div class="help-map-row">
+                        <dt><a href="/settings">Settings</a></dt>
+                        <dd>Application preferences (design theme first).</dd>
+                        <code>/settings</code>
+                    </div>
+                    <div class="help-map-row">
+                        <dt>Monitors</dt>
+                        <dd>Attached to runs and workflows -- opened from their
+                            links, or by pasting an id on the System tracker.</dd>
+                        <code>/monitor/&lt;id&gt;</code>
+                    </div>
+                </dl>
+            </section>
+
+            <div class="help-grid">
+                <section class="card help-card">
+                    <div class="card-header"><span>Getting started</span></div>
+                    <ol class="help-outline">
+                        <li>Open a config and start a run</li>
+                        <li>Watch it on the System tracker</li>
+                        <li>Find it later in the run history</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Working with datasets</span></div>
+                    <ol class="help-outline">
+                        <li>Create a dataset, run a cache sweep</li>
+                        <li>Curate items (prompts, good/bad, discard)</li>
+                        <li>Commit a training set</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Graph editor basics</span></div>
+                    <ol class="help-outline">
+                        <li>Nodes, edges, validation</li>
+                        <li>Saving to the library</li>
+                        <li>Running a graph</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Editing the config</span></div>
+                    <ol class="help-outline">
+                        <li>Form mode vs raw TOML</li>
+                        <li>Field visibility follows distillation mode</li>
+                        <li>Save, revert, reload</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Monitors, runs and logs</span></div>
+                    <ol class="help-outline">
+                        <li>What a monitor shows</li>
+                        <li>Run detail pages and log tails</li>
+                        <li>Stopping and force-killing</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Troubleshooting</span></div>
+                    <ol class="help-outline">
+                        <li>A run failed -- where to look</li>
+                        <li>Dataset task states</li>
+                        <li>Reading the system console</li>
+                    </ol>
+                    <p class="help-todo">To be written.</p>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+</body>
+</html>

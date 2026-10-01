@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (101
+checklist below now runs as `backend/tests/visual_smoke.py` (132
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -32,8 +32,11 @@ dirty tracking, E2E save against a throwaway copy), run detail views
 (hand-off link, honest 404, completed + failed renders), and the
 dataset manager against the real library (create guard, honest empty
 states, preview bytes over the files route, filters, throwaway
-cleanup). Console is asserted clean across every page. Desktop-browser
-execution of the same checklist below stays as the manual fallback.
+cleanup), and the M8d shell (icon rail inventory + active states +
+hover tips, floating console minimize/FAB/restore/persistence,
+help + settings pages). Console is asserted clean across every page.
+Desktop-browser execution of the same checklist below stays as the
+manual fallback.
 
 ## Prerequisites
 
@@ -55,10 +58,11 @@ A scratch DB keeps the check independent of real training history.
 
 ## 1. App shell + training controls -- `http://127.0.0.1:8766/`
 
-* [x] Page renders: sidebar nav, topbar + state hero (start form when
-      idle, live run when active), history table (6 column headers) +
-      log pane. Layout is state-driven: idle never shows empty metric
-      cards, running never shows a start form that would 409.
+* [x] Page renders: icon rail (shell.js, all pages), topbar + state
+      hero (start form when idle, live run when active), the monitor
+      hand-off strip, history table (6 column headers) + log pane.
+      Layout is state-driven: idle never shows empty metric cards,
+      running never shows a start form that would 409.
 * [x] Console clean (no errors/warnings from our modules; the lone
       `/runs/active` 404 line is the browser's network log for the
       expected `no_active_run` answer, rendered correctly as
@@ -71,7 +75,7 @@ A scratch DB keeps the check independent of real training history.
       run", not an exception.
 * [x] Runs history lists rows (empty state: "No runs yet."; Wipe
       disabled while empty).
-* [x] `/api/v1/events` SSE connects (System Console: "Connected to
+* [x] `/api/v1/events` SSE connects (floating console: "Connected to
       /api/v1/events.").
 * [x] Running-state hero (automated with a mocked `RunOut`): phase in
       the badge, progress `412 / 1000 · 41%`, cache sub-bar
@@ -169,8 +173,8 @@ Runs against the REAL backend and the repo's real datasets (opened
 read-only; a throwaway `m8c-smoke-ds` is created and deleted inside
 the scenario, its confirmation dialog captured).
 
-* [x] Library list renders the real datasets; the main page's sidebar
-      links to `/datasets` (M8c hand-off).
+* [x] Library list renders the real datasets; the icon rail links to
+      `/datasets` (M8c hand-off).
 * [x] Create guard: an empty name refuses inline, fires no request,
       adds no card; a real create appends the card.
 * [x] Fresh-dataset detail: title follows the route, seven stat chips
@@ -192,7 +196,39 @@ the scenario, its confirmation dialog captured).
 * [ ] Task start/stop is never fired from the smoke (it would spawn a
       real child process against user checkpoints).
 
-## 7. Record
+## 7. Shell -- rail + floating console + help/settings (M8d)
+
+Exercises the shell mounted on every page (icon rail + floating
+system console) plus the two new pages.
+
+* [x] Icon rail: visible, exactly 6 items (Graph Editor, Dataset
+      manager, Pre-built workflows, System tracker, Help, Settings);
+      the workflows slot is honestly disabled (`aria-disabled`);
+      `aria-current="page"` marks the active destination, on `/` and
+      after rail navigation alike; the logo links home.
+* [x] Rail hover tips carry the label (opacity actually transitions
+      in -- `is_visible()` would pass on an unstyled tip, so the check
+      waits for `opacity > 0.9`).
+* [x] Floating console: mounted on every page (tracker and the
+      monitor/graph regression pages both assert it), natively
+      resizable (`resize: both`), minimizes to the bottom-right FAB,
+      the minimized state survives a reload (localStorage), clicking
+      the FAB restores the window.
+* [x] Rail navigation: tracker -> datasets lands on `/datasets` with
+      the destination item active; the console follows to the new
+      page.
+* [x] Help (`/help`): title, six stub sections, every stub honestly
+      marked "To be written.", the factual where-things-live table
+      lists six destinations.
+* [x] Settings (`/settings`): Design theme first -- Dark selected
+      (the theme that ships), Light honestly disabled and tagged
+      "planned"; the config editor stays reachable from here.
+* [ ] Dragging the console by its header and native corner-resize
+      are exercised interactively (desktop session); the automated
+      run pins persistence of whatever geometry it gets, not the
+      gestures themselves.
+
+## 8. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --

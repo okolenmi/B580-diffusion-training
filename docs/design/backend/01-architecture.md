@@ -446,7 +446,8 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M5 | Frontend decision + parity audit + migration strategy (doc 02/03), decommission plan for `server/` | **done** |
 | M6 | Frontend slice 1: `frontend/` shell served by the backend, monitor-bus port + `GET /monitor/{id}/stream`, monitor dashboard + training controls | **done** |
 | M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | **done** |
-| M8 | Frontend slice 3: dataset manager + config editor + run history views | planned |
+| M8 | Frontend slice 3: dataset manager + config editor + run history views | **done** |
+| M8d | Shell redesign: icon rail on every page, floating persistent console, `/help` + `/settings` | **done** |
 | M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
 
 ## 8. Running it

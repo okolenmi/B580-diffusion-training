@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/settings.css">
+</head>
+<body class="layout-fixed">
+    <main class="content-area">
+        <header class="page-topbar">
+            <h1>Settings</h1>
+            <span class="page-sub">Application preferences -- this page is new, sections will grow</span>
+        </header>
+
+        <div class="page-body">
+            <!-- First item, as agreed: the design theme. Dark is what
+                 ships; Light is honestly marked and disabled, not faked. -->
+            <section class="card settings-card" id="theme-group">
+                <div class="card-header"><span>Design theme</span></div>
+                <div class="theme-options" role="radiogroup" aria-label="Design theme">
+                    <label class="theme-option">
+                        <input type="radio" name="theme" value="dark" checked>
+                        <span class="theme-swatch theme-swatch-dark" aria-hidden="true"></span>
+                        <span class="theme-name">Dark</span>
+                        <span class="settings-tag settings-tag-current">current</span>
+                    </label>
+                    <label class="theme-option theme-option-disabled">
+                        <input type="radio" name="theme" value="light" disabled>
+                        <span class="theme-swatch theme-swatch-light" aria-hidden="true"></span>
+                        <span class="theme-name">Light</span>
+                        <span class="settings-tag">planned</span>
+                    </label>
+                </div>
+                <p class="settings-note text-dim">
+                    Dark is the only theme that ships today. Every color in the
+                    UI comes from shared tokens, so a second theme is a token
+                    set, not a redesign -- Light is next and not yet
+                    implemented.
+                </p>
+            </section>
+
+            <section class="card settings-card">
+                <div class="card-header"><span>Project</span></div>
+                <a class="settings-link" href="/config">
+                    <span class="settings-link-body">
+                        <span class="settings-link-title">Config editor</span>
+                        <span class="settings-link-sub text-dim">
+                            Training config as a structured form or the raw TOML
+                        </span>
+                    </span>
+                    <span class="settings-link-arrow" aria-hidden="true">→</span>
+                </a>
+            </section>
+
+            <section class="card settings-card">
+                <div class="card-header"><span>About</span></div>
+                <p class="settings-note text-dim">
+                    Distillation control server -- this UI and its API are
+                    served from a single origin.
+                </p>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+</body>
+</html>

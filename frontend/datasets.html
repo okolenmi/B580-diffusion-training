@@ -6,42 +6,10 @@
     <title>Datasets</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
     <link rel="stylesheet" href="/ui/css/datasets.css">
 </head>
 <body class="layout-fixed">
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <div class="brand">
-                <span class="brand-icon">⚡</span>
-                <span class="brand-name">Distillation</span>
-            </div>
-        </div>
-
-        <nav class="sidebar-nav">
-            <a class="nav-item" href="/">Training</a>
-            <a class="nav-item" href="/graph">Graph Editor</a>
-            <button class="nav-item active" aria-current="page">Datasets</button>
-            <a class="nav-item" href="/config">Config Editor</a>
-
-            <div class="sidebar-tool">
-                <label class="sidebar-tool-label" for="monitor-id-input">Open a monitor</label>
-                <input id="monitor-id-input" class="cfg-input" type="text"
-                       placeholder="mon-… id" aria-label="Monitor id"
-                       title="Paste a monitor id to open its live dashboard">
-                <button id="btn-open-monitor" class="btn btn-secondary btn-block btn-small">Open monitor →</button>
-            </div>
-        </nav>
-
-        <div class="sidebar-footer">
-            <div class="system-console">
-                <div class="console-header">System Console</div>
-                <div class="console-lines" id="console-output">
-                    <div class="console-line info">Ready.</div>
-                </div>
-            </div>
-        </div>
-    </aside>
-
     <main class="content-area">
         <header class="page-topbar">
             <h1 id="ds-title">Datasets</h1>
@@ -174,6 +142,7 @@
         </div>
     </main>
 
+    <script type="module" src="/ui/js/shell.js"></script>
     <script type="module" src="/ui/js/views/datasets.js"></script>
 </body>
 </html>

@@ -1,0 +1,91 @@
+/* ---------------------------------------------------------------------------
+   help.css -- Help page (/help), a structured placeholder: the "Where things
+   live" block carries real factual content; every other section shows its
+   outline plus an honest "To be written." marker. Loaded after style.css
+   (tokens + page chrome come from there).
+
+   Sections:
+   1. .help-map  -- the where-things-live rows (name / meaning / href)
+   2. .help-grid -- responsive card grid for the stub sections
+   3. .help-outline / .help-todo -- stub anatomy
+--------------------------------------------------------------------------- */
+
+/* ---- 1. Where things live ------------------------------------------------ */
+
+.help-map {
+    display: flex;
+    flex-direction: column;
+}
+.help-map-row {
+    display: grid;
+    grid-template-columns: minmax(150px, max-content) 1fr max-content;
+    gap: 16px;
+    align-items: baseline;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--border);
+}
+.help-map-row:last-child { border-bottom: none; }
+
+.help-map dt {
+    font-weight: 700;
+    font-size: 14px;
+}
+.help-map dt a {
+    color: var(--text);
+    text-decoration: none;
+}
+.help-map dt a:hover { color: var(--accent); text-decoration: underline; }
+
+.help-map dd {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin: 0;
+}
+
+.help-map code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+/* ---- 2. Stub sections grid ----------------------------------------------- */
+
+.help-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+}
+/* page-body stacks cards vertically; the grid provides its own gaps */
+.help-grid .card { margin-bottom: 0; }
+
+/* ---- 3. Stub anatomy ------------------------------------------------------ */
+
+.help-outline {
+    margin: 0 0 12px;
+    padding-left: 20px;
+    color: var(--text-dim);
+    font-size: 13px;
+}
+.help-outline li { margin: 4px 0; }
+
+.help-todo {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-dim);
+    opacity: 0.8;
+    margin: 0;
+}
+
+/* ---- Responsive ----------------------------------------------------------- */
+
+@media (max-width: 900px) {
+    .help-map-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+}

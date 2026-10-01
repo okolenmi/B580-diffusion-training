@@ -3,51 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Training</title>
+    <title>System tracker</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
     <link rel="stylesheet" href="/ui/css/training.css">
 </head>
 <body class="layout-fixed">
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <div class="brand">
-                <span class="brand-icon">⚡</span>
-                <span class="brand-name">Distillation</span>
-            </div>
-        </div>
-
-        <nav class="sidebar-nav">
-            <button class="nav-item active" aria-current="page">Training</button>
-            <a class="nav-item" href="/graph">Graph Editor</a>
-            <a class="nav-item" href="/datasets">Datasets</a>
-            <a class="nav-item" href="/config">Config Editor</a>
-
-            <div class="sidebar-tool">
-                <label class="sidebar-tool-label" for="monitor-id-input">Open a monitor</label>
-                <input id="monitor-id-input" class="cfg-input" type="text"
-                       placeholder="mon-… id" aria-label="Monitor id"
-                       title="Paste a monitor id to open its live dashboard">
-                <button id="btn-open-monitor" class="btn btn-secondary btn-block btn-small">Open monitor →</button>
-            </div>
-        </nav>
-
-        <div class="sidebar-footer">
-            <div class="system-console">
-                <div class="console-header">System Console</div>
-                <div class="console-lines" id="console-output">
-                    <div class="console-line info">Ready.</div>
-                </div>
-            </div>
-        </div>
-    </aside>
-
     <main class="content-area">
         <header class="page-topbar">
-            <h1>Training</h1>
+            <h1>System tracker</h1>
             <div id="status-badge" class="status-badge status-idle">Idle</div>
             <span class="page-sub">Start, control and review training runs</span>
         </header>
+
+        <!-- Manual monitor hand-off: monitors are attached to runs and
+             workflows (their links open them); this strip is the escape
+             hatch for pasting an id from a URL. -->
+        <div class="util-strip">
+            <span class="util-label">Monitor</span>
+            <input id="monitor-id-input" class="cfg-input" type="text"
+                   placeholder="mon-… id" aria-label="Monitor id"
+                   title="Paste a monitor id to open its live dashboard">
+            <button id="btn-open-monitor" class="btn btn-secondary btn-small">Open monitor →</button>
+            <span class="util-hint text-dim">The id is in the monitor page URL.</span>
+        </div>
 
         <div class="page-body">
             <!-- Hero: exactly one of two states. Live metrics live here
@@ -170,6 +150,7 @@
         </div>
     </main>
 
+    <script type="module" src="/ui/js/shell.js"></script>
     <script type="module" src="/ui/js/views/dashboard.js"></script>
 </body>
 </html>

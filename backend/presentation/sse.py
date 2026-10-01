@@ -5,16 +5,33 @@ thread -- use cases, the training monitor). The bridge therefore hops
 onto the event loop with ``call_soon_threadsafe`` before touching the
 client buffer.
 
-Backpressure (docs 07 F-09): the buffer is bounded, and overflow is
-resolved by *kind*, not by recency. ``run_progressed`` /
-``graph_execution_progressed`` are transient -- only their newest
-values matter -- so they are coalesced: enqueuing a new progress frame
-evicts every older queued progress frame. Lifecycle frames
-(``run_completed``, ``run_failed``, ...) are never dropped for the sake
-of progress. If the buffer somehow fills with lifecycle frames alone,
-the oldest goes, the drop is counted and logged -- unbounded growth
-would trade lost events for unbounded memory, and the client's
-refetch-on-(re)open plus the dashboard's slow poll close that gap.
+Backpressure (docs 07 F-09, corrected by docs 08 N-04): the buffer is
+bounded, and *how* overflow is resolved follows each event kind's
+**delivery class**, not its recency. That distinction is the whole
+design; getting it wrong silently loses information the client needs.
+
+======================  ==========  ====================================
+Kind                    Class       Policy
+======================  ==========  ====================================
+``run_progressed``      state       coalesce per ``run_id``: a newer
+                                    sample supersedes the queued one
+                                    for the same run, and only that
+                                    one.
+``graph_execution_      delta       never coalesced, never evicted.
+progressed``                        Every node's completion is a fact
+                                    that happened; six of them must
+                                    arrive as six. Evicting them was
+                                    what dropped 6 node events to 1
+                                    (reproduced, docs 08 N-04).
+everything else          lifecycle   never dropped for the sake of a
+                                    newer event of any other kind.
+======================  ==========  ====================================
+
+Only at `QUEUE_MAX`, and only if nothing above applies, is the oldest
+frame dropped -- whichever class it is. Every drop is counted and
+logged; unbounded growth would trade lost events for unbounded memory,
+and the client's refetch-on-(re)open plus the dashboard's slow poll
+close that gap.
 
 Serialization: frames go through :func:`backend.json_safe.strict_dumps`,
 so a diverged loss is ``null`` + a ``nonfinite`` marker rather than a
@@ -45,8 +62,41 @@ logger = logging.getLogger(__name__)
 QUEUE_MAX = 256
 HEARTBEAT_SECONDS = 15.0
 
-# Transient telemetry: coalescible, safe to lose to a newer value.
-PROGRESS_EVENT_TYPES = frozenset({"run_progressed", "graph_execution_progressed"})
+# Delivery classes, keyed by event type. Anything absent is lifecycle,
+# which is the safe default: it means "never drop for someone else's
+# sake", not "coalescible because it is probably redundant".
+STATE_EVENT_TYPES = frozenset({"run_progressed"})
+DELTA_EVENT_TYPES = frozenset({"graph_execution_progressed"})
+
+
+def delivery_class(event_type: str) -> str:
+    """``"state"``, ``"delta"`` or ``"lifecycle"`` for one event type."""
+    if event_type in DELTA_EVENT_TYPES:
+        return "delta"
+    if event_type in STATE_EVENT_TYPES:
+        return "state"
+    return "lifecycle"
+
+
+def coalesce_key(event_type: str, payload: str) -> str | None:
+    """The identity whose *newest* value supersedes an older one, or
+    ``None`` if this kind must never be coalesced.
+
+    Only state events get a key, and only the one field that identifies
+    the thing being reported on: two samples for the same run supersede
+    each other, two samples for different runs do not. A delta event
+    returns ``None`` unconditionally -- the caller must never treat
+    "has a key" as permission to evict, or N-04 comes straight back.
+    """
+    if delivery_class(event_type) != "state":
+        return None
+    try:
+        import json
+
+        run_id = json.loads(payload).get("run_id")
+    except (ValueError, AttributeError):
+        return None  # unparseable: treat as unkeyed, never coalesce
+    return None if run_id is None else f"run:{run_id}"
 
 
 def serialize_event(event: DomainEvent) -> str:
@@ -66,58 +116,102 @@ def serialize_event(event: DomainEvent) -> str:
 
 
 class ClientBuffer:
-    """Bounded per-client frame buffer with kind-aware overflow.
+    """Bounded per-client frame buffer, resolved by delivery class.
 
     Both ``put`` and ``get`` run on the event loop (``put`` is hopped
     onto it from the publisher's thread), so the deque needs no lock.
     """
 
     def __init__(self, maxsize: int = QUEUE_MAX) -> None:
-        self._items: deque[tuple[str, str]] = deque()
+        self._items: deque[tuple[str, str, str | None]] = deque()
         self._maxsize = maxsize
         self._wake = asyncio.Event()
-        self.coalesced = 0  # progress frames dropped to make room
-        self.dropped = 0    # lifecycle frames dropped (logged, never silent)
+        self.coalesced = 0     # state frames superseded by a newer one
+        self.dropped_delta = 0  # delta frames lost to a full buffer
+        self.dropped = 0        # anything else lost to a full buffer
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def put(self, event_type: str, payload: str) -> None:
+    def put(self, event_type: str, payload: str, key: str | None = None) -> None:
         """Append one frame, making room first if the buffer is full.
 
-        Progress is coalesced eagerly -- a queued progress frame is
-        superseded by the one being enqueued, so a client that falls
-        behind sees the newest values, not a backlog of stale ones.
+        `key` is the coalescing identity, computed by the caller (the
+        event object is available there; the serialized payload is what
+        this method receives). Computed here as a fallback when omitted,
+        so a direct caller cannot accidentally get the old behaviour by
+        forgetting it.
+
+        A caller-supplied key is *not* trusted for the decision: it is
+        re-checked against `coalesce_key` for this event type, so a
+        delta can never be coalesced no matter what its caller passed.
+        N-04 was exactly a caller treating "progress" as "redundant",
+        and the failure mode of getting that wrong is silent event loss,
+        so the check belongs inside the buffer rather than in every call
+        site that might forget it.
         """
-        if event_type in PROGRESS_EVENT_TYPES:
-            self.coalesced += self._drop_progress()
+        expected = coalesce_key(event_type, payload)
+        if expected is None:
+            key = None  # not coalescible: a passed key is ignored
+        elif key is None:
+            key = expected
+        if key is not None:
+            # State only: replace the queued frame for THIS key, and
+            # nothing else. A run's newest sample never costs another
+            # run's sample, and never costs a node event.
+            self.coalesced += self._drop_key(key)
         if len(self._items) >= self._maxsize:
             self._make_room(event_type)
-        self._items.append((event_type, payload))
+        self._items.append((event_type, payload, key))
         self._wake.set()
 
-    def _drop_progress(self) -> int:
+    def _drop_key(self, key: str) -> int:
         indexes = [
             index
-            for index, (kind, _) in enumerate(self._items)
-            if kind in PROGRESS_EVENT_TYPES
+            for index, (_kind, _payload, queued_key) in enumerate(self._items)
+            if queued_key == key
         ]
         for index in reversed(indexes):
             del self._items[index]
         return len(indexes)
 
     def _make_room(self, incoming: str) -> None:
-        if self._drop_progress():
-            return
-        # Only lifecycle frames queued: an all-lifecycle backlog means
-        # the client is far slower than the event rate. Drop the oldest
-        # and say so (rule: no silent swallowing).
-        dropped_type, _ = self._items.popleft()
+        """Overflow policy: sacrifice the least valuable queued frame.
+
+        Order matters, and it is the delivery classes from the module
+        docstring: supersedeable state first (it is by definition
+        reconstructible from a newer value of the same key), then the
+        oldest delta (a fact that happened, lost, counted), then the
+        oldest frame of any kind -- which at that point can only be
+        lifecycle, since state and delta have both been tried.
+        """
+        for index, (kind, _payload, _key) in enumerate(self._items):
+            if delivery_class(kind) == "state":
+                del self._items[index]
+                self.coalesced += 1
+                logger.warning(
+                    "SSE buffer full -- dropped a superseded-able %s to make "
+                    "room for %s", kind, incoming,
+                )
+                return
+
+        for index, (kind, _payload, _key) in enumerate(self._items):
+            if delivery_class(kind) == "delta":
+                del self._items[index]
+                self.dropped_delta += 1
+                logger.warning(
+                    "SSE buffer full for a slow client -- dropped the oldest "
+                    "delta %s to make room for %s (counted in dropped_delta; "
+                    "the client will refetch node state on reconnect)",
+                    kind, incoming,
+                )
+                return
+
+        dropped_type, _payload, _key = self._items.popleft()
         self.dropped += 1
         logger.warning(
             "SSE buffer full of lifecycle events for a slow client -- "
-            "dropped the oldest %s to make room for %s",
-            dropped_type, incoming,
+            "dropped the oldest %s to make room for %s", dropped_type, incoming,
         )
 
     async def get(self, timeout: float) -> str | None:
@@ -159,6 +253,10 @@ async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
                 yield f"data: {item}\n\n"
         finally:
             subscription.close()
+        logger.info(
+            "SSE client gone -- coalesced=%d dropped_delta=%d dropped=%d",
+            buffer.coalesced, buffer.dropped_delta, buffer.dropped,
+        )
 
     return StreamingResponse(
         generate(),

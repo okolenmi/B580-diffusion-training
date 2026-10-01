@@ -20,7 +20,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.domain.events import RunProgressed
 from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.json_safe import sanitize, strict_dumps
-from backend.presentation.sse import ClientBuffer, serialize_event
+from backend.presentation.sse import (
+    ClientBuffer,
+    coalesce_key,
+    delivery_class,
+    serialize_event,
+)
 from backend.tests.support import check, finish
 
 NAN = float("nan")
@@ -124,54 +129,113 @@ def test_serialize_event_nonfinite() -> None:
 
 
 def test_client_buffer() -> None:
-    print("\n== SSE buffer: progress coalesces, lifecycle is kept (F-09) ==")
+    """Coalescing is decided by delivery class (docs 07 F-09, corrected by
+    docs 08 N-04). Three classes, three rules:
+
+    state -- coalesce per key, so a newer sample for the same run
+      supersedes only that run's queued sample;
+    delta -- never coalesced and never evicted, because every node's
+      completion is a fact that happened and all of them must arrive;
+    lifecycle -- never dropped for the sake of a newer frame of any
+      other kind, and only sacrificed at a full buffer once state and
+      delta have both been tried.
+    """
 
     async def scenario() -> None:
-        buf = ClientBuffer(maxsize=3)
+        buf = ClientBuffer(maxsize=16)
         check(await buf.get(0.01) is None, "empty buffer times out (heartbeat)")
 
-        buf.put("run_progressed", "p1")
-        buf.put("run_progressed", "p2")
-        check(len(buf) == 1, f"progress coalesces to the newest (got {len(buf)})")
+        # --- state: coalesce, keyed ---
+        # Real payloads, because a state frame's coalescing key is
+        # derived from its own run_id. That also means a hand-passed key
+        # cannot rescue an unkeyable frame -- see the explicit-key case
+        # below, which asserts exactly that.
+        p1 = '{"type":"run_progressed","run_id":1,"step":1}'
+        p2 = '{"type":"run_progressed","run_id":1,"step":2}'
+        buf.put("run_progressed", p1)
+        buf.put("run_progressed", p2)
+        check(len(buf) == 1, f"same-run progress coalesces to the newest (got {len(buf)})")
         check(buf.coalesced == 1, f"coalesced counter (got {buf.coalesced})")
-        check(await buf.get(0.01) == "p2", "the surviving frame is the newest")
+        check(await buf.get(0.01) == p2, "the surviving frame is the newest")
 
-        # Lifecycle interleaved with progress keeps both, in order.
-        buf.put("run_progressed", "p3")
+        # A different run's newest sample is not superseded by this one's.
+        other = '{"type":"run_progressed","run_id":2,"step":1}'
+        buf.put("run_progressed", other)
+        buf.put("run_progressed", p1)
+        check(len(buf) == 2, f"two runs' samples coexist (got {len(buf)})")
+        check([await buf.get(0.01), await buf.get(0.01)] == [other, p1],
+              "and both runs' samples arrive, in order")
+
+        # --- delta: N-04. Six node events must arrive as six ---
+        p3 = '{"type":"run_progressed","run_id":1,"step":3}'
+        buf.put("run_progressed", p3)
         buf.put("run_completed", "c1")
-        buf.put("run_progressed", "p4")
-        got = [await buf.get(0.01), await buf.get(0.01)]
-        check(got == ["c1", "p4"], f"lifecycle kept, progress replaced (got {got})")
-
-        # A lifecycle frame arriving at a full buffer evicts progress
-        # first, and only ever counts it as coalesced.
-        buf.put("run_failed", "c2")
-        buf.put("run_cancelled", "c3")
-        buf.put("run_progressed", "p5")
-        check(len(buf) == 3, f"buffer is full (got {len(buf)})")
-        buf.put("run_completed", "c4")
-        check(buf.dropped == 0, "no lifecycle frame dropped for progress")
-        check(buf.coalesced == 2, f"progress eviction counted (got {buf.coalesced})")
-        got = [await buf.get(0.01) for _ in range(3)]
+        for node in "ABCDEF":
+            buf.put("graph_execution_progressed", f"n{node}")
+        check(len(buf) == 8, f"1 state + 1 lifecycle + 6 deltas all queued (got {len(buf)})")
+        got = [await buf.get(0.01) for _ in range(8)]
         check(
-            got == ["c2", "c3", "c4"],
-            f"full buffer gave up its progress frame (got {got})",
+            got == [p3, "c1", "nA", "nB", "nC", "nD", "nE", "nF"],
+            f"every node event survives a run's progress frame (got {got})",
         )
+        check(buf.coalesced == 1, f"no coalescing happened among the deltas (got {buf.coalesced})")
 
-        # A backlog of pure lifecycle frames: bounded, oldest evicted,
-        # counted and logged -- never silent, never unbounded.
-        full = ClientBuffer(maxsize=2)
+        # A delta is never given a coalescing key, even if a caller
+        # offers one -- "has a key" must not mean "may evict" (N-04).
+        buf2 = ClientBuffer(maxsize=8)
+        buf2.put("graph_execution_progressed", "nX", key="node:X")
+        buf2.put("graph_execution_progressed", "nY", key="node:X")
+        check(len(buf2) == 2, "an explicit key does not license coalescing a delta")
+        check(buf2.coalesced == 0, "and the counter stays honest")
+
+        # --- overflow order: state, then delta, then anything ---
+        small = ClientBuffer(maxsize=2)
+        small.put("graph_execution_progressed", "nA")
+        small.put("run_completed", "c1")
+        small.put("graph_execution_progressed", "nB")   # full: drop a delta
+        check(small.dropped_delta == 1, f"a delta was sacrificed, counted (got {small.dropped_delta})")
+        check(small.dropped == 0, "no lifecycle frame touched")
+        small.put("run_completed", "c2")               # full: no state left, drop delta
+        check(small.dropped_delta == 2, f"second delta sacrificed (got {small.dropped_delta})")
+
+        only_lifecycle = ClientBuffer(maxsize=2)
         for kind in ("run_created", "run_started", "run_completed"):
-            full.put(kind, kind)
-        check(full.dropped == 1, f"oldest lifecycle evicted, counted (got {full.dropped})")
-        check(len(full) == 2, "buffer stays bounded")
-        got = [await full.get(0.01), await full.get(0.01)]
+            only_lifecycle.put(kind, kind)
+        check(only_lifecycle.dropped == 1,
+              f"all-lifecycle buffer: oldest evicted and counted (got {only_lifecycle.dropped})")
+        check(only_lifecycle.dropped_delta == 0, "not miscounted as a delta loss")
+        got = [await only_lifecycle.get(0.01), await only_lifecycle.get(0.01)]
         check(
             got == ["run_started", "run_completed"],
             f"newest lifecycle frames survive in order (got {got})",
         )
 
     asyncio.run(scenario())
+
+
+def test_delivery_class_assignment() -> None:
+    """The class table is the policy; a wrong entry silently reintroduces
+    the class of bug N-04 was, so it is pinned directly."""
+    print("\n== SSE: delivery classes are what the buffer assumes (N-04) ==")
+    check(delivery_class("graph_execution_progressed") == "delta",
+          "per-node graph progress is a delta: every one must arrive")
+    check(delivery_class("run_progressed") == "state",
+          "run progress is state: newest wins")
+    for kind in ("run_created", "run_started", "run_completed", "run_failed",
+                 "run_cancelled", "stream_opened"):
+        check(delivery_class(kind) == "lifecycle",
+              f"{kind} is lifecycle (got {delivery_class(kind)})")
+
+    check(coalesce_key("graph_execution_progressed", '{"node_id":"a"}') is None,
+          "a delta never gets a coalescing key")
+    check(coalesce_key("run_completed", '{"run_id":1}') is None,
+          "a lifecycle event never gets one either")
+    check(coalesce_key("run_progressed", '{"run_id":7,"step":1}') == "run:7",
+          "run progress is keyed by its run")
+    check(coalesce_key("run_progressed", '{"step":1}') is None,
+          "progress with no run_id is not coalesced rather than coalesced wrongly")
+    check(coalesce_key("run_progressed", "not json") is None,
+          "an unparseable payload is not coalesced")
 
 
 def test_monitor_frames_are_strict() -> None:
@@ -209,6 +273,7 @@ def main() -> None:
     test_strict_dumps_guard()
     test_serialize_event_nonfinite()
     test_client_buffer()
+    test_delivery_class_assignment()
     test_monitor_frames_are_strict()
     finish()
 

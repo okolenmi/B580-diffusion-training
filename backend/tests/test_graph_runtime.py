@@ -346,9 +346,21 @@ check(
     "callback exceptions are logged and swallowed",
 )
 
-# release_memory delegates to the injected releaser.
+# Whoever allocates device memory releases it: execute() does it in its
+# own finally, so no caller has to remember a cleanup step it cannot
+# see (docs 08 S-05). release_memory stays public and delegates too.
+before_release = releases["n"]
 runtime.release_memory()
-check(releases["n"] == 1, "release_memory calls the injected releaser")
+check(
+    releases["n"] == before_release + 1,
+    "release_memory calls the injected releaser",
+)
+before_run = releases["n"]
+runtime.execute(valid, cancel_event=threading.Event())
+check(
+    releases["n"] == before_run + 1,
+    "execute releases the device memory it used, by itself",
+)
 
 # ==========================================================================
 # Monitor bus wiring (M6) -- the injected bus reaches the node's context

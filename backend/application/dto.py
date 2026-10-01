@@ -10,9 +10,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from ..domain.entities.graph_execution import GraphExecution
+from ..domain.graph import NodeResult
 from ..domain.entities.run import Run
 from ..domain.value_objects import GraphStatus, RunStatus
 from .ports.config_inspector import StartOption
+from .ports.dataset_library import (
+    DatasetInfo,
+    DatasetItem,
+    DatasetStats,
+    DatasetSummary,
+    TrainingSetInfo,
+)
+from .ports.dataset_tasks import DatasetTask
+from .ports.graph_runtime import GraphIssue
+from .ports.graph_library import SavedGraph
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,22 +187,22 @@ class DatasetDetail:
     resolved card image (``DatasetPreviews`` port), null when the
     dataset has no usable preview."""
 
-    info: "DatasetInfo"  # noqa: F821 -- application.ports.dataset_library
-    stats: "DatasetStats | None"  # noqa: F821
-    sets: tuple  # tuple[TrainingSetInfo, ...]
-    active_tasks: tuple  # tuple[DatasetTask, ...]
-    preview_path: "str | None" = None  # noqa: F821
+    info: DatasetInfo
+    stats: DatasetStats | None
+    sets: tuple[TrainingSetInfo, ...]
+    active_tasks: tuple[DatasetTask, ...]
+    preview_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DatasetListResult:
-    datasets: tuple  # tuple[DatasetSummary, ...]
+    datasets: tuple[DatasetSummary, ...]
     count: int
 
 
 @dataclass(frozen=True, slots=True)
 class DatasetItemsResult:
-    items: tuple  # tuple[DatasetItem, ...]
+    items: tuple[DatasetItem, ...]
     count: int
     limit: int | None = None   # None = every row was requested
     offset: int = 0
@@ -215,7 +227,7 @@ class CommitResult:
 
 @dataclass(frozen=True, slots=True)
 class DatasetTaskListResult:
-    tasks: tuple  # tuple[DatasetTask, ...]
+    tasks: tuple[DatasetTask, ...]
     count: int
 
 
@@ -305,7 +317,7 @@ class GraphExecutionDTO:
     execution_id: int
     status: GraphStatus
     error: str | None
-    results: tuple  # tuple[NodeResult, ...]
+    results: tuple[NodeResult, ...]
     graph: dict  # {"format": 1, "nodes": [...], "edges": [...]}
     created_at: datetime
     updated_at: datetime
@@ -326,7 +338,7 @@ class GraphExecutionSummaryDTO:
     finished_at: datetime | None
 
 
-def to_execution_dto(execution: "GraphExecution") -> GraphExecutionDTO:
+def to_execution_dto(execution: GraphExecution) -> GraphExecutionDTO:
     """Map a domain entity to its full read-side projection."""
     if execution.id is None:
         raise ValueError("cannot project an unpersisted execution (no id yet)")
@@ -343,7 +355,7 @@ def to_execution_dto(execution: "GraphExecution") -> GraphExecutionDTO:
     )
 
 
-def to_execution_summary_dto(execution: "GraphExecution") -> GraphExecutionSummaryDTO:
+def to_execution_summary_dto(execution: GraphExecution) -> GraphExecutionSummaryDTO:
     if execution.id is None:
         raise ValueError("cannot project an unpersisted execution (no id yet)")
     return GraphExecutionSummaryDTO(
@@ -359,7 +371,7 @@ def to_execution_summary_dto(execution: "GraphExecution") -> GraphExecutionSumma
 
 @dataclass(frozen=True, slots=True)
 class ExecutionListResult:
-    executions: tuple  # tuple[GraphExecutionSummaryDTO, ...]
+    executions: tuple[GraphExecutionSummaryDTO, ...]
     count: int
 
 
@@ -368,7 +380,7 @@ class GraphValidationResult:
     """``ok`` is "no error-severity issue"; warnings never block."""
 
     ok: bool
-    issues: tuple  # tuple[GraphIssue, ...]
+    issues: tuple[GraphIssue, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,7 +411,7 @@ class SavedGraphSummaryDTO:
     updated_at: datetime
 
 
-def to_saved_graph_dto(saved) -> SavedGraphDTO:
+def to_saved_graph_dto(saved: SavedGraph) -> SavedGraphDTO:
     """Map a ``SavedGraph`` port row to its projection."""
     return SavedGraphDTO(
         name=saved.name,
@@ -423,7 +435,7 @@ def to_saved_graph_summary(saved) -> SavedGraphSummaryDTO:
 
 @dataclass(frozen=True, slots=True)
 class SavedGraphListResult:
-    graphs: tuple  # tuple[SavedGraphSummaryDTO, ...]
+    graphs: tuple[SavedGraphSummaryDTO, ...]
     count: int
 
 

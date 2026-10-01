@@ -25,12 +25,14 @@ from dataclasses import dataclass
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.ports.clock import Clock
 from .application.ports.training_gateway import TrainingGateway
+from .application.dataset_task_sweeper import DatasetTaskSweeper
 from .application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
     DatasetServices,
     GraphServices,
+    MonitorServices,
     SettingsServices,
 )
 from .application.supervisor import RunSupervisor
@@ -76,6 +78,7 @@ from .application.use_cases import (
     StartDatasetTask,
     StartGraphExecution,
     StartTraining,
+    SubscribeMonitor,
     StopDatasetTask,
     StopGraphExecution,
     StopTraining,
@@ -103,6 +106,7 @@ from .infrastructure.graph.catalog import DiscoveredGraphCatalog
 from .infrastructure.graph.discovery import NodeRegistry
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
 from .infrastructure.jsonl_progress_source import JsonlProgressSource
+from .application.ports.monitor_bus import MonitorBus
 from .infrastructure.monitor_bus import SharedMonitorBus
 from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -127,6 +131,11 @@ class Container:
     supervisor: RunSupervisor
     gateway: TrainingGateway
     services: ApplicationServices
+    # The monitor adapter stays reachable for the few callers that
+    # legitimately *publish* telemetry (tests; the graph runtime's
+    # ExecutionContext wiring). Subscribing goes through
+    # ``services.monitor.subscribe`` -- see docs 08 S-04.
+    monitor_bus: MonitorBus
 
 
 def build_container(settings: Settings) -> Container:
@@ -174,6 +183,9 @@ def build_container(settings: Settings) -> Container:
     # through the library (M8f) -- server view state, never dataset files.
     dataset_previews = SqliteDatasetPreviews(database, dataset_library)
     dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
+    task_sweeper = DatasetTaskSweeper(
+        tasks=dataset_tasks, gateway=dataset_gateway, clock=clock
+    )
     dataset_files = FsDatasetFiles(layout.datasets_dir)
     assets = FileSystemAssetStore(layout, datasets=dataset_library)
 
@@ -218,7 +230,7 @@ def build_container(settings: Settings) -> Container:
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
-            supervisor=supervisor,
+            watcher=supervisor,
             clock=clock,
             project_root=settings.project_root,
         ),
@@ -234,7 +246,7 @@ def build_container(settings: Settings) -> Container:
             events=event_bus,
             gateway=gateway,
             clock=clock,
-            supervisor=supervisor,
+            watcher=supervisor,
             artifacts=artifacts,
         ),
         config=ConfigServices(
@@ -282,21 +294,18 @@ def build_container(settings: Settings) -> Container:
             tasks=ListDatasetTasks(
                 library=dataset_library,
                 tasks=dataset_tasks,
-                gateway=dataset_gateway,
-                clock=clock,
             ),
             start_task=StartDatasetTask(
                 library=dataset_library,
                 tasks=dataset_tasks,
                 gateway=dataset_gateway,
                 checkpoints_dir=layout.checkpoints_dir,
+                sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
-            reconcile_tasks=ReconcileDatasetTasks(
-                tasks=dataset_tasks, gateway=dataset_gateway
-            ),
+            reconcile_tasks=ReconcileDatasetTasks(sweeper=task_sweeper),
             read_file=ReadDatasetFile(files=dataset_files),
             set_preview=SetDatasetPreview(
                 library=dataset_library, previews=dataset_previews
@@ -310,7 +319,7 @@ def build_container(settings: Settings) -> Container:
                 executions=graph_executions,
                 runtime=graph_runtime,
                 events=event_bus,
-                supervisor=graph_supervisor,
+                launcher=graph_supervisor,
                 clock=clock,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
@@ -318,7 +327,7 @@ def build_container(settings: Settings) -> Container:
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 events=event_bus,
-                supervisor=graph_supervisor,
+                launcher=graph_supervisor,
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
@@ -334,7 +343,7 @@ def build_container(settings: Settings) -> Container:
         ),
         # shared
         event_bus=event_bus,
-        monitor_bus=monitor_bus,
+        monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 
     # Startup sweep: nothing may observe an unfinished row from a dead
@@ -368,4 +377,5 @@ def build_container(settings: Settings) -> Container:
         supervisor=supervisor,
         gateway=gateway,
         services=services,
+        monitor_bus=monitor_bus,
     )

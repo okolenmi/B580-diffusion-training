@@ -408,8 +408,8 @@ def _adopted_scenario(terminal: str | None) -> tuple[object, int]:
     seed_run(env.repo, env.clock, start=True, pid=4242)  # id 1, still running
     run_id = 1
     env.gateway.alive.add(4242)
-    supervisor = env.services.start_training._supervisor
-    supervisor.adopt(
+    watcher = env.services.start_training._watcher
+    watcher.adopt(
         run_id=run_id, pid=4242, progress_path=env.progress_path
     )
     if terminal is not None:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+from ..dataset_task_sweeper import DatasetTaskSweeper
 from ..dto import StartDatasetTaskCommand, TeacherTaskParams
 from ..errors import (
     DatasetTaskActiveError,
@@ -59,11 +60,16 @@ class StartDatasetTask:
         tasks: DatasetTasks,
         gateway: DatasetTaskGateway,
         checkpoints_dir: Path,
+        sweeper: DatasetTaskSweeper | None = None,
     ) -> None:
         self._library = library
         self._tasks = tasks
         self._gateway = gateway
         self._checkpoints = checkpoints_dir
+        # Optional because only the *liveness* judgement needs it, and
+        # the composition root always passes it; a container without one
+        # simply keeps a dead predecessor's row until startup.
+        self._sweeper = sweeper
         self._lock = threading.Lock()
 
     def execute(self, command: StartDatasetTaskCommand) -> DatasetTask:
@@ -92,6 +98,12 @@ class StartDatasetTask:
                 teacher = self._require_teacher(command)
                 total = teacher.n_conditions * teacher.n_samples_per_cond
                 params = self._teacher_params(teacher, model_rel)
+
+            # A predecessor whose child died must not answer 409 "a task
+            # is already active" -- sweep the debris before asking
+            # (docs 08 S-03; the rule itself lives in the sweeper).
+            if self._sweeper is not None:
+                self._sweeper.sweep()
 
             active = self._tasks.find_active(command.dataset)
             if active is not None:

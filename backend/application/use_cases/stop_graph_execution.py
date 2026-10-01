@@ -19,11 +19,10 @@ from ..errors import (
     GraphExecutionNotFoundError,
     GraphExecutionNotActiveError,
 )
-from ..graph_supervisor import GraphExecutionSupervisor
 from ..ports.clock import Clock
+from ..ports.execution_launcher import ExecutionLauncher
 from ..ports.event_bus import EventBus
 from ..ports.graph_execution_repository import GraphExecutionRepository
-from ...domain.events import DomainEvent
 
 _MAX_ATTEMPTS = 3
 
@@ -34,16 +33,16 @@ class StopGraphExecution:
         *,
         executions: GraphExecutionRepository,
         events: EventBus,
-        supervisor: GraphExecutionSupervisor,
+        launcher: ExecutionLauncher,
         clock: Clock,
     ) -> None:
         self._executions = executions
         self._events = events
-        self._supervisor = supervisor
+        self._launcher = launcher
         self._clock = clock
 
     def execute(self, execution_id: int) -> GraphExecutionDTO:
-        self._supervisor.cancel(execution_id)  # signal, then claim
+        self._launcher.cancel(execution_id)  # signal, then claim
 
         for _ in range(_MAX_ATTEMPTS):
             execution = self._executions.get(execution_id)

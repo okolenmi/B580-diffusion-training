@@ -361,44 +361,55 @@ class ReflectedGraphRuntime(GraphRuntime):
         )
         outputs_by_node: dict[str, dict] = {}
         results: list[NodeResult] = []
+        try:
+            for node_id in order:
+                if cancel_event.is_set():
+                    break  # stop requested; whatever ran so far is reported
+                spec = graph.node(node_id)
+                cls = classes[spec.class_name]
+                inputs = dict(spec.params)
+                for edge in graph.edges_to(node_id):
+                    inputs[edge.to_port] = outputs_by_node[edge.from_node][edge.from_port]
 
-        for node_id in order:
-            if cancel_event.is_set():
-                break  # stop requested; whatever ran so far is reported
-            spec = graph.node(node_id)
-            cls = classes[spec.class_name]
-            inputs = dict(spec.params)
-            for edge in graph.edges_to(node_id):
-                inputs[edge.to_port] = outputs_by_node[edge.from_node][edge.from_port]
+                started = time.monotonic()
+                try:
+                    outputs = cls(context).build(**inputs)
+                    described = {k: _describe(v) for k, v in outputs.items()}
+                except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome
+                    result = NodeResult(
+                        node_id=node_id,
+                        ok=False,
+                        outputs={},
+                        error=f"{type(exc).__name__}: {exc}",
+                        duration_ms=(time.monotonic() - started) * 1000.0,
+                    )
+                    results.append(result)
+                    self._notify(on_node_done, result)
+                    return GraphOutcome(results=tuple(results), error=result.error)
 
-            started = time.monotonic()
-            try:
-                outputs = cls(context).build(**inputs)
-                described = {k: _describe(v) for k, v in outputs.items()}
-            except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome
+                outputs_by_node[node_id] = outputs  # real objects feed the next node
                 result = NodeResult(
                     node_id=node_id,
-                    ok=False,
-                    outputs={},
-                    error=f"{type(exc).__name__}: {exc}",
+                    ok=True,
+                    outputs=described,
                     duration_ms=(time.monotonic() - started) * 1000.0,
                 )
                 results.append(result)
                 self._notify(on_node_done, result)
-                return GraphOutcome(results=tuple(results), error=result.error)
-
-            outputs_by_node[node_id] = outputs  # real objects feed the next node
-            result = NodeResult(
-                node_id=node_id,
-                ok=True,
-                outputs=described,
-                duration_ms=(time.monotonic() - started) * 1000.0,
-            )
-            results.append(result)
-            self._notify(on_node_done, result)
-        return GraphOutcome(results=tuple(results), error=None)
+            return GraphOutcome(results=tuple(results), error=None)
+        finally:
+            # Whoever allocated device memory releases it: a caller can
+            # no longer forget a cleanup step it cannot see (docs 08
+            # S-05). A failing release must not lose the run's results.
+            try:
+                self.release_memory()
+            except Exception:  # noqa: BLE001 -- cleanup is best-effort
+                logger.exception("device memory release after a graph run failed")
 
     def release_memory(self) -> None:
+        """Return freed device memory to the driver (the legacy worker's
+        ``finally``). ``execute`` already calls this for itself; it stays
+        public for callers that allocate outside a run."""
         self._memory_releaser()
 
     # ------------------------------------------------------------------

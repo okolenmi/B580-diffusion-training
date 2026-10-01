@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from ..dto import RunDTO, to_run_dto
 from ..errors import RunNotFoundError, RunNotRunningError
 from ..ports.clock import Clock
@@ -11,8 +9,6 @@ from ..ports.event_bus import EventBus
 from ..ports.run_repository import RunRepository
 from ..ports.training_gateway import TrainingGateway
 from ...domain.value_objects import RunStatus
-
-logger = logging.getLogger(__name__)
 
 
 class StopTraining:

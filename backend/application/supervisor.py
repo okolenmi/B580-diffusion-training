@@ -36,6 +36,7 @@ from .ports.event_bus import EventBus
 from .ports.progress_source import ProgressSample, ProgressSource
 from .ports.run_artifacts import RunArtifacts
 from .ports.run_repository import RunRepository
+from .ports.run_watcher import RunWatcher
 from .ports.training_gateway import TrainingGateway
 from ..domain.entities.run import Run
 from ..domain.events import RunProgressed
@@ -44,7 +45,7 @@ from ..domain.value_objects import RunId, RunStatus
 logger = logging.getLogger(__name__)
 
 
-class RunSupervisor:
+class RunSupervisor(RunWatcher):
     def __init__(
         self,
         *,
@@ -70,15 +71,11 @@ class RunSupervisor:
         self._adopted: set[RunId] = set()
         self._terminal: dict[RunId, str] = {}
 
-    def watch(
-        self, *, run_id: RunId, pid: int, progress_path: Path
-    ) -> threading.Thread:
-        """Start watching a spawned run; returns the daemon thread."""
-        return self._start(run_id, pid, progress_path, adopted=False)
+    def watch(self, *, run_id: RunId, pid: int, progress_path: Path) -> None:
+        """Start watching a spawned run (the port's fire-and-forget shape)."""
+        self._start(run_id, pid, progress_path, adopted=False)
 
-    def adopt(
-        self, *, run_id: RunId, pid: int, progress_path: Path
-    ) -> threading.Thread:
+    def adopt(self, *, run_id: RunId, pid: int, progress_path: Path) -> None:
         """Re-attach to a trainer this process did not spawn.
 
         Trainers are started in their own session so they survive a
@@ -94,11 +91,11 @@ class RunSupervisor:
         * a log note records the re-attachment.
         """
         self._progress.read_new(progress_path)  # consume history, apply none
-        return self._start(run_id, pid, progress_path, adopted=True)
+        self._start(run_id, pid, progress_path, adopted=True)
 
     def _start(
         self, run_id: RunId, pid: int, progress_path: Path, *, adopted: bool
-    ) -> threading.Thread:
+    ) -> None:
         with self._lock:
             if adopted:
                 self._adopted.add(run_id)
@@ -117,7 +114,6 @@ class RunSupervisor:
             daemon=True,
         )
         thread.start()
-        return thread
 
     def _guard(self, run_id: RunId, pid: int, progress_path: Path) -> None:
         try:

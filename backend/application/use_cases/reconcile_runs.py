@@ -31,9 +31,9 @@ from ..ports.clock import Clock
 from ..ports.event_bus import EventBus
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
+from ..ports.run_watcher import RunWatcher
 from ..ports.training_gateway import TrainingGateway
 from ...domain.value_objects import RunStatus
-from ..supervisor import RunSupervisor
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +46,17 @@ class ReconcileRuns:
         events: EventBus,
         gateway: TrainingGateway,
         clock: Clock,
-        supervisor: RunSupervisor | None = None,
-        artifacts: RunArtifacts | None = None,
+        watcher: RunWatcher,
+        artifacts: RunArtifacts,
     ) -> None:
         self._runs = runs
         self._events = events
         self._gateway = gateway
         self._clock = clock
-        # Both optional so a caller without them keeps the legacy
-        # kill-the-orphan behaviour; the real container always passes
-        # them (bootstrap wires both).
-        self._supervisor = supervisor
+        # Required, not optional: with these missing the sweep would
+        # silently fall back to killing live trainers, which is the data
+        # loss docs 07 F-11 exists to prevent (docs 08 S-02).
+        self._watcher = watcher
         self._artifacts = artifacts
 
     def execute(self) -> ReconcileResult:
@@ -113,14 +113,10 @@ class ReconcileRuns:
         process must exist, still look like this project's trainer, and
         have somewhere to write progress we can tail.
         """
-        if self._supervisor is None or self._artifacts is None:
-            return False
         if run.id is None or run.pid is None:
             return False
         if not self._gateway.is_alive(run.pid) or not self._gateway.owns(run.pid):
             return False
         progress = self._artifacts.paths_for(run.id).progress
-        self._supervisor.adopt(
-            run_id=run.id, pid=run.pid, progress_path=progress
-        )
+        self._watcher.adopt(run_id=run.id, pid=run.pid, progress_path=progress)
         return True

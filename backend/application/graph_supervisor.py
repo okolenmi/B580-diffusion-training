@@ -41,13 +41,14 @@ from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .ports.clock import Clock
 from .ports.event_bus import EventBus
+from .ports.execution_launcher import ExecutionLauncher
 from .ports.graph_execution_repository import GraphExecutionRepository
 from .ports.graph_runtime import GraphOutcome, GraphRuntime
 
 logger = logging.getLogger(__name__)
 
 
-class GraphExecutionSupervisor:
+class GraphExecutionSupervisor(ExecutionLauncher):
     def __init__(
         self,
         *,
@@ -68,8 +69,8 @@ class GraphExecutionSupervisor:
     # ------------------------------------------------------------------
 
     def launch(
-        self, *, execution_id: ExecutionId, graph: GraphDefinition
-    ) -> threading.Thread:
+        self, execution_id: ExecutionId, graph: GraphDefinition
+    ) -> None:
         """Register cancellation, then start the worker daemon thread."""
         event = threading.Event()
         with self._lock:
@@ -81,7 +82,6 @@ class GraphExecutionSupervisor:
             daemon=True,
         )
         thread.start()
-        return thread
 
     def cancel(self, execution_id: ExecutionId) -> None:
         """Set the execution's cancel event; no-op if not running here
@@ -106,7 +106,7 @@ class GraphExecutionSupervisor:
             self._supervise(execution_id, graph, event)
         except Exception:  # noqa: BLE001 -- thread must not die silently
             logger.exception("supervisor for graph execution %s crashed", execution_id)
-            self._fail_leftover(execution_id, event)
+            self._fail_leftover(execution_id)
         finally:
             with self._lock:
                 self._cancel_events.pop(execution_id, None)
@@ -127,22 +127,11 @@ class GraphExecutionSupervisor:
             return  # lost the claim race (stop on a queued row, mostly)
         self._publish(execution.collect_events())  # GraphExecutionStarted
 
-        try:
-            outcome = self._runtime.execute(
-                graph,
-                cancel_event=event,
-                on_node_done=lambda result: self._record_result(
-                    execution_id, result
-                ),
-            )
-        finally:
-            try:
-                self._runtime.release_memory()
-            except Exception:  # noqa: BLE001 -- cleanup is best-effort
-                logger.exception(
-                    "memory release after execution %s failed (non-fatal)",
-                    execution_id,
-                )
+        outcome = self._runtime.execute(
+            graph,
+            cancel_event=event,
+            on_node_done=lambda result: self._record_result(execution_id, result),
+        )
         self._finalize(execution_id, event, outcome)
 
     def _record_result(self, execution_id: ExecutionId, result: NodeResult) -> None:
@@ -196,9 +185,7 @@ class GraphExecutionSupervisor:
             return  # lost the terminal CAS; the stop writer's result stands
         self._publish(execution.collect_events())
 
-    def _fail_leftover(
-        self, execution_id: ExecutionId, event: threading.Event
-    ) -> None:
+    def _fail_leftover(self, execution_id: ExecutionId) -> None:
         """Last-ditch row repair after a supervisor crash: never leave
         the row active (it would block the next start until restart)."""
         try:

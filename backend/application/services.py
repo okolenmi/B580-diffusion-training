@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .ports.event_bus import EventBus
-from .ports.monitor_bus import MonitorBus
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
 from .use_cases.commit_dataset_items import CommitDatasetItems
@@ -52,6 +51,7 @@ from .use_cases.read_config_raw import ReadConfigRaw
 from .use_cases.read_dataset_file import ReadDatasetFile
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
+from .use_cases.subscribe_monitor import SubscribeMonitor
 from .use_cases.reconcile_runs import ReconcileRuns
 from .use_cases.save_graph import SaveGraph
 from .use_cases.set_dataset_preview import SetDatasetPreview
@@ -138,6 +138,19 @@ class GraphServices:
 
 
 @dataclass(frozen=True, slots=True)
+class MonitorServices:
+    """Live node telemetry (the monitor page's data path, M6).
+
+    A group of its own rather than a raw port on the aggregate: the
+    endpoint used to reach for ``services.monitor_bus`` directly, which
+    left the one member of the aggregate that was *not* behind a use case
+    (docs 08 S-04).
+    """
+
+    subscribe: SubscribeMonitor
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationServices:
     # runs domain (M1/M2)
     list_runs: ListRuns
@@ -156,6 +169,7 @@ class ApplicationServices:
     datasets: DatasetServices
     # graph domain (M4)
     graphs: GraphServices
+    # monitor telemetry (M6)
+    monitor: MonitorServices
     # shared
     event_bus: EventBus
-    monitor_bus: MonitorBus

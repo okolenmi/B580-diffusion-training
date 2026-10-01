@@ -46,6 +46,7 @@ from .start_training import StartTraining
 from .stop_dataset_task import StopDatasetTask
 from .stop_graph_execution import StopGraphExecution
 from .stop_training import StopTraining
+from .subscribe_monitor import SubscribeMonitor
 from .update_config import UpdateConfig
 from .update_dataset_item import UpdateDatasetItem
 from .update_settings import UpdateSettings
@@ -98,6 +99,7 @@ __all__ = [
     "StopDatasetTask",
     "StopGraphExecution",
     "StopTraining",
+    "SubscribeMonitor",
     "UpdateConfig",
     "UpdateDatasetItem",
     "UpdateSettings",

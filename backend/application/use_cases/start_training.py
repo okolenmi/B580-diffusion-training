@@ -17,6 +17,7 @@ from ..ports.config_inspector import ConfigInspector
 from ..ports.event_bus import EventBus
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
+from ..ports.run_watcher import RunWatcher
 from ..ports.training_gateway import TrainingGateway, TrainingLaunch
 from ...domain.entities.run import Run
 from ...domain.value_objects import RunStatus
@@ -41,7 +42,7 @@ class StartTraining:
         gateway: TrainingGateway,
         inspector: ConfigInspector,
         artifacts: RunArtifacts,
-        supervisor: "RunSupervisor",  # noqa: F821 -- application sibling
+        watcher: RunWatcher,
         clock: Clock,
         project_root: Path,
     ) -> None:
@@ -50,7 +51,7 @@ class StartTraining:
         self._gateway = gateway
         self._inspector = inspector
         self._artifacts = artifacts
-        self._supervisor = supervisor
+        self._watcher = watcher
         self._clock = clock
         self._root = project_root
         self._lock = threading.Lock()
@@ -114,7 +115,7 @@ class StartTraining:
                         f"run {run.id} was reclaimed during startup launch"
                     )
                 self._publish(run)
-                self._supervisor.watch(
+                self._watcher.watch(
                     run_id=run.id,  # type: ignore[arg-type]
                     pid=pid,
                     progress_path=paths.progress,

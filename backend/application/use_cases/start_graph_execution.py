@@ -19,8 +19,8 @@ import threading
 
 from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
-from ..graph_supervisor import GraphExecutionSupervisor
 from ..ports.clock import Clock
+from ..ports.execution_launcher import ExecutionLauncher
 from ..ports.event_bus import EventBus
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import ISSUE_ERROR, GraphRuntime, issue_to_dict
@@ -38,13 +38,13 @@ class StartGraphExecution:
         executions: GraphExecutionRepository,
         runtime: GraphRuntime,
         events: EventBus,
-        supervisor: GraphExecutionSupervisor,
+        launcher: ExecutionLauncher,
         clock: Clock,
     ) -> None:
         self._executions = executions
         self._runtime = runtime
         self._events = events
-        self._supervisor = supervisor
+        self._launcher = launcher
         self._clock = clock
         self._lock = threading.Lock()
 
@@ -73,7 +73,7 @@ class StartGraphExecution:
             )
             self._executions.add(execution)  # binds id + buffers Queued
             self._publish(execution.collect_events())
-            self._supervisor.launch(execution_id=execution.id, graph=graph)
+            self._launcher.launch(execution.id, graph)
             return to_execution_summary_dto(execution)
 
     def _publish(self, events: list[DomainEvent]) -> None:

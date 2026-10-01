@@ -34,7 +34,7 @@ def test_monitor_stream() -> None:
     print("\n== GET /api/v1/monitor/{id}/stream (SSE end-to-end) ==")
     with tempfile.TemporaryDirectory() as tmp:
         container, app = _build(tmp)
-        bus = container.services.monitor_bus
+        bus = container.monitor_bus
 
         # History exists before anyone connects: a dashboard opened
         # mid-run must get the run so far, not just future frames.
@@ -141,7 +141,7 @@ def test_subscriber_backlog_is_bounded() -> None:
     print("\n== monitor bus: a stalled subscriber's queue stays bounded ==")
     with tempfile.TemporaryDirectory() as tmp:
         container, _ = _build(tmp)
-        bus = container.services.monitor_bus
+        bus = container.monitor_bus
 
         async def scenario() -> None:
             queue = bus.subscribe("mon-bound")

@@ -13,6 +13,4 @@ class BrowseAssets:
     def execute(self, kind: str, path: str = "") -> AssetBrowse:
         if not kind:
             raise InvalidQueryError("asset kind is required")
-        if path is None:
-            path = ""
         return self._assets.browse(kind, path)

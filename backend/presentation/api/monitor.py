@@ -41,15 +41,12 @@ async def monitor_stream(
     """
 
     async def frames():
-        queue = services.monitor_bus.subscribe(monitor_id)
-        try:
+        async with services.monitor.subscribe.open(monitor_id) as stream:
             yield 'data: {"type": "connected"}\n\n'
-            while True:
+            async for frame in stream:
                 # Blocks until a frame or cancellation; a client
                 # disconnect cancels this task, which runs the finally.
-                yield await queue.get()
-        finally:
-            services.monitor_bus.unsubscribe(monitor_id, queue)
+                yield frame
 
     return StreamingResponse(
         frames(),

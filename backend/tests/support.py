@@ -36,9 +36,11 @@ from backend.application.ports.training_gateway import (
     TrainingGateway,
     TrainingLaunch,
 )
+from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.errors import ConfigNotFoundError
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.services import (
+    MonitorServices,
     ApplicationServices,
     AssetServices,
     ConfigServices,
@@ -48,6 +50,7 @@ from backend.application.services import (
 )
 from backend.application.supervisor import RunSupervisor
 from backend.application.use_cases import (
+    SubscribeMonitor,
     BrowseAssets,
     BulkUpdateDatasetItems,
     CommitDatasetItems,
@@ -739,6 +742,9 @@ def build_services(
         dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
     if dataset_gateway is None:
         dataset_gateway = FakeDatasetTaskGateway()
+        task_sweeper = DatasetTaskSweeper(
+            tasks=dataset_tasks, gateway=dataset_gateway, clock=clock
+        )
     if dataset_previews is None:
         previews_db = SqliteDatabase(project_root / "test-dataset-previews.db")
         previews_db.initialize()
@@ -795,7 +801,7 @@ def build_services(
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
-            supervisor=supervisor,
+            watcher=supervisor,
             clock=clock,
             project_root=project_root,
         ),
@@ -805,7 +811,7 @@ def build_services(
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
             runs=runs, events=events, gateway=gateway, clock=clock,
-            supervisor=supervisor, artifacts=artifacts,
+            watcher=supervisor, artifacts=artifacts,
         ),
         config=ConfigServices(
             read=GetConfig(files=config_files, project_root=project_root),
@@ -850,19 +856,16 @@ def build_services(
             tasks=ListDatasetTasks(
                 library=dataset_library,
                 tasks=dataset_tasks,
-                gateway=dataset_gateway,
-                clock=clock,
             ),
             start_task=StartDatasetTask(
                 library=dataset_library,
                 tasks=dataset_tasks,
                 gateway=dataset_gateway,
                 checkpoints_dir=layout.checkpoints_dir,
+                sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(tasks=dataset_tasks, gateway=dataset_gateway),
-            reconcile_tasks=ReconcileDatasetTasks(
-                tasks=dataset_tasks, gateway=dataset_gateway
-            ),
+            reconcile_tasks=ReconcileDatasetTasks(sweeper=task_sweeper),
             read_file=ReadDatasetFile(files=dataset_files),
             set_preview=SetDatasetPreview(
                 library=dataset_library, previews=dataset_previews
@@ -876,7 +879,7 @@ def build_services(
                 executions=graph_executions,
                 runtime=graph_runtime,
                 events=events,
-                supervisor=graph_supervisor,
+                launcher=graph_supervisor,
                 clock=clock,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
@@ -884,7 +887,7 @@ def build_services(
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 events=events,
-                supervisor=graph_supervisor,
+                launcher=graph_supervisor,
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
@@ -899,7 +902,7 @@ def build_services(
             delete_graph=DeleteGraph(library=graph_library),
         ),
         event_bus=events,
-        monitor_bus=monitor_bus,
+        monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 
 

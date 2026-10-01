@@ -116,5 +116,11 @@ class GraphRuntime(ABC):
 
     @abstractmethod
     def release_memory(self) -> None:
-        """Best-effort return of freed device memory (no-op-safe)."""
+        """Best-effort return of freed device memory (no-op-safe).
+
+        ``execute`` calls this itself in its own ``finally`` -- the
+        runtime owns the device state it allocated, so a caller cannot
+        forget the cleanup (docs 08 S-05). It stays on the port for
+        callers that allocate outside a run.
+        """
         raise NotImplementedError

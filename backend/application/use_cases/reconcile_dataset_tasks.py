@@ -6,37 +6,32 @@ now belongs to something else, which the gateway's liveness guard
 rejects -- is CASed to ``failed`` with a reconcile note. Rows whose
 child is genuinely still alive (a task outliving a server restart)
 are left running: the reporter keeps writing and the UI keeps working.
+
+The "is it dead" rule itself belongs to ``DatasetTaskSweeper``, which
+``StartDatasetTask`` uses for the same judgement (docs 08 S-03).
 """
 
 from __future__ import annotations
 
 import logging
 
+from ..dataset_task_sweeper import DatasetTaskSweeper
 from ..dto import ReconcileResult
-from ..ports.dataset_task_gateway import DatasetTaskGateway
-from ..ports.dataset_tasks import DatasetTasks
 
 logger = logging.getLogger(__name__)
 
 
 class ReconcileDatasetTasks:
-    def __init__(self, *, tasks: DatasetTasks, gateway: DatasetTaskGateway) -> None:
-        self._tasks = tasks
-        self._gateway = gateway
+    def __init__(self, *, sweeper: DatasetTaskSweeper) -> None:
+        self._sweeper = sweeper
 
     def execute(self) -> ReconcileResult:
-        cleaned = 0
-        for task in self._tasks.list_unfinished():
-            if task.pid is not None and self._gateway.is_alive(task.pid):
-                logger.info(
-                    "dataset task %s (%s) still alive after restart; keeping",
-                    task.id, task.dataset,
-                )
-                continue
-            if self._tasks.fail_if_active(
-                task.id, "reconciled: task process is not running"
-            ):
-                cleaned += 1
+        # At startup no start is in flight, so a pidless pending row is
+        # debris rather than a launch that has not recorded its pid yet.
+        cleaned = self._sweeper.sweep(
+            pidless_pending_is_debris=True,
+            note_for_dead="reconciled: task process is not running",
+        )
         if cleaned:
             logger.info("reconciled %d unfinished dataset task(s)", cleaned)
         return ReconcileResult(cleaned=cleaned)

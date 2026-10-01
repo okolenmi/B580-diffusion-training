@@ -12,7 +12,6 @@ class ListRuns:
     """Single responsibility: validate the query, fetch, project."""
 
     MAX_LIMIT = 500
-    DEFAULT_LIMIT = ListRunsQuery.limit  # keep defaults in one place
 
     def __init__(self, runs: RunRepository) -> None:
         self._runs = runs

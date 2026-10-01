@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.dto import StartDatasetTaskCommand
 from backend.application.errors import (
     DatasetNotFoundError,
@@ -182,7 +183,9 @@ gateway.alive.add(gateway.next_pid)
 gateway.next_pid += 1
 never = repo.add(dataset="rec", kind=KIND_INGEST_LORA, total=9, params={})  # pending, no pid
 
-reconciled = ReconcileDatasetTasks(tasks=repo, gateway=gateway).execute()
+reconciled = ReconcileDatasetTasks(
+    sweeper=DatasetTaskSweeper(tasks=repo, gateway=gateway, clock=clock)
+).execute()
 check(reconciled.cleaned == 2, "reconcile fails dead-pid and never-started rows")
 check(repo.get(dead.id).status == "failed", "dead running row failed")
 check(repo.get(never.id).status == "failed", "pending row failed")
@@ -192,21 +195,29 @@ check("reconciled" in (repo.get(dead.id).error or ""), "reconcile note recorded"
 # -- ListDatasetTasks sweep + filters ----------------------------------------
 
 make_v2_dataset(root, "sweep")
-listing = ListDatasetTasks(library=library, tasks=repo, gateway=gateway, clock=clock)
+listing = ListDatasetTasks(library=library, tasks=repo)
+sweeper = DatasetTaskSweeper(tasks=repo, gateway=gateway, clock=clock)
 
 gone = repo.add(dataset="sweep", kind=KIND_INGEST_LORA, total=1, params={})
 repo.update_progress(gone.id, 1, pid=6666)  # dies without reporting
 fresh = repo.add(dataset="sweep", kind=KIND_INGEST_LORA, total=1, params={})  # just spawned
 
+# A read is a read: listing rows must not rewrite any row, least of all
+# one belonging to another dataset (docs 08 S-03).
 result = listing.execute("sweep")
-check([t.id for t in result.tasks] == [fresh.id],
-      "active list keeps the young pending row only (swept one is terminal)")
-check(repo.get(gone.id).status == "failed", "dead running row swept on list")
+check([t.id for t in result.tasks] == [fresh.id, gone.id],
+      "both active rows are listed, newest first")
+check(repo.get(gone.id).status == "running", "listing swept nothing")
+check(repo.get(fresh.id).status == "pending", "nor the pending row")
+
+# The sweeper is the one definition of dead, and start/reconcile call it.
+check(sweeper.sweep() == 1, "the sweeper fails only the dead-pid row")
+check(repo.get(gone.id).status == "failed", "dead running row swept")
+check("not running" in (repo.get(gone.id).error or ""), "death reason recorded")
 check(repo.get(fresh.id).status == "pending", "young pending row untouched")
 
 clock.advance(120)
-listing.execute("sweep")
-check(repo.get(fresh.id).status == "failed", "stale pending row swept after age-out")
+check(sweeper.sweep() == 1, "the stale pending row is swept once it ages out")
 check("never reported" in (repo.get(fresh.id).error or ""),
       "age-out reason recorded")
 history = listing.execute("sweep", active_only=False)

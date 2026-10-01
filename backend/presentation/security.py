@@ -46,6 +46,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ..application.errors import ApplicationError
 from .errors import error_body
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,27 @@ DEFAULT_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 # Methods that change state. GET/HEAD stay open: a hostile page can only
 # read with those, and reads are scoped to the loopback deployment.
 _STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+class ForbiddenHostError(ApplicationError):
+    """The request's ``Host`` header names a server this is not.
+
+    Declared here rather than in ``application/errors.py`` because the
+    guard is its only source -- but it is an ``ApplicationError`` so the
+    code and its 403 come from the same declaration as every other API
+    error, and the documented table in ``02-api-reference.md`` has a
+    class behind each row (docs 08 S-10).
+    """
+
+    code = "forbidden_host"
+    status_code = 403
+
+
+class ForbiddenOriginError(ApplicationError):
+    """A state-changing request arrived from another origin."""
+
+    code = "forbidden_origin"
+    status_code = 403
 
 
 def _split_env(name: str) -> tuple[str, ...]:
@@ -114,9 +136,10 @@ class HostOriginGuard:
             logger.warning("refused request with Host %r", host)
             await self._refuse(
                 scope, receive, send,
-                "forbidden_host",
-                f"Host {host!r} is not served by this backend; expected one "
-                f"of {', '.join(sorted(self._hosts))}",
+                ForbiddenHostError(
+                    f"Host {host!r} is not served by this backend; expected one "
+                    f"of {', '.join(sorted(self._hosts))}"
+                ),
             )
             return
 
@@ -130,8 +153,9 @@ class HostOriginGuard:
                 )
                 await self._refuse(
                     scope, receive, send,
-                    "forbidden_origin",
-                    f"Origin {origin!r} may not change state on this backend",
+                    ForbiddenOriginError(
+                        f"Origin {origin!r} may not change state on this backend"
+                    ),
                 )
                 return
 
@@ -143,10 +167,15 @@ class HostOriginGuard:
 
     @staticmethod
     async def _refuse(
-        scope: Scope, receive: Receive, send: Send, code: str, message: str
+        scope: Scope, receive: Receive, send: Send, error: ApplicationError
     ) -> None:
+        # Written here rather than raised: this middleware sits above the
+        # router, so an exception would reach the server's error
+        # middleware, not the registered handler. The envelope and the
+        # status still come from one place.
         await JSONResponse(
-            status_code=403, content=error_body(code, message)
+            status_code=error.status_code,
+            content=error_body(error.code, str(error)),
         )(scope, receive, send)
 
 

@@ -5,7 +5,10 @@ bare dicts, and the global handler):
 
     {"error": {"code": "run_not_found", "message": "...", "details": [...]}}
 
-* ``ApplicationError`` -> status from the code table below.
+* ``ApplicationError`` -> the status its class declares. The code and
+  the status are one fact, kept together on the error class
+  (``application/errors.py``); this module no longer keeps a second copy
+  of the table (docs 08 S-10).
 * FastAPI/pydantic request validation -> 422 ``validation_error``.
 * Anything else (including domain errors escaping a use case, which is
   always a bug) -> 500 ``internal_error``, full traceback logged.
@@ -24,39 +27,6 @@ from ..application.errors import ApplicationError
 
 logger = logging.getLogger(__name__)
 
-_STATUS_BY_CODE: dict[str, int] = {
-    "run_not_found": 404,
-    "invalid_query": 422,
-    "asset_too_large": 413,
-    "config_not_found": 404,
-    "config_invalid": 422,
-    "run_already_active": 409,
-    "run_not_running": 409,
-    "no_active_run": 404,
-    "training_launch_failed": 500,
-    "settings_invalid": 400,
-    # datasets (M3b)
-    "dataset_not_found": 404,
-    "dataset_item_not_found": 404,
-    "dataset_file_not_found": 404,
-    "dataset_exists": 409,
-    "dataset_directory_conflict": 409,
-    "run_directory_conflict": 409,
-    "dataset_not_migrated": 409,
-    "dataset_task_active": 409,
-    "dataset_task_not_found": 404,
-    "dataset_task_not_active": 409,
-    "dataset_task_launch_failed": 500,
-    # graphs (M4)
-    "graph_invalid": 422,
-    "graph_execution_not_found": 404,
-    "graph_execution_active": 409,
-    "graph_execution_not_active": 409,
-    "node_class_not_found": 404,
-    "node_diagnostics_failed": 400,
-    "graph_not_found": 404,
-}
-
 
 def error_body(
     code: str, message: str, details: dict | list | None = None
@@ -70,9 +40,8 @@ def error_body(
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApplicationError)
     async def _application_error(request: Request, exc: ApplicationError) -> JSONResponse:
-        status = _STATUS_BY_CODE.get(exc.code, 400)
         return JSONResponse(
-            status_code=status,
+            status_code=exc.status_code,
             content=error_body(exc.code, str(exc), exc.details),
         )
 

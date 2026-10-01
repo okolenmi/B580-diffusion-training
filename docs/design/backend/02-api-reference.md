@@ -37,8 +37,10 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   `details` present only when the use case supplies it (e.g. the full
   issue list for `graph_invalid`, pydantic field errors for
   `validation_error` as `{loc, msg, type}` entries).
-* **Error codes** (application codes -> status; anything unmapped is
-  400; pydantic body rejection is 422 `validation_error`):
+* **Error codes** (application codes -> status; every
+  `ApplicationError` subclass declares its own status in
+  `backend/application/errors.py`, so this table *is* that module --
+  pydantic body rejection is 422 `validation_error`):
 
   | Code | Status | Domain |
   |---|---|---|
@@ -52,7 +54,7 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   | `training_launch_failed` | 500 | runs |
   | `settings_invalid` | 400 | settings |
   | `asset_too_large` | 413 | assets (upload body or declared `Content-Length` over the 8 GiB cap) |
-  | `dataset_not_found`, `dataset_item_not_found`, `dataset_task_not_found` | 404 | datasets |
+  | `dataset_not_found`, `dataset_item_not_found`, `dataset_file_not_found`, `dataset_task_not_found` | 404 | datasets |
   | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active`, `dataset_directory_conflict` | 409 | datasets (`dataset_directory_conflict`: the name is taken by a directory that is not a dataset — it is never deleted, docs 07 F-10) |
   | `dataset_task_launch_failed` | 500 | datasets |
   | `graph_invalid` | 422 | graphs |

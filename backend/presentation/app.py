@@ -29,6 +29,7 @@ from .api import (
 from .errors import register_error_handlers
 from .frontend import register_frontend
 from .responses import SanitizingJSONResponse
+from .security import register_request_guard
 
 
 def create_app(
@@ -45,6 +46,9 @@ def create_app(
     )
     app.state.services = services
 
+    # Host/Origin guard first: it must see every request, including the
+    # ones the error handlers would otherwise answer (docs 07 F-06).
+    register_request_guard(app)
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(runs.router)

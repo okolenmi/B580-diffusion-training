@@ -14,6 +14,15 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
 
 * **Base path**: `/api/v1`. All bodies and responses are JSON
   (assets upload is raw bytes; SSE is `text/event-stream`).
+* **No authentication, but the browser doors are closed** (docs 07 F-06):
+  every request's `Host` must name this server (loopback names by
+  default, plus anything in `BACKEND_ALLOWED_HOSTS`) — that is what stops
+  DNS rebinding — and a state-changing method (`POST`/`PUT`/`PATCH`/
+  `DELETE`) carrying an `Origin` must match this server's own origin or
+  one in `BACKEND_ALLOWED_ORIGINS`. Refusals are 403 `forbidden_host` /
+  `forbidden_origin` in the ordinary envelope. Requests without an
+  `Origin` (curl, scripts, server-to-server) are not browser cross-site
+  requests and pass; `GET`/`HEAD` stay open.
 * **Timestamps**: ISO 8601 with offset (`2026-09-30T12:00:00+00:00`),
   serialised from `datetime` fields.
 * **List responses** are wrapped: `<resource>s: [...]` plus `count`.
@@ -34,6 +43,7 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   | Code | Status | Domain |
   |---|---|---|
   | `invalid_query` | 422 | runs/graphs (limit, status, name range) |
+  | `forbidden_host`, `forbidden_origin` | 403 | requests (Host not served / cross-site state change — see section 1) |
   | `run_not_found`, `no_active_run` | 404 | runs |
   | `run_already_active`, `run_not_running` | 409 | runs |
   | `run_directory_conflict` | 409 | runs (`runs/run_<id>/` already holds files — never overwritten, docs 07 F-04) |
@@ -119,7 +129,7 @@ project config dir; `path` selects the file.
 | GET | `/config` | `path` (**required** -- empty is 422 `invalid_query`) | nested JSON mirroring `TrainingConfig` |
 | PATCH | `/config` | `ConfigPatchIn{path, overrides}` deep-merge | merged config JSON; file untouched unless merged config validates (422 `config_invalid`) |
 | GET | `/config/raw` | `path` | `{"content": "<toml text>"}` |
-| PUT | `/config/raw` | `ConfigRawIn{path, content}` | `{"ok": true}` (create-or-replace; 422 on invalid TOML) |
+| PUT | `/config/raw` | `ConfigRawIn{path, content}` | `{"ok": true}` (create-or-replace; 422 on invalid TOML). **Stores the user's own text**: the document is parsed to validate it, then written verbatim through a temp sibling + rename, so comments, key order and keys the model does not declare survive (docs 07 F-08). `PATCH /config` (the form editor) still rewrites through the model by design |
 | GET | `/config/options` | — | `{"options": [{...field schema...}]}` — schema only, no config read |
 | GET | `/config/start-options` | `path` | `StartOptionsOut`: `start_from: {option: {path, available, label}}`, `has_unfinished_run`, `last_finished` or `null` |
 
@@ -133,6 +143,16 @@ Tiered override store (`settings.toml`); values are strings.
 |---|---|---|---|
 | GET | `/settings` | — | `{"stored": {k: v}, "resolved": {k: v\|null}}` |
 | POST | `/settings` | `SettingsIn` (all optional: `default_config, comfy_dir, venv_python, checkpoints_dir, loras_dir`) | same shape; **absent key = untouched, `""` = clear override**; 400 `settings_invalid` |
+
+Validation is **pure** -- it looks, it never acts (docs 07 F-15): a
+rejected update leaves the filesystem exactly as it was. What each key
+must satisfy:
+
+| Key | Accepted when |
+|---|---|
+| `comfy_dir` | it is an existing directory |
+| `venv_python` | it is an existing **executable** file -- the value is executed on every start, so "it exists" is not the contract (F-06) |
+| `checkpoints_dir`, `loras_dir` | absolute, not an existing non-directory, and *creatable*: the nearest existing ancestor is a writable directory. The directory itself is created **after** the commit, so an update that fails validation creates nothing |
 
 ## 6. Assets
 

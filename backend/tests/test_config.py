@@ -150,6 +150,31 @@ def main() -> None:
         "rejected raw write left the file unchanged",
     )
 
+    # The raw editor stores the user's own text (docs 07 F-08): comments,
+    # key order and keys the model does not declare must survive a save.
+    annotated = (
+        "# tuning notes for the next attempt\n"
+        "[common]\n"
+        "steps = 888   # raised after the OOM\n"
+        "\n"
+        "[experimental]\n"
+        "my_note = \"keep me\"\n"
+    )
+    write_raw.execute("cfg/annotated.toml", annotated)
+    stored = (root / "cfg" / "annotated.toml").read_text(encoding="utf-8")
+    check(stored == annotated, f"the file is byte-for-byte what was sent (got {stored!r})")
+    check("# tuning notes" in stored, "the comment survived")
+    check("steps = 888   # raised after the OOM" in stored, "the inline comment survived")
+    check("[experimental]" in stored and "my_note" in stored, "the unknown table survived")
+    check(
+        read.execute("cfg/annotated.toml")["common"]["steps"] == 888,
+        "and the model still reads it (validation ran on save)",
+    )
+    check(
+        not (root / "cfg" / ".annotated.toml.partial").exists(),
+        "the atomic temp file is gone after the write",
+    )
+
     # -- options schema (pure) -------------------------------------------
     options = GetConfigOptions(options=PydanticConfigOptions())
     schema = options.execute()

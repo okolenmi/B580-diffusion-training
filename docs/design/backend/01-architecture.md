@@ -201,6 +201,7 @@ backend/
 │   ├── app.py                # create_app(services, *, static_dir) factory
 │   ├── deps.py               # get_services request dependency
 │   ├── errors.py             # the one error envelope (4 handlers)
+│   ├── security.py           # Host/Origin guard (DNS rebinding + cross-site writes)
 │   ├── schemas.py            # pydantic response models + *_out mappers
 │   ├── responses.py          # SanitizingJSONResponse (app-wide default)
 │   ├── sse.py                # EventBus -> text/event-stream bridge

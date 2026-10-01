@@ -421,11 +421,73 @@ def test_lifecycle_endpoints() -> None:
         )
 
 
+def test_request_guard() -> None:
+    # docs 07 F-06: no auth is a documented decision, but DNS rebinding
+    # and cross-site writes are not something "bound to loopback" already
+    # prevents -- a browser will happily send both.
+    print("\n== Host / Origin guard (rebinding + cross-site writes) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        _, app = _build(tmp)
+
+        status, _, body = asgi_request(
+            app, "/api/v1/health", extra_headers={"host": "evil.example"}
+        )
+        check(
+            status == 403 and body["error"]["code"] == "forbidden_host",
+            f"a foreign Host is refused (got {status} {body!r})",
+        )
+        status, _, body = asgi_request(
+            app, "/api/v1/health", extra_headers={"host": "127.0.0.1:8766"}
+        )
+        check(status == 200, f"our own host with a port is fine (got {status})")
+        status, _, body = asgi_request(app, "/api/v1/health")
+        check(status == 200, f"localhost is fine (got {status})")
+
+        # Cross-site write: refused, whatever the body was going to be.
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST",
+            json_body={"config_path": "configs/distill.toml"},
+            extra_headers={"origin": "http://evil.example"},
+        )
+        check(
+            status == 403 and body["error"]["code"] == "forbidden_origin",
+            f"a cross-site POST is refused (got {status} {body!r})",
+        )
+
+        # Same-origin write: allowed (this is what the frontend does).
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST",
+            json_body={"config_path": "configs/missing.toml"},
+            extra_headers={"origin": "http://localhost"},
+        )
+        check(
+            status == 404 and body["error"]["code"] == "config_not_found",
+            f"a same-origin POST reaches the handler (got {status} {body!r})",
+        )
+
+        # Reads stay open: a cross-origin GET changes nothing.
+        status, _, body = asgi_request(
+            app, "/api/v1/health", extra_headers={"origin": "http://evil.example"}
+        )
+        check(status == 200, f"cross-origin reads are allowed (got {status})")
+
+        # No Origin at all is not a browser cross-site request.
+        status, _, body = asgi_request(
+            app, "/api/v1/runs", method="POST",
+            json_body={"config_path": "configs/missing.toml"},
+        )
+        check(
+            status == 404,
+            f"a request without Origin is not blocked (got {status})",
+        )
+
+
 def main() -> None:
     test_health()
     test_list_runs()
     test_get_run_and_errors()
     test_diverged_run_body()
+    test_request_guard()
     test_delete_runs()
     test_lifecycle_endpoints()
     test_sse_stream()

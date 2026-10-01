@@ -80,6 +80,71 @@ def main() -> None:
     except SettingsInvalidError:
         check(True, "invalid comfy_dir rejected")
 
+    # -- validation never acts on the filesystem (docs 07 F-15) --------------
+    # The mixed update below has a valid managed dir and an invalid key:
+    # the rejected request must leave the disk untouched.
+
+    would_create = root / "never-created"
+    try:
+        store.update(SettingsChanges(
+            checkpoints_dir=str(would_create),
+            venv_python="/nonexistent/python-xyz",
+        ))
+        check(False, "the mixed update is rejected")
+    except SettingsInvalidError:
+        check(True, "the mixed update is rejected")
+    check(
+        not would_create.exists(),
+        "a rejected update created no directory (F-15)",
+    )
+
+    # A managed dir is accepted wherever it could really be created --
+    # including a fresh nested path -- and only the commit creates it.
+
+    nested = root / "fresh" / "nested" / "loras"
+    view = store.update(SettingsChanges(loras_dir=str(nested)))
+    check(view.stored["loras_dir"] == str(nested), "a nested managed dir is accepted")
+    check(nested.is_dir(), "and created after the commit")
+    store.update(SettingsChanges(loras_dir=""))
+
+    try:
+        store.update(SettingsChanges(loras_dir="relative/loras"))
+        check(False, "a relative path is refused")
+    except SettingsInvalidError:
+        check(True, "a relative path is refused")
+
+    # An existing file is not a directory, and venv_python must be
+    # executable -- it is executed on every start (docs 07 F-06).
+
+    not_a_dir = root / "a-file"
+    not_a_dir.write_text("not a directory")
+    try:
+        store.update(SettingsChanges(loras_dir=str(not_a_dir)))
+        check(False, "a file is not a directory")
+    except SettingsInvalidError:
+        check(True, "a file is not a directory")
+    try:
+        store.update(SettingsChanges(loras_dir=str(not_a_dir / "under-a-file")))
+        check(False, "nothing can be created under a file")
+    except SettingsInvalidError:
+        check(True, "nothing can be created under a file")
+
+    not_executable = root / "python-but-not-executable"
+    not_executable.write_text("#!/bin/sh\n")
+    not_executable.chmod(0o644)
+    try:
+        store.update(SettingsChanges(venv_python=str(not_executable)))
+        check(False, "a non-executable interpreter is refused")
+    except SettingsInvalidError:
+        check(True, "a non-executable interpreter is refused")
+    not_executable.chmod(0o755)
+    view = store.update(SettingsChanges(venv_python=str(not_executable)))
+    check(
+        view.stored["venv_python"] == str(not_executable),
+        "an executable file is accepted",
+    )
+    store.update(SettingsChanges(venv_python=""))
+
     # -- env tier beats stored override for venv -----------------------------
     saved_env = os.environ.get("VENV_PYTHON")
     try:

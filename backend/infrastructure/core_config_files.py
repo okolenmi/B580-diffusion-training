@@ -2,7 +2,9 @@
 
 The adapter owns all knowledge of the config format; the application
 only ever sees plain dicts and the two config errors. Updates are
-validate-then-write, so a rejected merge never touches the file.
+validate-then-write, so a rejected merge never touches the file, and the
+raw editor stores the user's own text (comments and unknown keys
+intact, docs 07 F-08) through a temp sibling + rename.
 
 Bridging note: ``core`` is imported lazily inside methods (same
 deliberate-bridge posture as ``CoreConfigInspector``) so importing
@@ -12,6 +14,7 @@ serves HTTP.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -68,15 +71,39 @@ class CoreConfigFiles(ConfigFiles):
         return config.model_dump(mode="json")
 
     def replace(self, config_path: Path, content: str) -> None:
+        """Validate the document, then store the user's own text.
+
+        Serializing the parsed model back out would drop comments, key
+        order and any key the model does not declare -- silent data loss
+        in a file people keep notes in (docs 07 F-08). So the text is
+        validated by parsing it and then written verbatim through a temp
+        sibling + rename: a failed write never truncates either.
+        """
         config_io, _ = _core_io()
         try:
-            config = config_io.config_from_toml_string(content)
+            config_io.config_from_toml_string(content)
         except Exception as exc:
             raise ConfigInvalidError(
                 f"invalid config document, file unchanged: {exc}"
             ) from exc
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_io.write_config(config_path, config)
+        self._write_atomic(config_path, content)
+
+    @staticmethod
+    def _write_atomic(config_path: Path, content: str) -> None:
+        temp = config_path.with_name(f".{config_path.name}.partial")
+        try:
+            with open(temp, "w", encoding="utf-8") as fh:
+                fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
+            temp.replace(config_path)
+        except OSError as exc:
+            try:
+                temp.unlink()
+            except OSError:
+                pass  # nothing better to do about the temp file either
+            raise ConfigInvalidError(f"cannot write config {config_path}: {exc}") from exc
 
     # -- shared --------------------------------------------------------
 

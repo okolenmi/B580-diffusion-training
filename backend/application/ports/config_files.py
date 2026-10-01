@@ -47,4 +47,11 @@ class ConfigFiles(ABC):
 
     @abstractmethod
     def replace(self, config_path: Path, content: str) -> None:
+        """Validate ``content`` as a config document and store *that text*.
+
+        The user's own bytes are what lands on disk -- comments, key
+        order and keys the model does not know survive untouched
+        (docs 07 F-08). Model-based rewriting belongs to :meth:`update`
+        (the form editor), never to the raw editor.
+        """
         raise NotImplementedError

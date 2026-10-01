@@ -1095,20 +1095,22 @@ async def _asgi_call(
         str(k).lower().encode(): str(v).encode()
         for k, v in (extra_headers or {}).items()
     }
-    headers = [(b"host", b"localhost")]
+    header_map: dict[bytes, bytes] = {b"host": b"localhost"}
     if body_bytes is not None:
         body = body_bytes
-        headers.append(
-            (b"content-type", (content_type or "application/octet-stream").encode())
-        )
-        if b"content-length" not in extra:
-            headers.append((b"content-length", str(len(body)).encode()))
+        header_map[b"content-type"] = (
+            content_type or "application/octet-stream"
+        ).encode()
+        header_map.setdefault(b"content-length", str(len(body)).encode())
     elif json_body is not None:
         body = json.dumps(json_body).encode("utf-8")
-        headers.append((b"content-type", b"application/json"))
-        if b"content-length" not in extra:
-            headers.append((b"content-length", str(len(body)).encode()))
-    headers.extend(extra.items())
+        header_map[b"content-type"] = b"application/json"
+        header_map.setdefault(b"content-length", str(len(body)).encode())
+    # Extra headers replace the default of the same name -- a test that
+    # sends a foreign `host` must end up with exactly one Host header,
+    # not two (the first would win on the wire).
+    header_map.update(extra)
+    headers = list(header_map.items())
 
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}

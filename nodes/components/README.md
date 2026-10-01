@@ -23,7 +23,8 @@ material, per the project's existing rule) -- `manager/loader.py` and
 `manager/t_sampling.py` still import them directly (manager's layer, not
 a nodes/ shortcut), and no `nodes/` module reaches for them at module
 load (`nodes/dataset/renoise.py`, which did, was retired together with
-the baked-grid format it existed to correct -- see doc 04, section 5.5).
+the baked-grid format it existed to correct -- see
+nodes/train/bucket_balance.py's module docstring).
 
 `layout.py` (`ProjectLayout`) has also landed -- backlog item 8,
 equivalence-tested against `paths.py` in

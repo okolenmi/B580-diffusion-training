@@ -10,69 +10,21 @@ main route's loop reused behind a stricter gate. See "First attempt,
 reverted" below for why that distinction is the whole point of this
 phase, not a style preference.
 
-**Status: done, verified against a focused smoke-test run (not the
-full suite -- see "Verified" below for which tests and why only
-those). Update 2026-09-28: also run on real hardware (Arc B580) --
-the addendum's perf regression confirmed fixed (managed 0.897 vs main
-0.943 steps/sec, identical settings), strict/synchronize confirmed
-under real budget pressure, escalation confirmed on the
-variable-resolution dataset with no OOM; measured numbers in
-`docs/known-issues/resolved.md` (moved there from
-`docs/known-issues/pending-testing.md`).**
-
 ### First attempt, reverted
 
-The first version of this phase extracted `SupervisedLoRATrainerNode`'s
-real loop into a shared function (`nodes/train/loop.py`) and built a
-second trainer node, `BudgetedLoRATrainerNode`, that called the exact
-same function with two different Port defaults (`resource_control`
-required, `empty_cache_every_n_steps` defaulting to 50). Both are gone
-now -- correctly identified as having missed the actual point: sharing
-one loop meant the "new route" was the main route's loop with a
-stricter gate in front of it, not an alternative memory design. The
-reasoning used to justify *not* offloading model/optimizer
-(`nothing calls ensure_loaded() on either mid-run, so marking them
-offloadable would let before_step() offload one and never bring it
-back`) was correct for that shared loop, but was never re-examined for
-whether the new route actually had to accept the same constraint --
-it doesn't, and doesn't now (see "The actual design" below).
-
-### `TrainerResourcesUnpackNode`, also reverted
-
-The first version also added a small node adapting `trainer` into the
-main route's own `model`/`text_encoder` ports, specifically so nothing
-about `TrainerNode`/`ModelParametersNode`/`CachingTextEncoderNode` would
-need to change. That reasoning was sound for making the bundle wireable
-into the *main route's* ports, but Phase 9's own trainer node no longer
-has those ports to adapt into -- it takes `trainer` directly (see
-below), so there's nothing left for that node to bridge. Its role for
-the optimizer side is now `TrainerParametersNode`
-(`nodes/model/trainer_parameters.py`) -- `ModelParametersNode`'s own
-counterpart for this route, extracting a `ParameterList` straight from
-`trainer.unet.trainable_parameters()`.
+- sharing one loop meant the "new route" was the main route's loop
+  with a stricter gate in front of it, not an alternative memory
+  design.
+- Phase 9's own trainer node no longer has those ports to adapt
+  into -- it takes `trainer` directly, so there's nothing left for
+  that node to bridge.
+- The original design released text_encoder/optimizer
+  unconditionally, every step, regardless of whether the stated
+  budget ever needed it.
+- Ongoing escalation, not calibrate-once.
 
 ### The actual design: `nodes/train/managed.py`
 
-A new, independent step loop (`ManagedStepPhase`/`ManagedTrainingStepPipeline`/
-`ManagedLoRATrainerNode`) -- not importing from, or shared with,
-`nodes/train/step_pipeline.py`/`nodes/train/supervised.py`. Written
-using those files as a reference for the underlying math (diffusion
-input prep, forward, loss, backward -- unrelated to what actually
-differs here, so pointless to re-derive from nothing), not as a base to
-extend or a shared implementation to call into.
-
-**What's actually different.** The main route keeps every resident
-loaded for a step's entire duration by default, offloading only
-reactively, under measured pressure. This route's loop instead treats
-residency as deterministic: each resident is loaded immediately before
-the one phase that needs it and released immediately after, every step,
-budget exceeded or not.
-
-- `EncodeConditioningPhase`: loads `text_encoder`, encodes, releases it
-  -- correct unconditionally, not just an optimization, because the
-  text encoder is always frozen in this design (`TrainerParametersNode`
-  never pulls trainable parameters from it), so nothing downstream
-  needs it resident once `ctx_emb`/`y` are computed.
 - `BackwardAndOptimizerStepPhase`: loads `optimizer`, runs backward
   (and `.step()` for a non-fused optimizer), releases it -- one phase,
   one residency window spanning both, not two. Checked directly against
@@ -88,235 +40,11 @@ budget exceeded or not.
   than strictly required is a small, deliberate over-inclusion, traded
   for one rule correct for both cases rather than a fused/non-fused
   branch in the residency logic itself.
-- `model`: registered `offloadable=False`, same conclusion the main
-  route reaches, reached independently this time -- the frozen base
-  dominates the model's own footprint and is too expensive to move
-  every step (a real multi-GB transfer, likely making per-step
-  offload/reload slower than the run it's meant to protect).
-
-Why this is a real, not token, difference for an SDXL LoRA run
-specifically: the optimizer's tracked state is proportional only to the
-trainable LoRA parameters, a small fraction of the base model's size --
-cheap to move every step. SDXL's two text encoders (a full CLIP
-ViT-L/14 plus OpenCLIP ViT-bigG/14) are large enough on their own that
-keeping them off GPU outside their one phase is a real reduction for
-the step's most memory-hungry stretch (forward+backward, activations
-included) -- not just visibility into usage, an actual smaller peak.
-Whether the transfer cost this adds is worth it against the main route
-is exactly what this route exists to let someone measure, not something
-decided here.
-
-`ResourceControlHandle.release()` (`nodes/memory/control_handle.py`) is
-new this session, specifically for this file -- the existing handle
-only ever offloaded reactively, with no way for a caller who already
-knows precisely when a resident's idle window starts to just say so.
-Raises if called on a resident registered `offloadable=False`, same
-"an explicit request to move something is not a hint" reasoning as the
-rest of this handle's contract. Everything else this file uses from
-`nodes/memory/` -- `register()`/`ensure_loaded()`, `ResourceCoordinator`,
-`DeviceResident` -- is unchanged, already-established machinery, used
-here as directly as the main route uses it. `before_step()` still runs
-every step too, as a safety net for `model` alone exceeding the budget
--- this is exactly where `strict=True` (below) matters: without it,
-that case would train on silently over budget forever, since nothing
-in this design would ever offload `model` to bring it back under.
-
-`resource_control` is required on `ManagedLoRATrainerNode`, not
-optional -- this design has nothing meaningful left to do without it.
-`empty_cache_every_n_steps` defaults to 1 (every step), not the main
-route's 0: a `release()` call only moves tensors off GPU inside this
-process's own caching allocator -- returning that freed reserved memory
-to the driver, the actual point for a route built around staying clear
-of a VRAM ceiling, needs an explicit `empty_cache()` on top.
-
-### VRAM safety: `strict`, and an explicit `synchronize()`
-
-Both in `nodes/memory/control_handle.py` (shared, unchanged from the
-first version of this phase -- see that module's own docstring for the
-full reasoning, unaffected by the revert above):
-
-1. **`ResourceBudget.strict`** (`nodes/resource_budget.py`, default
-   `False`). `_make_room()` previously offloaded what it could and
-   returned, over budget or not, silently. `strict=True` raises
-   `RuntimeError` instead, once nothing registered offloadable is left
-   to move and measured usage is still over budget. Exposed as
-   `VRAMBudgetControllerNode`'s `strict` input
-   (`nodes/memory/vram_budget_controller.py`).
-2. An explicit `DeviceContext.synchronize()` after every offload/reload/
-   release transition, before trusting the next `memory_stats()` read.
-   Not provably necessary from this codebase's own `offload()`/`reload()`
-   implementations alone (every one already does a synchronous
-   `.to("cpu")`/`.cpu()`, checked directly, not assumed) -- added
-   anyway: this project's own legacy `core/trainer.py` (same B580/XPU
-   hardware) already learned the hard way that even a nominally-
-   synchronous transfer is worth an explicit `synchronize()` before
-   trusting a memory snapshot right after it, at the exact kind of
-   offload point `docs/known-issues/open.md`'s "device lost"/hang
-   report names as a real trigger. A plausible root-cause *shape*, not
-   a confirmed diagnosis -- see that file's own entry and
-   `docs/known-issues/resolved.md`'s confirmed control-handle entry
-   (2026-09-28: the `nodes/` offload path itself survived 30 steps of
-   real sustained pressure without a hang; the legacy path in that
-   report still unexercised).
-
-### Verified
-
-A focused run, not the full 60-file suite -- markdown/plan edits don't
-need a test run at all, and re-running every pre-existing test after
-touching one new, independent module doesn't tell you anything the
-tests for that module and its direct dependents don't already:
-`smoke_test_managed_trainer.py` (new -- the actual thing under test:
-that optimizer/text_encoder residency really is bracketed in the right
-order around encode/backward/step for both a plain and a fused
-optimizer, that model is never released, checked against real event
-ordering, not assumed from reading the code), plus
-`smoke_test_resource_control_strict.py` and
-`smoke_test_text_encoder_cache.py` (both touched directly -- the former
-gained a `release()`-specific check, the latter's own
-`ResourceControlHandle` test fixture needed the new abstract method
-implemented to stay instantiable). All three pass. `TrainerParametersNode`
-(`nodes/model/trainer_parameters.py`) has no dedicated test -- it's a
-three-line extraction with no branching, the same size and shape as
-`ModelParametersNode`, which has never had one either.
-
-### Not verified
-
-No real XPU/CUDA hardware in this environment -- the residency
-choreography's correctness (call order, which resident, which window)
-is checked; its actual effect on peak VRAM, and on step time, is not
-measured anywhere in this repository. Whether the `synchronize()`
-addition helps with, or is even related to, the real "device lost"/hang
-reports in `docs/known-issues/open.md` is unconfirmed and stays
-unconfirmed here. `unet_weight_store="nf4"`'s path through
-`LoRATrainingConfigNode` -- the complementary lever for the model's own
-footprint this design deliberately doesn't try to shrink via offload --
-isn't newly touched or newly tested by this phase either.
-
-**Dependency:** Phase 6 (done).
-
-## Addendum: from "always release" to "release only if measured usage actually needs it"
 
 A real run reported ~0.36 steps/sec against this route vs. ~1.7 steps/sec
 on the main route (same settings, AdamW) -- a ~4.7x slowdown -- with
 peak reserved VRAM around 9.0GB against a stated 12500MB budget the
-whole time. Investigated rather than guessed at; found several real,
-compounding causes, in roughly descending order of likely impact:
-
-1. **`SDXLTextEncoder.offload()` routed through `unload()`
-   (`core/clip_encode.py`), which calls `gc.collect()` +
-   `empty_cache()` internally, every single call.** Appropriate for
-   `unload()`'s own original "done with this encoder for the rest of
-   the run" use, real, avoidable, previously-invisible cost for a
-   per-step offload cycle. Fixed: `offload()` now does a direct move,
-   no `unload()`. Regression test:
-   `nodes/smoke_tests/smoke_test_sdxl_text_encoder_offload.py`.
-2. **The original design released text_encoder/optimizer
-   unconditionally, every step, regardless of whether the stated
-   budget ever needed it.** In the reported run it never did -- every
-   release()/ensure_loaded() round trip was pure cost, bought nothing.
-   Fixed with `AdaptiveResidencyController` (`nodes/train/managed.py`,
-   full reasoning in its own docstring): `calibration_steps` steps run
-   fully resident first, measuring real peak VRAM
-   (`DeviceContext.reset_peak_stats()`/`memory_stats()`'s own
-   `peak_reserved_mb`, `nodes/components/device.py`); if that already
-   fits the budget, nothing is ever released for the rest of the run.
-   If it doesn't, candidates are released smallest-`footprint_bytes()`-
-   first, only as many as the estimated shortfall needs.
-   `resource_control.usable_budget_mb()` is a new
-   `ResourceControlHandle` method (alongside `release()`) so the
-   controller doesn't need to know how a budget is represented
-   internally. Tested directly (fake numbers, no hardware needed) in
-   `nodes/smoke_tests/smoke_test_adaptive_residency_controller.py`;
-   the CPU-only integration tests in `smoke_test_managed_trainer.py`
-   can only exercise the "no usable ceiling / no memory-stats concept
-   -> decide immediately, stay resident" fallback (`DeviceContext.
-   for_device()` on a CPU tensor returns `_NullDeviceContext`, whose
-   `memory_stats()` is always `None`) -- both are drilled separately
-   in the same file for the "controller actually decided to release,
-   do the phases honor it" side.
-3. **No candidate is wrapped in `CachingTextEncoder` on this route**
-   (`trainer.clip` is always a plain `SDXLTextEncoder`) -- for a
-   dataset with repeated prompts (a single-image dataset, concretely,
-   the reported case), the main route's own `CachingTextEncoderNode`
-   wiring would make conditioning nearly free after the first step;
-   this route pays full transfer + full recompute every step,
-   unconditionally, with no possible cache hit. Real, likely
-   significant for that specific case, **not fixed here** -- would need
-   `trainer.clip` exposed as its own wireable output (the role
-   `TrainerResourcesUnpackNode` used to play, before this file's own
-   "First attempt, reverted" section, for a different reason). A real,
-   scoped, separate follow-up, not attempted in this same change.
-4. **No pinned (page-locked) host memory anywhere in this project's
-   offload/reload paths** -- already known and disclosed, not new:
-   `03-training-step-orchestration.md` section 2.3 already flags this
-   exact gap ("a real platform-specific wrinkle... left for its own
-   follow-up"). Still real, still unaddressed, now more likely to
-   matter given how much more offload/reload traffic this route can
-   generate.
-5. **A rank-64 LoRA's own optimizer state is not negligible** --
-   corrects an assumption in this doc's own first version ("proportional
-   only to the trainable LoRA parameters -- a small fraction of the
-   base model's size -- cheap to move every step"), true at low rank,
-   not reliably true at rank 64. The offload/reload path itself has no
-   hidden costs the way text_encoder's did (checked directly against
-   `ComposedOptimizerHandle.offload_states_to_cpu()`/
-   `reload_states_to_device()`, `nodes/optimizer/composed.py`) -- just
-   real bytes moved, real PCIe time.
-
-**Deliberately not attempted in this same change:** wiring gradient
-checkpointing (`nodes/model/gradient_checkpointing.py`) or its own
-budget-driven block-placement policy
-(`GreedyRatioPlacement`/`BlockCost`, `nodes/model/checkpoint_placement.py`)
-into this route as a genuine "slower but more memory-efficient"
-alternative to offloading -- both already exist, real and working, and
-that policy's own docs already flag it as unvalidated against a real
-training run and deliberately not wired into any node's construction
-path yet, for the same "measure, don't guess" reason
-`AdaptiveResidencyController` exists. Extending that same caution to a
-second, newer piece, built and tested on hardware neither has ever
-actually run on, felt like the right call rather than rushing both in
-under one patch. A natural next step, not started here.
-
-## Second addendum: calibrate-once wasn't enough either
-
-A second real report, from real use of the addendum above:
-`AdaptiveResidencyController` calibrated fine (measured peak comfortably
-under budget, decided to stay resident) and the run still OOM'd partway
-through, on a variable-resolution ("non-square") dataset. Root cause:
-each step's own activation memory depends on that step's own image
-size, and `calibration_steps` (default 3) happened to sample smaller
-images -- the true worst case in the dataset was never measured before
-the "stay resident" decision was locked in for the rest of the run.
-
-Two real, complementary fixes, not a bigger `calibration_steps` default
-(which only ever narrows the odds, never closes the gap -- the largest
-image in a dataset can be anywhere):
-
-1. **Ongoing escalation, not calibrate-once.** `ManagedLoRATrainerNode.
-   build()` now calls `DeviceContext.reset_peak_stats()` every step, not
-   just once before calibration, so every `memory_stats()` reading
-   reflects *that step's own* peak, not a cumulative one -- which is
-   what makes "keep checking after the initial decision, and escalate
-   (release one more candidate) if a later step's own peak exceeds
-   budget" possible at all. No de-escalation once something's been
-   added, to avoid thrashing. Honest limit, stated plainly in
-   `AdaptiveResidencyController`'s own docstring: this still can't react
-   *within* the step that actually OOMs -- a within-step activation
-   spike isn't something any between-step check can catch in time, the
-   same limit `before_step()`'s own reactive check already had. What it
-   does buy: the *next* image of that size survives, once one instance
-   has been seen and escalated for once.
-2. **`residency_safety_margin`** (new `ManagedLoRATrainerNode` input,
-   default 0.1): shaves that fraction off the usable ceiling before any
-   comparison runs, so a somewhat-larger-than-calibrated step has a
-   chance of fitting without needing to escalate at all.
-
-Neither one is a guarantee for a dataset with truly wide resolution
-variance and a small `calibration_steps` -- both are real, disclosed
-insurance, not a solved problem. The right fix for large numbers of
-same-answer variance would look at the dataset itself (bucket by
-resolution and calibrate per bucket, or make calibration explicitly
-seek out the largest sample) -- not attempted here.
+whole time.
 
 ## Third addendum: activation memory is the ceiling residency management and weight precision can't touch
 
@@ -351,66 +79,17 @@ only has two real choices, `"bf16"` and `"nf4"` --
 two would have raised immediately via `Port.choices` validation, so
 whatever was actually selected and produced these numbers was `"nf4"`.)
 
-Together, these two findings point at the same conclusion the first
-addendum already named as deliberately not attempted: gradient
-checkpointing (`nodes/model/gradient_checkpointing.py`, real, working,
-not wired into this route) is the lever that actually addresses
-activation memory, the dominant, currently-unmanaged cost in both
-reports. Two real cases now, not a hypothetical -- still not started
-here; see the first addendum's own reasoning for why rushing it into
-the same session as everything else felt like the wrong tradeoff, which
-still holds, but the case for it being the actual next priority (over
-further residency-management or precision tuning) is now real, not
-speculative.
-
-**Update, follow-up session:** checked directly, not assumed --
-`use_checkpoint` (`ComfyUNetLoRANode`'s own Port) already defaults
-`True` all the way through `build_lora_injected_unet()`, and nothing in
-this route's own construction path (`LoRATrainingConfigNode.build()` ->
-`SDXL_LoraTrainer.from_resources()`) overrides it, so gradient
-checkpointing was, in that narrow sense, already active for both
-reports above. It just wasn't doing much: `docs/known-issues/
-resolved.md`'s confirmed `[2026-09]` entry has the full story --
-`BasicTransformerBlock.forward()` never actually called `checkpoint()`
-in ComfyUI's own implementation, so `use_checkpoint=True` only ever
-checkpointed `ResBlock`, a minority of SDXL's UNet next to its
-attention-heavy `BasicTransformerBlock` stacks. That's almost certainly
-why activation memory stayed ~half of reserved VRAM in both reports
-above despite checkpointing nominally being on. `nodes/model/
-attention_checkpointing.py` closes that gap; confirmed on real
-hardware 2026-09-28 with the before/after this sentence asked for --
-same run with the patch neutered: hard OOM on the first forward pass
-at 1024² (10.76 GiB of 11.93 GiB allocated, zero steps); same run
-with it on: 40/40 steps at 8592 MB peak reserved. So yes, both
-reports' activation-dominance shape has a real lever now, and the
-numbers are in `docs/known-issues/resolved.md`.
-
 ## Fourth addendum: `prewarm_text_encoder` -- the text encoder leaves VRAM for good
 
 The reports above counted the text encoder (1561MB) as a permanent
-resident this route carries for the whole run, and the first addendum's
-calibration design then concluded, correctly given what existed at the
-time, that nothing could be done about it cheaply: releasing it meant
+resident this route carries for the whole run, and the calibration design
+then concluded, correctly given what existed at the time, that nothing
+could be done about it cheaply: releasing it meant
 re-uploading it whenever the next encode needed it, and the ordering
 rule (candidates released smallest-footprint-first) meant any pressure
 sufficient to reach the encoder had already dragged the always-needed
 optimizer out with it -- measured at -54% throughput in the 2026-09-28
 floor-lever sweep (`docs/known-issues/open.md`, `--budget 8000`).
-
-What that analysis assumed and never questioned: that the encoder has
-to be *resident* to encode with. It doesn't -- `CachingTextEncoder`
-(`nodes/model/text_encoder_cache.py`) only touches its inner encoder on
-a genuine cache miss, and `PrewarmedTextEncoderNode`
-(`nodes/model/text_encoder_prewarm.py`, main route only -- its `encoder`
-input is unwirable here since this route never exposes `trainer.clip`
-as a graph port) showed the rest of the shape: discover every
-(prompt, batch_size, height, width) key the dataset will ever request,
-encode them once, `unload()` the encoder forever. What was missing was
-an entry point where clip and batches coexist, and a step pipeline that
-wouldn't immediately undo it.
-
-Both landed 2026-09-28 as `ManagedLoRATrainerNode`'s
-`prewarm_text_encoder` Port (default `False`):
 
 - **Build order matters twice.** Discovery + wrap/bind happen before
   `resource_control.register("text_encoder", ...)` (discovery reads
@@ -423,16 +102,6 @@ Both landed 2026-09-28 as `ManagedLoRATrainerNode`'s
   `CachingTextEncoder.bind_resource_control()` (LoRATrainingConfigNode
   runs before `resource_control` is anywhere in scope, so that wrap
   can't have had one).
-- **The pipeline had to cooperate.** `EncodeConditioningPhase` called
-  `ensure_loaded("text_encoder")` unconditionally before every encode --
-  correct for every case that existed (releasable, resident, frozen),
-  and exactly wrong here: it would re-upload the encoder the prewarm
-  just freed and re-reside it for the rest of the run (or re-offload it
-  every step, churning per step under a tight budget). The Port passes
-  `ensure_loaded_before_encode=False`; a genuine miss (dataset changed
-  after warm-up) still self-loads through the cache's bound handle, so
-  the degradation path is slow-and-correct, never wrong, and
-  `release()` stays a no-op for an already-unloaded resident.
 - **Measured** (managed route, batch 2, dataset 1024, 40 steps,
   budget 11500): floor 7888 -> 6327 MB allocated at step 0, peak
   reserved 9268 -> 7666 MB, throughput 0.716 -> 0.789 steps/sec
@@ -460,10 +129,7 @@ addendum is about the steps themselves: a 2026-09-29 review of the
 managed route against the legacy `core/` loop found the managed route
 had silently dropped four stabilizers when it was written, which
 together explain why trained LoRAs came out "slightly destructive" at
-strength 1.0 even when the loss curve looked healthy. All five pieces
-below landed together; defaults keep every pre-existing behavior
-byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
-`save_every_n_steps=0`, uniform weighting unchanged).
+strength 1.0 even when the loss curve looked healthy.
 
 - **`grad_accum` Port (default 1): effective batch was 2.** The legacy
   loop trained with `grad_accum=6`; the managed route had no
@@ -478,11 +144,6 @@ byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
   legacy `core/train_step.py`, where `steps` counted micro-steps and the
   displayed step/total were batch-position counts -- keeping the old
   meaning would have made `steps` mean different things at K=1 and K>1.
-  Fused optimizers accumulate through their documented contract:
-  `begin_step(sub_steps=K)` once per window, `prepare_next_pass()`
-  between micro-steps (without it `_in_backward` stays set and pass 2
-  never counts), no `step()` call at all -- the boundary backward's hook
-  *is* the update.
 - **`WarmupLRSchedule` (`nodes/train/schedule.py`): the legacy
   200-step warmup was never ported.** LR went straight to 1.5e-5 at
   step 0. The wrapper lerps from `warmup_start` (default 0.0) toward
@@ -499,29 +160,7 @@ byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
   every step depending on where the t-samples landed. Both
   `ManagedLoRATrainerNode`'s and `step_pipeline.py`'s `LossPhase` now
   weight per sample when sigma is per-sample (mean-sigma fallback for
-  shared-sigma schedules, uniform is bit-identical either way), and
-  stash the detached raw per-sample MSE in `extras["per_sample_loss"]`
-  for the diagnostics below. The shared `step_pipeline` change means
-  the main route gets this fix and the diagnostics for free.
-- **Per-t loss diagnostics, colored per series on the monitor.**
-  `t_bucket_losses()` (`nodes/train/loss.py`) splits the window's raw
-  per-sample MSE into fixed t thirds -- `loss_t_low` [0, 333),
-  `loss_t_mid` [333, 666), `loss_t_high` [666, 1000) -- unweighted, so
-  the chart shows what the model is actually doing at each noise level
-  rather than the weighting's output. The managed `MonitoringPhase`
-  accumulates them across micro-steps and emits once per optimizer
-  step; a bucket whose window sampled no t falls in that range *omits
-  its key* rather than emitting 0 (the monitor bus passes report dicts
-  through unchanged, so the omission reaches the chart). `LossChart`
-  (`server/static/loss_chart.js`) is now multi-series
-  (`options.series=[{key,label,color}]`): one colored line + dots per
-  series, gaps where a key is absent, per-series tooltip rows with
-  color chips, and a legend laid out per series -- total loss blue
-  `#6c8cff`, t-low green `#4caf50`, t-mid amber `#ffb300`, t-high red
-  `#ff5252`, matching three new color-labeled bucket rows in the
-  dashboard's run-stats rail. `addPoint(step, number)` still works
-  (legacy single-series form); `point.loss`/`point.smoothed` keep
-  tracking the primary series.
+  shared-sigma schedules, uniform is bit-identical either way).
 - **`grad_clip_max_norm` Port (default 0.0): no gradient clipping
   anywhere, fused or not.** Clipping runs `clip_grad_norm_` once per
   optimizer step, on the boundary's full accumulated gradient only
@@ -530,155 +169,10 @@ byte-identical (`grad_accum=1`, `grad_clip_max_norm=0.0`,
   those optimizers fire their updates inside `backward()` hooks, so
   clipping after backward is already too late and pretending otherwise
   would be a silent no-op -- and for negative max-norm.
-- **`save_every_n_steps` / `save_prefix` / `project_layout` Ports:
-  intermediate LoRAs.** Runs were routinely killed by hand around step
-  700 with nothing on disk; now each boundary optimizer step divisible
-  by the cadence writes `<prefix>_<step:06d>.safetensors` (default
-  prefix `lora_step`) into the sandboxed loras dir through
-  `save_trained_weights()`, the shared atomic helper extracted from
-  `LoRACheckpointSaverNode` (tmp + `replace`, empty-dict raises).
-  Saving between optimizer steps is safe: gradients are zeroed, the
-  optimizer has stepped, and the next window starts clean. Cadence
-  counts optimizer steps, so it is cadence in *updates* regardless of
-  K. `save_every_n_steps=0` (default) disables saving; 0 cadence with
-  an empty prefix, and negative cadence, are build-time errors.
-- **Optional per-t-bucket rebalancing (all mechanisms off by default).**
-  The `loss_t_*` diagnostics above showed *which* region diverges but
-  never changed what the optimizer did about it -- a plain sum
-  objective trades one t region's progress against another's, and
-  `t_mode`/Min-SNR are fixed at config time. A new `BucketBalanceNode`
-  (design doc 04, section 5) produces one shared `BucketBalance`
-  wired to the trainer's `bucket_balance` port (both routes) and/or a
-  dataset source node's `bucket_balance` with `t_mode="adaptive"`:
-  gradient side `normalize` (equalize contribution magnitude),
-  `speed` (equalize relative descent rates), `dro` (worst-bucket
-  emphasis), or `off` (tracking only -- bit-identical no-op); data
-  side reweights t sampling toward buckets lagging their own
-  baseline. Reports gain `weight_t_low/mid/high` (post-update,
-  post-warmup only) and `prob_t_low/mid/high` (only once an adaptive
-  sampler has stated its range) -- absent, not zero, whenever
-  meaningless. `mode="off"` + no adaptive sampling = today's behavior,
-  byte-identical.
-
-The K=1 path was kept behavior-identical on purpose (zero_grad at
-micro 0, no `loss_for_backward` tensor in the graph, unchanged
-`empty_cache` cadence, `before_step` index = step), and
-`nodes/smoke_tests/` covers all of it: window call counts and
-fused pass counts, loss/K staying internal to backward, boundary-only
-clip via a monkeypatched spy, numbered files landing on cadence, each
-contract error, bucket keys present/omitted per window, warmup ramp and
-join math, and both LossPhases' per-sample weighting against
-hand-computed values.
-
-## Sixth addendum: the monitor screen grows up -- new report keys, run_end, and a multi-panel dashboard
-
-The fifth addendum's monitor was one loss chart plus metric cards. The
-dashboard (`server/static/monitor_dashboard.{html,js}`) now answers the
-questions a loss line alone can't, and the trainers grew the report
-keys to feed it. The screen's full contract lives in design doc 5.8;
-what changed on *this* doc's side of the boundary:
-
-- **`run_end`, both routes, both exits.** `{"type": "run_end", step,
-  cancelled, t}` is emitted on normal completion and on cooperative
-  cancel by `ManagedLoRATrainerNode` and `SupervisedLoRATrainerNode`.
-  An open SSE stream looks identical while running and after finishing,
-  so before this the dashboard could never distinguish "finished" from
-  "hung"; now the status readout says finished/cancelled at step N, and
-  a cancelled run's numbers are visibly final.
-- **`vram_budget_mb`** on every report from both routes'
-  `MonitoringPhase`s (new `usable_budget_mb` ctor param, wired at build
-  from `resource_control.usable_budget_mb()`; key omitted when no
-  handle states a budget) -- drawn as a dashed reference line against
-  the new VRAM/residency chart, so the ceiling is visible where the
-  reserved numbers are instead of only in graph config.
-- **`vram_peak_reserved_mb`/`vram_peak_allocated_mb`** from the managed
-  report (`vram_{k}` naming, same as the main route's full
-  `memory_stats()` dump) -- the per-micro-step high-water mark, since
-  the build loop resets peak stats every micro-step.
-- **`grad_norm`, only when clipping is on.** The boundary clip already
-  ran `clip_grad_norm_`; its returned pre-clip total norm is stashed in
-  `extras["grad_norm"]` and shipped by the report. With clipping off
-  the key is absent, because measuring it separately would cost a grad
-  pass + device sync every optimizer step -- present-or-absent is the
-  contract, and absent is never a placeholder 0.
-- **Timing reaches the report, not just the print.** With
-  `TRAIN_STEP_TIMING=1`, `ManagedTrainingStepPipeline` now lands each
-  phase's measurement into `extras["timing_ms"]` *as phases complete*
-  (the boundary `MonitoringPhase` reads it to emit `{label}_ms` +
-  `step_total_ms`). Labels come from `_phase_label`, moved to
-  `step_pipeline.py` so both routes and the shared dashboard use one
-  naming scheme. The sync-per-phase overhead is unchanged and still
-  opt-in.
-
-Dashboard side (details and honest-data rules in 5.8): a VRAM/residency
-chart and a phase-timing chart, both hidden until a report actually
-carries their keys; a hero status block (step/loss/smoothed/ETA +
-progress bar + meta row with rate, elapsed time and optimizer id) above
-the loss chart; best-loss/LR/grad-norm/VRAM/peak readouts in a
-run-stats rail beside the chart, with a budget-utilization meter under
-the reserved value; graph controls with the chart (Freeze/Resume and
-visible-items count centered in the loss card's header, history slider
-under the chart, over a shared step window -- slider geometry frozen
-while the thumb is held so incoming reports can't teleport it); legend
-click to hide/show any series (hidden series leave the tooltip and the
-axis range); session CSV export.
-
-Tests updated to the new message contract rather than around it: step
-counts now filter on "no `type` key" (run_end is a different message,
-not a step report), and new checks assert exactly one `run_end` with
-the right `step`/`cancelled` (including the mid-run cancel path),
-`vram_budget_mb` present-with-budget and absent-without, `grad_norm`
-present-with-clip and absent-without, and timing keys reaching the
-managed report end-to-end with `step_total_ms` equal to their sum.
-
-## Seventh addendum: the dataset pipeline collapses onto single-latent, and t becomes fully targetable
-
-Everything up to here already *trained* on single-latent data -- one
-clean latent (x0) per image, noise + timestep injected at draw time
-(verified on disk: all six datasets are `format=lora_raw`,
-`sample_count=1`, the standard kohya/diffusers model). What this
-addendum removes is the other, older concept still living in the code
-around it, and adds the precise targeting that the single-latent model
-makes trivial:
-
-- **Retired:** `run_ingestion_task` (the legacy real-image path that
-  baked a fixed ~20-value t grid per image -- the "sampled wasn't
-  sampled" bug), the loader branch that read those shards (including
-  its dual-pass target blending; `use_dataset_cfg` survives on the node
-  as a documented no-op so old graphs still load), the `real` ("Real
-  (VAE Encoding)") option in the dataset generator UI plus its route
-  branch, and `RenoiseBatchSourceNode` (`nodes/dataset/renoise.py` +
-  its smoke test) -- a workaround node whose entire reason for existing
-  was undoing that grid. `ManagedDatasetLoader` now reads
-  `format=lora_raw` trajectories only; anything else (teacher/
-  compressed sequences) is skipped with a printed count, never misread
-  as a clean latent. `run_teacher_task` stays: distillation
-  trajectories are genuinely sequential multi-t data, a different
-  format for a different purpose.
-- **New:** `t_mode="exact"` + a `t_values` Port on
-  `ManagedDatasetSourceNode` -- `t_values="500"` pins every sample to
-  one precise timestep, `t_values="200,500,800"` cycles the list in
-  draw order (one value per sample, equal long-run share regardless of
-  shuffling), every value validated inside `[t_low, t_high] ∩ [1, 999]`
-  at build time. `manager/t_sampling.py`'s `TrainTimeSampler` is the
-  single interpreter/validator for all three t_mode families (static
-  five / adaptive / exact) -- config errors fire in the node's `build()`
-  before path resolution and in the loader's ctor before DB access,
-  never by silently degrading to uniform.
-- **Tests:** new `nodes/smoke_tests/smoke_test_t_sampling.py` (the
-  node/core/t_sampling list-sync guarantee, the exact cycle as an exact
-  sequence, every config-error path, and the adaptive-bias end-to-end
-  that used to run through `RenoiseBatchSource._renoise()`);
-  `smoke_test_lora_raw_dataset.py` gains real round trips for the
-  pinned cycle and for skipping non-single-latent trajectories;
-  `smoke_test_renoise.py` deleted with the node; port-choices
-  expectations extended to `T_MODES_TRAIN_TIME`, not weakened.
-  Design detail: doc 04, section 5.5.
 
 ## Eighth addendum: `exact` joins the bucket-balance loop -- balance-steered t targeting
 
-The seventh addendum shipped `t_mode="exact"` as a pure pin (cycle the
-list, balance ignored). The actual intent was targeting *inside* the
+The actual intent was targeting *inside* the
 bucket-balance toolkit: the balance shows which zone is underutilized
 or losing badly, and you hit precise timesteps there. So the two now
 compose:
@@ -706,11 +200,3 @@ compose:
   real opinion, and the user's equal-share pin is what they get. The
   cursor is per-loader as before, so the cycle still spans batches and
   epochs.
-- **Tests** (`smoke_test_t_sampling.py`, `check_exact_steered`): the
-  steered share checked against the balance's *own* `sampling_probs`
-  (the assertion can't drift from what the balance really says), plus
-  all four decline-to-cycle paths (cold balance, `sample_bias=0`,
-  single-bucket list, and the pre-existing no-balance pinned-cycle
-  checks untouched). Port docs on `t_mode`/`t_values`/`bucket_balance`
-  updated to say what wiring buys you. Design detail: doc 04, section
-  5.5.

@@ -8,7 +8,8 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 
 | Question | Decision |
 |---|---|
-| Stack | **Vanilla ES modules, no framework, no build step.** Performance first, structured, easy to expand -- no npm/node toolchain enters this repo. The legacy frontend (7,576 lines across 18 JS + 6 HTML files in `server/static/`) is the reference, not the base: it is rewritten. |
+| Stack | **Vanilla ES modules, no framework, no build step.** Performance first, structured, easy to expand -- no npm/node toolchain enters this repo. The legacy frontend (7,576 lines across 18 JS + 6 HTML files in `archive/server/static/`) is the reference, not the base: it is
+rewritten. |
 | What carries over | The **monitor dashboard's visualization** -- charts, series selection, CSV export, replay-on-reload -- is good enough to keep. Its data contract (SSE stream shapes below) is treated as pinned; the code is restructured into modules while the visuals stay. |
 | Who serves it | **The backend serves its own static files** (one origin on 8766: no CORS, no proxy, SSE and API same-origin). |
 | Build order | **Monitor + training controls first** (the daily driver -- a usable tool after every step), then the graph editor, then dataset manager + config/history tabs. |
@@ -61,7 +62,8 @@ Rules that keep it fast and expandable:
 ## 4. Monitor data path (pinned contract)
 
 Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
-`server/routes_monitor.py`, `server/static/monitor_dashboard.js`):
+`archive/server/routes_monitor.py`,
+`archive/server/static/monitor_dashboard.js`):
 
 * `MonitorBus` (repo root): thread-safe pub-sub keyed by **`monitor_id`**,
   `report(monitor_id, dict)` appends *unwrapped* dicts to a per-id
@@ -84,7 +86,7 @@ Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
   class the legacy server and `nodes/` use -- payload and replay
   semantics stay byte-identical); `ReflectedGraphRuntime` passes the
   instance into `ExecutionContext(monitor_bus=...)` instead of
-  `None` (doc 05's deferred item); presentation exposes
+  `None`; presentation exposes
   `GET /api/v1/monitor/{monitor_id}/stream` mirroring the legacy
   frame sequence. Nodes are untouched -- they already duck-type
   `report`/`clear` and no-op on `None`.
@@ -113,7 +115,7 @@ Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
 * **Settings/config**: backend reads the same project config files and
   settings tiers; no copy.
 
-## 6. Decommission plan for `server/`
+## 6. Decommission plan for `server/` (executed)
 
 | Phase | Scope | Entry criterion |
 |---|---|---|
@@ -131,4 +133,4 @@ the tree move:
 | `smoke_test_nodegraph_introspect.py` | `display_name` / NodeInfo introspection (design doc §11.5: class name stays the stable registry key) |
 | `smoke_test_node_presets.py` | `Node.NODE_KIND` / `NodePreset` / `list_presets()` and their introspection |
 | `smoke_test_asset_inspect.py` | asset path sandboxing + `inspect()` real safetensors I/O |
-| `smoke_test_static_caching.py` | `Cache-Control` policy for browser-facing responses (`server/main.py`) |
+| `smoke_test_static_caching.py` | `Cache-Control` policy for browser-facing responses (`archive/server/main.py`) |

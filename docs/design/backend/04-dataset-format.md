@@ -39,8 +39,9 @@ datasets/<name>/
 ## SQLite schema (user_version = 2)
 
 The authoritative copy of this schema is `manager/db.py`'s
-`init_local_db()`; anything here that looks abbreviated is. Migration
-scripts copy it from there too.
+`init_local_db()`; this is a transcription of it, and the
+`scripts/migrate_dataset_format.py` copy of the v2 tables is a third
+one to keep in sync.
 
 ```sql
 info(

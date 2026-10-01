@@ -280,7 +280,8 @@ EXTRAS: dict[str, ExtraDef] = {
     'common.use_dataset_cfg': {'label': 'Use Dataset CFG',
  'help': 'Legacy, now a no-op: it only gated the baked-format loader path\'s '
          'dual-pass target blending, retired with that format (single-latent '
-         'datasets now -- see doc 04, section 5.5). Kept so existing configs '
+         "datasets now -- see nodes/train/bucket_balance.py's "
+         "module docstring). Kept so existing configs "
          'still parse.',
  'group': '4. SAMPLING',
  'extra_visible_when': {'paths.dataset_name': '__truthy__'}},

@@ -580,7 +580,7 @@ class DataTaskRunner:
         time and reused it for every image (a real bug -- the user caught
         that "sampled" wasn't sampled at all -- and the reason that path,
         its loader branch, and the RenoiseBatchSource workaround are all
-        gone now; see doc 04 section 5.5). Also simpler and faster
+        gone now; see nodes/train/bucket_balance.py's module docstring). Also simpler and faster
         to ingest: one VAE encode per image, no noise loop, no eps/vpred
         target computation, no cond/uncond dual-pass bookkeeping.
 

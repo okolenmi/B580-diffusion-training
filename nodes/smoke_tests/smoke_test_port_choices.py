@@ -12,7 +12,7 @@ invalid one, and never touches choices for a value that's simply absent
 call sites this landed on -- ComposedAdamWOptimizerNode's `strategy` and
 ManagedDatasetSourceNode's `t_mode` (the other original t_mode consumer,
 RenoiseBatchSourceNode, was retired with the baked-grid format it
-existed to correct -- see doc 04, section 5.5) -- genuinely
+existed to correct) -- genuinely
 read their choices from the same shared registries their doc strings
 already cited (STRATEGIES, T_MODES), not a hand-copied second list, and
 `device` (deliberately NOT given choices -- torch.device-parseable,

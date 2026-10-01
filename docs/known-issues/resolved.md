@@ -183,12 +183,13 @@ through 2026-09, with no hardware run.
   returns the *same object*, not a copy, for a float32 parameter (state is
   already float32) -- so the subsequent `.mul_(alpha_t)` permanently shrank
   the momentum buffer by `alpha_t` (~lr) every step. bf16 was never affected
-  because there the cast is real. The blast radius differed between the two
-  optimizers: `FusedXPUAdafactor`'s buggy line was shared by both its
+  because there the cast is real. The blast radius differed between the
+  two optimizers: `FusedXPUAdafactor`'s buggy line was shared by both its
   tiny-parameter (< 10,000 element) and main-parameter paths, while
-  `ChunkedXPUAdafactor`'s sat only in its main-parameter path (its
-  tiny-parameter path applies updates via a different mechanism and was
-  never affected); `ForeachXPUAdafactor` never had it at all. Fix: forced
+  `ChunkedXPUAdafactor`'s sat only in its main-parameter path -- there
+  `p.numel() < 10_000` routes tiny parameters to a path that updates via
+  `ws[s:e].add_(..., alpha=-alpha_t)`, which doesn't alias, and was never
+  affected; `ForeachXPUAdafactor` never had it at all. Fix: forced
   a real copy (`.to(dtype=p.dtype, copy=True)`) in both `core/optimizers.py`
   locations; covered by
   `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py` (which also

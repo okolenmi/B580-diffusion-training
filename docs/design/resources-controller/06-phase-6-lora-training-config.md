@@ -13,8 +13,7 @@ this, not rebuilt here), and produces something `TrainerNode` can use.
 **Status: `LoRATrainingConfigNode` done. Downstream integration into
 `TrainerNode` also done -- see
 `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`
-for how (a separate unpack node, not the mechanism originally sketched
-below).**
+for how.**
 `nodes/model/lora_training_config.py` (new): `resources` is a wired
 `LoRATrainingResources` input (Phase 5's own output -- nothing left to
 load, everything real and already in memory by the time this node
@@ -42,53 +41,6 @@ has no `diagnostics()` override: Phase 5's live-diagnostics endpoint
 sends plain JSON widget values, and a wired object is exactly what it
 can't carry.
 
-Required a real refactor of `LoRATrainingSkeleton`
-(`nodes/model/lora_training_resources.py`), not just a new caller: its
-`__init__` did split -> merge frozen LoRA -> inject -> build text
-encoder all in one call, which would have meant
-`LoRATrainingConfigNode` either re-deriving `unet_sd`/`clip` from a raw
-checkpoint a second time (`resources` no longer even exposes one) or
-duplicating the inject/continue-load/coordinator-setup logic itself.
-Extracted a shared `_inject()` (inject, load an optional continuing
-LoRA into the fresh adapter, set up the coordinator) that both
-`__init__` (the from-a-raw-checkpoint path) and a new
-`from_resources()` classmethod (the from-Phase-5's-own-output path)
-call -- one real implementation of "inject and finalize," not two.
-
-Caught two real bugs while doing this refactor, neither shipped:
-`LoRATrainingResources.reload()`'s device fallback was hardcoded
-`"xpu"` regardless of what device the object was actually built for
-(unlike `LoRATrainingSkeleton.reload()`, which correctly remembers its
-own construction device) -- `reload(None)` after `offload()` on
-anything built for `"cpu"` would have silently moved everything to a
-device never actually asked for. Fixed by storing `self._device` in
-`LoRATrainingResources.__init__`, same as `LoRATrainingSkeleton`
-already does. Same method also called `self.clip.reload(device)` with
-the *unresolved* argument while `unet_sd`/`vae_sd` used the resolved
-fallback -- `clip` and the raw tensors could have ended up on two
-different devices from one `reload(None)` call. Both fixed together.
-
-**Verified manually, real dispatch path (not the smoke-test suite):**
-a minimal, real (not faked) `SDXL_LoRATrainingResources` instance
-routed through `LoRATrainingConfigNode.build()` reaches the same real,
-expected `ModuleNotFoundError: comfy` boundary inside `inject_lora()`
--- confirms the dispatch table and `from_resources()` wiring are
-correct end to end, not just at the mock level. Mock-level checks
-(a fake `inject_lora()`, since a real one needs ComfyUI) confirm:
-`from_resources()` reuses `resources.clip`/`.vae_sd` by identity
-(never rebuilds them) and never calls `split_checkpoint()`/
-`build_text_encoder()`; rank is honored when given and no
-`continue_lora_sd` exists; rank is silently overridden to the
-detected value when `continue_lora_sd` does exist, even when an
-explicit, different rank was also given; `unet_weight_store="nf4"`
-resolves to the real `NF4WeightStore` class; an unregistered resources
-type raises a clear, actionable error naming
-`_TRAINER_FOR_RESOURCES`; the two `LoRATrainingResources` bug fixes
-above (device fallback, `clip`/tensor device consistency) both
-verified against a minimal fake `DeviceResident`-shaped object.
-Registered in `server/nodegraph_registry.py`; auto-derives the display
-name "LoRA Training Config".
-
 **Superseded by `docs/design/resources-controller/09-trainer-integration-and-vram-safety.md`:**
 this section originally read "`TrainerNode` consumes `LoRATrainingConfigNode`'s
 own `trainer` output as one bundled port, replacing its separate
@@ -115,5 +67,3 @@ or `CachingTextEncoderNode` needed to change either way.
 methods, outliving and outnumbering any one node's own Ports, is still
 exactly the design posture this paragraph originally argued for --
 only the specific "replace TrainerNode's ports" mechanism was wrong.
-
-**Dependency:** Phase 5 (done).

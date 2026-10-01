@@ -44,9 +44,4 @@ through that correction and two earlier, smaller ones (a wired-socket
 detour for `checkpoint_path`, correcting checkbox inference to real
 `bool` Ports) in full blow-by-blow; removed from here on the same
 direct feedback that the accumulated correction history had itself
-become the confusing part of this document. The reasoning for each
-individual decision above (why a wire was rejected, why `"inherited"`
-is static, why `LoRATrainingResources` doesn't do injection) still
-lives in the code's own docstrings, not just here.
-
-**Dependency:** Phases 1-4 (done).
+become the confusing part of this document.

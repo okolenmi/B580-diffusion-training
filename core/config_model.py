@@ -83,7 +83,8 @@ class CommonSettings(BaseModel):
                                                              "baked-format loader path's dual-pass target "
                                                              "blending, retired with that format (the "
                                                              "dataset pipeline is single-latent now -- see "
-                                                             "doc 04, section 5.5). Kept so existing configs "
+                                                             "nodes/train/bucket_balance.py's module "
+                                                             "docstring). Kept so existing configs "
                                                              "still parse.")
 
     training_positive_prompt: str = ""

@@ -42,7 +42,7 @@ through 2026-09, with no hardware run.
   ("reserved flat at ~6034 MB" for the legacy health check) -- the
   report was right: real consumption was ~11.4/12.2 GB, and the
   misleading number was a snapshot-ordering artifact, now fixed.**
-  Investigation (legacy `convert.py`, `runs/hw_validation/legacy_check.toml`,
+  Investigation (`core.cli`, `runs/hw_validation/legacy_check.toml`,
   instrumented phase snapshots + tensor census + a cross-process
   `torch.xpu.mem_get_info` monitor): steady state during training is
   **reserved 9942 MB, live tensors ("allocated" and an independent

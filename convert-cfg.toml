@@ -1,30 +1,11 @@
-# Template config for convert.py (legacy CLI pipeline).
-#
-# Copy this file to `convert-cfg.toml` in this repo's root and edit the
-# machine-specific values for your setup:
-#
-#     cp convert-cfg.example.toml convert-cfg.toml
-#
-# `convert-cfg.toml` itself is gitignored -- it's one person's real,
-# machine-specific working config (real paths, real dataset names, real
-# preview prompts) and doesn't belong in version control. This template
-# carries the same structure with placeholder values instead.
-# `convert.py --config` creates a defaults-filled config if the file
-# you point it at doesn't exist, so this copy step is a convenience,
-# not a requirement. See docs/setup.md for the full picture.
-
 start_from = "teacher"
 reset_optimizer = false
 
 [paths]
-# Checkpoint filename under ComfyUI's models/checkpoints directory.
-base_model = "your-base-model.safetensors"
+base_model = "div_4.safetensors"
 checkpoint_output = ""
-# Dataset name under this project's datasets/ directory.
-dataset_name = "your_dataset"
-# Can usually be left alone if your ComfyUI checkout is a sibling of
-# this repo (auto-detected); set it explicitly if your layout differs.
-comfy_dir = "/path/to/ComfyUI/"
+dataset_name = "test"
+comfy_dir = "/home/okolenmi/comfy/ComfyUI/"
 
 [common]
 steps = 1000
@@ -71,7 +52,7 @@ method = "lora"
 rank = 64
 alpha = 32.0
 dropout = 0.0
-lora_output = "my_lora.safetensors"
+lora_output = "test_lora11b.safetensors"
 target_all = false
 block_weighting = ""
 gate_enabled = false
@@ -102,8 +83,7 @@ student_chain_noise = 0.02
 [preview]
 enabled = true
 every_n_steps = 100
-# One prompt per line; use a trigger word you trained into the LoRA.
-prompts = "your-trigger-word, \r\nyour-trigger-word, landscape"
+prompts = "ttw001, \r\nttw001, landscape\r\nttw001, 2 girls"
 negative_prompt = ""
 steps = 24
 cfg = 6.0

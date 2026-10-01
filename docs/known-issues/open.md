@@ -36,7 +36,7 @@
   `synchronize()` hardening behaves under pressure; it says nothing
   about the legacy path this entry is about. What *has* been run: a
   plain health check of the legacy CLI route on this hardware
-  (2026-09-28 -- 100 steps on `datasets/test` via `convert.py` with
+  (2026-09-28 -- 100 steps on `datasets/test` via `core.cli` with
   `runs/hw_validation/legacy_check.toml`: 100/100 steps, ~794 ms/step,
   clean LoRA save, no hang or device-lost) -- a healthy baseline, but
   not the pressure-plus-preview-decode trigger this entry describes.

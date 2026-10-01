@@ -7,10 +7,10 @@ reader fast).
 
 ## The two pipelines
 
-| | Legacy pipeline | Node-graph rewrite |
+| | TOML trainer | Node-graph rewrite |
 |---|---|---|
 | Packages | `core/`, `manager/` | `nodes/`, `backend/` |
-| Entry point | `convert.py` + a TOML config | `run_server.sh` (browser UI) |
+| Entry point | `python -m core.cli` + a TOML config | `run_server.sh` (browser UI) |
 | Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does |
 | Config style | One big TOML file, many flat fields | A visual graph of typed `Node`s wired together |
 

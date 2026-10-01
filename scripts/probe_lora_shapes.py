@@ -10,9 +10,9 @@ LoRA: what shape does `x` actually have when it reaches to_q / to_k / to_v
 depths -- and does its batch dimension (dim 0) line up 1:1 with the
 timestep batch the way a gate value would need to?
 
-Run from the ComfyUI root directory, same as convert.py:
-    cd /path/to/ComfyUI
-    python /path/to/this-project/scripts/probe_lora_shapes.py --config convert-cfg.toml
+Run from this repo's root, same as the trainer it probes:
+    cd /path/to/this-project
+    python scripts/probe_lora_shapes.py --config config.toml
 
 Paste the full output back.
 """
@@ -30,7 +30,7 @@ from paths import get_comfy_dir, set_comfy_dir  # noqa: E402
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, default="convert-cfg.toml",
+    p.add_argument("--config", type=str, default="config.toml",
                     help="Path to a training config, used only to find base_model.")
     p.add_argument("--batch", type=int, default=4,
                     help="Batch size to simulate (use something >1 so per-sample "

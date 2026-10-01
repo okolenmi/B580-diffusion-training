@@ -1,0 +1,113 @@
+# Template TOML training config -- the format `core.cli` reads, and the
+# one the web UI's config editor round-trips.
+#
+# Copy this file to `config.toml` in this repo's root and edit the
+# machine-specific values for your setup:
+#
+#     cp config.example.toml config.toml
+#
+# `config.toml` itself is gitignored -- it's one person's real,
+# machine-specific working config (real paths, real dataset names, real
+# preview prompts) and doesn't belong in version control. This template
+# carries the same structure with placeholder values instead.
+# `--config` creates a defaults-filled config if the file you point it
+# at doesn't exist, so this copy step is a convenience, not a
+# requirement. See docs/setup.md for the full picture.
+
+start_from = "teacher"
+reset_optimizer = false
+
+[paths]
+# Checkpoint filename under ComfyUI's models/checkpoints directory.
+base_model = "your-base-model.safetensors"
+checkpoint_output = ""
+# Dataset name under this project's datasets/ directory.
+dataset_name = "your_dataset"
+# Can usually be left alone if your ComfyUI checkout is a sibling of
+# this repo (auto-detected); set it explicitly if your layout differs.
+comfy_dir = "/path/to/ComfyUI/"
+
+[common]
+steps = 1000
+batch_size = 2
+grad_accum = 6
+lr = 1e-06
+optimizer = "came"
+adafactor_scale_param = false
+seed = 52
+save_every = 0
+lr_schedule = "cosine"
+lr_end = 1e-05
+lr_power = 2.0
+lr_warmup_steps = 200
+lr_warmup_start = 1e-08
+lr_strategy = "uniform"
+center_mult = 0.67
+side_mult = 1.5
+time_mult = 1.8
+snr_weighting = "snr"
+t_mode = "logit"
+t_low = 0
+t_high = 999
+device = "xpu"
+no_compile = true
+no_checkpoint = true
+dump_cache_samples = false
+save_on_crash = true
+data_source = "dataset"
+teacher_type = "eps"
+student_type = "eps"
+resume_step = 0
+latent_size = 0
+use_dataset_cfg = false
+training_positive_prompt = ""
+training_negative_prompt = ""
+pre_cond_enable = false
+pre_cond_power_min = 0.1
+pre_cond_power_max = 0.5
+pre_cond_clean_ratio = 0.3
+
+[tuning]
+method = "lora"
+rank = 64
+alpha = 32.0
+dropout = 0.0
+lora_output = "my_lora.safetensors"
+target_all = false
+block_weighting = ""
+gate_enabled = false
+gate_train_low = 300.0
+gate_train_high = 999.0
+gate_width = 50.0
+
+[cache]
+mode = "trajectory"
+batch_size = 0
+traj_steps_min = 20
+traj_steps_max = 30
+traj_skip_steps = 4
+sequence_size = 0
+sequence_mode = "random"
+cfg = 4.0
+cfg_random = false
+cfg_min = 1.0
+cfg_max = 1.0
+cond_mode = "random"
+positive_prompt = ""
+negative_prompt = ""
+student_mix = 0.0
+student_anchor_steps = 5
+student_chain_len = 3
+student_chain_noise = 0.02
+
+[preview]
+enabled = true
+every_n_steps = 100
+# One prompt per line; use a trigger word you trained into the LoRA.
+prompts = "your-trigger-word, \r\nyour-trigger-word, landscape"
+negative_prompt = ""
+steps = 24
+cfg = 6.0
+resolution = 768
+seed = 1
+max_batch_size = 8

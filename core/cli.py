@@ -1,4 +1,13 @@
-"""CLI entry point — simplified, config-driven."""
+"""CLI entry point -- simplified, config-driven.
+
+Two callers: the web backend spawns `python -m core.cli --config ...` as
+the training subprocess (`backend/infrastructure/subprocess_gateway.py`),
+and a human can run it directly from this repo's root. There is
+deliberately no `convert.py` wrapper: it existed only so the script
+could be invoked by absolute path from ComfyUI's root, which
+`paths.get_comfy_dir()` already resolves by other means (COMFY_DIR, or
+ComfyUI as a sibling of this repo).
+"""
 
 import argparse
 import random
@@ -22,9 +31,12 @@ def main():
         description="Distillation converter for SDXL models",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Run from this repo's root (so `core` is importable); ComfyUI's own
+directory is resolved separately, by paths.get_comfy_dir().
+
 Examples:
-  python convert.py --config my_run.toml
-  python convert.py --config my_run.toml --lr 5e-4 --steps 5000
+  python -m core.cli --config config.toml
+  python -m core.cli --config config.toml --lr 5e-4 --steps 5000
         """)
 
     p.add_argument("--config", type=str, default=None,

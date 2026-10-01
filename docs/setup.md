@@ -54,36 +54,39 @@ etc.):
 pip install -r requirements.txt
 ```
 
-## Running: two separate entry points
+## Running: two ways to actually train something
 
-This repo has two independent ways to actually train something -- see
-[`architecture.md`](architecture.md) for how they relate to each
-other's code.
+One trainer, two front ends -- see [`architecture.md`](architecture.md)
+for how they relate to each other's code.
 
-### 1. Legacy CLI trainer (`core/`/`manager/`, production path)
+### 1. The TOML trainer (`core/`/`manager/`)
 
-Config-driven, TOML-based. Must be run **from ComfyUI's own root
-directory** (see `convert.py`'s own docstring for why):
+Config-driven: one TOML file, many flat fields. This is also what the
+web UI runs underneath (see section 2), so the config format is shared.
 
-```bash
-cd /path/to/ComfyUI
-python /path/to/B580-diffusion-training/convert.py --config my_run.toml
-```
-
-`convert-cfg.example.toml` in this repo's root is the committed
-template config to copy and edit; copy it to `convert-cfg.toml` (also
-in the repo root) for your own working config:
+Run it from **this repo's root** so `core` is importable. ComfyUI's own
+directory is resolved separately, by `paths.get_comfy_dir()` -- nothing
+about the working directory needs to be ComfyUI:
 
 ```bash
-cp convert-cfg.example.toml convert-cfg.toml
+cd /path/to/B580-diffusion-training
+python -m core.cli --config config.toml
 ```
 
-`convert-cfg.toml` itself is gitignored -- it holds machine-specific
-values (real checkpoint/dataset names, real paths, real preview
-prompts) and isn't committed; the example carries the same structure
-with placeholders. `convert.py --config` will also create a
-defaults-filled config for any filename you point it at, so the copy
-step is a convenience rather than a requirement.
+`config.example.toml` in this repo's root is the committed template to
+copy and edit:
+
+```bash
+cp config.example.toml config.toml
+```
+
+`config.toml` itself is gitignored -- it holds machine-specific values
+(real checkpoint/dataset names, real paths, real preview prompts) and
+isn't committed; the example carries the same structure with
+placeholders. `--config` will create a defaults-filled config for any
+filename you point it at, so the copy step is a convenience rather than
+a requirement. `--reset-config PATH` rewrites one from current defaults
+and exits, which is how you pick up new config fields.
 
 ### 2. Node-graph web UI (`nodes/`/`backend/`, the active rewrite)
 

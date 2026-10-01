@@ -84,16 +84,20 @@ with placeholders. `convert.py --config` will also create a
 defaults-filled config for any filename you point it at, so the copy
 step is a convenience rather than a requirement.
 
-### 2. Node-graph web UI (`nodes/`/`server/`, the active rewrite)
+### 2. Node-graph web UI (`nodes/`/`backend/`, the active rewrite)
 
 ```bash
-./run_server.sh                  # binds 0.0.0.0:8765 by default
+./run_server.sh                  # binds 0.0.0.0:8766 by default
 ./run_server.sh --host 127.0.0.1 --port 8080   # override either
 ```
 
 This starts a browser-based visual node editor for building and
 running training graphs out of the `nodes/` package's Node classes.
 Open the printed URL in a browser once the server starts.
+`run_server.sh` launches `python -m backend.cli` -- the `backend/`
+package (REST API under `/api/v1` + the frontend it serves). The
+first-cut `server/` web layer is retired under `archive/` as of M9;
+`archive/server_cli.py` still launches it for reference.
 
 ## Running the test suite
 
@@ -102,7 +106,7 @@ script -- CPU-only, no ComfyUI/XPU hardware required, no test
 framework dependency beyond what's already installed:
 
 ```bash
-# Everything, all three suites (nodes/ + server/ + manager/), one command:
+# Everything, both suites (nodes/ + manager/), one command:
 python run_tests.py
 
 # Filter by filename substring, e.g. only memory-related tests
@@ -110,8 +114,16 @@ python run_tests.py memory
 
 # Per-suite runners still work on their own:
 python nodes/smoke_tests/run_all.py          # nodes/ only
-python server/smoke_tests/smoke_test_graph_executor.py
 python manager/smoke_tests/smoke_test_lora_raw_dataset.py
+```
+
+(`server/`'s six smoke tests retired with `archive/` at M9.) The web
+backend has its own suite, run under the torch venv interpreter, and
+the full gate ties every suite together:
+
+```bash
+$VENV_PYTHON backend/tests/run_all.py   # backend suite (API, pages, use cases)
+scripts/full_gate.sh                    # legacy suites + backend suite + frontend node --check
 ```
 
 `run_tests.py` picks the interpreter itself: the tests import torch,
@@ -119,7 +131,7 @@ which lives in your ComfyUI venv, not in whatever system `python`
 happens to be first on PATH. If the running interpreter has no torch,
 it resolves `VENV_PYTHON` (environment variable, then `.env`, same
 precedence as `paths.py`) and runs every test under that -- rather
-than emitting ~70 identical `ModuleNotFoundError: No module named
+than emitting ~68 identical `ModuleNotFoundError: No module named
 'torch'` tracebacks, which is exactly what running the suite with the
 wrong python looks like.
 

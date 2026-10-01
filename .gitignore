@@ -2,11 +2,10 @@
 __pycache__/
 datasets/
 runs/
-server/data/
+archive/server/data/
 backend/data/
 converter/__pycache__/
 manager/__pycache__/
-server__pycache__/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

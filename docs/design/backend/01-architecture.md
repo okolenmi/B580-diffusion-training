@@ -10,8 +10,10 @@ later milestones must keep.
 
 The legacy server is 4,542 lines of Python across 27 files (51 HTTP
 endpoints, 6 smoke suites) plus 6,275 lines of frontend JS -- written
-by many different AI passes. The algorithms in it are mostly sound;
-the *ownership model* is the disease. Ranked problems, with evidence:
+by many different AI passes (every cited legacy path now resolves
+under `archive/server/` -- the layer was archived at M9). The
+algorithms in it are mostly sound; the *ownership model* is the
+disease. Ranked problems, with evidence:
 
 1. **State lives in module-level singletons, not in the app.**
    Composition happens at *import* time: `settings = Settings()` is
@@ -453,7 +455,7 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M8d | Shell redesign: icon rail on every page, floating persistent console, `/help` + `/settings` | **done** |
 | M8e | Dataset add-data + edit modes: `generate_teacher` task kind (validated in `application/teacher_prompts.py`), bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`), add-data dialog (generate/import), browse/edit item modes, advanced item editor | **done** |
 | M8f | Dataset card previews + item context menu: resolved `preview_path` on list/detail (backend.db pointer, migration `006`; first non-bad item fallback; stale pointers degrade, never dead URLs), `PUT /datasets/{name}/preview` by item id, card thumb on `/datasets`, half-transparent `⋮` per item with the one-option "Set as dataset preview" menu | **done** |
-| M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
+| M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | **done** |
 
 ## 8. Running it
 

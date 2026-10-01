@@ -1,4 +1,8 @@
-"""CLI entry point for the web server."""
+"""CLI entry point for the legacy web server -- ARCHIVED with M9.
+
+Kept so the retired server/ stays runnable for reference; the live
+entry point is ``run_server.sh`` -> ``python -m backend.cli``.
+"""
 
 import argparse
 import sys
@@ -40,7 +44,8 @@ def main():
     if str(comfy_dir) not in sys.path:
         sys.path.append(str(comfy_dir))
 
-    from server.main import run
+    # archived layout: the package now lives at archive/server/
+    from archive.server.main import run
     run(host=args.host, port=args.port)
 
 

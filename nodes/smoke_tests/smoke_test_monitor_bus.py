@@ -60,12 +60,16 @@ def test_history_cap_matches_dashboard_and_evicts_oldest():
 
     import monitor_bus as mb
 
-    src = (Path(__file__).resolve().parents[2] / "server" / "static"
-           / "monitor_dashboard.js").read_text()
+    # The live dashboard is frontend/js/monitor.js (the archived
+    # server/static/monitor_dashboard.js it replaced declares the same
+    # 100000); the invariant -- replay cap == displayed records -- is
+    # unchanged, only its target moved with M9.
+    src = (Path(__file__).resolve().parents[2] / "frontend" / "js"
+           / "monitor.js").read_text()
     m = re.search(r"MAX_RECORDS = (\d+)", src)
     check(m is not None, "the dashboard must declare MAX_RECORDS")
     check(mb.HISTORY_LIMIT == int(m.group(1)),
-          "server replay cap must equal the dashboard's MAX_RECORDS")
+          "bus replay cap must equal the live dashboard's MAX_RECORDS")
 
     # Finite and oldest-first once over the cap (patch the module global
     # BEFORE the deque is created -- the defaultdict factory reads it then).

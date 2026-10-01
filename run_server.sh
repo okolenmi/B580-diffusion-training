@@ -39,10 +39,10 @@ if [ -f "$ENV_FILE" ]; then
     done < "$ENV_FILE"
 fi
 
-# Resolve the python interpreter with the same precedence as
-# server.config.Settings.venv_python (used internally to launch training
-# subprocesses), so the server itself and the trainer it spawns are
-# guaranteed to agree on which interpreter/venv to use:
+# Resolve the python interpreter with the same precedence as paths.py's
+# VENV_PYTHON resolution (the backend launches training and dataset
+# tasks through the same rules), so the server itself and the trainer
+# it spawns are guaranteed to agree on which interpreter/venv to use:
 #   1. VENV_PYTHON env var (or .env), if set and it actually exists
 #   2. <parent-of-this-project>/venv/bin/python, if it exists (the
 #      project / ComfyUI / venv sibling-folder layout)
@@ -56,8 +56,12 @@ else
     PYTHON="python"
 fi
 
-if [ -n "${COMFY_DIR:-}" ]; then
-    cd "$COMFY_DIR"
-fi
-
-exec "$PYTHON" "$SCRIPT_DIR/server_cli.py" "$@"
+# M9: the backend replaces the old server/ (still launchable from
+# archive/server_cli.py for reference). Run from the project root --
+# `-m backend.cli` needs it importable -- and resolve ComfyUI/venv
+# through paths.py (.env + env) instead of cd'ing there: the backend
+# spawns training with cwd=COMFY_DIR itself. Bind all interfaces like
+# the old server did; --host/--port passed after this win (argparse
+# keeps the last value).
+cd "$SCRIPT_DIR"
+exec "$PYTHON" -m backend.cli --host 0.0.0.0 "$@"

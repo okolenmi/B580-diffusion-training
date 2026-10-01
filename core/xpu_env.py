@@ -1,18 +1,20 @@
 """SYCL/Level-Zero performance environment variables for Intel XPU --
 single source of truth, called from every real process entry point
-(core/cli.py, server_cli.py) before anything else in that process
-touches torch/XPU.
+(core/cli.py, backend/cli.py since M9 -- formerly server_cli.py, now
+archive/server_cli.py) before anything else in that process touches
+torch/XPU.
 
 Extracted from core/cli.py, where these five lines already lived,
 unconditionally, at module-import time, predating this file. Real gap
 found investigating a reported speed regression this session:
 server_cli.py (the node-graph/Resources-Controller route's own process
-entry point) never set any of these -- graph execution
-(server/routes_nodegraph.py's _worker()) runs training in a background
-thread inside that same long-lived server process, never as its own
-`python -m core.cli` subprocess the way the older route always has, so
-core/cli.py's own os.environ[...] lines, module-level as they are,
-never ran for that route at all. Confirmed directly: no other file in
+entry point, retired to archive/ with M9) never set any of these --
+graph execution (server/routes_nodegraph.py's _worker(), same archive)
+runs training in a background thread inside that same long-lived
+server process, never as its own `python -m core.cli` subprocess the
+way the older route always has, so core/cli.py's own os.environ[...]
+lines, module-level as they are, never ran for that route at all.
+Confirmed directly: no other file in
 this codebase sets any of these (grepped for SYCL_/UR_L0_/IGC_Enable
 across the whole repo before writing this).
 

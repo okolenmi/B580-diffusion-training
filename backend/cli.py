@@ -34,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    # Entry-point parity with the retired server_cli (archived with M9):
+    # both gateways spawn children via os.environ.copy(), so the XPU
+    # perf env must be set in THIS process before anything spawns. Pure
+    # os.environ writes, no torch import -- safe before any child.
+    from core.xpu_env import set_xpu_perf_env_vars  # noqa: PLC0415
+
+    set_xpu_perf_env_vars()
+
     settings = Settings.load(os.environ)
     overrides = {}
     if args.host is not None:

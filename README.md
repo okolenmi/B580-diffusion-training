@@ -16,12 +16,16 @@ of maturity:
 - **The legacy pipeline (`core/` + `manager/`)** -- a config-driven
   (TOML) command-line trainer. This is the current *production* path:
   what real training runs actually use today. Entry point: `convert.py`.
-- **The node-graph rewrite (`nodes/` + `server/`)** -- a from-scratch,
+- **The node-graph rewrite (`nodes/` + `backend/`)** -- a from-scratch,
   strict-OOP redesign of the same training pipeline, exposed through a
-  browser-based visual node editor. This is where new design work
-  lands; it wraps and reuses legacy code rather than duplicating it,
-  and is not yet a full production replacement for the legacy path.
-  Entry point: `run_server.sh`.
+  browser-based visual node editor served by `backend/` (REST API under
+  `/api/v1`, layered application design, own docs under
+  [`docs/design/backend/`](docs/design/backend/README.md)). This is
+  where new design work lands; it wraps and reuses legacy code rather
+  than duplicating it, and is not yet a full production replacement for
+  the legacy path. Entry point: `run_server.sh`. (The first-cut web
+  layer `server/` was retired to `archive/server/` at M9; `backend/` is
+  its clean-room replacement.)
 
 `core/`/`manager/` are treated as reference material by the `nodes/`
 rewrite -- correct, working code that gets wrapped, not rewritten, per
@@ -62,7 +66,7 @@ cd /path/to/ComfyUI
 python /path/to/this-project/convert.py --config my_run.toml
 
 # Node-graph web UI -- run from this project's own directory
-./run_server.sh   # serves on http://0.0.0.0:8765 by default
+./run_server.sh   # serves on http://0.0.0.0:8766 by default
 ```
 
 ## Where to find things
@@ -70,7 +74,7 @@ python /path/to/this-project/convert.py --config my_run.toml
 ```
 docs/
 ├── setup.md                 Environment setup, running either pipeline, running tests
-├── architecture.md          Codebase map: core/manager/server/nodes and how they relate
+├── architecture.md          Codebase map: core/manager/backend/nodes and how they relate
 ├── training-diagnostics.md  Fixed-probe / gradient-alignment tools: is a LoRA damaging a t region?
 ├── review_notes.md          New-reader audit: confusing/stale things flagged for follow-up
 ├── status/
@@ -160,7 +164,8 @@ been split by topic into the folders above, with the content itself
 preserved (verified line-for-line during the split) and only
 reorganized. A follow-up pass then updated every source-code comment
 and docstring that referenced the old flat paths (52 files across
-`nodes/`, `server/`, `manager/`) to point at the correct split file --
+`nodes/`, `server/` (since moved to `archive/server/` at M9), `manager/`)
+to point at the correct split file --
 most citations named a specific section/phase number, which had to be
 looked up against the section-number-to-file mapping in
 `docs/design/README.md` and `docs/design/resources-controller/README.md`

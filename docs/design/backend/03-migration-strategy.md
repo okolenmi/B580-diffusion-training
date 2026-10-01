@@ -170,7 +170,21 @@ numbers match the milestone table in `01-architecture.md`:
 | M8d | Shell redesign: icon rail (all pages) + floating persistent console + `/help` + `/settings` | **shipped 2026-10-01**: `shell.js`/`shell.css` mounted on all six existing pages (rail order: Graph Editor, Datasets, Workflows (soon), System tracker, Help; Settings pinned last; monitor stays workflow-attached, no rail slot); console geometry + minimized state persist in localStorage; visual smoke: 132 checks incl. scenario G |
 | M8e | Dataset add-data + edit modes | **shipped 2026-10-01**: `generate_teacher` task kind (legacy `type=teacher` parity: prompt/keyword sources, neg keyword mix, cfg/steps/t ranges, batch, conditions x samples); import kind hardened (resize/model-type enums validated); bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`, idempotent joins); frontend: per-card "Add data" dialog (generate/import tabs with the full option sets), Browse/Edit item modes, advanced item editor (fields + metadata + prev/next walk), multi-edit panel; visual smoke scenario H |
 | M8f | Dataset card previews + item context menu | **shipped 2026-10-01**: `preview_path` resolved on list/detail (backend.db pointer, migration `006`, removed with the dataset; first non-bad item fallback; existence re-checked per read so stale pointers degrade to the fallback, never a dead URL); `PUT /datasets/{name}/preview` by item id; card thumb + half-transparent `⋮` one-option menu (disabled when current/absent); visual smoke 180 checks |
-| M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
+| M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected -- one import repointed to `archive.server`); legacy `smoke_test_*` knowledge is preserved in this doc series | **executed 2026-10-01 on user instruction**: `server/` + `server_cli.py` -> `archive/`, entry-point docs (README, setup, architecture) flipped to `backend/`, `run_tests.py`/`full_gate.sh` down to nodes+manager (68 tests), `backend/cli.py` inherits the XPU-env entry-point contract. Entry criterion status: the real training cycle on the new frontend **remains the follow-up validation** |
+
+The six `server/` smoke tests retired with the move; the files live on
+under `archive/server/smoke_tests/` (still runnable for reference),
+and what each one pinned is recorded here so the knowledge survives
+the tree move:
+
+| Retired test | What it pinned |
+|---|---|
+| `smoke_test_graph_executor.py` | topological execution + port compatibility (`graph_executor.py`, `nodegraph_registry.py`) |
+| `smoke_test_execution_registry.py` | the real threaded `GraphExecutor` over a trivial one-node graph, execution registry |
+| `smoke_test_nodegraph_introspect.py` | `display_name` / NodeInfo introspection (design doc §11.5: class name stays the stable registry key) |
+| `smoke_test_node_presets.py` | `Node.NODE_KIND` / `NodePreset` / `list_presets()` and their introspection |
+| `smoke_test_asset_inspect.py` | asset path sandboxing + `inspect()` real safetensors I/O |
+| `smoke_test_static_caching.py` | `Cache-Control` policy for browser-facing responses (`server/main.py`) |
 
 Both servers run side by side until M8 (8765 legacy, 8766 backend) --
 they share data files read-only, so there is no cutover day, only the

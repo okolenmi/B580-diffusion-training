@@ -9,7 +9,7 @@ reader fast).
 
 | | Legacy pipeline | Node-graph rewrite |
 |---|---|---|
-| Packages | `core/`, `manager/` | `nodes/`, `server/` |
+| Packages | `core/`, `manager/` | `nodes/`, `backend/` |
 | Entry point | `convert.py` + a TOML config | `run_server.sh` (browser UI) |
 | Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does |
 | Config style | One big TOML file, many flat fields | A visual graph of typed `Node`s wired together |
@@ -45,8 +45,8 @@ convert-cfg.example.toml Template config for convert.py (copy to
 paths.py               Single source of truth for path resolution
                         (COMFY_DIR, VENV_PYTHON, dataset/model paths).
                         Both pipelines read this.
-run_server.sh          Node-graph web UI entry point
-server_cli.py          Thin CLI wrapper run_server.sh actually invokes
+run_server.sh          Node-graph web UI entry point (runs
+                        `python -m backend.cli` since M9)
 
 core/                  Legacy: trainer, optimizers, noise schedule,
                         LoRA math, UNet wrapper, VAE decode, caching.
@@ -76,11 +76,17 @@ nodes/                 The rewrite: typed Node/Port graph-construction
   └─ smoke_tests/        CPU-only tests for everything above; see
                          docs/setup.md for how to run them.
 
-server/                Web server + graph executor for the nodes/ UI:
-                        topological execution, port-compatibility
-                        checking, the browser-side editor
-                        (server/static/), REST routes per concern
-                        (datasets, training, config, monitoring).
+backend/               Web server for the nodes/ UI (clean-room
+                        replacement for the old server/, M9): REST
+                        routes per concern (datasets, training, config,
+                        monitoring, graphs) under /api/v1, layered
+                        application (ports/use cases/infrastructure),
+                        graph runtime + saved-graph library, serves
+                        frontend/ (browser editor included).
+archive/               Retired first-cut web layer: server/ +
+                        server_cli.py, moved wholesale at M9 -- still
+                        launchable for reference; its six smoke tests
+                        retired with it.
 
 docs/                  This folder. See the root README.md's map for
                         what's where.

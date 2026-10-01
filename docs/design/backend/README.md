@@ -1,9 +1,10 @@
 # Backend design docs
 
 Documents the clean-room replacement for `server/` living in
-`backend/` -- architecture, API contract, and (eventually) the
-migration strategy. The old `server/` stays untouched and in use
-until that migration is agreed.
+`backend/` -- architecture, API contract, and migration strategy.
+The old `server/` was retired to `archive/server/` at M9
+(2026-10-01), untouched, for reference; `run_server.sh`, the README
+and the setup/architecture docs now point at `backend/`.
 
 | # | Doc | Contents |
 |---|-----|----------|

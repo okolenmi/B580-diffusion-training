@@ -2,8 +2,9 @@
 LoRA math. Verifies nodes/model/lora_phases.py:
 
   1. Contracts: LoRAPhaseSplitNode is concrete and correctly typed, and
-     the graph editor's real issubclass() check (server/graph_executor.py
-     ._is_compatible) actually accepts every wire this feature needs,
+     the graph editor's real issubclass() check
+     (archive/server/graph_executor.py ._is_compatible -- server/ was
+     archived with M9) actually accepts every wire this feature needs,
      including the ones that motivated generalizing LoRAWeightsExportable
      into TrainedWeightsExportable partway through building this.
   2. Forward equivalence: a freshly-split generation is a no-op at the
@@ -41,7 +42,7 @@ from nodes.model.lora_phases import (
 from nodes.model.lora_saver import LoRACheckpointSaverNode
 from nodes.model.parameters import ModelParametersNode
 from nodes.train.supervised import SupervisedLoRATrainerNode
-from server.graph_executor import _is_compatible
+from archive.server.graph_executor import _is_compatible
 
 
 class _FakeWrapper:

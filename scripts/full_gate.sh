@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Full regression gate: legacy routes (nodes/server/manager smoke tests)
-# + the new backend suite + frontend syntax check.
+# Full regression gate: legacy routes (nodes/manager smoke tests;
+# server/'s six retired with archive/ in M9) + the new backend suite +
+# frontend syntax check.
 #
 #     scripts/full_gate.sh
 #
@@ -13,7 +14,7 @@ cd "$(dirname "$0")/.."
 
 VENV_PYTHON="${VENV_PYTHON:-/home/okolenmi/comfy/venv/bin/python}"
 
-echo "== legacy suites: nodes + server + manager =="
+echo "== legacy suites: nodes + manager =="
 "$VENV_PYTHON" run_tests.py
 
 echo "== backend suite =="

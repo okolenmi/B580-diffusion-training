@@ -1,9 +1,10 @@
-"""Run every smoke test in the repo -- nodes/, server/, and manager/ --
-in one command, with the right interpreter.
+"""Run every smoke test in the repo -- nodes/ and manager/ -- in one
+command, with the right interpreter. (server/'s six tests retired with
+the archive/ move, M9.)
 
-    python run_tests.py                 # everything (~70 files)
+    python run_tests.py                 # everything (~68 files)
     python run_tests.py memory          # filename-substring filters, same
-    python run_tests.py server manager  # semantics as nodes/smoke_tests/run_all.py
+    python run_tests.py manager         # semantics as nodes/smoke_tests/run_all.py
 
 Exits 0 only if every test that ran exited 0.
 
@@ -32,7 +33,7 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_SUITES = ("nodes", "server", "manager")
+_SUITES = ("nodes", "manager")
 
 
 def _has_torch(python: str) -> bool:

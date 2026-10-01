@@ -5,7 +5,7 @@ call rather than duplicating this construction logic later (see
 docs/design/resources-controller/08-consolidation.md
 for why that matters).
 
-Can't exercise this fully end to end -- core.unet_wrapper.ComfyUNetWrapper
+Can't exercise this fully end to end -- unet_wrapper.ComfyUNetWrapper
 needs ComfyUI's real SDXL UNet class, not installed in this environment
 (every other smoke test in this project that touches UNet construction
 has the same real constraint). So instead: patch ComfyUNetWrapper and
@@ -17,7 +17,6 @@ is left real, unpatched (the fake wrapper's lora_registry is empty, so
 it's a real no-op call, not a mocked one).
 """
 
-import contextlib
 import sys
 from pathlib import Path
 
@@ -25,9 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-import core.unet_wrapper as unet_wrapper_module
-from core.lora import LoRAConfig
-from nodes.model import adapter_injection
+import nodes.model.unet_wrapper as unet_wrapper_module
+from nodes.model.lora import LoRAConfig
 from nodes.model.handle import ModelWeights
 from nodes.model.lora_injector import ComfyUNetLoRANode, build_lora_injected_unet
 from nodes.model.lora_scaling import ClassicLoRAScaling
@@ -48,7 +46,7 @@ def check(condition: bool, message: str):
 
 
 class _RecordingWrapper:
-    """Stands in for core.unet_wrapper.ComfyUNetWrapper -- records its
+    """Stands in for ComfyUNetWrapper -- records its
     own construction args, exposes just enough (.lora_registry,
     .lora_parameters(), .model/.state_dict()) for
     reenable_dora_requires_grad(), ComfyUNetTrainableModel's
@@ -56,17 +54,19 @@ class _RecordingWrapper:
     only needs a registry/state-dict-shaped object (not a real UNet
     forward pass) to work against it for real, not further mocked."""
 
-    def __init__(self, unet_sd, device, dtype, use_checkpoint, lora_config):
+    def __init__(self, unet_sd, device, dtype, use_checkpoint, lora_config,
+                 layer_classes=None):
         self.unet_sd = unet_sd
         self.device = device
         self.dtype = dtype
         self.use_checkpoint = use_checkpoint
         self.lora_config = lora_config
+        self.layer_classes = layer_classes
         self.lora_registry = []
         self.model = torch.nn.Linear(4, 4)  # real nn.Module -- real .state_dict()
 
     def lora_parameters(self):
-        # Mirrors core.unet_wrapper.ComfyUNetWrapper.lora_parameters()'s
+        # Mirrors ComfyUNetWrapper.lora_parameters()'s
         # own real early-return for an empty registry -- this fixture's
         # lora_registry is always [] (no real LoRA layers get injected
         # against a fake unet_sd), so this is that same real code path,
@@ -77,7 +77,7 @@ class _RecordingWrapper:
         return self.model.state_dict()
 
     def to(self, device=None, **kwargs):
-        # Mirrors core.unet_wrapper.ComfyUNetWrapper.to()'s own real
+        # Mirrors ComfyUNetWrapper.to()'s own real
         # behavior exactly (self.model.to(...), then update self.device
         # only if a device was actually given) -- needed for
         # ComfyUNetTrainableModel.offload()/reload()/release(), all of
@@ -89,34 +89,35 @@ class _RecordingWrapper:
 
 
 class _Recorder:
+    """Captures what build_lora_injected_unet() hands the UNet wrapper.
+
+    Only the wrapper call needs intercepting now. It used to also patch
+    `adapter_injection.adapter_strategy_scope`, because that context
+    manager was how the adapter strategy was passed in; it is now an
+    argument (`layer_classes=`) on the very same constructor call, so the
+    strategy is observable right here without a second patch point.
+    """
+
     def __init__(self):
         self.wrapper_calls = []
-        self.scope_calls = []
 
     def install(self):
         recorder = self
 
-        def fake_wrapper(unet_sd, device, dtype, use_checkpoint, lora_config):
+        def fake_wrapper(unet_sd, device, dtype, use_checkpoint, lora_config,
+                         layer_classes=None):
             recorder.wrapper_calls.append(dict(
                 unet_sd=unet_sd, device=device, dtype=dtype,
-                use_checkpoint=use_checkpoint, lora_config=lora_config))
-            return _RecordingWrapper(unet_sd, device, dtype, use_checkpoint, lora_config)
-
-        @contextlib.contextmanager
-        def fake_scope(adapter_strategy, frozen_weight_store_factory=None):
-            recorder.scope_calls.append(dict(
-                adapter_strategy=adapter_strategy,
-                frozen_weight_store_factory=frozen_weight_store_factory))
-            yield
+                use_checkpoint=use_checkpoint, lora_config=lora_config,
+                layer_classes=layer_classes))
+            return _RecordingWrapper(unet_sd, device, dtype, use_checkpoint,
+                                     lora_config, layer_classes)
 
         self._real_wrapper = unet_wrapper_module.ComfyUNetWrapper
-        self._real_scope = adapter_injection.adapter_strategy_scope
         unet_wrapper_module.ComfyUNetWrapper = fake_wrapper
-        adapter_injection.adapter_strategy_scope = fake_scope
 
     def uninstall(self):
         unet_wrapper_module.ComfyUNetWrapper = self._real_wrapper
-        adapter_injection.adapter_strategy_scope = self._real_scope
 
 
 def check_defaults_match_the_old_inline_logic():
@@ -140,12 +141,29 @@ def check_defaults_match_the_old_inline_logic():
     # exactly matching the old inline code's default behavior.
     check(call["lora_config"] == LoRAConfig(rank=64, alpha=1.0, dropout=0.0), call["lora_config"])
 
-    check(len(rec.scope_calls) == 1, f"expected 1 adapter_strategy_scope call, got {len(rec.scope_calls)}")
-    from nodes.model.adapter_strategy import PlainLoRAAdapter
-    check(isinstance(rec.scope_calls[0]["adapter_strategy"], PlainLoRAAdapter),
-          rec.scope_calls[0]["adapter_strategy"])
-    check(rec.scope_calls[0]["frozen_weight_store_factory"] is None,
-          rec.scope_calls[0]["frozen_weight_store_factory"])
+    # The adapter strategy now reaches the wrapper as layer_classes=,
+    # built by adapter_layer_classes(PlainLoRAAdapter(), None) -- the
+    # default strategy, and no frozen_weight_store_factory override.
+    #
+    # Identity is not the assertion here: adapter_layer_classes() returns a
+    # freshly-built class per call (that is what makes it safe to build
+    # during a build at all), so two calls never compare equal. What is
+    # asserted is behavior -- the pair is not the injection walk's own
+    # defaults, and calling it really does route through PlainLoRAAdapter.
+    import torch.nn as _nn
+    from nodes.model.lora import LoRAConv2d, LoRALinear
+    linear_cls, conv_cls = call["layer_classes"]
+    check((linear_cls, conv_cls) != (LoRALinear, LoRAConv2d),
+          "layer_classes is not the injection walk's own default pair, so the "
+          "strategy really is in play")
+    built = linear_cls(_nn.Linear(4, 4), rank=4, alpha=8.0)
+    check(type(built) is LoRALinear,
+          f"the passed linear_cls builds exactly a real LoRALinear via "
+          f"PlainLoRAAdapter (got {type(built).__name__})")
+    built_conv = conv_cls(_nn.Conv2d(2, 2, 1), rank=4, alpha=8.0)
+    check(type(built_conv) is LoRAConv2d,
+          f"the passed conv_cls builds exactly a real LoRAConv2d "
+          f"(got {type(built_conv).__name__})")
     check(model._wrapper is not None, "should return a real ComfyUNetTrainableModel")
     print("    PASS")
 

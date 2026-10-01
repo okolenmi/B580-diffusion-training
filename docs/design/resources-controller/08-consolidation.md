@@ -50,7 +50,7 @@ That constant is a **deliberate**, documented duplicate of a same-named
 constant added to `core/noise_schedule.py` (where `sample_timestep()`
 actually implements those five distributions), not importable from
 there directly -- checked directly, not assumed: `core/__init__.py`
-eagerly imports `core.unet_wrapper` (ComfyUI-dependent) and other heavy
+eagerly imported `core.unet_wrapper` (ComfyUI-dependent) and other heavy
 modules, so anything under `core.*` pulls all of that in at import
 time, which is exactly why the original deferral example
 (`renoise.py`'s `_renoise()`, since retired with the baked-grid format

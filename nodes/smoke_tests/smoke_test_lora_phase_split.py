@@ -1,4 +1,4 @@
-"""Real torch (CPU), real core.lora classes -- no mocks for the actual
+"""Real torch (CPU), real lora.py classes -- no mocks for the actual
 LoRA math. Verifies nodes/model/lora_phases.py:
 
   1. Contracts: LoRAPhaseSplitNode is concrete and correctly typed, and
@@ -13,10 +13,10 @@ LoRA math. Verifies nodes/model/lora_phases.py:
   3. Gradient isolation: only the new generation's parameters ever get a
      gradient after a split.
   4. The strongest check -- round-tripping extract_combined_weights /
-     extract_own_generation_weights through core.lora's own, completely
+     extract_own_generation_weights through lora.py's own, completely
      untouched load_lora_into_model, then comparing forward() output.
      Real interop with proven code, not self-comparison.
-  5. Byte-exact degeneration to core.lora.extract_lora_weights's own
+  5. Byte-exact degeneration to lora.extract_lora_weights's own
      output when nothing was split (no behavior change for the common
      case that doesn't use this feature).
 """
@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 import torch.nn as nn
 
-from core.lora import LoRAConv2d, LoRALinear, extract_lora_weights, load_lora_into_model
+from nodes.model.lora import LoRAConv2d, LoRALinear, extract_lora_weights, load_lora_into_model
 from nodes.model.dora_layer import DoRALinear
 from nodes.model.handle import TrainableModel, TrainedWeightsExportable
 from nodes.model.lora_injector import ComfyUNetLoRANode, ComfyUNetTrainableModel
@@ -46,7 +46,7 @@ from archive.server.graph_executor import _is_compatible
 
 
 class _FakeWrapper:
-    """Minimal stand-in for core.unet_wrapper.ComfyUNetWrapper -- just the
+    """Minimal stand-in for ComfyUNetWrapper -- just the
     two members split_into_new_generation actually touches."""
 
     def __init__(self, registry):
@@ -133,7 +133,7 @@ def check_linear_phase_split():
     torch.testing.assert_close(gen0.lora_B, B0_before)
     print("    PASS: gen0 got zero gradient and is bit-for-bit unchanged after training gen1")
 
-    # Strongest check: combined weights, reloaded through core.lora's own
+    # Strongest check: combined weights, reloaded through lora.py's own
     # (untouched) load_lora_into_model into a fresh single-generation
     # LoRALinear, reproduce the live stacked forward exactly.
     combined = extract_combined_weights(wrapper.lora_registry)
@@ -144,7 +144,7 @@ def check_linear_phase_split():
     load_lora_into_model([("root.proj", None, "proj", fresh)], combined)
     x = torch.randn(10, 8)
     torch.testing.assert_close(fresh(x), gen1(x))
-    print("    PASS: combined checkpoint reloaded via core.lora.load_lora_into_model "
+    print("    PASS: combined checkpoint reloaded via lora.load_lora_into_model "
           "exactly reproduces the live stacked forward pass")
 
     # completed_generation snapshot matches the frozen phase's own weights,
@@ -208,7 +208,7 @@ def check_conv2d_phase_split():
     load_lora_into_model([("root.conv", None, "conv", fresh)], combined)
     x = torch.randn(3, 8, 10, 10)
     torch.testing.assert_close(fresh(x), gen1(x))
-    print("    PASS: combined conv2d checkpoint round-trips exactly through core.lora's "
+    print("    PASS: combined conv2d checkpoint round-trips exactly through lora.py's "
           "own loader (stride/padding/groups all preserved)")
 
     own = extract_own_generation_weights(frozen_snapshot)
@@ -327,8 +327,8 @@ def check_dora_phase_split_extraction():
         print(f"    PASS (raises instead of silently dropping magnitude): {e}")
 
 
-def check_never_split_is_byte_identical_to_core_lora():
-    print("[never split: extract_combined_weights must match core.lora.extract_lora_weights exactly]")
+def check_never_split_is_byte_identical_to_lora_mod():
+    print("[never split: extract_combined_weights must match lora.extract_lora_weights exactly]")
     torch.manual_seed(3)
     base = nn.Linear(6, 5)
     gen0 = LoRALinear(base, rank=4, alpha=17.0)  # alpha != rank on purpose
@@ -382,7 +382,7 @@ def main():
     check_conv2d_phase_split()
     check_three_generation_chain()
     check_dora_phase_split_extraction()
-    check_never_split_is_byte_identical_to_core_lora()
+    check_never_split_is_byte_identical_to_lora_mod()
     check_end_to_end_node()
     print()
     print("=" * 60)

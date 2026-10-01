@@ -154,7 +154,7 @@ class NF4WeightStore(FrozenWeightStore):
         self._numel = weight.numel()
         self._blocksize = blocksize
         # bf16 unless the source was fp16 -- matches this project's own
-        # working precision (see core/lora.py's LoRALinear) rather than
+        # working precision (see nodes/model/lora.py's LoRALinear) rather than
         # assuming bf16 always.
         self._dtype = weight.dtype if weight.dtype == torch.float16 else torch.bfloat16
 

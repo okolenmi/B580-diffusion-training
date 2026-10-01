@@ -11,7 +11,7 @@ wrong, not that a number "looks odd":
   * evaluate(): deterministic across calls (fixed noise), rel == 1 and
     drift == 0 for a LoRA that is a no-op, rel != 1 / drift > 0 once it is
     not, the frozen-base reference is computed once and reused, and both
-    core.lora's gate and the model's train/eval flag are restored;
+    lora.py's gate and the model's train/eval flag are restored;
   * alignment(): with a single scalar parameter and per-bucket sign
     constructed to conflict, cosines come out as -1 and the combined
     direction's alignment flags the losing bucket; orthogonal per-bucket
@@ -56,7 +56,7 @@ def _close(a: float, b: float, tol: float = 1e-4) -> bool:
 # ---- toy models --------------------------------------------------------------------
 
 class _GatedToyModel:
-    """pred = base(xc) + gate * delta * xc. Reads core.lora._current_gate the
+    """pred = base(xc) + gate * delta * xc. Reads lora._current_gate the
     way LoRALinear does, so gate=0 is *exactly* the base output."""
 
     def __init__(self, delta: float):
@@ -66,7 +66,7 @@ class _GatedToyModel:
         self.forwards = 0
 
     def forward(self, xc, t, ctx_emb, y):
-        import core.lora as lora
+        import nodes.model.lora as lora
         self.forwards += 1
         out = self.base_scale * xc.float()
         gate = lora._current_gate
@@ -198,7 +198,7 @@ def check_collect_recovers_x0_eps_and_vpred():
 
 def check_evaluate_noop_lora_is_rel_one_drift_zero():
     print("[evaluate: no-op LoRA -> rel == 1, drift == 0; deterministic; base cached]")
-    import core.lora as lora
+    import nodes.model.lora as lora
     probe = _make_probe(n_items=2, points=2)
     model = _GatedToyModel(delta=0.0)
     r1, detail = probe.evaluate(model, PROCESS)
@@ -217,7 +217,7 @@ def check_evaluate_noop_lora_is_rel_one_drift_zero():
 
 def check_evaluate_sees_a_real_change_and_restores_state():
     print("[evaluate: LoRA that changes the output -> rel != 1, drift > 0; gate & train flag restored]")
-    import core.lora as lora
+    import nodes.model.lora as lora
     probe = _make_probe(n_items=2, points=2)
     model = _GatedToyModel(delta=0.0)
     base_report, _ = probe.evaluate(model, PROCESS)

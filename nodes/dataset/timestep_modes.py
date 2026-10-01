@@ -5,13 +5,15 @@ Deliberately NOT imported from either side that actually implements or
 interprets the modes:
 
  * core.noise_schedule (where the five static distributions are
-   implemented by sample_timestep()) -- core/ has an __init__.py that
-   eagerly imports core.unet_wrapper (ComfyUI-dependent) and
-   core.optimizers, so importing anything under core.* at module load
-   time would require ComfyUI installed just to build the node registry
-   / list nodes in the editor -- exactly what
-   nodegraph_introspect.py's own module docstring promises never happens
-   ("ZERO side effects and ZERO coupling to the rest of the codebase").
+   implemented by sample_timestep()) -- it would now be reachable as
+   nodes.model.*'s sibling too, but importing it at module load time
+   still costs a torch import (and, via core/'s facade, potentially
+   ComfyUI) just to build the node registry or list nodes in the
+   editor -- exactly what nodegraph_introspect.py's own module docstring
+   promises never happens ("ZERO side effects and ZERO coupling to the
+   rest of the codebase"). A Port's `choices` is needed at
+   class-definition time, i.e. module load, so deferring is not an
+   option here.
  * manager/t_sampling.py (where the train-time modes "adaptive" and
    "exact" are interpreted and validated for draw-time t selection) --
    it imports core (and through it torch), and a Port's `choices` is

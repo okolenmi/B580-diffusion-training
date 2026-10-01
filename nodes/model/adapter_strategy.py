@@ -3,7 +3,7 @@ See docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.1 for 
 
 Plain LoRA -- a low-rank pair of matrices added to a frozen weight -- is
 one way to parameterize a trainable delta, not the only one.
-PlainLoRAAdapter wraps core.lora.LoRALinear/LoRAConv2d's math unchanged.
+PlainLoRAAdapter wraps lora.LoRALinear/LoRAConv2d's math unchanged.
 
 wrap() takes two parameters beyond a minimal (frozen, rank, scaling_policy)
 signature, both structurally necessary: `alpha`, since
@@ -14,7 +14,7 @@ not just a weight tensor.
 
 PlainLoRAAdapter honors both BF16WeightStore and NF4WeightStore, checked
 at wrap() time rather than silently ignoring `frozen`. For
-BF16WeightStore, core.lora.LoRALinear/LoRAConv2d's forward() reads its
+BF16WeightStore, lora.LoRALinear/LoRAConv2d's forward() reads its
 own stored base_weight/base_bias buffers directly -- it never calls
 frozen.materialize(). This is behavior-identical to calling
 materialize() every forward pass (materialize() is a no-op passthrough
@@ -23,7 +23,7 @@ For NF4WeightStore, wrap() instead constructs
 nodes/model/nf4_lora_layer.py's NF4LoRALinear/NF4LoRAConv2d, which do
 call frozen.materialize() every forward -- see that module's own
 docstring for why this couldn't be done via composition over
-core.lora.LoRALinear the way DoRAAdapter's layers are.
+lora.LoRALinear the way DoRAAdapter's layers are.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .frozen_weight_store import BF16WeightStore, FrozenWeightStore
-from .lora_class_cache import _real_lora_classes
 from .lora_scaling import LoRAScalingPolicy, _effective_alpha
 
 
@@ -39,12 +38,12 @@ class AdaptedLayer(ABC):
     """Structural contract for whatever AdapterStrategy.wrap() returns --
     a frozen weight combined with a trainable delta. Deliberately
     minimal: just the one member every current consumer
-    (core.lora.extract_lora_weights, nodes/model/lora_phases.py) actually
-    depends on by name. core.lora.LoRALinear/LoRAConv2d already satisfy
+    (lora.extract_lora_weights, nodes/model/lora_phases.py) actually
+    depends on by name. lora.LoRALinear/LoRAConv2d already satisfy
     this exactly (same method, same return shape) -- registered as
-    virtual subclasses below via AdaptedLayer.register(), not by adding
-    this as a base class in core/lora.py, so isinstance()/issubclass()
-    checks work correctly without touching legacy code at all."""
+    virtual subclasses below via AdaptedLayer.register(), rather than
+    adding this as a base class in lora.py, so neither module has to
+    know about the other at import time."""
 
     @abstractmethod
     def get_lora_weights(self):
@@ -62,15 +61,15 @@ class AdapterStrategy(ABC):
         `frozen`: that same layer's weight, already wrapped in a
         FrozenWeightStore -- an AdapterStrategy is free to reject a
         FrozenWeightStore kind it can't honor (see PlainLoRAAdapter).
-        `weight`: core.lora's existing per-block scaling multiplier
+        `weight`: lora.py's existing per-block scaling multiplier
         (LoRAConfig.block_weights), unrelated to LoRAScalingPolicy/
         rank/alpha -- kept as its own parameter to match what
-        core.lora.LoRALinear/LoRAConv2d already take."""
+        lora.LoRALinear/LoRAConv2d already take."""
         ...
 
 
 class PlainLoRAAdapter(AdapterStrategy):
-    """core.lora.LoRALinear/LoRAConv2d math for BF16WeightStore;
+    """lora.LoRALinear/LoRAConv2d math for BF16WeightStore;
     nf4_lora_layer.py's NF4LoRALinear/NF4LoRAConv2d for NF4WeightStore.
     See this module's docstring for the real difference between the two
     paths (only one of them actually calls frozen.materialize())."""
@@ -85,7 +84,7 @@ class PlainLoRAAdapter(AdapterStrategy):
         effective_alpha = _effective_alpha(alpha=alpha, rank=rank, policy=scaling_policy)
 
         if isinstance(frozen, BF16WeightStore):
-            LoRALinear, LoRAConv2d = _real_lora_classes()
+            from .lora import LoRAConv2d, LoRALinear
             _register_legacy_adapted_layers()
             if isinstance(original, nn.Linear):
                 return LoRALinear(original, rank=rank, alpha=effective_alpha,
@@ -124,7 +123,7 @@ class DoRAAdapter(AdapterStrategy):
     """Liu et al., "DoRA: Weight-Decomposed Low-Rank Adaptation"
     (arXiv:2402.09353, ICML 2024 Oral) -- nodes/model/dora_layer.py's
     DoRALinear/DoRAConv2d, built via composition over a real
-    core.lora.LoRALinear/LoRAConv2d (see dora_layer.py's module
+    lora.LoRALinear/LoRAConv2d (see dora_layer.py's module
     docstring for the full derivation, grounded directly in
     HuggingFace PEFT's real implementation). Only BF16WeightStore today
     -- unlike PlainLoRAAdapter, not yet extended to NF4WeightStore
@@ -161,18 +160,18 @@ class DoRAAdapter(AdapterStrategy):
 
 
 def _register_legacy_adapted_layers():
-    """AdaptedLayer.register(core.lora.LoRALinear/LoRAConv2d) -- virtual
-    subclass registration, so isinstance(layer, AdaptedLayer) is True for
-    what PlainLoRAAdapter.wrap() actually returns, without core/lora.py
-    declaring AdaptedLayer as a base class at all. Called from wrap()
-    itself (idempotent -- ABCMeta.register() tolerates being called more
-    than once) rather than at this module's import time, matching this
-    project's rule that importing a nodes/ module for graph introspection
-    alone should never require torch importable (see
+    """AdaptedLayer.register(LoRALinear/LoRAConv2d) -- virtual subclass
+    registration, so isinstance(layer, AdaptedLayer) is True for what
+    PlainLoRAAdapter.wrap() actually returns, without lora.py declaring
+    AdaptedLayer as a base class at all. Called from wrap() itself
+    (idempotent -- ABCMeta.register() tolerates being called more than
+    once) rather than at this module's import time, matching this
+    project's rule that importing a nodes/ module for graph
+    introspection alone should never require torch importable (see
     nodes/model/lora_phases.py's docstring for the same reasoning) --
-    core.lora imports torch at its own module level, so this genuinely
+    lora.py imports torch at its own module level, so this genuinely
     can't run until something -- here, wrap() -- actually needs it."""
-    LoRALinear, LoRAConv2d = _real_lora_classes()
+    from .lora import LoRAConv2d, LoRALinear
     AdaptedLayer.register(LoRALinear)
     AdaptedLayer.register(LoRAConv2d)
 
@@ -195,7 +194,13 @@ def _register_dora_adapted_layers():
     would work today (this module only imports dora_layer.py lazily,
     inside DoRAAdapter.wrap()), but ties the two modules' import
     ordering together for no real benefit over registration, which
-    needs no such care."""
+    needs no such care.
+
+    (Kept as registration rather than inheritance now that lora.py is
+    this project's own code too -- the original reason, not touching
+    read-only reference material, no longer applies. Changing it would
+    be a gratuitous change to code the equivalence tests already pin, so
+    it stays.)"""
     from .dora_layer import DoRAConv2d, DoRALinear
     AdaptedLayer.register(DoRALinear)
     AdaptedLayer.register(DoRAConv2d)

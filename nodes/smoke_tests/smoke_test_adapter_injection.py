@@ -1,14 +1,25 @@
 """Equivalence check for nodes/model/adapter_injection.py's
-adapter_strategy_scope -- live-wiring AdapterStrategy into
-core.lora._inject_lora's real, unmodified targeting logic.
+adapter_layer_classes -- live-wiring AdapterStrategy into
+nodes.model.lora's real targeting logic.
 
 Uses a synthetic UNet-like fixture (nested to_q/to_k/to_v/to_out.0,
 a time_embed Sequential, a block_weights/target_all case) that exercises
-the same targeting rules core.lora._inject_lora actually implements,
-rather than reconstructing ComfyUI's real SDXL UNet (not installed in
-this environment) -- core.lora itself is imported and run completely
-unmodified throughout; only what core.lora.LoRALinear/LoRAConv2d
-temporarily point to changes.
+the same targeting rules `_inject_lora` actually implements, rather than
+reconstructing ComfyUI's real SDXL UNet (not installed in this
+environment) -- the injection walk itself is imported and run
+completely unmodified throughout.
+
+**What changed 2026-10-02, and why most of this file still exists.**
+`adapter_layer_classes` replaces `adapter_strategy_scope`. The scope
+monkeypatched `lora.LoRALinear`/`LoRAConv2d` for the duration of a
+build; now the walk is handed the classes to build as an argument.
+Three checks here were specifically about the patch and are gone as
+behavioral claims, replaced by stronger ones: nothing is rebound so
+there is nothing to restore after an exception, and nothing is shared
+between builds so two concurrent builds cannot interfere. The
+equivalence, delegation, alpha and block-weight checks below all still
+hold and still matter -- they are what proves the argument-passing
+refactor changed the wiring and not the math.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adapter_injection.py`
 """
@@ -22,9 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 import torch.nn as nn
 
-import core.lora as core_lora
-from core.lora import LoRAConfig, inject_lora_into_unet
-from nodes.model.adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
+import nodes.model.lora as lora
+from nodes.model.lora import LoRAConfig, inject_lora_into_unet
+from nodes.model.adapter_injection import adapter_layer_classes, reenable_dora_requires_grad
 from nodes.model.adapter_strategy import AdapterStrategy, DoRAAdapter, PlainLoRAAdapter
 from nodes.model.dora_layer import DoRAConv2d, DoRALinear
 from nodes.model.frozen_weight_store import BF16WeightStore
@@ -69,7 +80,7 @@ class _TransformerBlockLike(nn.Module):
 
 
 class _MiniUNetLike(nn.Module):
-    """Exercises core.lora._inject_lora's real targeting rules -- nested
+    """Exercises lora._inject_lora's real targeting rules -- nested
     to_q/to_k/to_v/to_out.0, a top-level time_embed Sequential
     (segment-boundary match), and a Conv2d only reachable via
     block_weights/target_all -- without needing ComfyUI's real SDXL
@@ -98,7 +109,7 @@ class _ObservableAdapter(AdapterStrategy):
     """Records every wrap() call, then delegates to a real
     PlainLoRAAdapter for the actual returned layer -- so forward/backward
     still works for equivalence checks, while every argument
-    adapter_strategy_scope actually passed is inspectable afterward."""
+    the injection walk actually passed is inspectable afterward."""
 
     def __init__(self):
         self.calls = []
@@ -110,17 +121,20 @@ class _ObservableAdapter(AdapterStrategy):
         return self._delegate.wrap(original, frozen, rank, alpha, scaling_policy, dropout, weight)
 
 
-def check_patched_mechanism_matches_reference_exactly():
-    print("\n=== adapter_strategy_scope(some_other_strategy) delegating internally to a "
-          "real PlainLoRAAdapter() == the real, unpatched reference path ===")
-    # Deliberately NOT PlainLoRAAdapter itself here -- adapter_strategy_scope
-    # skips patching entirely for that (see check_plain_lora_adapter_installs_no_patch_at_all
-    # below), so forcing it through the patch anyway doesn't exercise a real
-    # code path. _ObservableAdapter is a different strategy that delegates
-    # to a real PlainLoRAAdapter() internally -- exactly the shape a future
-    # DoRAAdapter reusing PlainLoRAAdapter's base construction would have,
-    # and exactly what surfaced the real recursion bug this module's fix
-    # (adapter_strategy.py's _real_lora_classes() cache) exists for.
+def check_injected_strategy_matches_reference_exactly():
+    print("\n=== inject_lora_into_unet(layer_classes=...) routing through some_other_strategy "
+          "== the real, unparameterized reference path ===")
+    # _ObservableAdapter is a strategy that delegates to a real
+    # PlainLoRAAdapter() internally -- exactly the shape a future DoRAAdapter
+    # reusing PlainLoRAAdapter's base construction would have.
+    #
+    # Delegation used to be dangerous here. Under the old monkeypatch,
+    # PlainLoRAAdapter re-resolving LoRALinear/LoRAConv2d found the patch and
+    # recursed forever (hit for real while this test was being written), and
+    # lora_class_cache.py existed purely to hand out the real classes to
+    # dodge it. It can't happen now: nothing is rebound, so the import inside
+    # PlainLoRAAdapter resolves to the same class whether or not a strategy
+    # is routing the build.
     model_a, model_b = _same_fixture_pair()
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
 
@@ -132,7 +146,7 @@ def check_patched_mechanism_matches_reference_exactly():
     # different starting points (model_a's injection runs to completion
     # first, advancing the RNG, before model_b's even starts) and
     # lora_A ends up numerically different between them -- a real gap in
-    # an earlier version of this test, not a bug in adapter_strategy_scope
+    # an earlier version of this test, not a bug in the injection walk
     # itself (forward output matched regardless, since it doesn't depend
     # on lora_A while lora_B is still zero -- only the gradient check
     # caught it).
@@ -141,8 +155,8 @@ def check_patched_mechanism_matches_reference_exactly():
 
     observable = _ObservableAdapter()
     torch.manual_seed(100)
-    with adapter_strategy_scope(observable):
-        registry_b = inject_lora_into_unet(model_b, config)
+    registry_b = inject_lora_into_unet(
+        model_b, config, layer_classes=adapter_layer_classes(observable))
 
     names_a = sorted(full_name for full_name, _, _, _ in registry_a)
     names_b = sorted(full_name for full_name, _, _, _ in registry_b)
@@ -156,8 +170,9 @@ def check_patched_mechanism_matches_reference_exactly():
     out_a = model_a(x.clone())
     out_b = model_b(x.clone())
     record(torch.allclose(out_a, out_b, atol=1e-6),
-           "forward output is byte-identical between the real path and the patched "
-           "path (through _ObservableAdapter delegating to a real PlainLoRAAdapter)",
+           "forward output is byte-identical between the real path and the "
+           "strategy-routed path (through _ObservableAdapter delegating to a real "
+           "PlainLoRAAdapter)",
            detail=f"max diff={float((out_a - out_b).abs().max().detach())}")
 
     out_a.sum().backward()
@@ -165,40 +180,42 @@ def check_patched_mechanism_matches_reference_exactly():
     for (_, _, _, layer_a), (_, _, _, layer_b) in zip(registry_a, registry_b):
         if hasattr(layer_a, "lora_A"):
             record(torch.allclose(layer_a.lora_A.grad, layer_b.lora_A.grad, atol=1e-6),
-                   f"lora_A gradient matches for one layer")
+                   "lora_A gradient matches for one layer")
             record(torch.allclose(layer_a.lora_B.grad, layer_b.lora_B.grad, atol=1e-6),
-                   f"lora_B gradient matches for one layer")
+                   "lora_B gradient matches for one layer")
 
 
-def check_plain_lora_adapter_installs_no_patch_at_all():
-    print("\n=== adapter_strategy_scope(PlainLoRAAdapter()): installs nothing, "
-          "core.lora.LoRALinear/LoRAConv2d untouched ===")
-    before_linear, before_conv2d = core_lora.LoRALinear, core_lora.LoRAConv2d
-    with adapter_strategy_scope(PlainLoRAAdapter()):
-        record(core_lora.LoRALinear is before_linear,
-               "core.lora.LoRALinear is the real, original class inside the scope")
-        record(core_lora.LoRAConv2d is before_conv2d,
-               "core.lora.LoRAConv2d is the real, original class inside the scope")
-    record(core_lora.LoRALinear is before_linear and core_lora.LoRAConv2d is before_conv2d,
-           "still untouched after the scope exits")
+def check_injection_never_rebinds_module_globals():
+    print("\n=== no strategy rebinds lora.LoRALinear/LoRAConv2d -- before, during, or after ===")
+    # The property that replaces the entire patch/restore machinery. It held
+    # before for PlainLoRAAdapter specifically (that one combination skipped
+    # the patch as a no-op); it now holds for every strategy, which is the
+    # whole point of the change.
+    before_linear, before_conv2d = lora.LoRALinear, lora.LoRAConv2d
+    model = _MiniUNetLike(dim=8)
+    config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
+    for strategy in (PlainLoRAAdapter(), DoRAAdapter(), _ObservableAdapter()):
+        inject_lora_into_unet(model, config,
+                              layer_classes=adapter_layer_classes(strategy))
+        record(lora.LoRALinear is before_linear and lora.LoRAConv2d is before_conv2d,
+               f"lora.LoRALinear/LoRAConv2d untouched by {type(strategy).__name__}")
+    record(lora.LoRALinear is before_linear and lora.LoRAConv2d is before_conv2d,
+           "still untouched at the end")
 
 
-def check_a_different_strategy_actually_gets_used_and_is_restored_after():
-    print("\n=== adapter_strategy_scope(some_other_strategy): every target routes through "
-          "it, restored after exit ===")
+def check_a_different_strategy_actually_gets_used():
+    print("\n=== layer_classes=some_other_strategy: every target routes through it ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
     observable = _ObservableAdapter()
 
-    before_linear, before_conv2d = core_lora.LoRALinear, core_lora.LoRAConv2d
-    with adapter_strategy_scope(observable):
-        registry = inject_lora_into_unet(model, config)
-    record(core_lora.LoRALinear is before_linear and core_lora.LoRAConv2d is before_conv2d,
-           "core.lora.LoRALinear/LoRAConv2d restored to the real classes after the scope exits")
+    registry = inject_lora_into_unet(
+        model, config, layer_classes=adapter_layer_classes(observable))
 
     record(len(observable.calls) == len(registry) == 10,
            "every one of the 10 real targets went through the custom strategy's wrap(), "
-           "not core.lora's own construction", detail=f"calls={len(observable.calls)}")
+           "not the injection walk's own default construction",
+           detail=f"calls={len(observable.calls)}")
     record(all(isinstance(c["frozen"], BF16WeightStore) for c in observable.calls),
            "each call got a real, per-layer BF16WeightStore wrapping that layer's own weight")
     record(all(isinstance(c["scaling_policy"], ClassicLoRAScaling) for c in observable.calls),
@@ -208,23 +225,22 @@ def check_a_different_strategy_actually_gets_used_and_is_restored_after():
 
 def check_alpha_is_not_double_applied():
     print("\n=== RankStabilizedScaling applied upstream (as ComfyUNetLoRANode.build() does) "
-          "is NOT re-applied inside the patched path ===")
+          "is NOT re-applied inside the strategy ===")
     model_a, model_b = _same_fixture_pair(seed=1)
     rank, nominal_alpha = 4, 8.0
     # Exactly what ComfyUNetLoRANode.build() does: resolve the real
-    # scaling_policy into a single effective alpha BEFORE core.lora ever
-    # runs.
+    # scaling_policy into a single effective alpha BEFORE any adapter is built.
     effective_alpha = _effective_alpha(alpha=nominal_alpha, rank=rank,
                                         policy=RankStabilizedScaling())
     config = LoRAConfig(rank=rank, alpha=effective_alpha, dropout=0.0)
 
-    # Reference: real, unpatched core.lora, given the pre-resolved
+    # Reference: the walk with no layer_classes, given the pre-resolved
     # effective_alpha directly -- exactly what happens today.
     registry_a = inject_lora_into_unet(model_a, config)
 
     observable = _ObservableAdapter()
-    with adapter_strategy_scope(observable):
-        registry_b = inject_lora_into_unet(model_b, config)
+    registry_b = inject_lora_into_unet(
+        model_b, config, layer_classes=adapter_layer_classes(observable))
 
     record(len(observable.calls) > 0, "sanity: the custom strategy was actually invoked")
     record(all(c["alpha"] == effective_alpha for c in observable.calls),
@@ -244,13 +260,13 @@ def check_alpha_is_not_double_applied():
 
 def check_block_weights_and_target_all_flow_through_correctly():
     print("\n=== block_weights + target_all=True: a normally-untargeted Conv2d gets "
-          "adapted with the right weight, through the patched path too ===")
+          "adapted with the right weight, through the strategy too ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0,
                          block_weights={"input_blocks.1": 0.5}, target_all=True)
     observable = _ObservableAdapter()
-    with adapter_strategy_scope(observable):
-        registry = inject_lora_into_unet(model, config)
+    registry = inject_lora_into_unet(
+        model, config, layer_classes=adapter_layer_classes(observable))
 
     proj_calls = [c for c in observable.calls if isinstance(c["original"], nn.Conv2d)]
     record(len(proj_calls) == 1,
@@ -267,21 +283,31 @@ def check_block_weights_and_target_all_flow_through_correctly():
            "input_blocks.0's Conv2d (not named in block_weights) stayed untouched")
 
 
-def check_exception_inside_scope_still_restores():
-    print("\n=== an exception inside the scope still restores the real classes ===")
-    before_linear, before_conv2d = core_lora.LoRALinear, core_lora.LoRAConv2d
-    try:
-        with adapter_strategy_scope(_ObservableAdapter()):
+def check_a_failed_injection_leaves_nothing_behind():
+    print("\n=== a strategy that raises mid-injection leaves no global state to clean up ===")
+    # This used to assert "restored even though the with-block raised",
+    # because there was something to restore. There isn't any more, so a
+    # failed build cannot have corrupted shared state at all -- and there is
+    # no cleanup path left that could itself be wrong.
+    before_linear, before_conv2d = lora.LoRALinear, lora.LoRAConv2d
+
+    class _ExplodingAdapter(AdapterStrategy):
+        def wrap(self, *args, **kwargs):
             raise RuntimeError("simulated failure mid-injection")
+
+    try:
+        inject_lora_into_unet(_MiniUNetLike(dim=8), LoRAConfig(rank=4, alpha=8.0),
+                              layer_classes=adapter_layer_classes(_ExplodingAdapter()))
+        record(False, "the exploding strategy's error propagated")
     except RuntimeError:
-        pass
-    record(core_lora.LoRALinear is before_linear and core_lora.LoRAConv2d is before_conv2d,
-           "restored even though the with-block raised")
+        record(True, "the exploding strategy's error propagated")
+    record(lora.LoRALinear is before_linear and lora.LoRAConv2d is before_conv2d,
+           "lora.LoRALinear/LoRAConv2d still the real classes after a failed build")
 
 
 def check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse():
-    print("\n=== regression: a strategy delegating to a real PlainLoRAAdapter() inside "
-          "the patch does not recurse (RecursionError, hit for real while building this) ===")
+    print("\n=== regression: a strategy delegating to a real PlainLoRAAdapter() does not "
+          "recurse (RecursionError, hit for real while building this) ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
 
@@ -294,30 +320,30 @@ def check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse():
             return PlainLoRAAdapter().wrap(*args, **kwargs)
 
     try:
-        with adapter_strategy_scope(_DelegatingStrategy()):
-            registry = inject_lora_into_unet(model, config)
+        registry = inject_lora_into_unet(
+            model, config, layer_classes=adapter_layer_classes(_DelegatingStrategy()))
     except RecursionError:
-        record(False, "delegating to PlainLoRAAdapter() from inside the patch recursed")
+        record(False, "delegating to PlainLoRAAdapter() from inside the strategy recursed")
         return
     record(len(registry) == 10, "completed without recursing, found all 10 target layers",
            detail=str(len(registry)))
 
 
 def check_dora_layers_end_up_trainable_after_the_real_injection_path():
-    print("\n=== core.unet_wrapper.ComfyUNetWrapper._init_lora() freezes every "
+    print("\n=== ComfyUNetWrapper._init_lora() freezes every "
           "DoRA parameter and never re-enables any of "
           "them -- reenable_dora_requires_grad() fixes it ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
-    with adapter_strategy_scope(DoRAAdapter()):
-        registry = inject_lora_into_unet(model, config)
+    registry = inject_lora_into_unet(
+        model, config, layer_classes=adapter_layer_classes(DoRAAdapter()))
     record(len(registry) == 10 and all(isinstance(layer, (DoRALinear, DoRAConv2d))
                                         for *_, layer in registry),
            "real DoRALinear/DoRAConv2d layers actually got injected",
            detail=str(len(registry)))
 
-    # Exactly core.unet_wrapper.ComfyUNetWrapper._init_lora()'s own two
-    # lines (frozen legacy code -- reproduced verbatim here rather than
+    # Exactly ComfyUNetWrapper._init_lora()'s own two
+    # lines (reproduced verbatim here rather than
     # constructed for real, since that needs ComfyUI's real SDXL UNet,
     # not installed in this environment -- see this file's own module
     # docstring for why a synthetic fixture is used throughout instead).
@@ -367,8 +393,8 @@ def check_reenable_dora_requires_grad_is_a_no_op_for_plain_lora():
           "PlainLoRAAdapter registry -- only ever matches a DoRA layer ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
-    with adapter_strategy_scope(PlainLoRAAdapter()):
-        registry = inject_lora_into_unet(model, config)
+    registry = inject_lora_into_unet(
+        model, config, layer_classes=adapter_layer_classes(PlainLoRAAdapter()))
     for _, _, _, layer in registry:
         layer.lora_A.requires_grad_(False)
         layer.lora_B.requires_grad_(False)
@@ -380,7 +406,7 @@ def check_reenable_dora_requires_grad_is_a_no_op_for_plain_lora():
 
 
 class _FakeWrapperWithLoraParameters:
-    """Minimal stand-in for core.unet_wrapper.ComfyUNetWrapper --
+    """Minimal stand-in for ComfyUNetWrapper --
     ComfyUNetTrainableModel only ever calls .lora_registry,
     .lora_parameters(), and .state_dict() on it. lora_parameters()
     below is that real class's own real logic, reproduced verbatim
@@ -408,14 +434,14 @@ class _FakeWrapperWithLoraParameters:
 
 
 def check_dora_trainable_parameters_and_footprint_bytes():
-    print("\n=== the other half of the same gap: core.unet_wrapper.ComfyUNetWrapper's "
+    print("\n=== the other half of the same gap: ComfyUNetWrapper's "
           "own lora_parameters() also excludes a bare DoRA layer's params from what "
           "an optimizer actually receives -- dora_trainable_parameters() plus "
           "ComfyUNetTrainableModel closes it ===")
     model = _MiniUNetLike(dim=8)
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
-    with adapter_strategy_scope(DoRAAdapter()):
-        registry = inject_lora_into_unet(model, config)
+    registry = inject_lora_into_unet(
+        model, config, layer_classes=adapter_layer_classes(DoRAAdapter()))
     reenable_dora_requires_grad(registry)
 
     wrapper = _FakeWrapperWithLoraParameters(model, registry)
@@ -423,7 +449,7 @@ def check_dora_trainable_parameters_and_footprint_bytes():
 
     bare_call = wrapper.lora_parameters()
     record(len(bare_call) == 0,
-           "confirms the bug: core.unet_wrapper.ComfyUNetWrapper's own "
+           "confirms the bug: ComfyUNetWrapper's own "
            "lora_parameters() logic returns nothing at all for a bare DoRA registry",
            detail=str(len(bare_call)))
 
@@ -468,12 +494,12 @@ def check_dora_trainable_parameters_and_footprint_bytes():
 
 
 def main():
-    check_patched_mechanism_matches_reference_exactly()
-    check_plain_lora_adapter_installs_no_patch_at_all()
-    check_a_different_strategy_actually_gets_used_and_is_restored_after()
+    check_injected_strategy_matches_reference_exactly()
+    check_injection_never_rebinds_module_globals()
+    check_a_different_strategy_actually_gets_used()
     check_alpha_is_not_double_applied()
     check_block_weights_and_target_all_flow_through_correctly()
-    check_exception_inside_scope_still_restores()
+    check_a_failed_injection_leaves_nothing_behind()
     check_a_strategy_that_delegates_to_plain_lora_adapter_does_not_recurse()
     check_dora_layers_end_up_trainable_after_the_real_injection_path()
     check_reenable_dora_requires_grad_is_a_no_op_for_plain_lora()

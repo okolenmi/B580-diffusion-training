@@ -81,7 +81,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
             doc="Only used when gate_enabled=True. Smaller = sharper cutoff right at "
                 "[gate_train_low, gate_train_high]'s edges, larger = more gradual handoff. "
                 "Same parameter, same default, as the legacy pipeline's gate_width "
-                "(core/config_model.py) -- see core/lora.py's compute_lora_gate for the "
+                "(core/config_model.py) -- see nodes/model/lora.py's compute_lora_gate for the "
                 "exact formula and a worked numeric example.",
         ),
         "profile": Port(

@@ -12,7 +12,7 @@ near-duplicate node class for the snapshot case.
 
 Writes the dict straight to safetensors itself rather than going through
 core.save.save_lora_checkpoint -- that legacy function reads weights via
-ComfyUNetWrapper.get_lora_weights(), which core.lora's own isinstance
+ComfyUNetWrapper.get_lora_weights(), which lora.py's own isinstance
 gate would skip for a phase-split model's LoRAGeneration layers (see
 nodes/model/lora_phases.py); ComfyUNetTrainableModel.trained_state_dict()
 already resolves that, and there's nothing left for the legacy function

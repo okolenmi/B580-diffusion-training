@@ -181,7 +181,7 @@ class PrepareDiffusionInputsPhase(StepPhase):
     "fetch a batch" and "run the model" so a different NoiseSchedule/
     Parameterization/ModelInputTransform touches only this phase.
 
-    **LoRA timestep gate.** core/lora.py's set_lora_gate()/
+    **LoRA timestep gate.** nodes/model/lora.py's set_lora_gate()/
     compute_lora_gate() keeps a LoRA's contribution close to the frozen
     base at timesteps outside the dataset's own actually-trained range.
     Wired here at the same point the legacy pipeline calls it (right
@@ -198,7 +198,7 @@ class PrepareDiffusionInputsPhase(StepPhase):
     here don't error -- they just gate against the wrong range silently,
     so this needs to be set deliberately, not guessed.
 
-    Known limitation, inherited from core/lora.py's own design:
+    Known limitation, inherited from nodes/model/lora.py's own design:
     `_current_gate` is a module-level global, not scoped to any one
     model/build -- if a single process ever runs multiple concurrent
     trainer builds, one build's gate could leak into another's forward
@@ -217,7 +217,7 @@ class PrepareDiffusionInputsPhase(StepPhase):
 
     def run(self, state: StepState) -> StepState:
         import torch
-        from core.lora import compute_lora_gate, set_lora_gate
+        from ..model.lora import compute_lora_gate, set_lora_gate
 
         batch = state.batch
         x_t = batch["x_t"].to(state.device)

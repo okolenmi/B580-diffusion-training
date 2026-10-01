@@ -9,8 +9,8 @@ Design: stack a brand new, independent adapter on top of the current one
 instead of merging the current one into the frozen base weights and
 reinitializing it in place. Concretely, each
 LoRAGeneration wraps an `inner` module (either the original
-core.lora.LoRALinear/LoRAConv2d, or an earlier LoRAGeneration) and adds
-its own low-rank delta on top, computed exactly like core.lora's own
+lora.LoRALinear/LoRAConv2d, or an earlier LoRAGeneration) and adds
+its own low-rank delta on top, computed exactly like lora.py's own
 layers (same math, reused via composition -- nothing here reimplements
 LoRA math, it composes another instance of it):
 
@@ -34,7 +34,7 @@ pair along the rank axis produces a single rank-sum(r_i) adapter whose
 output is bit-for-bit (up to ordinary floating-point summation order)
 identical to the live stacked-generations forward pass.
 smoke_test_lora_phase_split.py checks this directly against a fresh
-core.lora.LoRALinear/LoRAConv2d loaded with the combined weights, not
+lora.LoRALinear/LoRAConv2d loaded with the combined weights, not
 just against itself.
 
 The LoRAGeneration classes are built lazily (_generation_classes(), first
@@ -111,7 +111,7 @@ def _generation_classes():
             return base + self._delta(x).to(base.dtype)
 
         def get_lora_weights(self):
-            """Matches core.lora.LoRALinear/LoRAConv2d's own method name
+            """Matches lora.LoRALinear/LoRAConv2d's own method name
             and return shape on purpose -- this generation's *own* raw
             (A, B), not combined with inner's."""
             return self.lora_A, self.lora_B
@@ -124,7 +124,7 @@ def _generation_classes():
             out_features = inner_B.shape[0]
             device = inner_A.device
             # fp32 regardless of the frozen chain's dtype -- same bf16
-            # rounding-to-a-standstill reasoning as core.lora.LoRALinear.
+            # rounding-to-a-standstill reasoning as lora.LoRALinear.
             self.lora_A = nn.Parameter(torch.empty(self.rank, in_features,
                                                      device=device, dtype=torch.float32))
             self.lora_B = nn.Parameter(torch.zeros(out_features, self.rank,
@@ -144,7 +144,7 @@ def _generation_classes():
             rank, in_ch_per_group, kh, kw = inner_A.shape
             out_channels = inner_B.shape[0]
             device = inner_A.device
-            # Propagated from inner (present on both a core.lora.LoRAConv2d
+            # Propagated from inner (present on both a lora.LoRAConv2d
             # and an earlier Conv2dLoRAGeneration, and -- see this class's
             # own _build_params note above -- a DoRAConv2d, which copies
             # these onto itself directly at __init__ rather than nesting
@@ -156,7 +156,7 @@ def _generation_classes():
             self.dilation = self.inner.dilation
             self.groups = self.inner.groups
             if self.rank % self.groups != 0:
-                # The same constraint core.lora.LoRAConv2d's own first
+                # The same constraint lora.LoRAConv2d's own first
                 # conv2d(..., groups=self.groups) already has -- checked
                 # here instead of leaving it to surface as a cryptic
                 # "weight of size [...] instead" from inside F.conv2d.
@@ -176,7 +176,7 @@ def _generation_classes():
                                 self.dilation, self.groups)
             # Second conv is always a plain 1x1 over the rank channels
             # (groups=1), independent of the original layer's own groups --
-            # matches core.lora.LoRAConv2d.forward exactly.
+            # matches lora.LoRAConv2d.forward exactly.
             return F.conv2d(adapter, self.lora_B * self.scaling)
 
     _generation_classes_cache = (LoRAGeneration, LinearLoRAGeneration, Conv2dLoRAGeneration)
@@ -184,7 +184,7 @@ def _generation_classes():
 
 
 def lora_key(full_module_name: str) -> str:
-    """Same convention as core.lora._key_to_lora_key -- this is a stable
+    """Same convention as lora._key_to_lora_key -- this is a stable
     external file-format detail (ComfyUI/Kohya's lora_unet_... naming),
     not a design choice, so reimplementing the two-line mapping here
     (rather than importing a private helper across module boundaries) is
@@ -202,7 +202,7 @@ def _generation_chain(layer):
     """Oldest-first [(A, B, scaling), ...] for `layer` and everything it's
     stacked on top of, down to the original core.lora layer. Returns
     (chain, root) -- root is whatever's at the bottom of the stack: a
-    plain core.lora.LoRALinear/LoRAConv2d, or a DoRALinear/DoRAConv2d if
+    plain lora.LoRALinear/LoRAConv2d, or a DoRALinear/DoRAConv2d if
     this layer was built under DoRAAdapter (see extract_combined_weights'
     use of `root` for exactly why that distinction matters)."""
     LoRAGeneration, _, _ = _generation_classes()
@@ -261,7 +261,7 @@ def _combine_conv_generations(chain, groups: int):
 def extract_combined_weights(registry) -> dict:
     """Every generation folded into one portable (rank, alpha) adapter
     per layer. For a layer that's never been split (the common case),
-    this is byte-identical to core.lora.extract_lora_weights's own
+    this is byte-identical to lora.extract_lora_weights's own
     output -- same tensors, same alpha -- so a model that never uses
     phase-splitting sees zero behavior change from this replacing the
     old extraction call in ComfyUNetTrainableModel.trained_state_dict().
@@ -291,7 +291,7 @@ def extract_combined_weights(registry) -> dict:
     *entire* frozen-base-plus-delta result (see dora_layer.py's module
     docstring), which isn't expressible as "one more rank-stacked LoRA
     generation" the way a plain generation's delta is -- there is no
-    single combined (A, B) pair a fresh core.lora.LoRALinear could load
+    single combined (A, B) pair a fresh lora.LoRALinear could load
     that reproduces a DoRA base's magnitude-scaled contribution, so
     silently emitting one here would ship a checkpoint that quietly
     drops the trained magnitude's effect entirely, indistinguishable
@@ -376,7 +376,7 @@ def split_into_new_generation(wrapper, rank: int, alpha: float, dropout: float =
     """Freeze every LoRA layer currently in `wrapper.lora_registry` and
     stack a fresh, independently-trainable generation on each. Mutates
     `wrapper` in place (swaps the live module-tree references via
-    setattr, exactly like core.lora's own injection does, plus updates
+    setattr, exactly like lora.py's own injection does, plus updates
     wrapper.lora_registry so lora_parameters()/get_lora_weights()/
     merge_lora() keep working against whatever's now on top).
 
@@ -386,7 +386,7 @@ def split_into_new_generation(wrapper, rank: int, alpha: float, dropout: float =
 
     Real, previously-broken case, fixed here rather than left for later:
     freezing used to reach for `layer.lora_A`/`layer.lora_B` directly,
-    which only exist on a plain core.lora.LoRALinear/LoRAConv2d -- a
+    which only exist on a plain lora.LoRALinear/LoRAConv2d -- a
     DoRALinear/DoRAConv2d (nodes/model/dora_layer.py) holds its A/B
     nested one level down (`self._lora.lora_A`), built via composition,
     not inheritance (see that module's docstring for why), so this

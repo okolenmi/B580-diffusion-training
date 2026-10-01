@@ -3,7 +3,7 @@
 nodes/model/lora_injector.py's module docstring for the derivation).
 
 The crux: _effective_alpha() is checked against the REAL
-core.lora.LoRALinear formula directly, not just its own algebra -- the
+LoRALinear formula directly, not just its own algebra -- the
 same discipline as every other equivalence test in this project.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_lora_scaling_policy.py`
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch.nn as nn
 
-from core.lora import LoRALinear
+from nodes.model.lora import LoRALinear
 from nodes.model.lora_injector import (ClassicLoRAScaling, LoRAScalingPolicy,
                                         RankStabilizedScaling, _effective_alpha)
 
@@ -40,13 +40,13 @@ def check_formulas():
            "RankStabilizedScaling == alpha/sqrt(rank)")
 
 
-def check_seam_against_real_core_lora():
+def check_seam_against_real_lora_mod():
     """The actual point of this test: _effective_alpha(), fed into a real
-    core.lora.LoRALinear (not reimplemented, not mocked), must produce
+    LoRALinear (not reimplemented, not mocked), must produce
     exactly the scaling the policy asked for -- checked against the
     legacy class's own formula executing for real, not against my own
     derivation of it."""
-    print("\n=== _effective_alpha(), fed through the real core.lora.LoRALinear ===")
+    print("\n=== _effective_alpha(), fed through the real LoRALinear ===")
     original = nn.Linear(8, 8)
     alpha, rank, weight = 2.0, 64, 1.0
 
@@ -95,7 +95,7 @@ def check_policy_contract():
 
 def main():
     check_formulas()
-    check_seam_against_real_core_lora()
+    check_seam_against_real_lora_mod()
     check_classic_is_true_zero_behavior_change()
     check_policy_contract()
 

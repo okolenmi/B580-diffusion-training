@@ -2,7 +2,7 @@
 (AdaptedLayer/AdapterStrategy/PlainLoRAAdapter).
 
 The crux, same discipline as smoke_test_lora_scaling_policy.py: checked
-against constructing a real core.lora.LoRALinear/LoRAConv2d directly, not
+against constructing a real LoRALinear/LoRAConv2d directly, not
 against my own derivation of what PlainLoRAAdapter.wrap() should do.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_adapter_strategy.py`
@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch.nn as nn
 
-from core.lora import LoRAConv2d, LoRALinear
+from nodes.model.lora import LoRAConv2d, LoRALinear
 from nodes.model.adapter_strategy import AdaptedLayer, AdapterStrategy, PlainLoRAAdapter
 from nodes.model.frozen_weight_store import BF16WeightStore, FrozenWeightStore
 from nodes.model.lora_injector import ClassicLoRAScaling, RankStabilizedScaling
@@ -32,7 +32,7 @@ def record(ok: bool, name: str, detail: str = ""):
 
 
 def check_wrap_linear_matches_direct_construction():
-    print("\n=== PlainLoRAAdapter.wrap() on nn.Linear matches core.lora.LoRALinear directly ===")
+    print("\n=== PlainLoRAAdapter.wrap() on nn.Linear matches LoRALinear directly ===")
     original = nn.Linear(8, 6)
     rank, alpha = 4, 2.0
     adapted = PlainLoRAAdapter().wrap(
@@ -51,7 +51,7 @@ def check_wrap_linear_matches_direct_construction():
 
 
 def check_wrap_conv2d_matches_direct_construction():
-    print("\n=== PlainLoRAAdapter.wrap() on nn.Conv2d matches core.lora.LoRAConv2d directly ===")
+    print("\n=== PlainLoRAAdapter.wrap() on nn.Conv2d matches LoRAConv2d directly ===")
     original = nn.Conv2d(4, 8, kernel_size=3, stride=2, padding=1)
     rank, alpha = 4, 1.5
     adapted = PlainLoRAAdapter().wrap(

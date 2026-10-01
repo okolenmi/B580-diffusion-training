@@ -94,7 +94,7 @@ Found in a second pass, deliberately looking for other instances of the
 same pattern, and by far the most severe of the four: **a real DoRA
 training run through `ComfyUNetLoRANode(adapter_strategy=DoRAAdapter())`
 trained nothing at all**, in two independent, both-necessary ways.
-`core.unet_wrapper.ComfyUNetWrapper._init_lora()` (frozen legacy code)
+`unet_wrapper.ComfyUNetWrapper._init_lora()`
 freezes every model parameter, then re-enables `requires_grad` only for
 whatever passes `hasattr(layer, "lora_A")` -- False for a bare DoRA
 layer, so `lora_A`, `lora_B`, and `magnitude` (which that function

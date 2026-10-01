@@ -8,7 +8,7 @@
 
 Plain LoRA -- a low-rank pair of matrices added to a frozen weight -- is
 one way to parameterize a trainable delta, not the only one. Today's
-`core.lora`-wrapping code hardcodes it as the only option; this section
+`lora.py`-wrapping code hardcodes it as the only option; this section
 makes it an explicit choice.
 
 **Implemented**: `DoRAAdapter` -- Liu et al., "DoRA: Weight-Decomposed
@@ -38,14 +38,14 @@ recomputed. `||base_weight + scaling*BA||`'s gradient is detached, per
 the paper's own section 4.3 (quoted directly in PEFT's source).
 
 **A real, deliberate extension beyond PEFT**: the LoRA timestep gate
-(`core.lora.py`'s `set_lora_gate()`/`compute_lora_gate()`) applies to
+(`lora.py`'s `set_lora_gate()`/`compute_lora_gate()`) applies to
 the entire DoRA delta, not just the raw LoRA term inside it, matching
 `LoRALinear`'s own gate semantics exactly -- `gate=0` produces exactly
 the frozen base output. PEFT has no equivalent concept (no LLM
 fine-tuning analogue to "only some timesteps were in the training
 data").
 
-**Built via composition over a real `core.lora.LoRALinear`/`LoRAConv2d`**,
+**Built via composition over a real `LoRALinear`/`LoRAConv2d`**,
 not a second implementation of parameter setup -- only the forward math
 is genuinely new. Same store support as `PlainLoRAAdapter`, including
 `NF4WeightStore` (3.3) via `NF4LoRALinear`/`NF4LoRAConv2d`.
@@ -58,38 +58,44 @@ second conformance checked against it) exists, **and is now live-wired
 into `ComfyUNetLoRANode`'s real construction path** --
 `nodes/model/adapter_injection.py`'s `adapter_strategy_scope`, a new
 `adapter_strategy` port (default `None` -> `PlainLoRAAdapter()`, so
-nothing wired to this Node today changes). Neither modifying
-`core/lora.py` (against this project's standing rule) nor re-deriving
-`_inject_lora`'s tree-walk inside `nodes/` turned out to be necessary:
-`_inject_lora` constructs its target layers by calling
-`LoRALinear(...)`/`LoRAConv2d(...)` as plain module-level names, which
-Python resolves from `core.lora`'s own namespace at call time -- a real,
-exploitable seam. `adapter_strategy_scope` temporarily replaces what
-those two names point to for the duration of one `ComfyUNetWrapper(...)`
-construction call, restored on every exit (exception or not), so
-`_inject_lora`'s real, unmodified, already-correct targeting logic keeps
-running exactly as before -- only what happens at each target it finds
-changes. `PlainLoRAAdapter` selected (the default) installs no patch at
-all, since it *is* `core.lora`'s own behavior by definition -- there's
-nothing to intercept.
+nothing wired to this Node today changes). `_inject_lora`'s targeting
+logic was never re-derived inside `nodes/` -- it moved there intact.
 
-**A real recursion hazard, found by hitting it, not by predicting it in
-advance**, and now fixed generally rather than routed around: any
-`AdapterStrategy` whose `wrap()` internally constructs real
-`LoRALinear`/`LoRAConv2d` (`PlainLoRAAdapter` does; a future
-`DoRAAdapter` reusing `PlainLoRAAdapter`'s base construction naturally
-would too) would, if it re-imported those classes live from `core.lora`
-while a patch is active, resolve to the patch itself and recurse
-forever. Fixed with a small cache
-(`adapter_strategy.py`'s `_real_lora_classes()`/`_real_lora_classes_cache`)
-that `adapter_strategy_scope` populates with the real classes at the one
-moment they're still guaranteed real -- immediately before patching --
-so `PlainLoRAAdapter.wrap()` gets the real ones regardless of what's
-currently patched or what's calling it.
+**Superseded 2026-10-02, and the supersession is the interesting part.**
+This originally worked by *not* touching `core/lora.py` (per the standing
+rule) and exploiting a seam instead: `_inject_lora` constructed its
+target layers by calling `LoRALinear(...)`/`LoRAConv2d(...)` as plain
+module-level names, which Python resolves from `core.lora`'s own
+namespace at call time, so `adapter_strategy_scope` temporarily rebound
+those two names for the duration of one `ComfyUNetWrapper(...)` call --
+restored on every exit -- and `_inject_lora`'s real targeting logic kept
+running unchanged. A clever way to avoid editing a file you were not
+supposed to edit, and it cost more than the edit would have:
+
+* a **concurrency hazard**, admitted in the code's own docstring: two
+  builds at once would patch each other's targets;
+* **a recursion hazard**, found by hitting it -- any strategy whose
+  `wrap()` constructs real `LoRALinear`/`LoRAConv2d` (which
+  `PlainLoRAAdapter` itself does) would re-import them and find the
+  patch, recursing forever. Worked around with
+  `_real_lora_classes()`/`_real_lora_classes_cache`, a side channel whose
+  only job was to hand out the real classes;
+* **four silently-wrong `isinstance` gates** in
+  `extract_lora_weights`/`load_lora_into_model`/`merge_lora_into_unet`/
+  `lora_param_count`, which checked the rebound names and so skipped
+  every DoRA and NF4 layer -- the reason
+  `reenable_dora_requires_grad()` and `dora_trainable_parameters()` exist.
+
+`core/lora.py` is now `nodes/model/lora.py`, so the rule that forbade
+the edit no longer applies to this file. `_inject_lora` takes
+`layer_classes` as an argument and `adapter_layer_classes()` supplies
+the pair; there is no scope to enter, nothing to restore, nothing
+shared between builds, no recursion to dodge, and the gates now test the
+classes that were actually injected.
 
 Also fixed while landing this: `ComfyUNetLoRANode.build()` already
 resolves `scaling_policy` into a single effective alpha *before*
-`core.lora` ever runs (3.2's seam) -- so the `alpha` `_inject_lora` hands
+`lora.py` runs (3.2's seam) -- so the `alpha` `_inject_lora` hands
 to each target is already final. `adapter_strategy_scope`'s patched
 construction always passes `ClassicLoRAScaling()` (a proven identity on
 an already-effective alpha) as `wrap()`'s `scaling_policy` argument,

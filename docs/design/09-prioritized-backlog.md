@@ -83,18 +83,19 @@ missing is a real run:**
   `manager/`'s own use). Three sub-pieces remain, and they are not
   equally hard:
 
-  - **`nodes/model/` LoRA/UNet injection** (`core.lora`,
-    `core.unet_wrapper`). Genuinely larger than either domain that just
-    went, and the reason is structural rather than a matter of volume:
-    `core.unet_wrapper.ComfyUNetWrapper` is the *model* every LoRA path
-    in the graph is built on, and `core.lora._inject_lora` is a tree-walk
-    that resolves `LoRALinear`/`LoRAConv2d` as module-level names at
-    call time, which is exactly what
-    `nodes/model/adapter_injection.py`'s `adapter_strategy_scope` patches
-    in order to substitute the rewrite's own DoRA/NF4 layers. Unwiring
-    this means owning the injection walk, and that patch is load-bearing
-    for every non-plain adapter strategy -- it is not a thin import the
-    way the text encoder was.
+  - ~~**`nodes/model/` LoRA/UNet injection** (`core.lora`,
+    `core.unet_wrapper`)~~ -- **done 2026-10-02.** This was the one
+    flagged as "not a thin import": `core.unet_wrapper` is the *model*
+    every LoRA path is built on, and `core.lora._inject_lora` resolved
+    `LoRALinear`/`LoRAConv2d` as module-level names at call time, which
+    is what `adapter_injection.py` patched in place to substitute DoRA
+    and NF4 layers. Owning the file made that patch unnecessary --
+    `_inject_lora` now takes the classes as an argument -- which removed
+    a documented concurrent-build race, deleted `lora_class_cache.py`
+    entirely, and fixed four `isinstance` gates that had been silently
+    skipping every DoRA and NF4 layer. `nodes/` now imports nothing from
+    `core/`; `core/{lora,unet_wrapper,clip_encode,seed}.py` are re-export
+    shims for `core/`'s own use.
   - **`nodes/dataset/managed.py`** (`manager.loader`, and through it
     `manager/t_sampling.py` -> `core.noise_schedule.sample_timestep` and
     `core.model_io.make_init_noise`, `core.seed.derive_seed`). Note the
@@ -105,9 +106,14 @@ missing is a real run:**
     the backend's dataset ingestion path rather than anything `nodes/`
     reaches.
 
-  Real future work, not cleanup debt. Start with the dataset piece: it is
-  the smallest, and unlike the model piece nothing depends on the
-  arrangement of the code it would move.
+  So dataset ingestion is now the only domain left to unwire. It is
+  worth doing deliberately rather than by following the pattern above:
+  the other two were relocations of self-contained modules, whereas here
+  the dependency runs the opposite direction -- `manager/` is the
+  implementation and `nodes/dataset/managed.py` calls into it. Deciding
+  which side owns `sample_timestep`, `make_init_noise` and the dataset
+  loading is the actual content of that piece, and the move is only the
+  easy half.
 
 **Not recommended as near-term work, with reasoning kept where it's
 argued in full:** `ComponentRegistry`/`TrainingRecipe`/`PipelineFactory`

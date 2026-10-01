@@ -67,7 +67,7 @@ in what's actually there rather than guessed at:
 - **Composition-over-inheritance already has a real precedent here for
   exactly this kind of two-axis combination.** `DoRALinear`
   (`nodes/model/dora_layer.py`) deliberately wraps
-  `core.lora.LoRALinear` via composition rather than inheriting from
+  `lora.LoRALinear` via composition rather than inheriting from
   it. The bugs fixed in the previous two patches
   (`split_into_new_generation`, `reenable_dora_requires_grad`,
   `dora_trainable_parameters`) were all downstream of code elsewhere

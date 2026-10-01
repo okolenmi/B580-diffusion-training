@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import core.lora as core_lora
+import nodes.model.lora as lora
 from nodes.model.adapter_strategy import AdaptedLayer, DoRAAdapter, PlainLoRAAdapter
 from nodes.model.dora_layer import DoRAConv2d, DoRALinear
 from nodes.model.frozen_weight_store import BF16WeightStore
@@ -154,11 +154,11 @@ def check_gate_zero_produces_exactly_the_frozen_base_output():
         opt.step()
 
     x = torch.randn(3, 6)
-    core_lora.set_lora_gate(torch.zeros(3))
+    lora.set_lora_gate(torch.zeros(3))
     try:
         out = layer(x)
     finally:
-        core_lora.set_lora_gate(None)
+        lora.set_lora_gate(None)
     ref = F.linear(x, layer._lora.base_weight, layer._lora.base_bias)
     record(torch.allclose(out, ref, atol=1e-5),
            "gate=0 -> exactly base_weight's own forward, even though magnitude/lora_A/"
@@ -191,7 +191,7 @@ def check_magnitude_is_a_real_trainable_parameter():
 def check_adapted_layer_conformance():
     print("\n=== DoRALinear/DoRAConv2d conform to AdaptedLayer ===")
     # Registration happens lazily inside DoRAAdapter.wrap() (same pattern
-    # as _register_legacy_adapted_layers() for core.lora's classes) --
+    # as _register_legacy_adapted_layers() for lora.py's classes) --
     # constructing DoRALinear/DoRAConv2d directly, as this test does,
     # bypasses that, so trigger it explicitly rather than relying on
     # another test having already called wrap() first.
@@ -262,27 +262,27 @@ def check_dora_adapter_wrap_contract():
         record(True, "wrap() rejects an unsupported original module type")
 
 
-def check_dora_through_adapter_strategy_scope_end_to_end():
-    print("\n=== DoRAAdapter through the real adapter_strategy_scope mechanism "
+def check_dora_through_the_real_injection_path_end_to_end():
+    print("\n=== DoRAAdapter through the real adapter_layer_classes mechanism "
           "(not just standalone construction) -- same target set as PlainLoRAAdapter, "
           "identity at init holds end-to-end ===")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from smoke_test_adapter_injection import _MiniUNetLike, _same_fixture_pair
-    from core.lora import LoRAConfig, inject_lora_into_unet
-    from nodes.model.adapter_injection import adapter_strategy_scope
+    from nodes.model.lora import LoRAConfig, inject_lora_into_unet
+    from nodes.model.adapter_injection import adapter_layer_classes
 
     model_plain, model_dora = _same_fixture_pair()
     config = LoRAConfig(rank=4, alpha=8.0, dropout=0.0)
 
     registry_plain = inject_lora_into_unet(model_plain, config)
-    with adapter_strategy_scope(DoRAAdapter()):
-        registry_dora = inject_lora_into_unet(model_dora, config)
+    registry_dora = inject_lora_into_unet(
+        model_dora, config, layer_classes=adapter_layer_classes(DoRAAdapter()))
 
     names_plain = sorted(n for n, _, _, _ in registry_plain)
     names_dora = sorted(n for n, _, _, _ in registry_dora)
     record(names_plain == names_dora,
            "DoRAAdapter targets exactly the same layers PlainLoRAAdapter does "
-           "(same core.lora._inject_lora targeting logic, unmodified either way)")
+           "(same _inject_lora targeting logic, unmodified either way)")
     record(all(isinstance(layer, DoRALinear) for _, _, _, layer in registry_dora),
            "every targeted layer really is a DoRALinear (this fixture has no Conv2d "
            "targets under default rules)")
@@ -308,7 +308,7 @@ def main():
     check_adapted_layer_conformance()
     check_load_lora_weights_vs_load_dora_weights()
     check_dora_adapter_wrap_contract()
-    check_dora_through_adapter_strategy_scope_end_to_end()
+    check_dora_through_the_real_injection_path_end_to_end()
 
     print("\n" + "=" * 60)
     if failures:

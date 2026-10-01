@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import core.lora as core_lora
+import nodes.model.lora as lora_mod
 from nodes.model.adapter_strategy import AdaptedLayer, PlainLoRAAdapter
 from nodes.model.frozen_weight_store import BF16WeightStore
 from nodes.model.lora_scaling import ClassicLoRAScaling
@@ -132,11 +132,11 @@ def check_gate_zero_produces_exactly_the_dequantized_base_output():
         opt.step()
 
     x = torch.randn(3, 64, dtype=torch.bfloat16)
-    core_lora.set_lora_gate(torch.zeros(3))
+    lora_mod.set_lora_gate(torch.zeros(3))
     try:
         out = layer(x)
     finally:
-        core_lora.set_lora_gate(None)
+        lora_mod.set_lora_gate(None)
     ref = F.linear(x, frozen.materialize(), layer.base_bias)
     record(torch.allclose(out, ref, atol=1e-5),
            "gate=0 -> exactly the dequantized base's own forward",
@@ -196,26 +196,26 @@ def check_adapted_layer_conformance_and_wrap_dispatch():
     record(isinstance(result_conv, NF4LoRAConv2d), "wrap() on nn.Conv2d + NF4WeightStore "
            "returns an NF4LoRAConv2d")
 
-    # Confirm BF16WeightStore still takes the real core.lora.LoRALinear path
+    # Confirm BF16WeightStore still takes the real LoRALinear path
     # -- this class's new NF4 branch must not have disturbed the existing one.
     frozen_bf16 = BF16WeightStore(linear.weight)
     result_bf16 = adapter.wrap(linear, frozen_bf16, rank=2, alpha=4.0,
                                 scaling_policy=ClassicLoRAScaling())
-    LoRALinear, _ = core_lora.LoRALinear, core_lora.LoRAConv2d
+    LoRALinear, _ = lora_mod.LoRALinear, lora_mod.LoRAConv2d
     record(type(result_bf16).__name__ == "LoRALinear",
-           "BF16WeightStore still dispatches to the real core.lora.LoRALinear, unchanged",
+           "BF16WeightStore still dispatches to the real LoRALinear, unchanged",
            detail=type(result_bf16).__name__)
 
 
-def check_end_to_end_through_adapter_strategy_scope():
+def check_end_to_end_through_the_real_injection_path():
     print("\n=== frozen_weight_store_factory=NF4WeightStore through the real "
-          "adapter_strategy_scope mechanism, with PlainLoRAAdapter (the default "
-          "adapter_strategy) -- the exact case that would have silently done nothing "
+          "adapter_layer_classes mechanism, with PlainLoRAAdapter (the default "
+          "adapter_strategy) -- the case that would have silently done nothing "
           "under the old 'skip patching for PlainLoRAAdapter' rule ===")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from smoke_test_adapter_injection import _MiniUNetLike, _same_fixture_pair
-    from core.lora import LoRAConfig, inject_lora_into_unet
-    from nodes.model.adapter_injection import adapter_strategy_scope
+    from nodes.model.lora import LoRAConfig, inject_lora_into_unet
+    from nodes.model.adapter_injection import adapter_layer_classes
 
     model_bf16, model_nf4 = _same_fixture_pair()
     model_bf16 = model_bf16.to(torch.bfloat16)
@@ -224,14 +224,12 @@ def check_end_to_end_through_adapter_strategy_scope():
 
     registry_bf16 = inject_lora_into_unet(model_bf16, config)
 
-    before_linear = core_lora.LoRALinear
-    with adapter_strategy_scope(PlainLoRAAdapter(), NF4WeightStore):
-        record(core_lora.LoRALinear is not before_linear,
-               "the patch IS installed for PlainLoRAAdapter + NF4WeightStore "
-               "(the old 'always skip for PlainLoRAAdapter' rule would have been wrong "
-               "here -- confirmed fixed)")
-        registry_nf4 = inject_lora_into_unet(model_nf4, config)
-    record(core_lora.LoRALinear is before_linear, "restored after the scope exits")
+    before_linear = lora_mod.LoRALinear
+    registry_nf4 = inject_lora_into_unet(
+        model_nf4, config,
+        layer_classes=adapter_layer_classes(PlainLoRAAdapter(), NF4WeightStore))
+    record(lora_mod.LoRALinear is before_linear,
+           "NF4WeightStore routed through the real strategy without rebinding anything")
 
     names_bf16 = sorted(n for n, _, _, _ in registry_bf16)
     names_nf4 = sorted(n for n, _, _, _ in registry_nf4)
@@ -260,7 +258,7 @@ def main():
     check_gradients_and_parameter_membership()
     check_footprint_is_real_not_hiding_a_bf16_copy()
     check_adapted_layer_conformance_and_wrap_dispatch()
-    check_end_to_end_through_adapter_strategy_scope()
+    check_end_to_end_through_the_real_injection_path()
 
     print("\n" + "=" * 60)
     if failures:

@@ -395,7 +395,7 @@ class FetchBatchPhase(ManagedStepPhase):
 
 class PrepareDiffusionInputsPhase(ManagedStepPhase):
     """x_t/target/t onto the device, noise schedule + input scaling, and
-    the same LoRA timestep gate (core/lora.py) the main route's own
+    the same LoRA timestep gate (nodes/model/lora.py) the main route's own
     equivalent phase wires -- no residency concern of its own (model
     isn't touched yet), and no reason for this project's LoRA-gate math
     itself to have two implementations."""
@@ -410,7 +410,7 @@ class PrepareDiffusionInputsPhase(ManagedStepPhase):
         self._gate_width = gate_width
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
-        from core.lora import compute_lora_gate, set_lora_gate
+        from ..model.lora import compute_lora_gate, set_lora_gate
 
         batch = state.batch
         x_t = batch["x_t"].to(state.device)
@@ -1005,7 +1005,7 @@ class ManagedLoRATrainerNode(TrainerNode):
         "gate_enabled": Port(
             name="gate_enabled", type=bool, required=False, default=False,
             doc="Off by default. See SupervisedLoRATrainerNode's identically-named port "
-                "for the full explanation -- same mechanism, same core/lora.py functions.",
+                "for the full explanation -- same mechanism, same nodes/model/lora.py functions.",
         ),
         "gate_train_low": Port(name="gate_train_low", type=float, required=False, default=0.0,
                                 visible_when=("gate_enabled", True)),

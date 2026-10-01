@@ -32,7 +32,7 @@ class LoRAScalingPolicy(ABC):
 
 
 class ClassicLoRAScaling(LoRAScalingPolicy):
-    """Today's actual behavior -- core.lora's existing alpha/rank formula,
+    """Today's actual behavior -- lora.py's existing alpha/rank formula,
     unchanged. Default, so nothing wired to this Node today changes."""
 
     def scaling(self, alpha: float, rank: int) -> float:

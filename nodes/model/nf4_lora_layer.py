@@ -6,7 +6,7 @@ section 3.3 and docs/design/09-prioritized-backlog.md section 10 for the
 design rationale (this was the single remaining construction item in
 the original backlog).
 
-**Not built via composition over core.lora.LoRALinear**, unlike
+**Not built via composition over lora.LoRALinear**, unlike
 DoRALinear -- deliberately. LoRALinear.__init__ captures the frozen
 base weight as a real bf16 buffer directly from `original.weight`
 (`self.register_buffer("base_weight", original.weight.detach())`), which
@@ -20,7 +20,7 @@ NF4WeightStore's own documented caching decision ("re-dequantize on
 every materialize() call, never cache the dequantized bf16 result
 across calls").
 
-Otherwise matches core.lora.LoRALinear/LoRAConv2d's real math and
+Otherwise matches lora.LoRALinear/LoRAConv2d's real math and
 conventions as closely as the composition constraint above allows,
 confirmed against that source directly (not recalled): same fp32
 lora_A/lora_B convention and the same reasoning for it (bf16 rounds an
@@ -52,7 +52,7 @@ data) means `frozen.materialize()` is already a lossy approximation of
 the original weight. What IS held to the same bar as every other layer
 in this codebase: given whatever `frozen.materialize()` actually
 returns, the LoRA forward/backward math built on top of it is exactly
-what core.lora.LoRALinear/LoRAConv2d would compute given that same
+what lora.LoRALinear/LoRAConv2d would compute given that same
 tensor as their own base_weight -- see
 nodes/smoke_tests/smoke_test_nf4_lora_layer.py for that equivalence
 check, done against a fixed dequantized reference specifically so

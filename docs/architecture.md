@@ -39,13 +39,35 @@ moved to `nodes/model/clip_encoder.py` (it was self-contained, so this
 was a relocation, not a reimplementation), and `core/clip_encode.py` is
 now a re-export shim for `core/`'s and `manager/`'s own use.
 
-LoRA/UNet injection and dataset ingestion still wrap `core/`/`manager/`
-directly (tracked in `docs/design/09-prioritized-backlog.md`), and those
-are harder than the two that just went: `core.unet_wrapper.ComfyUNetWrapper`
-is the model every LoRA path in the graph is built on, and `core.lora`'s
-`_inject_lora` is a tree-walk that `nodes/` substitutes its own layer
-classes into by patching module-level names. Wrapping is the fallback
-for a domain nobody's rewritten yet, not a destination.
+LoRA/UNet injection went the same way on 2026-10-02, and it bought more
+than a boundary: `SDXLClipEncoder`, `LoRALinear`/`LoRAConv2d`, the
+`_inject_lora` walk, `ComfyUNetWrapper` and `derive_seed` all moved into
+`nodes/`. `nodes/` now imports nothing from `core/` at all.
+
+Because `nodes/` owned the injection walk, `_inject_lora` could be given
+the layer classes to build as an argument instead of having `nodes/`
+monkeypatch the walk's module globals to change what it constructed --
+which removed a documented race between two concurrent builds, removed
+`lora_class_cache.py` (a side channel that existed only to hand out the
+real classes to the patch), and fixed four `isinstance` gates that had
+been silently answering the wrong question under a patch and skipping
+every DoRA and NF4 layer.
+
+**What still reaches into `core/`:** only the backend, and only for
+things that are genuinely shared rather than unwired --
+`core.config_io`/`core.config_model` (the TOML schema the UI's config
+editor round-trips and the trainer reads), `core.comfy_setup`'s
+`xpu_empty_cache` (the graph runtime's memory releaser), and
+`core.xpu_env` (SYCL variables, which must be set before anything
+touches a device). `core/lora.py`, `core/unet_wrapper.py`,
+`core/seed.py` and `core/clip_encode.py` are re-export shims kept for
+`core/`'s own trainer and `manager/`; they are not dependencies of the
+node graph any more.
+
+Dataset ingestion is the remaining unwired domain, and it is inverted
+relative to everything else: `nodes/dataset/managed.py` does not depend
+on `manager/`, `manager/` is the implementation and `nodes/` calls into
+it (tracked in `docs/design/09-prioritized-backlog.md`).
 
 ## Design principles, in short
 

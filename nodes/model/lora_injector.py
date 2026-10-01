@@ -1,6 +1,6 @@
 """ComfyUNetLoRANode: builds comfy's SDXL UNet from raw weights, injects LoRA.
 
-Adapter only -- core.unet_wrapper.ComfyUNetWrapper and core.lora already do
+Adapter only -- `unet_wrapper.ComfyUNetWrapper` and `lora.py` already do
 the real work (UNet construction, LoRA layer injection); this wraps them
 behind the TrainableModel/LoRAInjectorNode contracts.
 
@@ -12,27 +12,27 @@ the reason LoRA is usually kept at low rank in practice, since higher ranks
 suppresses them. RankStabilizedScaling's alpha/sqrt(rank) fixes that, at
 zero VRAM/inference cost.
 
-core.lora.LoRALinear/LoRAConv2d always compute `scaling = (alpha/rank) *
+`lora.LoRALinear`/`LoRAConv2d` always compute `scaling = (alpha/rank) *
 weight` themselves, internally, with no seam to override that formula
-directly (confirmed by reading core/lora.py -- not modified here, per this
-project's standing rule about legacy code). So this Node applies whatever
-LoRAScalingPolicy it's given *before* core.lora ever runs, by solving for
-the "effective alpha" that makes core.lora's own fixed formula land on the
-policy's chosen scaling: `effective_alpha = policy.scaling(alpha, rank) *
-rank`, so that core.lora's `effective_alpha / rank` recovers exactly
-`policy.scaling(alpha, rank)`. For ClassicLoRAScaling this is an identity
-(effective_alpha == alpha, zero behavior change); the algebra is otherwise
-straightforward but worth being explicit about since it's the whole trick.
+directly. So this Node applies whatever LoRAScalingPolicy it's given
+*before* the adapter is built, by solving for the "effective alpha" that
+makes that fixed formula land on the policy's chosen scaling:
+`effective_alpha = policy.scaling(alpha, rank) * rank`, so that
+`effective_alpha / rank` recovers exactly `policy.scaling(alpha, rank)`.
+For ClassicLoRAScaling this is an identity (effective_alpha == alpha,
+zero behavior change); the algebra is otherwise straightforward but worth
+being explicit about since it's the whole trick.
 
-One real, worth-knowing side effect of this seam: core.lora.extract_lora_weights
-saves each layer's *effective* alpha into the checkpoint (not the nominal
-value this Node was given), and load_lora_into_model restores scaling via
-its own hardcoded alpha/rank on resume -- which is exactly why the round
-trip stays correct regardless of which policy produced the effective value
-in the first place. The one cosmetic consequence: if a checkpoint's saved
-alpha is inspected directly, or if core.lora's "alpha mismatch" print ever
-fires on a config change, the number shown is the effective alpha, not
-whatever nominal `alpha` was typed into this Node's Port.
+One real, worth-knowing side effect of this seam:
+`lora.extract_lora_weights` saves each layer's *effective* alpha into the
+checkpoint (not the nominal value this Node was given), and
+`load_lora_into_model` restores scaling via its own hardcoded alpha/rank on
+resume -- which is exactly why the round trip stays correct regardless of
+which policy produced the effective value in the first place. The one
+cosmetic consequence: if a checkpoint's saved alpha is inspected directly,
+or if lora.py's "alpha mismatch" print ever fires on a config change, the
+number shown is the effective alpha, not whatever nominal `alpha` was
+typed into this Node's Port.
 
 LoRAScalingPolicy/ClassicLoRAScaling/RankStabilizedScaling/_effective_alpha
 now live in lora_scaling.py, re-exported here unchanged -- moved once
@@ -224,11 +224,11 @@ def build_lora_injected_unet(
     from inside a `build()`.
     """
     import torch
-    from core.lora import LoRAConfig
-    from core.unet_wrapper import ComfyUNetWrapper
 
-    from .adapter_injection import adapter_strategy_scope, reenable_dora_requires_grad
+    from .adapter_injection import adapter_layer_classes, reenable_dora_requires_grad
     from .adapter_strategy import PlainLoRAAdapter
+    from .lora import LoRAConfig
+    from .unet_wrapper import ComfyUNetWrapper
 
     adapter_strategy = adapter_strategy or PlainLoRAAdapter()
     checkpointing_strategy = (
@@ -241,20 +241,25 @@ def build_lora_injected_unet(
         dropout=dropout,
         target_modules=target_modules,
     )
-    with adapter_strategy_scope(adapter_strategy, frozen_weight_store_factory):
-        wrapper = ComfyUNetWrapper(
-            weights.unet_sd,
-            device=device,
-            dtype=dtype or torch.bfloat16,
-            use_checkpoint=use_checkpoint,
-            lora_config=lora_config,
-        )
-    # core.unet_wrapper.ComfyUNetWrapper._init_lora() (frozen legacy
-    # code, ran just above) doesn't know a DoRALinear/DoRAConv2d's
-    # trainable parameters exist -- see reenable_dora_requires_grad's
-    # own docstring for the real, previously-silent "trains nothing"
-    # bug this closes. A no-op for any other adapter_strategy (the
-    # isinstance check inside only ever matches a DoRA layer).
+    wrapper = ComfyUNetWrapper(
+        weights.unet_sd,
+        device=device,
+        dtype=dtype or torch.bfloat16,
+        use_checkpoint=use_checkpoint,
+        lora_config=lora_config,
+        # Stated, not installed. Previously this was a context manager
+        # monkeypatching lora.py's LoRALinear/LoRAConv2d names for the
+        # duration of the construction below; adapter_layer_classes()
+        # returns the same classes to build with, and the injection walk
+        # takes them as an argument. See adapter_injection.py.
+        layer_classes=adapter_layer_classes(adapter_strategy, frozen_weight_store_factory),
+    )
+    # ComfyUNetWrapper._init_lora() (just ran, inside the constructor)
+    # doesn't know a DoRALinear/DoRAConv2d's trainable parameters exist --
+    # see reenable_dora_requires_grad's own docstring for the real,
+    # previously-silent "trains nothing" bug this closes. A no-op for any
+    # other adapter_strategy (the isinstance check inside only ever
+    # matches a DoRA layer).
     reenable_dora_requires_grad(wrapper.lora_registry)
     return ComfyUNetTrainableModel(wrapper)
 
@@ -274,7 +279,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "RankStabilizedScaling (alpha/sqrt(rank)) is worth pairing with a higher "
                 "rank than this Node's default (64) -- see LoRAScalingPolicy's module "
                 "docstring for why alpha/rank alone suppresses higher ranks. Applied via "
-                "an effective-alpha seam ahead of core.lora, not a core.lora change -- "
+                "an effective-alpha seam ahead of lora.py, not a lora.py change -- "
                 "same docstring covers the one cosmetic side effect (checkpoint-saved "
                 "alpha is the effective value, not this Port's nominal one).",
         ),
@@ -290,13 +295,15 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         ),
         "adapter_strategy": Port(
             name="adapter_strategy", type=AdapterStrategy, required=False, default=None,
-            doc="None = PlainLoRAAdapter (today's exact core.lora.LoRALinear/LoRAConv2d "
+            doc="None = PlainLoRAAdapter (today's exact LoRALinear/LoRAConv2d "
                 "behavior when frozen_weight_store is also its own default -- see that "
                 "port's own doc for the one case this stops being a no-op). Any other "
-                "AdapterStrategy (nodes/model/adapter_strategy.py) is live-wired "
-                "into core.lora's real, unmodified injection tree-walk via a scoped, "
-                "restored-on-exit patch -- see adapter_injection.py's module docstring for "
-                "the full mechanism and the alpha-double-application pitfall it avoids.",
+                "AdapterStrategy (nodes/model/adapter_strategy.py) is live-wired into "
+                "the real, unmodified injection tree-walk: the classes it builds are "
+                "passed to that walk as an argument, so every target it finds is "
+                "constructed through this strategy -- see adapter_injection.py's module "
+                "docstring for the mechanism and the alpha-double-application pitfall "
+                "it avoids.",
         ),
         "frozen_weight_store": Port(
             name="frozen_weight_store", type=type, required=False, default=None,

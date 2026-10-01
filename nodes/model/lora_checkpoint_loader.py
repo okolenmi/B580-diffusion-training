@@ -6,7 +6,7 @@ continue_lora_sd parameter (lora_training_resources.py) calls it
 directly with an already-in-memory state dict -- same validation and
 loading either way, not two copies of it.
 
-Reuses core.lora.load_lora_into_model for the plain-LoRA layers it
+Reuses lora.load_lora_into_model for the plain-LoRA layers it
 understands. That function's own coverage check is permissive --
 silently skips any registry entry whose keys aren't in the source,
 rather than erroring. load_lora_into_registry adds a stricter check in
@@ -15,12 +15,12 @@ present, or this raises with the specific missing keys listed, rather
 than silently loading a partial LoRA. Rank mismatches are also caught
 explicitly with a clear message.
 
-core.lora.load_lora_into_model's isinstance gate is
+lora.load_lora_into_model's isinstance gate is
 (LoRALinear, LoRAConv2d) -- correct for skipping an already-phase-split
 LoRAGeneration layer, but DoRALinear/DoRAConv2d (dora_layer.py) are
 also not instances of those two classes (composition, not inheritance),
 so that call silently does nothing for a DoRA-adapted layer: direction
-and alpha are never restored, not just magnitude. core/lora.py is
+and alpha are never restored, not just magnitude. nodes/model/lora.py is
 frozen, so _load_dora_layers() below handles DoRA layers itself, same
 missing-keys/rank-mismatch discipline as the plain-LoRA path, and the
 same alpha-restore-with-a-printed-note behavior load_lora_into_model
@@ -49,7 +49,7 @@ from .node import LoRAInjectorNode
 
 def _load_dora_layers(registry, state_dict: dict) -> None:
     """The DoRA-layer half of load_lora_into_registry() --
-    core.lora.load_lora_into_model silently skips every DoRALinear/
+    lora.load_lora_into_model silently skips every DoRALinear/
     DoRAConv2d, see this module's own docstring. Missing-keys/rank-
     mismatch validation for these layers already happened before this
     is called; this only does the actual loading.
@@ -93,11 +93,11 @@ def load_lora_into_registry(registry, state_dict: dict, source_description: str 
     """Validates state_dict against every layer in registry (missing
     keys, rank mismatches -- raises ValueError with specifics rather
     than silently loading a partial LoRA), then loads it: plain layers
-    via core.lora.load_lora_into_model, DoRA layers via
+    via lora.load_lora_into_model, DoRA layers via
     _load_dora_layers() above. source_description is used only in error
     messages -- a file path, or a plain label like "continue_lora_sd"
     when there's no path (an already-in-memory state dict)."""
-    from core.lora import LoRAConv2d, LoRALinear, load_lora_into_model
+    from .lora import LoRAConv2d, LoRALinear, load_lora_into_model
 
     from .dora_layer import DoRAConv2d, DoRALinear
 

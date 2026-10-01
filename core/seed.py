@@ -1,18 +1,13 @@
-"""Deterministic seed derivation for reproducible randomness."""
+"""Compatibility shim: `derive_seed` now lives in
+`nodes/components/seed.py`.
 
-import hashlib
+Moved there on 2026-10-02 because `nodes/model/unet_wrapper.py`'s
+`make_rand_cond()` needs it, and a SHA-256 helper is not worth a
+cross-package dependency on `core/`. `manager/builder.py` and both of
+`core/`'s cache builders still call this; they keep working unchanged.
+Retire this file when `core/` goes.
+"""
 
+from nodes.components.seed import derive_seed
 
-def derive_seed(base: int, step: int, role: str) -> int:
-    """
-    Derive a reproducible 32-bit seed from (base_seed, global_step, role).
-
-    Any code that needs randomness tied to a specific training step can call
-    this independently — teacher cache, student forward, make_rand_cond, future
-    augmentations — and will always agree on the value for the same inputs.
-
-    'role' is a free-form string that namespaces the seed so different uses at
-    the same step never collide (e.g. "x0", "noise", "cond").
-    """
-    key = f"{base}:{step}:{role}".encode()
-    return int(hashlib.sha256(key).hexdigest(), 16) % (2**32)
+__all__ = ["derive_seed"]

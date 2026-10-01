@@ -1,5 +1,5 @@
 """Checks nodes/model/lora_merge.py's merge_lora_into_state_dict()
-against core.lora.LoRALinear.merge()/LoRAConv2d.merge() -- the
+against LoRALinear.merge()/LoRAConv2d.merge() -- the
 already-real, already-tested reference implementation of this same
 merge math, just operating on a live injected module instead of a raw
 state dict. Building a real LoRALinear/LoRAConv2d, running its own
@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 import torch.nn as nn
 
-from core.lora import LoRAConv2d, LoRALinear
+from nodes.model.lora import LoRAConv2d, LoRALinear
 from nodes.model.lora_merge import merge_lora_into_state_dict
 
 
@@ -26,7 +26,7 @@ def check(condition: bool, message: str):
         raise AssertionError(message)
 
 
-def check_linear_merge_matches_core_lora_reference():
+def check_linear_merge_matches_lora_mod_reference():
     print("[merge_lora_into_state_dict() matches LoRALinear.merge() exactly, "
           "for a real, non-trivial (trained) A/B]")
     torch.manual_seed(0)
@@ -58,7 +58,7 @@ def check_linear_merge_matches_core_lora_reference():
     print("    PASS")
 
 
-def check_conv2d_merge_matches_core_lora_reference():
+def check_conv2d_merge_matches_lora_mod_reference():
     print("[merge_lora_into_state_dict() matches LoRAConv2d.merge() exactly]")
     torch.manual_seed(1)
     base = nn.Conv2d(4, 6, kernel_size=3, padding=1)
@@ -140,8 +140,8 @@ def check_mutates_and_returns_the_same_dict():
 
 
 def main():
-    check_linear_merge_matches_core_lora_reference()
-    check_conv2d_merge_matches_core_lora_reference()
+    check_linear_merge_matches_lora_mod_reference()
+    check_conv2d_merge_matches_lora_mod_reference()
     check_strength_scales_the_merge()
     check_no_match_leaves_base_sd_untouched()
     check_mutates_and_returns_the_same_dict()

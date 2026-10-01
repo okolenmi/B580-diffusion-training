@@ -4,7 +4,7 @@ enables on TrainableModel/ComfyUNetTrainableModel
 (docs/design/02-foundational-ontology.md section 1.2,
 docs/design/04-lora-adapter-mechanics-and-loss-weighting.md section 3.3).
 
-Built around real torch, real core.lora.LoRALinear, and a minimal fake
+Built around real torch, real LoRALinear, and a minimal fake
 wrapper exposing only the surface ComfyUNetTrainableModel's new methods
 actually touch (device/to/state_dict/lora_parameters) -- same lightweight-
 real-objects approach as smoke_test_lora_checkpoint_loader.py and
@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 import torch.nn as nn
 
-from core.lora import LoRALinear
+from nodes.model.lora import LoRALinear
 from nodes.model.frozen_weight_store import BF16WeightStore
 from nodes.model.lora_injector import ComfyUNetTrainableModel
 from nodes.model.lora_phases import split_into_new_generation
@@ -44,7 +44,7 @@ def record(ok: bool, name: str, detail: str = ""):
 
 
 class _FakeWrapper:
-    """Minimal stand-in for core.unet_wrapper.ComfyUNetWrapper -- only the
+    """Minimal stand-in for ComfyUNetWrapper -- only the
     attributes/methods ComfyUNetTrainableModel's DeviceResident methods
     and lora_phases.split_into_new_generation actually touch."""
 

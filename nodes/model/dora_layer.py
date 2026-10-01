@@ -34,7 +34,7 @@ paper's weight-only equations directly), and base_result is reused
 rather than recomputed.
 
 **Real, deliberate extension beyond PEFT, needed for this project
-specifically: the LoRA timestep gate** (core.lora.py's
+specifically: the LoRA timestep gate** (lora.py's
 set_lora_gate()/compute_lora_gate(), docs/known-issues/pending-testing.md's
 matching entry). PEFT has no such concept -- LLM
 fine-tuning has no analogous "only some timesteps were in the training
@@ -51,14 +51,19 @@ the failure mode the gate exists to prevent for plain LoRA. The actual
 gate application (`apply_lora_gate()`) lives in `lora_gate.py` now --
 extracted once `nf4_lora_layer.py` needed the identical logic too.
 
-**Built via composition over a real core.lora.LoRALinear/LoRAConv2d**
-(accessed through lora_class_cache.py's _real_lora_classes(), the same
-patch-immune accessor PlainLoRAAdapter uses, for the same reason:
-constructing one from inside adapter_strategy_scope's own patched path
-must not recurse) rather than reimplementing parameter setup (dtype
-choices, kaiming init, buffer registration for the frozen base) a second
-time -- only the forward math is genuinely new here, so only the forward
-math is new code. Held as a real submodule (self._lora), so
+**Built via composition over a real LoRALinear/LoRAConv2d** (from
+`lora.py`, imported directly) rather than reimplementing parameter setup
+(dtype choices, kaiming init, buffer registration for the frozen base) a
+second time -- only the forward math is genuinely new here, so only the
+forward math is new code.
+
+This import used to go through `lora_class_cache.py`'s
+`_real_lora_classes()`, because `adapter_injection.py` used to patch
+`core.lora`'s `LoRALinear`/`LoRAConv2d` names and a direct import here
+would have resolved to the patch and recursed forever. That patch is gone
+-- `inject_lora_into_unet` now takes the classes to build as an argument,
+so nothing is rebound and a plain import is correct. See
+`adapter_injection.py`'s docstring. Held as a real submodule (self._lora), so
 DoRALinear.parameters() correctly includes lora_A/lora_B via ordinary
 nn.Module recursion, plus this class's own new magnitude parameter --
 and correctly excludes base_weight/base_bias (LoRALinear's own buffers,
@@ -73,7 +78,7 @@ full DoRA checkpoint round-trip, since a trained magnitude is
 independent state a freshly-recomputed value can't recover.
 load_dora_weights(lora_A, lora_B, magnitude) is the real round-trip, and
 restore_alpha(alpha) keeps alpha/scaling consistent with a
-checkpoint-restored value the same way core.lora.load_lora_into_model
+checkpoint-restored value the same way lora.load_lora_into_model
 does for a plain layer. nodes/model/lora_saver.py (via
 nodes/model/lora_phases.py's extract_combined_weights/
 extract_own_generation_weights) and LoRACheckpointLoaderNode (via its
@@ -107,7 +112,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .lora_class_cache import _real_lora_classes
+from .lora import LoRAConv2d, LoRALinear
 from .lora_gate import apply_lora_gate
 
 
@@ -147,7 +152,6 @@ class DoRALinear(nn.Module):
     def __init__(self, original: nn.Linear, rank: int = 64, alpha: float = 1.0,
                  dropout: float = 0.0, weight: float = 1.0):
         super().__init__()
-        LoRALinear, _ = _real_lora_classes()
         self._lora = LoRALinear(original, rank=rank, alpha=alpha, dropout=dropout, weight=weight)
         self.in_features = self._lora.in_features
         self.out_features = self._lora.out_features
@@ -217,7 +221,7 @@ class DoRALinear(nn.Module):
 
     def restore_alpha(self, alpha: float) -> None:
         """Update alpha/scaling to a checkpoint-restored value -- same
-        formula core.lora.load_lora_into_model uses for a plain
+        formula lora.load_lora_into_model uses for a plain
         LoRALinear/LoRAConv2d, kept as this class's own method rather
         than something outside it recomputing the formula itself, since
         it needs self._lora.training_weight and has to land in
@@ -234,7 +238,6 @@ class DoRAConv2d(nn.Module):
     def __init__(self, original: nn.Conv2d, rank: int = 64, alpha: float = 1.0,
                  dropout: float = 0.0, weight: float = 1.0):
         super().__init__()
-        _, LoRAConv2d = _real_lora_classes()
         self._lora = LoRAConv2d(original, rank=rank, alpha=alpha, dropout=dropout, weight=weight)
         self.in_channels = self._lora.in_channels
         self.out_channels = self._lora.out_channels

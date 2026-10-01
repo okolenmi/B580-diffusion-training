@@ -20,7 +20,7 @@ Two independent tools, both off unless wired:
    call sees exactly the same (x0, noise, t, conditioning), so a change
    between two calls is the model's change, not the sampler's. Each probe
    point is evaluated twice: with the LoRA live, and with the LoRA gated
-   to exactly zero (the frozen base -- core.lora's gate=0 contract; cached
+   to exactly zero (the frozen base -- lora.py's gate=0 contract; cached
    after the first call because the base never changes). Reported per
    bucket:
 
@@ -65,7 +65,7 @@ Two independent tools, both off unless wired:
 Neither tool changes training arithmetic: evaluate() is torch.no_grad()
 and alignment() runs after the step. Both leave the model in train mode
 (the only mode the trainer ever runs it in). The training-time gate
-(core.lora._current_gate) is saved and restored around both, and the
+(lora._current_gate) is saved and restored around both, and the
 probes always run with the gate off -- i.e. as inference would apply the
 LoRA (full strength at every t), which is the behavior being judged.
 """
@@ -194,7 +194,7 @@ class TProbe:
         items, for a human-readable printout."""
         if not self.ready():
             return {}, []
-        from core.lora import lora_gate_override
+        from ..model.lora import lora_gate_override
 
         model.eval()
         try:
@@ -281,7 +281,7 @@ class TProbe:
         param's .grad as None on exit."""
         if not self.ready():
             return {}
-        from core.lora import lora_gate_override
+        from ..model.lora import lora_gate_override
 
         params = [p for p in params if p.requires_grad]
         names = [name for name, _, _ in T_BUCKETS]

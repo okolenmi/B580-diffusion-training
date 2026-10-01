@@ -14,8 +14,8 @@ expected, and a more important one attached.
 |---|---|---|
 | `python -m core.cli` (CLI) | direct; also the backend's spawned subprocess | The command-line trainer, entirely |
 | `backend/` (web) | **spawns `<venv python> -m core.cli --config ...`** as the training subprocess (`infrastructure/subprocess_gateway.py:124`) | Every run started from the UI |
-| `manager/builder.py` | imports 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, and `clip_encode` via its shim) | Dataset ingestion, and therefore every run that has data |
-| `nodes/` (rewrite) | lazy imports of `core.lora` and `core.unet_wrapper` only | LoRA injection and the UNet wrapper |
+| `manager/builder.py` | imports 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, and `clip_encode` -- all via the shims below) | Dataset ingestion, and therefore every run that has data |
+| `nodes/` (rewrite) | **nothing** -- imports no `core.*` at all since 2026-10-02 | nothing |
 
 The second row is the one that surprises people. The node-graph rewrite
 is a *graph around* the trainer, not a replacement for it: pressing
@@ -24,21 +24,30 @@ process and then supervises it. The dataset path is the same shape --
 the backend's ingest worker calls `manager.builder.DataTaskRunner`,
 which calls into `core/`.
 
-**Shrinking, as of 2026-10-02.** The optimizer domain and text encoding
-have been unwired -- `nodes/optimizer/` imports nothing from
-`core.optimizers`, and `SDXLClipEncoder` lives in `nodes/model/`. What
-remains is `core.lora` and `core.unet_wrapper`, and both are load-bearing
-for more than one consumer: `core.unet_wrapper.ComfyUNetWrapper` is the
-model that `nodes/model/lora_injector.py:228` wraps for every LoRA path in
-the graph, and `core.lora._inject_lora` is the tree-walk whose
-module-level `LoRALinear`/`LoRAConv2d` names
-`nodes/model/adapter_injection.py` patches in place to substitute the
-rewrite's own DoRA/NF4 layers. Neither is a thin import; see
-`docs/design/09-prioritized-backlog.md`.
+**Shrinking fast, as of 2026-10-02.** In one day the optimizer domain,
+text encoding, and LoRA/UNet injection were all unwired:
+`nodes/optimizer/` imports nothing from `core.optimizers`,
+`SDXLClipEncoder` moved to `nodes/model/clip_encoder.py`, and
+`LoRALinear`/`LoRAConv2d`/`_inject_lora`/`ComfyUNetWrapper`/`derive_seed`
+moved to `nodes/model/{lora,unet_wrapper}.py` and
+`nodes/components/seed.py`. `nodes/` now imports nothing from `core/`.
 
-Smoke tests still import `core.*` directly as *reference
+`core/lora.py`, `core/unet_wrapper.py`, `core/clip_encode.py` and
+`core/seed.py` survive only as re-export shims, because `core/`'s own
+trainer, its two cache builders and `manager/builder.py` still construct
+these objects and `core/` is the production training path. They are not
+dependencies of the node graph.
+
+Smoke tests still import `core.optimizers` directly as *reference
 implementations* -- that is the point of an equivalence test, and those
 references remain valid precisely because `core/` is unchanged.
+
+What still reaches into `core/` is `backend/`, for things that are
+genuinely shared rather than unwired: `core.config_io`/`core.config_model`
+(the TOML schema the config editor round-trips and the trainer reads),
+`core.comfy_setup.xpu_empty_cache` (the graph runtime's memory releaser),
+and `core.xpu_env` (SYCL variables, which must be set before anything
+touches a device).
 
 ## Module by module
 
@@ -55,13 +64,19 @@ equivalence-tested against the `core/` version it replaces.
 | `noise_schedule.py` (schedule + conversions only) | `nodes/components/diffusion.py` | A fresh `NoiseSchedule`/`Parameterization` pair, and the rewrite is strictly *ahead* -- `RescaledZeroTerminalSNRSchedule` has no `core/` equivalent. `sample_timestep` and `T_MODES` did **not** move. |
 | `schedules.py` (cosine/constant/warmup only) | `nodes/train/schedule.py` | `make_poly_lr` did not move. |
 
-### Wrapped at runtime (the rewrite cannot work without them)
+### Was wrapped at runtime (the rewrite could not work without them)
+
+Strikethrough marks the entries the rewrite no longer depends on. They
+are kept because the history is the useful part: it shows which
+dependencies were genuinely load-bearing and what each one cost. What
+remains live is the `backend/` and `manager/` traffic, which is shared
+infrastructure rather than an unwired domain.
 
 | `core/` module | Who calls it |
 |---|---|
-| `lora.py` (556) | `nodes/model/adapter_injection.py` **monkeypatches `core.lora.LoRALinear`/`LoRAConv2d`** to swap in the rewrite's own layer classes; `lora_class_cache.py`, `lora_gate.py`, `lora_injector.py`, `lora_checkpoint_loader.py`, `train/step_pipeline.py`, `train/managed.py`, `train/t_probe.py` all import from it. 150 references. |
-| `unet_wrapper.py` | `nodes/model/lora_injector.py:228`, `manager/builder.py:25` -- the ComfyUI UNet adapter itself |
-| `clip_encode.py` | **unwired 2026-10-02** -- the implementation now lives at `nodes/model/clip_encoder.py`; `core/clip_encode.py` is a re-export shim for `core/`'s and `manager/`'s own use. `manager/builder.py:20` is the remaining non-`core/` caller |
+| ~~`lora.py` (556)~~ | **unwired 2026-10-02.** Now `nodes/model/lora.py`; `core/lora.py` is a re-export shim for `core/`'s and `manager/`'s use. The rewrite used to monkeypatch its `LoRALinear`/`LoRAConv2d` names to swap in its own layers; it now passes them to `_inject_lora` as an argument, and `lora_class_cache.py` is gone. |
+| ~~`unet_wrapper.py`~~ | **unwired 2026-10-02.** Now `nodes/model/unet_wrapper.py`; `core/unet_wrapper.py` is a re-export shim. Still built directly by `manager/builder.py`. |
+| ~~`clip_encode.py`~~ | **unwired 2026-10-02** -- the implementation now lives at `nodes/model/clip_encoder.py`; `core/clip_encode.py` is a re-export shim for `core/`'s and `manager/`'s own use. `manager/builder.py:20` is the remaining non-`core/` caller |
 | ~~`optimizers.py` (strategies)~~ | **No longer wrapped.** The `AdafactorOptimizerNode` that built a `ChunkedXPUAdafactor` is deleted; see `docs/known-issues/open.md` for the one unmeasured performance trade that retirement accepted |
 | `config_io.py`, `config_model.py` | `backend/infrastructure/{core_config_inspector,subprocess_gateway,config_schema}.py` -- the backend reads and validates configs through them |
 | `comfy_setup.py` | `backend/infrastructure/graph/runtime.py:62` (`xpu_empty_cache` as the graph runtime's memory releaser), `manager/builder.py`. `nodes/` does **not** use this -- `nodes/components/device.py`'s `_XPUDeviceContext` is the rewrite, and `smoke_test_device_context_equivalence.py` proves the two agree |
@@ -88,13 +103,12 @@ the rewrite *through* `manager/` as well:
 A plan of "delete `core/`, keep the rewrite" therefore breaks dataset
 ingestion and dataset `t_mode`, not just the node graph.
 
-### Legacy-only (reachable only via `core.cli`, or `manager/` alone)
+### Not reachable from the rewrite at all (only via `core.cli`, or `manager/`)
 
-These are *not* imported by the rewrite: `trainer.py`, `train_step.py`,
-`optimizer_builder.py`, `progress_writer.py`, `save.py`, `timer.py`,
-`cache_utils.py`, `cache_random.py`, `cache_trajectory.py`,
-`preview_sampler.py`. The last three are where the unique capabilities
-below live.
+`trainer.py`, `train_step.py`, `optimizer_builder.py`, `progress_writer.py`,
+`save.py`, `timer.py`, `cache_utils.py`, `cache_random.py`,
+`cache_trajectory.py`, `preview_sampler.py`. The last three hold the
+unique capabilities listed below.
 
 ### Genuinely unique -- nothing else in the repo provides it
 
@@ -117,15 +131,19 @@ in `core/`, and the rewrite either borrows it or has no equivalent:
    `ChunkedXPUCAME`, `ForeachXPUCAME`, `CPUAdamW`). `nodes/` did
    reimplement the per-parameter *math* (`algorithms/{adamw,adafactor,
    came}.py`, verified equivalent) and fused execution
-   (`composed_fused.py`) -- but it kept borrowing the *batching*
-   strategies, which is why one live node (`AdafactorOptimizerNode`)
-   still wraps `ChunkedXPUAdafactor`.
-3. **The LoRA timestep gate.** `core/lora.py`'s `compute_lora_gate` /
-   `set_lora_gate` / `lora_gate_override` restrict LoRA updates to the
-   timestep range actually present in the data. The rewrite *consumes*
-   it from three call sites and reimplements nothing -- it is the
-   project's own contribution, documented in
-   `docs/design/04-...md` section 3.1, and it lives here.
+   (`composed_fused.py`) -- but the *batching* strategies were never
+   rewritten, and none are now. `nodes/` no longer imports any of these;
+   `docs/known-issues/open.md` records the one unmeasured performance
+   trade that retiring the last wrapper accepted.
+3. **The LoRA timestep gate.** `compute_lora_gate` / `set_lora_gate` /
+   `lora_gate_override` restrict LoRA updates to the timestep range
+   actually present in the data. This is the project's own contribution
+   (documented in `docs/design/04-...md` section 3.1) and it still has
+   no equivalent elsewhere; as of 2026-10-02 it lives in
+   `nodes/model/lora.py` rather than `core/`, so "only `core/` has it"
+   no longer applies -- what is true is that both trainers and every
+   adapter layer (plain, DoRA, NF4) depend on it, and nothing else
+   implements the concept.
 4. **Latent caching.** `core/cache_trajectory.py` (646) and
    `cache_random.py` (186) precompute VAE latents for teacher and random
    trajectories. The rewrite's `ManagedLoRATrainerNode` uses its own
@@ -193,11 +211,14 @@ Worth knowing before any refactor, so it is not mistaken for load-bearing:
 
 * `core/cache_utils.py::shuffle_and_rebatch_cache` -- zero call sites
   anywhere in the repo (exported from `__init__`, never called).
-* `core/unet_wrapper.py::clear_embedder_cache` -- imported at
-  `trainer.py:38` and `train_step.py:28`, never called.
-* `core/unet_wrapper.py::ComfyUNetWrapper.enable_gradient_checkpointing`
-  -- no call sites; superseded by `nodes/model/gradient_checkpointing.py`.
-* `core/lora.py::GroupedLoRALinear.forward` -- an explicit `pass`.
+* `unet_wrapper.py::clear_embedder_cache` (now
+  `nodes/model/unet_wrapper.py`) -- imported at `core/trainer.py:38` and
+  `core/train_step.py:28`, never called.
+* `unet_wrapper.py::ComfyUNetWrapper.enable_gradient_checkpointing`
+  (now `nodes/model/unet_wrapper.py`) -- no call sites; superseded by
+  `nodes/model/gradient_checkpointing.py`.
+* `lora.py::GroupedLoRALinear.forward` (now `nodes/model/lora.py`) -- an
+  explicit `pass`.
 * `core/__init__.py`'s `load_config` alias -- kept for compatibility,
   unused.
 
@@ -220,16 +241,28 @@ Every re-export in that file was verified unused outside `core/`, and the
 only external `from core import ...` uses submodules, so nothing else
 could regress.
 
-**Two process-global concurrency hazards, documented but not fixed:**
+**One process-global hazard remains; the other is fixed.**
 
-* `core/lora.py::_current_gate` is a module global. It is acknowledged as
-  a hazard in `core/lora.py:41` and in
+* **Fixed -- the LoRALinear/LoRAConv2d monkeypatch.** `nodes/` used to
+  rebind those two module globals for the duration of a build, which
+  meant two concurrent `ComfyUNetLoRANode.build()` calls would corrupt
+  each other's layers, and needed `lora_class_cache.py` to hand out the
+  real classes to anything that recursed. Both are gone: `_inject_lora`
+  takes the classes to build as an argument
+  (`nodes/model/lora.py::inject_lora_into_unet`'s `layer_classes`), so
+  there is no shared state and no cache to defeat. This also fixed four
+  `isinstance` gates in `extract_lora_weights`/`load_lora_into_model`/
+  `merge_lora_into_unet`/`lora_param_count` that had been silently
+  checking the patched name and so skipped every DoRA and NF4 layer.
+* **Still open -- `lora.py::_current_gate` is a module global.** It is
+  acknowledged in `nodes/model/lora.py` and in
   `nodes/train/step_pipeline.py:201-207`, and it is safe only because
-  both trainers are single-threaded.
-* `nodes/model/adapter_injection.py` monkeypatches the module globals
-  `core.lora.LoRALinear` / `LoRAConv2d` for the duration of
-  `adapter_strategy_scope`, so two concurrent `build()` calls would race.
-  The module's own docstring names the risk.
+  both trainers are single-threaded. Fixing it properly means passing the
+  gate to each layer instead of having every `forward()` read a global,
+  which is a real change to four layer classes (plain, DoRA, NF4,
+  plus the phase-split generation) and not attempted here. Note that
+  `core/lora.py` deliberately does *not* re-export `_current_gate`, since
+  a re-exported global is a stale snapshot pretending to be live.
 
 ## What deletion would actually mean
 
@@ -239,10 +272,14 @@ Not "removing a dead folder". It would mean:
    what `run_server.sh`'s Start button spawns), so no run is produced at
    all.
 2. Dataset ingestion stops, so no run has data.
-3. The rewrite loses LoRA injection and the UNet wrapper -- the two
-   domains the design docs list as "not yet rewritten". Text encoding
-   and the whole optimizer domain are already clear of `core/`.
-4. 23 of 66 smoke tests fail.
+3. Nothing in the node graph breaks -- `nodes/` imports no `core.*` at
+   all. What breaks is `manager/builder.py`'s dataset ingestion, which
+   goes through six `core/` modules (see the table above), and
+   `backend/`'s config handling, graph-runtime memory releaser, and XPU
+   environment setup.
+4. Smoke tests fail wherever they use `core.*` as an equivalence
+   reference -- which is most of the optimizer and LoRA suites, and is
+   correct: those references are the point.
 
 Removing it is only meaningful as a *migration* -- port the remaining
 domains across first, which is exactly the work

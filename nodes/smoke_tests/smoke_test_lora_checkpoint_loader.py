@@ -1,4 +1,4 @@
-"""Real torch, real core.lora classes, real safetensors I/O against a
+"""Real torch, real lora.py classes, real safetensors I/O against a
 temp directory (paths.set_loras_dir) -- verifies nodes/model/
 lora_checkpoint_loader.py end to end: save a trained LoRA with the real
 extraction path, load it into a fresh injection, forward output matches
@@ -10,7 +10,7 @@ not a separate file, since this is still exactly the same node under
 test. Real, closed-here gap: before this, this file (and every other
 smoke test) exercised LoRACheckpointLoaderNode against plain
 LoRALinear/LoRAConv2d layers only -- a DoRA-adapted layer was silently
-skipped by core.lora.load_lora_into_model's isinstance gate this whole
+skipped by lora.load_lora_into_model's isinstance gate this whole
 time (LoRACheckpointLoaderNode's own missing-key/rank-mismatch
 validation loop had the same gate, so it never even got a chance to
 catch a DoRA-layer problem), and nothing here would have noticed. See
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 
 import paths
-from core.lora import LoRALinear, extract_lora_weights
+from nodes.model.lora import LoRALinear, extract_lora_weights
 from nodes.model.dora_layer import DoRALinear
 from nodes.model.lora_checkpoint_loader import LoRACheckpointLoaderNode
 from nodes.model.lora_injector import ComfyUNetTrainableModel

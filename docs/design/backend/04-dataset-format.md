@@ -137,5 +137,6 @@ separate concern), loader RAM strategy (future work, enabled by size columns).
   the dataset), while the fallback (first non-bad item's `preview_path`)
   and the override's existence check are read-only over `trajectories` —
   a dataset directory never stores UI state.
-- Startup reconciliation of dataset tasks mirrors `ReconcileRuns`; the
-  task list additionally sweeps rows whose child died unreported.
+- Startup reconciliation of dataset tasks mirrors `ReconcileRuns`, and
+  the next task start sweeps too (one `DatasetTaskSweeper` serves both);
+  the task list is a pure query and writes nothing.

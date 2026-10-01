@@ -143,7 +143,10 @@ per-node callback that CAS-persists partial results + publishes
 `stopped` if the cancel event is set, else `finished` -- CAS
 `running -> final` (a lost CAS means the stop use case already wrote
 `stopped`; its results stand, the thread's are discarded), publish the
-buffered events. `release_memory()` runs in `finally`. A crashed thread
+buffered events (through the shared `ExecutionLifecycleWriter`, which
+does the CAS-then-announce in one place). `GraphRuntime.execute` runs
+`release_memory()` in its own `finally`, so the caller cannot forget it.
+A crashed thread
 best-effort fails the row (never leaves `running` stuck blocking the
 next start).
 

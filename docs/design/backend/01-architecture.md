@@ -280,7 +280,7 @@ Endpoints as of M4:
 | POST | `/api/v1/datasets/{name}/items/discard` | `DiscardDatasetItems` (body: `item_ids`) |
 | GET | `/api/v1/datasets/{name}/sets` | `ListDatasetSets` |
 | POST | `/api/v1/datasets/{name}/sets` | `CommitDatasetItems` (body: `item_ids`, `name`) -> 201 |
-| GET | `/api/v1/datasets/{name}/tasks?active_only=` | `ListDatasetTasks` (sweeps dead rows) |
+| GET | `/api/v1/datasets/{name}/tasks?active_only=` | `ListDatasetTasks` (a pure query -- it writes nothing, not even rows of other datasets; sweeping belongs to startup and to the next start) |
 | POST | `/api/v1/datasets/{name}/tasks` | `StartDatasetTask` (body: kind/image_dir/model/flags) -> 201; 409 `dataset_task_active` |
 | POST | `/api/v1/datasets/{name}/tasks/{id}/stop` | `StopDatasetTask` (SIGKILL; 409 if terminal) |
 | GET | `/api/v1/graphs/nodes?refresh=` | `ListNodeCatalog` -- palette (auto-discovered classes by domain; `refresh=true` re-walks `nodes/`) |
@@ -371,9 +371,14 @@ never a resurrection). One active task per dataset (409
 `/proc` cmdline marker guarding both kill (refuse strangers) and
 liveness (a reused pid or a zombie reads as dead, a task that
 outlives a server restart still reads as alive). Startup runs
-`ReconcileDatasetTasks`; the list endpoint additionally sweeps rows
-whose child died unreported (running+dead immediately, pending with
-no pid after 60s).
+`ReconcileDatasetTasks`, and `StartDatasetTask` sweeps before its
+active-task check -- so a predecessor whose child died cannot answer
+409 "a task is already active". Both call one
+`DatasetTaskSweeper`, which fails rows whose child is gone (running +
+dead immediately, pending with no pid: at startup always, mid-flight
+only after 60 s). The list endpoint itself is a pure query: it used to
+sweep, which meant reading dataset A rewrote rows of dataset B
+(docs 08 S-03).
 
 **Error envelope** -- every non-2xx response, no exceptions (unknown
 routes, method-not-allowed, and framework validation included):

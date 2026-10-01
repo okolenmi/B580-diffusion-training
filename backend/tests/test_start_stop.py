@@ -24,6 +24,7 @@ from backend.application.errors import (
     RunNotRunningError,
     TrainingLaunchError,
 )
+from backend.application.ports.run_artifacts import RunArtifactsPaths
 from backend.tests.support import (
     FakeClock,
     FakeConfigInspector,
@@ -37,7 +38,7 @@ from backend.tests.support import (
 )
 
 
-def _env(tmp: str) -> SimpleNamespace:
+def _env(tmp: str, artifacts: object | None = None) -> SimpleNamespace:
     project = Path(tmp) / "project"
     (project / "configs").mkdir(parents=True)
     runs = Path(tmp) / "runs"
@@ -58,6 +59,7 @@ def _env(tmp: str) -> SimpleNamespace:
         project_root=project,
         runs_dir=runs,
         poll_interval=0.02,
+        artifacts=artifacts,  # type: ignore[arg-type]
     )
     return SimpleNamespace(
         project=project,
@@ -187,6 +189,79 @@ def test_start_spawn_failure_finalises_run() -> None:
             StartTrainingCommand(config_path="configs/test.toml")
         )
         check(dto.id == 2 and dto.status.value == "running", "retry succeeds")
+
+
+class FlakyArtifacts:
+    """``prepare()`` raises for the first run only -- the docs 07 F-02
+    repro (PermissionError after the row insert), then behaves."""
+
+    def __init__(self, runs_dir: Path) -> None:
+        self._runs_dir = runs_dir
+        self._fail_first = True
+
+    def _paths(self, run_id: int) -> RunArtifactsPaths:
+        root = self._runs_dir / f"run_{run_id}"
+        return RunArtifactsPaths(
+            directory=root,
+            log=root / "log.txt",
+            progress=root / "log.progress.jsonl",
+        )
+
+    def prepare(self, run_id: int) -> RunArtifactsPaths:
+        if self._fail_first:
+            self._fail_first = False
+            raise PermissionError("runs directory is read-only (injected)")
+        paths = self._paths(run_id)
+        paths.directory.mkdir(parents=True, exist_ok=True)
+        return paths
+
+    def paths_for(self, run_id: int) -> RunArtifactsPaths:
+        return self._paths(run_id)
+
+    def append_log_note(self, run_id: int, note: str) -> None:
+        paths = self._paths(run_id)
+        paths.log.parent.mkdir(parents=True, exist_ok=True)
+        with open(paths.log, "a", encoding="utf-8") as fh:
+            fh.write(note + "\n")
+
+
+def test_start_prepare_failure_finalises_row() -> None:
+    # docs 07 F-02 -- prepare() raising after the row insert must not
+    # strand the row at `created` (was: find_active() counted the ghost
+    # forever, every start 409 until restart).
+    print("\n== StartTraining: prepare() failure does not strand the row ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        artifacts = FlakyArtifacts(Path(tmp) / "runs")
+        env = _env(tmp, artifacts=artifacts)
+        try:
+            env.services.start_training.execute(
+                StartTrainingCommand(config_path="configs/test.toml")
+            )
+            check(False, "prepare() failure must propagate")
+        except PermissionError:
+            check(True, "prepare() failure propagates to the caller")
+
+        run = env.repo.get(1)
+        check(
+            run is not None and run.status.value == "failed",
+            "row is failed, not stranded at created",
+        )
+        check(
+            run is not None and run.error is not None and "read-only" in run.error,
+            f"error recorded on the row (got {run.error!r})",
+        )
+        check(
+            env.events.types() == ["run_created", "run_failed"],
+            f"events recorded the failure (got {env.events.types()})",
+        )
+        check(env.gateway.spawned == [], "nothing was spawned")
+
+        # A second start is accepted -- no ghost blocks it.
+        dto = env.services.start_training.execute(
+            StartTrainingCommand(config_path="configs/test.toml")
+        )
+        check(dto.id == 2, f"retry accepted (got run {dto.id})")
+        check(dto.status.value == "running", "retry actually spawned")
 
 
 def test_stop_training() -> None:
@@ -351,6 +426,7 @@ def main() -> None:
     test_start_happy_path()
     test_start_config_errors()
     test_start_spawn_failure_finalises_run()
+    test_start_prepare_failure_finalises_row()
     test_stop_training()
     test_get_active_run()
     test_get_run_log()

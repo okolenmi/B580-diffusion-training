@@ -79,51 +79,84 @@ class StartTraining:
             )
             self._runs.add(run)
 
-            paths = self._artifacts.prepare(run.id)  # type: ignore[arg-type]
-            launch = TrainingLaunch(
-                run_id=run.id,  # type: ignore[arg-type]
-                config_path=config_path,
-                mode=summary.mode,
-                total_steps=summary.total_steps,
-                start_from=command.start_from,
-                reset_optimizer=command.reset_optimizer,
-                log_path=paths.log,
-                progress_path=paths.progress,
-            )
-
+            # Everything from the insert to the watcher handover can
+            # fail (artifacts.prepare, spawn, publish, thread start).
+            # Any failure must repair the row before re-raising: a row
+            # left `created` (or `running` with no watcher) blocks
+            # every future start until restart (docs 07 F-02).
+            pid: int | None = None
             try:
+                paths = self._artifacts.prepare(run.id)  # type: ignore[arg-type]
+                launch = TrainingLaunch(
+                    run_id=run.id,  # type: ignore[arg-type]
+                    config_path=config_path,
+                    mode=summary.mode,
+                    total_steps=summary.total_steps,
+                    start_from=command.start_from,
+                    reset_optimizer=command.reset_optimizer,
+                    log_path=paths.log,
+                    progress_path=paths.progress,
+                )
                 pid = self._gateway.spawn(launch)
-            except TrainingLaunchError as exc:
-                # Launch failed before the process existed: finalise the
-                # row here (created -> failed), publish, and re-raise so
-                # the caller sees the envelope. Nothing to reap.
-                run.mark_failed(at=self._clock.now(), error=str(exc))
-                self._runs.update_if_status(run, expected=RunStatus.CREATED)
+                run.mark_started(pid=pid, at=self._clock.now())
+                if not self._runs.update_if_status(run, expected=RunStatus.CREATED):
+                    # Unreachable while the lock is held (only
+                    # reconciliation, which runs before the server
+                    # accepts requests, touches created rows) -- but
+                    # never leave a live process attached to a row
+                    # someone else reclaimed.
+                    logger.error(
+                        "run %s was reclaimed during launch; killing pid %s",
+                        run.id, pid,
+                    )
+                    self._gateway.kill(pid)
+                    raise TrainingLaunchError(
+                        f"run {run.id} was reclaimed during startup launch"
+                    )
                 self._publish(run)
+                self._supervisor.watch(
+                    run_id=run.id,  # type: ignore[arg-type]
+                    pid=pid,
+                    progress_path=paths.progress,
+                )
+            except TrainingLaunchError as exc:
+                self._repair_failed_start(run, pid, exc)
                 raise
-
-            run.mark_started(pid=pid, at=self._clock.now())
-            if not self._runs.update_if_status(run, expected=RunStatus.CREATED):
-                # Unreachable while the lock is held (only reconciliation,
-                # which runs before the server accepts requests, touches
-                # created rows) -- but never leave a live process
-                # attached to a row someone else reclaimed.
-                logger.error(
-                    "run %s was reclaimed during launch; killing pid %s",
-                    run.id, pid,
-                )
-                self._gateway.kill(pid)
-                raise TrainingLaunchError(
-                    f"run {run.id} was reclaimed during startup launch"
-                )
-
-            self._publish(run)
-            self._supervisor.watch(
-                run_id=run.id,  # type: ignore[arg-type]
-                pid=pid,
-                progress_path=paths.progress,
-            )
+            except Exception as exc:
+                logger.exception("startup of run %s failed", run.id)
+                self._repair_failed_start(run, pid, exc)
+                raise
             return to_run_dto(run)
+
+    def _repair_failed_start(self, run: Run, pid: int | None, exc: Exception) -> None:
+        """Terminal-state repair for a failed start sequence: created
+        -> failed (so a retry is accepted), or -- when the row already
+        reached running but the watcher never attached -- kill the
+        orphan and fail it. Reclaims by other writers are left alone."""
+        try:
+            current = self._runs.get(run.id)
+            if current is None or current.status.is_terminal:
+                return
+            error = str(exc) or type(exc).__name__
+            if current.status is RunStatus.CREATED:
+                current.mark_failed(at=self._clock.now(), error=error)
+                if self._runs.update_if_status(current, expected=RunStatus.CREATED):
+                    # The launch entity still buffers RunCreated (the
+                    # sqlite repo re-hydrates `current`); publish it
+                    # first so the stream stays created -> failed.
+                    self._publish(run)
+                    self._publish(current)
+                return
+            if current.status is RunStatus.RUNNING and pid is not None:
+                current.mark_failed(
+                    at=self._clock.now(), error=f"startup handover failed: {error}"
+                )
+                if self._runs.update_if_status(current, expected=RunStatus.RUNNING):
+                    self._publish(run)
+                    self._publish(current)
+                    self._gateway.kill(pid)  # nobody watches this process
+        except Exception:  # noqa: BLE001 -- already on the failure path
+            logger.exception("could not repair run %s after failed start", run.id)
 
     def _resolve(self, raw: str) -> Path:
         path = Path(raw)

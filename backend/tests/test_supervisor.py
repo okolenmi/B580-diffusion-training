@@ -31,7 +31,22 @@ from backend.tests.support import (
 )
 
 
-def _env(tmp: str) -> SimpleNamespace:
+class CrashingGateway(FakeTrainingGateway):
+    """First ``is_alive`` probe explodes -- forces an in-loop crash so
+    the supervisor's ``_guard`` crash-repair path is exercised (F-01)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._crashed = False
+
+    def is_alive(self, pid: int) -> bool:
+        if not self._crashed:
+            self._crashed = True
+            raise RuntimeError("injected supervisor crash")
+        return super().is_alive(pid)
+
+
+def _env(tmp: str, *, gateway: FakeTrainingGateway | None = None) -> SimpleNamespace:
     project = Path(tmp) / "project"
     (project / "configs").mkdir(parents=True)
     (project / "configs" / "test.toml").write_text(
@@ -40,7 +55,7 @@ def _env(tmp: str) -> SimpleNamespace:
     runs = Path(tmp) / "runs"
     repo = InMemoryRunRepository()
     events = RecordingEventBus()
-    gateway = FakeTrainingGateway()
+    gateway = gateway if gateway is not None else FakeTrainingGateway()
     clock = FakeClock()
     services = build_services(
         runs=repo,
@@ -68,8 +83,15 @@ def _env(tmp: str) -> SimpleNamespace:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(line) + "\n")
 
+    def emit_raw(text: str) -> None:
+        """Append bytes as-is (torn lines, garbage -- hostile input)."""
+        path = runs / "run_1" / "log.progress.jsonl"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(text)
+
     env.start = start
     env.emit = emit
+    env.emit_raw = emit_raw
     env.progress_path = runs / "run_1" / "log.progress.jsonl"
     return env
 
@@ -250,12 +272,124 @@ def test_cache_phase_telemetry() -> None:
         )
 
 
+def test_hostile_progress_lines_do_not_break_the_tail() -> None:
+    # docs 07 F-01 -- one malformed record must not kill the supervisor
+    # thread (the r1 repro: {"step":"n/a"} raised inside _sample).
+    print("\n== supervisor: hostile progress lines are survived ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+        run_id = env.start()
+        env.emit({"phase": "training_start", "total_steps": 100})
+
+        env.emit_raw('{"phase":"step","step":"n/a"}\n')  # r1 repro line
+        env.emit_raw("[1, 2, 3]\n")                      # not an object
+        env.emit_raw('{"phase":"step","step":-5,"loss":9.9}\n')  # negative step
+        env.emit_raw("this is not json\n")               # not JSON
+        env.emit({"phase": "step", "step": 4, "total": 100,
+                  "loss": 1.25, "avg": 1.3, "lr": 0.0001})
+
+        check(
+            wait_until(lambda: env.repo.get(run_id).done_steps == 4),
+            "the good line after the garbage still applies",
+        )
+        run = env.repo.get(run_id)
+        check(run.status.value == "running", "supervisor thread survived")
+        check(run.current_loss == 1.25, f"loss applied (got {run.current_loss})")
+        check(run.done_steps == 4, "malformed step never rewound progress")
+
+
+def test_torn_progress_line_is_recovered() -> None:
+    # docs 07 F-07 -- a record split across two writes must be parsed
+    # once complete, not consumed-and-skipped as invalid JSON (r4 lost
+    # step 42 this way and its offset stayed past the sample forever).
+    print("\n== supervisor: torn line stays buffered until completed ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+        run_id = env.start()
+        env.emit({"phase": "training_start", "total_steps": 100})
+
+        env.emit_raw('{"phase":"step","step":7,"loss":0.4,"total":100')  # no \n
+        time.sleep(0.12)  # several supervisor ticks
+        check(
+            env.repo.get(run_id).done_steps == 0,
+            "torn line not applied yet (and not consumed)",
+        )
+
+        env.emit_raw("}\n")  # the record completes
+        check(
+            wait_until(lambda: env.repo.get(run_id).done_steps == 7),
+            "step 7 recovered once the line completed",
+        )
+        env.emit({"phase": "step", "step": 8, "total": 100, "loss": 0.3})
+        check(
+            wait_until(lambda: env.repo.get(run_id).done_steps == 8),
+            "later lines still flow after the recovery",
+        )
+
+
+def test_final_samples_survive_process_exit() -> None:
+    # docs 07 F-07 -- everything written in the death tick must be
+    # drained after is_alive turns False, not left behind (r1 showed
+    # a completed run reporting 0/100).
+    print("\n== supervisor: final samples are drained after exit ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+        run_id = env.start()
+        env.emit({"phase": "training_start", "total_steps": 100})
+        env.emit({"phase": "step", "step": 100, "total": 100,
+                  "loss": 0.5, "avg": 0.6, "lr": 0.0001})
+        env.gateway.alive.discard(4242)  # process gone before the next tick
+
+        check(
+            wait_until(lambda: env.repo.get(run_id).status.value == "completed"),
+            "run completes",
+        )
+        run = env.repo.get(run_id)
+        check(run.done_steps == 100, f"final sample drained (got {run.done_steps})")
+        check(run.current_loss == 0.5, f"final loss recorded (got {run.current_loss})")
+
+
+def test_supervisor_crash_repairs_the_row() -> None:
+    # docs 07 F-01 -- a crash inside _supervise must finalise the row
+    # as failed and unblock the next start (was: row stuck running,
+    # every start 409 until restart).
+    print("\n== supervisor: crash fails the row and unblocks starts ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp, gateway=CrashingGateway())
+        run_id = env.start()
+
+        # _fail_leftover stops the orphan trainer AFTER the row repair;
+        # waiting on the stop implies the whole repair ran.
+        check(
+            wait_until(lambda: env.gateway.stopped == [(4242, False)]),
+            "orphan trainer stopped gracefully",
+        )
+        run = env.repo.get(run_id)
+        check(run.status.value == "failed", "crashed supervisor fails the row")
+        check(
+            run.error is not None and "supervisor crashed" in run.error,
+            f"crash recorded on the row (got {run.error!r})",
+        )
+        check("run_failed" in env.events.types(), "run_failed published")
+
+        # A new start is accepted without restarting the server.
+        dto = env.services.start_training.execute(
+            StartTrainingCommand(config_path="configs/test.toml")
+        )
+        check(dto.id == 2, f"retry accepted (got run {dto.id})")
+        check(dto.status.value == "running", "retry actually spawned")
+
+
 def main() -> None:
     test_progress_then_completion()
     test_failed_exit_code()
     test_stop_wins_over_finalise()
     test_total_steps_adoption()
     test_cache_phase_telemetry()
+    test_hostile_progress_lines_do_not_break_the_tail()
+    test_torn_progress_line_is_recovered()
+    test_final_samples_survive_process_exit()
+    test_supervisor_crash_repairs_the_row()
     finish()
 
 

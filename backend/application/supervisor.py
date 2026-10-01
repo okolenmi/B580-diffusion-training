@@ -10,14 +10,18 @@ the run's single writer of *final* status:
    sample to the entity and persist with a status CAS, then publish
    ``RunProgressed`` telemetry. A lost CAS means we raced a terminal
    writer: discard and exit.
-3. When the process dies, read the exit code, finalise
-   (completed / failed), publish lifecycle events, and append the
-   ``--- RUN ENDED`` marker to the log -- but only if the CAS on
-   ``running`` still succeeds. Losers write nothing.
+3. When the process dies, drain the progress file ONE final time
+   (lines written in the death tick must not be lost), then read the
+   exit code, finalise (completed / failed), publish lifecycle events,
+   and append the ``--- RUN ENDED`` marker to the log -- but only if
+   the CAS on ``running`` still succeeds. Losers write nothing.
 
 Exceptions are logged, never raised into the thread: a crashed
-supervisor must not take the server with it; reconciliation on the
-next startup covers the leftover row.
+supervisor must not take the server with it. A crash still has to
+repair its row -- ``_guard`` fails the leftover (and stops the
+unwatched trainer) exactly as ``GraphExecutionSupervisor._guard``
+does, so a stuck ``running`` row can never block the next start until
+restart (docs 07 F-01).
 """
 
 from __future__ import annotations
@@ -78,6 +82,7 @@ class RunSupervisor:
             self._supervise(run_id, pid, progress_path)
         except Exception:  # noqa: BLE001 -- thread must not die silently
             logger.exception("supervisor for run %s crashed", run_id)
+            self._fail_leftover(run_id, pid)
 
     def _supervise(self, run_id: RunId, pid: int, progress_path: Path) -> None:
         while True:
@@ -90,7 +95,24 @@ class RunSupervisor:
                 if not self._apply_sample(run, sample):
                     return  # CAS lost mid-batch: terminal writer won
             time.sleep(self._poll)
+        # The process is gone: its final lines may have landed after
+        # the last in-loop read (or inside the very tick that saw the
+        # death) -- drain once more so completion records the true last
+        # sample instead of the previous poll's (docs 07 F-07).
+        if not self._drain(run_id, progress_path):
+            return  # terminal writer won during the drain
         self._finalize(run_id, pid)
+
+    def _drain(self, run_id: RunId, progress_path: Path) -> bool:
+        """One final read after process death. Returns False when a
+        terminal writer already owns the row (skip finalisation)."""
+        run = self._runs.get(run_id)
+        if run is None or run.status is not RunStatus.RUNNING:
+            return False
+        for sample in self._progress.read_new(progress_path):
+            if not self._apply_sample(run, sample):
+                return False
+        return True
 
     def _apply_sample(self, run: Run, sample: ProgressSample) -> bool:
         total = run.total_steps
@@ -151,3 +173,37 @@ class RunSupervisor:
             run_id,
             f"--- RUN ENDED: status={status_word}, exit_code={exit_code} ---",
         )
+
+    def _fail_leftover(self, run_id: RunId, pid: int) -> None:
+        """Last-ditch row repair after a supervisor crash: never leave
+        the row ``running`` (it would block the next start until
+        restart, docs 07 F-01), and never leave a live trainer nobody
+        watches (two trainers on one device)."""
+        try:
+            run = self._runs.get(run_id)
+            if run is None or run.status.is_terminal:
+                return  # already finalised by another writer
+            expected = run.status
+            run.mark_failed(
+                at=self._clock.now(),
+                error="run supervisor crashed (see server log)",
+            )
+            if not self._runs.update_if_status(run, expected=expected):
+                return  # stop/reconcile won the row; their pid handling stands
+            for event in run.collect_events():
+                self._events.publish(event)
+            try:
+                self._artifacts.append_log_note(
+                    run_id,
+                    "--- RUN ENDED: status=failed, supervisor crash ---",
+                )
+            except Exception:  # noqa: BLE001 -- repair is best-effort
+                logger.exception("log note after supervisor crash failed (non-fatal)")
+            # If the trainer is still alive, stop it gracefully (a dead
+            # pid is a no-op): the row says failed, so nothing watches
+            # this process any more.
+            self._gateway.stop(pid)
+        except Exception:  # noqa: BLE001 -- already in the crash path
+            logger.exception(
+                "could not fail leftover run %s after supervisor crash", run_id
+            )

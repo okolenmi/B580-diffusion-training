@@ -14,8 +14,17 @@ overwritten:
   them here -- as the legacy server did -- threw away hours of work for
   no reason.
 - ``running``, kill() True -> cancelled (leftover process reaped)
-- ``running``, kill() False-> failed  (process already gone or PID
-  reused by something that is no longer our trainer)
+- ``running``, kill() False -> read the progress file and finalise from
+  the trainer's own last word, exactly as adoption does (docs 08 N-03)
+
+That last row used to be an unconditional ``failed`` at 0 steps, on the
+reasoning that a pid we cannot signal is a trainer we know nothing
+about. The premise was wrong: the trainer wrote a progress file, and it
+is the same evidence adoption already trusts. So a run that finished
+100/100 while the server was down was recorded ``failed`` 0/100 -- the
+worst possible reading of a successful run, and the common case after an
+overnight restart. A dead pid with no progress file at all still fails,
+and still with no steps, because then there is genuinely nothing to read.
 
 Adoption deliberately does not touch the row: it stays ``running`` with
 the pid it always had. Clients refetch authoritative state when they
@@ -29,10 +38,12 @@ import logging
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
 from ..lifecycle_writer import RunLifecycleWriter
+from ..ports.progress_source import ProgressSource
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
 from ..ports.training_gateway import TrainingGateway
+from ..run_verdict import apply_verdict, fold_samples
 from ...domain.value_objects import RunStatus
 
 logger = logging.getLogger(__name__)
@@ -48,11 +59,17 @@ class ReconcileRuns:
         clock: Clock,
         watcher: RunWatcher,
         artifacts: RunArtifacts,
+        progress: ProgressSource,
     ) -> None:
         self._runs = runs
         self._writer = writer
         self._gateway = gateway
         self._clock = clock
+        # Required, not optional: finalising a dead-pid run from the
+        # trainer's own progress file is the same evidence adoption uses
+        # (docs 08 N-03). Without it a finished run reads as failed at 0
+        # steps, which is how it used to behave.
+        self._progress = progress
         # Required, not optional: with these missing the sweep would
         # silently fall back to killing live trainers, which is the data
         # loss docs 07 F-11 exists to prevent (docs 08 S-02).
@@ -88,10 +105,7 @@ class ReconcileRuns:
                     reason="orphan cleanup: killed leftover training process",
                 )
             else:
-                run.mark_failed(
-                    at=self._clock.now(),
-                    error="orphan cleanup: process already gone or no longer ours",
-                )
+                self._finalise_from_progress(run)
 
             if not self._writer.commit(run, expected=expected):
                 logger.warning(
@@ -118,3 +132,55 @@ class ReconcileRuns:
         progress = self._artifacts.paths_for(run.id).progress
         self._watcher.adopt(run_id=run.id, pid=run.pid, progress_path=progress)
         return True
+
+    def _finalise_from_progress(self, run) -> None:
+        """A ``running`` row whose process is gone: read what the trainer
+        left behind and finalise from that (docs 08 N-03).
+
+        The process is not ours to signal, so its exit code is
+        unreadable and the trainer's own terminal progress line is the
+        only verdict available -- the same evidence, and the same rule,
+        that `_adopt`'s path uses when it later finalises. The verdict
+        itself lives in `run_verdict.apply_verdict` so the two cannot
+        drift again, which is how the original defect happened.
+
+        Reads from offset 0: a fresh `ProgressSource` is constructed per
+        call site and this is a one-shot read, so the whole file is
+        consumed rather than a tail.
+
+        Every read is best-effort. A missing, empty, truncated or
+        unparseable file is not an error here -- it just means there is
+        no evidence, and the correct finalisation for absent evidence is
+        a failure, never a hopeful completion.
+        """
+        samples = []
+        if run.id is not None:
+            progress_path = self._artifacts.paths_for(run.id).progress
+            try:
+                samples = self._progress.read_new(progress_path)
+            except OSError as exc:
+                # Unreadable file (permissions, vanished mid-read). Same
+                # outcome as no file: fail with no steps claimed.
+                logger.warning(
+                    "reconcile: cannot read progress of run %s (%s): %s",
+                    run.id, progress_path, exc,
+                )
+                samples = []
+
+        verdict = fold_samples(run, samples, self._clock)
+        status_word = apply_verdict(
+            run,
+            verdict=verdict,
+            exit_code=None,  # unreadable: we did not spawn it
+            clock=self._clock,
+            unreadable_exit_note=(
+                "orphan cleanup: process already gone or no longer ours"
+                + ("" if samples else "; its progress file holds nothing"
+                   " readable either, so there is no evidence of progress")
+            ),
+        )
+        logger.info(
+            "reconciled run %s -> %s from its progress file (%d samples, "
+            "verdict=%r, done_steps=%s)",
+            run.id, status_word, len(samples), verdict, run.done_steps,
+        )

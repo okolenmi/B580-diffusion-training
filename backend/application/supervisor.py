@@ -33,6 +33,7 @@ from pathlib import Path
 
 from .event_publisher import EventPublisher
 from .lifecycle_writer import RunLifecycleWriter
+from .run_verdict import apply_verdict, fold_samples
 from .ports.clock import Clock
 from .ports.progress_source import ProgressSample, ProgressSource
 from .ports.run_artifacts import RunArtifacts
@@ -165,19 +166,11 @@ class RunSupervisor(RunWatcher):
             # -- and the client should hear about the run's end through
             # the normal lifecycle path, not through telemetry.
             return True
-        # total_steps is passed as the trainer reported it: whether it is
-        # adopted is the entity's call (a plan only ever grows), not this
-        # thread's -- one writer, one rule (docs 08 S-15).
-        run.record_progress(
-            done_steps=run.done_steps if sample.step is None else sample.step,
-            at=self._clock.now(),
-            current_loss=sample.loss,
-            avg_loss=sample.avg,
-            phase=sample.phase,
-            total_steps=sample.total,
-            cache_done=sample.cache_done,
-            cache_total=sample.cache_total,
-        )
+        # One sample, so the shared folder's loop is not worth it here --
+        # but the rule it implements is the same one ReconcileRuns uses on
+        # a whole file, and it lives in run_verdict.py so the two cannot
+        # drift (docs 08 N-03).
+        fold_samples(run, [sample], self._clock)
         if not self._writer.commit(run, expected=RunStatus.RUNNING):
             return False
         self._events.emit(
@@ -201,7 +194,6 @@ class RunSupervisor(RunWatcher):
         run = self._runs.get(run_id)
         if run is None or run.status is not RunStatus.RUNNING:
             return  # stop request or reconcile beat us to the row
-        at = self._clock.now()
         adopted = run_id in self._adopted
         verdict = self._terminal.get(run_id)
         self._adopted.discard(run_id)
@@ -212,34 +204,17 @@ class RunSupervisor(RunWatcher):
             # missing word is a failure, never a hopeful "completed"
             # (docs 07 F-11).
             exit_code = None  # honest in the marker: unreadable, not zero
-            if verdict == "finished":
-                run.mark_completed(at=at)
-                status_word = "completed"
-            else:
-                run.mark_failed(
-                    at=at,
-                    error=(
-                        "trainer reported an error"
-                        if verdict == "error"
-                        else "process exited with no terminal progress line "
-                             "(adopted after a server restart; its exit "
-                             "code cannot be read)"
-                    ),
-                )
-                status_word = "failed"
-        elif exit_code == 0:
-            run.mark_completed(at=at)
-            status_word = "completed"
-        elif exit_code is None:
-            run.mark_failed(
-                at=at, error="process died (exit code unavailable)"
-            )
-            status_word = "failed"
-        else:
-            run.mark_failed(
-                at=at, error=f"Exit code {exit_code}", exit_code=exit_code
-            )
-            status_word = "failed"
+        status_word = apply_verdict(
+            run,
+            verdict=verdict,
+            exit_code=exit_code,
+            clock=self._clock,
+            unreadable_exit_note=(
+                "process exited with no terminal progress line "
+                "(adopted after a server restart; its exit "
+                "code cannot be read)"
+            ) if adopted else "process died (exit code unavailable)",
+        )
         if not self._writer.commit(run, expected=RunStatus.RUNNING):
             return
         self._artifacts.append_log_note(

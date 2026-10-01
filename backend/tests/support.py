@@ -882,7 +882,7 @@ def build_services(
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
             runs=runs, writer=run_writer, gateway=gateway, clock=clock,
-            watcher=supervisor, artifacts=artifacts,
+            watcher=supervisor, artifacts=artifacts, progress=_Jsonl(),
         ),
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),

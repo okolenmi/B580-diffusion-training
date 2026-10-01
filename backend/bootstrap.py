@@ -264,6 +264,7 @@ def build_container(settings: Settings) -> Container:
             clock=clock,
             watcher=supervisor,
             artifacts=artifacts,
+            progress=progress,
         ),
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),

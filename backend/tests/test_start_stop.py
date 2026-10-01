@@ -6,6 +6,7 @@ Run directly: python backend/tests/test_start_stop.py
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -478,6 +479,112 @@ def test_reconcile_runs() -> None:
         )
 
 
+def _write_progress(runs_dir: Path, run_id: int, lines: list[dict]) -> Path:
+    """Write a trainer's progress file the way the trainer itself does."""
+    path = runs_dir / f"run_{run_id}" / "log.progress.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
+    )
+    return path
+
+
+def test_reconcile_reads_the_progress_file_of_a_dead_run() -> None:
+    """docs 08 N-03: a run that finished while the server was down was
+    recorded ``failed`` at 0 steps, because this sweep trusted the
+    absence of a signalable pid and never opened the progress file
+    adoption already relies on. The four cases below are the trainer's
+    own last word, and each has exactly one honest reading.
+    """
+    print("\n== ReconcileRuns: a dead-pid run is finalised from its progress file ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+
+        finished = seed_run(env.repo, env.clock, total_steps=100, start=True, pid=4242)
+        _write_progress(env.runs_dir, finished.id, [
+            {"phase": "training_start", "total": 100},
+            *[{"phase": "step", "step": s, "total": 100, "loss": 0.1, "avg": 0.1,
+               "lr": 1e-4} for s in range(1, 101)],
+            {"phase": "finished"},
+        ])
+        errored = seed_run(env.repo, env.clock, total_steps=50, start=True, pid=4243)
+        _write_progress(env.runs_dir, errored.id, [
+            {"phase": "step", "step": 7, "total": 50, "loss": 0.2},
+            {"phase": "error"},
+        ])
+        silent = seed_run(env.repo, env.clock, total_steps=10, start=True, pid=4244)
+        _write_progress(env.runs_dir, silent.id, [
+            {"phase": "step", "step": 4, "total": 10, "loss": 0.3},
+        ])
+        empty = seed_run(env.repo, env.clock, total_steps=10, start=True, pid=4245)
+        _write_progress(env.runs_dir, empty.id, [])  # file exists, says nothing
+        missing = seed_run(env.repo, env.clock, total_steps=10, start=True, pid=4246)
+
+        env.gateway.alive.discard(4242)
+        env.gateway.alive.discard(4243)
+        env.gateway.alive.discard(4244)
+        env.gateway.alive.discard(4245)
+        env.gateway.alive.discard(4246)
+
+        result = env.services.reconcile_runs.execute()
+        check(result.adopted == 0, "nothing was adopted: no pid is alive")
+
+        # The defect itself: 100/100 plus "finished" used to be failed 0/100.
+        check(
+            env.repo.get(finished.id).status.value == "completed",
+            f"a finished run is completed, not failed "
+            f"(got {env.repo.get(finished.id).status.value!r})",
+        )
+        check(
+            env.repo.get(finished.id).done_steps == 100,
+            f"and it reports the steps it really did "
+            f"(got {env.repo.get(finished.id).done_steps})",
+        )
+
+        check(
+            env.repo.get(errored.id).status.value == "failed",
+            "an 'error' line still fails",
+        )
+        check(
+            "trainer reported an error" in (env.repo.get(errored.id).error or ""),
+            f"with the trainer's own reason (got {env.repo.get(errored.id).error!r})",
+        )
+        check(
+            env.repo.get(errored.id).done_steps == 7,
+            f"and the real done_steps, not zero (got {env.repo.get(errored.id).done_steps})",
+        )
+
+        check(
+            env.repo.get(silent.id).status.value == "failed",
+            "a run that ended with no last word still fails: absent evidence "
+            "is never read as success",
+        )
+        check(
+            env.repo.get(silent.id).done_steps == 4,
+            f"but keeps the steps it did (got {env.repo.get(silent.id).done_steps})",
+        )
+
+        for label, row in (("an empty", empty), ("a missing", missing)):
+            check(
+                env.repo.get(row.id).status.value == "failed"
+                and env.repo.get(row.id).done_steps == 0,
+                f"{label} progress file yields failed/0, as before (got "
+                f"{env.repo.get(row.id).status.value}/"
+                f"{env.repo.get(row.id).done_steps})",
+            )
+
+        types = env.events.types()
+        check(
+            types.count("run_completed") == 1,
+            f"the completed run published exactly one run_completed (got {types})",
+        )
+        check(
+            types.count("run_failed") == 4,
+            f"the four without evidence published run_failed (got {types})",
+        )
+        check(result.cleaned == 5, f"all five rows finalised (got {result.cleaned})")
+
+
 def test_start_refuses_an_occupied_run_directory() -> None:
     # docs 07 F-04: the trainer opens log.txt with "w", so a run id whose
     # directory already holds another run's files must be refused, not
@@ -534,6 +641,7 @@ def main() -> None:
     test_get_run_log()
     test_run_log_tail_is_read_from_the_end()
     test_reconcile_runs()
+    test_reconcile_reads_the_progress_file_of_a_dead_run()
     finish()
 
 

@@ -1,6 +1,6 @@
-"""Training page visual smoke: idle state, mocked running state,
-interactions, and a regression pass over monitor/graph (they share
-style.css with the training page).
+"""Visual smoke for the main pages: idle state, mocked running state,
+interactions, the config editor (schema form + raw), run detail views,
+and a regression pass over monitor/graph (they share style.css).
 
 Not auto-discovered by run_all.py (no ``test_`` prefix): it needs a
 LIVE backend and the Playwright venv.
@@ -51,8 +51,13 @@ def hook_console(page, tag):
 
 
 def is_expected_noise(text):
-    # Browser network-log line for the contract 404 when idle.
-    return "404" in text and "runs/active" in text
+    # Browser network-log lines for deliberate contract 404s: the idle
+    # probe of /runs/active (no_active_run) and scenario E1's probe of
+    # a run id that never existed (run_not_found) -- both render honest
+    # states in-app; the browser still logs the resource status.
+    if "404" not in text:
+        return False
+    return "runs/active" in text or "runs/9999" in text
 
 
 def main():
@@ -224,6 +229,10 @@ def main():
             ),
             "clicked row marked selected",
         )
+        # hand-off: the quick log links to the full /run/{id} detail
+        check(page.locator("#log-open").is_visible(), "'open full' link shown with a selection")
+        check(page.locator("#log-open").get_attribute("href") == "/run/12",
+              "open-full href follows selection")
 
         page.screenshot(path=str(OUT / "running.png"), full_page=True)
         check((OUT / "running.png").stat().st_size > 20000, "running screenshot captured")
@@ -331,6 +340,83 @@ def main():
 
         page.screenshot(path=str(OUT / "config.png"), full_page=True)
         check((OUT / "config.png").stat().st_size > 20000, "config screenshot captured")
+        ctx.close()
+
+        # ---------- E: run detail (/run/{id}) ----------
+        print("== E: run detail ==")
+
+        # E1: honest 404 against the real backend (scratch DB, no runs)
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "E404")
+        page.goto(f"{BASE}/run/9999", wait_until="networkidle")
+        check(page.locator("#run-grid").is_hidden(), "404: details stay hidden")
+        check("not found" in page.locator("#run-state").inner_text().lower(),
+              "404: honest not-found state")
+        ctx.close()
+
+        # E2: completed run mocked -- every field renders, log tails
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "E")
+        run12 = next(r for r in history if r["id"] == 12)
+        run11 = next(r for r in history if r["id"] == 11)
+        page.route(
+            re.compile(r"/api/v1/runs/12/log"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"log": log_text, "lines": 40})),
+        )
+        page.route(
+            re.compile(r"/api/v1/runs/12$"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps(run12)),
+        )
+        page.goto(f"{BASE}/run/12", wait_until="networkidle")
+        page.wait_for_selector("#run-grid", state="visible", timeout=15000)
+
+        check(page.locator("#run-title").inner_text() == "Run #12", "title = Run #12")
+        badge_cls = page.locator("#status-badge").get_attribute("class")
+        check("status-completed" in badge_cls, f"completed badge class ({badge_cls})")
+        n_rows = page.locator("#run-details dt").count()
+        check(n_rows == 16, f"16 detail rows ({n_rows})")
+        ddetails = page.locator("#run-details").inner_text()
+        check("1000 / 1000" in ddetails, "steps rendered")
+        # row order is pinned by render(): Exit code is index 9
+        check(page.locator("#run-details dd").nth(9).inner_text().strip() == "0",
+              "exit code 0 rendered")
+        check("ago" in ddetails, "relative time in absolute timestamps")
+        # Error row is index 10; a clean run renders "—" with class mono
+        # (the error class only applies when run.error is truthy)
+        check(page.locator("#run-details dd").nth(10).inner_text() == "—",
+              "error empty (—) for a clean run")
+        check("step 39" in page.locator("#log-body").inner_text(), "log tail filled")
+        # .log-pane is shared chrome in style.css -- if it drifts back to a
+        # page stylesheet, run detail loses line structure silently
+        ws = page.locator("#log-body").evaluate("e => getComputedStyle(e).whiteSpace")
+        check(ws == "pre-wrap", f"log pane keeps line structure ({ws})")
+        page.screenshot(path=str(OUT / "run.png"), full_page=True)
+        check((OUT / "run.png").stat().st_size > 20000, "run screenshot captured")
+
+        # E3: failed run -- error renders in red, exit code shown
+        page.route(
+            re.compile(r"/api/v1/runs/11/log"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps({"log": log_text, "lines": 40})),
+        )
+        page.route(
+            re.compile(r"/api/v1/runs/11$"),
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=json.dumps(run11)),
+        )
+        page.goto(f"{BASE}/run/11", wait_until="networkidle")
+        page.wait_for_selector("#run-grid", state="visible", timeout=15000)
+        err_dd = page.locator("#run-details dd.error")
+        check(err_dd.count() == 1 and err_dd.inner_text() == "CUDA OOM",
+              "failed run shows its error text with the error class")
+        err_color = err_dd.evaluate("e => getComputedStyle(e).color")
+        norm_color = page.locator("#run-details dd.mono").first.evaluate(
+            "e => getComputedStyle(e).color")
+        check(err_color != norm_color, f"error rendered in red ({err_color})")
         ctx.close()
 
         browser.close()

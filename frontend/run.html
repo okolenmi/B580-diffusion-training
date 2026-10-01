@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Run detail</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/run.css">
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-name">Distillation</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item active" href="/">Training</a>
+            <a class="nav-item" href="/graph">Graph Editor</a>
+            <span class="nav-item nav-item-disabled"
+                  title="M8 -- dataset manager views">Datasets — soon</span>
+            <a class="nav-item" href="/config">Config Editor</a>
+
+            <div class="sidebar-tool">
+                <label class="sidebar-tool-label" for="monitor-id-input">Open a monitor</label>
+                <input id="monitor-id-input" class="cfg-input" type="text"
+                       placeholder="mon-… id" aria-label="Monitor id"
+                       title="Paste a monitor id to open its live dashboard">
+                <button id="btn-open-monitor" class="btn btn-secondary btn-block btn-small">Open monitor →</button>
+            </div>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="system-console">
+                <div class="console-header">System Console</div>
+                <div class="console-lines" id="console-output">
+                    <div class="console-line info">Ready.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="content-area">
+        <header class="page-topbar">
+            <h1 id="run-title">Run #—</h1>
+            <div id="status-badge" class="status-badge status-idle">—</div>
+            <span class="page-sub" id="run-sub"></span>
+            <a class="btn btn-secondary btn-small" href="/">← Training</a>
+        </header>
+
+        <div class="page-body">
+            <div class="cfg-state" id="run-state">Loading…</div>
+
+            <div class="run-grid" id="run-grid" hidden>
+                <section class="card">
+                    <div class="card-header"><span>Details</span></div>
+                    <dl class="run-details" id="run-details"></dl>
+                </section>
+
+                <section class="card">
+                    <div class="card-header">
+                        <span>Log tail <span class="text-dim">(last 500 lines)</span></span>
+                        <button id="btn-refresh-log" class="btn btn-secondary btn-small">Refresh</button>
+                    </div>
+                    <div class="log-pane" id="log-body"
+                         data-empty="No log text for this run."></div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/views/run.js"></script>
+</body>
+</html>

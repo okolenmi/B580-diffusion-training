@@ -31,11 +31,13 @@ ASSETS = (
     "/ui/css/editor.css",
     "/ui/css/training.css",
     "/ui/css/config.css",
+    "/ui/css/run.css",
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",
     "/ui/js/views/dashboard.js",
     "/ui/js/views/config.js",
+    "/ui/js/views/run.js",
     "/ui/js/editor.js",
     "/ui/js/editor/state.js",
     "/ui/js/editor/canvas.js",
@@ -85,6 +87,12 @@ def test_pages_and_assets() -> None:
             f"/config serves the config editor page (got {status})",
         )
 
+        status, _, body = asgi_request(app, "/run/12")
+        check(
+            status == 200 and isinstance(body, str) and "run-details" in body,
+            f"/run/{{id}} serves the run detail page (got {status})",
+        )
+
         for asset in ASSETS:
             status, _, _ = asgi_request(app, asset)
             check(status == 200, f"{asset} serves (got {status})")
@@ -118,7 +126,7 @@ def test_static_cache_headers() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         app = create_app(_container(tmp).services, static_dir=FRONTEND)
 
-        for path in ("/", "/graph", "/config", "/monitor/mon-test",
+        for path in ("/", "/graph", "/config", "/run/12", "/monitor/mon-test",
                      "/ui/css/style.css", "/ui/js/editor.js"):
             status, headers, _ = asgi_request(app, path)
             check(

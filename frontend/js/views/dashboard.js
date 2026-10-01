@@ -259,6 +259,10 @@ async function showLog(runId) {
     const res = await api(`/runs/${runId}/log?lines=200`);
     shownLogRun = runId;
     el("log-title").textContent = `#${runId}`;
+    const openLink = el("log-open");
+    openLink.href = `/run/${runId}`;
+    openLink.title = `Open run #${runId} detail: full log + all fields`;
+    openLink.hidden = false;
     el("log-body").textContent = res.log || "(empty)";
     el("log-body").scrollTop = 0;
     markSelectedRow();

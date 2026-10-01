@@ -1,0 +1,65 @@
+/* ---------------------------------------------------------------------------
+   run.css -- the Run detail page only (run.html).
+
+   Page chrome (topbar/body) comes from style.css. Two blocks: the
+   details card (definition grid) and the log card; they sit side by
+   side and stretch to a shared height like the training page's
+   history/log pair.
+   --------------------------------------------------------------------------- */
+
+.run-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: 20px;
+    align-items: stretch;
+}
+.run-grid .card { display: flex; flex-direction: column; }
+
+/* ---- details ---- */
+
+.run-details {
+    margin: 0;
+    padding: 6px 0;
+    display: grid;
+    grid-template-columns: minmax(140px, max-content) minmax(0, 1fr);
+}
+.run-details dt {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 9px 20px 9px 24px;
+    align-self: center;
+}
+.run-details dd {
+    margin: 0;
+    padding: 9px 24px 9px 0;
+    font-size: 13.5px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+.run-details dd.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+.run-details dd.error { color: var(--red); white-space: pre-wrap; }
+.run-details dt, .run-details dd {
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+.run-details dt:first-of-type, .run-details dd:first-of-type {
+    border-top: none;
+}
+
+/* ---- log card: fills whatever the details card does not ---- */
+
+.run-grid .log-pane {
+    flex: 1;
+    min-height: 320px;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.run-grid .log-pane:not(:empty) { cursor: ns-resize; }
+
+@media (max-width: 1100px) {
+    .run-grid { grid-template-columns: 1fr; }
+}

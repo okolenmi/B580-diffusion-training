@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (50
+checklist below now runs as `backend/tests/visual_smoke.py` (77
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -27,10 +27,11 @@ Covers: idle state (real backend), running state (API mocked with a
 synthetic `RunOut` + history + log), interactions (start-form guard,
 row-click -> log, wipe confirm dialog captured in code), elapsed
 ticker, a monitor/graph regression pass (all three pages share
-`style.css`), and the config editor (schema-driven form, visibility,
-dirty tracking, E2E save against a throwaway copy). Console is
-asserted clean across every page. Desktop-browser execution of the
-same checklist below stays as the manual fallback.
+`style.css`), the config editor (schema-driven form, visibility,
+dirty tracking, E2E save against a throwaway copy), and run detail
+views (hand-off link, honest 404, completed + failed renders).
+Console is asserted clean across every page. Desktop-browser
+execution of the same checklist below stays as the manual fallback.
 
 ## Prerequisites
 
@@ -139,7 +140,28 @@ A scratch DB keeps the check independent of real training history.
       untouched) is API-tested (`test_config.py`); not driven in the
       browser.
 
-## 5. Record
+## 5. Run detail -- `http://127.0.0.1:8766/run/{id}`
+
+* [x] Hand-off from the main page: the log card's "open full ↗" link
+      appears with a selection and follows it (`/run/12` after
+      clicking run 12's row, scenario B).
+* [x] Missing run renders an honest state: probing `/run/9999`
+      against the real backend keeps the details hidden and shows a
+      "not found" message; the browser's own resource-status line for
+      this deliberate 404 is filtered noise (`is_expected_noise`).
+* [x] Completed run (mocked): title, `status-completed` badge, all 16
+      detail rows (steps, exit code 0, absolute + relative timestamps,
+      empty error as em dash), log tail fills. Line structure is
+      pinned via `white-space: pre-wrap` -- `.log-pane` moved to
+      `style.css` (both pages share it); it was missing on this page
+      until the screenshot showed run-together lines.
+* [x] Failed run (mocked): error text renders with the `error` class,
+      red (computed color differs from a normal row), exit code shown.
+* [ ] Live active-run refresh (5s log tail + 1s duration ticker +
+      terminal-event SSE reload) is exercised only through its code
+      path; the smoke has no real running run on `/run/{id}`.
+
+## 6. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --

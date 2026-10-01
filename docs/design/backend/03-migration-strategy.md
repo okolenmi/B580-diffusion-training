@@ -21,12 +21,14 @@ frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
 ├── graph.html                # graph editor page (/graph)
 ├── config.html               # config editor page (/config, M8a)
+├── run.html                  # run detail page (/run/{id}, M8b)
 ├── css/
 │   ├── style.css             # shared design system: tokens, shell, buttons, inputs,
-│   │                         # badges, console, card, page chrome (topbar/body);
-│   │                         # legacy dead weight removed
+│   │                         # badges, console, card, page chrome (topbar/body),
+│   │                         # log pane; legacy dead weight removed
 │   ├── training.css          # training page: state hero, history/log grid
 │   ├── config.css            # config page: path bar, tabs, grouped form, raw editor
+│   ├── run.css               # run detail page: details grid, log card
 │   ├── monitor.css           # monitor page block
 │   └── editor.css            # editor layout, canvas plane, node visuals
 └── js/
@@ -35,6 +37,7 @@ frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
     ├── editor.js             # editor page entry: catalog, GraphDoc, toolbar, /events
     ├── views/dashboard.js    # training controls (runs REST + /events SSE)
     ├── views/config.js       # config editor: schema form + raw buffer (M8a)
+    ├── views/run.js          # run detail: full RunOut grid + log tail (M8b)
     ├── editor/               # state.js (GraphDoc + wire forms), canvas.js (render/
     │                         # drag/connect), inspector.js (params form), palette.js,
     │                         # executions.js (run lifecycle), library.js (+ legacy import)
@@ -70,7 +73,7 @@ Rules that keep it fast and expandable:
 | nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
 | nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
 | **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
-| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`; `/datasets` view follows (M8) |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`; `/datasets` view follows (M8) |
 
 ### 3.1 Gaps and their resolutions
 

@@ -84,4 +84,8 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     def config_page() -> FileResponse:
         return FileResponse(static_dir / "config.html", headers=_NO_CACHE)
 
+    @app.get("/run/{run_id}", include_in_schema=False)
+    def run_page(run_id: str) -> FileResponse:
+        return FileResponse(static_dir / "run.html", headers=_NO_CACHE)
+
     app.mount("/ui", _UiStaticFiles(directory=static_dir), name="ui")

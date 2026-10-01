@@ -294,22 +294,15 @@
 }
 .runs-table .status-badge { margin-top: 0; }
 
-.log-pane {
-    flex: 1;
-    min-height: 320px;
-    overflow-y: auto;
-    background: #000;
-    padding: 14px 16px;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: #c9d1d9;
-    /* sit flush in the card without spilling square corners */
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+/* hand-off from the quick log to the /run/{id} detail page */
+.log-open {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    margin-left: 8px;
+    text-decoration: none;
 }
-.log-pane:empty::before { content: attr(data-empty); color: var(--text-dim); }
+.log-open:hover { text-decoration: underline; }
 
 /* ---- sidebar tool group (monitor hand-off) ---- */
 

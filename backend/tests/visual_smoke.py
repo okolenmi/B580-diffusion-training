@@ -489,7 +489,10 @@ def main():
         check(page.locator("#sets-state").is_visible(),
               "sets tab honest empty state")
         page.click("#tab-tasks")
-        check(page.locator("#task-image-dir").is_visible(), "task form renders")
+        check(page.locator("#btn-add-data-tab").is_visible(),
+              "add-data entry point renders on the Tasks tab")
+        check(page.locator("#add-dialog").is_hidden(),
+              "add dialog starts closed")
         check(page.locator("#tasks-state").is_visible(),
               "tasks tab honest empty state")
         page.screenshot(path=str(OUT / "datasets_empty.png"), full_page=True)
@@ -651,6 +654,140 @@ def main():
         page.screenshot(path=str(OUT / "shell.png"), full_page=True)
         check((OUT / "shell.png").stat().st_size > 20000,
               "shell screenshot captured")
+        ctx.close()
+
+        # ---------- H: dataset add-data dialog + edit modes (M8e) ------
+        print("== H: add data dialog + item edit modes ==")
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "H")
+        confirm_msgs: list[str] = []
+        page.on("dialog", lambda d: (confirm_msgs.append(d.message), d.accept()))
+        task_posts: list[str] = []
+        page.on("request", lambda r: task_posts.append(r.url)
+                if r.method == "POST" and "/tasks" in r.url else None)
+
+        page.goto(f"{BASE}/datasets", wait_until="networkidle")
+        page.wait_for_selector("#ds-grid .ds-card", timeout=15000)
+
+        # card entry point -> dialog, generate tab by default
+        card = page.locator(".ds-card").filter(has_text="1024 aes")
+        card.locator("button", has_text="Add data").click()
+        page.wait_for_selector("#add-dialog", state="visible", timeout=5000)
+        check(page.locator("#add-ds-name").inner_text() == "1024 aes",
+              "add dialog targets the card's dataset")
+        check(page.locator("#add-panel-generate").is_visible()
+              and page.locator("#add-panel-import").is_hidden(),
+              "generate panel is the default tab")
+        n_gen = page.locator(
+            "#add-prompts, #add-cfg-min, #add-steps-min, #add-t-mode,"
+            " #add-batch, #add-conditions, #add-samples, #add-latent,"
+            " #add-model-type").count()
+        check(n_gen == 9, f"generate form exposes its option set ({n_gen})")
+        check("10 images" in page.locator("#add-total").inner_text(),
+              "total preview computed from conditions x samples")
+        check("512" in page.locator("#add-latent-px").inner_text(),
+              "latent size renders its pixel equivalent")
+
+        # client-side validation refuses before any request leaves
+        page.click("#btn-add-start")
+        check(page.locator("#add-error").is_visible()
+              and page.locator("#add-dialog").is_visible(),
+              "empty checkpoint refused locally (dialog stays open)")
+        check(len(task_posts) == 0, "no task POST left the browser")
+
+        # import tab: the resizing option set
+        page.click("#add-tab-import")
+        check(page.locator("#add-panel-import").is_visible()
+              and page.locator("#add-panel-generate").is_hidden(),
+              "import panel swaps in")
+        check(len(page.locator("#add-resize-desc").inner_text()) > 20,
+              "resize mode carries an honest description")
+        check(page.locator("#add-max-aspect-row").is_hidden(),
+              "max aspect ratio hidden when it does not apply")
+        page.select_option("#add-resize-mode", "fit")
+        check(page.locator("#add-max-aspect-row").is_visible(),
+              "max aspect ratio shown for the splitting mode")
+        n_imp = page.locator(
+            "#add-image-dir, #add-recursive, #add-resize-mode,"
+            " #add-import-latent, #add-import-model-type, #add-import-neg,"
+            " #add-import-seed").count()
+        check(n_imp == 7, f"import form exposes its option set ({n_imp})")
+        page.click("#add-close")
+        check(page.locator("#add-dialog").is_hidden(), "add dialog closes")
+
+        # detail: edit mode + advanced editor (read-only: nothing saved)
+        page.click("a.ds-card-name[href='/datasets/1024%20aes']")
+        page.wait_for_selector("#items-grid .ds-item", timeout=15000)
+        page.click(".seg[data-mode='edit']")
+        check(page.locator("#items-grid").evaluate(
+            "e => e.classList.contains('edit-mode')"),
+            "edit mode marks the grid")
+        check(page.locator(".item-edit-hint").first.is_visible(),
+              "cards show the edit affordance")
+
+        page.locator("#items-grid .ds-item .ds-item-body").first.click()
+        page.wait_for_selector("#item-dialog", state="visible", timeout=5000)
+        item_id = page.locator("#item-ed-id").inner_text()
+        check(item_id.startswith("#"), f"editor bound to an item ({item_id})")
+        check(page.locator("#item-ed-save").is_disabled(),
+              "pristine editor refuses an empty save")
+        check("item" in page.locator("#item-ed-meta").inner_text(),
+              "editor shows read-only metadata")
+        pos = page.locator("#item-ed-pos").inner_text()
+        check("of" in pos, f"editor positions the walk ({pos})")
+
+        page.fill("#item-ed-prompt", "smoke edit -- must be reverted")
+        check(page.locator("#item-ed-save").is_enabled(),
+              "edited field marks the editor dirty")
+        page.click("#item-ed-revert")
+        check(page.locator("#item-ed-save").is_disabled(),
+              "revert restores the snapshot")
+        page.click("#item-ed-next")
+        check(page.locator("#item-ed-id").inner_text() != item_id,
+              "next moves to the following item")
+        page.click("#item-ed-close")
+        check(page.locator("#item-dialog").is_hidden(),
+              "editor closes from the walk")
+
+        # browse mode: the prompt reaches the same editor
+        page.click(".seg[data-mode='browse']")
+        page.locator("#items-grid .item-prompt").first.click()
+        page.wait_for_selector("#item-dialog", state="visible", timeout=5000)
+        check(page.locator("#item-ed-save").is_disabled(),
+              "prompt click opens the same pristine editor")
+        page.click("#item-ed-close")
+        check(page.locator("#item-dialog").is_hidden(),
+              "editor closes from a prompt click")
+
+        # multi-select -> multi-edit panel (rendered, never applied here)
+        page.locator("#items-grid .ds-item-check").nth(0).check()
+        page.locator("#items-grid .ds-item-check").nth(1).check()
+        check(page.locator("#bulk-bar").is_visible(),
+              "multi-edit panel rises with a selection")
+        n_bulk = page.locator("#bulk-field .seg").count()
+        check(n_bulk == 4, f"multi-edit offers four fields ({n_bulk})")
+        check("2 selected" in page.locator("#bulk-count").inner_text(),
+              "selection count follows the checkboxes")
+        page.click(".seg[data-field='cfg']")
+        check(page.locator("#bulk-row-cfg").is_visible()
+              and page.locator("#bulk-row-text").is_hidden(),
+              "cfg value row swaps in")
+        page.click(".seg[data-field='type']")
+        check(page.locator("#bulk-row-type").is_visible(),
+              "verdict row swaps in")
+        check("2" in page.locator("#bulk-apply-n").inner_text(),
+              "apply button counts the selection")
+        check(task_posts == [], "still no task POST (read-only smoke)")
+        page.locator("#bulk-bar").scroll_into_view_if_needed()
+        page.screenshot(path=str(OUT / "datasets_edit.png"))
+        check((OUT / "datasets_edit.png").stat().st_size > 20000,
+              "edit-mode screenshot captured")
+        page.click("#btn-clear-sel")
+        check(page.locator("#bulk-bar").is_hidden(),
+              "clearing the selection hides the panel")
+        check(confirm_msgs == [],
+              "no stray confirmation asked on the read-only walk")
         ctx.close()
 
         browser.close()

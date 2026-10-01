@@ -17,6 +17,7 @@
             <div class="topbar-actions" id="topbar-actions">
                 <button id="btn-new-dataset" class="btn btn-start">＋ New dataset</button>
             </div>
+            <button id="btn-add-data" class="btn btn-start" hidden>＋ Add data</button>
             <a class="btn btn-secondary btn-small" id="btn-back" href="/datasets" hidden>← Datasets</a>
         </header>
 
@@ -59,6 +60,12 @@
                     <!-- ITEMS -->
                     <section id="panel-items" role="tabpanel" aria-labelledby="tab-items">
                         <div class="ds-toolbar">
+                            <div class="ds-filter" id="item-mode">
+                                <button class="seg active" data-mode="browse"
+                                        title="Browse: filter, select, quick actions">Browse</button>
+                                <button class="seg" data-mode="edit"
+                                        title="Edit: open any item in the advanced editor">Edit</button>
+                            </div>
                             <div class="ds-filter" id="item-filter">
                                 <button class="seg active" data-filter="all">All</button>
                                 <button class="seg" data-filter="pending">Pending</button>
@@ -72,20 +79,60 @@
 
                         <div class="error-box" id="items-error" role="alert" hidden></div>
 
+                        <!-- multi-edit: one field appended/replaced across the selection -->
                         <div class="ds-bulk" id="bulk-bar" hidden>
-                            <span class="ds-bulk-count" id="bulk-count">0 selected</span>
-                            <input id="bulk-prompt" type="text"
-                                   placeholder="prompt text for the selection"
-                                   autocomplete="off" aria-label="Bulk prompt">
-                            <select id="bulk-mode" aria-label="Prompt mode">
-                                <option value="set">replace</option>
-                                <option value="append">append</option>
-                            </select>
-                            <button id="btn-bulk-prompt" class="btn btn-secondary btn-small">Apply prompt</button>
-                            <input id="set-name" type="text" placeholder="new set name"
-                                   autocomplete="off" aria-label="Set name">
-                            <button id="btn-commit" class="btn btn-start btn-small">Commit to set</button>
-                            <button id="btn-bulk-discard" class="btn btn-danger btn-small">Discard</button>
+                            <div class="ds-bulk-head">
+                                <span class="ds-bulk-count" id="bulk-count">0 selected</span>
+                                <span class="toolbar-hint text-dim">
+                                    Multi-edit applies one field to every selected item.
+                                </span>
+                                <button id="btn-clear-sel" class="btn btn-secondary btn-small">
+                                    Clear selection
+                                </button>
+                            </div>
+                            <div class="ds-bulk-edit">
+                                <div class="ds-filter" id="bulk-field">
+                                    <button class="seg active" data-field="prompt">Prompt</button>
+                                    <button class="seg" data-field="neg_prompt">Negative</button>
+                                    <button class="seg" data-field="cfg">CFG</button>
+                                    <button class="seg" data-field="type">Verdict</button>
+                                </div>
+                                <div class="bulk-row" id="bulk-row-text">
+                                    <input id="bulk-text" type="text"
+                                           placeholder="value for every selected item"
+                                           autocomplete="off" aria-label="Bulk value">
+                                    <select id="bulk-text-mode" aria-label="Apply mode">
+                                        <option value="set">replace</option>
+                                        <option value="prepend">prepend</option>
+                                        <option value="append">append</option>
+                                    </select>
+                                </div>
+                                <div class="bulk-row" id="bulk-row-cfg" hidden>
+                                    <input id="bulk-cfg" type="number" step="0.1"
+                                           placeholder="cfg value" aria-label="CFG value">
+                                    <span class="toolbar-hint text-dim">
+                                        replaces cfg on every selected item
+                                    </span>
+                                </div>
+                                <div class="bulk-row" id="bulk-row-type" hidden>
+                                    <div class="ds-filter" id="bulk-type">
+                                        <button class="seg" data-btype="good">good</button>
+                                        <button class="seg" data-btype="bad">bad</button>
+                                    </div>
+                                    <span class="toolbar-hint text-dim">
+                                        flips the review verdict for the selection
+                                    </span>
+                                </div>
+                                <button id="btn-bulk-apply" class="btn btn-secondary">
+                                    Apply to <b id="bulk-apply-n">0</b> selected
+                                </button>
+                            </div>
+                            <div class="ds-bulk-actions">
+                                <input id="set-name" type="text" placeholder="new set name"
+                                       autocomplete="off" aria-label="Set name">
+                                <button id="btn-commit" class="btn btn-start btn-small">Commit to set</button>
+                                <button id="btn-bulk-discard" class="btn btn-danger btn-small">Discard</button>
+                            </div>
                         </div>
 
                         <div class="state-box" id="items-state" hidden></div>
@@ -101,36 +148,17 @@
                     <!-- TASKS -->
                     <section id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden>
                         <section class="card">
-                            <div class="card-header"><span>Start an ingest sweep</span></div>
+                            <div class="card-header"><span>Add data</span></div>
                             <div class="task-form">
-                                <label class="tf-field">
-                                    <span>Image dir <span class="text-dim">(absolute, server-side)</span></span>
-                                    <input id="task-image-dir" type="text" placeholder="/home/…/images"
-                                           autocomplete="off" spellcheck="false">
-                                </label>
-                                <label class="tf-field">
-                                    <span>Checkpoint <span class="text-dim">(from the assets catalog)</span></span>
-                                    <input id="task-model" type="text" placeholder="model.safetensors"
-                                           autocomplete="off" spellcheck="false" list="dl-checkpoint">
-                                    <datalist id="dl-checkpoint"></datalist>
-                                </label>
-                                <div class="tf-row">
-                                    <label class="tf-field tf-small">
-                                        <span>Seed</span>
-                                        <input id="task-seed" type="number" value="42" step="1">
-                                    </label>
-                                    <label class="tf-check">
-                                        <input id="task-recursive" type="checkbox" checked>
-                                        recurse into subfolders
-                                    </label>
-                                </div>
                                 <div class="tf-actions">
-                                    <button id="btn-start-task" class="btn btn-start">Start sweep</button>
+                                    <button id="btn-add-data-tab" class="btn btn-start">
+                                        ＋ Add data…
+                                    </button>
                                     <span class="toolbar-hint text-dim">
-                                        Server defaults: center-crop, 64px latents, eps.
+                                        Generate images from a checkpoint or import a folder of
+                                        images. One task at a time per dataset.
                                     </span>
                                 </div>
-                                <div class="error-box" id="task-error" role="alert" hidden></div>
                             </div>
                         </section>
 
@@ -141,6 +169,311 @@
             </div>
         </div>
     </main>
+
+    <!-- ================= ADD DATA DIALOG (M8e) ================= -->
+    <dialog id="add-dialog" class="dlg add-dialog" aria-labelledby="add-title">
+        <div class="dlg-head">
+            <h2 id="add-title">Add data to <span id="add-ds-name"></span></h2>
+            <button id="add-close" class="btn btn-secondary btn-small" aria-label="Close">✕</button>
+        </div>
+
+        <div class="tabs dlg-tabs" role="tablist">
+            <button class="tab active" id="add-tab-generate" role="tab"
+                    aria-selected="true"
+                    title="Sample new images with a teacher checkpoint">Generate</button>
+            <button class="tab" id="add-tab-import" role="tab"
+                    aria-selected="false"
+                    title="Encode a folder of images into this dataset">Import images</button>
+        </div>
+
+        <div class="dlg-body">
+            <!-- shared: the checkpoint both kinds consume -->
+            <div class="dlg-section">
+                <div class="dlg-section-title">Checkpoint</div>
+                <label class="tf-field">
+                    <input id="add-model" type="text" placeholder="model.safetensors"
+                           autocomplete="off" spellcheck="false" list="dl-checkpoint">
+                    <datalist id="dl-checkpoint"></datalist>
+                    <span class="hint text-dim" id="add-model-hint"></span>
+                </label>
+            </div>
+
+            <!-- ============ GENERATE ============ -->
+            <section id="add-panel-generate" class="dlg-panel">
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Positive prompts</div>
+                    <div class="ds-filter" id="add-prompt-mode">
+                        <button class="seg active" data-pmode="list">Prompt list</button>
+                        <button class="seg" data-pmode="keywords">Keyword mix</button>
+                    </div>
+                    <div id="add-prompts-list">
+                        <label class="tf-field">
+                            <span class="hint text-dim">One prompt per line.</span>
+                            <textarea id="add-prompts" rows="5"
+                                      placeholder="a red cube on a table&#10;a blue sphere"></textarea>
+                        </label>
+                    </div>
+                    <div id="add-prompts-keywords" hidden>
+                        <div class="dlg-grid">
+                            <label class="tf-field">
+                                <span>Keywords <span class="text-dim">(one per line)</span></span>
+                                <textarea id="add-keywords" rows="4" placeholder="masterpiece&#10;4k"></textarea>
+                            </label>
+                            <div class="dlg-grid-col">
+                                <label class="tf-field tf-small">
+                                    <span>Template <span class="text-dim">({keywords})</span></span>
+                                    <input id="add-template" type="text"
+                                           placeholder="(empty = builder default)">
+                                </label>
+                                <label class="tf-field tf-small">
+                                    <span>Min / max keywords</span>
+                                    <span class="num-pair">
+                                        <input id="add-min-kw" type="number" value="3" min="1" step="1">
+                                        <input id="add-max-kw" type="number" value="10" min="1" step="1">
+                                    </span>
+                                </label>
+                                <label class="tf-field">
+                                    <span>Word list file <span class="text-dim">(optional .txt/.csv)</span></span>
+                                    <input id="add-keywords-file" type="text"
+                                           placeholder="/home/…/words.txt" spellcheck="false">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Negative prompts</div>
+                    <div class="ds-filter" id="add-neg-mode">
+                        <button class="seg active" data-nmode="list">Fixed text</button>
+                        <button class="seg" data-nmode="keywords">Keyword mix</button>
+                    </div>
+                    <div id="add-neg-list">
+                        <label class="tf-field">
+                            <span class="hint text-dim">One negative string for every sample (optional).</span>
+                            <input id="add-negative" type="text" placeholder="blurry, lowres">
+                        </label>
+                    </div>
+                    <div id="add-neg-keywords" hidden>
+                        <div class="dlg-grid">
+                            <label class="tf-field">
+                                <span>Keywords <span class="text-dim">(one per line)</span></span>
+                                <textarea id="add-neg-keywords-ta" rows="4" placeholder="watermark&#10;text"></textarea>
+                            </label>
+                            <div class="dlg-grid-col">
+                                <label class="tf-field tf-small">
+                                    <span>Template <span class="text-dim">({keywords})</span></span>
+                                    <input id="add-neg-template" type="text"
+                                           placeholder="(empty = builder default)">
+                                </label>
+                                <label class="tf-field tf-small">
+                                    <span>Min / max keywords</span>
+                                    <span class="num-pair">
+                                        <input id="add-neg-min-kw" type="number" value="3" min="1" step="1">
+                                        <input id="add-neg-max-kw" type="number" value="10" min="1" step="1">
+                                    </span>
+                                </label>
+                                <label class="tf-field">
+                                    <span>Word list file <span class="text-dim">(optional .txt/.csv)</span></span>
+                                    <input id="add-neg-keywords-file" type="text"
+                                           placeholder="/home/…/words.txt" spellcheck="false">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Sampling</div>
+                    <div class="dlg-grid">
+                        <label class="tf-field tf-small">
+                            <span>CFG min / max</span>
+                            <span class="num-pair">
+                                <input id="add-cfg-min" type="number" value="3" step="0.1">
+                                <input id="add-cfg-max" type="number" value="9" step="0.1">
+                            </span>
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Steps min / max <span class="text-dim">(per image)</span></span>
+                            <span class="num-pair">
+                                <input id="add-steps-min" type="number" value="20" min="1" step="1">
+                                <input id="add-steps-max" type="number" value="30" min="1" step="1">
+                            </span>
+                        </label>
+                        <label class="tf-field">
+                            <span>Timestep mode</span>
+                            <select id="add-t-mode">
+                                <option value="uniform">uniform (even spacing)</option>
+                                <option value="low">low (Beta 1,3 -- fine detail)</option>
+                                <option value="mid">mid (Beta 2,2)</option>
+                                <option value="high">high (Beta 3,1 -- coarse)</option>
+                                <option value="logit">logit-normal (mid + tails)</option>
+                            </select>
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>T range low / high</span>
+                            <span class="num-pair">
+                                <input id="add-t-low" type="number" value="20" min="0" step="1">
+                                <input id="add-t-high" type="number" value="999" min="0" step="1">
+                            </span>
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Batch size</span>
+                            <input id="add-batch" type="number" value="1" min="1" max="256" step="1">
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Output</div>
+                    <div class="dlg-grid">
+                        <label class="tf-field tf-small">
+                            <span>Seed</span>
+                            <input id="add-seed" type="number" value="42" step="1">
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Latent size <span class="hint text-dim" id="add-latent-px"></span></span>
+                            <input id="add-latent" type="number" value="64" min="8" step="1">
+                        </label>
+                        <label class="tf-field">
+                            <span>Prediction type</span>
+                            <select id="add-model-type">
+                                <option value="eps">eps</option>
+                                <option value="vpred">vpred</option>
+                            </select>
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Conditions (prompts)</span>
+                            <input id="add-conditions" type="number" value="10" min="1" step="1">
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Samples per condition</span>
+                            <input id="add-samples" type="number" value="1" min="1" step="1">
+                        </label>
+                        <span class="add-total" id="add-total"></span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ IMPORT ============ -->
+            <section id="add-panel-import" class="dlg-panel" hidden>
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Source</div>
+                    <div class="dlg-grid">
+                        <label class="tf-field">
+                            <span>Image dir <span class="text-dim">(absolute, server-side)</span></span>
+                            <input id="add-image-dir" type="text" placeholder="/home/…/images"
+                                   autocomplete="off" spellcheck="false">
+                        </label>
+                        <label class="tf-check">
+                            <input id="add-recursive" type="checkbox" checked>
+                            recurse into subfolders
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Resizing</div>
+                    <label class="tf-field">
+                        <span>Resize mode</span>
+                        <select id="add-resize-mode">
+                            <option value="center_crop">center crop -- scale to cover, cut the edges</option>
+                            <option value="fit">fit + split -- keep aspect, split wide images into crops</option>
+                            <option value="pad">pad -- keep aspect, fill the edges</option>
+                            <option value="resize">stretch -- force exact size (distorts aspect)</option>
+                        </select>
+                        <span class="hint text-dim" id="add-resize-desc"></span>
+                    </label>
+                    <div class="dlg-grid">
+                        <label class="tf-field tf-small">
+                            <span>Latent size <span class="hint text-dim" id="add-import-latent-px"></span></span>
+                            <input id="add-import-latent" type="number" value="64" min="8" step="1">
+                        </label>
+                        <label class="tf-field tf-small" id="add-max-aspect-row">
+                            <span>Max aspect ratio <span class="text-dim">(fit split)</span></span>
+                            <input id="add-max-aspect" type="number" value="2" min="1" step="0.1">
+                        </label>
+                        <label class="tf-field">
+                            <span>Prediction type</span>
+                            <select id="add-import-model-type">
+                                <option value="eps">eps</option>
+                                <option value="vpred">vpred</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="dlg-section">
+                    <div class="dlg-section-title">Captions</div>
+                    <div class="dlg-grid">
+                        <label class="tf-field">
+                            <span>Negative prompt <span class="text-dim">(optional, for every image)</span></span>
+                            <input id="add-import-neg" type="text" placeholder="blurry, lowres">
+                        </label>
+                        <label class="tf-field tf-small">
+                            <span>Seed</span>
+                            <input id="add-import-seed" type="number" value="42" step="1">
+                        </label>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div class="dlg-foot">
+            <div class="error-box" id="add-error" role="alert" hidden></div>
+            <span class="toolbar-hint text-dim" id="add-hint"></span>
+            <button id="btn-add-start" class="btn btn-start">Start task</button>
+        </div>
+    </dialog>
+
+    <!-- ================= ITEM EDITOR DIALOG (M8e) ================= -->
+    <dialog id="item-dialog" class="dlg item-dialog" aria-labelledby="item-ed-title">
+        <div class="dlg-head">
+            <h2 id="item-ed-title">Edit item <span id="item-ed-id">#—</span></h2>
+            <div class="item-ed-nav">
+                <button id="item-ed-prev" class="btn btn-secondary btn-small">← prev</button>
+                <span id="item-ed-pos" class="toolbar-hint text-dim"></span>
+                <button id="item-ed-next" class="btn btn-secondary btn-small">next →</button>
+            </div>
+            <button id="item-ed-close" class="btn btn-secondary btn-small" aria-label="Close">✕</button>
+        </div>
+
+        <div class="dlg-body item-ed-body">
+            <div class="item-ed-media" id="item-ed-media"></div>
+            <div class="item-ed-form">
+                <label class="tf-field">
+                    <span>Prompt</span>
+                    <textarea id="item-ed-prompt" rows="5" spellcheck="false"></textarea>
+                </label>
+                <label class="tf-field">
+                    <span>Negative prompt</span>
+                    <textarea id="item-ed-neg" rows="3" spellcheck="false"></textarea>
+                </label>
+                <div class="item-ed-row">
+                    <label class="tf-field tf-small">
+                        <span>CFG <span class="hint text-dim">(empty = keep current)</span></span>
+                        <input id="item-ed-cfg" type="number" step="0.1">
+                    </label>
+                    <div class="tf-field">
+                        <span>Verdict <span class="text-dim">(bad items are skipped)</span></span>
+                        <div class="ds-filter" id="item-ed-type">
+                            <button class="seg" data-etype="good">good</button>
+                            <button class="seg" data-etype="bad">bad</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="item-ed-meta" id="item-ed-meta"></div>
+                <div class="error-box" id="item-ed-error" role="alert" hidden></div>
+            </div>
+        </div>
+
+        <div class="dlg-foot">
+            <button id="item-ed-discard" class="btn btn-danger btn-small">Discard item</button>
+            <span class="dlg-foot-gap"></span>
+            <button id="item-ed-revert" class="btn btn-secondary">Revert</button>
+            <button id="item-ed-save" class="btn btn-start" disabled>Save</button>
+        </div>
+    </dialog>
 
     <script type="module" src="/ui/js/shell.js"></script>
     <script type="module" src="/ui/js/views/datasets.js"></script>

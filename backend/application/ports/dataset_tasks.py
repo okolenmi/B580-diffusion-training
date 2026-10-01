@@ -23,7 +23,8 @@ ACTIVE_TASK_STATUSES: tuple[str, ...] = ("pending", "running")
 TERMINAL_TASK_STATUSES: tuple[str, ...] = ("finished", "failed", "killed")
 
 KIND_INGEST_LORA = "ingest_lora"
-TASK_KINDS: tuple[str, ...] = (KIND_INGEST_LORA,)
+KIND_GENERATE_TEACHER = "generate_teacher"
+TASK_KINDS: tuple[str, ...] = (KIND_INGEST_LORA, KIND_GENERATE_TEACHER)
 
 
 @dataclass(frozen=True, slots=True)

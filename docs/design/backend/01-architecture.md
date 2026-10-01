@@ -448,6 +448,7 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M7 | Frontend slice 2: graph editor against `/graphs` (palette, validate, run, executions, library + localStorage import) | **done** |
 | M8 | Frontend slice 3: dataset manager + config editor + run history views | **done** |
 | M8d | Shell redesign: icon rail on every page, floating persistent console, `/help` + `/settings` | **done** |
+| M8e | Dataset add-data + edit modes: `generate_teacher` task kind (validated in `application/teacher_prompts.py`), bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`), add-data dialog (generate/import), browse/edit item modes, advanced item editor | **done** |
 | M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
 
 ## 8. Running it

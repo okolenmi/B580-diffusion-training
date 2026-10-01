@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (132
+checklist below now runs as `backend/tests/visual_smoke.py` (168
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -32,9 +32,13 @@ dirty tracking, E2E save against a throwaway copy), run detail views
 (hand-off link, honest 404, completed + failed renders), and the
 dataset manager against the real library (create guard, honest empty
 states, preview bytes over the files route, filters, throwaway
-cleanup), and the M8d shell (icon rail inventory + active states +
+cleanup), the M8d shell (icon rail inventory + active states +
 hover tips, floating console minimize/FAB/restore/persistence,
-help + settings pages). Console is asserted clean across every page.
+help + settings pages), and the M8e dataset flows (add-data dialog
+option sets + local validation, Browse/Edit modes, the advanced item
+editor's dirty/revert/walk cycle, the multi-edit panel -- all
+read-only against the real curated datasets). Console is asserted
+clean across every page.
 Desktop-browser execution of the same checklist below stays as the
 manual fallback.
 
@@ -179,7 +183,8 @@ the scenario, its confirmation dialog captured).
       adds no card; a real create appends the card.
 * [x] Fresh-dataset detail: title follows the route, seven stat chips
       with real zeros (API-computed, never placeholders), honest empty
-      states on all three tabs, task form renders.
+      states on all three tabs, the Add-data entry point renders on
+      the Tasks tab (the dialog itself is scenario H).
 * [x] Real curated dataset (`1024 aes` -- space in the name pins the
       URL-encoded route): stats show the true counts, all 201 item
       cards render, a preview image actually loads through
@@ -192,9 +197,12 @@ the scenario, its confirmation dialog captured).
       `datasets/` directory is checked clean afterwards).
 * [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
       apply, commit-to-set) are covered by `test_api_datasets.py` at
-      the API level only -- the smoke never edits the user's data.
+      the API level only -- the smoke edits nothing and applies
+      nothing; scenario H exercises the editor/multi-edit UI in a
+      read-only walk (dirty -> revert, rows rendered, never saved).
 * [ ] Task start/stop is never fired from the smoke (it would spawn a
-      real child process against user checkpoints).
+      real child process against user checkpoints); scenario H pins
+      that the browser sends no task POST during its walk.
 
 ## 7. Shell -- rail + floating console + help/settings (M8d)
 
@@ -228,7 +236,43 @@ system console) plus the two new pages.
       run pins persistence of whatever geometry it gets, not the
       gestures themselves.
 
-## 8. Record
+## 8. Dataset add-data + edit modes -- scenario H (M8e)
+
+Read-only walk of the M8e flows against the real library: the dialog
+opens and validates but never posts, the editor dirties and reverts
+but never saves, the multi-edit panel renders but never applies.
+
+* [x] Card entry point: a dataset card's "Add data" opens the dialog
+      bound to that dataset; Generate is the default tab; the form
+      exposes its option set (prompt list, cfg/steps/t ranges, batch,
+      conditions/samples, latent size, prediction type); the total
+      preview computes `conditions x samples` and the latent size
+      renders its pixel equivalent.
+* [x] Local validation: an empty checkpoint refuses inline with the
+      error box visible and the dialog still open; the scenario
+      watches requests and asserts **zero** task POSTs left the
+      browser.
+* [x] Import tab: swaps panels, resize mode carries a written
+      description, the max-aspect-ratio knob is hidden until the
+      `fit` (split) mode makes it relevant; the import option set
+      (dir, recursion, resize mode, latent size, prediction type,
+      negative prompt, seed) renders.
+* [x] Edit mode: the toolbar toggle marks the grid and shows the
+      per-card edit affordance; clicking a card opens the advanced
+      editor bound to that item with read-only metadata and its
+      position in the walk.
+* [x] Dirty tracking: editing the prompt enables Save, Revert
+      restores the snapshot (Save disabled again), next moves to the
+      following item, close works from both the walk and a
+      prompt-click (Browse mode reaches the same editor).
+* [x] Multi-edit: two checkboxes raise the panel with exactly four
+      field segments; the CFG and Verdict value rows swap in on
+      demand; counts (selected / apply-target) follow the selection;
+      clearing selection hides the panel; still zero task POSTs and
+      no confirmation dialog fired (the walk deleted nothing).
+* [x] Screenshot `datasets_edit.png` captured.
+
+## 9. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --

@@ -209,12 +209,63 @@ class DatasetTaskListResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TeacherTaskParams:
+    """Sampling + prompt options for ``generate_teacher`` (M8e).
+
+    Ported from the legacy ``/tasks/start`` ``type="teacher"`` body
+    (``server/routes_datasets.py``), one field per legacy parameter so
+    the stored task ``params`` record stays a flat, faithful launch
+    payload. ``seed``/``latent_size``/``model_type`` are shared with
+    image import in the wire schema but live here for this kind, since
+    they are what the builder's teacher path consumes.
+
+    Validation (modes, ranges, prompt content) is *not* here: this is
+    a DTO. ``application.teacher_prompts`` owns it, shared between the
+    start use case (fail fast, before the row exists) and the task
+    worker (re-assemble the prompt configs it hands to the builder).
+    """
+
+    prompt_mode: str = "list"  # 'list' | 'keywords'
+    prompts: str = ""  # newline-separated, mode=list
+    keywords: str = ""  # newline-separated, mode=keywords
+    keywords_file: str = ""  # optional server-side word list (.txt/.csv)
+    template: str = ""  # "{keywords}" placeholder template
+    min_keywords: int = 3
+    max_keywords: int = 10
+    neg_mode: str = "list"  # 'list' | 'keywords'
+    negative_prompt: str = ""  # one string for every sample, mode=list
+    neg_keywords: str = ""
+    neg_keywords_file: str = ""
+    neg_template: str = ""
+    neg_min_keywords: int = 3
+    neg_max_keywords: int = 10
+    cfg_min: float = 3.0
+    cfg_max: float = 9.0
+    steps_min: int = 20
+    steps_max: int = 30
+    t_mode: str = "uniform"  # uniform | low | mid | high | logit
+    t_low: int = 20
+    t_high: int = 999
+    batch_size: int = 1
+    seed: int = 42
+    n_conditions: int = 10
+    n_samples_per_cond: int = 1
+    latent_size: int = 64
+    model_type: str = "eps"  # eps | vpred
+
+
+@dataclass(frozen=True, slots=True)
 class StartDatasetTaskCommand:
-    """Launch an ingestion task. ``model`` is a checkpoint path
+    """Launch a dataset task. ``model`` is a checkpoint path
     relative to the resolved checkpoints dir (validated + sandboxed by
     the use case); ``image_dir`` is an absolute server-side source
     directory (validated for existence, not sandboxed -- raw images
-    legitimately live outside the workspace, as in the legacy API)."""
+    legitimately live outside the workspace, as in the legacy API).
+
+    Two kinds (``application.ports.dataset_tasks.TASK_KINDS``):
+    ``ingest_lora`` VAE-encodes an image directory (flat fields below);
+    ``generate_teacher`` samples new trajectories from a checkpoint
+    (``teacher`` carries its options, absent for the import kind)."""
 
     dataset: str
     kind: str = "ingest_lora"
@@ -227,6 +278,7 @@ class StartDatasetTaskCommand:
     model_type: str = "eps"
     seed: int = 42
     max_aspect_ratio: float = 2.0
+    teacher: TeacherTaskParams | None = None
 
 
 # --------------------------------------------------------------------------

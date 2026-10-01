@@ -145,14 +145,14 @@ dataset.
 | GET | `/datasets/{name}` | — | `DatasetDetailOut`: `info, stats, sets[], active_tasks[]` |
 | DELETE | `/datasets/{name}` | — | `{"deleted": true}`; 409 while a task is active |
 | GET | `/datasets/{name}/items` | `committed` (bool, optional) | `DatasetItemsOut`: `items[], count` |
-| PATCH | `/datasets/{name}/items` | `BulkUpdateItemsIn{item_ids, prompt?, prompt_mode("set"/"append"), neg_prompt?, cfg?}` | `{"updated": N}` |
+| PATCH | `/datasets/{name}/items` | `BulkUpdateItemsIn{item_ids, prompt?, prompt_mode("set"/"prepend"/"append"), neg_prompt?, neg_prompt_mode(same)?, cfg?, type("good"/"bad")?}` — legacy truthy gates (empty never clears in bulk); `prepend`/`append` are idempotent (re-applying is a no-op) | `{"updated": N}`; 422 `invalid_query` for unknown mode/type or an all-empty change set |
 | PATCH | `/datasets/{name}/items/{id}` | `UpdateItemIn` — every `null` field untouched; `""` clears a caption; explicit `type` replaces the legacy toggle | `DatasetItemOut` |
 | POST | `/datasets/{name}/items/discard` | `ItemIdsIn` | `{"deleted": N}` |
 | GET | `/datasets/{name}/files/{path}` | — | file bytes (item previews); media type from the suffix; 404 `dataset_not_found` / `dataset_file_not_found` (missing **or** escaping the dataset dir — an escape is reported as not-found, never resolved) |
 | GET | `/datasets/{name}/sets` | — | `DatasetSetsOut`: `sets[{id,name,description,created_at,members}], count` |
 | POST | `/datasets/{name}/sets` | `CommitItemsIn{item_ids, name}` | `CommitOut{set_id, set_name, added}` -> **201** |
 | GET | `/datasets/{name}/tasks` | `active_only` (bool) | `DatasetTasksOut` (sweeps dead rows first) |
-| POST | `/datasets/{name}/tasks` | `StartDatasetTaskIn{kind, image_dir, model, recursive, resize_mode, latent_size, neg_prompt, model_type, seed, max_aspect_ratio}` | `DatasetTaskOut` -> **201**; 409 `dataset_task_active` |
+| POST | `/datasets/{name}/tasks` | `StartDatasetTaskIn` — one body, discriminated by `kind`: **`ingest_lora`** `{image_dir(absolute, not sandboxed), recursive, resize_mode("fit"/"center_crop"/"pad"/"resize"), latent_size, max_aspect_ratio, neg_prompt, seed}` vs **`generate_teacher`** `{prompt_mode("list"/"keywords"), prompts, keywords, keywords_file, template, min/max_keywords, neg_mode("list"/"keywords"), negative_prompt, neg_*…, cfg_min/max, steps_min/max, t_mode("uniform"/"low"/"mid"/"high"/"logit"), t_low/t_high, batch_size, n_conditions, n_samples_per_cond}`; shared `{model(relative to checkpoints dir, sandboxed), seed, latent_size, model_type("eps"/"vpred")}`, `image_dir` defaults empty and is ignored by `generate_teacher` | `DatasetTaskOut` -> **201**; `total` = image count (ingest) or `n_conditions × n_samples_per_cond` (generate); 409 `dataset_task_active`; 422 `invalid_query` for unknown kind/mode/enum, inverted ranges, empty prompt/keyword sources (validated in `application/teacher_prompts.py` *before* the row exists) |
 | POST | `/datasets/{name}/tasks/{id}/stop` | — | `DatasetTaskOut` (SIGKILL); 409 if terminal |
 
 `DatasetItemOut`: `id, source_id, shard_id, prompt, neg_prompt,

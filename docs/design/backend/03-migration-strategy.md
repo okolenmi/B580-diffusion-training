@@ -16,13 +16,14 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 ## 2. New frontend layout (planned)
 
 ```
-frontend/                     # shipped slices 1+2 (M6/M7) + M8 views + M8d shell
+frontend/                     # shipped slices 1+2 (M6/M7) + M8 views + M8d shell + M8e dataset flows
 ├── index.html                # System tracker page (/): state hero, history, log
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
 ├── graph.html                # graph editor page (/graph)
 ├── config.html               # config editor page (/config, M8a)
 ├── run.html                  # run detail page (/run/{id}, M8b)
-├── datasets.html             # dataset manager (/datasets + /{name}, M8c)
+├── datasets.html             # dataset manager (/datasets + /{name}, M8c);
+│                             # add-data + item editor dialogs (M8e)
 ├── help.html                 # help skeleton (/help, M8d)
 ├── settings.html             # settings: design theme first (/settings, M8d)
 ├── css/
@@ -54,7 +55,8 @@ frontend/                     # shipped slices 1+2 (M6/M7) + M8 views + M8d shel
     ├── views/dashboard.js    # training controls (runs REST + /events SSE)
     ├── views/config.js       # config editor: schema form + raw buffer (M8a)
     ├── views/run.js          # run detail: full RunOut grid + log tail (M8b)
-    ├── views/datasets.js     # dataset manager: list/detail/items/sets/tasks (M8c)
+    ├── views/datasets.js     # dataset manager: list/detail/items/sets/tasks,
+    │                         # add-data dialog + browse/edit modes (M8c, M8e)
     ├── editor/               # state.js (GraphDoc + wire forms), canvas.js (render/
     │                         # drag/connect), inspector.js (params form), palette.js,
     │                         # executions.js (run lifecycle), library.js (+ legacy import)
@@ -86,7 +88,7 @@ Rules that keep it fast and expandable:
 | runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | list/get/log + `DELETE /runs` | **resolved** (3.1): `events`/`previews`/`logs/clear` all dropped; the rest shipped |
 | `/sse` | `GET /events` | **parity+** (all domain events, generic encoder, heartbeat) |
 | settings (`GET/POST /settings`, `/files/{kind}`) | `GET/POST /settings` | **resolved** (3.1): `/files/{kind}` dropped -- the config editor uses a path input + datalists |
-| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` + `GET /datasets/{name}/files/{path}` (preview bytes) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); **view shipped M8c** |
+| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` + `GET /datasets/{name}/files/{path}` (preview bytes) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); both task kinds since M8e (`ingest_lora` + `generate_teacher`, vs legacy `type=lora`/`teacher`); bulk edit exceeds legacy (neg modes + verdict, M8e); **view shipped M8c, add-data + edit modes M8e** |
 | nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
 | nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
 | **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
@@ -163,6 +165,7 @@ numbers match the milestone table in `01-architecture.md`:
 | M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | **shipped 2026-10-01**: `/graph` page; validate/run/library round-trip (incl. `layout` extras) smoke-tested on 8766; every frontend module passes `node --check` |
 | M8 | Dataset manager + config editor + run history views | **shipped 2026-10-01**: `/config` (M8a), `/run/{id}` (M8b), `/datasets` + preview bytes (M8c); each page is smoke-covered |
 | M8d | Shell redesign: icon rail (all pages) + floating persistent console + `/help` + `/settings` | **shipped 2026-10-01**: `shell.js`/`shell.css` mounted on all six existing pages (rail order: Graph Editor, Datasets, Workflows (soon), System tracker, Help; Settings pinned last; monitor stays workflow-attached, no rail slot); console geometry + minimized state persist in localStorage; visual smoke: 132 checks incl. scenario G |
+| M8e | Dataset add-data + edit modes | **shipped 2026-10-01**: `generate_teacher` task kind (legacy `type=teacher` parity: prompt/keyword sources, neg keyword mix, cfg/steps/t ranges, batch, conditions x samples); import kind hardened (resize/model-type enums validated); bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`, idempotent joins); frontend: per-card "Add data" dialog (generate/import tabs with the full option sets), Browse/Edit item modes, advanced item editor (fields + metadata + prev/next walk), multi-edit panel; visual smoke scenario H |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
 
 Both servers run side by side until M8 (8765 legacy, 8766 backend) --

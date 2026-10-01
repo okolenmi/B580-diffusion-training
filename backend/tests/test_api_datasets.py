@@ -167,6 +167,74 @@ status, _, body = asgi_request(
 )
 expect_error(status, body, 422, "validation_error", "PATCH bulk empty ids")
 
+# -- multi-edit bulk (M8e): append/prepend/neg/verdict + guards --------
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1, 2], "prompt": "trigger", "prompt_mode": "append"},
+)
+check(status == 200 and body == {"updated": 2}, "bulk append mode accepted")
+status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
+by_id = {i["id"]: i for i in body["items"]}
+check(by_id[1]["prompt"].endswith("trigger") and by_id[2]["prompt"].endswith("trigger"),
+      "append lands after the existing caption")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1], "prompt": "trigger", "prompt_mode": "append"},
+)
+status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
+by_id = {i["id"]: i for i in body["items"]}
+check(by_id[1]["prompt"].count("trigger") == 1, "append is idempotent (no doubling)")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1, 2], "neg_prompt": "lowres", "neg_prompt_mode": "set"},
+)
+check(status == 200 and body == {"updated": 2}, "bulk neg_prompt set accepted")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1], "neg_prompt": ", ugly", "neg_prompt_mode": "append"},
+)
+status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
+by_id = {i["id"]: i for i in body["items"]}
+check(by_id[1]["neg_prompt"] == "lowres, ugly", "neg_prompt append composes with set")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH", json_body={"item_ids": [1, 2, 3], "type": "bad"},
+)
+check(status == 200 and body == {"updated": 3}, "bulk verdict flip accepted")
+status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
+check(all(i["type"] == "bad" for i in body["items"]),
+      "bulk verdict landed on every selected row")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH", json_body={"item_ids": [1], "type": "meh"},
+)
+expect_error(status, body, 422, "invalid_query", "bulk verdict validated")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1], "prompt": "x", "prompt_mode": "bogus"},
+)
+expect_error(status, body, 422, "invalid_query", "bulk prompt_mode validated")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items",
+    method="PATCH",
+    json_body={"item_ids": [1], "neg_prompt_mode": "bogus", "neg_prompt": "y"},
+)
+expect_error(status, body, 422, "invalid_query", "bulk neg_prompt_mode validated")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/items", method="PATCH", json_body={"item_ids": [1]}
+)
+expect_error(status, body, 422, "invalid_query", "bulk with no changes refused")
+
 status, _, body = asgi_request(
     app, "/api/v1/datasets/flow/items/discard",
     method="POST", json_body={"item_ids": [4]},
@@ -226,6 +294,15 @@ status, _, body = asgi_request(
 )
 expect_error(status, body, 422, "invalid_query", "unknown task kind")
 
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks",
+    method="POST", json_body=dict(payload, resize_mode="banana"),
+)
+expect_error(
+    status, body, 422, "invalid_query",
+    "unknown resize_mode refused -- 422 beats 409 even while active",
+)
+
 status, _, body = asgi_request(app, "/api/v1/datasets/flow/tasks")
 check(status == 200 and body["count"] == 1 and body["tasks"][0]["id"] == task_id,
       "GET tasks lists the active one")
@@ -245,6 +322,87 @@ status, _, body = asgi_request(
     app, f"/api/v1/datasets/flow/tasks/{task_id}/stop", method="POST"
 )
 expect_error(status, body, 409, "dataset_task_not_active", "stop of a killed task")
+
+# -- generate_teacher (M8e) ---------------------------------------------
+
+teacher_payload = {
+    "kind": "generate_teacher",
+    "model": "m.safetensors",
+    "prompt_mode": "list",
+    "prompts": "a red cube\na blue sphere",
+    "negative_prompt": "blurry",
+    "cfg_min": 3.0,
+    "cfg_max": 9.0,
+    "steps_min": 10,
+    "steps_max": 20,
+    "t_mode": "logit",
+    "t_low": 20,
+    "t_high": 999,
+    "n_conditions": 5,
+    "n_samples_per_cond": 3,
+    "latent_size": 64,
+    "model_type": "vpred",
+    "seed": 7,
+    "batch_size": 2,
+}
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks", method="POST", json_body=teacher_payload
+)
+check(status == 201, f"generate_teacher accepted (201, got {status})")
+if status == 201:
+    check(
+        body["kind"] == "generate_teacher" and body["total"] == 15
+        and body["status"] == "running" and isinstance(body["pid"], int),
+        f"teacher row: kind/total/status/pid "
+        f"({body['kind']}, {body['total']}, {body['status']}, {body['pid']})",
+    )
+    check(
+        body["params"]["model"] == "m.safetensors"
+        and body["params"]["prompts"].startswith("a red cube")
+        and body["params"]["model_type"] == "vpred"
+        and body["params"]["n_conditions"] == 5,
+        "teacher params record carries the launch payload flat",
+    )
+    teacher_id = body["id"]
+else:
+    teacher_id = None
+    check(False, f"teacher launch body: {body}")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks",
+    method="POST",
+    json_body=dict(teacher_payload, steps_min=40, steps_max=10),
+)
+expect_error(status, body, 422, "invalid_query", "inverted steps range refused")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks",
+    method="POST", json_body=dict(teacher_payload, prompts="\n  \n"),
+)
+expect_error(status, body, 422, "invalid_query", "empty prompt list refused")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks",
+    method="POST", json_body=dict(teacher_payload, t_mode="quantum"),
+)
+expect_error(status, body, 422, "invalid_query", "unknown t_mode refused")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/flow/tasks",
+    method="POST",
+    json_body=dict(teacher_payload, prompt_mode="keywords", prompts=""),
+)
+expect_error(
+    status, body, 422, "invalid_query",
+    "keywords mode without a keyword source refused",
+)
+status, _, body = asgi_request(app, "/api/v1/datasets/flow/tasks")
+check(
+    status == 200 and body["count"] == 1 and body["tasks"][0]["id"] == teacher_id,
+    "failed teacher launches never leave a row behind",
+)
+
+status, _, body = asgi_request(
+    app, f"/api/v1/datasets/flow/tasks/{teacher_id}/stop", method="POST"
+)
+check(status == 200 and body["status"] == "killed", "teacher task stoppable")
 
 status, _, body = asgi_request(app, "/api/v1/datasets/flow", method="DELETE")
 check(status == 200 and body == {"deleted": True}, "delete after stop succeeds")

@@ -1,16 +1,23 @@
 /* ---------------------------------------------------------------------------
-   datasets.js -- Datasets page entry (M8c).
+   datasets.js -- Datasets page entry (M8c, extended in M8e).
 
    Two views on one page, routed by the URL:
-     /datasets         -- card list, create/delete
+     /datasets         -- card list, create/delete, "Add data" per card
      /datasets/{name}  -- detail: stats chips + Items | Sets | Tasks tabs
 
-   Items are the curation surface: filter by membership, edit prompts
-   inline, toggle good/bad, discard, bulk-apply prompts, commit
-   selections into training sets. Cache sweeps (ingest tasks) run one
-   at a time per dataset (409 dataset_task_active) and are polled --
-   dataset tasks publish no events, so polling is the source of truth
-   here (4s while the detail view is open).
+   Items are the curation surface with three interactions:
+     * Browse mode -- filter, select, quick toggle/discard;
+     * Edit mode   -- click a card to open the advanced item editor
+       (prompt / negative / cfg / verdict, metadata, prev-next walk);
+     * Multi-edit  -- any selection raises the bulk panel: one field
+       (prompt / negative / cfg / verdict) appended, prepended or
+       replaced across every selected row.
+
+   "Add data" (cards, detail topbar, Tasks tab) opens one dialog with
+   two generators: sample new images from a checkpoint (teacher) or
+   import a folder of images -- both run as dataset tasks (one at a
+   time per dataset, 409 dataset_task_active) polled every 4s while
+   the detail view is open (dataset tasks publish no events).
 
    All data paths go through api.js (error envelope decoded once).
    --------------------------------------------------------------------------- */
@@ -62,9 +69,28 @@ let datasetName = null;   // detail view: the open dataset (null = list)
 let detail = null;        // DatasetDetailOut
 let items = [];           // current filter's rows
 let itemFilter = "all";   // all | pending | used
+let itemMode = "browse";  // browse | edit (toolbar toggle)
 let selected = new Set(); // item ids marked in the grid
 let tasks = [];           // all task rows for the dataset
 let pollTimer = null;
+
+// multi-edit panel
+let bulkField = "prompt"; // prompt | neg_prompt | cfg | type
+let bulkType = "";        // chosen verdict in the type row ("" = unset)
+
+// add-data dialog
+let addTarget = null;     // dataset the dialog will launch into
+let addTab = "generate";  // generate | import (last used, session memory)
+
+// item editor
+let editorIndex = -1;     // index into `items` of the row being edited
+let editorSnapshot = null;// field values at load/save time (dirty base)
+let editorType = "";      // verdict picked in the editor
+
+const TASK_KIND_LABEL = {
+  ingest_lora: "import images",
+  generate_teacher: "generate",
+};
 
 const TASK_STATUS_CLASS = {
   pending: "status-idle",
@@ -110,6 +136,7 @@ function showView(which) {
   el("view-list").hidden = !list;
   el("view-detail").hidden = list;
   el("topbar-actions").hidden = !list;
+  el("btn-add-data").hidden = list;
   el("btn-back").hidden = list;
 }
 
@@ -190,6 +217,13 @@ function datasetCard(entry) {
     onclick: (ev) => { ev.stopPropagation(); deleteDataset(info.name); },
     title: `Delete dataset '${info.name}' and all of its files`,
   });
+  // v1 datasets refuse tasks (format gate in the builder) -- no Add data
+  const add = legacy ? null : h("button", {
+    class: "btn btn-start btn-small",
+    text: "＋ Add data",
+    onclick: (ev) => { ev.stopPropagation(); openAddDialog(info.name); },
+    title: "Generate images or import a folder into this dataset",
+  });
 
   const card = h("div", { class: "ds-card", onclick: (ev) => {
     // real link for normal/middle clicks; this handler covers the card body
@@ -201,7 +235,7 @@ function datasetCard(entry) {
     h("div", { class: "ds-card-desc", text: info.description || "" }),
     h("div", { class: "ds-card-meta", text: meta }),
     h("div", { class: "ds-card-meta", text: `created ${fmtTime(info.created_at)}` }),
-    h("div", { class: "ds-card-foot" }, del),
+    h("div", { class: "ds-card-foot" }, add, del),
   );
   return card;
 }
@@ -252,6 +286,9 @@ async function openDetail(name) {
   showState("detail-state", "Loading…");
   el("detail-wrap").hidden = true;
   stopPoll();
+  selected = new Set();     // ids collide across datasets -- never carry over
+  editorIndex = -1;
+  el("item-dialog").close(); // in case a walk outlived the navigation
 
   try {
     detail = await api(dsApi(""));
@@ -323,11 +360,13 @@ async function loadItems() {
 
 function renderItems() {
   el("items-count").textContent =
-    `${items.length} shown · ${selected.size} selected`;
+    `${items.length} shown · ${selected.size} selected` +
+    (itemMode === "edit" ? " · edit mode" : "");
   const all = items.length > 0 && selected.size === items.length;
   el("select-all").checked = all;
   const grid = el("items-grid");
   grid.replaceChildren();
+  grid.classList.toggle("edit-mode", itemMode === "edit");
 
   if (!items.length) {
     showState("items-state",
@@ -335,7 +374,8 @@ function renderItems() {
         ? "Nothing awaiting review -- every item is already used or bad."
         : itemFilter === "used"
           ? "No items are committed to training yet."
-          : "This dataset has no items yet. Start a cache sweep on the Tasks tab.");
+          : "This dataset has no items yet. Use Add data (Tasks tab) " +
+            "to generate or import images.");
   } else {
     showState("items-state", "");
   }
@@ -374,8 +414,8 @@ function itemCard(item) {
   const promptBox = h("div", {
     class: `item-prompt${item.prompt ? "" : " empty"}`,
     text: item.prompt || "(no prompt -- click to edit)",
-    title: "Click to edit the prompt",
-    onclick: () => editPrompt(item),
+    title: "Click to open the item editor",
+    onclick: (ev) => { ev.stopPropagation(); openItemEditor(item); },
   });
 
   const metaKids = [
@@ -394,8 +434,19 @@ function itemCard(item) {
   const card = h("div", {
       class: `ds-item${selected.has(item.id) ? " selected" : ""}`,
       "data-item-id": item.id,
+      onclick: (ev) => {
+        // Edit mode: the whole card body opens the editor. Browse mode
+        // leaves clicks inert (the prompt box handles itself above) so
+        // rubber-band selection never triggers an edit.
+        if (itemMode !== "edit") return;
+        if (ev.target.closest("button, input, a")) return;
+        openItemEditor(item);
+      },
     },
-    h("div", { class: "ds-thumb" }, thumbKids),
+    h("div", { class: "ds-thumb" }, thumbKids,
+      itemMode === "edit"
+        ? h("span", { class: "item-edit-hint", text: "edit" })
+        : null),
     h("div", { class: "ds-item-body" },
       promptBox,
       h("div", { class: "item-meta" }, metaKids),
@@ -418,36 +469,178 @@ function itemCard(item) {
   return card;
 }
 
-function editPrompt(item) {
-  const card = el("items-grid")
-    .querySelector(`[data-item-id="${item.id}"]`);
-  if (!card) return;
-  const promptBox = card.querySelector(".item-prompt");
-  const area = h("textarea", { class: "item-prompt-edit", text: item.prompt });
-  const save = h("button", {
-    class: "btn btn-start btn-small", text: "Save",
-    onclick: async () => {
-      try {
-        const updated = await api(dsApi(`/items/${item.id}`), {
-          method: "PATCH", body: { prompt: area.value },
-        });
-        Object.assign(item, updated);
-        log(`Item ${item.id} prompt saved.`, "success");
-        renderItems();
-      } catch (err) {
-        logError(err);
-        showError("items-error", errText(err));
-      }
-    },
+/* ---- item editor (M8e) --------------------------------------------
+   One advanced editor for every per-item edit: prompt, negative,
+   cfg, verdict, read-only metadata, prev/next walk over the current
+   filter. Save sends only what changed; Revert restores the snapshot.
+   CFG cannot be cleared through the API (null = untouched), so the
+   field is hint-labeled "empty = keep current". */
+
+function setItemMode(mode) {
+  itemMode = mode;
+  for (const b of el("item-mode").children) {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  }
+  renderItems();
+}
+
+function editorItem() {
+  return editorIndex >= 0 && editorIndex < items.length
+    ? items[editorIndex] : null;
+}
+
+function editorValues() {
+  return {
+    prompt: el("item-ed-prompt").value,
+    neg_prompt: el("item-ed-neg").value,
+    cfg: el("item-ed-cfg").value.trim(),
+    type: editorType,
+  };
+}
+
+function editorDirty() {
+  if (!editorSnapshot) return false;
+  const v = editorValues();
+  const s = editorSnapshot;
+  const cfgSame = v.cfg === ""
+    ? true                       // empty = keep current (API cannot clear)
+    : (s.cfg === null || s.cfg === undefined
+        ? false : Number(v.cfg) === s.cfg);
+  return v.prompt !== s.prompt
+    || v.neg_prompt !== s.neg_prompt
+    || v.type !== s.type
+    || !cfgSame;
+}
+
+function syncEditorDirty() {
+  el("item-ed-save").disabled = !editorDirty();
+}
+
+function renderEditorType() {
+  for (const b of el("item-ed-type").children) {
+    b.classList.toggle("active", b.dataset.etype === editorType);
+  }
+}
+
+function renderEditorMeta(item) {
+  const meta = el("item-ed-meta");
+  meta.replaceChildren();
+  const rows = [
+    ["item", `#${item.id}`],
+    ["source", `#${item.source_id}`],
+    ["shard", `#${item.shard_id}`],
+    ["size", `${item.latent_h}×${item.latent_w}`],
+    ["model", item.model_type],
+    ["seed", item.seed === null || item.seed === undefined ? "—" : String(item.seed)],
+    ["cfg", item.cfg === null || item.cfg === undefined ? "—" : String(item.cfg)],
+    ["membership", item.committed ? "in training" : "pending"],
+    ["origin", item.source_path || "—"],
+  ];
+  for (const [label, value] of rows) {
+    meta.appendChild(h("span", {},
+      h("b", { text: `${label} ` }), value));
+  }
+}
+
+function renderEditorMedia(item) {
+  const box = el("item-ed-media");
+  box.replaceChildren();
+  if (!item.preview_path) {
+    box.appendChild(h("div", { class: "no-preview", text: "NO PREVIEW" }));
+    return;
+  }
+  const img = h("img", {
+    src: previewUrl(item.preview_path),
+    alt: `preview of item ${item.id}`,
   });
-  const cancel = h("button", {
-    class: "btn btn-secondary btn-small", text: "Cancel",
-    onclick: () => renderItems(),
-  });
-  promptBox.replaceWith(area);
-  area.insertAdjacentElement("afterend",
-    h("div", { class: "item-edit-row" }, save, cancel));
-  area.focus();
+  img.addEventListener("error", () =>
+    box.replaceChildren(h("div", { class: "no-preview", text: "NO PREVIEW" })));
+  box.appendChild(img);
+}
+
+function fillEditor(item) {
+  const idx = items.findIndex((it) => it.id === item.id);
+  if (idx < 0) return; // row left the filter under us
+  editorIndex = idx;
+  editorType = item.type;
+  editorSnapshot = {
+    prompt: item.prompt,
+    neg_prompt: item.neg_prompt,
+    cfg: item.cfg === null || item.cfg === undefined ? null : item.cfg,
+    type: item.type,
+  };
+  el("item-ed-id").textContent = `#${item.id}`;
+  el("item-ed-pos").textContent = `${idx + 1} of ${items.length} shown`;
+  el("item-ed-prev").disabled = idx === 0;
+  el("item-ed-next").disabled = idx === items.length - 1;
+  el("item-ed-prompt").value = item.prompt;
+  el("item-ed-neg").value = item.neg_prompt || "";
+  el("item-ed-cfg").value =
+    item.cfg === null || item.cfg === undefined ? "" : String(item.cfg);
+  renderEditorType();
+  renderEditorMeta(item);
+  renderEditorMedia(item);
+  showError("item-ed-error", "");
+  syncEditorDirty();
+}
+
+function openItemEditor(item) {
+  fillEditor(item);
+  const dlg = el("item-dialog");
+  if (!dlg.open) dlg.showModal();
+}
+
+function closeItemEditor() {
+  const dlg = el("item-dialog");
+  if (dlg.open) dlg.close();
+  editorIndex = -1;
+  editorSnapshot = null;
+}
+
+function editorNav(delta) {
+  const item = editorItem();
+  if (!item) return;
+  const next = items[editorIndex + delta];
+  if (!next) return;
+  if (editorDirty()
+      && !window.confirm("Discard unsaved changes and move on?")) return;
+  fillEditor(next);
+}
+
+function revertEditor() {
+  const item = editorItem();
+  if (!item) return;
+  fillEditor(item);
+}
+
+async function saveEditor() {
+  const item = editorItem();
+  if (!item || !editorSnapshot) return;
+  const v = editorValues();
+  const s = editorSnapshot;
+  const body = {};
+  if (v.prompt !== s.prompt) body.prompt = v.prompt;
+  if (v.neg_prompt !== s.neg_prompt) body.neg_prompt = v.neg_prompt;
+  if (v.cfg !== "" && v.cfg !== String(s.cfg ?? "")) body.cfg = Number(v.cfg);
+  if (v.type !== s.type) body.type = v.type;
+  if (!Object.keys(body).length) return; // pristine -- button is disabled anyway
+  try {
+    const updated = await api(dsApi(`/items/${item.id}`), {
+      method: "PATCH", body,
+    });
+    Object.assign(item, updated);
+    log(`Item ${item.id} saved (${Object.keys(body).join(", ")}).`, "success");
+    await loadItems();
+    // keep the editor on the same row if it survived the filter
+    const still = items.findIndex((it) => it.id === item.id);
+    if (still < 0) closeItemEditor();
+    else fillEditor(items[still]);
+    renderItems();
+    if (body.type !== undefined) reloadDetail(); // bad count lives in stats
+  } catch (err) {
+    logError(err);
+    showError("item-ed-error", errText(err));
+  }
 }
 
 async function toggleType(item) {
@@ -469,6 +662,8 @@ async function toggleType(item) {
 async function discardItems(ids) {
   const what = ids.length === 1 ? `item ${ids[0]}` : `${ids.length} items`;
   if (!window.confirm(`Discard ${what}? Rows and preview files are deleted permanently.`)) return;
+  const ed = editorItem();
+  if (ed && ids.includes(ed.id)) closeItemEditor();
   try {
     const res = await api(dsApi("/items/discard"), {
       method: "POST", body: { item_ids: ids },
@@ -484,30 +679,82 @@ async function discardItems(ids) {
   }
 }
 
+/* ---- multi-edit (M8e) ----------------------------------------------
+   The panel appears with any selection: pick a field, pick a mode
+   (text: replace/prepend/append), apply to every selected row. CFG
+   and verdict replace outright; empty values are refused here rather
+   than silently no-op'ing server-side. */
+
 function renderBulkBar() {
   const bar = el("bulk-bar");
   bar.hidden = selected.size === 0;
   el("bulk-count").textContent = `${selected.size} selected`;
+  el("bulk-apply-n").textContent = String(selected.size);
 }
 
-async function bulkPrompt() {
+function setBulkField(field) {
+  bulkField = field;
+  for (const b of el("bulk-field").children) {
+    b.classList.toggle("active", b.dataset.field === field);
+  }
+  el("bulk-row-text").hidden = !(field === "prompt" || field === "neg_prompt");
+  el("bulk-row-cfg").hidden = field !== "cfg";
+  el("bulk-row-type").hidden = field !== "type";
+}
+
+function setBulkType(value) {
+  bulkType = value;
+  for (const b of el("bulk-type").children) {
+    b.classList.toggle("active", b.dataset.btype === value);
+  }
+}
+
+async function applyBulk() {
   if (!selected.size) return;
-  const prompt = el("bulk-prompt").value;
+  showError("items-error", "");
+  const ids = [...selected];
+  let body;
+  if (bulkField === "prompt" || bulkField === "neg_prompt") {
+    const value = el("bulk-text").value;
+    if (!value) {
+      showError("items-error", "Enter a value to apply to the selection.");
+      el("bulk-text").focus();
+      return;
+    }
+    const mode = el("bulk-text-mode").value;
+    body = bulkField === "prompt"
+      ? { item_ids: ids, prompt: value, prompt_mode: mode }
+      : { item_ids: ids, neg_prompt: value, neg_prompt_mode: mode };
+  } else if (bulkField === "cfg") {
+    const raw = el("bulk-cfg").value.trim();
+    if (raw === "") {
+      showError("items-error", "Enter a CFG value to apply.");
+      el("bulk-cfg").focus();
+      return;
+    }
+    body = { item_ids: ids, cfg: Number(raw) };
+  } else {
+    if (!bulkType) {
+      showError("items-error", "Pick good or bad first.");
+      return;
+    }
+    body = { item_ids: ids, type: bulkType };
+  }
   try {
-    const res = await api(dsApi("/items"), {
-      method: "PATCH",
-      body: {
-        item_ids: [...selected],
-        prompt,
-        prompt_mode: el("bulk-mode").value,
-      },
-    });
-    log(`Prompt applied to ${res.updated} item(s).`, "success");
-    el("bulk-prompt").value = "";
+    const res = await api(dsApi("/items"), { method: "PATCH", body });
+    log(`${bulkField} applied to ${res.updated} item(s).`, "success");
+    if (bulkField === "prompt" || bulkField === "neg_prompt") {
+      el("bulk-text").value = "";
+    } else if (bulkField === "cfg") {
+      el("bulk-cfg").value = "";
+    } else {
+      setBulkType("");
+    }
     await loadItems();
     renderItems();
+    if (bulkField === "type") reloadDetail(); // bad count lives in stats
   } catch (err) {
-    logError(err);
+    logError(err); // 422 invalid_query: mode/type/value guards
     showError("items-error", errText(err));
   }
 }
@@ -571,7 +818,8 @@ function renderTasks() {
   const list = el("tasks-list");
   list.replaceChildren();
   if (!tasks.length) {
-    showState("tasks-state", "No cache sweeps recorded for this dataset yet.");
+    showState("tasks-state",
+      "No dataset tasks yet -- use Add data to generate or import images.");
     return;
   }
   showState("tasks-state", "");
@@ -581,7 +829,11 @@ function renderTasks() {
       ? Math.min(100, Math.round((task.current / task.total) * 100)) : 0;
     list.appendChild(h("div", { class: "ds-task" },
       h("span", { class: "ds-task-id", text: `#${task.id}` }),
-      h("span", { class: "ds-task-kind", text: task.kind }),
+      h("span", {
+        class: "ds-task-kind",
+        text: TASK_KIND_LABEL[task.kind] || task.kind,
+        title: task.kind,
+      }),
       h("span", {
         class: `status-badge ${TASK_STATUS_CLASS[task.status] || "status-idle"}`,
         text: task.status,
@@ -614,34 +866,198 @@ async function stopTask(id) {
   }
 }
 
-async function startTask() {
-  const imageDir = el("task-image-dir").value.trim();
-  const model = el("task-model").value.trim();
-  showError("task-error", "");
-  if (!imageDir || !model) {
-    showError("task-error",
-      "Image dir and checkpoint are required (absolute dir, catalog model).");
-    return;
+/* ---- add data dialog (M8e) ------------------------------------------
+   One dialog, two generators, one launch endpoint. The client checks
+   only what it can see fast (required fields, min <= max, counts);
+   the server's use case is the authority and its envelope error lands
+   in #add-error. */
+
+const RESIZE_DESC = {
+  fit: "Keep aspect ratio; wide/tall images split into crops so no " +
+       "crop exceeds max aspect ratio (one item per crop).",
+  center_crop: "Scale to cover the square, then cut the edges -- " +
+               "always exactly latent_size², some content lost.",
+  pad: "Keep aspect ratio, scale to fit, fill the edges with black " +
+       "-- nothing lost, padded borders are real pixels.",
+  resize: "Force the exact size -- stretches, aspect ratio not kept.",
+};
+
+function openAddDialog(name, tab) {
+  addTarget = name;
+  el("add-ds-name").textContent = name;
+  showError("add-error", "");
+  setAddTab(tab || addTab);
+  updateAddHints();
+  const dlg = el("add-dialog");
+  if (!dlg.open) dlg.showModal();
+  el("add-model").focus();
+}
+
+function setAddTab(tab) {
+  addTab = tab;
+  const gen = tab === "generate";
+  el("add-tab-generate").classList.toggle("active", gen);
+  el("add-tab-import").classList.toggle("active", !gen);
+  el("add-tab-generate").setAttribute("aria-selected", String(gen));
+  el("add-tab-import").setAttribute("aria-selected", String(!gen));
+  el("add-panel-generate").hidden = !gen;
+  el("add-panel-import").hidden = gen;
+  el("add-model-hint").textContent = gen
+    ? "Teacher checkpoint that samples the images."
+    : "Checkpoint whose VAE encodes the imported images.";
+  el("add-hint").textContent = gen
+    ? "One task at a time; watch progress on the Tasks tab."
+    : "Images are counted when the task starts; .txt sidecars become prompts.";
+  updateAddHints();
+}
+
+function setAddPromptMode(mode) {
+  for (const b of el("add-prompt-mode").children) {
+    b.classList.toggle("active", b.dataset.pmode === mode);
   }
-  try {
-    await api(dsApi("/tasks"), {
-      method: "POST",
-      body: {
-        kind: "ingest_lora",
-        image_dir: imageDir,
-        model,
-        recursive: el("task-recursive").checked,
-        seed: Number(el("task-seed").value || 42),
-      },
-    });
-    log("Cache sweep started.", "success");
-    el("task-image-dir").value = "";
-    await loadTasks();
-    renderTasks();
-  } catch (err) {
-    logError(err); // 409 dataset_task_active: one sweep at a time
-    showError("task-error", errText(err));
+  el("add-prompts-list").hidden = mode !== "list";
+  el("add-prompts-keywords").hidden = mode !== "keywords";
+}
+
+function setAddNegMode(mode) {
+  for (const b of el("add-neg-mode").children) {
+    b.classList.toggle("active", b.dataset.nmode === mode);
   }
+  el("add-neg-list").hidden = mode !== "list";
+  el("add-neg-keywords").hidden = mode !== "keywords";
+}
+
+function pxHint(inputId) {
+  const v = Number(el(inputId).value || 0);
+  return v >= 8 ? `→ ${v * 8}×${v * 8}px` : "";
+}
+
+function updateAddHints() {
+  el("add-latent-px").textContent = pxHint("add-latent");
+  el("add-import-latent-px").textContent = pxHint("add-import-latent");
+  const mode = el("add-resize-mode").value;
+  el("add-resize-desc").textContent = RESIZE_DESC[mode] || "";
+  // the split knob only exists for the mode that splits
+  el("add-max-aspect-row").hidden = mode !== "fit";
+  if (addTab === "generate") {
+    const n = Number(el("add-conditions").value || 0);
+    const m = Number(el("add-samples").value || 0);
+    el("add-total").textContent =
+      n >= 1 && m >= 1 ? `→ ${n * m} images` : "";
+  } else {
+    el("add-total").textContent = "";
+  }
+}
+
+function activeSegData(groupId, key) {
+  const seg = el(groupId).querySelector(".seg.active");
+  return seg ? seg.dataset[key] : null;
+}
+
+function addFieldError(message, inputId) {
+  showError("add-error", message);
+  if (inputId) el(inputId).focus();
+}
+
+function startAddTask() {
+  const name = addTarget;
+  if (!name) return;
+  showError("add-error", "");
+  const model = el("add-model").value.trim();
+  if (!model) return addFieldError("Checkpoint is required.", "add-model");
+
+  let body;
+  if (addTab === "generate") {
+    const promptMode = activeSegData("add-prompt-mode", "pmode") || "list";
+    const prompts = el("add-prompts").value;
+    const keywords = el("add-keywords").value;
+    if (promptMode === "list" && !prompts.split("\n").some((l) => l.trim())) {
+      return addFieldError("Prompt list needs at least one non-empty line.",
+        "add-prompts");
+    }
+    if (promptMode === "keywords" && !keywords.split("\n").some((l) => l.trim())
+        && !el("add-keywords-file").value.trim()) {
+      return addFieldError(
+        "Keyword mix needs keywords or a word-list file.", "add-keywords");
+    }
+    const cfgMin = Number(el("add-cfg-min").value);
+    const cfgMax = Number(el("add-cfg-max").value);
+    if (cfgMin > cfgMax) return addFieldError("CFG min must be <= max.");
+    const stMin = Number(el("add-steps-min").value);
+    const stMax = Number(el("add-steps-max").value);
+    if (stMin > stMax) return addFieldError("Steps min must be <= max.");
+    const tLow = Number(el("add-t-low").value);
+    const tHigh = Number(el("add-t-high").value);
+    if (tLow > tHigh) return addFieldError("T low must be <= high.");
+    const negMode = activeSegData("add-neg-mode", "nmode") || "list";
+    body = {
+      kind: "generate_teacher",
+      model,
+      prompt_mode: promptMode,
+      prompts,
+      keywords,
+      keywords_file: el("add-keywords-file").value.trim(),
+      template: el("add-template").value,
+      min_keywords: Number(el("add-min-kw").value),
+      max_keywords: Number(el("add-max-kw").value),
+      neg_mode: negMode,
+      negative_prompt: el("add-negative").value,
+      neg_keywords: el("add-neg-keywords-ta").value,
+      neg_keywords_file: el("add-neg-keywords-file").value.trim(),
+      neg_template: el("add-neg-template").value,
+      neg_min_keywords: Number(el("add-neg-min-kw").value),
+      neg_max_keywords: Number(el("add-neg-max-kw").value),
+      cfg_min: cfgMin,
+      cfg_max: cfgMax,
+      steps_min: stMin,
+      steps_max: stMax,
+      t_mode: el("add-t-mode").value,
+      t_low: tLow,
+      t_high: tHigh,
+      batch_size: Number(el("add-batch").value),
+      seed: Number(el("add-seed").value || 42),
+      n_conditions: Number(el("add-conditions").value),
+      n_samples_per_cond: Number(el("add-samples").value),
+      latent_size: Number(el("add-latent").value),
+      model_type: el("add-model-type").value,
+    };
+  } else {
+    const imageDir = el("add-image-dir").value.trim();
+    if (!imageDir) {
+      return addFieldError("Image dir is required (absolute, server-side).",
+        "add-image-dir");
+    }
+    body = {
+      kind: "ingest_lora",
+      model,
+      image_dir: imageDir,
+      recursive: el("add-recursive").checked,
+      resize_mode: el("add-resize-mode").value,
+      latent_size: Number(el("add-import-latent").value),
+      max_aspect_ratio: Number(el("add-max-aspect").value),
+      model_type: el("add-import-model-type").value,
+      neg_prompt: el("add-import-neg").value,
+      seed: Number(el("add-import-seed").value || 42),
+    };
+  }
+
+  const fromList = datasetName === null;
+  api(`/datasets/${encodeURIComponent(name)}/tasks`, {
+    method: "POST", body,
+  }).then((task) => {
+    log(`Task #${task.id} (${TASK_KIND_LABEL[task.kind] || task.kind}) ` +
+        `started for '${name}' -- ${task.total} to process.`, "success");
+    el("add-dialog").close();
+    if (fromList) {
+      location.href = `/datasets/${encodeURIComponent(name)}`;
+    } else {
+      showTab("tasks");
+      loadTasks().then(renderTasks).catch(logError);
+    }
+  }).catch((err) => {
+    logError(err); // 409 dataset_task_active, 422 invalid_query, ...
+    showError("add-error", errText(err));
+  });
 }
 
 /* Dataset tasks emit no events: poll while the detail view is open.
@@ -656,7 +1072,7 @@ async function pollTasks() {
       (t) => t.status === "pending" || t.status === "running").length;
     renderTasks();
     if (prevActive > 0 && lastActiveCount === 0) {
-      log("A cache sweep finished -- refreshing items.", "success");
+      log("A dataset task finished -- refreshing items.", "success");
       await loadItems();
       renderItems();
       reloadDetail();
@@ -682,6 +1098,17 @@ function stopPoll() {
 
 /* ---- boot ---- */
 
+function bindSeg(groupId, key, onPick) {
+  el(groupId).addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".seg");
+    if (!btn) return;
+    for (const b of el(groupId).children) {
+      b.classList.toggle("active", b === btn);
+    }
+    onPick(btn.dataset[key]);
+  });
+}
+
 async function boot() {
   // global bindings
   el("btn-new-dataset").addEventListener("click", () => {
@@ -695,6 +1122,9 @@ async function boot() {
   for (const name of ["items", "sets", "tasks"]) {
     el(`tab-${name}`).addEventListener("click", () => showTab(name));
   }
+
+  // toolbar: mode + filters + selection
+  bindSeg("item-mode", "mode", setItemMode);
   el("item-filter").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".seg");
     if (!btn) return;
@@ -714,11 +1144,63 @@ async function boot() {
     selected = ev.target.checked ? new Set(items.map((it) => it.id)) : new Set();
     renderItems();
   });
-  el("btn-bulk-prompt").addEventListener("click", bulkPrompt);
+
+  // multi-edit panel
+  bindSeg("bulk-field", "field", setBulkField);
+  bindSeg("bulk-type", "btype", setBulkType);
+  el("btn-bulk-apply").addEventListener("click", applyBulk);
+  el("btn-clear-sel").addEventListener("click", () => {
+    selected = new Set();
+    renderItems();
+  });
   el("btn-commit").addEventListener("click", commitToSet);
   el("btn-bulk-discard").addEventListener("click", () =>
     discardItems([...selected]));
-  el("btn-start-task").addEventListener("click", startTask);
+
+  // add-data dialog
+  el("btn-add-data").addEventListener("click", () =>
+    openAddDialog(datasetName));
+  el("btn-add-data-tab").addEventListener("click", () =>
+    openAddDialog(datasetName));
+  el("add-close").addEventListener("click", () => el("add-dialog").close());
+  el("add-dialog").addEventListener("close", () => showError("add-error", ""));
+  el("add-tab-generate").addEventListener("click", () => setAddTab("generate"));
+  el("add-tab-import").addEventListener("click", () => setAddTab("import"));
+  bindSeg("add-prompt-mode", "pmode", setAddPromptMode);
+  bindSeg("add-neg-mode", "nmode", setAddNegMode);
+  el("btn-add-start").addEventListener("click", startAddTask);
+  for (const id of ["add-conditions", "add-samples", "add-latent",
+                    "add-import-latent", "add-resize-mode"]) {
+    el(id).addEventListener("input", updateAddHints);
+    el(id).addEventListener("change", updateAddHints);
+  }
+
+  // item editor dialog
+  el("item-ed-close").addEventListener("click", () => {
+    if (editorDirty()
+        && !window.confirm("Discard unsaved changes?")) return;
+    closeItemEditor();
+  });
+  el("item-dialog").addEventListener("close", () => {
+    editorIndex = -1;
+    editorSnapshot = null;
+  });
+  el("item-ed-prev").addEventListener("click", () => editorNav(-1));
+  el("item-ed-next").addEventListener("click", () => editorNav(1));
+  el("item-ed-save").addEventListener("click", saveEditor);
+  el("item-ed-revert").addEventListener("click", revertEditor);
+  el("item-ed-discard").addEventListener("click", () => {
+    const item = editorItem();
+    if (item) discardItems([item.id]);
+  });
+  bindSeg("item-ed-type", "etype", (value) => {
+    editorType = value;
+    syncEditorDirty();
+  });
+  for (const id of ["item-ed-prompt", "item-ed-neg", "item-ed-cfg"]) {
+    el(id).addEventListener("input", syncEditorDirty);
+  }
+
   window.addEventListener("pagehide", stopPoll);
 
   // checkpoint catalog feeds the model datalist (suggestions only)

@@ -103,12 +103,17 @@ class ItemChanges:
 class BulkItemChanges:
     """Bulk update, legacy-compatible semantics: ``prompt``/``neg_prompt``
     are truthy-gated (empty string does not clear in bulk), ``cfg`` is
-    ``None``-gated, ``prompt_mode`` is 'set' or 'prepend'."""
+    ``None``-gated, text modes are 'set' | 'prepend' | 'append'
+    ('prepend' is the legacy trigger-word flow, idempotent; 'append'
+    added M8e for the multi-edit surface), ``type`` is ``None``-gated
+    and validated by the use case."""
 
     prompt: str | None = None
     prompt_mode: str = "set"
     neg_prompt: str | None = None
+    neg_prompt_mode: str = "set"
     cfg: float | None = None
+    type: str | None = None  # 'good' | 'bad'
 
 
 class DatasetLibrary(ABC):

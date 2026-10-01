@@ -19,6 +19,7 @@ from ..application.dto import (
     RunDTO,
     StartDatasetTaskCommand,
     StartOptionsResult,
+    TeacherTaskParams,
 )
 from ..application.ports.asset_store import AssetCatalog, AssetBrowse
 from ..application.ports.graph_catalog import CatalogSnapshot, NodeInfo, PortInfo
@@ -31,7 +32,7 @@ from ..application.ports.dataset_library import (
     DatasetSummary,
     TrainingSetInfo,
 )
-from ..application.ports.dataset_tasks import DatasetTask
+from ..application.ports.dataset_tasks import KIND_GENERATE_TEACHER, DatasetTask
 from ..application.ports.settings_store import SettingsChanges, SettingsView
 from ..domain.value_objects import GraphStatus, RunStatus
 
@@ -397,9 +398,11 @@ class UpdateItemIn(BaseModel):
 class BulkUpdateItemsIn(BaseModel):
     item_ids: list[int] = Field(min_length=1)
     prompt: str | None = None
-    prompt_mode: str = "set"
+    prompt_mode: str = Field("set", description="set | prepend | append")
     neg_prompt: str | None = None
+    neg_prompt_mode: str = Field("set", description="set | prepend | append")
     cfg: float | None = None
+    type: str | None = Field(None, description="good | bad (multi-edit verdict)")
 
 
 class ItemIdsIn(BaseModel):
@@ -412,11 +415,25 @@ class CommitItemsIn(BaseModel):
 
 
 class StartDatasetTaskIn(BaseModel):
-    """Ingestion launch. ``model`` is a checkpoint path relative to the
-    checkpoints dir; ``image_dir`` is an absolute server-side path."""
+    """Task launch, one body for both kinds (M8e).
+
+    ``kind: ingest_lora`` consumes the import fields -- ``model`` is a
+    checkpoint path relative to the checkpoints dir, ``image_dir`` an
+    absolute server-side path. ``kind: generate_teacher`` consumes the
+    teacher fields below (flat, mirroring the legacy ``type="teacher"``
+    body); ``seed``/``latent_size``/``model_type`` are shared by both.
+    Semantic validation (modes, ranges, prompt content, per-kind
+    required fields) is the use case's job -- ``kind`` stays a plain
+    string so an unknown one leaves as ``invalid_query``, not a
+    schema-level ``validation_error``.
+    """
 
     kind: str = "ingest_lora"
-    image_dir: str = Field(min_length=1)
+    image_dir: str = Field(
+        "",
+        description="required for kind=ingest_lora: absolute server-side "
+        "source directory; unused by generate_teacher",
+    )
     model: str = Field(min_length=1)
     recursive: bool = True
     resize_mode: str = "center_crop"
@@ -426,7 +443,64 @@ class StartDatasetTaskIn(BaseModel):
     seed: int = 42
     max_aspect_ratio: float = Field(default=2.0, ge=1.0)
 
+    # -- generate_teacher options (legacy type="teacher") -----------------
+    prompt_mode: str = "list"  # list | keywords
+    prompts: str = Field("", description="newline-separated prompts (mode=list)")
+    keywords: str = Field("", description="newline-separated keywords (mode=keywords)")
+    keywords_file: str = Field("", description="optional server-side .txt/.csv word list")
+    template: str = Field("", description='prompt template, "{keywords}" placeholder')
+    min_keywords: int = Field(3, ge=1)
+    max_keywords: int = Field(10, ge=1)
+    neg_mode: str = "list"  # list | keywords
+    negative_prompt: str = Field("", description="one negative string for every sample")
+    neg_keywords: str = ""
+    neg_keywords_file: str = ""
+    neg_template: str = ""
+    neg_min_keywords: int = Field(3, ge=1)
+    neg_max_keywords: int = Field(10, ge=1)
+    cfg_min: float = 3.0
+    cfg_max: float = 9.0
+    steps_min: int = Field(20, ge=1)
+    steps_max: int = Field(30, ge=1)
+    t_mode: str = "uniform"  # uniform | low | mid | high | logit
+    t_low: int = Field(20, ge=0)
+    t_high: int = Field(999, ge=0)
+    batch_size: int = Field(1, ge=1, le=256)
+    n_conditions: int = Field(10, ge=1)
+    n_samples_per_cond: int = Field(1, ge=1)
+
     def to_command(self, dataset: str) -> StartDatasetTaskCommand:
+        teacher: TeacherTaskParams | None = None
+        if self.kind == KIND_GENERATE_TEACHER:
+            teacher = TeacherTaskParams(
+                prompt_mode=self.prompt_mode,
+                prompts=self.prompts,
+                keywords=self.keywords,
+                keywords_file=self.keywords_file,
+                template=self.template,
+                min_keywords=self.min_keywords,
+                max_keywords=self.max_keywords,
+                neg_mode=self.neg_mode,
+                negative_prompt=self.negative_prompt,
+                neg_keywords=self.neg_keywords,
+                neg_keywords_file=self.neg_keywords_file,
+                neg_template=self.neg_template,
+                neg_min_keywords=self.neg_min_keywords,
+                neg_max_keywords=self.neg_max_keywords,
+                cfg_min=self.cfg_min,
+                cfg_max=self.cfg_max,
+                steps_min=self.steps_min,
+                steps_max=self.steps_max,
+                t_mode=self.t_mode,
+                t_low=self.t_low,
+                t_high=self.t_high,
+                batch_size=self.batch_size,
+                seed=self.seed,
+                n_conditions=self.n_conditions,
+                n_samples_per_cond=self.n_samples_per_cond,
+                latent_size=self.latent_size,
+                model_type=self.model_type,
+            )
         return StartDatasetTaskCommand(
             dataset=dataset,
             kind=self.kind,
@@ -439,6 +513,7 @@ class StartDatasetTaskIn(BaseModel):
             model_type=self.model_type,
             seed=self.seed,
             max_aspect_ratio=self.max_aspect_ratio,
+            teacher=teacher,
         )
 
 

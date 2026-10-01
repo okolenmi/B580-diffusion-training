@@ -1,4 +1,4 @@
-"""StartDatasetTask -- validate, persist, spawn one ingestion child.
+"""StartDatasetTask -- validate, persist, spawn one dataset child.
 
 Check-then-act under a lock (one process, two concurrent starts must
 not both pass the active-task check); the row is added *before* the
@@ -6,12 +6,21 @@ spawn so a crash between the two leaves something for startup
 reconciliation to sweep. A spawn failure fails the row here and
 re-raises as ``DatasetTaskLaunchError`` -- there is nothing to reap.
 
-``model`` is sandboxed against the checkpoints directory (client input
-is untrusted, same posture as the assets API); ``image_dir`` must be
-an existing absolute directory but is deliberately *not* sandboxed --
-source images legitimately live anywhere on the machine, as in the
-legacy API. The image count uses the legacy rule exactly so ``total``
-matches what the child will iterate.
+Two kinds, both following the same shape: validate everything first,
+compute ``total`` honestly, then insert + spawn:
+
+* ``ingest_lora`` -- VAE-encode an image directory. ``model`` is
+  sandboxed against the checkpoints directory (client input is
+  untrusted, same posture as the assets API); ``image_dir`` must be an
+  existing absolute directory but is deliberately *not* sandboxed --
+  source images legitimately live anywhere on the machine, as in the
+  legacy API. The image count uses the legacy rule exactly so ``total``
+  matches what the child will iterate.
+* ``generate_teacher`` (M8e) -- sample new trajectories from a
+  checkpoint. All options validate through
+  ``application.teacher_prompts`` (modes, ranges, prompt content), so
+  an impossible launch never becomes a row; ``total =
+  n_conditions * n_samples_per_cond``, the legacy rule.
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from ..dto import StartDatasetTaskCommand
+from ..dto import StartDatasetTaskCommand, TeacherTaskParams
 from ..errors import (
     DatasetTaskActiveError,
     DatasetTaskLaunchError,
@@ -28,19 +37,24 @@ from ..errors import (
 from ..ports.dataset_library import DatasetLibrary
 from ..ports.dataset_task_gateway import DatasetTaskGateway, DatasetTaskLaunch
 from ..ports.dataset_tasks import (
+    KIND_GENERATE_TEACHER,
+    KIND_INGEST_LORA,
     DatasetTask,
     DatasetTasks,
     TASK_KINDS,
 )
+from ..teacher_prompts import MODEL_TYPES, teacher_payload
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+_RESIZE_MODES: tuple[str, ...] = ("fit", "center_crop", "pad", "resize")
 
 
 class StartDatasetTask:
     """The only place a dataset task is born (single-active per dataset)."""
 
     def __init__(
-        self, *,
+        self,
+        *,
         library: DatasetLibrary,
         tasks: DatasetTasks,
         gateway: DatasetTaskGateway,
@@ -60,15 +74,24 @@ class StartDatasetTask:
                     f"unknown task kind {command.kind!r}; "
                     f"expected one of {list(TASK_KINDS)}"
                 )
-            image_dir = self._validate_image_dir(command.image_dir)
             model_rel = self._validate_model(command.model)
 
-            total = self._count_images(image_dir, command.recursive)
-            if total == 0:
-                raise InvalidQueryError(
-                    f"no images ({', '.join(sorted(_IMAGE_EXTENSIONS))}) "
-                    f"found in '{image_dir}'"
-                )
+            # Per-kind validation + honest total, before the active-task
+            # check: a bad request stays a bad request even while
+            # another task runs (422 beats 409, as before M8e).
+            if command.kind == KIND_INGEST_LORA:
+                image_dir = self._validate_image_dir(command.image_dir)
+                total = self._count_images(image_dir, command.recursive)
+                if total == 0:
+                    raise InvalidQueryError(
+                        f"no images ({', '.join(sorted(_IMAGE_EXTENSIONS))}) "
+                        f"found in '{image_dir}'"
+                    )
+                params = self._ingest_params(command, model_rel)
+            else:  # KIND_GENERATE_TEACHER
+                teacher = self._require_teacher(command)
+                total = teacher.n_conditions * teacher.n_samples_per_cond
+                params = self._teacher_params(teacher, model_rel)
 
             active = self._tasks.find_active(command.dataset)
             if active is not None:
@@ -78,17 +101,6 @@ class StartDatasetTask:
                     details={"task_id": active.id, "status": active.status},
                 )
 
-            params: dict = {
-                "image_dir": str(image_dir),
-                "model": model_rel,
-                "recursive": command.recursive,
-                "resize_mode": command.resize_mode,
-                "latent_size": command.latent_size,
-                "neg_prompt": command.neg_prompt,
-                "model_type": command.model_type,
-                "seed": command.seed,
-                "max_aspect_ratio": command.max_aspect_ratio,
-            }
             task = self._tasks.add(
                 dataset=command.dataset,
                 kind=command.kind,
@@ -114,6 +126,58 @@ class StartDatasetTask:
             # progress write repeats the same pid (self-identifying).
             self._tasks.update_progress(task.id, 0, pid)
             return self._tasks.get(task.id) or task
+
+    # -- per-kind params --------------------------------------------------
+
+    def _ingest_params(
+        self, command: StartDatasetTaskCommand, model_rel: str
+    ) -> dict:
+        # Enum checks live here rather than in the pydantic schema so
+        # unknown values leave as the envelope's invalid_query with an
+        # "expected one of" list: the builder silently *defaults* an
+        # unknown resize_mode and crashes deep on an unknown
+        # model_type -- neither is honest feedback on its own.
+        if command.resize_mode not in _RESIZE_MODES:
+            raise InvalidQueryError(
+                f"unknown resize_mode {command.resize_mode!r}; "
+                f"expected one of {list(_RESIZE_MODES)}"
+            )
+        if command.model_type not in MODEL_TYPES:
+            raise InvalidQueryError(
+                f"unknown model_type {command.model_type!r}; "
+                f"expected one of {list(MODEL_TYPES)}"
+            )
+        return {
+            "image_dir": command.image_dir,
+            "model": model_rel,
+            "recursive": command.recursive,
+            "resize_mode": command.resize_mode,
+            "latent_size": command.latent_size,
+            "neg_prompt": command.neg_prompt,
+            "model_type": command.model_type,
+            "seed": command.seed,
+            "max_aspect_ratio": command.max_aspect_ratio,
+        }
+
+    @staticmethod
+    def _require_teacher(
+        command: StartDatasetTaskCommand,
+    ) -> TeacherTaskParams:
+        # The wire schema always builds this for the kind; the guard
+        # keeps a hand-constructed command honest.
+        if command.teacher is None:
+            raise InvalidQueryError(
+                f"task kind {command.kind!r} needs teacher parameters"
+            )
+        return command.teacher
+
+    @staticmethod
+    def _teacher_params(teacher: TeacherTaskParams, model_rel: str) -> dict:
+        try:
+            payload = teacher_payload(teacher)
+        except ValueError as exc:
+            raise InvalidQueryError(f"teacher task: {exc}") from exc
+        return dict(payload, model=model_rel)
 
     # -- validation helpers ---------------------------------------------
 

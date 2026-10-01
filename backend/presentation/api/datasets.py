@@ -114,14 +114,17 @@ def bulk_update_items(
     body: BulkUpdateItemsIn,
     services: ApplicationServices = Depends(get_services),
 ):
-    """Bulk caption/CFG edit (legacy truthy semantics -- see use case)."""
+    """Multi-row edit: text fields with set/prepend/append, CFG, verdict
+    (legacy truthy semantics -- see the use case)."""
     result = services.datasets.bulk_update.execute(
         name,
         list(body.item_ids),
         prompt=body.prompt,
         prompt_mode=body.prompt_mode,
         neg_prompt=body.neg_prompt,
+        neg_prompt_mode=body.neg_prompt_mode,
         cfg=body.cfg,
+        type=body.type,
     )
     return BulkUpdateOut(updated=result.updated)
 

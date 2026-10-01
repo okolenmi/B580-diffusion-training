@@ -175,33 +175,68 @@ class SqliteDatasetLibrary(DatasetLibrary):
         placeholders = ",".join("?" * len(item_ids))
         with self._connect(directory / "metadata.db") as conn:
             rows = conn.execute(
-                f"SELECT id, prompt, neg_prompt, cfg FROM trajectories "
+                f"SELECT id, prompt, neg_prompt, cfg, type FROM trajectories "
                 f"WHERE id IN ({placeholders})",
                 item_ids,
             ).fetchall()
             updated = 0
             for row in rows:
-                prompt = row["prompt"] or ""
-                if changes.prompt:
-                    if changes.prompt_mode == "prepend":
-                        if not prompt.startswith(changes.prompt):
-                            prompt = f"{changes.prompt} {prompt}".strip()
-                    else:  # "set"
-                        prompt = changes.prompt
+                prompt = self._merge_text(
+                    row["prompt"] or "", changes.prompt, changes.prompt_mode
+                )
+                neg_prompt = self._merge_text(
+                    row["neg_prompt"] or "",
+                    changes.neg_prompt,
+                    changes.neg_prompt_mode,
+                )
                 # Truthy gates are legacy-compatible: an empty string
                 # never clears in bulk (single-item PATCH does that).
                 conn.execute(
-                    "UPDATE trajectories SET prompt = ?, neg_prompt = ?, cfg = ? "
-                    "WHERE id = ?",
+                    "UPDATE trajectories SET prompt = ?, neg_prompt = ?, "
+                    "cfg = ?, type = ? WHERE id = ?",
                     (
                         prompt,
-                        changes.neg_prompt if changes.neg_prompt else row["neg_prompt"],
+                        neg_prompt,
                         changes.cfg if changes.cfg is not None else row["cfg"],
+                        changes.type if changes.type is not None else row["type"],
                         row["id"],
                     ),
                 )
                 updated += 1
         return updated
+
+    @staticmethod
+    def _merge_text(existing: str, new: str | None, mode: str) -> str:
+        """set / prepend / append, both merges idempotent (re-applying
+        the same value is a no-op instead of doubling the caption).
+
+        The join adds a separating space only when the incoming text
+        brings no separator of its own: tags are comma-separated, so
+        appending ", ugly" must read "lowres, ugly", never
+        "lowres , ugly" -- while "trigger" still lands as "photo 2
+        trigger" (the legacy prepend shape)."""
+
+        def join(first: str, second: str) -> str:
+            if not first:
+                return second
+            if not second:
+                return first
+            if first[-1].isspace() or second[0].isspace() or second[0] == ",":
+                return f"{first}{second}"
+            return f"{first} {second}"
+
+        if not new:
+            return existing  # truthy gate, legacy-compatible
+        if mode == "set":
+            return new
+        if mode == "prepend":
+            if existing.startswith(new):
+                return existing
+            return join(new, existing)
+        # "append"
+        if existing.endswith(new):
+            return existing
+        return join(existing, new)
 
     def discard(self, name: str, item_ids: list[int]) -> int:
         directory = self._existing_dir(name)

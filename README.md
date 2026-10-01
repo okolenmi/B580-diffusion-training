@@ -30,7 +30,11 @@ of maturity:
 `core/`/`manager/` are treated as reference material by the `nodes/`
 rewrite -- correct, working code that gets wrapped, not rewritten, per
 the project's own stated rule (see
-[`docs/architecture.md`](docs/architecture.md)).
+[`docs/architecture.md`](docs/architecture.md)). Note that "legacy"
+describes *when* `core/` was written, not what it does: the web UI's
+Start button literally spawns `python -m core.cli`, and
+[`docs/core-inventory.md`](docs/core-inventory.md) maps what depends on
+it and lists the capabilities nothing else provides.
 
 ## Goals
 
@@ -83,6 +87,7 @@ ask the server, which serves its own OpenAPI schema.
 docs/
 ├── setup.md                 Environment setup, running either pipeline, running tests
 ├── architecture.md          Codebase map: core/manager/backend/nodes and how they relate
+├── core-inventory.md        What `core/` is (the training engine) and the eight things only it has
 ├── training-diagnostics.md  Fixed-probe / gradient-alignment tools: is a LoRA damaging a t region?
 ├── review_notes.md          The one open documentation-hygiene judgment call
 ├── known-issues/            Bug/quirk tracker, split by status. Cited from source

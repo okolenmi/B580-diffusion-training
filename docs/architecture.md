@@ -14,6 +14,11 @@ reader fast).
 | Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does |
 | Config style | One big TOML file, many flat fields | A visual graph of typed `Node`s wired together |
 
+`core/` in particular is not dead code -- it is the training engine
+every path runs through, including the web UI's. See
+[`core-inventory.md`](core-inventory.md) for the dependency map and the
+capabilities that exist only there.
+
 **The legacy pipeline (`core/`, `manager/`) is not modified by this
 project** (section 9.3 of `docs/design/08-validation-and-implementation-status.md`
 says this explicitly) -- it's the current production path, and bugs

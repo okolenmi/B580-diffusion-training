@@ -148,6 +148,7 @@ dataset.
 | PATCH | `/datasets/{name}/items` | `BulkUpdateItemsIn{item_ids, prompt?, prompt_mode("set"/"append"), neg_prompt?, cfg?}` | `{"updated": N}` |
 | PATCH | `/datasets/{name}/items/{id}` | `UpdateItemIn` — every `null` field untouched; `""` clears a caption; explicit `type` replaces the legacy toggle | `DatasetItemOut` |
 | POST | `/datasets/{name}/items/discard` | `ItemIdsIn` | `{"deleted": N}` |
+| GET | `/datasets/{name}/files/{path}` | — | file bytes (item previews); media type from the suffix; 404 `dataset_not_found` / `dataset_file_not_found` (missing **or** escaping the dataset dir — an escape is reported as not-found, never resolved) |
 | GET | `/datasets/{name}/sets` | — | `DatasetSetsOut`: `sets[{id,name,description,created_at,members}], count` |
 | POST | `/datasets/{name}/sets` | `CommitItemsIn{item_ids, name}` | `CommitOut{set_id, set_name, added}` -> **201** |
 | GET | `/datasets/{name}/tasks` | `active_only` (bool) | `DatasetTasksOut` (sweeps dead rows first) |

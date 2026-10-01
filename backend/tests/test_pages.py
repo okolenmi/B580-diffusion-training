@@ -1,4 +1,4 @@
-"""Frontend serving tests -- page routes + /ui asset mount (M6/M7).
+"""Frontend serving tests -- page routes + /ui asset mount (M6--M8).
 
 Pins register_frontend's contract: pages serve when ``static_dir`` is
 given, every asset the shipped pages reference resolves, the mount
@@ -32,12 +32,14 @@ ASSETS = (
     "/ui/css/training.css",
     "/ui/css/config.css",
     "/ui/css/run.css",
+    "/ui/css/datasets.css",
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",
     "/ui/js/views/dashboard.js",
     "/ui/js/views/config.js",
     "/ui/js/views/run.js",
+    "/ui/js/views/datasets.js",
     "/ui/js/editor.js",
     "/ui/js/editor/state.js",
     "/ui/js/editor/canvas.js",
@@ -93,6 +95,18 @@ def test_pages_and_assets() -> None:
             f"/run/{{id}} serves the run detail page (got {status})",
         )
 
+        status, _, body = asgi_request(app, "/datasets")
+        check(
+            status == 200 and isinstance(body, str) and "ds-grid" in body,
+            f"/datasets serves the dataset manager page (got {status})",
+        )
+
+        status, _, body = asgi_request(app, "/datasets/test2")
+        check(
+            status == 200 and isinstance(body, str) and "ds-grid" in body,
+            f"/datasets/{{name}} serves the same detail page (got {status})",
+        )
+
         for asset in ASSETS:
             status, _, _ = asgi_request(app, asset)
             check(status == 200, f"{asset} serves (got {status})")
@@ -126,8 +140,9 @@ def test_static_cache_headers() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         app = create_app(_container(tmp).services, static_dir=FRONTEND)
 
-        for path in ("/", "/graph", "/config", "/run/12", "/monitor/mon-test",
-                     "/ui/css/style.css", "/ui/js/editor.js"):
+        for path in ("/", "/graph", "/config", "/run/12", "/datasets",
+                     "/monitor/mon-test", "/ui/css/style.css",
+                     "/ui/js/editor.js"):
             status, headers, _ = asgi_request(app, path)
             check(
                 status == 200 and headers.get("cache-control") == "no-cache",

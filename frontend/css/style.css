@@ -304,9 +304,9 @@ input[type="checkbox"]:checked::after {
 /* Utilities */
 .text-dim { color: var(--text-dim); }
 
-/* Page chrome: topbar + gap-driven body, shared by the app's main
-   pages (training, config, ...). The monitor/editor pages bring their
-   own shells. */
+/* Page chrome: topbar + gap-driven body + tabs, shared by the app's
+   main pages (training, config, datasets, ...). The monitor/editor
+   pages bring their own shells. */
 .page-topbar {
     display: flex;
     align-items: center;
@@ -332,6 +332,54 @@ input[type="checkbox"]:checked::after {
     margin-top: 16px;
 }
 .page-body .card { margin-bottom: 0; }
+
+/* Tabs: one active panel at a time; ids/aria live in the markup. */
+.tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+}
+.tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 9px 14px;
+    cursor: pointer;
+    margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* Shared blocks: honest empty/loading states, error banners, small
+   toolbar hints (config, run detail, datasets all render these). */
+.state-box {
+    color: var(--text-dim);
+    font-size: 13.5px;
+    padding: 32px 24px;
+    text-align: center;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+}
+.error-box {
+    color: var(--red);
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    white-space: pre-wrap;
+}
+.toolbar-hint { font-size: 12.5px; }
 
 /* Log tail pane: shared by the training page (quick log) and the run
    detail page; pre-wrap keeps line structure honest. */

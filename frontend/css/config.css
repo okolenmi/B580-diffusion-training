@@ -22,31 +22,9 @@
     padding: 0.55rem 0.7rem;
 }
 
-/* ---- tabs ---- */
+/* ---- tabs (styles live in style.css page chrome); the dirty chip
+   below is config-specific (unsaved form/raw edits) ---- */
 
-.cfg-tabs {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-}
-.cfg-tab {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-dim);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    padding: 9px 14px;
-    cursor: pointer;
-    margin-bottom: -1px;
-}
-.cfg-tab:hover { color: var(--text); }
-.cfg-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-}
 .cfg-dirty {
     margin-left: auto;
     font-size: 12px;
@@ -60,26 +38,6 @@
 
 /* ---- states + errors ---- */
 
-.cfg-state {
-    color: var(--text-dim);
-    font-size: 13.5px;
-    padding: 32px 24px;
-    text-align: center;
-    background: var(--surface);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-lg);
-}
-.cfg-error {
-    color: var(--red);
-    background: rgba(239, 68, 68, 0.08);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    font-size: 13px;
-    margin-bottom: 16px;
-    white-space: pre-wrap;
-}
-
 /* ---- toolbar ---- */
 
 .cfg-toolbar {
@@ -88,7 +46,6 @@
     gap: 10px;
     margin-bottom: 18px;
 }
-.cfg-toolbar-hint { font-size: 12.5px; }
 
 /* ---- groups + fields ---- */
 

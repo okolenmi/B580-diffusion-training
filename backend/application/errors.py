@@ -97,6 +97,14 @@ class DatasetItemNotFoundError(ApplicationError):
     code = "dataset_item_not_found"
 
 
+class DatasetFileNotFoundError(ApplicationError):
+    """No readable file at the requested path inside the dataset
+    directory: missing, not a regular file, or escaping the dataset
+    root (the escape is reported as not-found, never resolved)."""
+
+    code = "dataset_file_not_found"
+
+
 class DatasetAlreadyExistsError(ApplicationError):
     """A dataset already occupies the requested name."""
 

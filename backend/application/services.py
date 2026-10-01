@@ -49,6 +49,7 @@ from .use_cases.list_runs import ListRuns
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.read_config_raw import ReadConfigRaw
+from .use_cases.read_dataset_file import ReadDatasetFile
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.reconcile_runs import ReconcileRuns
@@ -112,6 +113,7 @@ class DatasetServices:
     start_task: StartDatasetTask
     stop_task: StopDatasetTask
     reconcile_tasks: ReconcileDatasetTasks
+    read_file: ReadDatasetFile
 
 
 @dataclass(frozen=True, slots=True)

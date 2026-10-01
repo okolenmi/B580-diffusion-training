@@ -9,6 +9,8 @@ Resource-oriented contract over ``services.datasets``:
   filter); ``PATCH /{name}/items`` -- bulk edit; ``PATCH
   /{name}/items/{id}`` -- single edit (explicit ``type`` replaces the
   legacy toggle endpoint); ``POST /{name}/items/discard``;
+* ``GET /{name}/files/{path}`` -- preview image bytes (containment
+  enforced by the adapter, never resolved out of the dataset dir);
 * ``GET/POST /{name}/sets`` -- list / commit items into a set;
 * ``GET/POST /{name}/tasks`` -- rows / start; ``POST
   /{name}/tasks/{id}/stop`` -- SIGKILL.
@@ -19,7 +21,7 @@ Every error leaves as the one envelope (``dataset_not_found`` 404,
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from ...application.services import ApplicationServices
 from ..deps import get_services
@@ -160,6 +162,30 @@ def discard_items(
     """Delete rows (+ previews, empty shards); membership cascades."""
     result = services.datasets.discard.execute(name, list(body.item_ids))
     return DiscardOut(deleted=result.deleted)
+
+
+@router.get(
+    "/{name}/files/{rel_path:path}",
+    response_class=Response,
+    responses={404: _ERROR_404},
+)
+def read_dataset_file(
+    name: str,
+    rel_path: str,
+    services: ApplicationServices = Depends(get_services),
+):
+    """Preview image bytes for the items grid.
+
+    Scoped by contract: the adapter refuses anything outside
+    ``datasets/{name}/`` (``dataset_file_not_found`` 404), so this
+    route can never be steered at the rest of the filesystem.
+    """
+    payload = services.datasets.read_file.execute(name, rel_path)
+    return Response(
+        content=payload.content,
+        media_type=payload.media_type,
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/{name}/sets", response_model=DatasetSetsOut, responses={404: _ERROR_404, 409: _ERROR_409})

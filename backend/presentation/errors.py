@@ -37,6 +37,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     # datasets (M3b)
     "dataset_not_found": 404,
     "dataset_item_not_found": 404,
+    "dataset_file_not_found": 404,
     "dataset_exists": 409,
     "dataset_not_migrated": 409,
     "dataset_task_active": 409,

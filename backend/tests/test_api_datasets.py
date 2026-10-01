@@ -66,6 +66,27 @@ by_name = {d["info"]["name"]: d for d in body["datasets"]}
 check(by_name["old-ds"]["stats"] is None and by_name["old-ds"]["info"]["format_version"] == 0,
       "v1 listed with null stats, never fabricated counts")
 
+# preview file serving (M8c): scoped bytes, envelope on refusal
+(root_a / "escape.txt").write_text("SECRET")
+status, headers, body = asgi_request(
+    app, "/api/v1/datasets/api-ds/files/previews/p1.png"
+)
+check(status == 200, f"preview file serves (got {status})")
+check(headers.get("content-type", "").startswith("image/png"),
+      f"preview content-type image/png (got {headers.get('content-type')!r})")
+check(isinstance(body, str) and "PNG" in body, "PNG signature present in bytes")
+check(headers.get("cache-control") == "no-cache", "preview revalidates (no-cache)")
+
+status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/previews/none.png")
+expect_error(status, body, 404, "dataset_file_not_found", "GET missing preview")
+
+status, _, body = asgi_request(app, "/api/v1/datasets/nope/files/previews/p1.png")
+expect_error(status, body, 404, "dataset_not_found", "GET preview, unknown dataset")
+
+status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/../../escape.txt")
+expect_error(status, body, 404, "dataset_file_not_found", "traversal refused as not-found")
+check("SECRET" not in str(body), "escape file never read")
+
 # assets: catalog-only dataset kind
 status, _, body = asgi_request(app, "/api/v1/assets/dataset")
 check(status == 200, "asset catalog serves kind 'dataset'")

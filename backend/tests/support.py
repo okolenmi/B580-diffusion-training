@@ -80,6 +80,7 @@ from backend.application.use_cases import (
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
+    ReadDatasetFile,
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
     ReconcileRuns,
@@ -108,6 +109,7 @@ from backend.application.ports.dataset_task_gateway import (
 from backend.infrastructure.config_options import PydanticConfigOptions
 from backend.infrastructure.core_config_files import CoreConfigFiles
 from backend.infrastructure.core_config_inspector import CoreConfigInspector
+from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
@@ -723,6 +725,7 @@ def build_services(
         dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
     if dataset_gateway is None:
         dataset_gateway = FakeDatasetTaskGateway()
+    dataset_files = FsDatasetFiles(layout.datasets_dir)
     if assets is None:
         assets = FileSystemAssetStore(layout, datasets=dataset_library)
     if config_files is None:
@@ -833,6 +836,7 @@ def build_services(
             reconcile_tasks=ReconcileDatasetTasks(
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
+            read_file=ReadDatasetFile(files=dataset_files),
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),

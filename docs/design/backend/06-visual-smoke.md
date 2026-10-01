@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (77
+checklist below now runs as `backend/tests/visual_smoke.py` (101
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -28,9 +28,11 @@ synthetic `RunOut` + history + log), interactions (start-form guard,
 row-click -> log, wipe confirm dialog captured in code), elapsed
 ticker, a monitor/graph regression pass (all three pages share
 `style.css`), the config editor (schema-driven form, visibility,
-dirty tracking, E2E save against a throwaway copy), and run detail
-views (hand-off link, honest 404, completed + failed renders).
-Console is asserted clean across every page. Desktop-browser
+dirty tracking, E2E save against a throwaway copy), run detail views
+(hand-off link, honest 404, completed + failed renders), and the
+dataset manager against the real library (create guard, honest empty
+states, preview bytes over the files route, filters, throwaway
+cleanup). Console is asserted clean across every page. Desktop-browser
 execution of the same checklist below stays as the manual fallback.
 
 ## Prerequisites
@@ -161,7 +163,36 @@ A scratch DB keeps the check independent of real training history.
       terminal-event SSE reload) is exercised only through its code
       path; the smoke has no real running run on `/run/{id}`.
 
-## 6. Record
+## 6. Dataset manager -- `http://127.0.0.1:8766/datasets`
+
+Runs against the REAL backend and the repo's real datasets (opened
+read-only; a throwaway `m8c-smoke-ds` is created and deleted inside
+the scenario, its confirmation dialog captured).
+
+* [x] Library list renders the real datasets; the main page's sidebar
+      links to `/datasets` (M8c hand-off).
+* [x] Create guard: an empty name refuses inline, fires no request,
+      adds no card; a real create appends the card.
+* [x] Fresh-dataset detail: title follows the route, seven stat chips
+      with real zeros (API-computed, never placeholders), honest empty
+      states on all three tabs, task form renders.
+* [x] Real curated dataset (`1024 aes` -- space in the name pins the
+      URL-encoded route): stats show the true counts, all 201 item
+      cards render, a preview image actually loads through
+      `/datasets/{name}/files/{path}` (`naturalWidth > 0`).
+* [x] Membership filters: Pending is honestly empty on a fully
+      curated dataset (its empty state shows), Used brings the items
+      back; the training-sets tab lists the real set rows.
+* [x] Delete asks for confirmation and removes the throwaway (the
+      scenario asserts the card count returns to baseline; the repo's
+      `datasets/` directory is checked clean afterwards).
+* [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
+      apply, commit-to-set) are covered by `test_api_datasets.py` at
+      the API level only -- the smoke never edits the user's data.
+* [ ] Task start/stop is never fired from the smoke (it would spawn a
+      real child process against user checkpoints).
+
+## 7. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --

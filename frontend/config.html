@@ -20,8 +20,7 @@
         <nav class="sidebar-nav">
             <a class="nav-item" href="/">Training</a>
             <a class="nav-item" href="/graph">Graph Editor</a>
-            <span class="nav-item nav-item-disabled"
-                  title="M8 -- dataset manager views">Datasets — soon</span>
+            <a class="nav-item" href="/datasets">Datasets</a>
             <button class="nav-item active" aria-current="page">Config Editor</button>
 
             <div class="sidebar-tool">
@@ -57,26 +56,26 @@
         </header>
 
         <div class="page-body">
-            <div class="cfg-tabs" role="tablist">
-                <button class="cfg-tab active" id="tab-form" role="tab"
+            <div class="tabs" role="tablist">
+                <button class="tab active" id="tab-form" role="tab"
                         aria-selected="true" aria-controls="panel-form">Form</button>
-                <button class="cfg-tab" id="tab-raw" role="tab"
+                <button class="tab" id="tab-raw" role="tab"
                         aria-selected="false" aria-controls="panel-raw">Raw TOML</button>
                 <span class="cfg-dirty" id="dirty-chip" hidden></span>
             </div>
 
             <!-- FORM -->
             <section id="panel-form" role="tabpanel" aria-labelledby="tab-form">
-                <div class="cfg-state" id="form-state">
+                <div class="state-box" id="form-state">
                     Enter a config path above and press Load.
                 </div>
-                <div class="cfg-error" id="form-error" role="alert" hidden></div>
+                <div class="error-box" id="form-error" role="alert" hidden></div>
 
                 <div id="form-wrap" hidden>
                     <div class="cfg-toolbar">
                         <button id="btn-save-form" class="btn btn-start" disabled>✓ Save changes</button>
                         <button id="btn-revert" class="btn btn-secondary">Revert edits</button>
-                        <span class="cfg-toolbar-hint text-dim" id="save-hint"></span>
+                        <span class="toolbar-hint text-dim" id="save-hint"></span>
                     </div>
                     <!-- groups render here; one section per schema group -->
                     <div id="config-form"></div>
@@ -85,16 +84,16 @@
 
             <!-- RAW -->
             <section id="panel-raw" role="tabpanel" aria-labelledby="tab-raw" hidden>
-                <div class="cfg-state" id="raw-state">
+                <div class="state-box" id="raw-state">
                     Enter a config path above and press Load.
                 </div>
-                <div class="cfg-error" id="raw-error" role="alert" hidden></div>
+                <div class="error-box" id="raw-error" role="alert" hidden></div>
 
                 <div id="raw-wrap" hidden>
                     <div class="cfg-toolbar">
                         <button id="btn-save-raw" class="btn btn-start">✓ Write file</button>
                         <button id="btn-reload-raw" class="btn btn-secondary">Reload from disk</button>
-                        <span class="cfg-toolbar-hint text-dim">
+                        <span class="toolbar-hint text-dim">
                             Replaces the whole file; rejected if it does not validate.
                         </span>
                     </div>

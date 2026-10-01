@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Datasets</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/datasets.css">
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-name">Distillation</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item" href="/">Training</a>
+            <a class="nav-item" href="/graph">Graph Editor</a>
+            <button class="nav-item active" aria-current="page">Datasets</button>
+            <a class="nav-item" href="/config">Config Editor</a>
+
+            <div class="sidebar-tool">
+                <label class="sidebar-tool-label" for="monitor-id-input">Open a monitor</label>
+                <input id="monitor-id-input" class="cfg-input" type="text"
+                       placeholder="mon-… id" aria-label="Monitor id"
+                       title="Paste a monitor id to open its live dashboard">
+                <button id="btn-open-monitor" class="btn btn-secondary btn-block btn-small">Open monitor →</button>
+            </div>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="system-console">
+                <div class="console-header">System Console</div>
+                <div class="console-lines" id="console-output">
+                    <div class="console-line info">Ready.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="content-area">
+        <header class="page-topbar">
+            <h1 id="ds-title">Datasets</h1>
+            <span class="page-sub" id="ds-sub">Curate items, commit training sets, run cache sweeps</span>
+            <div class="topbar-actions" id="topbar-actions">
+                <button id="btn-new-dataset" class="btn btn-start">＋ New dataset</button>
+            </div>
+            <a class="btn btn-secondary btn-small" id="btn-back" href="/datasets" hidden>← Datasets</a>
+        </header>
+
+        <div class="page-body">
+            <!-- ================= LIST VIEW ================= -->
+            <div id="view-list">
+                <section class="card" id="create-card" hidden>
+                    <div class="card-header"><span>New dataset</span></div>
+                    <div class="create-form">
+                        <input id="new-name" type="text" placeholder="name (folder under datasets/)"
+                               autocomplete="off" spellcheck="false" aria-label="Dataset name">
+                        <input id="new-desc" type="text" placeholder="description (optional)"
+                               autocomplete="off" aria-label="Description">
+                        <button id="btn-create" class="btn btn-start">Create</button>
+                        <span class="error-box error-inline" id="create-error" role="alert" hidden></span>
+                    </div>
+                </section>
+
+                <div class="state-box" id="list-state">Loading…</div>
+                <div class="ds-grid" id="ds-grid" hidden></div>
+            </div>
+
+            <!-- ================= DETAIL VIEW ================= -->
+            <div id="view-detail" hidden>
+                <div class="state-box" id="detail-state">Loading…</div>
+
+                <div id="detail-wrap" hidden>
+                    <div class="ds-stats" id="ds-stats"></div>
+
+                    <div class="tabs" role="tablist">
+                        <button class="tab active" id="tab-items" role="tab"
+                                aria-selected="true" aria-controls="panel-items">Items</button>
+                        <button class="tab" id="tab-sets" role="tab"
+                                aria-selected="false" aria-controls="panel-sets">Training sets</button>
+                        <button class="tab" id="tab-tasks" role="tab"
+                                aria-selected="false" aria-controls="panel-tasks">Cache tasks</button>
+                        <span class="toolbar-hint text-dim" id="detail-hint"></span>
+                    </div>
+
+                    <!-- ITEMS -->
+                    <section id="panel-items" role="tabpanel" aria-labelledby="tab-items">
+                        <div class="ds-toolbar">
+                            <div class="ds-filter" id="item-filter">
+                                <button class="seg active" data-filter="all">All</button>
+                                <button class="seg" data-filter="pending">Pending</button>
+                                <button class="seg" data-filter="used">Used</button>
+                            </div>
+                            <label class="ds-selectall">
+                                <input type="checkbox" id="select-all"> select all visible
+                            </label>
+                            <span class="toolbar-hint text-dim" id="items-count"></span>
+                        </div>
+
+                        <div class="error-box" id="items-error" role="alert" hidden></div>
+
+                        <div class="ds-bulk" id="bulk-bar" hidden>
+                            <span class="ds-bulk-count" id="bulk-count">0 selected</span>
+                            <input id="bulk-prompt" type="text"
+                                   placeholder="prompt text for the selection"
+                                   autocomplete="off" aria-label="Bulk prompt">
+                            <select id="bulk-mode" aria-label="Prompt mode">
+                                <option value="set">replace</option>
+                                <option value="append">append</option>
+                            </select>
+                            <button id="btn-bulk-prompt" class="btn btn-secondary btn-small">Apply prompt</button>
+                            <input id="set-name" type="text" placeholder="new set name"
+                                   autocomplete="off" aria-label="Set name">
+                            <button id="btn-commit" class="btn btn-start btn-small">Commit to set</button>
+                            <button id="btn-bulk-discard" class="btn btn-danger btn-small">Discard</button>
+                        </div>
+
+                        <div class="state-box" id="items-state" hidden></div>
+                        <div class="ds-items" id="items-grid"></div>
+                    </section>
+
+                    <!-- SETS -->
+                    <section id="panel-sets" role="tabpanel" aria-labelledby="tab-sets" hidden>
+                        <div class="state-box" id="sets-state" hidden></div>
+                        <div class="ds-sets" id="sets-list"></div>
+                    </section>
+
+                    <!-- TASKS -->
+                    <section id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden>
+                        <section class="card">
+                            <div class="card-header"><span>Start an ingest sweep</span></div>
+                            <div class="task-form">
+                                <label class="tf-field">
+                                    <span>Image dir <span class="text-dim">(absolute, server-side)</span></span>
+                                    <input id="task-image-dir" type="text" placeholder="/home/…/images"
+                                           autocomplete="off" spellcheck="false">
+                                </label>
+                                <label class="tf-field">
+                                    <span>Checkpoint <span class="text-dim">(from the assets catalog)</span></span>
+                                    <input id="task-model" type="text" placeholder="model.safetensors"
+                                           autocomplete="off" spellcheck="false" list="dl-checkpoint">
+                                    <datalist id="dl-checkpoint"></datalist>
+                                </label>
+                                <div class="tf-row">
+                                    <label class="tf-field tf-small">
+                                        <span>Seed</span>
+                                        <input id="task-seed" type="number" value="42" step="1">
+                                    </label>
+                                    <label class="tf-check">
+                                        <input id="task-recursive" type="checkbox" checked>
+                                        recurse into subfolders
+                                    </label>
+                                </div>
+                                <div class="tf-actions">
+                                    <button id="btn-start-task" class="btn btn-start">Start sweep</button>
+                                    <span class="toolbar-hint text-dim">
+                                        Server defaults: center-crop, 64px latents, eps.
+                                    </span>
+                                </div>
+                                <div class="error-box" id="task-error" role="alert" hidden></div>
+                            </div>
+                        </section>
+
+                        <div class="state-box" id="tasks-state" hidden></div>
+                        <div class="ds-tasks" id="tasks-list"></div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/views/datasets.js"></script>
+</body>
+</html>

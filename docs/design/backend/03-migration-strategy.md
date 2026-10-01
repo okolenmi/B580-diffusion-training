@@ -16,19 +16,23 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 ## 2. New frontend layout (planned)
 
 ```
-frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
+frontend/                     # shipped slices 1+2 (M6/M7) + M8 views
 ├── index.html                # app shell: sidebar nav + state-driven training page
 ├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
 ├── graph.html                # graph editor page (/graph)
 ├── config.html               # config editor page (/config, M8a)
 ├── run.html                  # run detail page (/run/{id}, M8b)
+├── datasets.html             # dataset manager (/datasets + /{name}, M8c)
 ├── css/
 │   ├── style.css             # shared design system: tokens, shell, buttons, inputs,
-│   │                         # badges, console, card, page chrome (topbar/body),
-│   │                         # log pane; legacy dead weight removed
+│   │                         # badges, console, card, page chrome (topbar/body,
+│   │                         # tabs, state/error blocks), log pane; dead weight
+│   │                         # removed
 │   ├── training.css          # training page: state hero, history/log grid
-│   ├── config.css            # config page: path bar, tabs, grouped form, raw editor
+│   ├── config.css            # config page: path bar, grouped form, raw editor
 │   ├── run.css               # run detail page: details grid, log card
+│   ├── datasets.css          # dataset manager: card grid, stats, item cards,
+│   │                         # bulk bar, task form
 │   ├── monitor.css           # monitor page block
 │   └── editor.css            # editor layout, canvas plane, node visuals
 └── js/
@@ -38,6 +42,7 @@ frontend/                     # shipped slices 1+2 (M6/M7); M8 adds views
     ├── views/dashboard.js    # training controls (runs REST + /events SSE)
     ├── views/config.js       # config editor: schema form + raw buffer (M8a)
     ├── views/run.js          # run detail: full RunOut grid + log tail (M8b)
+    ├── views/datasets.js     # dataset manager: list/detail/items/sets/tasks (M8c)
     ├── editor/               # state.js (GraphDoc + wire forms), canvas.js (render/
     │                         # drag/connect), inspector.js (params form), palette.js,
     │                         # executions.js (run lifecycle), library.js (+ legacy import)
@@ -66,24 +71,25 @@ Rules that keep it fast and expandable:
 | config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | `GET/PATCH /config`, `GET/PUT /config/raw`, `GET /config/options`, `GET /config/start-options` | **parity** (PATCH merges nested partials; tree shape improved) |
 | training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | `POST /runs`, `POST /runs/{id}/stop`, `GET /runs/active`, `GET /runs/{id}/log` | **parity** (start is JSON, not multipart form) |
 | `/run/reset` | -- | **dropped**: legacy in-memory service reset; backend state lives in the DB (delete + restart covers it) |
-| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | list/get/log + `DELETE /runs` | **gaps**: per-run `events` history, `previews` manifest+images, `logs/clear` (see 3.1) |
+| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | list/get/log + `DELETE /runs` | **resolved** (3.1): `events`/`previews`/`logs/clear` all dropped; the rest shipped |
 | `/sse` | `GET /events` | **parity+** (all domain events, generic encoder, heartbeat) |
-| settings (`GET/POST /settings`, `/files/{kind}`) | `GET/POST /settings` | **gap**: `/files/{kind}` file browser (3.1) |
-| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`) |
+| settings (`GET/POST /settings`, `/files/{kind}`) | `GET/POST /settings` | **resolved** (3.1): `/files/{kind}` dropped -- the config editor uses a path input + datalists |
+| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` + `GET /datasets/{name}/files/{path}` (preview bytes) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); **view shipped M8c** |
 | nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
 | nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
 | **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
-| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`; `/datasets` view follows (M8) |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `GET /datasets`, `GET /datasets/{name}`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`, M8c `/datasets` |
 
 ### 3.1 Gaps and their resolutions
 
 | Gap | Resolution |
 |---|---|
 | Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. **Shipped in M6.** |
-| Run previews (`runs/run_{id}/previews/` manifest + images) | **Port with the graph/config views** (phase 3): the training pipeline still writes the files; the backend needs a read route + static image serving for `runs/`. Not needed by the monitor page. |
-| Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs. |
+| Run previews (`runs/run_{id}/previews/` manifest + images) | **Drop** (M8 decision): the producer is `core/preview_sampler.py` on the unsupported `core/` route -- `nodes/` (the supported route) never writes previews, so no new run will ever have a manifest. The run detail page serves the full `RunOut` + log instead. |
+| Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs (the M8b run detail shipped without one). |
 | `/runs/logs/clear` | **Drop**: `DELETE /runs` (history wipe) plus per-run artifacts on disk cover the intent. |
-| `/files/{kind}` (settings file browser) | **Port with the config view** (phase 4) if the new config UI wants it; otherwise drop with the settings tab's redesign. |
+| `/files/{kind}` (settings file browser) | **Drop** (M8 decision): the config editor shipped with a path input + datalists and never needed a browser; revisit only if the settings tab's redesign asks for one. |
+| Dataset preview images (legacy: static mount `/datasets/{name}/{preview_path}`) | **Port** (M8c): served through `GET /api/v1/datasets/{name}/files/{path}` with containment enforced by the adapter (02 section 7). **Shipped in M8c.** |
 | `/run/reset` | **Dropped** (table above). |
 
 ## 4. Monitor data path (pinned contract)
@@ -143,7 +149,7 @@ numbers match the milestone table in `01-architecture.md`:
 |---|---|---|
 | M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | **shipped 2026-09-30**: backend serves the monitor page on 8766; the stream's replay/live/clear frames are test-pinned (`test_api_monitor.py`) |
 | M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | **shipped 2026-10-01**: `/graph` page; validate/run/library round-trip (incl. `layout` extras) smoke-tested on 8766; every frontend module passes `node --check` |
-| M8 | Dataset manager + config editor + run history views | Every page in section 3's table has a backend-backed equivalent |
+| M8 | Dataset manager + config editor + run history views | **shipped 2026-10-01**: `/config` (M8a), `/run/{id}` (M8b), `/datasets` + preview bytes (M8c); each page is smoke-covered (visual smoke: 101 checks) |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected); legacy `smoke_test_*` knowledge is preserved in this doc series | M8 complete and the new frontend used for a real training cycle |
 
 Both servers run side by side until M8 (8765 legacy, 8766 backend) --

@@ -67,6 +67,7 @@ from .application.use_cases import (
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
+    ReadDatasetFile,
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
     ReconcileRuns,
@@ -89,6 +90,7 @@ from .infrastructure.clock import SystemClock
 from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.core_config_inspector import CoreConfigInspector
+from .infrastructure.dataset_files import FsDatasetFiles
 from .infrastructure.dataset_library import SqliteDatasetLibrary
 from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
@@ -156,6 +158,7 @@ def build_container(settings: Settings) -> Container:
     dataset_library = SqliteDatasetLibrary(layout)
     dataset_tasks = SqliteDatasetTasks(database, clock)
     dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
+    dataset_files = FsDatasetFiles(layout.datasets_dir)
     assets = FileSystemAssetStore(layout, datasets=dataset_library)
 
     # Graph domain (M4): one NodeRegistry feeds both the palette and the
@@ -268,6 +271,7 @@ def build_container(settings: Settings) -> Container:
             reconcile_tasks=ReconcileDatasetTasks(
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
+            read_file=ReadDatasetFile(files=dataset_files),
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),

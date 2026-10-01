@@ -1,10 +1,11 @@
 """Static frontend serving -- pages + assets, one origin with the API.
 
-Four registrations, deliberately *not* a root mount:
+Page routes, deliberately *not* a root mount:
 
-* ``/``, ``/monitor/{monitor_id}``, ``/graph`` and ``/config`` serve
-  the page files (the monitor page reads its id from the URL, like the
-  legacy dashboard);
+* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/config``,
+  ``/run/{run_id}``, ``/datasets`` and ``/datasets/{name}`` serve the
+  page files (monitor/dataset/run ids live in the URL; the HTML is
+  generic and the client script reads it, like the legacy dashboard);
 * ``/ui/*`` serves the frontend directory (ES modules, css);
 * nothing catches ``/api/...`` misses, so unknown API routes keep
   answering with the JSON error envelope instead of static 404 HTML.
@@ -87,5 +88,14 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     @app.get("/run/{run_id}", include_in_schema=False)
     def run_page(run_id: str) -> FileResponse:
         return FileResponse(static_dir / "run.html", headers=_NO_CACHE)
+
+    @app.get("/datasets", include_in_schema=False)
+    def datasets_page() -> FileResponse:
+        return FileResponse(static_dir / "datasets.html", headers=_NO_CACHE)
+
+    @app.get("/datasets/{name}", include_in_schema=False)
+    def dataset_detail_page(name: str) -> FileResponse:
+        # One HTML for list + detail; views/datasets.js routes on the path.
+        return FileResponse(static_dir / "datasets.html", headers=_NO_CACHE)
 
     app.mount("/ui", _UiStaticFiles(directory=static_dir), name="ui")

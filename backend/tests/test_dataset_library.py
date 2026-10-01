@@ -13,12 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.errors import (
     DatasetAlreadyExistsError,
+    DatasetFileNotFoundError,
     DatasetItemNotFoundError,
     DatasetNotFoundError,
     DatasetNotMigratedError,
     InvalidQueryError,
 )
 from backend.application.ports.dataset_library import BulkItemChanges, ItemChanges
+from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.workspace import WorkspaceLayout
 from backend.tests.support import (
@@ -184,5 +186,22 @@ for bad in ("", "   ", "../evil", "a/b", "a\\b", ".", "..", ".hidden", " padded 
 expect(DatasetNotFoundError, lambda: library.get("nope"), "get unknown -> not found")
 expect(DatasetNotFoundError, lambda: library.root("nope"), "root unknown -> not found")
 check(library.delete("nope") is False, "delete unknown -> False")
+
+# -- file serving (M8c): scoped byte reads ----------------------------------
+
+# fresh dataset: earlier sections deliberately unlinked raw's preview
+make_v2_dataset(root, "file-ds", items=2)
+files = FsDatasetFiles(datasets)
+blob = files.read("file-ds", "previews/p1.png")
+check(blob.content.startswith(b"\x89PNG"), "preview bytes round-trip exactly")
+check(blob.media_type == "image/png", "png media type from suffix")
+expect(DatasetNotFoundError, lambda: files.read("nope", "previews/p1.png"),
+       "files.read unknown dataset -> not found")
+expect(DatasetNotFoundError, lambda: files.read("../..", "x.png"),
+       "escaping dataset name -> not found")
+expect(DatasetFileNotFoundError, lambda: files.read("file-ds", "previews/absent.png"),
+       "missing file -> not found")
+expect(DatasetFileNotFoundError, lambda: files.read("file-ds", "../../escape.txt"),
+       "traversal out of the dataset dir refused")
 
 finish()

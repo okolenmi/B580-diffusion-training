@@ -419,6 +419,123 @@ def main():
         check(err_color != norm_color, f"error rendered in red ({err_color})")
         ctx.close()
 
+        # ---------- F: dataset manager (/datasets, real backend) ----------
+        print("== F: dataset manager ==")
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "F")
+        dialogs: list[str] = []
+        page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
+
+        page.goto(f"{BASE}/datasets", wait_until="networkidle")
+        page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
+        n0 = page.locator(".ds-card").count()
+        check(n0 >= 3, f"library list renders the real datasets ({n0})")
+
+        # the M8c nav hand-off from the main page
+        page.goto(f"{BASE}/", wait_until="networkidle")
+        check(page.locator("a.nav-item[href='/datasets']").count() == 1,
+              "sidebar links to /datasets")
+        page.goto(f"{BASE}/datasets", wait_until="networkidle")
+        page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
+
+        # create guard: empty name refuses inline, no request fired
+        page.click("#btn-new-dataset")
+        check(page.locator("#create-card").is_visible(), "create form opens")
+        page.click("#btn-create")
+        check(page.locator("#create-error").is_visible()
+              and "required" in page.locator("#create-error").inner_text(),
+              "empty name refused inline")
+        check(page.locator(".ds-card").count() == n0,
+              "refused create added no dataset")
+
+        # create a throwaway dataset and inspect its honest empty detail
+        page.fill("#new-name", "m8c-smoke-ds")
+        page.fill("#new-desc", "throwaway -- deleted at the end of the smoke")
+        page.click("#btn-create")
+        page.wait_for_function(
+            "n => document.querySelectorAll('.ds-card').length === n",
+            arg=n0 + 1, timeout=10000)
+        check(True, "create adds the dataset card")
+
+        page.click("a.ds-card-name[href='/datasets/m8c-smoke-ds']")
+        page.wait_for_selector("#detail-wrap", state="visible", timeout=15000)
+        check(page.locator("#ds-title").inner_text() == "m8c-smoke-ds",
+              "detail title follows the route")
+        check(page.locator(".ds-stat").count() == 7, "seven stat chips render")
+        first_stat = page.locator(".ds-stat b").first.inner_text()
+        check(first_stat == "0",
+              f"fresh dataset reports 0 items ({first_stat})")
+        check(page.locator("#items-state").is_visible(),
+              "items tab honest empty state")
+        page.click("#tab-sets")
+        check(page.locator("#sets-state").is_visible(),
+              "sets tab honest empty state")
+        page.click("#tab-tasks")
+        check(page.locator("#task-image-dir").is_visible(), "task form renders")
+        check(page.locator("#tasks-state").is_visible(),
+              "tasks tab honest empty state")
+        page.screenshot(path=str(OUT / "datasets_empty.png"), full_page=True)
+        check((OUT / "datasets_empty.png").stat().st_size > 20000,
+              "empty-detail screenshot captured")
+
+        # a real curated dataset, read-only: stats, preview bytes, filters, sets
+        page.click("#btn-back")
+        page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
+        page.click("a.ds-card-name[href='/datasets/1024%20aes']")
+        page.wait_for_selector("#detail-wrap", state="visible", timeout=15000)
+        check(page.locator("#ds-title").inner_text() == "1024 aes",
+              "space-in-name dataset opens (URL-encoded route)")
+        check("201" in page.locator("#ds-stats").inner_text(),
+              "real item count in stat chips")
+
+        page.wait_for_selector("#items-grid .ds-item", timeout=15000)
+        n_items = page.locator("#items-grid .ds-item").count()
+        check(n_items == 201, f"all items render ({n_items})")
+        try:
+            page.wait_for_function(
+                """() => { const i = document.querySelector('#items-grid .ds-thumb img');"""
+                """ return !!i && i.complete && i.naturalWidth > 0; }""",
+                timeout=15000)
+            check(True, "preview image loads via /datasets/{name}/files/{path}")
+        except Exception as exc:  # noqa: BLE001 -- report, don't kill the run
+            check(False, f"preview image loads ({type(exc).__name__})")
+
+        # pending is honestly empty on a fully curated dataset
+        page.click(".seg[data-filter='pending']")
+        page.wait_for_function(
+            "n => document.querySelectorAll('#items-grid .ds-item').length !== n",
+            arg=n_items, timeout=10000)
+        check(page.locator("#items-state").is_visible(),
+              "pending filter shows the honest empty state")
+        page.click(".seg[data-filter='used']")
+        page.wait_for_function(
+            "n => document.querySelectorAll('#items-grid .ds-item').length === n",
+            arg=n_items, timeout=10000)
+        check(True, "used filter brings the items back")
+
+        page.click("#tab-sets")
+        check(page.locator(".ds-set").count() >= 1, "training sets list rows")
+        page.click("#tab-items")
+        # viewport shot: 201 cards would be a 17k-pixel full-page image
+        page.screenshot(path=str(OUT / "datasets.png"))
+        check((OUT / "datasets.png").stat().st_size > 20000,
+              "datasets screenshot captured")
+
+        # cleanup: delete the throwaway (confirmation dialog auto-accepted)
+        page.click("#btn-back")
+        page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
+        card = page.locator(".ds-card").filter(has_text="m8c-smoke-ds")
+        card.locator("button", has_text="Delete").click()
+        page.wait_for_function(
+            "n => document.querySelectorAll('.ds-card').length === n",
+            arg=n0, timeout=10000)
+        check(page.locator(".ds-card").filter(has_text="m8c-smoke-ds").count() == 0,
+              "throwaway dataset deleted (cleanup)")
+        check(len(dialogs) == 1 and "m8c-smoke-ds" in dialogs[0],
+              "delete asked for confirmation first")
+        ctx.close()
+
         browser.close()
 
     unexpected = [n for n in console_noise if not is_expected_noise(n)]

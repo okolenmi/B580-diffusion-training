@@ -34,6 +34,7 @@ from .list_runs import ListRuns
 from .make_asset_folder import MakeAssetFolder
 from .node_diagnostics import NodeDiagnostics
 from .read_config_raw import ReadConfigRaw
+from .read_dataset_file import ReadDatasetFile
 from .reconcile_dataset_tasks import ReconcileDatasetTasks
 from .reconcile_graph_executions import ReconcileGraphExecutions
 from .reconcile_runs import ReconcileRuns
@@ -84,6 +85,7 @@ __all__ = [
     "MakeAssetFolder",
     "NodeDiagnostics",
     "ReadConfigRaw",
+    "ReadDatasetFile",
     "ReconcileDatasetTasks",
     "ReconcileGraphExecutions",
     "ReconcileRuns",

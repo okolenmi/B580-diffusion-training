@@ -308,10 +308,13 @@ class DatasetStatsOut(BaseModel):
 
 class DatasetSummaryOut(BaseModel):
     """List entry: identity always; ``stats`` is null for a legacy
-    (pre-v2) dataset until it is migrated."""
+    (pre-v2) dataset until it is migrated. ``preview_path`` is the
+    resolved card image (stored override or first non-bad item's
+    preview), null when the dataset has none."""
 
     info: DatasetInfoOut
     stats: DatasetStatsOut | None = None
+    preview_path: str | None = None
 
 
 class DatasetListOut(BaseModel):
@@ -376,8 +379,20 @@ class DatasetTasksOut(BaseModel):
 class DatasetDetailOut(BaseModel):
     info: DatasetInfoOut
     stats: DatasetStatsOut | None = None
+    preview_path: str | None = None
     sets: list[TrainingSetOut]
     active_tasks: list[DatasetTaskOut]
+
+
+class SetPreviewIn(BaseModel):
+    """``PUT /{name}/preview`` body: the item whose image fronts the
+    card. An id, never a path -- the server reads the path itself."""
+
+    item_id: int = Field(ge=1)
+
+
+class DatasetPreviewOut(BaseModel):
+    preview_path: str
 
 
 class CreateDatasetIn(BaseModel):
@@ -560,6 +575,7 @@ def dataset_summary_out(summary: DatasetSummary) -> DatasetSummaryOut:
     return DatasetSummaryOut(
         info=dataset_info_out(summary.info),
         stats=None if summary.stats is None else dataset_stats_out(summary.stats),
+        preview_path=summary.preview_path,
     )
 
 
@@ -612,6 +628,7 @@ def dataset_detail_out(detail: DatasetDetail) -> DatasetDetailOut:
     return DatasetDetailOut(
         info=dataset_info_out(detail.info),
         stats=None if detail.stats is None else dataset_stats_out(detail.stats),
+        preview_path=detail.preview_path,
         sets=[training_set_out(info) for info in detail.sets],
         active_tasks=[dataset_task_out(t) for t in detail.active_tasks],
     )

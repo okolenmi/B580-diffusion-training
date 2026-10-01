@@ -72,6 +72,7 @@ from .application.use_cases import (
     ReconcileGraphExecutions,
     ReconcileRuns,
     SaveGraph,
+    SetDatasetPreview,
     StartDatasetTask,
     StartGraphExecution,
     StartTraining,
@@ -92,6 +93,7 @@ from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.core_config_inspector import CoreConfigInspector
 from .infrastructure.dataset_files import FsDatasetFiles
 from .infrastructure.dataset_library import SqliteDatasetLibrary
+from .infrastructure.dataset_previews import SqliteDatasetPreviews
 from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.directory_run_artifacts import DirectoryRunArtifacts
@@ -157,6 +159,9 @@ def build_container(settings: Settings) -> Container:
     # list names through the same visibility rules as the API.
     dataset_library = SqliteDatasetLibrary(layout)
     dataset_tasks = SqliteDatasetTasks(database, clock)
+    # Card preview pointer: backend.db row + first-item fallback read
+    # through the library (M8f) -- server view state, never dataset files.
+    dataset_previews = SqliteDatasetPreviews(database, dataset_library)
     dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
     dataset_files = FsDatasetFiles(layout.datasets_dir)
     assets = FileSystemAssetStore(layout, datasets=dataset_library)
@@ -243,10 +248,18 @@ def build_container(settings: Settings) -> Container:
             inspect=InspectAsset(assets=assets),
         ),
         datasets=DatasetServices(
-            list=ListDatasets(library=dataset_library),
-            get=GetDataset(library=dataset_library, tasks=dataset_tasks),
+            list=ListDatasets(library=dataset_library, previews=dataset_previews),
+            get=GetDataset(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                previews=dataset_previews,
+            ),
             create=CreateDataset(library=dataset_library),
-            delete=DeleteDataset(library=dataset_library, tasks=dataset_tasks),
+            delete=DeleteDataset(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                previews=dataset_previews,
+            ),
             items=ListDatasetItems(library=dataset_library),
             update_item=UpdateDatasetItem(library=dataset_library),
             bulk_update=BulkUpdateDatasetItems(library=dataset_library),
@@ -272,6 +285,9 @@ def build_container(settings: Settings) -> Container:
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
             read_file=ReadDatasetFile(files=dataset_files),
+            set_preview=SetDatasetPreview(
+                library=dataset_library, previews=dataset_previews
+            ),
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),

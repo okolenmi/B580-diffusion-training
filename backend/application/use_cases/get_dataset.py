@@ -11,13 +11,21 @@ from __future__ import annotations
 from ..dto import DatasetDetail
 from ..errors import DatasetNotMigratedError
 from ..ports.dataset_library import DatasetLibrary
+from ..ports.dataset_previews import DatasetPreviews
 from ..ports.dataset_tasks import DatasetTasks
 
 
 class GetDataset:
-    def __init__(self, *, library: DatasetLibrary, tasks: DatasetTasks) -> None:
+    def __init__(
+        self,
+        *,
+        library: DatasetLibrary,
+        tasks: DatasetTasks,
+        previews: DatasetPreviews,
+    ) -> None:
         self._library = library
         self._tasks = tasks
+        self._previews = previews
 
     def execute(self, name: str) -> DatasetDetail:
         info = self._library.get(name)
@@ -35,4 +43,5 @@ class GetDataset:
             active_tasks=tuple(
                 t for t in self._tasks.list_for(name, active_only=True)
             ),
+            preview_path=self._previews.resolve(name),
         )

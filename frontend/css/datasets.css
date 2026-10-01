@@ -2,10 +2,11 @@
    datasets.css -- the Datasets page only (datasets.html).
 
    Sections:
-     1. topbar / create form / dataset cards (list view)
+     1. topbar / create form / dataset cards (list view, incl. the
+        card preview thumb)
      2. detail: stats chips, toolbar (browse|edit mode + filters),
         multi-edit panel (field picker + per-field value rows)
-     3. items grid, sets, tasks
+     3. items grid (incl. the ⋮ context menu trigger/panel), sets, tasks
      4. dialogs (add-data generator/import, item editor) -- native
         <dialog>, top-layer; display rules only apply while [open]
      5. responsive tweaks
@@ -101,6 +102,29 @@
     gap: 8px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     padding-top: 10px;
+}
+
+/* ---- dataset card preview thumb (M8f) ----
+   Full-bleed to the card's top edge (negative margins cancel the
+   card padding); "NO PREVIEW" is the honest absence state and doubles
+   as the fallback when the <img> 404s after load. */
+
+.ds-card-thumb {
+    position: relative;
+    margin: -16px -18px 0;
+    aspect-ratio: 16 / 10;
+    background: #000;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ds-card-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 /* ---- detail: stats chips ---- */
@@ -280,6 +304,70 @@
     height: 16px;
     accent-color: var(--accent);
 }
+
+/* ---- item ⋮ trigger + context menu (M8f) ----
+   The trigger sits half-transparent in the thumb's top-right corner
+   (the checkbox owns top-left); the panel is position:fixed at the
+   click point, z --z-menu (over the rail/console, under tooltips and
+   native <dialog> top layer). */
+
+.ds-item-menu {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: var(--radius-sm);
+    opacity: 0.55;
+    cursor: pointer;
+    transition: opacity var(--dur-fast);
+}
+.ds-item-menu:hover,
+.ds-item-menu:focus-visible {
+    opacity: 1;
+    border-color: var(--accent);
+}
+
+.ctx-menu {
+    position: fixed;
+    z-index: var(--z-menu);
+    min-width: 210px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+}
+.ctx-menu button {
+    font-family: inherit;
+    font-size: 12.5px;
+    color: var(--text);
+    text-align: left;
+    padding: 8px 10px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.ctx-menu button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--accent);
+}
+.ctx-menu button:disabled {
+    color: var(--text-dim);
+    cursor: default;
+}
 .ds-item-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
 .item-prompt {
     font-size: 12.5px;
@@ -413,7 +501,7 @@
 .ds-items.edit-mode .ds-item:hover { border-color: var(--accent); }
 .item-edit-hint {
     position: absolute;
-    top: 8px;
+    bottom: 8px;              /* top-right belongs to the ⋮ menu (M8f) */
     right: 8px;
     background: var(--accent);
     color: #0b0f16;

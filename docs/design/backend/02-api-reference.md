@@ -149,6 +149,7 @@ dataset.
 | PATCH | `/datasets/{name}/items/{id}` | `UpdateItemIn` — every `null` field untouched; `""` clears a caption; explicit `type` replaces the legacy toggle | `DatasetItemOut` |
 | POST | `/datasets/{name}/items/discard` | `ItemIdsIn` | `{"deleted": N}` |
 | GET | `/datasets/{name}/files/{path}` | — | file bytes (item previews); media type from the suffix; 404 `dataset_not_found` / `dataset_file_not_found` (missing **or** escaping the dataset dir — an escape is reported as not-found, never resolved) |
+| PUT | `/datasets/{name}/preview` | `SetPreviewIn{item_id}` — an id, never a path (the server reads the path from the dataset's own rows) | `DatasetPreviewOut{preview_path}`; 404 `dataset_not_found` / `dataset_item_not_found`, 409 `dataset_not_migrated`, 422 `invalid_query` when the item has no preview image or its file is gone |
 | GET | `/datasets/{name}/sets` | — | `DatasetSetsOut`: `sets[{id,name,description,created_at,members}], count` |
 | POST | `/datasets/{name}/sets` | `CommitItemsIn{item_ids, name}` | `CommitOut{set_id, set_name, added}` -> **201** |
 | GET | `/datasets/{name}/tasks` | `active_only` (bool) | `DatasetTasksOut` (sweeps dead rows first) |
@@ -159,6 +160,10 @@ dataset.
 model_type, type, cfg, seed, source_path, latent_h, latent_w,
 preview_path, committed`. `DatasetTaskOut`: `id, dataset, kind, status,
 pid, current, total, error, params, created_at, updated_at`.
+`DatasetSummaryOut`/`DatasetDetailOut` carry `preview_path`: the
+**resolved** card image (stored override when its file still exists,
+else the first non-bad item's preview, else null -- never a dead or
+guessed path).
 
 ## 8. Graphs
 

@@ -1,8 +1,10 @@
 /* ---------------------------------------------------------------------------
-   datasets.js -- Datasets page entry (M8c, extended in M8e).
+   datasets.js -- Datasets page entry (M8c, extended in M8e/M8f).
 
    Two views on one page, routed by the URL:
-     /datasets         -- card list, create/delete, "Add data" per card
+     /datasets         -- card list (each card fronts itself with the
+                          dataset's resolved preview image), create/
+                          delete, "Add data" per card
      /datasets/{name}  -- detail: stats chips + Items | Sets | Tasks tabs
 
    Items are the curation surface with three interactions:
@@ -12,6 +14,10 @@
      * Multi-edit  -- any selection raises the bulk panel: one field
        (prompt / negative / cfg / verdict) appended, prepended or
        replaced across every selected row.
+
+   Every item thumb carries a half-transparent ⋮ (M8f) opening the
+   item context menu -- currently one option, "Set as dataset preview"
+   (disabled when the item has no image or already fronts the card).
 
    "Add data" (cards, detail topbar, Tasks tab) opens one dialog with
    two generators: sample new images from a checkpoint (teacher) or
@@ -87,6 +93,9 @@ let editorIndex = -1;     // index into `items` of the row being edited
 let editorSnapshot = null;// field values at load/save time (dirty base)
 let editorType = "";      // verdict picked in the editor
 
+// item context menu (M8f)
+let menuAnchorItem = null; // item whose ⋮ menu is open (null = closed)
+
 const TASK_KIND_LABEL = {
   ingest_lora: "import images",
   generate_teacher: "generate",
@@ -125,13 +134,16 @@ function fmtTime(iso) {
   return `${d.toLocaleString()} (${rel})`;
 }
 
-const previewUrl = (previewPath) =>
-  `/api/v1/datasets/${encodeURIComponent(datasetName)}/files/` +
-  previewPath.split("/").map(encodeURIComponent).join("/");
+const fileUrl = (name, path) =>
+  `/api/v1/datasets/${encodeURIComponent(name)}/files/` +
+  path.split("/").map(encodeURIComponent).join("/");
+
+const previewUrl = (previewPath) => fileUrl(datasetName, previewPath);
 
 /* ---- view switching ---- */
 
 function showView(which) {
+  closeItemMenu(); // the menu is fixed-position: never outlive its view
   const list = which === "list";
   el("view-list").hidden = !list;
   el("view-detail").hidden = list;
@@ -156,6 +168,7 @@ function showError(id, message) {
 }
 
 function showTab(which) {
+  closeItemMenu(); // anchors live in the items grid
   for (const name of ["items", "sets", "tasks"]) {
     el(`tab-${name}`).classList.toggle("active", name === which);
     el(`tab-${name}`).setAttribute("aria-selected", String(name === which));
@@ -225,11 +238,28 @@ function datasetCard(entry) {
     title: "Generate images or import a folder into this dataset",
   });
 
+  // resolved card image (M8f): stored override or first-item fallback
+  // computed server-side; absent -> honest NO PREVIEW, never a guess
+  const thumb = h("div", { class: "ds-card-thumb" });
+  if (entry.preview_path) {
+    const img = h("img", {
+      src: fileUrl(info.name, entry.preview_path),
+      alt: `preview of dataset ${info.name}`,
+      loading: "lazy",
+    });
+    const ph = h("div", { class: "no-preview", text: "NO PREVIEW", hidden: true });
+    img.addEventListener("error", () => { img.hidden = true; ph.hidden = false; });
+    thumb.append(img, ph);
+  } else {
+    thumb.append(h("div", { class: "no-preview", text: "NO PREVIEW" }));
+  }
+
   const card = h("div", { class: "ds-card", onclick: (ev) => {
     // real link for normal/middle clicks; this handler covers the card body
     if (ev.target.closest("button, a")) return;
     location.href = nameLink.href;
   }},
+    thumb,
     h("div", { class: "ds-card-head" }, nameLink,
       legacy ? h("span", { class: "ds-legacy", text: "legacy v1" }) : null),
     h("div", { class: "ds-card-desc", text: info.description || "" }),
@@ -410,6 +440,16 @@ function itemCard(item) {
   } else {
     thumbKids.push(h("div", { class: "no-preview", text: "NO PREVIEW" }));
   }
+  // half-transparent ⋮ (M8f): opens the item context menu
+  thumbKids.push(h("button", {
+    class: "ds-item-menu",
+    type: "button",
+    text: "⋮",
+    title: "Item options",
+    "aria-label": `Options for item ${item.id}`,
+    "aria-haspopup": "menu",
+    onclick: (ev) => { ev.stopPropagation(); toggleItemMenu(item, ev.currentTarget); },
+  }));
 
   const promptBox = h("div", {
     class: `item-prompt${item.prompt ? "" : " empty"}`,
@@ -467,6 +507,61 @@ function itemCard(item) {
     ),
   );
   return card;
+}
+
+/* ---- item context menu (M8f): set the dataset's card preview ---- */
+
+function closeItemMenu() {
+  el("item-menu").hidden = true;
+  menuAnchorItem = null;
+}
+
+function openItemMenu(item, anchor) {
+  const menu = el("item-menu");
+  const opt = el("item-menu-preview");
+  const current = Boolean(
+    detail && item.preview_path && detail.preview_path === item.preview_path
+  );
+  menuAnchorItem = item;
+  // one option, honestly disabled: nothing to show, or already showing
+  opt.disabled = !item.preview_path || current;
+  opt.title = !item.preview_path
+    ? "this item has no preview image"
+    : current ? "already the dataset preview" : "";
+  menu.hidden = false;
+  // fixed placement under the ⋮, flipped up / clamped near viewport edges
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  const hgt = menu.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+  const top = r.bottom + 4 + hgt > window.innerHeight - 8
+    ? Math.max(8, r.top - hgt - 4)
+    : r.bottom + 4;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function toggleItemMenu(item, anchor) {
+  const open = !el("item-menu").hidden && menuAnchorItem
+    && menuAnchorItem.id === item.id;
+  if (open) closeItemMenu();
+  else openItemMenu(item, anchor);
+}
+
+async function setDatasetPreview() {
+  const item = menuAnchorItem;
+  closeItemMenu();
+  if (!item || !detail) return;
+  try {
+    const res = await api(dsApi("/preview"), {
+      method: "PUT",
+      body: { item_id: item.id },
+    });
+    detail.preview_path = res.preview_path; // disables the option on this item
+    log(`Dataset preview set to item #${item.id}.`, "success");
+  } catch (err) {
+    logError(err);
+  }
 }
 
 /* ---- item editor (M8e) --------------------------------------------
@@ -1213,6 +1308,17 @@ async function boot() {
   } catch {
     // no suggestions is not an error
   }
+
+  // item context menu (M8f): one option, closed by outside click / Escape
+  el("item-menu-preview").addEventListener("click", setDatasetPreview);
+  document.addEventListener("click", (ev) => {
+    if (el("item-menu").hidden) return;
+    if (ev.target.closest("#item-menu, .ds-item-menu")) return;
+    closeItemMenu();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !el("item-menu").hidden) closeItemMenu();
+  });
 
   // route: /datasets or /datasets/{name}
   const segs = location.pathname.split("/").filter(Boolean);

@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (168
+checklist below now runs as `backend/tests/visual_smoke.py` (180
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -32,7 +32,10 @@ dirty tracking, E2E save against a throwaway copy), run detail views
 (hand-off link, honest 404, completed + failed renders), and the
 dataset manager against the real library (create guard, honest empty
 states, preview bytes over the files route, filters, throwaway
-cleanup), the M8d shell (icon rail inventory + active states +
+cleanup), the M8f card previews + item context menu (thumb images
+resolve on real cards, the one-option menu opens/disables/closes --
+never clicked, so the real datasets stay read-only), the M8d shell
+(icon rail inventory + active states +
 hover tips, floating console minimize/FAB/restore/persistence,
 help + settings pages), and the M8e dataset flows (add-data dialog
 option sets + local validation, Browse/Edit modes, the advanced item
@@ -189,6 +192,18 @@ the scenario, its confirmation dialog captured).
       URL-encoded route): stats show the true counts, all 201 item
       cards render, a preview image actually loads through
       `/datasets/{name}/files/{path}` (`naturalWidth > 0`).
+* [x] Card previews (M8f): every dataset card renders a preview thumb
+      and a real card's image resolves through the files route; the
+      empty throwaway's card shows the honest `NO PREVIEW` placeholder
+      (no guessed image).
+* [x] Item `⋮` context menu (M8f): the half-transparent trigger
+      renders on the thumb; the menu opens with exactly one option
+      ("Set as dataset preview"); the item currently fronting the card
+      is honestly **disabled**, another item's option renders enabled
+      (**never clicked** -- the scenario watches requests and asserts
+      zero `PUT /preview`, so the real dataset is never mutated);
+      Escape and an outside click both close the menu; screenshot
+      `datasets_menu.png`.
 * [x] Membership filters: Pending is honestly empty on a fully
       curated dataset (its empty state shows), Used brings the items
       back; the training-sets tab lists the real set rows.
@@ -196,10 +211,11 @@ the scenario, its confirmation dialog captured).
       scenario asserts the card count returns to baseline; the repo's
       `datasets/` directory is checked clean afterwards).
 * [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
-      apply, commit-to-set) are covered by `test_api_datasets.py` at
-      the API level only -- the smoke edits nothing and applies
-      nothing; scenario H exercises the editor/multi-edit UI in a
-      read-only walk (dirty -> revert, rows rendered, never saved).
+      apply, commit-to-set, **set card preview**) are covered by
+      `test_api_datasets.py` at the API level only -- the smoke edits
+      nothing and applies nothing; scenario H exercises the
+      editor/multi-edit UI in a read-only walk (dirty -> revert, rows
+      rendered, never saved).
 * [ ] Task start/stop is never fired from the smoke (it would spawn a
       real child process against user checkpoints); scenario H pins
       that the browser sends no task POST during its walk.

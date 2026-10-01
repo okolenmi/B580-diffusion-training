@@ -5,6 +5,7 @@ Run directly: python backend/tests/test_dataset_library.py
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -203,5 +204,39 @@ expect(DatasetFileNotFoundError, lambda: files.read("file-ds", "previews/absent.
        "missing file -> not found")
 expect(DatasetFileNotFoundError, lambda: files.read("file-ds", "../../escape.txt"),
        "traversal out of the dataset dir refused")
+
+# -- item fetch + preview fallback (M8f) ------------------------------------
+
+make_v2_dataset(root, "pv", items=4)  # item 1 previews p1.png, item 4 is bad
+item = library.get_item("pv", 1)
+check(item.id == 1 and item.preview_path == "previews/p1.png" and item.type == "good",
+      "get_item round-trips the row")
+expect(DatasetItemNotFoundError, lambda: library.get_item("pv", 99),
+       "get_item unknown id -> not found")
+expect(DatasetNotFoundError, lambda: library.get_item("nope", 1),
+       "get_item unknown dataset -> not found")
+
+check(library.first_preview("pv") == "previews/p1.png",
+      "first_preview = first non-bad row carrying an image")
+check(library.first_preview("nope") is None,
+      "first_preview unknown dataset -> None (best effort)")
+make_v1_dataset(root, "pv-legacy")
+check(library.first_preview("pv-legacy") is None,
+      "first_preview legacy dataset -> None (v2 columns untouched)")
+expect(DatasetNotMigratedError, lambda: library.get_item("pv-legacy", 1),
+       "get_item on a legacy dataset -> not migrated")
+
+# a bad-only image must never front the dataset
+conn = sqlite3.connect(str(datasets / "pv" / "metadata.db"))
+try:
+    conn.execute("UPDATE trajectories SET preview_path = NULL WHERE id = 1")
+    conn.execute("UPDATE trajectories SET preview_path = 'previews/p4.png' WHERE id = 4")
+    conn.commit()
+finally:
+    conn.close()
+check(library.first_preview("pv") is None,
+      "first_preview skips the bad row's image (honest null)")
+check(library.get_item("pv", 4).preview_path == "previews/p4.png",
+      "get_item still reads the bad row's own preview")
 
 finish()

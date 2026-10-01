@@ -85,6 +85,7 @@ from backend.application.use_cases import (
     ReconcileGraphExecutions,
     ReconcileRuns,
     SaveGraph,
+    SetDatasetPreview,
     StartDatasetTask,
     StartGraphExecution,
     StartTraining,
@@ -111,6 +112,7 @@ from backend.infrastructure.core_config_files import CoreConfigFiles
 from backend.infrastructure.core_config_inspector import CoreConfigInspector
 from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
+from backend.infrastructure.dataset_previews import SqliteDatasetPreviews
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
@@ -676,6 +678,7 @@ def build_services(
     assets: FileSystemAssetStore | None = None,
     dataset_library: SqliteDatasetLibrary | None = None,
     dataset_tasks: SqliteDatasetTasks | None = None,
+    dataset_previews: SqliteDatasetPreviews | None = None,
     dataset_gateway: DatasetTaskGateway | None = None,
     graph_registry: NodeRegistry | None = None,
     graph_runtime: GraphRuntime | None = None,
@@ -725,6 +728,10 @@ def build_services(
         dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
     if dataset_gateway is None:
         dataset_gateway = FakeDatasetTaskGateway()
+    if dataset_previews is None:
+        previews_db = SqliteDatabase(project_root / "test-dataset-previews.db")
+        previews_db.initialize()
+        dataset_previews = SqliteDatasetPreviews(previews_db, dataset_library)
     dataset_files = FsDatasetFiles(layout.datasets_dir)
     if assets is None:
         assets = FileSystemAssetStore(layout, datasets=dataset_library)
@@ -810,10 +817,18 @@ def build_services(
             inspect=InspectAsset(assets=assets),
         ),
         datasets=DatasetServices(
-            list=ListDatasets(library=dataset_library),
-            get=GetDataset(library=dataset_library, tasks=dataset_tasks),
+            list=ListDatasets(library=dataset_library, previews=dataset_previews),
+            get=GetDataset(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                previews=dataset_previews,
+            ),
             create=CreateDataset(library=dataset_library),
-            delete=DeleteDataset(library=dataset_library, tasks=dataset_tasks),
+            delete=DeleteDataset(
+                library=dataset_library,
+                tasks=dataset_tasks,
+                previews=dataset_previews,
+            ),
             items=ListDatasetItems(library=dataset_library),
             update_item=UpdateDatasetItem(library=dataset_library),
             bulk_update=BulkUpdateDatasetItems(library=dataset_library),
@@ -837,6 +852,9 @@ def build_services(
                 tasks=dataset_tasks, gateway=dataset_gateway
             ),
             read_file=ReadDatasetFile(files=dataset_files),
+            set_preview=SetDatasetPreview(
+                library=dataset_library, previews=dataset_previews
+            ),
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),

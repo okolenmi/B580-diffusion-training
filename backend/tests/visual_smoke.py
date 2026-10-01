@@ -1,7 +1,8 @@
 """Visual smoke for the main pages: idle state, mocked running state,
 interactions, the config editor (schema form + raw), run detail views,
 a regression pass over monitor/graph (they share style.css), the
-dataset manager against the real library, and the M8d shell (icon rail,
+dataset manager against the real library (incl. the M8f card preview
+thumbs and the item ⋮ context menu), and the M8d shell (icon rail,
 floating console, help/settings).
 
 Not auto-discovered by run_all.py (no ``test_`` prefix): it needs a
@@ -449,6 +450,18 @@ def main():
         n0 = page.locator(".ds-card").count()
         check(n0 >= 3, f"library list renders the real datasets ({n0})")
 
+        # card preview thumbs (M8f): one per card, real images resolve
+        check(page.locator(".ds-card-thumb").count() == n0,
+              "every dataset card renders a preview thumb")
+        try:
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('.ds-card-thumb img')]"
+                "  .some(i => i.complete && i.naturalWidth > 0)",
+                timeout=15000)
+            check(True, "a real card's preview image loads via /files/{path}")
+        except Exception as exc:  # noqa: BLE001 -- report, don't kill the run
+            check(False, f"a real card's preview image loads ({type(exc).__name__})")
+
         # the M8d rail hands off to the dataset manager
         page.goto(f"{BASE}/", wait_until="networkidle")
         check(page.locator("a.rail-item[href='/datasets']").count() == 1,
@@ -523,6 +536,62 @@ def main():
         except Exception as exc:  # noqa: BLE001 -- report, don't kill the run
             check(False, f"preview image loads ({type(exc).__name__})")
 
+        # -- M8f: item context menu (menus open, the option NEVER clicked --
+        # this dataset is real, so any PUT would mutate user data)
+        preview_puts: list[str] = []
+        page.on("request", lambda r: preview_puts.append(r.url)
+                if r.method == "PUT" and "/preview" in r.url else None)
+
+        def open_item_menu(item_id: int):
+            card = page.locator(
+                f'#items-grid .ds-item[data-item-id="{item_id}"]'
+            )
+            card.locator(".ds-item-menu").click()
+            page.wait_for_selector("#item-menu", state="visible", timeout=5000)
+            return page.locator("#item-menu [role='menuitem']")
+
+        detail_json = page.evaluate(
+            "async () => (await fetch('/api/v1/datasets/1024%20aes')).json()")
+        items_json = page.evaluate(
+            "async () => (await fetch('/api/v1/datasets/1024%20aes/items')).json()")
+        current = detail_json.get("preview_path")
+        with_preview = [i for i in items_json["items"] if i.get("preview_path")]
+        current_item = next(
+            (i for i in with_preview if i["preview_path"] == current), None)
+        other_item = next(
+            (i for i in with_preview if i["preview_path"] != current), None)
+        check(current is not None and current_item is not None and other_item is not None,
+              "detail exposes a resolved preview with honest candidates "
+              f"({current!r})")
+
+        trigger = page.locator("#items-grid .ds-item .ds-item-menu").first
+        check(trigger.is_visible(), "item ⋮ trigger renders on the thumb")
+
+        if current_item is not None:
+            opts = open_item_menu(current_item["id"])
+            check(opts.count() == 1
+                  and opts.inner_text().strip() == "Set as dataset preview",
+                  "context menu offers exactly one option")
+            check(opts.is_disabled(),
+                  "the item already fronting the card is honestly disabled")
+            page.screenshot(path=str(OUT / "datasets_menu.png"))
+            check((OUT / "datasets_menu.png").stat().st_size > 15000,
+                  "context-menu screenshot captured")
+            page.keyboard.press("Escape")
+            check(page.locator("#item-menu").is_hidden(),
+                  "Escape closes the menu")
+
+        if other_item is not None:
+            opts = open_item_menu(other_item["id"])
+            check(not opts.is_disabled(),
+                  "another item's option renders enabled (not clicked)")
+            page.locator("#ds-stats").click()  # outside click
+            check(page.locator("#item-menu").is_hidden(),
+                  "outside click closes the menu")
+
+        check(preview_puts == [],
+              "no PUT /preview fired -- the real dataset stays read-only")
+
         # pending is honestly empty on a fully curated dataset
         page.click(".seg[data-filter='pending']")
         page.wait_for_function(
@@ -548,6 +617,10 @@ def main():
         page.click("#btn-back")
         page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
         card = page.locator(".ds-card").filter(has_text="m8c-smoke-ds")
+        empty_thumb = card.locator(".ds-card-thumb")
+        check(empty_thumb.locator("img").count() == 0
+              and empty_thumb.locator(".no-preview").is_visible(),
+              "empty dataset card shows the honest NO PREVIEW thumb")
         card.locator("button", has_text="Delete").click()
         page.wait_for_function(
             "n => document.querySelectorAll('.ds-card').length === n",

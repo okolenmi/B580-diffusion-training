@@ -132,5 +132,10 @@ separate concern), loader RAM strategy (future work, enabled by size columns).
 - Dataset task lifecycle lives in `backend.db` (migration `004`); ingestion
   children report through a duck-typed reporter (`progress/finished/failed`)
   instead of writing a dataset DB `tasks` table — the "fork task gateway".
+- The dataset **card preview pointer** follows the same rule (M8f): the
+  stored override lives in `backend.db` (migration `006`, removed with
+  the dataset), while the fallback (first non-bad item's `preview_path`)
+  and the override's existence check are read-only over `trajectories` —
+  a dataset directory never stores UI state.
 - Startup reconciliation of dataset tasks mirrors `ReconcileRuns`; the
   task list additionally sweeps rows whose child died unreported.

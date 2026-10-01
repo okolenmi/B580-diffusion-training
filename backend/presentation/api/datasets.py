@@ -11,6 +11,8 @@ Resource-oriented contract over ``services.datasets``:
   legacy toggle endpoint); ``POST /{name}/items/discard``;
 * ``GET /{name}/files/{path}`` -- preview image bytes (containment
   enforced by the adapter, never resolved out of the dataset dir);
+  ``PUT /{name}/preview`` -- front the dataset's card with one item's
+  preview image (body ``{item_id}``);
 * ``GET/POST /{name}/sets`` -- list / commit items into a set;
 * ``GET/POST /{name}/tasks`` -- rows / start; ``POST
   /{name}/tasks/{id}/stop`` -- SIGKILL.
@@ -37,11 +39,13 @@ from ..schemas import (
     DatasetItemOut,
     DatasetItemsOut,
     DatasetListOut,
+    DatasetPreviewOut,
     DatasetSetsOut,
     DatasetTaskOut,
     DatasetTasksOut,
     DiscardOut,
     ItemIdsIn,
+    SetPreviewIn,
     StartDatasetTaskIn,
     UpdateItemIn,
     dataset_detail_out,
@@ -188,6 +192,26 @@ def read_dataset_file(
         content=payload.content,
         media_type=payload.media_type,
         headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.put(
+    "/{name}/preview",
+    response_model=DatasetPreviewOut,
+    responses={404: _ERROR_404, 409: _ERROR_409},
+)
+def set_dataset_preview(
+    name: str,
+    body: SetPreviewIn,
+    services: ApplicationServices = Depends(get_services),
+):
+    """Front the dataset's card with this item's preview image.
+
+    404 unknown dataset/item, 409 legacy dataset, 422 ``invalid_query``
+    when the item has no preview or its file is gone.
+    """
+    return DatasetPreviewOut(
+        preview_path=services.datasets.set_preview.execute(name, body.item_id)
     )
 
 

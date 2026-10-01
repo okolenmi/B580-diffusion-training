@@ -165,12 +165,15 @@ class StartOptionsResult:
 @dataclass(frozen=True, slots=True)
 class DatasetDetail:
     """One round-trip for a dataset page: identity, counts, sets, and
-    whatever task is currently running."""
+    whatever task is currently running. ``preview_path`` is the
+    resolved card image (``DatasetPreviews`` port), null when the
+    dataset has no usable preview."""
 
     info: "DatasetInfo"  # noqa: F821 -- application.ports.dataset_library
     stats: "DatasetStats | None"  # noqa: F821
     sets: tuple  # tuple[TrainingSetInfo, ...]
     active_tasks: tuple  # tuple[DatasetTask, ...]
+    preview_path: "str | None" = None  # noqa: F821
 
 
 @dataclass(frozen=True, slots=True)

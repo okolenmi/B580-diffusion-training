@@ -151,7 +151,8 @@ backend/
 │   │                         # TrainingGateway, ConfigInspector, ConfigFiles,
 │   │                         # ConfigOptions, SettingsStore, AssetStore,
 │   │                         # DatasetLibrary, DatasetTasks, DatasetTaskGateway,
-│   │                         # RunArtifacts, ProgressSource, GraphCatalog,
+│   │                         # DatasetPreviews (M8f), RunArtifacts,
+│   │                         # ProgressSource, GraphCatalog,
 │   │                         # GraphRuntime, GraphExecutionRepository, GraphLibrary,
 │   │                         # MonitorBus (M6)
 │   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
@@ -159,7 +160,7 @@ backend/
 │                             # Update); assets (List/Browse/MakeFolder/Upload/
 │                             # Inspect); datasets (List/Get/Create/Delete, items
 │                             # x4, sets/commit, tasks list/start/stop,
-│                             # ReconcileDatasetTasks); graphs (catalog/diagnostics,
+│                             # ReconcileDatasetTasks, SetDatasetPreview); graphs (catalog/diagnostics,
 │                             # validate/start/list/get/stop/delete executions,
 │                             # ReconcileGraphExecutions, library save/get/list/
 │                             # delete)
@@ -169,6 +170,8 @@ backend/
 │   ├── path_tiers.py         # shared resolution policy (layout == settings view)
 │   ├── subprocess_gateway.py # SubprocessTrainingGateway (spawn/signal/reap)
 │   ├── dataset_library.py    # SqliteDatasetLibrary (own-SQL reads, manager bridges)
+│   ├── dataset_previews.py   # SqliteDatasetPreviews (backend.db override row +
+│   │                         # first-item fallback, M8f)
 │   ├── dataset_tasks.py      # SqliteDatasetTasks (CAS row store for tasks)
 │   ├── dataset_task_gateway.py   # SubprocessDatasetTaskGateway (fork gateway)
 │   ├── dataset_task_worker.py    # child entry: reporter + DataTaskRunner
@@ -188,7 +191,7 @@ backend/
 │   │                         # validate + execute over real Node classes)
 │   ├── persistence/          # SqliteDatabase + SqliteRunRepository +
 │   │                         # SqliteGraphExecutionRepository/SqliteGraphLibrary
-│   │                         # + migrations/ (001..005_graphs.sql)
+│   │                         # + migrations/ (001..006_dataset_previews.sql)
 │   ├── monitor_bus.py         # SharedMonitorBus: wraps repo-root monitor_bus.MonitorBus
 │   └── events/               # CallbackEventBus (thread-safe)
 ├── presentation/
@@ -449,6 +452,7 @@ the graph supervisor after the row CAS lands, not by the entity.
 | M8 | Frontend slice 3: dataset manager + config editor + run history views | **done** |
 | M8d | Shell redesign: icon rail on every page, floating persistent console, `/help` + `/settings` | **done** |
 | M8e | Dataset add-data + edit modes: `generate_teacher` task kind (validated in `application/teacher_prompts.py`), bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`), add-data dialog (generate/import), browse/edit item modes, advanced item editor | **done** |
+| M8f | Dataset card previews + item context menu: resolved `preview_path` on list/detail (backend.db pointer, migration `006`; first non-bad item fallback; stale pointers degrade, never dead URLs), `PUT /datasets/{name}/preview` by item id, card thumb on `/datasets`, half-transparent `⋮` per item with the one-option "Set as dataset preview" menu | **done** |
 | M9 | Flip: README/run entry point -> `backend`; decommission `server/` (per `03-migration-strategy.md` §6) | planned |
 
 ## 8. Running it

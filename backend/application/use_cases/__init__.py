@@ -39,6 +39,7 @@ from .reconcile_dataset_tasks import ReconcileDatasetTasks
 from .reconcile_graph_executions import ReconcileGraphExecutions
 from .reconcile_runs import ReconcileRuns
 from .save_graph import SaveGraph
+from .set_dataset_preview import SetDatasetPreview
 from .start_dataset_task import StartDatasetTask
 from .start_graph_execution import StartGraphExecution
 from .start_training import StartTraining
@@ -90,6 +91,7 @@ __all__ = [
     "ReconcileGraphExecutions",
     "ReconcileRuns",
     "SaveGraph",
+    "SetDatasetPreview",
     "StartDatasetTask",
     "StartGraphExecution",
     "StartTraining",

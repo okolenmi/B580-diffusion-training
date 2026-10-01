@@ -21,6 +21,7 @@
     --rail-w: 64px;
     --z-rail: 40;
     --z-console: 60;
+    --z-menu: 70;   /* dataset item context menu: over console, under tips */
     --z-tip: 80;
     --dur-fast: 120ms;
     --dur-med: 220ms;

@@ -54,6 +54,7 @@ from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.reconcile_runs import ReconcileRuns
 from .use_cases.save_graph import SaveGraph
+from .use_cases.set_dataset_preview import SetDatasetPreview
 from .use_cases.start_dataset_task import StartDatasetTask
 from .use_cases.start_graph_execution import StartGraphExecution
 from .use_cases.start_training import StartTraining
@@ -114,6 +115,7 @@ class DatasetServices:
     stop_task: StopDatasetTask
     reconcile_tasks: ReconcileDatasetTasks
     read_file: ReadDatasetFile
+    set_preview: SetDatasetPreview
 
 
 @dataclass(frozen=True, slots=True)

@@ -136,6 +136,33 @@ class SqliteDatasetLibrary(DatasetLibrary):
             rows = conn.execute(sql, params).fetchall()
         return tuple(_row_to_item(r) for r in rows)
 
+    def get_item(self, name: str, item_id: int) -> DatasetItem:
+        directory = self._existing_dir(name)
+        self._require_v2(directory, name)
+        item = self._get_item(directory, item_id)
+        if item is None:
+            raise DatasetItemNotFoundError(
+                f"no trajectory {item_id} in dataset '{name}'"
+            )
+        return item
+
+    def first_preview(self, name: str) -> str | None:
+        # Best-effort display fallback (port contract): a missing or
+        # legacy dataset resolves to None instead of raising, so a
+        # list round-trip never dies on one odd directory.
+        directory = self._validate_dir(name)
+        db = directory / "metadata.db"
+        if not db.exists() or self._version(db) != 2:
+            return None
+        with self._connect(db) as conn:
+            row = conn.execute(
+                "SELECT preview_path FROM trajectories "
+                "WHERE preview_path IS NOT NULL AND preview_path != '' "
+                "AND type != 'bad' "
+                "ORDER BY id LIMIT 1"
+            ).fetchone()
+        return str(row[0]) if row else None
+
     def update_item(self, name: str, item_id: int, changes: ItemChanges) -> DatasetItem:
         directory = self._existing_dir(name)
         self._require_v2(directory, name)

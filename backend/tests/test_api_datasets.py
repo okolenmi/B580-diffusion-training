@@ -9,6 +9,7 @@ Run directly: python backend/tests/test_api_datasets.py
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -412,5 +413,126 @@ expect_error(status, body, 404, "dataset_not_found", "detail after delete")
 status, _, body = asgi_request(app, "/api/v1/assets/dataset")
 check({o["value"] for o in body["options"]} == {"made"},
       "catalog reflects the deletion")
+
+# ==========================================================================
+# Section C: dataset card previews (M8f)
+# ==========================================================================
+
+root_c = Path(tempfile.mkdtemp(prefix="backend-api-ds-c-"))
+services = build_services(project_root=root_c)
+app = create_app(services)
+
+make_v2_dataset(root_c, "cards", items=4)  # item 1 previews p1.png, item 4 is bad
+
+# -- resolution: fallback when nothing is stored --------------------------
+
+status, _, body = asgi_request(app, "/api/v1/datasets")
+entry = next(d for d in body["datasets"] if d["info"]["name"] == "cards")
+check(entry["preview_path"] == "previews/p1.png",
+      "list entry falls back to the first non-bad item's preview")
+status, _, body = asgi_request(app, "/api/v1/datasets/cards")
+check(body["preview_path"] == "previews/p1.png",
+      "detail carries the same resolved preview")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets", method="POST", json_body={"name": "bare"}
+)
+check(status == 201, "empty dataset created")
+status, _, body = asgi_request(app, "/api/v1/datasets/bare")
+check(body["preview_path"] is None,
+      "empty dataset previews to null (never fabricated)")
+
+# -- set by item id -------------------------------------------------------
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/cards/preview", method="PUT", json_body={"item_id": 1}
+)
+check(status == 200 and body == {"preview_path": "previews/p1.png"},
+      f"PUT preview by item id (got {status} {body})")
+
+# give item 2 its own preview file, then point the card at it
+cards_dir = root_c / "datasets" / "cards"
+(cards_dir / "previews" / "p2.png").write_bytes(b"\x89PNG")
+conn = sqlite3.connect(str(cards_dir / "metadata.db"))
+try:
+    conn.execute(
+        "UPDATE trajectories SET preview_path = 'previews/p2.png' WHERE id = 2"
+    )
+    conn.commit()
+finally:
+    conn.close()
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/cards/preview", method="PUT", json_body={"item_id": 2}
+)
+check(status == 200 and body["preview_path"] == "previews/p2.png",
+      "second PUT stores the override (upsert path)")
+status, _, body = asgi_request(app, "/api/v1/datasets")
+by_name = {d["info"]["name"]: d for d in body["datasets"]}
+check(by_name["cards"]["preview_path"] == "previews/p2.png",
+      "stored override wins over the fallback (list)")
+status, _, body = asgi_request(app, "/api/v1/datasets/cards")
+check(body["preview_path"] == "previews/p2.png",
+      "stored override wins over the fallback (detail)")
+
+# -- stale override (item discarded, file gone) degrades honestly ---------
+
+(cards_dir / "previews" / "p2.png").unlink()
+status, _, body = asgi_request(app, "/api/v1/datasets/cards")
+check(body["preview_path"] == "previews/p1.png",
+      "stale override falls back to a live preview instead of a dead path")
+(cards_dir / "previews" / "p2.png").write_bytes(b"\x89PNG")  # restore fixture
+
+# -- refusals -------------------------------------------------------------
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/cards/preview", method="PUT", json_body={"item_id": 4}
+)
+expect_error(status, body, 422, "invalid_query",
+             "preview refused on an item without a preview image")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/cards/preview", method="PUT", json_body={"item_id": 99}
+)
+expect_error(status, body, 404, "dataset_item_not_found",
+             "preview refused for an unknown item")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/missing/preview", method="PUT", json_body={"item_id": 1}
+)
+expect_error(status, body, 404, "dataset_not_found",
+             "preview refused on an unknown dataset")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/bare/preview", method="PUT", json_body={"item_id": 0}
+)
+expect_error(status, body, 422, "validation_error", "item_id must be >= 1")
+
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/bare/preview", method="PUT", json_body={}
+)
+expect_error(status, body, 422, "validation_error", "item_id is required")
+
+# -- legacy datasets: honest null + 409 on set ----------------------------
+
+make_v1_dataset(root_c, "oldv1")
+status, _, body = asgi_request(app, "/api/v1/datasets")
+by_name = {d["info"]["name"]: d for d in body["datasets"]}
+check(by_name["oldv1"]["preview_path"] is None,
+      "legacy dataset previews to null (no v2 columns touched)")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/oldv1/preview", method="PUT", json_body={"item_id": 1}
+)
+expect_error(status, body, 409, "dataset_not_migrated",
+             "preview set refused on a legacy dataset")
+
+# -- delete drops the override (no inheritance by a same-name successor) --
+
+status, _, body = asgi_request(app, "/api/v1/datasets/cards", method="DELETE")
+check(status == 200 and body == {"deleted": True}, "cards deleted with its override")
+make_v2_dataset(root_c, "cards", items=4)  # fresh dir, only previews/p1.png
+status, _, body = asgi_request(app, "/api/v1/datasets/cards")
+check(body["preview_path"] == "previews/p1.png",
+      "recreated dataset resolves its own items, not the stale override")
 
 finish()

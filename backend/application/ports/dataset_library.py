@@ -51,10 +51,14 @@ class DatasetStats:
 
 @dataclass(frozen=True, slots=True)
 class DatasetSummary:
-    """One list entry: identity always, stats only for v2 datasets."""
+    """One list entry: identity always, stats only for v2 datasets.
+    ``preview_path`` is filled by the list use case via the
+    ``DatasetPreviews`` port (stored override or first-item fallback);
+    the library itself never resolves it."""
 
     info: DatasetInfo
     stats: DatasetStats | None
+    preview_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +163,21 @@ class DatasetLibrary(ABC):
         self, name: str, *, committed: bool | None = None
     ) -> tuple[DatasetItem, ...]:
         """All items, or filtered by training-set membership."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_item(self, name: str, item_id: int) -> DatasetItem:
+        """One trajectory row (``DatasetItemNotFoundError`` when absent,
+        ``DatasetNotMigratedError`` on a legacy dataset)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def first_preview(self, name: str) -> str | None:
+        """First non-bad item's ``preview_path`` (id order).
+
+        Best-effort display fallback for the dataset card: ``None``
+        for a missing dataset, a legacy (pre-v2) one, or a dataset
+        without preview files -- never raises."""
         raise NotImplementedError
 
     @abstractmethod

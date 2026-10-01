@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.errors import (
     DatasetAlreadyExistsError,
+    DatasetDirectoryConflictError,
     DatasetFileNotFoundError,
     DatasetItemNotFoundError,
     DatasetNotFoundError,
@@ -61,11 +62,30 @@ check(library.get("bridge-ds").description == "created through the bridge", "get
 
 expect(DatasetAlreadyExistsError, lambda: library.create("bridge-ds"), "duplicate create refused")
 
+# A ghost directory (no metadata.db) is only cleared when it is the empty
+# skeleton create() makes. A directory with content may be the user's own
+# image folder that happens to share the name -- this server never deletes
+# files it did not create (docs 07 F-10).
 (datasets / "ghost").mkdir(parents=True)
-(datasets / "ghost" / "junk.txt").write_text("leftover")
 ghost_info = library.create("ghost")
-check(ghost_info.format_version == 2, "ghost dir (no metadata.db) is wiped and recreated")
-check(not (datasets / "ghost" / "junk.txt").exists(), "ghost content removed")
+check(ghost_info.format_version == 2, "empty ghost dir is recreated")
+check((datasets / "ghost" / "shards").is_dir(), "recreated ghost has the skeleton")
+
+(datasets / "mine").mkdir(parents=True)
+(datasets / "mine" / "IMG_0001.png").write_bytes(b"\x89PNG")
+expect(
+    DatasetDirectoryConflictError,
+    lambda: library.create("mine"),
+    "a directory with content is refused",
+)
+check(
+    (datasets / "mine" / "IMG_0001.png").exists(),
+    "the user's own file was not deleted",
+)
+check(
+    not (datasets / "mine" / "metadata.db").exists(),
+    "and no dataset was written into it either",
+)
 
 # -- raw fixture: summaries / stats ----------------------------------------
 
@@ -159,6 +179,58 @@ check(library.discard("raw", [2, 3]) == 2, "discard last rows")
 check(not (raw_dir / "shards" / "x0_0.safetensors").exists(),
       "empty shard file unlinked")
 check(library.stats("raw").shards == 0, "empty shard row removed")
+
+# -- discard ordering: rows commit first (docs 07 F-05) --------------------
+#
+# Unlinking a shard inside the transaction and then failing left the
+# dataset pointing at a file that was already gone. Now the rows commit
+# first, so a failed unlink can only leave an orphan file -- recoverable
+# -- never a dangling row.
+
+import logging  # noqa: E402 -- local to this scenario
+
+make_v2_dataset(root, "ordered", items=2)
+ordered_dir = datasets / "ordered"
+ordered_shard = ordered_dir / "shards" / "x0_0.safetensors"
+
+records: list[str] = []
+
+
+class _Capture(logging.Handler):
+    def emit(self, record):
+        records.append(record.getMessage())
+
+
+capture = _Capture()
+library_logger = logging.getLogger("backend.infrastructure.dataset_library")
+library_logger.addHandler(capture)
+
+real_unlink = Path.unlink
+
+
+def _failing_unlink(self, *args, **kwargs):
+    if self.name == ordered_shard.name and self.parent == ordered_shard.parent:
+        raise OSError("injected: read-only filesystem")
+    return real_unlink(self, *args, **kwargs)
+
+
+Path.unlink = _failing_unlink
+try:
+    check(library.discard("ordered", [1, 2]) == 2, "discard of the last rows succeeded")
+finally:
+    Path.unlink = real_unlink
+    library_logger.removeHandler(capture)
+
+check(library.list_items("ordered") == (), "rows are gone (the commit stands)")
+check(
+    library.stats("ordered").shards == 0,
+    "the shard row went with its last row -- no row points at a missing file",
+)
+check(ordered_shard.exists(), "the undeletable shard survived as an orphan file")
+check(
+    any(ordered_shard.name in message for message in records),
+    f"the leftover is reported, not swallowed (got {records})",
+)
 
 # -- legacy (v1) refusal ----------------------------------------------------
 

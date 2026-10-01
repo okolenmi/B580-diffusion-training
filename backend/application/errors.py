@@ -117,6 +117,34 @@ class DatasetAlreadyExistsError(ApplicationError):
     code = "dataset_exists"
 
 
+class DatasetDirectoryConflictError(ApplicationError):
+    """A non-dataset directory occupies the requested dataset name.
+
+    ``datasets/<name>`` exists but holds no ``metadata.db`` *and* is not
+    an empty skeleton -- i.e. it holds files this code did not create. The
+    legacy server deleted such a directory ("nothing in it can be
+    loadable"); doing that to a user's own image folder is silent data
+    loss, so the name is refused instead (docs 07 F-10). The user renames
+    or removes the directory, then creates the dataset.
+    """
+
+    code = "dataset_directory_conflict"
+
+
+class RunDirectoryCollisionError(ApplicationError):
+    """``runs/run_<id>/`` already holds another run's files.
+
+    The database handed out an id whose directory is occupied -- e.g. a
+    legacy run that predates this backend's table. Writing there would
+    truncate the old log (``spawn`` opens it with ``"w"``), so the start
+    is refused (docs 07 F-04). Startup seeds the id sequence above the
+    highest existing ``run_*`` directory, so this is the safety net for
+    anything that appeared after boot.
+    """
+
+    code = "run_directory_conflict"
+
+
 class DatasetNotMigratedError(ApplicationError):
     """The dataset is still in legacy format v1.
 

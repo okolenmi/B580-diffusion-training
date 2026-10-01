@@ -152,6 +152,17 @@ def build_container(settings: Settings) -> Container:
     config_files = CoreConfigFiles()
     config_options = PydanticConfigOptions()
 
+    # A fresh database numbers runs from 1, but runs/run_<id>/ may already
+    # hold a legacy run: the trainer opens its log with "w", so a
+    # colliding id would truncate that history. Continue the sequence
+    # above whatever is on disk instead (docs 07 F-04).
+    legacy_high_water = artifacts.highest_existing_run_id()
+    if legacy_high_water:
+        run_repository.continue_ids_above(legacy_high_water)
+        logger.info(
+            "run ids continue above the existing runs/run_%d directory", legacy_high_water
+        )
+
     # Dataset domain (M3b): library reads each dataset's own metadata.db,
     # task rows live in backend.db, and the fork gateway spawns children
     # through the same layout the settings resolve. The library is built

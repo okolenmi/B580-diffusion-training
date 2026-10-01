@@ -36,13 +36,14 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   | `invalid_query` | 422 | runs/graphs (limit, status, name range) |
   | `run_not_found`, `no_active_run` | 404 | runs |
   | `run_already_active`, `run_not_running` | 409 | runs |
+  | `run_directory_conflict` | 409 | runs (`runs/run_<id>/` already holds files — never overwritten, docs 07 F-04) |
   | `config_not_found` | 404 | config |
   | `config_invalid` | 422 | config |
   | `training_launch_failed` | 500 | runs |
   | `settings_invalid` | 400 | settings |
   | `asset_too_large` | 413 | assets (upload body or declared `Content-Length` over the 8 GiB cap) |
   | `dataset_not_found`, `dataset_item_not_found`, `dataset_task_not_found` | 404 | datasets |
-  | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active` | 409 | datasets |
+  | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active`, `dataset_directory_conflict` | 409 | datasets (`dataset_directory_conflict`: the name is taken by a directory that is not a dataset — it is never deleted, docs 07 F-10) |
   | `dataset_task_launch_failed` | 500 | datasets |
   | `graph_invalid` | 422 | graphs |
   | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found` | 404 | graphs |
@@ -97,7 +98,7 @@ frames, never a stored row. Clients must render a marker as a loud
 | GET | `/runs` | `limit` (1..500, default 50), `status` (`pending/running/completed/failed/cancelled`) | `ListRunsOut` |
 | GET | `/runs/active` | — | `RunOut`; 404 `no_active_run` |
 | GET | `/runs/{id}` | — | `RunOut`; 404 |
-| POST | `/runs` | body `StartRunIn`: `config_path`, `start_from` (default `"teacher"`), `reset_optimizer` | `RunOut` -> **201**; 409 `run_already_active`, 422 `config_invalid`, 500 `training_launch_failed` |
+| POST | `/runs` | body `StartRunIn`: `config_path`, `start_from` (default `"teacher"`), `reset_optimizer` | `RunOut` -> **201**; 409 `run_already_active`, 409 `run_directory_conflict`, 422 `config_invalid`, 500 `training_launch_failed` |
 | POST | `/runs/{id}/stop` | body `StopRunIn`: `force` (default false) | `RunOut`; 409 `run_not_running` |
 | GET | `/runs/{id}/log` | `lines` (1..500) | `{"log": "<tail text>"}` |
 | DELETE | `/runs` | — | `{"deleted": N}` (history wipe) |
@@ -163,7 +164,7 @@ dataset.
 | Method | Path | Query / body | Response |
 |---|---|---|---|
 | GET | `/datasets` | — | `DatasetListOut`: `datasets[{info, stats\|null}], count` |
-| POST | `/datasets` | `CreateDatasetIn{name, description?}` | `DatasetSummaryOut` -> **201**; 409 `dataset_exists` |
+| POST | `/datasets` | `CreateDatasetIn{name, description?}` | `DatasetSummaryOut` -> **201**; 409 `dataset_exists`, 409 `dataset_directory_conflict` |
 | GET | `/datasets/{name}` | — | `DatasetDetailOut`: `info, stats, sets[], active_tasks[]` |
 | DELETE | `/datasets/{name}` | — | `{"deleted": true}`; 409 while a task is active |
 | GET | `/datasets/{name}/items` | `committed` (bool, optional) | `DatasetItemsOut`: `items[], count` |

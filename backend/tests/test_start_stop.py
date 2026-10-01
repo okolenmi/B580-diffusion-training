@@ -22,6 +22,7 @@ from backend.application.errors import (
     RunAlreadyActiveError,
     RunNotFoundError,
     RunNotRunningError,
+    RunDirectoryCollisionError,
     TrainingLaunchError,
 )
 from backend.application.ports.run_artifacts import RunArtifactsPaths
@@ -422,11 +423,57 @@ def test_reconcile_runs() -> None:
         )
 
 
+def test_start_refuses_an_occupied_run_directory() -> None:
+    # docs 07 F-04: the trainer opens log.txt with "w", so a run id whose
+    # directory already holds another run's files must be refused, not
+    # written over. Startup seeds ids above existing run dirs; this is the
+    # net for anything that appeared afterwards.
+    print("\n== StartTraining: an occupied runs/run_<id>/ is refused ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+        occupied = env.runs_dir / "run_1"
+        occupied.mkdir(parents=True)
+        legacy_log = occupied / "log.txt"
+        legacy_log.write_text("legacy run line\n" * 200, encoding="utf-8")
+        before = legacy_log.stat().st_size
+
+        try:
+            env.services.start_training.execute(
+                StartTrainingCommand(config_path="configs/test.toml")
+            )
+            check(False, "an occupied run directory must refuse the start")
+        except RunDirectoryCollisionError as exc:
+            check(exc.code == "run_directory_conflict", "409 run_directory_conflict")
+
+        check(legacy_log.stat().st_size == before, "the legacy log was not truncated")
+        check(
+            legacy_log.read_text(encoding="utf-8") == "legacy run line\n" * 200,
+            "its content is byte-for-byte intact",
+        )
+        check(env.gateway.spawned == [], "nothing was spawned")
+
+        # The refused start still finalised its row (F-02 repair), so the
+        # next attempt is not blocked by a ghost.
+        row = env.repo.get(1)
+        check(row is not None and row.status.value == "failed", "row is failed")
+        check("run_1" in (row.error or ""), f"error names the directory (got {row.error!r})")
+
+        # Operator moves the old run aside -> the next start proceeds.
+        occupied.rename(env.runs_dir / "run_1_legacy")
+        dto = env.services.start_training.execute(
+            StartTrainingCommand(config_path="configs/test.toml")
+        )
+        check(dto.id == 2 and dto.status.value == "running", "start accepted once moved")
+        check((env.runs_dir / "run_2" / "log.progress.jsonl").parent.is_dir(),
+              "the new run gets its own directory")
+
+
 def main() -> None:
     test_start_happy_path()
     test_start_config_errors()
     test_start_spawn_failure_finalises_run()
     test_start_prepare_failure_finalises_row()
+    test_start_refuses_an_occupied_run_directory()
     test_stop_training()
     test_get_active_run()
     test_get_run_log()

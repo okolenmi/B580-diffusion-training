@@ -256,6 +256,9 @@ class InMemoryRunRepository(RunRepository):
         ]
         return max(unfinished, key=lambda r: r.id) if unfinished else None
 
+    def continue_ids_above(self, run_id: RunId) -> None:
+        self._next_id = max(self._next_id, int(run_id) + 1)
+
     def list_unfinished(self) -> list[Run]:
         unfinished = [
             r

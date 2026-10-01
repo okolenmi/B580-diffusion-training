@@ -18,6 +18,7 @@ dataset with ``DatasetNotMigratedError`` before touching v2 columns.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from ..application.errors import (
     DatasetAlreadyExistsError,
+    DatasetDirectoryConflictError,
     DatasetItemNotFoundError,
     DatasetNotFoundError,
     DatasetNotMigratedError,
@@ -42,6 +44,8 @@ from ..application.ports.dataset_library import (
     TrainingSetInfo,
 )
 from .workspace import WorkspaceLayout
+
+logger = logging.getLogger(__name__)
 
 
 def _dt(epoch: float | None) -> datetime:
@@ -90,9 +94,13 @@ class SqliteDatasetLibrary(DatasetLibrary):
         if directory.exists():
             if (directory / "metadata.db").exists():
                 raise DatasetAlreadyExistsError(f"dataset '{name}' already exists")
-            # Ghost directory (no metadata.db): the legacy server's cleanup
-            # rule -- nothing in it can be loadable, so start fresh.
-            shutil.rmtree(directory)
+            # No metadata.db, so nothing in it can be loadable -- but a
+            # directory with content is not ours to delete: it may be the
+            # user's own image folder that happens to share the name.
+            # Only an empty skeleton (what a create() interrupted before
+            # writing the database leaves behind) is cleared
+            # (docs 07 F-10).
+            self._clear_empty_skeleton(name, directory)
         directory.mkdir(parents=True)
         (directory / "shards").mkdir()
         (directory / "previews").mkdir()
@@ -104,6 +112,29 @@ class SqliteDatasetLibrary(DatasetLibrary):
         init_local_db(directory / "metadata.db")
         set_dataset_info(directory / "metadata.db", name, description)
         return self._read_info(directory)
+
+    @staticmethod
+    def _clear_empty_skeleton(name: str, directory: Path) -> None:
+        """Remove ``directory`` when it holds nothing but the empty
+        skeleton ``create`` makes; otherwise refuse the name."""
+        strays = [
+            child
+            for child in directory.iterdir()
+            if not (
+                child.is_dir()
+                and child.name in {"shards", "previews"}
+                and not any(child.iterdir())
+            )
+        ]
+        if strays:
+            names = ", ".join(sorted(child.name for child in strays)[:5])
+            raise DatasetDirectoryConflictError(
+                f"'{directory}' already exists and is not a dataset "
+                f"(found: {names}). Rename or remove it, then create the "
+                f"dataset '{name}' -- this server never deletes files it "
+                f"did not create."
+            )
+        shutil.rmtree(directory)
 
     def delete(self, name: str) -> bool:
         directory = self._validate_dir(name)
@@ -266,10 +297,20 @@ class SqliteDatasetLibrary(DatasetLibrary):
         return join(existing, new)
 
     def discard(self, name: str, item_ids: list[int]) -> int:
+        """Delete rows, then remove the files they owned.
+
+        Ordering is the whole point (docs 07 F-05): the rows go inside
+        one transaction, the unlink happens *after* the commit. Deleting
+        a file first and then rolling back leaves the dataset referencing
+        a shard that no longer exists -- dangling rows are
+        unrecoverable, an orphaned file is not. Removal failures are
+        logged and survive as orphans rather than undoing the discard.
+        """
         directory = self._existing_dir(name)
         self._require_v2(directory, name)
         placeholders = ",".join("?" * len(item_ids))
         db = directory / "metadata.db"
+        orphaned: list[Path] = []
         with self._connect(db) as conn:
             rows = conn.execute(
                 f"SELECT preview_path, shard_id FROM trajectories "
@@ -294,13 +335,22 @@ class SqliteDatasetLibrary(DatasetLibrary):
                 if shard:
                     path = directory / shard["file_path"]
                     if path.exists():
-                        path.unlink()
+                        orphaned.append(path)
                     conn.execute("DELETE FROM shards WHERE id = ?", (shard_id,))
-            previews = [r["preview_path"] for r in rows if r["preview_path"]]
-        for relative in previews:
-            path = directory / relative
-            if path.exists():
+            orphaned.extend(
+                directory / r["preview_path"] for r in rows if r["preview_path"]
+            )
+        # Past this line the transaction has committed: the rows are gone
+        # for good, so a failed unlink is an orphan to report, never a
+        # reason to resurrect them.
+        for path in orphaned:
+            try:
                 path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "discard left %s behind (its rows are already deleted): %s",
+                    path, exc,
+                )
         return deleted
 
     # -- training sets -----------------------------------------------------

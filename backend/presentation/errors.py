@@ -40,6 +40,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "dataset_item_not_found": 404,
     "dataset_file_not_found": 404,
     "dataset_exists": 409,
+    "dataset_directory_conflict": 409,
+    "run_directory_conflict": 409,
     "dataset_not_migrated": 409,
     "dataset_task_active": 409,
     "dataset_task_not_found": 404,

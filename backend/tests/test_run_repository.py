@@ -292,6 +292,52 @@ def test_list_unfinished() -> None:
         )
 
 
+def test_continue_ids_above() -> None:
+    # docs 07 F-04: a fresh database starts numbering at 1, which can
+    # collide with a legacy runs/run_<n>/ directory.
+    print("\n== continue_ids_above (legacy run directories) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = SqliteRunRepository(_open(tmp))
+        clock = FakeClock()
+
+        repo.continue_ids_above(57)
+        run = Run.create(
+            config_path="configs/a.toml", mode="distillation",
+            total_steps=10, created_at=clock.now(),
+        )
+        repo.add(run)
+        check(run.id == 58, f"the first id lands above the seeded dir (got {run.id})")
+
+        # Never moves the sequence backwards, even when asked to.
+        repo.continue_ids_above(3)
+        second = Run.create(
+            config_path="configs/b.toml", mode="distillation",
+            total_steps=10, created_at=clock.now(),
+        )
+        repo.add(second)
+        check(second.id == 59, f"a lower seed is ignored (got {second.id})")
+
+        # And it survives a new repository over the same file.
+        reopened = SqliteRunRepository(_open(tmp))
+        third = Run.create(
+            config_path="configs/c.toml", mode="distillation",
+            total_steps=10, created_at=clock.now(),
+        )
+        reopened.add(third)
+        check(third.id == 60, f"the seed is durable (got {third.id})")
+
+    # Seeding an empty database (no sqlite_sequence row yet) works too.
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = SqliteRunRepository(_open(tmp))
+        repo.continue_ids_above(5)
+        run = Run.create(
+            config_path="configs/a.toml", mode="distillation",
+            total_steps=10, created_at=FakeClock().now(),
+        )
+        repo.add(run)
+        check(run.id == 6, f"first insert lands above the seed (got {run.id})")
+
+
 def main() -> None:
     test_roundtrip()
     test_listing_and_filters()
@@ -300,6 +346,7 @@ def main() -> None:
     test_persistence_across_instances()
     test_update_if_status()
     test_list_unfinished()
+    test_continue_ids_above()
     finish()
 
 

@@ -149,8 +149,16 @@ Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
   No server-side migration is possible or needed -- the data is
   per-browser.
 * **Runs history**: not imported. Legacy history remains readable
-  through the legacy server until decommission; log files on disk stay
-  untouched either way. The new backend starts with an empty history.
+  through the legacy server until decommission, and the new backend
+  starts with an empty history. Log files on disk are never touched:
+  run ids are numbered from the database, and a fresh one would start
+  at 1 -- colliding with `runs/run_1/`. Startup therefore seeds the id
+  sequence **above the highest existing `runs/run_*` directory**, and two
+  guards refuse a collision rather than truncating it: `prepare` rejects
+  a non-empty `runs/run_<id>/` (409 `run_directory_conflict`) and the
+  gateway refuses to open a non-empty `log.txt`/`log.progress.jsonl` with
+  `"w"` (docs 07 F-04). So the numbering continues past the legacy
+  history and no old run is ever overwritten.
 * **Datasets**: already server-side and format-versioned (`04`); both
   servers can read them -- nothing to move.
 * **Settings/config**: backend reads the same project config files and

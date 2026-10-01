@@ -50,6 +50,18 @@ class RunRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def continue_ids_above(self, run_id: RunId) -> None:
+        """Guarantee that the next ``add`` binds an id > ``run_id``.
+
+        Id allocation is the repository's job, and a fresh database
+        starts at 1 while ``runs/run_1/`` may already hold a run from the
+        legacy server -- writing there would truncate its log. Startup
+        seeds the sequence above the highest existing run directory
+        (docs 07 F-04). Never moves the sequence backwards.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def find_active(self) -> Run | None:
         """The most recent unfinished run (``created`` or ``running``).
 

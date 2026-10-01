@@ -123,6 +123,26 @@ status, _, body = asgi_request(
 )
 expect_error(status, body, 409, "dataset_exists", "duplicate create")
 
+# A directory that is not a dataset is never deleted to make room for one
+# (docs 07 F-10).
+foreign = root_b / "datasets" / "my-images"
+foreign.mkdir(parents=True, exist_ok=True)
+(foreign / "IMG_0001.png").write_bytes(b"\x89PNG")
+status, _, body = asgi_request(
+    app, "/api/v1/datasets", method="POST", json_body={"name": "my-images"}
+)
+expect_error(
+    status, body, 409, "dataset_directory_conflict", "create over a foreign directory"
+)
+check(
+    (foreign / "IMG_0001.png").exists(),
+    "the user's file is still there after the refusal",
+)
+check(
+    not (foreign / "metadata.db").exists(),
+    "and nothing was written into their directory",
+)
+
 status, _, body = asgi_request(app, "/api/v1/datasets/made")
 check(status == 200 and body["info"]["description"] == "via api"
       and body["stats"]["items"] == 0 and body["sets"] == [] and body["active_tasks"] == [],

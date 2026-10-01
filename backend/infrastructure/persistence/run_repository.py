@@ -180,6 +180,30 @@ class SqliteRunRepository(RunRepository):
             ).fetchone()
         return _row_to_run(row) if row else None
 
+    def continue_ids_above(self, run_id: RunId) -> None:
+        """Seed the AUTOINCREMENT sequence above an existing run dir.
+
+        SQLite keeps that sequence in ``sqlite_sequence`` (created with
+        the table, one row per AUTOINCREMENT table once a row is
+        inserted). It has no unique index, so this is update-then-insert
+        rather than an upsert -- and it never lowers a sequence that is
+        already higher (docs 07 F-04).
+        """
+        with self._db.connection() as conn:
+            current = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'runs'"
+            ).fetchone()
+            if current is None:
+                conn.execute(
+                    "INSERT INTO sqlite_sequence (name, seq) VALUES ('runs', ?)",
+                    (int(run_id),),
+                )
+            elif int(current["seq"]) < int(run_id):
+                conn.execute(
+                    "UPDATE sqlite_sequence SET seq = ? WHERE name = 'runs'",
+                    (int(run_id),),
+                )
+
     def list_unfinished(self) -> list[Run]:
         with self._db.connection() as conn:
             rows = conn.execute(

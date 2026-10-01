@@ -65,6 +65,7 @@ class SubprocessTrainingGateway(TrainingGateway):
             cmd = self._build_command(launch)
             env = self._build_env()
             launch.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._refuse_existing_history(launch)
             with open(launch.log_path, "w", encoding="utf-8", buffering=1) as log:
                 proc = subprocess.Popen(
                     cmd,
@@ -83,6 +84,31 @@ class SubprocessTrainingGateway(TrainingGateway):
         with self._lock:
             self._procs[proc.pid] = proc
         return proc.pid
+
+    @staticmethod
+    def _refuse_existing_history(launch: TrainingLaunch) -> None:
+        """Never open a run's log/progress with ``"w"`` over real content.
+
+        Opening with ``"w"`` is how a legacy run's history disappears
+        without a word when a fresh database hands out an id that is
+        already on disk. Two layers sit above this (startup seeds the id
+        sequence above the highest existing ``runs/run_*`` directory, and
+        ``StartTraining`` refuses an occupied directory, docs 07 F-04);
+        this is the last line for a caller that reaches the gateway
+        directly. An empty file is fine -- it is what a failed spawn
+        leaves behind.
+        """
+        for path in (launch.log_path, launch.progress_path):
+            try:
+                occupied = path.is_file() and path.stat().st_size > 0
+            except OSError:
+                occupied = False  # unreadable: let the open() below decide
+            if occupied:
+                raise TrainingLaunchError(
+                    f"refusing to overwrite {path}: run {launch.run_id} already "
+                    f"has output there. Move the old run aside first -- this "
+                    f"server never truncates another run's history."
+                )
 
     def _build_command(self, launch: TrainingLaunch) -> list[str]:
         """Faithful port of server/control.build_training_command."""

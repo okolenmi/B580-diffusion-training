@@ -215,7 +215,7 @@ async def inspect_asset(kind: str, path: str):
     """Per-component dtype for a resource, read cheaply from its file
     header -- see server/asset_paths.py.inspect(). Powers the Resources
     Controller's per-input dtype readouts
-    (docs/design/resources-controller/02-phase-1-and-2.md, Phase 2) without
+    (the resources-controller redesign's Phase 2) without
     loading the resource itself."""
     try:
         return asset_paths.inspect(kind, path)

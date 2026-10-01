@@ -83,7 +83,7 @@ just "future work":
   systems in one codebase for two similar-but-different purposes would be
   duplication, not design.
 - **Redesigning `Node`/`Port`/`ExecutionContext`.** Section 1.1 arrived at
-  essentially the same shape independently; section 9.1 confirms it.
+  essentially the same shape independently.
   Proposing changes to something already correct, just to have proposed
   something, would be the opposite of the "good code is the only metric"
   standard this design is held to.

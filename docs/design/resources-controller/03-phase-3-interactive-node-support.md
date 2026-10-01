@@ -2,7 +2,7 @@
 
 ## Phase 3 -- Interactive node support (editor + core.py + introspection)
 
-**But `classInfo.inputs`/`classInfo.outputs` -- static, one shared
+**`classInfo.inputs`/`classInfo.outputs` -- static, one shared
 object per class, fetched once at page load -- are read directly in at
 least 10 separate places across `GraphModel`/`GraphView`, not one:**
 `GraphNode`'s constructor (default param values), node rendering (all

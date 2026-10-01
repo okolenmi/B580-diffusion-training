@@ -72,12 +72,7 @@ actually determines whether a step OOMs) is much closer to the
 unquantized case, because the transient buffer still has to exist for
 that one use. This is inherent to this whole class of technique
 (bitsandbytes/QLoRA has the same characteristic), not specific to this
-project's own implementation. (Also, for the record: `unet_weight_store`
-only has two real choices, `"bf16"` and `"nf4"` --
-`nodes/model/lora_training_config.py`'s own `_UNET_WEIGHT_STORE_CHOICES`
--- there is no `"nvfp4"` option in this codebase; a value outside those
-two would have raised immediately via `Port.choices` validation, so
-whatever was actually selected and produced these numbers was `"nf4"`.)
+project's own implementation.
 
 ## Fourth addendum: `prewarm_text_encoder` -- the text encoder leaves VRAM for good
 

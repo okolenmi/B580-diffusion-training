@@ -17,10 +17,9 @@ real, already-tested machinery (each already implements
 `DeviceResident` itself) instead of a second, hand-rolled, parallel
 implementation -- replaced the hand-summed `footprint_bytes()` from the
 first pass of this phase. `vae_sd` (real tensor state, not yet wrapped
-in any object) is moved/dropped by hand
-alongside the coordinator's own work in all three lifecycle methods,
-not silently left out of them just because there's no resident object
-to register it with yet.
+in any object) is moved/dropped by hand alongside the coordinator's
+own work in all three lifecycle methods, not silently left out of them
+just because there's no resident object to register it with yet.
 
 **Not yet built:** validators (per-input human-readable detection text
 -- both the checkpoint and LoRA inspection functions this needs now

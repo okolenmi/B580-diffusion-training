@@ -49,10 +49,7 @@ with measured numbers in
 [`docs/known-issues/resolved.md`](../../known-issues/resolved.md).
 This tracks a real,
 multi-session redesign, not a single patch -- update it as phases land
-or as open questions get resolved, the same way
-[`docs/status/progress.md`](../../status/progress.md) tracks the rest
-of this project (a fast-read summary that needs periodic resyncing to
-stay accurate -- this one hasn't drifted, so far).
+or as open questions get resolved.
 
 **Priority rule, made explicit rather than left implicit:** where this
 plan and the main design docs (`docs/design/`) conflict, this plan

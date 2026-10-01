@@ -11,23 +11,6 @@ one way to parameterize a trainable delta, not the only one. Today's
 `core.lora`-wrapping code hardcodes it as the only option; this section
 makes it an explicit choice.
 
-**Implemented**: `AdapterStrategy`/`PlainLoRAAdapter` (both in
-`nodes/model/adapter_strategy.py`) -- `PlainLoRAAdapter` wraps
-`core.lora.LoRALinear`/`LoRAConv2d`'s math unchanged, per the existing
-rule that genuinely-correct legacy math gets wrapped, not re-derived.
-**Two real signature gaps had to be closed to make the illustrative
-`wrap(frozen, rank, scaling_policy)` actually callable**, worth recording
-here since they're genuine interface corrections, not just
-implementation detail: an `alpha` parameter (`scaling_policy.scaling(alpha,
-rank)` structurally needs one, and the original signature omitted it),
-and an `original` parameter alongside `frozen` (`LoRALinear`/`LoRAConv2d`
-need the whole original `nn.Linear`/`nn.Conv2d` -- bias, in/out features,
-conv stride/padding/dilation/groups -- not just a weight tensor).
-Both adapters check the store at `wrap()` time rather than silently
-ignoring `frozen`, and both now honor `BF16WeightStore` *and*
-`NF4WeightStore` (3.3) -- see `nodes/model/adapter_strategy.py`. An
-unrecognized store type is refused there rather than dropped.
-
 **Implemented**: `DoRAAdapter` -- Liu et al., "DoRA: Weight-Decomposed
 Low-Rank Adaptation" (arXiv:2402.09353, ICML 2024 Oral). `nodes/model/dora_layer.py`'s
 `DoRALinear`/`DoRAConv2d`, `nodes/model/adapter_strategy.py`'s
@@ -69,27 +52,6 @@ is genuinely new. Same store support as `PlainLoRAAdapter`, including
 
 **Still not honored:** `DoRAAdapter` + `NF4WeightStore` together (the
 QDoRA combination) -- a real, separate follow-up, not done here.
-
-**Checkpoint save/load: now a real round-trip for the common case, one
-honestly-scoped gap left for phase-splitting.** `DoRALinear.load_lora_weights()`
-still loads the directional component and recomputes `magnitude` fresh from
-it (useful for starting DoRA training from an existing plain-LoRA
-checkpoint's direction, but not a full round-trip); `load_dora_weights()`
-is the real round-trip, and `restore_alpha()` keeps alpha/scaling
-consistent with a checkpoint-restored value. `nodes/model/lora_saver.py`
-(via `nodes/model/lora_phases.py`'s `extract_combined_weights`/
-`extract_own_generation_weights`) and `LoRACheckpointLoaderNode` (via its
-own `_load_dora_layers()`) both know about a `.dora_scale` key now --
-name matches ComfyUI's own `comfy/lora.py` convention (`{key}.dora_scale`,
-read alongside `.alpha`), not invented here. `DoRAAdapter` is trainable in
-a real run today (live-wired via 3.1's `adapter_strategy_scope`, same as
-`PlainLoRAAdapter`); saving and loading that training's real result
-(direction + magnitude + alpha) correctly is now wired for an unsplit
-DoRA layer, the overwhelmingly common case. See 9.1 for the one real edge
-case still open by design (a phase-split DoRA layer's magnitude can't be
-folded into a combined checkpoint) and for a second, deeper bug this
-landing found and closed along the way: phase-splitting a DoRA layer had
-never actually worked at all, independent of the checkpoint question.
 
 The seam this needed (`AdapterStrategy` existing at all, with a real
 second conformance checked against it) exists, **and is now live-wired
@@ -136,11 +98,6 @@ would apply it a second time. Equivalence-tested directly: a `RankStabilizedScal
 effective alpha, run through both the real, unpatched path and the
 patched path, land on byte-identical `layer.alpha`/`layer.scaling`.
 
-`DoRAAdapter` **is now implemented** too -- see above. Once
-`AdapterStrategy` was live-wired, building it was the only remaining
-piece, and it's trainable in a real run immediately, no further
-live-wiring needed.
-
 ### 3.2 `LoRAScalingPolicy`
 
 Standard LoRA scales its output by `alpha/r`. Kalajdzievski, "A Rank
@@ -153,7 +110,7 @@ fix is a one-line change: scale by `alpha/sqrt(r)` instead. Proven, not
 just observed, and costs nothing extra at inference or training time.
 
 **Implemented**, unchanged from the design: `LoRAScalingPolicy`/
-`ClassicLoRAScaling`/`RankStabilizedScaling` (`nodes/model/lora_injector.py`),
+`ClassicLoRAScaling`/`RankStabilizedScaling`,
 wired as an opt-in `scaling_policy` port on `ComfyUNetLoRANode` -- default
 `None` resolves to `ClassicLoRAScaling`, reproducing today's `alpha/rank`
 exactly, so nothing changes for an existing run. Adopted per the original
@@ -194,11 +151,6 @@ different roles throughout timesteps," trading prompt fidelity against
 subject fidelity rather than achieving both -- i.e. generic QLoRA applied
 unmodified to a diffusion UNet has a documented, real quality gap versus
 its LLM results.
-
-**Implemented**: `FrozenWeightStore`/`BF16WeightStore`
-(`nodes/model/frozen_weight_store.py`) -- the frozen base kept exactly as
-loaded, no change to any existing forward path. This closed the
-`TrainableModel.footprint_bytes()` gap (1.2) it existed for.
 
 `NF4WeightStore` (`nodes/model/nf4_weight_store.py`) is **implemented
 too** -- real blockwise NF4 quantization plus double quantization of the
@@ -247,13 +199,6 @@ stored `param_lr` as a list (one entry per parameter), `update_lr()`
 (called by the LR schedule every step) unconditionally overwrote every
 entry with the same value -- anything that set a per-group ratio at
 construction would have had it silently erased on the very next step.
-
-**Implemented**: `ParameterGroupPolicy`/`UniformGroups`
-(`nodes/optimizer/composed.py`), and the `ComposedOptimizerHandle` fix --
-`update_lr()` now recomputes `param_lr` from `[new_lr * r for r in
-self._group_ratios]` instead of overwriting uniformly. Behavior-preserving
-for every existing caller (`UniformGroups` produces exactly the old
-`[lr] * len(params)`).
 
 This unlocked Hayou, Ghosh, Yu, "LoRA+: Efficient Low Rank Adaptation of
 Large Models" (arXiv:2402.12354, ICML 2024): standard LoRA trains both
@@ -320,110 +265,7 @@ and nothing objects. The per-t bucket numbers are diagnostics only
 never changes what the gradient does. The only region levers are
 static -- `t_mode` picks a sampling distribution once at config time,
 Min-SNR/P2 are fixed functions of sigma -- so neither can react to
-what is actually happening per region mid-run. The dashboard's
-per-series trend lines make the symptom directly visible: three
-movement numbers disagreeing (one down, one flat, one up) *is* the
-tradeoff, quantified.
-
-### 5.2 What it is: one shared object, two independently optional sides
-
-`BucketBalance` tracks each bucket's window means (`observe()` folds
-in `{loss_t_*: mean raw MSE}`) and exposes:
-
-- **Gradient side** -- `weight_for_t(t)`: a per-sample multiplier
-  applied in both routes' `LossPhase`, composing with the existing
-  sigma weighting as `w(sigma) * w_bucket(t)`. Modes:
-  - **`off` (default)**: tracking only. `weight_for_t()` returns
-    `None`, and both `LossPhase`s keep their original code path
-    expression-for-expression -- wiring a balance in this mode is a
-    guaranteed bit-identical no-op (tested), so the tracking can exist
-    for the sampler side alone.
-  - **`normalize`**: after warmup, `w ∝ 1/baseline`, renormalized to
-    mean 1. Equalizes contribution *magnitude* -- a bucket whose raw
-    loss lives at 0.2 can't outshout one at 0.02 just by being 10x
-    the number. Static after warmup, no controller.
-  - **`speed`**: training-rate matching (the GradNorm idea, minus its
-    per-layer gradient norms -- here the rate is measured off the
-    reported bucket losses directly): each bucket's rate is
-    `fast_ema / slow_ema` (< 1 = descending), compared to the mean
-    rate across buckets; weights step by `(relative)^eta`,
-    renormalized, clamped. The control target is literally "all
-    losses should go down at the same speed" -- laggards gain weight,
-    fast descendents lose it.
-  - **`dro`**: worst-bucket emphasis (Group-DRO flavored):
-    `w ∝ exp(dro_lambda * current/baseline)` over buckets,
-    renormalized -- the bucket furthest above its own baseline
-    dominates, so one broken region pulls the run's capacity instead
-    of being averaged away.
-
-  Every mode renormalizes to mean 1 over *eligible* buckets and then
-  clamps to `[clip_min, clip_max]` (defaults 0.25 / 4.0): the floor is
-  the "no bucket gets ignored" guarantee, the ceiling keeps one noisy
-  window from flinging the loss scale. Renormalization happens before
-  the clamp, so in saturation a winner may sit inside the ceiling
-  rather than on it -- the guarantee is bounded weights, not a
-  specific saturation point.
-
-- **Data side** -- `sample_t(rng, t_low, t_high)`: adaptive t
-  sampling. Picks a bucket with probability ∝
-  `(current/baseline)^sample_bias` over whichever buckets
-  `[t_low, t_high]` actually intersects, then draws uniformly inside
-  that intersection. `sample_bias=0` keeps sampling uniform whatever
-  the gradient side is doing, so either side can be tested alone.
-  Pre-warmup it is plain uniform over the coverage.
-
-Wiring: `BucketBalanceNode` (registered in the graph) produces the
-instance; it goes to a trainer's `bucket_balance` port (both routes,
-in `TrainerNode.COMMON_INPUTS`) and/or to `ManagedDatasetSourceNode`'s
-`bucket_balance` port with `t_mode="adaptive"` -- `adaptive` (and the
-`exact` mode in 5.5) is carried as `T_MODES_TRAIN_TIME` in
-`nodes/dataset/timestep_modes.py`, deliberately *not* appended to
-`T_MODES` itself: `core.noise_schedule.sample_timestep` would silently
-degrade an unknown mode to uniform, and a silently-uniform mode would
-be a lie. One instance, shared: the trainer's `observe()` feeds what
-the sampler reads. Either side optional, both optional -- the point is
-that all four mechanisms are independently wireable for A/B testing.
-
-`adaptive` without a wired balance is a build-time `ValueError` on the
-node *and* on `ManagedDatasetLoader`'s own constructor (both route
-through `manager/t_sampling.py`'s `TrainTimeSampler`, which interprets
-every t_mode), raised before any filesystem/DB access -- a config
-error, not a mid-iteration crash. `manager/` stays duck-typed (it
-must never import `nodes/`), documented by contract in `t_sampling.py`.
-
-### 5.3 Cadence, honesty, reports
-
-`observe()` runs once per optimizer step, at the *reported window*:
-the managed route folds in the window-accumulated means at the
-grad_accum boundary, the main route its per-report means -- batch-2
-per-step numbers are too noisy to steer by. Both routes'
-`MonitoringPhase` observe even when no monitor is wired and profiling
-is off: the balance drives training, so tracking must not depend on
-reporting. A window that sampled no bucket X leaves X's state
-untouched (a gap is data, never zero-filled); a bucket with fewer
-than `warmup_reports` observations has no baseline, gets a neutral
-1.0 multiplier, and reports no key -- nothing is fabricated for a
-region the run hasn't measured.
-
-Reports gain `weight_t_low/mid/high` (mode `!= off`, only buckets
-past their own warmup, values as applied *after* this step's update)
-and, only once an adaptive sampler has actually stated its range,
-`prob_t_low/mid/high` (the real current sampling distribution over
-the covered buckets -- before that there is no distribution to
-report). Absent keys, not zeros -- the monitor chart's gap rule.
-
-### 5.4 Knobs (all Port-configurable on `BucketBalanceNode`)
-
-| Port | Default | Meaning |
-|---|---|---|
-| `mode` | `off` | Which gradient-side mechanism (table above) |
-| `warmup_reports` | 10 | Observations a bucket needs before it gets a baseline / any weight |
-| `ema_alpha` | 0.05 | Slow EMA of bucket loss (tracking + difficulty) |
-| `fast_alpha` | 0.25 | `speed` only: fast EMA; `fast/slow` is the descent rate |
-| `eta` | 0.5 | `speed` only: step gain (0.5 = square-root correction) |
-| `clip_min` / `clip_max` | 0.25 / 4.0 | Multiplier clamp after mean-1 renormalization |
-| `dro_lambda` | 1.0 | `dro` only: worst-bucket sharpness (0 = flat) |
-| `sample_bias` | 1.0 | Data side: difficulty exponent (0 = uniform sampling) |
+what is actually happening per region mid-run.
 
 Honest limits, stated as such: `speed` equalizes *speed*, not level --
 a hopelessly broken bucket still has high absolute loss, just
@@ -436,73 +278,3 @@ directions against hand-computed values, mean-1/clip invariants,
 bit-identical `off` path, window-cadence observe on both routes,
 coverage- and bias-correct sampling, and the config-error checks
 above); no GPU involved.
-
-### 5.5 One latent per image: the single-latent consolidation and `exact` t targeting
-
-Everything in section 5 -- adaptive sampling above, exact targeting
-below -- rides on one format property: **the dataset is one clean latent
-(x0) per image, and noise + t are injected at draw time.** That was
-already the live reality when this section was written (verified on
-disk: every trajectory of all six real datasets is `format=lora_raw`,
-`sample_count=1` -- the standard kohya/diffusers/OneTrainer model, one
-VAE encode per image). What changed is that the *old* concept stopped
-existing around it:
-
-- **Retired:** `manager/builder.py`'s `run_ingestion_task` (the legacy
-  real-image path that baked a fixed ~20-value t grid per image into the
-  shard -- the "sampled wasn't sampled" bug), the loader branch that read
-  those shards (including its dual-pass target blending;
-  `use_dataset_cfg` survives on the node as a documented no-op so old
-  graphs still load), the `real` ("Real (VAE Encoding)") option in the
-  dataset generator UI plus its route branch, and
-  `RenoiseBatchSourceNode` (`nodes/dataset/renoise.py` + its smoke test)
-  -- a workaround node whose entire reason for existing was undoing that
-  baked grid.
-- **Loader:** `ManagedDatasetLoader` now reads `format=lora_raw`
-  trajectories only; anything else (teacher/compressed sequences, old
-  baked shards) is *skipped* -- count and formats printed, never
-  misread as a clean latent.
-- **Kept:** `run_teacher_task` (distillation trajectories are genuinely
-  sequential multi-t data -- a different format for a different purpose)
-  and the shard-reader functions the dataset UI uses.
-
-**New: `t_mode="exact"` + a `t_values` Port.** `t_values="500"` pins
-every sample to one precise timestep; `t_values="200,500,800"` cycles
-the list in draw order, one value per sample drawn, so each listed t
-gets an equal long-run share regardless of shuffling. Every value must
-be an integer inside `[t_low, t_high]` (and inside 1..999); anything
-else is a build-time `ValueError`. `t_low`/`t_high` narrows the range,
-`exact` removes it -- they compose as bounds, not competitors.
-
-**Balance-steered exact.** Wiring the same `bucket_balance` the trainer
-uses turns that list into a steering target: each listed value's draw
-weight becomes `(current/baseline)^sample_bias` of the bucket it falls
-in (`BucketBalance.exact_probs()`, the data side's ratio semantics
-reused verbatim), so the precise t's you named get pulled toward
-whichever zone the balance measures as behind -- exact targeting *inside*
-the bucket-balance loop, not a parallel knob. The pin stays the
-default: with no balance wired, a balance that has nothing to say yet
-(all buckets unwarmed), `sample_bias=0`, or every listed value in one
-bucket, the equal-share cycle is untouched. Steering deliberately does
-not publish `prob_t_*` -- that key is the adaptive *range*
-distribution, and this one is over your list, so it stays absent rather
-than misreported.
-
-`manager/t_sampling.py`'s `TrainTimeSampler` is now the single
-interpreter of all three t_mode families (the static five, delegated to
-`core.noise_schedule.sample_timestep`; `adaptive`; `exact`) and the
-single place they are validated -- in the node's `build()` before path
-resolution, in the loader's ctor before any DB access, never silently:
-unknown modes used to degrade to uniform through
-`alpha_beta.get(mode, ...)`, and a silently-uniform mode is a lie. The
-node-side choices constant is `T_MODES_TRAIN_TIME` (still a deliberate
-copy -- a Port's `choices` is needed at class-definition time, when
-neither `core.*` nor `manager.*` is importable there).
-`nodes/smoke_tests/smoke_test_t_sampling.py` checks the copy against
-core's list and t_sampling's accepted set, the exact cycle as an exact
-sequence, the balance-steered exact draw against the balance's own
-distribution (and all four ways steering declines back to the plain
-cycle), and the adaptive-bias end-to-end that used to run through
-`RenoiseBatchSource._renoise()`; `manager/smoke_tests/
-smoke_test_lora_raw_dataset.py` covers the pinned-cycle and
-skip-non-single-latent behavior against a real temp dataset.

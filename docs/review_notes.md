@@ -12,7 +12,7 @@ This file should shrink over time, not grow -- once an item below is
 checked and resolved, delete it rather than marking it "done" and
 leaving it here. (Two large batches of previously-listed items were
 resolved and removed rather than kept as a record: first a docs
-restructuring pass, a `progress.md` resync, and several
+restructuring pass, a progress-file resync, and several
 dangling-reference cleanups on 2026-09-15; then, on 2026-09-28, the
 real-hardware confirmation of the five `pending-testing.md` fixes, the
 `convert-cfg.toml` handling decision (now gitignored, with a committed

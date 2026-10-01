@@ -1,10 +1,9 @@
 # 05 -- Graph runtime (M4)
 
 The nodegraph subsystem behind two application ports, replacing
-`server/nodegraph_registry.py` + `nodegraph_introspect.py` +
+`archive/server/nodegraph_registry.py` + `nodegraph_introspect.py` +
 `graph_executor.py` + `routes_nodegraph.py`. Legacy files stay untouched
-(reference only); this is a clean break with deliberate divergences,
-listed at the end.
+(reference only); this is a clean break with deliberate divergences.
 
 The goal, per the milestone plan: *more adaptive for future changes*.
 Every adaptivity mechanism below names the legacy pain point it removes.
@@ -27,24 +26,12 @@ Every adaptivity mechanism below names the legacy pain point it removes.
 
 **`GraphCatalog`** -- read side, no execution:
 
-```python
-snapshot(refresh: bool = False) -> CatalogSnapshot   # nodes + domain + load_errors
-diagnostics(class_name, params) -> dict[str, list[str]]  # raises NodeClassNotFoundError;
-                                                          # node exceptions propagate to the use case
-```
-
 `PortInfo` / `PresetInfo` / `NodeInfo` / `CatalogLoadError` live in the
 port module (they cross the boundary, like `DatasetTask` does).
 `NodeInfo` includes `domain` (from module path, `nodes.optimizer.x` ->
 `optimizer`), `node_kind`, `presets`, `has_diagnostics`, `bases`.
 
 **`GraphRuntime`** -- the executor:
-
-```python
-validate(graph) -> tuple[GraphIssue, ...]            # complete report, never raises
-execute(graph, *, cancel_event, on_node_done=None) -> GraphOutcome
-release_memory() -> None                             # gc + xpu cache (lazy core bridge)
-```
 
 `GraphIssue(severity, code, message, node_id?, edge_index?, param?)` with
 `severity in {"error", "warning"}`; errors block a run, warnings do not.
@@ -58,39 +45,12 @@ over one shared, instance-owned `NodeRegistry`. The port carries *real*
 `type` objects internally (validation needs `issubclass`), but nothing
 JSON-facing ever leaves as a non-JSON value.
 
-**`GraphExecutionRepository`** -- `RunRepository`'s shape: `add` (binds
-id), `get`, `list(limit)` newest-first, `find_active`, `list_unfinished`,
-`update`, `update_if_status` (the CAS), `delete_all`.
-
 **`GraphLibrary`** -- named graph storage: `save` (upsert, returns
 `(row, created)`), `get`, `list`, `delete`. Stores the submitted graph
 JSON **verbatim** (plus a stamped `format: 1`): saving never validates
 class names, so a graph saved while a node class is absent still loads
 later -- validation happens at run time, not save time (forward
 compatibility).
-
-## 3. Domain
-
-* `domain/graph.py`: `GraphNodeSpec`, `GraphEdgeSpec`, `GraphDefinition`
-  (frozen; dumb data -- all checking goes through `validate()` so reports
-  are complete rather than raise-on-first), `NodeResult`.
-* `domain/entities/graph_execution.py`: `GraphExecution`, a state machine
-  like `Run`:
-
-  ```
-  queued  -> running | stopped | error
-  running -> finished | error | stopped
-  terminal: finished, error, stopped (final)
-  ```
-
-  `record_result` only while running, emits no event (progress is
-  published by the supervisor, mirroring `RunProgressed`); every
-  lifecycle transition buffers its event for `collect_events()`.
-* `GraphStatus` + `ExecutionId` in `value_objects.py`.
-* Events (7, mirroring the run set): `GraphExecutionQueued`,
-  `GraphExecutionStarted`, `GraphExecutionProgressed`,
-  `GraphExecutionFinished`, `GraphExecutionFailed`,
-  `GraphExecutionStopped`, `GraphExecutionsDeleted`.
 
 ## 4. Validation issue codes
 
@@ -188,44 +148,14 @@ no silent eviction).
 
 ## 6. API (`/api/v1/graphs`)
 
-| Method | Path | Use case / behavior |
-|---|---|---|
-| GET | `/nodes?refresh=` | `ListNodeCatalog` -> `{count, domains: {domain: [node...]}, load_errors}` |
-| POST | `/nodes/{class_name}/diagnostics` | `NodeDiagnostics` (body `{params}`) -> `{messages}`; 404 `node_class_not_found`, 400 `node_diagnostics_failed` |
-| POST | `/validate` | `ValidateGraph` -> 200 always: `{ok, issues}` |
-| POST | `/run` | `StartGraphExecution` -> 201; 422 `graph_invalid` + issues, 409 `graph_execution_active` |
-| GET | `/executions?limit=` | `ListGraphExecutions` (1..500, newest first) -> summaries |
-| GET | `/executions/{id}` | `GetGraphExecution` -> detail: status, results (+`duration_ms`), graph snapshot, timestamps; 404 `graph_execution_not_found` |
-| POST | `/executions/{id}/stop` | `StopGraphExecution` -> detail; 409 `graph_execution_not_active` |
-| DELETE | `/executions` | `DeleteGraphExecutions` -> `{deleted}` |
-| GET | `/library` | `ListGraphs` -> summaries (+`node_count`) |
-| PUT | `/library/{name}` | `SaveGraph` (upsert) -> 201 created / 200 replaced |
-| GET | `/library/{name}` | `GetGraph` -> stored graph verbatim; 404 `graph_not_found` |
-| DELETE | `/library/{name}` | `DeleteGraph` -> `{deleted}`; 404 |
+The endpoint list is served by the server itself: `/openapi.json`.
 
 Run payload keeps the legacy field names (`nodes[{id, class_name,
 params}]`, `edges[{from_node, from_port, to_node, to_port}]`) to ease the
 M5 frontend port. Saved-graph storage replaces the browser's
 `localStorage` (`ng_graph_v1`) -- the client decides when to migrate.
 
-All errors leave as the one envelope; codes added to
-`presentation/errors.py`: `graph_invalid` (422),
-`graph_execution_not_found` (404), `graph_execution_not_active` (409),
-`graph_execution_active` (409), `node_class_not_found` (404),
-`node_diagnostics_failed` (400), `graph_not_found` (404).
-
 ## 7. Introspection shape (per node)
-
-```json
-{"class_name": "...", "display_name": "...", "domain": "optimizer",
- "module": "...", "doc": "...", "bases": [...], "node_kind": "static",
- "has_diagnostics": true, "presets": null,
- "inputs":  [{"name", "type", "type_mro", "default", "default_repr",
-              "required", "doc", "path_kind", "choices",
-              "visible_when", "widget_only"}],
- "outputs": [the same keys with identity values -- default/default_repr
-             null (outputs are wire-fed), widget hints null/false]}
-```
 
 `class_name` stays the stable identity (saved graphs resolve against
 it); `display_name` stays presentation-only (auto-derived with the

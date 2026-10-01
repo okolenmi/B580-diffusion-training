@@ -72,7 +72,7 @@ just "future work":
   why the Resources Controller's own precision work explicitly did *not*
   absorb it -- `docs/design/resources-controller/08-consolidation.md`),
   and verified end-to-end as a dequantize-around-an-unchanged-Algorithm
-  design (see `docs/status/progress.md`'s 8-bit item). The rejection
+  design. The rejection
   here still holds for what it rejected -- a quantized-`Algorithm`
   variant -- and the "smaller win than the frozen base" sizing was
   never wrong; both notes are kept rather than deleting this entry,

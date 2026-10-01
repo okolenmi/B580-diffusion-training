@@ -71,113 +71,74 @@ python /path/to/this-project/convert.py --config my_run.toml
 
 ## Where to find things
 
+The rule the docs now follow: **a document earns its place by saying
+something the code cannot.** Design rationale, rejected alternatives
+with their reasoning, hard-won constraints, hardware measurements and
+deferred-with-a-reason all stay. File trees, endpoint tables,
+implementation-status inventories and phase-by-phase plan narratives
+were removed in the 2026-10-01 cleanup -- open the module instead, or
+ask the server, which serves its own OpenAPI schema.
+
 ```
 docs/
 ├── setup.md                 Environment setup, running either pipeline, running tests
 ├── architecture.md          Codebase map: core/manager/backend/nodes and how they relate
 ├── training-diagnostics.md  Fixed-probe / gradient-alignment tools: is a LoRA damaging a t region?
-├── review_notes.md          New-reader audit: confusing/stale things flagged for follow-up
-├── status/
-│   └── progress.md          What's implemented in nodes/ today (fast-read summary; resynced 2026-09-28)
-├── known-issues/            Bug/quirk tracker, split by status
-│   ├── open.md
-│   ├── resolved.md
-│   ├── deferred.md
-│   └── pending-testing.md
-└── design/                  The full nodes/ rewrite design, one file per topic
-    ├── 02-foundational-ontology.md
-    ├── 03-training-step-orchestration.md
-    ├── 04-lora-adapter-mechanics-and-loss-weighting.md
-    ├── 05-coordination-registry-observability.md
-    ├── 06-composition-walkthrough.md
-    ├── 07-deferred-or-rejected.md
-    ├── 08-validation-and-implementation-status.md   <- most reliable "what's real" doc
-    ├── 09-prioritized-backlog.md
-    ├── 10-node-surface-and-precision-control.md
-    └── resources-controller/    Active, in-progress redesign -- most recently updated
-        ├── 01-context-and-ground-truth.md
-        ├── 02-phase-1-and-2.md
-        ├── 03-phase-3-interactive-node-support.md
-        ├── 04-phase-4-resource-preset-abstraction.md
-        ├── 05-phase-5-resources-controller-node.md
-        ├── 06-phase-6-lora-training-config.md
-        ├── 08-consolidation.md
-        └── 09-trainer-integration-and-vram-safety.md
+├── review_notes.md          The one open documentation-hygiene judgment call
+├── known-issues/            Bug/quirk tracker, split by status. Cited from source
+│   ├── open.md              Issues with no fix landed -- check here before assuming something is new
+│   ├── resolved.md          Measured results kept as prose (runs/ is gitignored, so this IS the record)
+│   ├── deferred.md          Confirmed, intentionally not acted on
+│   └── pending-testing.md   Fixes that exist but were never confirmed against real hardware
+└── design/
+    ├── README.md            Index of the nodes/ rationale docs -- start here
+    ├── 02..10               One file per topic: rationale and evidence, not reference
+    ├── resources-controller/  The Resources Controller redesign, incl. the hardware results
+    └── backend/                 The web backend and its frontend: architecture,
+                                  API contract, dataset format, graph runtime,
+                                  what is deferred and why
 ```
 
-Each folder with more than one file has its own `README.md` index with
-a "read this when..." table -- go there rather than guessing which
-numbered file you need. The two most useful entry points if you don't
-know where to start:
+Two entry points if you do not know where to start:
 
-- [`docs/design/README.md`](docs/design/README.md) -- full rationale
-  for the `nodes/` rewrite; its own index points at "what's actually
-  real" (file 08) vs "what's still open" (file 09).
+- [`docs/design/README.md`](docs/design/README.md) -- the index for
+  the `nodes/` rationale, including **07-deferred-or-rejected.md, which
+  you should read before proposing anything**.
 - [`docs/design/resources-controller/README.md`](docs/design/resources-controller/README.md)
-  -- the most recently active work in the repo; its status banner is
-  the single most current summary of anything resource-policy or
-  precision related.
+  -- the most recently active work, and the most current hardware
+  numbers.
+
+For the backend specifically, `docs/design/backend/README.md` indexes
+those docs, and `01-architecture.md` holds the layering rules a change
+has to keep.
 
 ## Current status, in one paragraph
 
 The `nodes/` rewrite's original 12-item backlog is complete and
-equivalence-tested (see
-[`docs/design/08-validation-and-implementation-status.md`](docs/design/08-validation-and-implementation-status.md)).
-Since then, work has moved to a Resources Controller / precision
-redesign
-([`docs/design/resources-controller/`](docs/design/resources-controller/README.md))
-that is itself now well past its "Phase 6" milestone, plus a live
-per-step VRAM budget enforcer and 8-bit optimizer-state quantization.
-[`docs/status/progress.md`](docs/status/progress.md) covers all of
-that as of this writing. As of 2026-09-28 the five previously
-hardware-unconfirmed fixes (VRAM ratchet, attention-block
-checkpointing, control-handle strict/synchronize, managed-route perf,
-managed-route escalation) have all been run and confirmed on the real
-B580, with numbers, in
-[`docs/known-issues/resolved.md`](docs/known-issues/resolved.md) --
-the reusable harness for that lives in `scripts/hw_validate.py`.
-Treat
-[`docs/design/resources-controller/README.md`](docs/design/resources-controller/README.md)'s
-own status banner (top of that file) as the most current single source
-of truth for what's actually landed recently -- `progress.md` is a
-fast-read summary, not the primary record, and summaries drift if
-nobody keeps them updated as work lands.
+equivalence-tested; `docs/design/08-validation-and-implementation-status.md`
+section 9.2 is the honest answer to "what is built but *not* yet
+validated", and `09-prioritized-backlog.md` says what is left. Since
+then the work has moved to the Resources Controller and precision
+redesign, and the web layer has been rewritten behind `backend/`
+(M1-M9 shipped, `server/` archived). The five previously
+hardware-unconfirmed fixes have all been run and confirmed on the real
+B580, with numbers, recorded in
+[`docs/known-issues/resolved.md`](docs/known-issues/resolved.md); the
+reusable harness for that is `scripts/hw_validate.py`.
 
 ## A note on how these docs are meant to be maintained
 
-`docs/design/` and `docs/design/resources-controller/` are living
-planning documents, not archives -- they're written to be edited in
-place as work lands (status banners at the top, sections marked
-"done"/"still open" inline) rather than superseded by a new file each
-time. Keep doing that: it's why they're still trustworthy despite their
-size. `docs/status/progress.md` is supposed to work the same way --
-keeping it updated as things land (rather than letting it silently
-predate reality, the way it once did) is what keeps it worth reading
-at all.
+Delete a document when its content has moved somewhere better, not when
+it gets old: if the code now says it, the code says it. When something
+is deferred or rejected, keep the *reason* -- that is the part nobody
+can reconstruct -- and let the rest go.
 
-This folder structure is new as of a recent docs-restructuring pass --
-the content that used to live in four large files (`PROGRESS.md`,
-`docs/training_pipeline_design.md`,
-`docs/resources_controller_redesign_plan.md`,
-`docs/suspicious_findings.md`, all at the repo/`docs/` top level) has
-been split by topic into the folders above, with the content itself
-preserved (verified line-for-line during the split) and only
-reorganized. A follow-up pass then updated every source-code comment
-and docstring that referenced the old flat paths (52 files across
-`nodes/`, `server/` (since moved to `archive/server/` at M9), `manager/`)
-to point at the correct split file --
-most citations named a specific section/phase number, which had to be
-looked up against the section-number-to-file mapping in
-`docs/design/README.md` and `docs/design/resources-controller/README.md`
-rather than mechanically renamed, since one old path now maps to up to
-eleven different files. A handful of citations pointed at content from
-two now-deleted docs (`docs/nodes_package_design.md`,
-`docs/optimizer_execution_redesign_plan.md`) that predated this
-restructuring entirely; where the cited content still exists somewhere
-current it's now pointed there, and where it doesn't survive anywhere,
-the comment was reworded to state the fact directly rather than cite a
-source that isn't there. See [`docs/review_notes.md`](docs/review_notes.md)
-for anything from that pass still open -- most of it, including this
-paragraph's own details, has since been resolved and isn't repeated
-there as a historical record; check `git log -- docs/review_notes.md`
-if the specifics matter.
+`scripts/check_doc_links.py` runs in `scripts/full_gate.sh`. It
+resolves every markdown link, every heading anchor, and every
+`docs/**.md` path cited from a source comment, because nothing renders
+these docs and nothing else would notice a citation rotting.
+
+`docs/review_notes.md` holds the one open documentation-hygiene judgment
+call. It is meant to shrink: fix an item and delete it rather than
+marking it done. The 2026-10-01 cleanup removed three documents this
+way, and `git log` has them.

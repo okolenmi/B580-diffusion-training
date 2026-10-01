@@ -16,9 +16,10 @@ interpreter doesn't fail cleanly -- it produces a wall of
 mass regression (it did, the first time someone ran the suite that way).
 So: if the interpreter running this script can already import torch, use
 it as-is; otherwise resolve VENV_PYTHON (environment variable, then
-.env, the same precedence paths.py uses) and re-exec the tests under
-that. If neither works, say exactly what's missing instead of emitting
-64 identical tracebacks.
+.env, then the sibling ../venv/ of the default layout -- the same
+fallback run_server.sh and path_tiers.py use) and re-exec the tests
+under that. If none works, say exactly what was tried instead of
+emitting a wall of identical tracebacks.
 
 This is the "one-line top-level runner" asked for in
 docs/review_notes.md; each individual suite's own runner stays
@@ -60,18 +61,35 @@ def _venv_python_from_dotenv() -> str | None:
     return None
 
 
+def _sibling_venv() -> str | None:
+    """The ``../venv/bin/python`` of the documented default layout.
+
+    run_server.sh and backend/infrastructure/path_tiers.py both fall back
+    to this, so without it the server started fine in a stock three-
+    folder checkout while the test runner hard-failed -- the asymmetry
+    was a trap in docs/setup.md, which claimed nothing needed
+    configuring (fixed 2026-10-01).
+    """
+    candidate = _HERE.parent / "venv" / "bin" / "python"
+    return str(candidate) if candidate.is_file() else None
+
+
 def resolve_interpreter() -> str:
     import os
     if _has_torch(sys.executable):
         return sys.executable
-    for candidate in (os.environ.get("VENV_PYTHON"), _venv_python_from_dotenv()):
+    candidates = (
+        os.environ.get("VENV_PYTHON"),
+        _venv_python_from_dotenv(),
+        _sibling_venv(),
+    )
+    for candidate in candidates:
         if candidate and Path(candidate).is_file() and _has_torch(candidate):
             return candidate
+    tried = "\n".join(f"  - {c}" for c in (sys.executable, *candidates) if c)
     sys.exit(
         "Cannot find a Python interpreter with torch installed.\n"
-        f"  - {sys.executable} has no torch (the interpreter running this script)\n"
-        "  - VENV_PYTHON is either unset (env var and .env both) or points "
-        "somewhere without torch\n"
+        f"{tried}\n"
         "Set VENV_PYTHON to your venv's python (see .env.example), or run "
         "this script with that interpreter directly."
     )

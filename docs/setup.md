@@ -20,9 +20,10 @@ some-parent-dir/
 └── B580-diffusion-training/   # this repo
 ```
 
-If your layout matches this, nothing below needs configuring --
-`paths.py` auto-detects both `ComfyUI/` and `venv/` from this repo's
-own location.
+If your layout matches this, nothing below needs configuring.
+`paths.py` auto-detects `ComfyUI/` from this repo's own location, and
+the venv is found as a sibling `venv/` (by `run_server.sh`, by
+`path_tiers.py` and by `run_tests.py` -- all three fall back to it).
 
 ## Configuring a different layout
 
@@ -123,15 +124,59 @@ the full gate ties every suite together:
 
 ```bash
 $VENV_PYTHON backend/tests/run_all.py   # backend suite (API, pages, use cases)
-scripts/full_gate.sh                    # legacy suites + backend suite + frontend node --check
+scripts/full_gate.sh                    # everything: legacy suites, backend suite,
+                                         # node --check, doc links, ruff (F,E9)
 ```
+
+### The browser smoke
+
+`full_gate.sh` deliberately does **not** include the browser layer:
+`backend/tests/visual_smoke.py` needs a live server *and* a separate
+Playwright venv, so it is run by hand, in two terminals. `BACKEND_DB_PATH`
+is the point of the recipe -- it keeps the run off your real
+`backend/data/backend.db`.
+
+```bash
+# terminal 1 -- a scratch database, so nothing touches your real one
+BACKEND_DB_PATH=/tmp/opencode/smoke.db \
+  "$VENV_PYTHON" -m backend.cli --port 8766
+
+# terminal 2
+~/.venvs/pw/bin/python backend/tests/visual_smoke.py
+```
+
+It prints one line per check and exits non-zero on any failure. What it
+does *not* cover is listed in
+`docs/design/backend/06-visual-smoke.md`.
+
+### Backend environment variables
+
+| Variable | Effect |
+|---|---|
+| `BACKEND_HOST`, `BACKEND_PORT` | defaults for the CLI; command-line flags win |
+| `BACKEND_DB_PATH` | database location (use a scratch path for tests/smokes) |
+| `BACKEND_ALLOWED_HOSTS` | extra `Host` names the server answers to (comma-separated) |
+| `BACKEND_ALLOWED_ORIGINS` | extra origins allowed to make state changes |
+
+The first three are documented in `backend/config.py`. The last two are
+the request guard's escape hatch, and they matter if you ever serve the
+UI from somewhere other than the backend's own origin: without them a
+cross-site write is refused by design (see
+`docs/design/backend/02-api-reference.md`).
+
+One asymmetry worth knowing: a `comfy_dir` / `venv_python` set through
+the UI (`POST /settings`) is persisted in the database and sits *below*
+the environment for those two keys but *above* it for `checkpoints_dir`
+and `loras_dir` -- `backend/infrastructure/path_tiers.py` owns that
+order, and it is the reason an old `.env` value can appear to be
+ignored.
 
 `run_tests.py` picks the interpreter itself: the tests import torch,
 which lives in your ComfyUI venv, not in whatever system `python`
 happens to be first on PATH. If the running interpreter has no torch,
-it resolves `VENV_PYTHON` (environment variable, then `.env`, same
-precedence as `paths.py`) and runs every test under that -- rather
-than emitting ~68 identical `ModuleNotFoundError: No module named
+it resolves `VENV_PYTHON` (environment variable, then `.env`, then
+the sibling `../venv/`) and runs every test under that -- rather than
+emitting a wall of identical `ModuleNotFoundError: No module named
 'torch'` tracebacks, which is exactly what running the suite with the
 wrong python looks like.
 

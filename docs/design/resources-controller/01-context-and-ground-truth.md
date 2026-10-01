@@ -121,8 +121,7 @@ established by
 `ComfyUNetTrainableModel.footprint_bytes()`/`FrozenWeightStore.footprint_bytes()`,
 not invent a new one, and should be shaped so it can later plug into
 `nodes/memory/manager.py`'s `MemoryManager`/`ResourceProfile` (built,
-real, but not yet threaded through anything real per
-`docs/status/progress.md`) --
+real, but not yet threaded through anything real --
 a genuine, already-flagged use case for "extend this object with extra
 memory control later," not a hypothetical one.
 

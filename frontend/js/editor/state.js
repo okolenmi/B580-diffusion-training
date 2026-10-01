@@ -2,11 +2,13 @@
    editor/state.js -- GraphDoc: the editable graph document (M7).
 
    One source of truth for nodes/edges/positions. Mutations go through
-   methods and notify `onChange(reason)`:
+   methods and notify `onChange(reason, origin)`:
      - "structure"  nodes/edges added/removed/replaced -> full re-render
-     - "params"     a param value committed -> canvas summary refresh
-                    (the inspector re-renders itself when its own widgets
-                     change; it must NOT rebuild on every keystroke)
+     - "params"     a param value committed -> node bodies + inspector
+                    refresh; `origin` ("inspector" | "canvas" | null)
+                    tells editor.js who committed, so the inspector
+                    skips rebuilding only when IT was the editor (focus
+                    survives keystrokes; every other origin refreshes it)
 
    Wire forms (docs 02 §graphs, 05 §6):
      run/validate: {nodes:[{id,class_name,params}],
@@ -59,11 +61,11 @@ export class GraphDoc {
     this.edges = [];          // [{from_node, from_port, to_node, to_port}]
     this.nextId = 1;
     this.classByName = {};    // editor.js fills this after /graphs/nodes
-    this.onChange = null;     // (reason) => void
+    this.onChange = null;     // (reason, origin) => void
   }
 
-  changed(reason) {
-    if (this.onChange) this.onChange(reason);
+  changed(reason, origin = null) {
+    if (this.onChange) this.onChange(reason, origin);
   }
 
   classOf(node) {

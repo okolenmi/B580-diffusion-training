@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from ...application.errors import AssetTooLargeError
+from ...application.ports.asset_store import MAX_UPLOAD_BYTES
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -81,14 +83,36 @@ def make_asset_folder(
     "/{kind}/files/{relative_path:path}",
     response_model=AssetPathOut,
     status_code=201,
-    responses={422: _ERROR_422},
+    responses={413: {"description": "body over MAX_UPLOAD_BYTES"}, 422: _ERROR_422},
 )
-def upload_asset(
+async def upload_asset(
     kind: str,
     relative_path: str,
-    body: bytes = Body(default=b""),
+    request: Request,
     services: ApplicationServices = Depends(get_services),
 ) -> AssetPathOut:
-    """Raw-body upload: the request body *is* the file."""
-    saved = services.assets.upload.execute(kind, relative_path, body)
+    """Raw-body upload: the request body *is* the file.
+
+    Bounded work: a declared Content-Length above the cap is rejected
+    before the body is read, and the read itself stops at the cap, so
+    neither a honest-large nor a chunked-lying request can buffer the
+    server into swap (the adapter re-checks while writing).
+    """
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        raise AssetTooLargeError(
+            f"upload of {relative_path!r} declares {declared} bytes; "
+            f"the cap is {MAX_UPLOAD_BYTES} bytes"
+        )
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise AssetTooLargeError(
+                f"upload of {relative_path!r} exceeds the "
+                f"{MAX_UPLOAD_BYTES}-byte cap"
+            )
+        chunks.append(chunk)
+    saved = services.assets.upload.execute(kind, relative_path, b"".join(chunks))
     return AssetPathOut(kind=kind, relative_path=relative_path, path=saved)

@@ -6,23 +6,25 @@
      - primitive    -> socket + widget (wired value overrides the param)
      - otherwise    -> pure handle: read-only "wire" row, never a param
    `visible_when` gates rows (value is preserved while hidden -- docs
-   resources-controller, Node.Port contract). Choices -> select, bool ->
-   checkbox, int/float -> number, list/dict/tuple -> JSON textarea, Path/
-   str -> text (path_kind is a picker hint; the picker itself is deferred).
+   resources-controller, Node.Port contract). The controls themselves
+   come from editor/widgets.js -- the SAME builder the node body uses,
+   so a value looks and behaves identically on canvas and here
+   (path_kind ports get the server-folder picker + upload).
 
    Also: node id rename (with edge rewiring), delete, diagnostics button
    (POST /graphs/nodes/{class}/diagnostics) when the class declares them.
 
-   Committing a value writes node.params and calls doc.changed("params"):
-   the canvas summary refreshes, the inspector does NOT rebuild itself on
-   every keystroke (it re-renders after select/checkbox commits, where a
-   visible_when gate may have moved).
+   Committing a value writes node.params and calls
+   doc.changed("params", "inspector"): the canvas re-renders (its node
+   widgets follow), but the inspector does NOT rebuild itself on every
+   keystroke -- it rebuilds after select/checkbox/JSON/path commits (a
+   visible_when gate or the picker catalog may have moved), and
+   editor.js refreshes it when the change came from anywhere else.
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
 import { isWidgetInput } from "./state.js";
-
-const JSON_TYPES = new Set(["list", "dict", "tuple"]);
+import { buildWidget, rowVisible } from "./widgets.js";
 
 export class Inspector {
   constructor(root, doc, { onNote }) {
@@ -112,7 +114,7 @@ export class Inspector {
     }
 
     // -- params
-    for (const p of cls.inputs) this.root.appendChild(this._inputRow(node, p));
+    for (const p of cls.inputs) this.root.appendChild(this._inputRow(node, cls, p));
 
     if (cls.has_diagnostics) {
       const actions = document.createElement("div");
@@ -138,18 +140,9 @@ export class Inspector {
     return row;
   }
 
-  _inputRow(node, p) {
+  _inputRow(node, cls, p) {
     const row = this._row(p.name);
     const wired = this.doc.edgeInto(node.id, p.name);
-
-    // gated visibility: (other_param, value | [values])
-    let gated = false;
-    if (p.visible_when) {
-      const [gate, accepted] = p.visible_when;
-      const cur = node.params[gate];
-      const want = Array.isArray(accepted) ? accepted.includes(cur) : cur === accepted;
-      gated = !want;
-    }
 
     if (!isWidgetInput(p)) {
       // pure handle: wire only
@@ -171,129 +164,26 @@ export class Inspector {
       row.querySelector(".param-label").appendChild(star);
     }
     row.querySelector(".param-label").title = p.doc ? `${p.name}: ${p.doc}` : p.name;
-    if (gated) row.classList.add("gated");
+    if (!rowVisible(node, p, cls.inputs)) row.classList.add("gated");
 
-    const input = this._widget(node, p);
-    row.appendChild(input);
+    row.appendChild(
+      buildWidget({
+        doc: this.doc,
+        node,
+        port: p,
+        origin: "inspector",
+        onNote: this.onNote,
+        onRebuild: () => this.render(),
+      }),
+    );
 
     if (wired) {
       const hint = document.createElement("span");
       hint.className = "param-wired";
       hint.textContent = `overridden by ${wired.from_node}.${wired.from_port}`;
       row.appendChild(hint);
-    } else if (p.path_kind) {
-      const hint = document.createElement("span");
-      hint.className = "param-hint";
-      hint.textContent = `path (${p.path_kind})`;
-      row.appendChild(hint);
     }
     return row;
-  }
-
-  _widget(node, p) {
-    const commit = (value, rerender) => {
-      if (value === undefined || value === null || value === "") delete node.params[p.name];
-      else node.params[p.name] = value;
-      this.doc.changed("params");
-      if (rerender) this.render();
-    };
-
-    if (p.choices && p.choices.length) {
-      const sel = document.createElement("select");
-      sel.className = "cfg-input";
-      const def = document.createElement("option");
-      def.value = "";
-      def.textContent = p.default !== null && p.default !== undefined && p.default !== ""
-        ? `(default: ${p.default})`
-        : "(default)";
-      sel.appendChild(def);
-      for (const c of p.choices) {
-        const o = document.createElement("option");
-        o.value = c;
-        o.textContent = c;
-        sel.appendChild(o);
-      }
-      const cur = node.params[p.name];
-      sel.value = cur === undefined || cur === null ? "" : String(cur);
-      sel.addEventListener("change", () => commit(sel.value, true));
-      return sel;
-    }
-
-    if (p.type === "bool") {
-      const wrap = document.createElement("label");
-      wrap.className = "param-label";
-      wrap.style.justifySelf = "start";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = node.params[p.name] === true;
-      box.addEventListener("change", () => {
-        // store explicit false too: unchecking must override an earlier true
-        node.params[p.name] = box.checked;
-        this.doc.changed("params");
-        this.render(); // a gated sibling may show/hide
-      });
-      wrap.append(box, document.createTextNode(" " + (box.checked ? "true" : "false")));
-      return wrap;
-    }
-
-    if (p.type === "int" || p.type === "float") {
-      const input = document.createElement("input");
-      input.className = "cfg-input";
-      input.type = "number";
-      if (p.type === "float") input.step = "any";
-      const cur = node.params[p.name];
-      input.value = cur === undefined || cur === null ? "" : String(cur);
-      if (p.default !== null && p.default !== undefined && input.value === "") {
-        input.placeholder = String(p.default);
-      }
-      input.addEventListener("change", () => {
-        if (input.value === "") return commit(undefined);
-        const n = p.type === "int" ? parseInt(input.value, 10) : parseFloat(input.value);
-        if (Number.isNaN(n)) {
-          input.value = "";
-          this.onNote(`${p.name}: not a ${p.type}, value cleared.`, "warn");
-          return commit(undefined);
-        }
-        commit(n);
-      });
-      return input;
-    }
-
-    if (JSON_TYPES.has(p.type)) {
-      const input = document.createElement("textarea");
-      input.className = "cfg-input";
-      input.rows = 2;
-      const cur = node.params[p.name];
-      input.value = cur === undefined || cur === null
-        ? ""
-        : typeof cur === "object"
-          ? JSON.stringify(cur)
-          : String(cur);
-      input.addEventListener("change", () => {
-        const raw = input.value.trim();
-        if (raw === "") return commit(undefined);
-        try {
-          commit(JSON.parse(raw), true);
-        } catch {
-          this.onNote(`${p.name}: invalid JSON -- keeping previous value.`, "warn");
-          input.value = typeof cur === "object" ? JSON.stringify(cur) : String(cur ?? "");
-        }
-      });
-      return input;
-    }
-
-    // str / Path / anything else: text
-    const input = document.createElement("input");
-    input.className = "cfg-input";
-    input.type = "text";
-    const cur = node.params[p.name];
-    input.value = cur === undefined || cur === null ? "" : String(cur);
-    if (p.default_repr !== null && p.default_repr !== undefined && input.value === "") {
-      input.placeholder = p.default_repr;
-    }
-    input.title = p.doc || p.name;
-    input.addEventListener("change", () => commit(input.value.trim() === "" ? undefined : input.value));
-    return input;
   }
 
   _actions(node) {

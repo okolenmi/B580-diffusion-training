@@ -40,6 +40,7 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   | `config_invalid` | 422 | config |
   | `training_launch_failed` | 500 | runs |
   | `settings_invalid` | 400 | settings |
+  | `asset_too_large` | 413 | assets (upload body or declared `Content-Length` over the 8 GiB cap) |
   | `dataset_not_found`, `dataset_item_not_found`, `dataset_task_not_found` | 404 | datasets |
   | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active` | 409 | datasets |
   | `dataset_task_launch_failed` | 500 | datasets |
@@ -128,9 +129,15 @@ and mkdir/upload unsupported — the booleans in the catalog say so).
 | GET | `/assets/{kind}/browse` | `path` (relative; `""` = root) | `AssetBrowseOut`: `kind, path, folders[], files[]` |
 | GET | `/assets/{kind}/inspect` | `path` | header-only safetensors metadata: checkpoint `{kind, path, components}` / lora `{kind, path, dtype, rank, key_count}` |
 | PUT | `/assets/{kind}/folders/{path}` | — | `AssetPathOut` -> **201** |
-| PUT | `/assets/{kind}/files/{path}` | raw bytes body | `AssetPathOut` -> **201** |
+| PUT | `/assets/{kind}/files/{path}` | raw bytes body (streamed, bounded) | `AssetPathOut` -> **201**; **413** `asset_too_large` if the body or its declared `Content-Length` exceeds **8 GiB** |
 
-422 `invalid_query` for traversal/unsupported-kind attempts.
+Upload policy (contract in `application/ports/asset_store.py`,
+enforced presentation + adapter): the name must end in **`.safetensors`**
+(422 `invalid_query` otherwise — traversal/unknown-kind attempts are
+422 too); the body is read as a stream that stops at the cap, so a
+chunked request cannot buffer the server past it; the bytes land in a
+`.part` sibling and are renamed into place, so a rejected or failed
+upload leaves no directory, no file and no partial behind.
 
 ## 7. Datasets
 

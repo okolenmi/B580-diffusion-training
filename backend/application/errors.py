@@ -35,6 +35,12 @@ class InvalidQueryError(ApplicationError):
     code = "invalid_query"
 
 
+class AssetTooLargeError(ApplicationError):
+    """An upload body exceeds the contract's MAX_UPLOAD_BYTES cap."""
+
+    code = "asset_too_large"
+
+
 class ConfigNotFoundError(ApplicationError):
     """The training config file does not exist."""
 

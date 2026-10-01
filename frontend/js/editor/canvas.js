@@ -12,6 +12,12 @@
    directly and only touches the `d` of the edges that node participates in
    (socket offsets are node-relative, so they don't shift while it moves).
 
+   Node bodies are EDITABLE: each input row carries its widget from
+   editor/widgets.js (the inspector builds the same controls), wired
+   inputs show `<- node.port` instead, required-unconnected sockets
+   read red, and classes with diagnostics render the server's per-input
+   lines live under the row (debounced, see _scheduleDiagnostics).
+
    Socket centers are measured with offsetLeft/offsetTop -- the node is the
    offsetParent (only positioned ancestor), so offsets are node-relative and
    absolute edge coords are node.x/y + offset.
@@ -20,7 +26,9 @@
    {kind:"edge", edge}; onNote(message, kind) for the floating console.
    --------------------------------------------------------------------------- */
 
-import { hasSocket, typesCompatible } from "./state.js";
+import { api } from "../api.js";
+import { hasSocket, isWidgetInput, typesCompatible } from "./state.js";
+import { buildWidget, rowVisible } from "./widgets.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -40,6 +48,9 @@ export class Canvas {
     this._drag = null;              // active node drag
     this._panDrag = null;           // active background pan
     this._suppressClick = false;    // set after a wire drop, eats the click
+    this._diagTimers = new Map();   // nodeId -> debounce timer (live diagnostics)
+    this._diagSeq = new Map();      // nodeId -> latest request token
+    this._diagLast = new Map();     // nodeId -> {sig, messages} last result
     this._bind();
   }
 
@@ -57,6 +68,7 @@ export class Canvas {
     this._applySelection();
     this._redrawEdges();
     this._restoreBadges();
+    this._scheduleDiagnostics();
   }
 
   _selectionAlive() {
@@ -87,38 +99,84 @@ export class Canvas {
     body.className = "gnode-body";
     const colIn = document.createElement("div");
     colIn.className = "gnode-col in";
-    const mid = document.createElement("div");
-    mid.className = "gnode-params";
     const colOut = document.createElement("div");
     colOut.className = "gnode-col out";
-    body.append(colIn, mid, colOut);
+    body.append(colIn, colOut);
 
     if (!cls) {
-      mid.textContent = "(unknown class)";
+      const ph = document.createElement("div");
+      ph.className = "gnode-unknown";
+      ph.textContent = "(unknown class)";
+      colIn.appendChild(ph);
     } else {
-      for (const p of cls.inputs) colIn.appendChild(this._portRow(node, p, "in"));
-      for (const p of cls.outputs) colOut.appendChild(this._portRow(node, p, "out"));
-      const summary = Object.entries(this.doc.paramsFor(node))
-        .slice(0, 3)
-        .map(([k, v]) => `${k}=${typeof v === "object" ? "…" : String(v)}`)
-        .join("\n");
-      const more = Object.keys(this.doc.paramsFor(node)).length > 3 ? "\n…" : "";
-      mid.textContent = summary + more || "no params";
+      for (const p of cls.inputs) colIn.appendChild(this._inputRow(node, cls, p));
+      for (const p of cls.outputs) colOut.appendChild(this._outRow(p));
     }
     el.appendChild(body);
     return el;
   }
 
-  _portRow(node, p, dir) {
+  /**
+   * Input row: socket + name on one line, then the editable widget
+   * below it (or the `<- node.port` wire hint when an edge feeds the
+   * input -- edges override params by design, docs 05 §4). Pure handles
+   * are just the line. `visible_when` hides the row (the value stays in
+   * params while hidden). Socket states: filled = wired, red ring =
+   * required and unconnected.
+   */
+  _inputRow(node, cls, p) {
     const row = document.createElement("div");
-    row.className = "gport-row";
-    if (dir === "in" && hasSocket(p)) row.appendChild(this._socket(p, "in"));
+    row.className = "gport-row in";
+    row.dataset.port = p.name;
+    row.dataset.dir = "in";
+    const wired = this.doc.edgeInto(node.id, p.name);
+
+    const line = document.createElement("div");
+    line.className = "gport-line";
+    if (hasSocket(p)) {
+      const s = this._socket(p, "in");
+      if (wired) s.classList.add("connected");
+      else if (p.required) s.classList.add("req-unmet");
+      line.appendChild(s);
+    }
     const label = document.createElement("span");
     label.className = "gport-label";
-    label.textContent = p.name + (dir === "in" && p.required ? " *" : "");
+    label.textContent = p.name + (p.required ? " *" : "");
     label.title = p.doc ? `${p.name} (${p.type}) -- ${p.doc}` : `${p.name} (${p.type})`;
-    row.appendChild(label);
-    if (dir === "out") row.appendChild(this._socket(p, "out"));
+    line.appendChild(label);
+    if (wired && isWidgetInput(p)) {
+      const hint = document.createElement("span");
+      hint.className = "gwire";
+      hint.textContent = `<- ${wired.from_node}.${wired.from_port}`;
+      hint.title = `value overridden by ${wired.from_node}.${wired.from_port}`;
+      line.appendChild(hint);
+    }
+    row.appendChild(line);
+
+    if (isWidgetInput(p)) {
+      if (!rowVisible(node, p, cls.inputs)) row.classList.add("gated");
+      else if (!wired) {
+        row.appendChild(
+          buildWidget({ doc: this.doc, node, port: p, origin: "canvas", onNote: this.onNote }),
+        );
+      }
+    }
+    return row;
+  }
+
+  _outRow(p) {
+    const row = document.createElement("div");
+    row.className = "gport-row out";
+    row.dataset.port = p.name;
+    row.dataset.dir = "out";
+    const line = document.createElement("div");
+    line.className = "gport-line";
+    const label = document.createElement("span");
+    label.className = "gport-label";
+    label.textContent = p.name;
+    label.title = p.doc ? `${p.name} (${p.type}) -- ${p.doc}` : `${p.name} (${p.type})`;
+    line.append(label, this._socket(p, "out"));
+    row.appendChild(line);
     return row;
   }
 
@@ -294,6 +352,87 @@ export class Canvas {
   /** Badges live in a map so structural/param re-renders keep live status. */
   _restoreBadges() {
     for (const id of this._badges.keys()) this._applyBadge(id);
+  }
+
+  /* ================= live diagnostics (server -> node) =================
+     Classes that declare diagnostics (has_diagnostics) get a debounced
+     POST after any re-render: the response's per-input lines render
+     under that input's row on the node -- the legacy "node calculates
+     and shows content" behaviour. Empty results clear the boxes (a box
+     only ever shows what the server sent); failures are silent here
+     (legacy parity) and the inspector's "Run diagnostics" button
+     reports errors to the console. */
+
+  _scheduleDiagnostics() {
+    for (const node of this.doc.nodes.values()) {
+      const cls = this.doc.classOf(node);
+      if (!cls || !cls.has_diagnostics) continue;
+      const sig = JSON.stringify(this.doc.paramsFor(node));
+      const last = this._diagLast.get(node.id);
+      if (last && last.sig === sig) {
+        this._renderDiagnostics(node, last.messages); // rebuild restores from cache
+        continue;
+      }
+      clearTimeout(this._diagTimers.get(node.id));
+      this._diagTimers.set(node.id, setTimeout(() => this._runDiagnostics(node.id), 400));
+    }
+  }
+
+  async _runDiagnostics(id) {
+    const node = this.doc.nodes.get(id);
+    if (!node) return;
+    const cls = this.doc.classOf(node);
+    if (!cls || !cls.has_diagnostics) return;
+    const sig = JSON.stringify(this.doc.paramsFor(node));
+    if (this._diagLast.get(id) && this._diagLast.get(id).sig === sig) return;
+    const seq = (this._diagSeq.get(id) || 0) + 1;
+    this._diagSeq.set(id, seq);
+    let messages;
+    try {
+      const res = await api(`/graphs/nodes/${encodeURIComponent(cls.class_name)}/diagnostics`, {
+        method: "POST",
+        body: { params: this.doc.paramsFor(node) },
+      });
+      messages = res.messages || {};
+    } catch {
+      return; // transient failure: the next change schedules again
+    }
+    if (this._diagSeq.get(id) !== seq) return;      // superseded by a newer request
+    const fresh = this.doc.nodes.get(id);
+    if (!fresh) return;
+    if (JSON.stringify(this.doc.paramsFor(fresh)) !== sig) return; // params moved on
+    this._diagLast.set(id, { sig, messages });
+    this._renderDiagnostics(fresh, messages);
+  }
+
+  _renderDiagnostics(node, messages) {
+    const el = this.inner.querySelector(`.gnode[data-id="${CSS.escape(node.id)}"]`);
+    if (!el) return;
+    const before = el.querySelectorAll(".gdiag").length;
+    for (const row of el.querySelectorAll('.gport-row[data-dir="in"]')) {
+      const old = row.querySelector(":scope > .gdiag");
+      if (old) old.remove();
+    }
+    for (const [input, lines] of Object.entries(messages)) {
+      if (!lines || !lines.length) continue;
+      const row = el.querySelector(
+        `.gport-row[data-dir="in"][data-port="${CSS.escape(input)}"]`,
+      );
+      if (!row) continue;
+      const box = document.createElement("div");
+      box.className = "gdiag";
+      for (const text of lines) {
+        const line = document.createElement("div");
+        line.className = "gdiag-line";
+        line.textContent = text;
+        box.appendChild(line);
+      }
+      row.appendChild(box);
+    }
+    if (el.querySelectorAll(".gdiag").length !== before) {
+      this._measure(el, node); // rows shifted: sockets move with them
+      this._updateEdgesFor(node.id);
+    }
   }
 
   /* ================= interaction ================= */

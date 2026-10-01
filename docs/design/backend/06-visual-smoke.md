@@ -2,8 +2,9 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (204
-checks, Playwright). The API/SSE/pages coverage comes from
+checklist below now runs as `backend/tests/visual_smoke.py` (229
+checks, Playwright; last full run 2026-10-01, exit 0). The
+API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
 Findings and fixes from that run are recorded at the bottom.
@@ -156,6 +157,22 @@ A scratch DB keeps the check independent of real training history.
       side instead of stacking, negative coordinates are legal (drag a
       node past the origin), a library load re-frames the graph around
       its content, and wiring works across the transformed plane.
+* [x] Editable node bodies (params on the card): the node's inputs
+      carry the same widgets as the inspector (one shared builder --
+      bool checkboxes commit on click and the inspector mirrors the
+      value, the dataset picker feeds from `GET /assets/dataset` and
+      mirrors back, a dataset-kind picker shows **no** upload button
+      while lora/checkpoint pickers and the Save-As text target do);
+      required inputs carry a `*` with a red unconnected socket,
+      optional ones don't, wired sockets read filled; `visible_when`
+      gates rows on the card too (checking `continue_training` reveals
+      the `continue_lora_path` picker, `t_values` stays hidden on a
+      fresh Managed Dataset Source); live diagnostics post on a 400ms
+      debounce -- empty params render **nothing** (no fabricated
+      content) and setting `checkpoint_path` to a missing file brings
+      the server's `ERROR: No such file or directory: ...` line back
+      under that input; the canvas stays unscrolled with widgets
+      present.
 
 ## 4. Config editor -- `http://127.0.0.1:8766/config`
 

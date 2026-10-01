@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _STATUS_BY_CODE: dict[str, int] = {
     "run_not_found": 404,
     "invalid_query": 422,
+    "asset_too_large": 413,
     "config_not_found": 404,
     "config_invalid": 422,
     "run_already_active": 409,

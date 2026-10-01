@@ -4,8 +4,8 @@
    Boots the catalog, GraphDoc and panels; owns the three cross-cutting
    concerns:
      - doc.onChange -> canvas re-render (always) + inspector refresh
-       (structural changes only; "params" commits come from the inspector
-       itself so text inputs keep focus);
+      (whenever the change did NOT come from the inspector itself, so
+      its text inputs keep focus while canvas widgets stay in sync);
      - one /events SSE subscription -> executions.onEvent (graph lifecycle)
        with the floating system console as the human-readable tail;
       - the collapsible layout (left/right rails + executions drawer),
@@ -169,9 +169,12 @@ async function boot() {
     onNote: log,
   });
 
-  doc.onChange = (reason) => {
+  doc.onChange = (reason, origin) => {
     canvas.render();
-    if (reason !== "params") inspector.refresh();
+    // The inspector skips rebuilding only for ITS OWN commits (so
+    // text/number inputs keep focus); canvas widgets, drags and
+    // structural changes all refresh it.
+    if (reason !== "params" || origin !== "inspector") inspector.refresh();
     el("btn-run").disabled = doc.size === 0;
   };
   el("btn-run").disabled = true;

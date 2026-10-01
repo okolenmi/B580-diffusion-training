@@ -19,6 +19,19 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+#: Upload policy (the contract both presentation and the adapter honour):
+#: model folders hold safetensors only -- the pickers list ``*.safetensors``
+#: and the inspectors read nothing else, so any other name is rejected
+#: before a byte is written.
+UPLOAD_SUFFIXES = (".safetensors",)
+
+#: Hard cap for one upload body, bytes (8 GiB -- larger than any single
+#: checkpoint this app manages). Presentation refuses a larger declared
+#: Content-Length before buffering and stops reading at the cap, so a
+#: chunked request cannot buffer the server into swap; the adapter
+#: enforces the same cap while writing (defence in depth).
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class AssetOption:

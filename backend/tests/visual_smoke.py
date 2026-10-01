@@ -426,6 +426,178 @@ def main():
                     ".map(n => n.style.left)")
                 check(any(int(p.replace("px", "")) < 0 for p in lefts),
                       f"graph: plane extends past the origin ({lefts})")
+
+                # ---- editable node bodies: values are set ON the node,
+                # pickers read the server's folders, and diagnostics come
+                # back live (docs 06 §3) ----
+                def show_node(sel):
+                    """Pan the plane until sel's center sits at the canvas
+                    center (drops and drags land anywhere on the plane)."""
+                    for _ in range(3):
+                        b = page.locator(sel).first.bounding_box()
+                        if b is None:
+                            break
+                        cb = page.locator("#graph-canvas").bounding_box()
+                        mx = (b["x"] + b["width"] / 2) - (cb["x"] + cb["width"] / 2)
+                        my = (b["y"] + b["height"] / 2) - (cb["y"] + cb["height"] / 2)
+                        if abs(mx) <= 4 and abs(my) <= 4:
+                            break
+                        page.mouse.move(cb["x"] + cb["width"] / 2,
+                                        cb["y"] + cb["height"] / 2)
+                        page.mouse.wheel(mx, my)
+                        page.wait_for_timeout(80)
+                    return page.locator(sel).first.bounding_box()
+
+                def add_via_search(query):
+                    page.fill("#palette-search", query)
+                    page.wait_for_timeout(60)
+                    items = page.locator(".ed-palette-item:visible")
+                    check(items.count() == 1,
+                          f"graph: palette search '{query}' narrows to one item")
+                    items.first.click()
+                    page.wait_for_timeout(150)
+                    page.fill("#palette-search", "")
+
+                # n1 (the first drop) IS the Managed Dataset Source:
+                # checkboxes, star/red-socket required state, visible_when
+                # gating and the server-fed dataset picker -- all on the card
+                show_node('.gnode[data-id="n1"]')
+                n1 = '.gnode[data-id="n1"] '
+                check(page.locator(n1 + "input[type=checkbox]").count() == 3,
+                      "graph: bool params render as checkboxes on the node")
+                check(page.locator(
+                    n1 + '.gport-row[data-port="dataset_root"] .gport.req-unmet'
+                ).count() == 1,
+                      "graph: required-unconnected socket reads red")
+                star = page.locator(
+                    n1 + '.gport-row[data-port="dataset_root"] .gport-label'
+                ).inner_text()
+                check("*" in star, f"graph: required input marked with a star ({star!r})")
+                opt = page.locator(
+                    n1 + '.gport-row[data-port="set_identifier"] .gport-label'
+                ).inner_text()
+                check("*" not in opt, f"graph: optional input unmarked ({opt!r})")
+                check(page.locator(
+                    n1 + '.gport-row[data-port="set_identifier"] .gport.req-unmet'
+                ).count() == 0,
+                      "graph: optional socket not flagged as unmet")
+                check(page.locator(n1 + '.gport-row[data-port="t_values"]').is_hidden(),
+                      "graph: visible_when hides the gated row on the node")
+                # wired sockets read filled (the wire n1->n2 exists by now)
+                check(page.locator(
+                    '.gnode[data-id="n2"] .gport.in.connected'
+                ).count() >= 1,
+                      "graph: wired socket reads filled")
+
+                box1 = page.locator(
+                    n1 + '.gport-row[data-port="shuffle"] input[type=checkbox]')
+                box1.click()
+                page.wait_for_timeout(120)
+                check(page.locator(
+                    n1 + '.gport-row[data-port="shuffle"] input[type=checkbox]'
+                ).is_checked(),
+                      "graph: clicking a node checkbox commits the value")
+                check(page.locator(
+                    '#inspector .param-row:has-text("shuffle") input[type=checkbox]'
+                ).is_checked(),
+                      "graph: inspector mirrors the node's checkbox")
+
+                page.wait_for_timeout(400)  # /assets/dataset catalog arrives
+                ds = n1 + '.gport-row[data-port="dataset_root"] select'
+                opts = page.locator(ds + " option").count()
+                check(opts >= 3, f"graph: dataset picker fed from the server ({opts} options)")
+                page.select_option(ds, "1024 aes")
+                page.wait_for_timeout(120)
+                check(page.locator(
+                    '#inspector .param-row:has-text("dataset_root") select'
+                ).input_value() == "1024 aes",
+                      "graph: inspector mirrors the node's picker value")
+                up = page.locator(n1 + '.gport-row[data-port="dataset_root"] .pupload')
+                check(up.count() == 1 and up.is_hidden(),
+                      "graph: dataset picker offers no upload (catalog-only kind)")
+
+                # Resources Controller: live diagnostics -- nothing for
+                # empty params (never fabricated), then the server's ERROR
+                # line under checkpoint_path once a missing file is set
+                add_via_search("resources controller")
+                page.wait_for_selector(
+                    '.gnode[data-id="n3"] .gport-row[data-port="checkpoint_path"]')
+                page.wait_for_timeout(800)  # debounce + POST round-trip
+                check(page.locator('.gnode[data-id="n3"] .gdiag').count() == 0,
+                      "graph: empty diagnostics render nothing (no fabrication)")
+                show_node('.gnode[data-id="n3"]')
+                check(page.locator(
+                    '.gnode[data-id="n3"] input[type=checkbox]').count() == 2,
+                      "graph: widget_only checkboxes render on the node")
+                check(page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_training"] .gport'
+                ).count() == 0,
+                      "graph: widget_only inputs expose no socket")
+                check(page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_lora_path"]'
+                ).is_hidden(),
+                      "graph: continue_lora_path gated until continue_training")
+                page.evaluate(
+                    """() => {
+                        const row = document.querySelector(
+                            '.gnode[data-id="n3"] .gport-row[data-port="checkpoint_path"]');
+                        const sel = row.querySelector('select');
+                        const o = document.createElement('option');
+                        o.value = 'smoke-missing.safetensors';
+                        o.textContent = 'smoke-missing.safetensors (probe)';
+                        sel.appendChild(o);
+                        sel.value = o.value;
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""")
+                page.wait_for_selector(
+                    '.gnode[data-id="n3"] .gport-row[data-port="checkpoint_path"] .gdiag',
+                    timeout=6000)
+                dtext = page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="checkpoint_path"] .gdiag'
+                ).inner_text()
+                check("ERROR" in dtext,
+                      f"graph: live diagnostics update the node ({dtext[:52]!r})")
+                # the same toggle reveals the gated picker (+ its upload)
+                page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_training"] input'
+                ).click()
+                page.wait_for_timeout(150)
+                check(page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_lora_path"]'
+                ).is_visible(),
+                      "graph: checking continue_training reveals its path picker")
+                lora_up = page.locator(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_lora_path"] .pupload'
+                )
+                page.wait_for_selector(
+                    '.gnode[data-id="n3"] .gport-row[data-port="continue_lora_path"] .pupload',
+                    state="visible", timeout=5000)
+                check(lora_up.is_visible(),
+                      "graph: lora picker offers upload from the server folder")
+
+                # Save-As (lora_output): a typed target, not a picker
+                add_via_search("checkpoint saver")
+                sav = '.gnode[data-id="n4"] .gport-row[data-port="relative_path"] '
+                page.wait_for_selector(sav + 'input[type="text"]')
+                check(page.locator(sav + 'input[type="text"]').count() == 1,
+                      "graph: Save-As path is typed on the node")
+                check(page.locator(
+                    '.gnode[data-id="n4"] .gport-row[data-port="model"] .gport.req-unmet'
+                ).count() == 1,
+                      "graph: required pure handle reads red too")
+                page.wait_for_selector(sav + ".pupload", state="visible", timeout=5000)
+                check(page.locator(sav + ".pupload").is_visible(),
+                      "graph: Save-As offers upload into the lora folder")
+
+                # widgets never make the canvas scroll (infinite plane)
+                scrolled = page.evaluate(
+                    """() => {
+                        const v = document.getElementById('graph-canvas');
+                        return v.scrollTop || v.scrollLeft;
+                    }""")
+                check(scrolled == 0,
+                      f"graph: canvas stays unscrolled with widgets ({scrolled}px)")
+                page.screenshot(path=str(OUT / "graph_nodes.png"), full_page=True)
             ctx.close()
 
         # ---------- D: config editor (loads read-only; the save step

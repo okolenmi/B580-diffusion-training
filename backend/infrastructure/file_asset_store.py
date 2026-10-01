@@ -12,6 +12,11 @@ filename.
 ``inspect`` imports the safetensors header reader lazily (it pulls in
 torch, which has no business being loaded by catalog/browse calls)
 and returns the fixed per-kind contract, never a raw header dump.
+
+Uploads are policy-checked before any write: ``.safetensors`` names
+only (``UPLOAD_SUFFIXES``), capped at ``max_upload_bytes``, written to
+a ``.part`` sibling and renamed, so a rejected or interrupted upload
+leaves nothing behind.
 """
 
 from __future__ import annotations
@@ -19,8 +24,10 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ..application.errors import InvalidQueryError
+from ..application.errors import AssetTooLargeError, InvalidQueryError
 from ..application.ports.asset_store import (
+    MAX_UPLOAD_BYTES,
+    UPLOAD_SUFFIXES,
     AssetBrowse,
     AssetCatalog,
     AssetOption,
@@ -44,6 +51,8 @@ class FileSystemAssetStore(AssetStore):
     ) -> None:
         self._layout = layout
         self._datasets = datasets
+        # contract default; overridable (tests, future settings)
+        self.max_upload_bytes = MAX_UPLOAD_BYTES
 
     # -- capabilities ---------------------------------------------------
 
@@ -112,10 +121,34 @@ class FileSystemAssetStore(AssetStore):
         return str(resolved)
 
     def save_upload(self, kind: str, relative_path: str, content: bytes) -> str:
+        # validate everything BEFORE touching the filesystem: a rejected
+        # upload must leave no directory, no file, no partial (docs 07,
+        # quality rule 3)
         self._reject_catalog_only(kind, "upload into")
         resolved = self._safe_resolve(kind, relative_path)
+        if resolved.suffix.lower() not in UPLOAD_SUFFIXES:
+            raise InvalidQueryError(
+                f"uploads must end in {', '.join(UPLOAD_SUFFIXES)}: {relative_path!r}"
+            )
+        if len(content) > self.max_upload_bytes:
+            raise AssetTooLargeError(
+                f"{relative_path!r} is {len(content)} bytes; the cap is "
+                f"{self.max_upload_bytes} bytes"
+            )
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_bytes(content)
+        # write beside the target, then rename: an interrupted or failed
+        # write never leaves a partial file at the final path (.part is
+        # invisible to pickers -- they list *.safetensors only)
+        partial = resolved.with_name(resolved.name + ".part")
+        try:
+            partial.write_bytes(content)
+            partial.replace(resolved)
+        except OSError:
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+            raise
         return str(resolved)
 
     def inspect(self, kind: str, relative_path: str) -> dict[str, Any]:

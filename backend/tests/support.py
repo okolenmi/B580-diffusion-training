@@ -1079,23 +1079,33 @@ async def _asgi_call(
     json_body=None,
     body_bytes: bytes | None = None,
     content_type: str | None = None,
+    extra_headers: dict | None = None,
 ):
     method = method or "GET"
     raw_path, _, query = path.partition("?")
     start: dict = {}
     chunks: list[bytes] = []
     body = b""
+    # caller-supplied headers win over the auto ones (e.g. a declared
+    # content-length that differs from the body, for cap checks)
+    extra = {
+        str(k).lower().encode(): str(v).encode()
+        for k, v in (extra_headers or {}).items()
+    }
     headers = [(b"host", b"localhost")]
     if body_bytes is not None:
         body = body_bytes
         headers.append(
             (b"content-type", (content_type or "application/octet-stream").encode())
         )
-        headers.append((b"content-length", str(len(body)).encode()))
+        if b"content-length" not in extra:
+            headers.append((b"content-length", str(len(body)).encode()))
     elif json_body is not None:
         body = json.dumps(json_body).encode("utf-8")
         headers.append((b"content-type", b"application/json"))
-        headers.append((b"content-length", str(len(body)).encode()))
+        if b"content-length" not in extra:
+            headers.append((b"content-length", str(len(body)).encode()))
+    headers.extend(extra.items())
 
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}
@@ -1135,6 +1145,7 @@ def asgi_request(
     json_body=None,
     body_bytes: bytes | None = None,
     content_type: str | None = None,
+    extra_headers: dict | None = None,
 ) -> tuple[int, dict, object]:
     """One request through the whole app; returns (status, headers, body).
 
@@ -1149,6 +1160,7 @@ def asgi_request(
             json_body=json_body,
             body_bytes=body_bytes,
             content_type=content_type,
+            extra_headers=extra_headers,
         )
     )
     text = raw.decode("utf-8", errors="replace")

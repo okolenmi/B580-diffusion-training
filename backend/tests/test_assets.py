@@ -14,7 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.errors import InvalidQueryError
+from backend.application.errors import AssetTooLargeError, InvalidQueryError
+from backend.application.ports.asset_store import MAX_UPLOAD_BYTES
 from backend.application.ports.settings_store import SettingsChanges
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.workspace import WorkspaceLayout
@@ -121,6 +122,28 @@ def main() -> None:
             check(False, f"sandbox rejects upload {bad!r}")
         except InvalidQueryError:
             check(True, f"sandbox rejects upload {bad!r}")
+
+    # upload policy: extension allowlist + size cap, nothing written
+    try:
+        store.save_upload("lora", "evil.sh", b"#!/bin/sh")
+        check(False, "upload rejects a non-safetensors extension")
+    except InvalidQueryError:
+        check(True, "upload rejects a non-safetensors extension")
+    check(not (loras / "evil.sh").exists(), "extension-rejected upload writes nothing")
+
+    store.max_upload_bytes = 4
+    try:
+        store.save_upload("lora", "big.safetensors", b"12345")
+        check(False, "upload enforces the size cap")
+    except AssetTooLargeError:
+        check(True, "upload enforces the size cap")
+    store.max_upload_bytes = MAX_UPLOAD_BYTES
+    check(
+        not (loras / "big.safetensors").exists()
+        and not (loras / "big.safetensors.part").exists(),
+        "size-rejected upload leaves no file and no .part",
+    )
+    check(not list(loras.rglob("*.part")), "successful upload leaves no .part behind")
 
     # -- inspect -----------------------------------------------------------
     good = ckpt / "good.safetensors"
@@ -232,6 +255,28 @@ def main() -> None:
     )
     check(status == 422 and body["error"]["code"] == "invalid_query",
           "PUT escape attempt -> 422 envelope")
+
+    status, _, body = asgi_request(
+        app, "/api/v1/assets/lora/files/payload.sh",
+        method="PUT",
+        body_bytes=b"#!/bin/sh",
+    )
+    check(status == 422 and body["error"]["code"] == "invalid_query",
+          "PUT non-safetensors name -> 422 envelope")
+    check(not (loras / "payload.sh").exists(), "extension-rejected PUT writes nothing")
+
+    # declared content-length over the cap is refused before the body
+    # is read (streaming: a chunked request cannot buffer past the cap)
+    status, _, body = asgi_request(
+        app, "/api/v1/assets/lora/files/never-written.safetensors",
+        method="PUT",
+        body_bytes=b"x",
+        extra_headers={"content-length": str(64 * 1024 * 1024 * 1024)},
+    )
+    check(status == 413 and body["error"]["code"] == "asset_too_large",
+          "declared body over the cap -> 413 asset_too_large")
+    check(not (loras / "never-written.safetensors").exists(),
+          "size-rejected PUT writes nothing")
 
     finish()
 

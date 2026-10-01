@@ -9,16 +9,23 @@
 # previous copy was lost to a /tmp clear and recreated 2026-10-01).
 # The visual smoke (backend/tests/visual_smoke.py) is NOT part of this
 # gate: it needs a live server on 8766 plus the Playwright venv.
+#
+# The interpreter is discovered, not hardcoded (docs 07 F-17): a path
+# baked in made the gate unrunnable on any other machine, and silently
+# wrong on this one after a venv move. run_tests.py already owns that
+# discovery (this interpreter -> $VENV_PYTHON -> .env -> fail loudly), so
+# the gate asks it instead of growing a second opinion.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VENV_PYTHON="${VENV_PYTHON:-/home/okolenmi/comfy/venv/bin/python}"
+GATE_PYTHON="$("${PYTHON:-python3}" -c 'import run_tests; print(run_tests.resolve_interpreter())')"
+echo "gate interpreter: $GATE_PYTHON"
 
 echo "== legacy suites: nodes + manager =="
-"$VENV_PYTHON" run_tests.py
+"$GATE_PYTHON" run_tests.py
 
 echo "== backend suite =="
-"$VENV_PYTHON" backend/tests/run_all.py
+"$GATE_PYTHON" backend/tests/run_all.py
 
 echo "== frontend module syntax =="
 for f in $(find frontend/js -name '*.js'); do

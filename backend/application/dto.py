@@ -192,6 +192,8 @@ class DatasetListResult:
 class DatasetItemsResult:
     items: tuple  # tuple[DatasetItem, ...]
     count: int
+    limit: int | None = None   # None = every row was requested
+    offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)

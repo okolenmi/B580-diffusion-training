@@ -110,7 +110,7 @@ frames, never a stored row. Clients must render a marker as a loud
 | GET | `/runs/{id}` | — | `RunOut`; 404 |
 | POST | `/runs` | body `StartRunIn`: `config_path`, `start_from` (default `"teacher"`), `reset_optimizer` | `RunOut` -> **201**; 409 `run_already_active`, 409 `run_directory_conflict`, 422 `config_invalid`, 500 `training_launch_failed` |
 | POST | `/runs/{id}/stop` | body `StopRunIn`: `force` (default false) | `RunOut`; 409 `run_not_running` |
-| GET | `/runs/{id}/log` | `lines` (1..500) | `{"log": "<tail text>"}` |
+| GET | `/runs/{id}/log` | `lines` (1..500) | `{"log": "<tail text>"}` — the tail is read from the **end** of the file (a run's log is the one artifact that grows without bound, docs 07 F-14) |
 | DELETE | `/runs` | — | `{"deleted": N}` (history wipe) |
 
 `RunOut`: `id, status, config_path, mode, phase, total_steps,
@@ -187,7 +187,7 @@ dataset.
 | POST | `/datasets` | `CreateDatasetIn{name, description?}` | `DatasetSummaryOut` -> **201**; 409 `dataset_exists`, 409 `dataset_directory_conflict` |
 | GET | `/datasets/{name}` | — | `DatasetDetailOut`: `info, stats, sets[], active_tasks[]` |
 | DELETE | `/datasets/{name}` | — | `{"deleted": true}`; 409 while a task is active |
-| GET | `/datasets/{name}/items` | `committed` (bool, optional) | `DatasetItemsOut`: `items[], count` |
+| GET | `/datasets/{name}/items` | `committed` (bool, optional), `limit` (1..500, **default: no limit, i.e. every row**), `offset` (>=0, default 0) | `DatasetItemsOut`: `items[], count, limit, offset`; 422 for an out-of-range `limit`/`offset`. Paging is opt-in — the curation UI still asks for everything; `limit`/`offset` let a caller page through a huge dataset instead of materialising it (docs 07 F-14) |
 | PATCH | `/datasets/{name}/items` | `BulkUpdateItemsIn{item_ids, prompt?, prompt_mode("set"/"prepend"/"append"), neg_prompt?, neg_prompt_mode(same)?, cfg?, type("good"/"bad")?}` — legacy truthy gates (empty never clears in bulk); `prepend`/`append` are idempotent (re-applying is a no-op) | `{"updated": N}`; 422 `invalid_query` for unknown mode/type or an all-empty change set |
 | PATCH | `/datasets/{name}/items/{id}` | `UpdateItemIn` — every `null` field untouched; `""` clears a caption; explicit `type` replaces the legacy toggle | `DatasetItemOut` |
 | POST | `/datasets/{name}/items/discard` | `ItemIdsIn` | `{"deleted": N}` |

@@ -37,3 +37,14 @@ class RunArtifacts(ABC):
         """Append a line to the run's log (post-exit marker, etc.).
         Must not raise on I/O failure -- it is observability, not state."""
         raise NotImplementedError
+
+    @abstractmethod
+    def tail_log(self, run_id: int, lines: int) -> str:
+        """The last ``lines`` lines of the run's log, read from the end.
+
+        Reading a growing log to show its tail is the classic way to turn
+        a 300 MB file into a 300 MB request (docs 07 F-14), so the
+        adapter walks backwards instead. A missing file answers ``""``
+        (the child may not have written one yet).
+        """
+        raise NotImplementedError

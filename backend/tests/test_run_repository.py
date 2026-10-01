@@ -5,6 +5,7 @@ Run directly: python backend/tests/test_run_repository.py
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -338,6 +339,67 @@ def test_continue_ids_above() -> None:
         check(run.id == 6, f"first insert lands above the seed (got {run.id})")
 
 
+def test_migrations_are_atomic() -> None:
+    # docs 07 F-16: a migration that fails halfway used to leave its
+    # earlier statements applied and unrecorded, so the next start died
+    # with "table a already exists".
+    print("\n== migrations: all or nothing (F-16) ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        migrations = Path(tmp) / "migrations"
+        migrations.mkdir()
+        (migrations / "001_partial.sql").write_text(
+            "CREATE TABLE a (id INTEGER);\n"
+            "CREATE TABLE b (id INTEGER);\n"
+            "INSERT INTO nonexistent_table VALUES (1);\n",
+            encoding="utf-8",
+        )
+        db_path = Path(tmp) / "runs.db"
+
+        def tables() -> set[str]:
+            import sqlite3 as _sqlite3
+
+            with _sqlite3.connect(str(db_path)) as conn:
+                return {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+
+        failures = []
+        for attempt in (1, 2):
+            db = SqliteDatabase(db_path)
+            try:
+                db.initialize(migrations)
+                failures.append(f"attempt {attempt}: no error")
+            except sqlite3.OperationalError as exc:
+                failures.append(f"attempt {attempt}: {exc}")
+            db.close()
+        check(
+            all("no such table: nonexistent_table" in message for message in failures),
+            f"both attempts failed the same way (got {failures})",
+        )
+        check("a" not in tables() and "b" not in tables(),
+              "a failed migration leaves no tables behind")
+        with SqliteDatabase(db_path).connection() as conn:
+            recorded = [row[0] for row in conn.execute("SELECT version FROM schema_migrations")]
+        check("001_partial" not in recorded, f"and is not recorded as applied (got {recorded})")
+
+        # A corrected migration then applies cleanly -- the retry path a
+        # user actually hits.
+        (migrations / "001_partial.sql").write_text(
+            "CREATE TABLE a (id INTEGER);\nCREATE TABLE b (id INTEGER);\n",
+            encoding="utf-8",
+        )
+        db = SqliteDatabase(db_path)
+        db.initialize(migrations)
+        db.close()
+        check({"a", "b"} <= tables(), "the fixed migration applies on the next start")
+        with SqliteDatabase(db_path).connection() as conn:
+            recorded = [row[0] for row in conn.execute("SELECT version FROM schema_migrations")]
+        check(recorded == ["001_partial"], f"and is recorded once (got {recorded})")
+
+
 def main() -> None:
     test_roundtrip()
     test_listing_and_filters()
@@ -347,6 +409,7 @@ def main() -> None:
     test_update_if_status()
     test_list_unfinished()
     test_continue_ids_above()
+    test_migrations_are_atomic()
     finish()
 
 

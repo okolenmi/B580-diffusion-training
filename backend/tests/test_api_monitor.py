@@ -134,4 +134,44 @@ def test_api_miss_keeps_error_envelope() -> None:
         )
 
 
+def test_subscriber_backlog_is_bounded() -> None:
+    # docs 07 F-14: a subscriber that stops consuming must not grow the
+    # process's memory forever. Telemetry frames are dropped oldest-first;
+    # the state frames (clear / run_end) are kept.
+    print("\n== monitor bus: a stalled subscriber's queue stays bounded ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        container, _ = _build(tmp)
+        bus = container.services.monitor_bus
+
+        async def scenario() -> None:
+            queue = bus.subscribe("mon-bound")
+            for step in range(1, 1500):
+                bus.report("mon-bound", {"step": step, "loss": 0.5})
+            await asyncio.sleep(0)  # let the loop-drained callbacks land
+            check(
+                queue.qsize() <= 512,
+                f"the backlog is capped (got {queue.qsize()} frames)",
+            )
+            frames = [queue.get_nowait() for _ in range(queue.qsize())]
+            check(
+                any('"step": 1499' in frame for frame in frames),
+                "the newest report is still in there",
+            )
+            check(
+                not any('"step": 1,' in frame for frame in frames),
+                "and the oldest ones are what got dropped",
+            )
+            bus.report("mon-bound", {"type": "run_end", "step": 1499})
+            await asyncio.sleep(0)
+            frames = [queue.get_nowait() for _ in range(queue.qsize())]
+            check(
+                any('"type": "run_end"' in frame for frame in frames),
+                "the state frame survived the overflow",
+            )
+            bus.unsubscribe("mon-bound", queue)
+
+        asyncio.run(scenario())
+
+
+test_subscriber_backlog_is_bounded()
 finish()

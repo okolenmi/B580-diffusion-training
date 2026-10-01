@@ -62,6 +62,10 @@ router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 _ERROR_404 = {"description": "dataset or item not found"}
 _ERROR_409 = {"description": "task already active / not migrated / already exists"}
 
+# Same ceiling as the run log: a page big enough to be useful, small
+# enough that one request cannot ask for the whole dataset by accident.
+MAX_ITEM_PAGE = 500
+
 
 @router.get("", response_model=DatasetListOut)
 def list_datasets(services: ApplicationServices = Depends(get_services)):
@@ -101,12 +105,26 @@ def delete_dataset(name: str, services: ApplicationServices = Depends(get_servic
 def list_dataset_items(
     name: str,
     committed: bool | None = Query(None),
+    limit: int | None = Query(
+        None, ge=1, le=MAX_ITEM_PAGE, description="rows per page (default: all)"
+    ),
+    offset: int = Query(0, ge=0),
     services: ApplicationServices = Depends(get_services),
 ):
-    """All trajectory rows, optionally by training-set membership."""
-    result = services.datasets.items.execute(name, committed=committed)
+    """Trajectory rows, optionally by training-set membership.
+
+    Paging is opt-in: without `limit` the whole dataset comes back, so
+    the curation UI is unchanged -- but a caller that does ask for a page
+    gets one instead of the entire dataset in memory (docs 07 F-14).
+    """
+    result = services.datasets.items.execute(
+        name, committed=committed, limit=limit, offset=offset
+    )
     return DatasetItemsOut(
-        items=[dataset_item_out(item) for item in result.items], count=result.count
+        items=[dataset_item_out(item) for item in result.items],
+        count=result.count,
+        limit=result.limit,
+        offset=result.offset,
     )
 
 

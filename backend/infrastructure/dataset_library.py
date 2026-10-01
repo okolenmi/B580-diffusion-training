@@ -148,7 +148,12 @@ class SqliteDatasetLibrary(DatasetLibrary):
     # -- items ------------------------------------------------------------
 
     def list_items(
-        self, name: str, *, committed: bool | None = None
+        self,
+        name: str,
+        *,
+        committed: bool | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> tuple[DatasetItem, ...]:
         directory = self._existing_dir(name)
         self._require_v2(directory, name)
@@ -163,6 +168,12 @@ class SqliteDatasetLibrary(DatasetLibrary):
         elif committed is False:
             sql += " WHERE NOT committed"
         sql += " ORDER BY t.id"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params = (limit, offset)
+        elif offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params = (offset,)
         with self._connect(directory / "metadata.db") as conn:
             rows = conn.execute(sql, params).fetchall()
         return tuple(_row_to_item(r) for r in rows)

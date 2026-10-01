@@ -160,9 +160,19 @@ class DatasetLibrary(ABC):
 
     @abstractmethod
     def list_items(
-        self, name: str, *, committed: bool | None = None
+        self,
+        name: str,
+        *,
+        committed: bool | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> tuple[DatasetItem, ...]:
-        """All items, or filtered by training-set membership."""
+        """All items, or filtered by training-set membership.
+
+        ``limit``/``offset`` page the result (``LIMIT``/``OFFSET`` in
+        SQL, ordered by id so pages are stable); ``limit=None`` returns
+        every row, which is what the curation UI asks for (docs 07 F-14).
+        """
         raise NotImplementedError
 
     @abstractmethod

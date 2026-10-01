@@ -226,6 +226,14 @@ class FlakyArtifacts:
         with open(paths.log, "a", encoding="utf-8") as fh:
             fh.write(note + "\n")
 
+    def tail_log(self, run_id: int, lines: int) -> str:
+        paths = self._paths(run_id)
+        try:
+            text = paths.log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return "".join(text.splitlines(keepends=True)[-lines:])
+
 
 def test_start_prepare_failure_finalises_row() -> None:
     # docs 07 F-02 -- prepare() raising after the row insert must not
@@ -373,6 +381,35 @@ def test_get_run_log() -> None:
                 check(True, f"lines={bad} rejected")
 
 
+def test_run_log_tail_is_read_from_the_end() -> None:
+    # docs 07 F-14: the tail is sliced by walking backwards, so the
+    # boundary cases matter -- a log much larger than one scan block, and
+    # a last line without a trailing newline.
+    print("\n== GetRunLog: backwards tail over a big log ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        env = _env(tmp)
+        seed_run(env.repo, env.clock, start=True)
+        log_path = env.runs_dir / "run_1" / "log.txt"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = 5000
+        with open(log_path, "w", encoding="utf-8") as fh:
+            for i in range(lines):
+                fh.write(f"line {i} {'x' * 200}\n")
+            fh.write("last line, no newline")
+        size = log_path.stat().st_size
+        check(size > 1_000_000, f"the fixture log is big (got {size} bytes)")
+
+        result = env.services.get_run_log.execute(1, lines=3)
+        check(
+            result.log == f"line {lines - 2} {'x' * 200}\nline {lines - 1} {'x' * 200}\n"
+                          f"last line, no newline",
+            f"the last three lines come back (got {result.log[:60]!r}...)",
+        )
+        check("line 0" not in result.log, "and nothing from the head of the file")
+        whole = env.services.get_run_log.execute(1, lines=500)
+        check(len(whole.log.splitlines()) == 500, f"max page size (got {len(whole.log.splitlines())})")
+
+
 def test_reconcile_runs() -> None:
     print("\n== ReconcileRuns (startup sweep, adoption included) ==")
     with tempfile.TemporaryDirectory() as tmp:
@@ -495,6 +532,7 @@ def main() -> None:
     test_stop_training()
     test_get_active_run()
     test_get_run_log()
+    test_run_log_tail_is_read_from_the_end()
     test_reconcile_runs()
     finish()
 

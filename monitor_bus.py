@@ -39,6 +39,16 @@ from collections import defaultdict, deque
 # report 100k steps, and clear() drops it all when the next run starts.
 HISTORY_LIMIT = 100000
 
+# Per-subscriber backlog cap. A dashboard that cannot keep up (a
+# backgrounded tab, a stalled laptop) used to grow this queue without
+# bound, holding every report in RAM until the client came back. The
+# live stream is telemetry: the NEWEST report is the one a chart needs,
+# so a full queue gives up its oldest *step report* and keeps the
+# frames that carry meaning (clear / run_end). History replay is a
+# separate buffer above, so nothing is lost that was not already
+# transient. docs 07 F-14.
+QUEUE_MAX = 512
+
 
 class MonitorBus:
 
@@ -52,7 +62,7 @@ class MonitorBus:
         handler) -- captures the loop on first use, same as SSEManager."""
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         for item in self._history[monitor_id]:
             q.put_nowait(f"data: {json.dumps(item)}\n\n")
         self._subscribers[monitor_id].append(q)
@@ -104,6 +114,27 @@ class MonitorBus:
 
     @staticmethod
     def _safe_put(q: asyncio.Queue, data: str) -> None:
+        """Never block the publisher; on a full backlog, drop a report.
+
+        Drops the oldest *step report* (telemetry) rather than the frame
+        that arrived: a chart only ever needs the newest numbers, while
+        `clear` / `run_end` reset state and must not be lost (docs 07
+        F-14).
+        """
+        try:
+            q.put_nowait(data)
+            return
+        except asyncio.QueueFull:
+            pass
+        try:
+            oldest = q.get_nowait()
+        except asyncio.QueueEmpty:  # raced with the consumer
+            return
+        if '"type"' in oldest and '"step"' not in oldest:
+            # Not a step report: put it back and give up on this frame
+            # rather than losing a state change.
+            q.put_nowait(oldest)
+            return
         try:
             q.put_nowait(data)
         except asyncio.QueueFull:

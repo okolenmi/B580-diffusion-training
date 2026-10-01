@@ -154,6 +154,29 @@ make_v2_dataset(root_b, "flow", items=4)
 
 status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
 check(status == 200 and body["count"] == 4, "list items")
+
+# Paging is opt-in (docs 07 F-14): the default still returns everything,
+# and a caller that asks for a page gets exactly one.
+check(body["limit"] is None and body["offset"] == 0, "unpaged by default")
+status, _, page = asgi_request(app, "/api/v1/datasets/flow/items?limit=2")
+check(
+    status == 200 and page["count"] == 2 and page["limit"] == 2
+    and [item["id"] for item in page["items"]] == [1, 2],
+    f"limit pages the rows (got {[i['id'] for i in page['items']]})",
+)
+status, _, tail = asgi_request(app, "/api/v1/datasets/flow/items?limit=2&offset=2")
+check(
+    [item["id"] for item in tail["items"]] == [3, 4],
+    f"offset continues the page (got {[i['id'] for i in tail['items']]})",
+)
+status, _, err = asgi_request(app, "/api/v1/datasets/flow/items?limit=501")
+expect_error(
+    status, err, 422, "validation_error", "an absurd page size is refused"
+)
+status, _, err = asgi_request(app, "/api/v1/datasets/flow/items?offset=-1")
+expect_error(
+    status, err, 422, "validation_error", "a negative offset is refused"
+)
 check(body["items"][0]["prompt"] == "photo 1" and body["items"][0]["neg_prompt"] == "",
       "item columns on the wire")
 

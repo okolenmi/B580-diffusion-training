@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from ..application.errors import RunDirectoryCollisionError
 from ..application.ports.run_artifacts import (
@@ -68,3 +69,45 @@ class DirectoryRunArtifacts(RunArtifacts):
                 fh.write(note + "\n")
         except OSError as exc:
             logger.warning("cannot append log note for run %s: %s", run_id, exc)
+
+    def tail_log(self, run_id: int, lines: int) -> str:
+        """Last ``lines`` lines of the log, read from the end.
+
+        A training log is the one file here that grows without bound, and
+        the only thing anyone ever wants from it is its tail -- reading
+        the whole thing to slice 500 lines out of it cost a
+        multi-hundred-MB allocation on a long run (docs 07 F-14). So seek
+        backwards in doubling blocks until enough newlines are in hand.
+        """
+        path = self._layout.log_path(run_id)
+        try:
+            with open(path, "rb") as fh:
+                return self._tail_from_end(fh, lines)
+        except FileNotFoundError:
+            return ""  # the child may not have created it yet
+        except OSError as exc:
+            logger.warning("cannot tail log for run %s: %s", run_id, exc)
+            return ""
+
+    # Block size for the backwards scan: big enough that a 500-line tail
+    # is two or three reads even for long lines, small enough to stay a
+    # few hundred KB on disk with a cache miss.
+    _SCAN_BLOCK = 64 * 1024
+
+    @classmethod
+    def _tail_from_end(cls, fh, lines: int) -> str:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        if size == 0:
+            return ""
+        block = cls._SCAN_BLOCK
+        collected = b""
+        position = size
+        while position > 0 and collected.count(b"\n") <= lines:
+            step = min(block, position)
+            position -= step
+            fh.seek(position)
+            collected = fh.read(step) + collected
+            block *= 2  # double the window: fewer reads on a big log
+        text = collected.decode("utf-8", errors="replace")
+        return "".join(text.splitlines(keepends=True)[-lines:])

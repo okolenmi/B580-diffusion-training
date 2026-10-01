@@ -43,8 +43,22 @@ class SqliteDatabase:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def initialize(self) -> None:
-        """Create the directory and apply pending migrations (idempotent)."""
+    def initialize(self, migrations_dir: Path | None = None) -> None:
+        """Create the directory and apply pending migrations (idempotent).
+
+        Each migration is applied **atomically**: its statements and the
+        row recording it as applied commit together or not at all
+        (docs 07 F-16). ``executescript`` commits any open transaction
+        before it runs and does not wrap what it runs, so a migration
+        that failed halfway used to leave its earlier statements applied
+        *and* unrecorded -- the next start then died on "table already
+        exists". Wrapping the text in ``BEGIN``/``COMMIT`` (with the
+        bookkeeping INSERT inside) is what makes "all or nothing" true
+        for DDL as well as DML in SQLite.
+
+        ``migrations_dir`` exists for tests that need a failing
+        migration; production always uses the packaged directory.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as conn:
             conn.executescript(
@@ -58,19 +72,28 @@ class SqliteDatabase:
                 row["version"]
                 for row in conn.execute("SELECT version FROM schema_migrations")
             }
-        migrations_dir = Path(__file__).resolve().parent / "migrations"
+        if migrations_dir is None:
+            migrations_dir = Path(__file__).resolve().parent / "migrations"
         for migration in sorted(migrations_dir.glob("*.sql")):
             if migration.stem in applied:
                 continue
+            body = migration.read_text(encoding="utf-8")
+            stamp = datetime.now(timezone.utc).isoformat()
             with self.connection() as conn:
-                conn.executescript(migration.read_text(encoding="utf-8"))
-                conn.execute(
-                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                    (
-                        migration.stem,
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+                try:
+                    conn.executescript(
+                        "BEGIN;\n"
+                        f"{body}\n;\n"
+                        "INSERT INTO schema_migrations (version, applied_at) "
+                        f"VALUES ('{migration.stem}', '{stamp}');\n"
+                        "COMMIT;"
+                    )
+                except sqlite3.Error:
+                    # Undo whatever the failed script managed to apply;
+                    # the version stays unrecorded, so the next start
+                    # retries this migration from a clean slate.
+                    conn.rollback()
+                    raise
 
     def close(self) -> None:
         """Close this thread's cached connection (no-op if none)."""

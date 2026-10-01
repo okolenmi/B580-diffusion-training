@@ -342,6 +342,11 @@ class DatasetItemOut(BaseModel):
 class DatasetItemsOut(BaseModel):
     items: list[DatasetItemOut]
     count: int
+    # Echo of the window actually served (docs 07 F-14): `limit` is null
+    # when the request asked for everything, which is the default the
+    # curation UI uses.
+    limit: int | None = None
+    offset: int = 0
 
 
 class TrainingSetOut(BaseModel):

@@ -279,6 +279,23 @@ variable-resolution run alive with no OOM -- full numbers in
 - `server/nodegraph_registry.py` -- palette list; currently matches every
   concrete `Node` subclass in `nodes/`.
 
+**Backend (`backend/`) -- the live entry point since M9**
+- `server/` is archived (moved to `archive/`); `python -m backend.cli`
+  serves the API on 8766 and its own `frontend/`. Architecture, API
+  contract and per-milestone state are in
+  [`docs/design/backend/`](../design/backend/README.md).
+- Milestones shipped: M1-M9 (runs + config + settings, datasets,
+  graph executions, frontend shell/monitor/training controls, config
+  editor, run detail, dataset manager, help/settings, and the M9 entry
+  point flip), then the graph-editor node-body batch (on-node widgets,
+  asset pickers with uploads, live diagnostics).
+- External review (`docs/design/backend/07-review-2026-10-01.md`) and
+  its remediations: all 17 findings triaged, batches 1-6 committed --
+  supervisor/progress-reader hardening, strict-JSON sanitization and
+  stream resync, dataset integrity and run-id collision, the
+  Host/Origin guard and raw-TOML fidelity, restart adoption and signal
+  safety, plus bounded work and atomic migrations.
+
 **Testing**
 - 64 smoke tests under `nodes/smoke_tests/` (runnable via
   `nodes/smoke_tests/run_all.py`), plus 5 under `server/` and 1 under

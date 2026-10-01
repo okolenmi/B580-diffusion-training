@@ -85,7 +85,7 @@ class PlainLoRAAdapter(AdapterStrategy):
 
         if isinstance(frozen, BF16WeightStore):
             from .lora import LoRAConv2d, LoRALinear
-            _register_legacy_adapted_layers()
+            _register_plain_lora_adapted_layers()
             if isinstance(original, nn.Linear):
                 return LoRALinear(original, rank=rank, alpha=effective_alpha,
                                    dropout=dropout, weight=weight)
@@ -159,7 +159,7 @@ class DoRAAdapter(AdapterStrategy):
         )
 
 
-def _register_legacy_adapted_layers():
+def _register_plain_lora_adapted_layers():
     """AdaptedLayer.register(LoRALinear/LoRAConv2d) -- virtual subclass
     registration, so isinstance(layer, AdaptedLayer) is True for what
     PlainLoRAAdapter.wrap() actually returns, without lora.py declaring
@@ -186,7 +186,7 @@ def _register_nf4_adapted_layers():
 
 def _register_dora_adapted_layers():
     """AdaptedLayer.register(DoRALinear/DoRAConv2d) -- same reasoning as
-    _register_legacy_adapted_layers() above, for consistency (both are
+    _register_plain_lora_adapted_layers() above, for consistency (both are
     lazy, both are idempotent), even though dora_layer.py's classes are
     new code this project fully controls and could have inherited
     AdaptedLayer directly. Kept as registration instead: dora_layer.py

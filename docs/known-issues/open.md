@@ -3,7 +3,7 @@
 # Open
 
 - **[2026-07] "Device lost" errors and silent training hangs after
-  VRAM-pressure events, reported from real ComfyUI use (legacy `core/`
+  VRAM-pressure events, reported from real ComfyUI use (the `core/`
   pipeline, not `nodes/`).** User-reported, not yet investigated here.
   Symptom: not a normal OOM -- either a device-lost error or a silent
   hang, most reliably reproduced by a VRAM-heavy sequence (merging three
@@ -24,18 +24,18 @@
   transitions all call `xpu_synchronize()` explicitly, and the code's own
   comment records that the VRAM spike was seen at exactly that
   reload-after-preview transition, which the sync there addresses. Don't
-  re-investigate that hypothesis; the legacy path has otherwise still
+  re-investigate that hypothesis; the TOML route has otherwise still
   never been run under pressure since this report.
   **2026-09-28 update (hardware now available):** the *rewrite's own*
-  offload path -- a different codebase from the legacy `core/trainer.py`
+  offload path -- a different codebase from the `core/trainer.py`
   implicated here -- was exercised under real, sustained VRAM pressure
   (30 steps at `vram_budget_mb=2500` against ~8114 MB actual usage,
   offload taken every step) with no hang and no device-lost
   (`scripts/hw_validate.py`, label `C_pressure`; see the confirmed
   entry in [`resolved.md`](resolved.md)). That says the `nodes/`
   `synchronize()` hardening behaves under pressure; it says nothing
-  about the legacy path this entry is about. What *has* been run: a
-  plain health check of the legacy CLI route on this hardware
+  about the TOML route this entry is about. What *has* been run: a
+  plain health check of the TOML CLI route on this hardware
   (2026-09-28 -- 100 steps on `datasets/test` via `core.cli` with
   `runs/hw_validation/legacy_check.toml`: 100/100 steps, ~794 ms/step,
   clean LoRA save, no hang or device-lost) -- a healthy baseline, but
@@ -44,7 +44,7 @@
   skips preview generation without a server `run_id`, so previews only
   fire on server-launched runs -- which means the CLI route can never
   have triggered this report, and the repro has to go through the
-  server. The legacy-path repro (training under pressure through preview
+  server. The TOML-route repro (training under pressure through preview
   generation's VAE decode, the reported trigger) remains the next
   concrete step here.
 

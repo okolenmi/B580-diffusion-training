@@ -13,28 +13,31 @@ actually trying to do.
 Two parallel systems live in this one repository, at different levels
 of maturity:
 
-- **The legacy pipeline (`core/` + `manager/`)** -- a config-driven
-  (TOML) command-line trainer. This is the current *production* path:
-  what real training runs actually use today. Entry point: `convert.py`.
-- **The node-graph rewrite (`nodes/` + `backend/`)** -- a from-scratch,
-  strict-OOP redesign of the same training pipeline, exposed through a
-  browser-based visual node editor served by `backend/` (REST API under
-  `/api/v1`, layered application design, own docs under
+- **The TOML trainer (`core/` + `manager/`)** -- a config-driven
+  command-line trainer. This is the current *production* path: what real
+  training runs actually use today. Entry point: `python -m core.cli`.
+- **The node-graph pipeline (`nodes/` + `backend/`)** -- a strict-OOP
+  redesign of the same pipeline, exposed through a browser-based visual
+  node editor served by `backend/` (REST API under `/api/v1`, layered
+  application design, own docs under
   [`docs/design/backend/`](docs/design/backend/README.md)). This is
-  where new design work lands; it wraps and reuses legacy code rather
-  than duplicating it, and is not yet a full production replacement for
-  the legacy path. Entry point: `run_server.sh`. (The first-cut web
-  layer `server/` was retired to `archive/server/` at M9; `backend/` is
-  its clean-room replacement.)
+  where new design work lands. Entry point: `run_server.sh`. (The
+  first-cut web layer `server/` was retired to `archive/server/` at M9;
+  `backend/` is its clean-room replacement.)
 
-`core/`/`manager/` are treated as reference material by the `nodes/`
-rewrite -- correct, working code that gets wrapped, not rewritten, per
-the project's own stated rule (see
-[`docs/architecture.md`](docs/architecture.md)). Note that "legacy"
-describes *when* `core/` was written, not what it does: the web UI's
-Start button literally spawns `python -m core.cli`, and
-[`docs/core-inventory.md`](docs/core-inventory.md) maps what depends on
-it and lists the capabilities nothing else provides.
+These are one trainer with two front ends, not an old system and a new
+one. The web UI's Start button launches `python -m core.cli` as a
+supervised subprocess, so both entry points run the same math.
+
+The project does **not** rewrite working code to reimplement it. Each
+domain is adopted where a verified-equivalent `nodes/` version exists
+and the old wrapper is retired; wrapping is the fallback for a domain
+nobody has rewritten yet, not a destination. As of 2026-10-02 the
+optimizer domain, text encoding and LoRA/UNet injection have all been
+adopted, and `nodes/` imports nothing from `core/` --
+[`docs/core-inventory.md`](docs/core-inventory.md) maps what still does
+and why (see also
+[`docs/architecture.md`](docs/architecture.md)).
 
 ## Goals
 
@@ -65,11 +68,10 @@ running the test suite) is in [`docs/setup.md`](docs/setup.md). The
 short version:
 
 ```bash
-# Legacy CLI trainer -- run from ComfyUI's own root directory
-cd /path/to/ComfyUI
-python /path/to/this-project/convert.py --config my_run.toml
+# TOML trainer -- run from this project's own root directory
+python -m core.cli --config config.toml
 
-# Node-graph web UI -- run from this project's own directory
+# Node-graph web UI -- also from this project's root
 ./run_server.sh   # serves on http://0.0.0.0:8766 by default
 ```
 

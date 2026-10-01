@@ -5,69 +5,49 @@ shaped this way, see `docs/design/` (the "why" lives there in depth,
 see that folder's own `README.md` index; this doc just orients a new
 reader fast).
 
-## The two pipelines
+## The two front ends
 
-| | TOML trainer | Node-graph rewrite |
+| | TOML trainer | Node-graph pipeline |
 |---|---|---|
 | Packages | `core/`, `manager/` | `nodes/`, `backend/` |
 | Entry point | `python -m core.cli` + a TOML config | `run_server.sh` (browser UI) |
-| Status | Current production path | Active development; reuses the legacy pipeline where nothing better exists yet, replaces it domain by domain where it does |
+| Status | Current production path | Active development; adopts each domain as its own version becomes available |
 | Config style | One big TOML file, many flat fields | A visual graph of typed `Node`s wired together |
 
-`core/` in particular is not dead code -- it is the training engine
-every path runs through, including the web UI's. See
-[`core-inventory.md`](core-inventory.md) for the dependency map and the
-capabilities that exist only there.
+One trainer, two front ends. The web UI's Start button launches
+`python -m core.cli` as a supervised subprocess, so both entry points
+run the same math.
 
-**The legacy pipeline (`core/`, `manager/`) is not modified by this
-project** (section 9.3 of `docs/design/08-validation-and-implementation-status.md`
-says this explicitly) -- it's the current production path, and bugs
-found in it while building the rewrite get fixed in place, not
-restructured. What *has* changed: `core/`/`manager/` used to be treated
-as permanent reference material that `nodes/` would always wrap rather
-than reimplement. That's no longer the rule. Where `nodes/` has since
-built its own independent, verified-equivalent version of something
-`core/` does (the `optimizer/` domain's `Algorithm`+`ExecutionStrategy`
-split; `components/diffusion.py`'s noise-schedule/parameterization
-objects), that version is canonical and the old `core/`-wrapping `Node`
-gets retired. The `optimizer/` domain is fully unified this way as of
-2026-10-02: the last holdout, `AdafactorOptimizerNode`, is deleted, and
-`nodes/optimizer/` now imports nothing from `core.optimizers` (see
-`docs/known-issues/open.md` for the one unmeasured performance trade that
-retirement accepted). Text encoding was unwired the same way on 2026-10-02: `SDXLClipEncoder`
-moved to `nodes/model/clip_encoder.py` (it was self-contained, so this
-was a relocation, not a reimplementation), and `core/clip_encode.py` is
-now a re-export shim for `core/`'s and `manager/`'s own use.
+**How domains move between them.** This project does not reimplement
+working code. Where `nodes/` builds its own independent,
+verified-equivalent version of something `core/` does, that version
+becomes canonical and the `core/`-wrapping code is retired -- wrapping
+is the fallback for a domain nobody has rewritten yet, not a
+destination. Three domains have moved that way as of 2026-10-02:
 
-LoRA/UNet injection went the same way on 2026-10-02, and it bought more
-than a boundary: `SDXLClipEncoder`, `LoRALinear`/`LoRAConv2d`, the
-`_inject_lora` walk, `ComfyUNetWrapper` and `derive_seed` all moved into
-`nodes/`. `nodes/` now imports nothing from `core/` at all.
+* **The optimizer domain** (`Algorithm` + `ExecutionStrategy` split),
+  fully: the last holdout, `AdafactorOptimizerNode`, is deleted. See
+  `docs/known-issues/open.md` for the one unmeasured performance trade
+  that retirement accepted.
+* **Text encoding**: `SDXLClipEncoder` moved to
+  `nodes/model/clip_encoder.py`. It was self-contained, so this was a
+  relocation rather than a reimplementation.
+* **LoRA/UNet injection**: `LoRALinear`/`LoRAConv2d`, `_inject_lora`,
+  `ComfyUNetWrapper` and `derive_seed` moved to `nodes/model/` and
+  `nodes/components/`. Owning the walk let `_inject_lora` take the
+  adapter classes as an argument instead of having `nodes/` rebind the
+  walk's module globals to change what it built -- which removed a
+  concurrent-build race, deleted `lora_class_cache.py`, and fixed four
+  `isinstance` gates that had been silently skipping every DoRA and NF4
+  layer.
 
-Because `nodes/` owned the injection walk, `_inject_lora` could be given
-the layer classes to build as an argument instead of having `nodes/`
-monkeypatch the walk's module globals to change what it constructed --
-which removed a documented race between two concurrent builds, removed
-`lora_class_cache.py` (a side channel that existed only to hand out the
-real classes to the patch), and fixed four `isinstance` gates that had
-been silently answering the wrong question under a patch and skipping
-every DoRA and NF4 layer.
+`core/` itself is not dead code: it is still the production trainer,
+`backend/` still spawns it, and its own modules have capabilities no
+`nodes/` version provides (mid-run previews, latent caching, the
+teacher-trajectory builders). What has changed is that `nodes/` no
+longer depends on any of it -- see
+[`core-inventory.md`](core-inventory.md) for the dependency map.
 
-**What still reaches into `core/`:** only the backend, and only for
-things that are genuinely shared rather than unwired --
-`core.config_io`/`core.config_model` (the TOML schema the UI's config
-editor round-trips and the trainer reads), `core.comfy_setup`'s
-`xpu_empty_cache` (the graph runtime's memory releaser), and
-`core.xpu_env` (SYCL variables, which must be set before anything
-touches a device). `core/lora.py`, `core/unet_wrapper.py`,
-`core/seed.py` and `core/clip_encode.py` are re-export shims kept for
-`core/`'s own trainer and `manager/`; they are not dependencies of the
-node graph any more.
-
-Dataset ingestion is the remaining unwired domain, and it is inverted
-relative to everything else: `nodes/dataset/managed.py` does not depend
-on `manager/`, `manager/` is the implementation and `nodes/` calls into
-it (tracked in `docs/design/09-prioritized-backlog.md`).
 
 ## Design principles, in short
 

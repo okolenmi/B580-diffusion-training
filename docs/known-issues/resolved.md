@@ -39,7 +39,7 @@ through 2026-09, with no hardware run.
   runs every call.
 
 - **[2026-09-28] User-reported wrong VRAM figure in this project's docs
-  ("reserved flat at ~6034 MB" for the legacy health check) -- the
+  ("reserved flat at ~6034 MB" for the TOML-route health check) -- the
   report was right: real consumption was ~11.4/12.2 GB, and the
   misleading number was a snapshot-ordering artifact, now fixed.**
   Investigation (`core.cli`, `runs/hw_validation/legacy_check.toml`,
@@ -133,7 +133,7 @@ through 2026-09, with no hardware run.
   under real pressure every step (via the caching wrapper), covering
   that companion fix from the same session. **Scope caveat kept from
   the original entry:** this exercises the `nodes/` rewrite's offload
-  path, not the legacy `core/trainer.py` path the open "Device lost"
+  path, not the `core/trainer.py` path the open "Device lost"
   report is about -- that relationship stays unconfirmed (see
   [`open.md`](open.md)).
 

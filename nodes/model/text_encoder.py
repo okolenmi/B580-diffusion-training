@@ -69,18 +69,18 @@ class TextEncoderNode(Node):
 
 class SDXLTextEncoder(TextEncoder):
 
-    def __init__(self, legacy_encoder):
-        self._legacy = legacy_encoder
+    def __init__(self, encoder):
+        self._encoder = encoder
         self._device_before_offload = None
 
     def encode_prompt_only(self, prompt: str, batch_size: int):
-        return self._legacy.encode_prompt_and_pool(prompt, batch_size)
+        return self._encoder.encode_prompt_and_pool(prompt, batch_size)
 
     def resolution_embedding(self, height: int, width: int, batch_size: int):
-        return self._legacy.resolution_embedding(height, width, batch_size)
+        return self._encoder.resolution_embedding(height, width, batch_size)
 
     def unload(self) -> None:
-        self._legacy.unload()
+        self._encoder.unload()
 
     def footprint_bytes(self) -> int:
         """clip_encoder.SDXLClipEncoder has no footprint accessor of
@@ -93,13 +93,13 @@ class SDXLTextEncoder(TextEncoder):
         numel()*element_size() alone can't tell CPU-resident from
         device-resident, so this has to be checked explicitly rather
         than left to the summing loop below to get right by accident."""
-        if self._legacy is None:
+        if self._encoder is None:
             return 0
         if self._device_before_offload is not None:
             return 0
-        total = sum(p.numel() * p.element_size() for p in self._legacy.clip_model.parameters())
-        total += sum(b.numel() * b.element_size() for b in self._legacy.clip_model.buffers())
-        embedder = self._legacy._embedder
+        total = sum(p.numel() * p.element_size() for p in self._encoder.clip_model.parameters())
+        total += sum(b.numel() * b.element_size() for b in self._encoder.clip_model.buffers())
+        embedder = self._encoder._embedder
         if embedder is not None:
             total += sum(p.numel() * p.element_size() for p in embedder.parameters())
             total += sum(b.numel() * b.element_size() for b in embedder.buffers())
@@ -120,14 +120,14 @@ class SDXLTextEncoder(TextEncoder):
         on its own account. Confirmed via profiling this was a real,
         measurable, previously-invisible cost, not a theoretical one --
         see docs/known-issues/pending-testing.md's entry on this."""
-        self._device_before_offload = self._legacy.device
-        self._legacy.clip_model = self._legacy.clip_model.cpu()
-        if self._legacy._embedder is not None:
-            self._legacy._embedder = self._legacy._embedder.cpu()
-        self._legacy.device = "cpu"
+        self._device_before_offload = self._encoder.device
+        self._encoder.clip_model = self._encoder.clip_model.cpu()
+        if self._encoder._embedder is not None:
+            self._encoder._embedder = self._encoder._embedder.cpu()
+        self._encoder.device = "cpu"
 
     def reload(self, device: str | None = None) -> None:
-        """No reload() on the legacy class to delegate to -- unload() is
+        """No reload() on the wrapped encoder to delegate to -- unload() is
         one-directional there. Moves clip_model back explicitly; resets
         _embedder to None rather than moving it, so _get_embedder()'s own
         existing lazy-construction path rebuilds it on the right device
@@ -139,21 +139,21 @@ class SDXLTextEncoder(TextEncoder):
                 "reload() needs an explicit device, or a prior offload() to "
                 "remember one -- neither was given."
             )
-        self._legacy.clip_model = self._legacy.clip_model.to(
-            device=target, dtype=self._legacy.dtype)
-        self._legacy._embedder = None
-        self._legacy.device = target
+        self._encoder.clip_model = self._encoder.clip_model.to(
+            device=target, dtype=self._encoder.dtype)
+        self._encoder._embedder = None
+        self._encoder.device = target
         self._device_before_offload = None
 
     def release(self) -> None:
         """Genuinely drops the encoder -- unload() alone doesn't (the
-        legacy object and its weights survive, just moved to CPU, so
+        encoder and its weights survive, just moved to CPU, so
         reload() would still work after it). Moves to CPU first for a
         clean drop, then drops the reference itself, matching
         ComfyUNetTrainableModel.release()'s exact pattern."""
-        if self._legacy is not None:
-            self._legacy.unload()
-            self._legacy = None
+        if self._encoder is not None:
+            self._encoder.unload()
+            self._encoder = None
 
 
 class SDXLTextEncoderNode(TextEncoderNode):
@@ -168,8 +168,8 @@ class SDXLTextEncoderNode(TextEncoderNode):
         from .clip_encoder import SDXLClipEncoder
 
         weights: ModelWeights = inputs["weights"]
-        legacy = SDXLClipEncoder(weights.non_unet_sd,
+        encoder = SDXLClipEncoder(weights.non_unet_sd,
                                   device=inputs.get("device", self.INPUTS["device"].default))
-        result = {"encoder": SDXLTextEncoder(legacy)}
+        result = {"encoder": SDXLTextEncoder(encoder)}
         self.validate_outputs(result)
         return result

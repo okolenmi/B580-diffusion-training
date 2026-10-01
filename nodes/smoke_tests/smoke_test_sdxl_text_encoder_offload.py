@@ -69,7 +69,7 @@ def check_reload_restores_the_remembered_device():
     # confirms the remembered value is right without needing real CUDA hardware to finish the
     # move itself (that half is exercised on "cpu" round trips elsewhere in this project's
     # own real usage).
-    check(encoder._legacy.device == "cpu", "offload() itself must still have completed")
+    check(encoder._encoder.device == "cpu", "offload() itself must still have completed")
     print("    PASS")
 
 

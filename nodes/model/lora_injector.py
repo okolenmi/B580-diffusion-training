@@ -70,7 +70,7 @@ class ComfyUNetTrainableModel(TrainableModel):
 
     def trainable_parameters(self) -> list:
         # dora_trainable_parameters() covers exactly what
-        # lora_parameters() (frozen legacy code) can't -- see that
+        # lora_parameters() (the wrapper's own logic) can't -- see that
         # function's own docstring (nodes/model/adapter_injection.py)
         # for the real "optimizer silently never updates DoRA at all"
         # bug this closes. A no-op list for anything that isn't a bare,
@@ -105,7 +105,7 @@ class ComfyUNetTrainableModel(TrainableModel):
     @property
     def raw(self):
         """Escape hatch to the wrapped ComfyUNetWrapper, for callers (e.g.
-        LoRAPhaseSplitNode) that need the full legacy object, not just
+        LoRAPhaseSplitNode) that need the full wrapped UNet, not just
         the TrainableModel contract."""
         return self._wrapper
 

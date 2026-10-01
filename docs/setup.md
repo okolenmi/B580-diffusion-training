@@ -127,7 +127,7 @@ the full gate ties every suite together:
 
 ```bash
 $VENV_PYTHON backend/tests/run_all.py   # backend suite (API, pages, use cases)
-scripts/full_gate.sh                    # everything: legacy suites, backend suite,
+scripts/full_gate.sh                    # everything: nodes/manager suites, backend suite,
                                          # node --check, doc links, ruff (F,E9)
 ```
 

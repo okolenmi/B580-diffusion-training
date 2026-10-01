@@ -110,8 +110,8 @@ def check_build_text_encoder_delegates_correctly():
 
     from nodes.model.text_encoder import SDXLTextEncoder
     check(isinstance(encoder, SDXLTextEncoder), type(encoder))
-    check(encoder._legacy.clip_sd is clip_sd, "should pass the exact clip_sd through")
-    check(encoder._legacy.device == "cpu", encoder._legacy.device)
+    check(encoder._encoder.clip_sd is clip_sd, "should pass the exact clip_sd through")
+    check(encoder._encoder.device == "cpu", encoder._encoder.device)
     # footprint_bytes() is real, unpatched logic -- proves the object this
     # returns is genuinely usable, not just structurally the right type.
     check(encoder.footprint_bytes() > 0, encoder.footprint_bytes())
@@ -154,7 +154,7 @@ def check_sdxl_lora_trainer_full_construction():
 
     check(rec.wrapper_calls[0]["lora_config"].rank == 32, rec.wrapper_calls[0]["lora_config"])
     check(trainer.unet is not None, trainer.unet)
-    check(trainer.clip is not None and trainer.clip._legacy.device == "cpu", trainer.clip)
+    check(trainer.clip is not None and trainer.clip._encoder.device == "cpu", trainer.clip)
     check(set(trainer.vae_sd) == {"first_stage_model.encoder.weight",
                                     "first_stage_model.decoder.weight"}, trainer.vae_sd)
     check(trainer.lora is None,
@@ -195,14 +195,14 @@ def check_device_resident_offload_reload_release():
     # no-arg fallback) so both code paths through reload() get exercised.
     trainer.offload()
     check(trainer.unet._wrapper.device == "cpu", trainer.unet._wrapper.device)
-    check(trainer.clip._legacy.device == "cpu", trainer.clip._legacy.device)
+    check(trainer.clip._encoder.device == "cpu", trainer.clip._encoder.device)
     check(all(t.device.type == "cpu" for t in trainer.vae_sd.values()),
           "vae_sd's own tensors must move too -- they aren't registered with the "
           "coordinator (not a DeviceResident), so offload() has to move them by hand")
 
     trainer.reload(device="cpu")
     check(trainer.unet._wrapper.device == "cpu", trainer.unet._wrapper.device)
-    check(trainer.clip._legacy.device == "cpu", trainer.clip._legacy.device)
+    check(trainer.clip._encoder.device == "cpu", trainer.clip._encoder.device)
     check(all(t.device.type == "cpu" for t in trainer.vae_sd.values()), "still cpu")
 
     # reload() with no device given falls back to self._device (the
@@ -216,7 +216,7 @@ def check_device_resident_offload_reload_release():
     # not left holding stale tensors.
     trainer.release()
     check(trainer.unet._wrapper is None, "unet should be genuinely released, not just offloaded")
-    check(trainer.clip._legacy is None, "clip should be genuinely released, not just offloaded")
+    check(trainer.clip._encoder is None, "clip should be genuinely released, not just offloaded")
     check(trainer.vae_sd == {}, trainer.vae_sd)
     check(trainer.footprint_bytes() == 0,
           f"a released trainer should report 0 footprint, got {trainer.footprint_bytes()}")

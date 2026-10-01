@@ -1,9 +1,16 @@
 # What `core/` is, and what only it has
 
-`core/` gets called "legacy" because of when it was written, not
-because of what it does. It is **the training engine**: 7,707 lines
-across 23 modules, and every training path in this repository runs
-through it.
+`core/` is **the training engine**: ~7,700 lines across 23 modules,
+and every training path in this repository runs through it -- including
+the web UI's, which launches `python -m core.cli` as a supervised
+subprocess.
+
+It was long described as "legacy", which described when it was written
+rather than what it does, and the label was actively misleading: it
+implied dead or superseded code, and it is the trainer every real run
+uses. As of 2026-10-02 the `nodes/` rewrite no longer imports any of
+it, so what is left here is a record of the parts nothing else
+provides.
 
 The question "what is unique in `core/`?" has a shorter answer than
 expected, and a more important one attached.
@@ -51,7 +58,7 @@ touches a device).
 
 ## Module by module
 
-### Reimplemented or relocated into `nodes/` (legacy-only copies remain)
+### Reimplemented or relocated into `nodes/` (the `core/` copies remain)
 
 Only the optimizer *algorithms* got this treatment, and the design docs
 are right about it: `nodes/optimizer/algorithms/` holds pure
@@ -86,7 +93,7 @@ infrastructure rather than an unwired domain.
 
 ### A second tier that is easy to miss: `manager/` pulls six more in
 
-`manager/` is not legacy-only -- the backend imports it directly for
+`manager/` is not just `core/`'s own -- the backend imports it directly for
 dataset ingestion (`backend/infrastructure/dataset_task_worker.py:79`
 runs `manager.builder.DataTaskRunner`). So `core/` is load-bearing for
 the rewrite *through* `manager/` as well:
@@ -121,7 +128,7 @@ in `core/`, and the rewrite either borrows it or has no equivalent:
    do this.
    *Currently an orphan:* the images are still written by every run that
    enables previews, but the endpoint that served them
-   (`GET /runs/{id}/previews`) was dropped with the legacy server and
+   (`GET /runs/{id}/previews`) was dropped with the retired `server/` and
    the new UI never gained one. Either surface them again or stop
    spending the time generating them.
 2. **The fused / chunked / foreach optimizer execution strategies.**
@@ -192,18 +199,24 @@ in `core/`, and the rewrite either borrows it or has no equivalent:
     v1/v2/v3/v4 cache tuple layouts and has **zero call sites** (see
     dead code below).
 
-## So why does it read as legacy?
+## Why it still exists at all
 
 Because of its *ownership model*, not its algorithms: `core/trainer.py`
-is a 865-line class with the training loop, the caching, the optimizer
+is an 865-line class with the training loop, the caching, the optimizer
 construction and the preview generation in one place, configured by a
-TOML file rather than composed. `docs/architecture.md` records the
-position this project took: `core/` is the production path, its bugs get
-fixed in place, and where `nodes/` builds a verified-equivalent version
-that version becomes canonical and the old wrapper retires. That has
-happened for the optimizer algorithms. It has not happened for LoRA
-injection, text encoding, dataset ingestion or the trainer loop --
-`docs/architecture.md` says so explicitly.
+TOML file rather than composed. Adopting a domain means moving the
+*shared* implementation into `nodes/` -- which is now done for the
+optimizer domain, text encoding, and LoRA/UNet injection -- but the
+trainer loop itself has no `nodes/` counterpart yet, and `backend/`
+spawns `core.cli` to run it.
+
+So the honest position today: `core/` is simultaneously (a) the
+production trainer, (b) the home of capabilities listed above that
+nothing else provides, and (c) no longer a dependency of the node
+graph. Retiring it means giving the trainer loop and the trainer-only
+capabilities a home of their own -- which is
+`docs/design/09-prioritized-backlog.md`'s remaining dataset-ingestion
+item plus the trainer loop itself.
 
 ## Dead code found inside `core/`
 

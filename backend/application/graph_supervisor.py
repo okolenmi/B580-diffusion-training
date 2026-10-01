@@ -40,6 +40,7 @@ from ..domain.events import DomainEvent, GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .event_publisher import EventPublisher
+from .lifecycle_writer import ExecutionLifecycleWriter
 from .ports.clock import Clock
 from .ports.execution_launcher import ExecutionLauncher
 from .ports.graph_execution_repository import GraphExecutionRepository
@@ -53,11 +54,15 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         self,
         *,
         executions: GraphExecutionRepository,
+        writer: ExecutionLifecycleWriter,
         runtime: GraphRuntime,
         events: EventPublisher,
         clock: Clock,
     ) -> None:
         self._executions = executions
+        # CAS-then-announce lives in the writer; ``events`` is for
+        # telemetry only.
+        self._writer = writer
         self._runtime = runtime
         self._events = events
         self._clock = clock
@@ -121,11 +126,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         if execution is None or execution.status is not GraphStatus.QUEUED:
             return  # stopped/reconciled before the claim; that writer won
         execution.mark_running(at=self._clock.now())
-        if not self._executions.update_if_status(
-            execution, expected=GraphStatus.QUEUED
-        ):
+        if not self._writer.commit(execution, expected=GraphStatus.QUEUED):
             return  # lost the claim race (stop on a queued row, mostly)
-        self._events.publish(execution)  # GraphExecutionStarted
 
         outcome = self._runtime.execute(
             graph,
@@ -146,9 +148,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             if execution is None or execution.status is not GraphStatus.RUNNING:
                 return  # stopped/deleted mid-run; drop this sample
             execution.record_result(result, at=self._clock.now())
-            if not self._executions.update_if_status(
-                execution, expected=GraphStatus.RUNNING
-            ):
+            if not self._writer.commit(execution, expected=GraphStatus.RUNNING):
                 return  # terminal writer won between get and update
             self._events.emit(
                 GraphExecutionProgressed(
@@ -179,11 +179,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             execution.stop(at=at, reason="stop requested")
         else:
             execution.mark_finished(at=at)
-        if not self._executions.update_if_status(
-            execution, expected=GraphStatus.RUNNING
-        ):
+        if not self._writer.commit(execution, expected=GraphStatus.RUNNING):
             return  # lost the terminal CAS; the stop writer's result stands
-        self._events.publish(execution)
 
     def _fail_leftover(self, execution_id: ExecutionId) -> None:
         """Last-ditch row repair after a supervisor crash: never leave
@@ -197,8 +194,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 at=self._clock.now(),
                 error="execution supervisor crashed (see server log)",
             )
-            if self._executions.update_if_status(execution, expected=expected):
-                self._events.publish(execution)
+            self._writer.commit(execution, expected=expected)
         except Exception:  # noqa: BLE001 -- already in the crash path
             logger.exception(
                 "could not fail leftover execution %s after supervisor crash",

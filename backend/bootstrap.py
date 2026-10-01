@@ -28,6 +28,10 @@ from .application.ports.clock import Clock
 from .application.ports.training_gateway import TrainingGateway
 from .application.dataset_task_sweeper import DatasetTaskSweeper
 from .application.event_publisher import EventPublisher
+from .application.lifecycle_writer import (
+    ExecutionLifecycleWriter,
+    RunLifecycleWriter,
+)
 from .application.services import (
     ApplicationServices,
     AssetServices,
@@ -207,15 +211,23 @@ def build_container(settings: Settings) -> Container:
     graph_runtime = ReflectedGraphRuntime(graph_registry, monitor_bus=monitor_bus)
     graph_executions = SqliteGraphExecutionRepository(database)
     graph_library = SqliteGraphLibrary(database)
+    execution_writer = ExecutionLifecycleWriter(
+        repository=graph_executions, events=publisher
+    )
     graph_supervisor = GraphExecutionSupervisor(
         executions=graph_executions,
+        writer=execution_writer,
         runtime=graph_runtime,
         events=publisher,
         clock=clock,
     )
 
+    # One writer per aggregate: CAS-then-announce is defined once
+    # (application/lifecycle_writer.py), not at every call site.
+    run_writer = RunLifecycleWriter(repository=run_repository, events=publisher)
     supervisor = RunSupervisor(
         runs=run_repository,
+        writer=run_writer,
         events=publisher,
         gateway=gateway,
         progress=progress,
@@ -230,7 +242,7 @@ def build_container(settings: Settings) -> Container:
         get_active_run=GetActiveRun(run_repository),
         start_training=StartTraining(
             runs=run_repository,
-            events=publisher,
+            writer=run_writer,
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
@@ -240,14 +252,14 @@ def build_container(settings: Settings) -> Container:
         ),
         stop_training=StopTraining(
             runs=run_repository,
-            events=publisher,
+            writer=run_writer,
             gateway=gateway,
             clock=clock,
         ),
         get_run_log=GetRunLog(runs=run_repository, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
             runs=run_repository,
-            events=publisher,
+            writer=run_writer,
             gateway=gateway,
             clock=clock,
             watcher=supervisor,
@@ -321,8 +333,8 @@ def build_container(settings: Settings) -> Container:
             validate=ValidateGraph(runtime=graph_runtime),
             start_execution=StartGraphExecution(
                 executions=graph_executions,
+                writer=execution_writer,
                 runtime=graph_runtime,
-                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -330,7 +342,7 @@ def build_container(settings: Settings) -> Container:
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
-                events=publisher,
+                writer=execution_writer,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -338,7 +350,9 @@ def build_container(settings: Settings) -> Container:
                 executions=graph_executions, events=publisher
             ),
             reconcile_executions=ReconcileGraphExecutions(
-                executions=graph_executions, events=publisher, clock=clock
+                executions=graph_executions,
+                writer=execution_writer,
+                clock=clock,
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),

@@ -15,7 +15,7 @@ from ..errors import (
 from ..ports.clock import Clock
 from ..project_paths import ProjectPaths
 from ..ports.config_inspector import ConfigInspector
-from ..event_publisher import EventPublisher
+from ..lifecycle_writer import RunLifecycleWriter
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
@@ -39,7 +39,7 @@ class StartTraining:
         self,
         *,
         runs: RunRepository,
-        events: EventPublisher,
+        writer: RunLifecycleWriter,
         gateway: TrainingGateway,
         inspector: ConfigInspector,
         artifacts: RunArtifacts,
@@ -48,7 +48,7 @@ class StartTraining:
         paths: ProjectPaths,
     ) -> None:
         self._runs = runs
-        self._events = events
+        self._writer = writer
         self._gateway = gateway
         self._inspector = inspector
         self._artifacts = artifacts
@@ -101,7 +101,7 @@ class StartTraining:
                 )
                 pid = self._gateway.spawn(launch)
                 run.mark_started(pid=pid, at=self._clock.now())
-                if not self._runs.update_if_status(run, expected=RunStatus.CREATED):
+                if not self._writer.commit(run, expected=RunStatus.CREATED):
                     # Unreachable while the lock is held (only
                     # reconciliation, which runs before the server
                     # accepts requests, touches created rows) -- but
@@ -115,7 +115,6 @@ class StartTraining:
                     raise TrainingLaunchError(
                         f"run {run.id} was reclaimed during startup launch"
                     )
-                self._events.publish(run)
                 self._watcher.watch(
                     run_id=run.id,  # type: ignore[arg-type]
                     pid=pid,
@@ -142,19 +141,20 @@ class StartTraining:
             error = str(exc) or type(exc).__name__
             if current.status is RunStatus.CREATED:
                 current.mark_failed(at=self._clock.now(), error=error)
-                if self._runs.update_if_status(current, expected=RunStatus.CREATED):
-                    # The launch entity still buffers RunCreated (the
-                    # sqlite repo re-hydrates `current`); publish it
-                    # first so the stream stays created -> failed.
-                    self._events.publish_all(run, current)
+                # `prior=(run,)` because the launch entity still buffers
+                # RunCreated: the stream must read created -> failed, not
+                # the other way round.
+                self._writer.commit(
+                    current, expected=RunStatus.CREATED, prior=(run,)
+                )
                 return
             if current.status is RunStatus.RUNNING and pid is not None:
                 current.mark_failed(
                     at=self._clock.now(), error=f"startup handover failed: {error}"
                 )
-                if self._runs.update_if_status(current, expected=RunStatus.RUNNING):
-                    self._events.publish(run)
-                    self._events.publish(current)
+                if self._writer.commit(
+                    current, expected=RunStatus.RUNNING, prior=(run,)
+                ):
                     self._gateway.kill(pid)  # nobody watches this process
         except Exception:  # noqa: BLE001 -- already on the failure path
             logger.exception("could not repair run %s after failed start", run.id)

@@ -19,7 +19,7 @@ import logging
 
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
-from ..event_publisher import EventPublisher
+from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ...domain.value_objects import GraphStatus
 
@@ -31,11 +31,11 @@ class ReconcileGraphExecutions:
         self,
         *,
         executions: GraphExecutionRepository,
-        events: EventPublisher,
+        writer: ExecutionLifecycleWriter,
         clock: Clock,
     ) -> None:
         self._executions = executions
-        self._events = events
+        self._writer = writer
         self._clock = clock
 
     def execute(self) -> ReconcileResult:
@@ -48,14 +48,13 @@ class ReconcileGraphExecutions:
                 error = "server restarted while the execution was in flight"
             execution.mark_failed(at=self._clock.now(), error=error)
 
-            if not self._executions.update_if_status(execution, expected=expected):
+            if not self._writer.commit(execution, expected=expected):
                 logger.warning(
                     "reconcile: execution %s was finalised by another writer",
                     execution.id,
                 )
                 continue
             cleaned += 1
-            self._events.publish(execution)
             logger.info(
                 "reconciled graph execution %s -> %s",
                 execution.id,

@@ -241,14 +241,26 @@ def test_total_steps_never_shrinks() -> None:
     run.record_progress(done_steps=2, at=clock.now(), total_steps=50)
     check(run.total_steps == 50, "a larger total is adopted")
 
-    try:
-        run.record_progress(done_steps=3, at=clock.now(), total_steps=10)
-        check(False, "a smaller total must be rejected")
-    except DomainError as exc:
-        check("cannot shrink" in str(exc), f"shrinking refused (got {exc})")
+    # A stale sample (the trainer re-read its config and reported a
+    # smaller plan) is ignored rather than refused: the step count is
+    # still good, and telemetry must never crash the watcher.
+    run.record_progress(done_steps=3, at=clock.now(), total_steps=10)
     check(
-        run.total_steps == 50 and run.done_steps == 2,
-        "the refused progress changed nothing",
+        run.total_steps == 50,
+        f"a smaller total is ignored, not applied (got {run.total_steps})",
+    )
+    check(run.done_steps == 3, "and the rest of the sample was applied")
+
+    # A negative total is a malformed sample, not a stale one.
+    before = (run.total_steps, run.done_steps)
+    try:
+        run.record_progress(done_steps=9, at=clock.now(), total_steps=-1)
+        check(False, "a negative total must be rejected")
+    except DomainError as exc:
+        check("total_steps cannot be negative" in str(exc), f"negative total refused (got {exc})")
+    check(
+        (run.total_steps, run.done_steps) == before,
+        "a rejected sample leaves the run untouched",
     )
 
 

@@ -21,7 +21,7 @@ from ..errors import (
 )
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
-from ..event_publisher import EventPublisher
+from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 
 _MAX_ATTEMPTS = 3
@@ -32,12 +32,12 @@ class StopGraphExecution:
         self,
         *,
         executions: GraphExecutionRepository,
-        events: EventPublisher,
+        writer: ExecutionLifecycleWriter,
         launcher: ExecutionLauncher,
         clock: Clock,
     ) -> None:
         self._executions = executions
-        self._events = events
+        self._writer = writer
         self._launcher = launcher
         self._clock = clock
 
@@ -57,8 +57,7 @@ class StopGraphExecution:
                 )
             expected = execution.status
             execution.stop(at=self._clock.now(), reason="stop requested")
-            if self._executions.update_if_status(execution, expected=expected):
-                self._events.publish(execution)
+            if self._writer.commit(execution, expected=expected):
                 return to_execution_dto(execution)
             # CAS lost -- most likely the worker claimed queued->running
             # between our read and our write; refetch and try again.

@@ -1,10 +1,12 @@
-"""Value objects the application layer extracted from duplicated rules.
+"""Value objects and services the application layer extracted from
+duplicated rules.
 
-One test file for the four small collaborators that replaced copies of a
-rule (docs 08 S-06..S-09). Each section pins the behaviour that used to
-live in six ``_resolve`` methods, nine publish loops, three bound
-constants and nine validation guards -- so the deduplication cannot be
-undone one call site at a time without a red test.
+One test file for the small collaborators that replaced copies of a rule
+(docs 08 S-06..S-09, S-13, S-14). Each section pins behaviour that used
+to live in six ``_resolve`` methods, nine publish loops, three bound
+constants, nine validation guards and twelve hand-rolled
+"compare-and-swap then announce" sequences -- so the deduplication
+cannot be undone one call site at a time without a red test.
 
 Run:  python backend/tests/test_value_objects.py
 """
@@ -39,6 +41,8 @@ from backend.application.requests import (  # noqa: E402
     ItemChangesRequest,
     ItemSelection,
 )
+from backend.application.lifecycle_writer import LifecycleWriter  # noqa: E402
+from backend.application.ports.progress_source import ProgressSample  # noqa: E402
 from backend.domain.events import DomainEvent, RunStarted  # noqa: E402
 from backend.tests.support import check, finish  # noqa: E402
 
@@ -269,6 +273,119 @@ def test_item_changes_request() -> None:
     check(verdict_only.type == "good", "a verdict on its own is a real change")
 
 
+# ---------------------------------------------------------------------------
+# S-13b: LifecycleWriter -- compare-and-swap, then announce, winner only
+# ---------------------------------------------------------------------------
+
+
+class _Repo:
+    """A repository that answers the CAS however the test says."""
+
+    def __init__(self, *, wins: bool = True) -> None:
+        self.wins = wins
+        self.calls: list[str] = []
+
+    def add(self, aggregate):
+        self.calls.append("add")
+        return aggregate
+
+    def update_if_status(self, aggregate, *, expected) -> bool:
+        self.calls.append(f"cas:{expected}")
+        return self.wins
+
+
+def test_lifecycle_writer() -> None:
+    print("\n== LifecycleWriter: CAS first, announce only if you won ==")
+    bus = _Bus()
+    writer = LifecycleWriter(repository=_Repo(wins=True), events=EventPublisher(events=bus))
+
+    first = _Aggregate(RunStarted(run_id=1, pid=1))
+    check(writer.commit(first, expected="running") is True, "a won CAS reports success")
+    check(len(bus.published) == 1, "and the buffered events are announced")
+
+    loser = LifecycleWriter(
+        repository=_Repo(wins=False), events=EventPublisher(events=bus)
+    )
+    second = _Aggregate(RunStarted(run_id=2, pid=2))
+    check(
+        loser.commit(second, expected="running") is False,
+        "a lost CAS reports failure",
+    )
+    check(len(bus.published) == 1, "and announces nothing -- the row is not ours")
+
+    # The order is the whole point: nothing is announced before the row
+    # is actually written, so the stream can never show a state the
+    # database does not hold.
+    bus2 = _Bus()
+    repo = _Repo(wins=True)
+    writer2 = LifecycleWriter(repository=repo, events=EventPublisher(events=bus2))
+    third = _Aggregate(RunStarted(run_id=3, pid=3))
+    writer2.commit(third, expected="running")
+    check(
+        repo.calls == ["cas:running"] and len(bus2.published) == 1,
+        "the row was written before it was announced",
+    )
+
+    # ``prior`` exists for the start-that-failed repair: the launch
+    # entity still buffers RunCreated, and the stream must read
+    # created -> failed rather than failed -> created.
+    bus3 = _Bus()
+    writer3 = LifecycleWriter(repository=_Repo(), events=EventPublisher(events=bus3))
+    created = _Aggregate(RunStarted(run_id=4, pid=4))
+    failed = _Aggregate(RunStarted(run_id=4, pid=None))
+    writer3.commit(failed, expected="created", prior=(created,))
+    check(
+        [e.run_id for e in bus3.published] == [4, 4],
+        "prior buffers are announced before the aggregate's own",
+    )
+
+    stored = writer3.insert(_Aggregate(RunStarted(run_id=5, pid=5)))
+    check(
+        isinstance(stored, _Aggregate) and len(bus3.published) == 3,
+        "insert persists and announces (nothing to race against)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# S-14: ProgressSample answers whether it is only a verdict
+# ---------------------------------------------------------------------------
+
+
+def test_progress_sample_terminal_only() -> None:
+    print("\n== ProgressSample.is_terminal_only (S-14) ==")
+    check(
+        ProgressSample(terminal="finished").is_terminal_only,
+        "a verdict with no telemetry is terminal-only",
+    )
+    check(
+        not ProgressSample(step=5).is_terminal_only,
+        "a plain progress record is not",
+    )
+    check(
+        not ProgressSample().is_terminal_only,
+        "an empty record is not (no verdict at all)",
+    )
+    for field, value in (
+        ("step", 1),
+        ("total", 10),
+        ("loss", 0.5),
+        ("avg", 0.4),
+        ("lr", 1e-4),
+        ("phase", "training"),
+        ("cache_done", 3),
+        ("cache_total", 9),
+    ):
+        sample = ProgressSample(terminal="finished", **{field: value})
+        check(
+            not sample.is_terminal_only,
+            f"a verdict plus {field} is progress, not a pure verdict",
+        )
+    check(
+        len(ProgressSample().has_telemetry) == 8,
+        "every telemetry field is accounted for",
+    )
+
+
 def main() -> None:
     test_project_paths()
     test_event_publisher()
@@ -276,6 +393,8 @@ def main() -> None:
     test_asset_request()
     test_item_selection()
     test_item_changes_request()
+    test_lifecycle_writer()
+    test_progress_sample_terminal_only()
     finish()
 
 

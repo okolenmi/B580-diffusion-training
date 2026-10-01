@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 from .event_publisher import EventPublisher
+from .lifecycle_writer import RunLifecycleWriter
 from .ports.clock import Clock
 from .ports.progress_source import ProgressSample, ProgressSource
 from .ports.run_artifacts import RunArtifacts
@@ -50,6 +51,7 @@ class RunSupervisor(RunWatcher):
         self,
         *,
         runs: RunRepository,
+        writer: RunLifecycleWriter,
         events: EventPublisher,
         gateway: TrainingGateway,
         progress: ProgressSource,
@@ -58,6 +60,9 @@ class RunSupervisor(RunWatcher):
         poll_interval: float = 0.5,
     ) -> None:
         self._runs = runs
+        # The writer owns "compare-and-swap the row, then announce it";
+        # ``events`` is only for telemetry, which no entity buffers.
+        self._writer = writer
         self._events = events
         self._gateway = gateway
         self._progress = progress
@@ -155,29 +160,25 @@ class RunSupervisor(RunWatcher):
     def _apply_sample(self, run: Run, sample: ProgressSample) -> bool:
         if sample.terminal is not None:
             self._terminal[run.id] = sample.terminal  # type: ignore[index]
-        if sample.terminal is not None and all(
-            getattr(sample, field) is None
-            for field in ("step", "total", "loss", "avg", "lr", "phase",
-                          "cache_done", "cache_total")
-        ):
+        if sample.is_terminal_only:
             # A pure terminal line: nothing to apply, but it is evidence
             # -- and the client should hear about the run's end through
             # the normal lifecycle path, not through telemetry.
             return True
-        total = run.total_steps
-        if sample.total is not None and sample.total > total:
-            total = sample.total  # trainer discovered a larger total
+        # total_steps is passed as the trainer reported it: whether it is
+        # adopted is the entity's call (a plan only ever grows), not this
+        # thread's -- one writer, one rule (docs 08 S-15).
         run.record_progress(
             done_steps=run.done_steps if sample.step is None else sample.step,
             at=self._clock.now(),
             current_loss=sample.loss,
             avg_loss=sample.avg,
             phase=sample.phase,
-            total_steps=total,
+            total_steps=sample.total,
             cache_done=sample.cache_done,
             cache_total=sample.cache_total,
         )
-        if not self._runs.update_if_status(run, expected=RunStatus.RUNNING):
+        if not self._writer.commit(run, expected=RunStatus.RUNNING):
             return False
         self._events.emit(
             RunProgressed(
@@ -239,9 +240,8 @@ class RunSupervisor(RunWatcher):
                 at=at, error=f"Exit code {exit_code}", exit_code=exit_code
             )
             status_word = "failed"
-        if not self._runs.update_if_status(run, expected=RunStatus.RUNNING):
+        if not self._writer.commit(run, expected=RunStatus.RUNNING):
             return
-        self._events.publish(run)
         self._artifacts.append_log_note(
             run_id,
             f"--- RUN ENDED: status={status_word}, exit_code={exit_code} ---",
@@ -261,9 +261,8 @@ class RunSupervisor(RunWatcher):
                 at=self._clock.now(),
                 error="run supervisor crashed (see server log)",
             )
-            if not self._runs.update_if_status(run, expected=expected):
+            if not self._writer.commit(run, expected=expected):
                 return  # stop/reconcile won the row; their pid handling stands
-            self._events.publish(run)
             try:
                 self._artifacts.append_log_note(
                     run_id,

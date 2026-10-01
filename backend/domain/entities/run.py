@@ -274,29 +274,26 @@ class Run:
         """Update training progress (``running`` only, no event).
 
         ``None`` means "leave unchanged" for every optional field.
-        ``total_steps`` is adopted explicitly by the caller (the
-        supervisor only ever passes a *larger* total than the config
-        promised) -- and it may only grow, which is why the rule is
-        here rather than in the supervisor: a second writer calling this
-        would otherwise be able to shrink the plan (docs 08 S-15).
+        ``total_steps`` is the plan the trainer reports, and the plan
+        only ever grows: a larger total is adopted, a smaller one is
+        ignored rather than refused, because a stale sample must not
+        shrink the run's own bookkeeping. The rule belongs here, not in
+        the supervisor thread, so every writer gets it (docs 08 S-15).
 
         High-frequency telemetry deliberately does not emit domain
         events -- the supervisor publishes ``RunProgressed`` itself;
         domain events mark lifecycle changes only.
+
+        Everything is checked before anything is written. A sample that
+        carried both a valid step count and an impossible value used to
+        leave the step count applied and the call rejected, which is how
+        a "refused" progress update still moved the run forward.
         """
-        # Everything is checked before anything is written. A sample that
-        # carried both a valid step count and an impossible total used to
-        # leave the step count applied and the call rejected, which is
-        # how a "refused" progress update still moved the run forward.
         self._life.require(RunStatus.RUNNING, action="record progress")
         if done_steps < 0:
             raise DomainError("done_steps cannot be negative")
         if total_steps is not None and total_steps < 0:
             raise DomainError("total_steps cannot be negative")
-        if total_steps is not None and total_steps < self._total_steps:
-            raise DomainError(
-                f"total_steps cannot shrink ({self._total_steps} -> {total_steps})"
-            )
         for value, label in ((cache_done, "cache_done"), (cache_total, "cache_total")):
             if value is not None and value < 0:
                 raise DomainError(f"{label} cannot be negative")
@@ -309,7 +306,7 @@ class Run:
             self._avg_loss = avg_loss
         if phase is not None:
             self._phase = phase
-        if total_steps is not None:
+        if total_steps is not None and total_steps > self._total_steps:
             self._total_steps = total_steps
         if cache_done is not None:
             self._cache_done = cache_done

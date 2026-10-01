@@ -21,7 +21,7 @@ from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
-from ..event_publisher import EventPublisher
+from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import ISSUE_ERROR, GraphRuntime, issue_to_dict
 from ...domain.entities.graph_execution import GraphExecution
@@ -36,14 +36,14 @@ class StartGraphExecution:
         self,
         *,
         executions: GraphExecutionRepository,
+        writer: ExecutionLifecycleWriter,
         runtime: GraphRuntime,
-        events: EventPublisher,
         launcher: ExecutionLauncher,
         clock: Clock,
     ) -> None:
         self._executions = executions
+        self._writer = writer
         self._runtime = runtime
-        self._events = events
         self._launcher = launcher
         self._clock = clock
         self._lock = threading.Lock()
@@ -71,8 +71,7 @@ class StartGraphExecution:
             execution = GraphExecution.create(
                 graph=graph, created_at=self._clock.now()
             )
-            self._executions.add(execution)  # binds id + buffers Queued
-            self._events.publish(execution)
+            self._writer.insert(execution)  # binds id, buffers Queued, announces
             self._launcher.launch(execution.id, graph)
             return to_execution_summary_dto(execution)
 

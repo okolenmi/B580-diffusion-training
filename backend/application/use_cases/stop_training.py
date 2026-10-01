@@ -6,6 +6,7 @@ from ..dto import RunDTO, to_run_dto
 from ..errors import RunNotFoundError, RunNotRunningError
 from ..ports.clock import Clock
 from ..event_publisher import EventPublisher
+from ..lifecycle_writer import RunLifecycleWriter
 from ..ports.run_repository import RunRepository
 from ..ports.training_gateway import TrainingGateway
 from ...domain.value_objects import RunStatus
@@ -25,12 +26,12 @@ class StopTraining:
         self,
         *,
         runs: RunRepository,
-        events: EventPublisher,
+        writer: RunLifecycleWriter,
         gateway: TrainingGateway,
         clock: Clock,
     ) -> None:
         self._runs = runs
-        self._events = events
+        self._writer = writer
         self._gateway = gateway
         self._clock = clock
 
@@ -48,12 +49,11 @@ class StopTraining:
 
         reason = "stop requested" + (" (force)" if force else "")
         run.cancel(at=self._clock.now(), reason=reason)
-        if not self._runs.update_if_status(run, expected=RunStatus.RUNNING):
+        if not self._writer.commit(run, expected=RunStatus.RUNNING):
             fresh = self._runs.get(run_id)
             won = fresh.status.value if fresh else "?"
             raise RunNotRunningError(
                 f"run {run_id} already finished as {won}"
             )
 
-        self._events.publish(run)
         return to_run_dto(run)

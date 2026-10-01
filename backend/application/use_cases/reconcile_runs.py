@@ -29,6 +29,7 @@ import logging
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
 from ..event_publisher import EventPublisher
+from ..lifecycle_writer import RunLifecycleWriter
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
@@ -43,14 +44,14 @@ class ReconcileRuns:
         self,
         *,
         runs: RunRepository,
-        events: EventPublisher,
+        writer: RunLifecycleWriter,
         gateway: TrainingGateway,
         clock: Clock,
         watcher: RunWatcher,
         artifacts: RunArtifacts,
     ) -> None:
         self._runs = runs
-        self._events = events
+        self._writer = writer
         self._gateway = gateway
         self._clock = clock
         # Required, not optional: with these missing the sweep would
@@ -93,13 +94,12 @@ class ReconcileRuns:
                     error="orphan cleanup: process already gone or no longer ours",
                 )
 
-            if not self._runs.update_if_status(run, expected=expected):
+            if not self._writer.commit(run, expected=expected):
                 logger.warning(
                     "reconcile: run %s was finalised by another writer", run.id
                 )
                 continue
             cleaned += 1
-            self._events.publish(run)
             logger.info(
                 "reconciled run %s -> %s", run.id, run.status.value
             )

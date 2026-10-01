@@ -41,6 +41,10 @@ from backend.application.errors import ConfigNotFoundError
 from backend.application.project_paths import ProjectPaths
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.event_publisher import EventPublisher
+from backend.application.lifecycle_writer import (
+    ExecutionLifecycleWriter,
+    RunLifecycleWriter,
+)
 from backend.application.services import (
     MonitorServices,
     ApplicationServices,
@@ -777,9 +781,14 @@ def build_services(
             graph_executions = SqliteGraphExecutionRepository(graphs_db)
         if graph_library is None:
             graph_library = SqliteGraphLibrary(graphs_db)
+    execution_writer = ExecutionLifecycleWriter(
+        repository=graph_executions, events=publisher
+    )
+    run_writer = RunLifecycleWriter(repository=runs, events=publisher)
     if graph_supervisor is None:
         graph_supervisor = GraphExecutionSupervisor(
             executions=graph_executions,
+            writer=execution_writer,
             runtime=graph_runtime,
             events=publisher,
             clock=clock,
@@ -787,6 +796,7 @@ def build_services(
     if supervisor is None:
         supervisor = RunSupervisor(
             runs=runs,
+            writer=run_writer,
             events=publisher,
             gateway=gateway,
             progress=_Jsonl(),
@@ -801,7 +811,7 @@ def build_services(
         get_active_run=GetActiveRun(runs),
         start_training=StartTraining(
             runs=runs,
-            events=publisher,
+            writer=run_writer,
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
@@ -810,11 +820,11 @@ def build_services(
             paths=paths,
         ),
         stop_training=StopTraining(
-            runs=runs, events=publisher, gateway=gateway, clock=clock
+            runs=runs, writer=run_writer, gateway=gateway, clock=clock
         ),
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
-            runs=runs, events=publisher, gateway=gateway, clock=clock,
+            runs=runs, writer=run_writer, gateway=gateway, clock=clock,
             watcher=supervisor, artifacts=artifacts,
         ),
         config=ConfigServices(
@@ -881,8 +891,8 @@ def build_services(
             validate=ValidateGraph(runtime=graph_runtime),
             start_execution=StartGraphExecution(
                 executions=graph_executions,
+                writer=execution_writer,
                 runtime=graph_runtime,
-                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -890,7 +900,7 @@ def build_services(
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
-                events=publisher,
+                writer=execution_writer,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -898,7 +908,9 @@ def build_services(
                 executions=graph_executions, events=publisher
             ),
             reconcile_executions=ReconcileGraphExecutions(
-                executions=graph_executions, events=publisher, clock=clock
+                executions=graph_executions,
+                writer=execution_writer,
+                clock=clock,
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),

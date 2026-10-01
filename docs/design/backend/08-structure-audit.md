@@ -31,7 +31,7 @@ deletes twenty copies of a rule outranks an item that tidies one class.
 | [S-10](#s-10) | layering | Error-code -> HTTP status table duplicated in two layers (26 strings) | High | **Fixed** (S-batch 3) |
 | [S-11](#s-11) | domain | Both entities are anemic: 17 and 7 public mutable attributes bypass every invariant | High | **Fixed** (S-batch 4) |
 | [S-12](#s-12) | domain | The terminal-state set is hand-maintained beside the transition table, twice per aggregate | Med | **Fixed** (S-batch 4) |
-| [S-13](#s-13) | domain | Two lifecycle machines, two supervisors, two reconcilers, no shared abstraction | Med | **Fixed** (S-batch 4, S-batch 5) |
+| [S-13](#s-13) | domain | Two lifecycle machines, two supervisors, two reconcilers, no shared abstraction | Med | **Fixed** (S-batch 4 guard, S-batch 5 writers) |
 | [S-14](#s-14) | domain | `ProgressSample` is interrogated by field-name reflection in the supervisor | Med | **Fixed** (S-batch 5) |
 | [S-15](#s-15) | domain | Two `Run` invariants enforced in the supervisor instead of the entity | Med | **Fixed** (S-batch 4) |
 | [S-16](#s-16) | domain | Rehydration has no sanctioned factory, so a loaded row can violate cross-field rules | Med | **Fixed** (S-batch 4) |
@@ -193,10 +193,14 @@ an aggregate is, and inheriting would couple the two lifecycles for no
 gain. The transition table stays beside its enum in `value_objects`,
 which is also what makes `status.is_terminal` derivable (S-12).
 
-The application half -- "finalise through compare-and-swap, then
-publish", hand-rolled six times across the two supervisors, two stop use
-cases and two reconcilers -- is the `RunLifecycleWriter` /
-`ExecutionLifecycleWriter` pair (S-batch 5).
+The application half -- "compare-and-swap the row, then announce it",
+hand-rolled twelve times across the two supervisors, the two stop use
+cases, the two reconcilers, the start and its repair path -- is
+`LifecycleWriter[R, S]` (`application/lifecycle_writer.py`), bound as
+`RunLifecycleWriter` / `ExecutionLifecycleWriter`. Its `commit()` also
+takes `prior=` for the one case where ordering matters: a start that
+failed between the insert and the launch leaves its `RunCreated` buffer
+behind, and the stream has to read created-then-failed.
 
 ### S-14
 Reflection over `ProgressSample`
@@ -204,7 +208,8 @@ Reflection over `ProgressSample`
 `supervisor.py` asked "is this sample only a terminal marker?" by
 `getattr`-ing eight field names, so renaming a field would turn the
 check into a silent always-`True`. `ProgressSample.is_terminal_only`
-answers it on the type that knows.
+answers it on the type that knows, next to `has_telemetry` so the field
+list has exactly one home.
 
 ### S-15
 Invariants enforced in a background thread
@@ -213,7 +218,10 @@ Invariants enforced in a background thread
 `RunSupervisor._apply_sample`; a second writer calling
 `record_progress` would have erased it. It is now an invariant of
 `record_progress`, pinned in `test_domain_run.py` rather than through
-the supervisor.
+the supervisor, and the supervisor passes the trainer's number straight
+through instead of deciding. A *smaller* total is ignored rather than
+refused -- a stale sample must not crash the watcher, and the rest of
+that sample is still good.
 
 Moving the rule up also fixed a defect it exposed: `record_progress`
 wrote `done_steps` before checking `total_steps`, so a sample carrying

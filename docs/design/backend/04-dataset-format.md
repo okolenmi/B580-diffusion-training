@@ -38,24 +38,43 @@ datasets/<name>/
 
 ## SQLite schema (user_version = 2)
 
-```sql
-info(name TEXT PRIMARY KEY, description TEXT, created_at REAL)
+The authoritative copy of this schema is `manager/db.py`'s
+`init_local_db()`; anything here that looks abbreviated is. Migration
+scripts copy it from there too.
 
-sources(id, name, type, model_path, config, created_at)          -- unchanged
+```sql
+info(
+    name        TEXT PRIMARY KEY,
+    description TEXT,
+    created_at  REAL NOT NULL)
+
+sources(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    type        TEXT    NOT NULL,           -- 'teacher' | 'real'
+    model_path  TEXT,
+    config      TEXT,                       -- JSON blob
+    created_at  REAL    NOT NULL)           -- unchanged from v1
 
 shards(
-    id INTEGER PRIMARY KEY,
-    file_path   TEXT NOT NULL UNIQUE,   -- relative to dataset root, "shards/..."
-    layout      TEXT NOT NULL DEFAULT 'single_latent',
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path   TEXT    NOT NULL UNIQUE,    -- relative to dataset root, "shards/..."
+    layout      TEXT    NOT NULL DEFAULT 'single_latent',
         -- 'single_latent'      : x0_{i} clean latents (LoRA images+captions)
         -- 'compressed_traj'    : traj_{i}_{xt,p,n,t} denoising sequences
         -- anything else        : legacy/unknown; readers must skip, not guess
-    sample_count, size_bytes, created_at)
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    size_bytes   INTEGER NOT NULL DEFAULT 0,
+    created_at   REAL    NOT NULL)
 
 trajectories(
-    id INTEGER PRIMARY KEY,
-    source_id, shard_id, shard_index,    -- unchanged
-    sample_count, seed, prompt,          -- unchanged
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id   INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    shard_id    INTEGER NOT NULL REFERENCES shards(id) ON DELETE CASCADE,
+    shard_index INTEGER NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    seed        INTEGER,
+    prompt      TEXT,
     neg_prompt  TEXT NOT NULL DEFAULT '',
     model_type  TEXT NOT NULL DEFAULT 'eps',   -- 'eps' | 'vpred'
     type        TEXT NOT NULL DEFAULT 'good',  -- 'good' | 'bad' (curation flag)
@@ -69,8 +88,19 @@ trajectories(
     extra       TEXT)                          -- residual JSON (e.g. crop_idx,
                                                -- batch_idx); never read by core
 
-training_sets(id, name UNIQUE, description, created_at)          -- unchanged
-set_members(set_id, trajectory_id)                               -- unchanged
+training_sets(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT,
+    created_at  REAL    NOT NULL)              -- unchanged from v1
+
+set_members(
+    set_id       INTEGER NOT NULL REFERENCES training_sets(id) ON DELETE CASCADE,
+    trajectory_id INTEGER NOT NULL REFERENCES trajectories(id) ON DELETE CASCADE,
+    PRIMARY KEY (set_id, trajectory_id))       -- unchanged from v1
+
+CREATE INDEX IF NOT EXISTS idx_traj_source ON trajectories(source_id);
+CREATE INDEX IF NOT EXISTS idx_traj_shard  ON trajectories(shard_id);
 
 -- tasks table: REMOVED. Task lifecycle belongs to the server (backend.db).
 ```
@@ -106,10 +136,14 @@ Connection PRAGMAs on every open: `journal_mode=WAL`, `busy_timeout=5000`,
 
 ## Transition rules
 
+The `archive/server/` rows describe the first-cut web layer, which moved
+wholesale to `archive/` at M9 and is not part of the running product
+anymore; the curation UI is no longer reachable in v1 or v2.
+
 | actor \ dataset | v1 (legacy) | v2 |
 |---|---|---|
-| legacy server `server/` curation UI | works unchanged | works (staging/archived views are membership-based aliases; rows carry a synthesized `metadata` JSON string projected from columns for the UI) |
-| legacy server ingestion/tasks | works, but `ensure_v2` in the builder refuses → task marked `failed` with migration hint | refuses at `create_task` (`no such table: tasks`) — replaced by the backend's dataset tasks (M3b, implemented) |
+| archived server `archive/server/` curation UI | works unchanged | works (staging/archived views are membership-based aliases; rows carry a synthesized `metadata` JSON string projected from columns for the UI) |
+| archived server ingestion/tasks | works, but `ensure_v2` in the builder refuses → task marked `failed` with migration hint | refuses at `create_task` (`no such table: tasks`) — replaced by the backend's dataset tasks (M3b, implemented) |
 | training (`core.cli` → `manager.loader`) | refuses via `ensure_v2` with migration hint | works |
 | new backend `backend/` | refuses via `ensure_v2` at the port boundary | works |
 

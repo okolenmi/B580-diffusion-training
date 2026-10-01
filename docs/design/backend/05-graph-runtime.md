@@ -165,24 +165,7 @@ real `Node`.
 
 ## 8. Testability
 
-* Discovery takes an injectable `scan` callable -- tests feed fixture
-  node classes (defined in `tests/support.py`); production uses the
-  `pkgutil` walk. One dedicated file (`test_graph_discovery.py`) runs the
-  *real* scan: same 36 classes as the frozen legacy list, zero load
-  errors, every `NodeInfo` JSON-serializable.
 * `Node.resolve_*` hooks get a fixture class overriding them.
 * The memory releaser is injectable (tests never touch `core/`/GPU).
 * Fixture nodes come from `nodes.core` directly -- it is stdlib-only
   (no torch), so hermetic tests stay torch-free.
-
-## 9. Deferrals
-
-* **Monitor bus**: shipped in M6 -- application `MonitorBus` port,
-  infrastructure adapter wrapping the repo-root bus, runtime passes it
-  into `ExecutionContext`, stream at `GET /api/v1/monitor/{id}/stream`.
-* **Assets**: already served by `/api/v1/assets/*`; not duplicated here.
-* **Frontend**: monitor slice shipped in M6 (`frontend/`); the graph
-  editor shipped in M7 (`/graph`): localStorage -> library import,
-  local type check -> validate endpoint, lifecycle live via `/events`
-  SSE with API polling as the fallback while executions are active.
-  Dataset/config/run-history views are M8.

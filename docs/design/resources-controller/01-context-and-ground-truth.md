@@ -95,12 +95,6 @@ speculatively now -- matches this project's own established preference
 throughout `docs/design/` for building the one real thing before
 extracting an abstraction from it.
 
-`SDXLArchitecture`'s own job is purely mechanical -- checkpoint
-splitting/parsing, the CLIP-masking above, adapter-injection targets --
-and has **no relationship to dtype at all**. Dtype lives entirely in
-the `ResourcePreset` interface layer described below, not in the
-architecture layer.
-
 **The `ResourcePreset` interface contract (settled):**
 
 | Piece | Contract | Maps to (node-graph side) |
@@ -141,11 +135,7 @@ memory control later," not a hypothetical one.
   the base order is right.
 
 **Decided (see the resolution note at the top of this section and
-Phase 4 below): multiple inheritance, concrete-mixin-first.** (This
-sentence originally read "Not yet decided which one this project
-uses" -- corrected in place during a later docs pass once Phase 4 had
-already settled it, so this section stops contradicting the rest of
-the document.)
+Phase 4 below): multiple inheritance, concrete-mixin-first.**
 
 ## Phases
 

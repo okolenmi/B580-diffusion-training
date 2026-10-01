@@ -10,61 +10,10 @@ section 6. Companion to `01-architecture.md` (backend contract) and
 |---|---|
 | Stack | **Vanilla ES modules, no framework, no build step.** Performance first, structured, easy to expand -- no npm/node toolchain enters this repo. The legacy frontend (7,576 lines across 18 JS + 6 HTML files in `server/static/`) is the reference, not the base: it is rewritten. |
 | What carries over | The **monitor dashboard's visualization** -- charts, series selection, CSV export, replay-on-reload -- is good enough to keep. Its data contract (SSE stream shapes below) is treated as pinned; the code is restructured into modules while the visuals stay. |
-| Who serves it | **The backend serves its own static files** (one origin on 8766: no CORS, no proxy, SSE and API same-origin). The legacy server keeps 8765 untouched until decommission. |
+| Who serves it | **The backend serves its own static files** (one origin on 8766: no CORS, no proxy, SSE and API same-origin). |
 | Build order | **Monitor + training controls first** (the daily driver -- a usable tool after every step), then the graph editor, then dataset manager + config/history tabs. |
 
 ## 2. New frontend layout (planned)
-
-```
-frontend/                     # shipped slices 1+2 (M6/M7) + M8 views + M8d shell + M8e/M8f dataset flows
-├── index.html                # System tracker page (/): state hero, history, log
-├── monitor.html              # standalone monitor dashboard (/monitor/{monitor_id})
-├── graph.html                # graph editor page (/graph)
-├── config.html               # config editor page (/config, M8a)
-├── run.html                  # run detail page (/run/{id}, M8b)
-├── datasets.html             # dataset manager (/datasets + /{name}, M8c);
-│                             # add-data + item editor dialogs (M8e),
-│                             # item context menu (M8f)
-├── help.html                 # help skeleton (/help, M8d)
-├── settings.html             # settings: design theme first (/settings, M8d)
-├── css/
-│   ├── style.css             # shared design system: tokens (incl. shell tokens),
-│   │                         # buttons, inputs, badges, console-line primitive,
-│   │                         # card, page chrome (topbar/body, tabs, state/error
-│   │                         # blocks), log pane; dead weight removed
-│   ├── shell.css             # THE application shell: icon rail (frame, items,
-│   │                         # hover tips, active/disabled states) + floating
-│   │                         # console window + FAB; layout contract documented
-│   │                         # in its header (M8d)
-│   ├── training.css          # system tracker page: state hero, history/log grid,
-│   │                         # monitor hand-off strip
-│   ├── config.css            # config page: path bar, grouped form, raw editor
-│   ├── run.css               # run detail page: details grid, log card
-│   ├── datasets.css          # dataset manager: card grid (+ preview thumb, M8f),
-│   │                         # stats, item cards (+ ⋮ menu, M8f), bulk bar,
-│   │                         # task form
-│   ├── help.css              # help page: where-things-live rows, stub grid
-│   ├── settings.css          # settings page: theme picker, tag, link rows
-│   ├── monitor.css           # monitor page block
-│   └── editor.css            # editor layout, canvas plane, node visuals
-└── js/
-    ├── shell.js              # mounts rail + floating console on every page
-    │                         # (loaded FIRST); active item from pathname;
-    │                         # console geometry/minimized state in localStorage
-    ├── api.js                # THE fetch wrapper: error envelope decoded once, + sse()
-    ├── monitor.js            # monitor page entry (ported visual, new stream URL)
-    ├── editor.js             # editor page entry: catalog, GraphDoc, toolbar, /events
-    ├── views/dashboard.js    # training controls (runs REST + /events SSE)
-    ├── views/config.js       # config editor: schema form + raw buffer (M8a)
-    ├── views/run.js          # run detail: full RunOut grid + log tail (M8b)
-    ├── views/datasets.js     # dataset manager: list/detail/items/sets/tasks,
-    │                         # add-data dialog + browse/edit modes (M8c, M8e),
-    │                         # card previews + ⋮ context menu (M8f)
-    ├── editor/               # state.js (GraphDoc + wire forms), canvas.js (render/
-    │                         # drag/connect), inspector.js (params form), palette.js,
-    │                         # executions.js (run lifecycle), library.js (+ legacy import)
-    └── lib/loss_chart.js     # chart lib as an ES module (visuals untouched)
-```
 
 Rules that keep it fast and expandable:
 
@@ -83,19 +32,19 @@ Rules that keep it fast and expandable:
 51 legacy endpoints vs 47 backend endpoints -- and they are not a
 1:1 mapping. Families:
 
-| Legacy family | Backend equivalent | Status |
-|---|---|---|
-| config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | `GET/PATCH /config`, `GET/PUT /config/raw`, `GET /config/options`, `GET /config/start-options` | **parity** (PATCH merges nested partials; tree shape improved) |
-| training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | `POST /runs`, `POST /runs/{id}/stop`, `GET /runs/active`, `GET /runs/{id}/log` | **parity** (start is JSON, not multipart form) |
-| `/run/reset` | -- | **dropped**: legacy in-memory service reset; backend state lives in the DB (delete + restart covers it) |
-| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | list/get/log + `DELETE /runs` | **resolved** (3.1): `events`/`previews`/`logs/clear` all dropped; the rest shipped |
-| `/sse` | `GET /events` | **parity+** (all domain events, generic encoder, heartbeat) |
-| settings (`GET/POST /settings`, `/files/{kind}`) | `GET/POST /settings` | **resolved** (3.1): `/files/{kind}` dropped -- the config editor uses a path input + datalists |
-| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | items/sets/tasks endpoints + `GET /assets/checkpoint` + `GET /datasets/{name}/files/{path}` (preview bytes) + `PUT /datasets/{name}/preview` (M8f) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); both task kinds since M8e (`ingest_lora` + `generate_teacher`, vs legacy `type=lora`/`teacher`); bulk edit exceeds legacy (neg modes + verdict, M8e); **view shipped M8c, add-data + edit modes M8e, card preview + `⋮` menu M8f (beyond legacy)** |
-| nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | `/graphs/nodes`, `/graphs/executions`, `/graphs/run`+stop, `/graphs/nodes/{class}/diagnostics` | **parity** (plus `validate`, library, history wipe -- legacy had none) |
-| nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | `GET/PUT /assets/{kind}...` | **parity** |
-| **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | `GET /api/v1/monitor/{monitor_id}/stream` | **shipped M6** (section 4) |
-| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | `GET /`, `GET /monitor/{monitor_id}`, `GET /graph`, `GET /config`, `GET /run/{id}`, `GET /datasets`, `GET /datasets/{name}`, `GET /help`, `GET /settings`, `/ui/*` (section 2) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`, M8c `/datasets`, M8d `/help` + `/settings` |
+| Legacy family | Status |
+|---|---|
+| config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | **parity** (PATCH merges nested partials; tree shape improved) |
+| training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | **parity** (start is JSON, not multipart form) |
+| `/run/reset` | **dropped**: legacy in-memory service reset; backend state lives in the DB (delete + restart covers it) |
+| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | **resolved** (3.1): `events`/`previews`/`logs/clear` all dropped; the rest shipped |
+| `/sse` | **parity+** (all domain events, generic encoder, heartbeat) |
+| settings (`GET/POST /settings`, `/files/{kind}`) | **resolved** (3.1): `/files/{kind}` dropped -- the config editor uses a path input + datalists |
+| datasets (trajectories CRUD, training-sets, tasks, checkpoints) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); both task kinds since M8e (`ingest_lora` + `generate_teacher`, vs legacy `type=lora`/`teacher`); bulk edit exceeds legacy (neg modes + verdict, M8e); **view shipped M8c, add-data + edit modes M8e, card preview + `⋮` menu M8f (beyond legacy)** |
+| nodegraph (`registry`, `executions`, `run`+stop, `node/{class}/diagnostics`) | **parity** (plus `validate`, library, history wipe -- legacy had none) |
+| nodegraph assets (`assets/{kind}`, `browse`, `inspect`, `mkdir`, `upload`) | **parity** |
+| **monitor stream** (`GET /nodegraph/monitor/{id}/stream`) | **shipped M6** (section 4) |
+| page routes (`/`, `/nodegraph`, `/nodegraph/monitor/{id}`, `/datasets`) | **shipped** M6 shell + monitor, M7 `/graph`, M8a `/config`, M8b `/run/{id}`, M8c `/datasets`, M8d `/help` + `/settings` |
 
 ### 3.1 Gaps and their resolutions
 
@@ -166,18 +115,8 @@ Facts the port preserves (source: `monitor_bus.py`, `nodes/monitor/*`,
 
 ## 6. Decommission plan for `server/`
 
-Phases, each with an entry criterion -- the legacy server keeps
-serving until the criterion for flipping the default is met. Phase
-numbers match the milestone table in `01-architecture.md`:
-
 | Phase | Scope | Entry criterion |
 |---|---|---|
-| M6 | Monitor slice: backend monitor port + stream endpoint, static serving, frontend shell + monitor dashboard + training controls | **shipped 2026-09-30**: backend serves the monitor page on 8766; the stream's replay/live/clear frames are test-pinned (`test_api_monitor.py`) |
-| M7 | Graph editor (palette/validate/run/executions/library) against `/api/v1/graphs` | **shipped 2026-10-01**: `/graph` page; validate/run/library round-trip (incl. `layout` extras) smoke-tested on 8766; every frontend module passes `node --check` |
-| M8 | Dataset manager + config editor + run history views | **shipped 2026-10-01**: `/config` (M8a), `/run/{id}` (M8b), `/datasets` + preview bytes (M8c); each page is smoke-covered |
-| M8d | Shell redesign: icon rail (all pages) + floating persistent console + `/help` + `/settings` | **shipped 2026-10-01**: `shell.js`/`shell.css` mounted on all six existing pages (rail order: Graph Editor, Datasets, Workflows (soon), System tracker, Help; Settings pinned last; monitor stays workflow-attached, no rail slot); console geometry + minimized state persist in localStorage; visual smoke: 132 checks incl. scenario G |
-| M8e | Dataset add-data + edit modes | **shipped 2026-10-01**: `generate_teacher` task kind (legacy `type=teacher` parity: prompt/keyword sources, neg keyword mix, cfg/steps/t ranges, batch, conditions x samples); import kind hardened (resize/model-type enums validated); bulk multi-edit (`neg_prompt_mode`, `type`, `prepend`/`append`, idempotent joins); frontend: per-card "Add data" dialog (generate/import tabs with the full option sets), Browse/Edit item modes, advanced item editor (fields + metadata + prev/next walk), multi-edit panel; visual smoke scenario H |
-| M8f | Dataset card previews + item context menu | **shipped 2026-10-01**: `preview_path` resolved on list/detail (backend.db pointer, migration `006`, removed with the dataset; first non-bad item fallback; existence re-checked per read so stale pointers degrade to the fallback, never a dead URL); `PUT /datasets/{name}/preview` by item id; card thumb + half-transparent `⋮` one-option menu (disabled when current/absent); visual smoke 180 checks |
 | M9 | **Flip**: `README.md` + `run_server.sh` point at the backend; `server/` moves to archive (its 6 smoke tests retire with it; the 66 `nodes/` tests are unaffected -- one import repointed to `archive.server`); legacy `smoke_test_*` knowledge is preserved in this doc series | **executed 2026-10-01 on user instruction**: `server/` + `server_cli.py` -> `archive/`, entry-point docs (README, setup, architecture) flipped to `backend/`, `run_tests.py`/`full_gate.sh` down to nodes+manager (68 tests), `backend/cli.py` inherits the XPU-env entry-point contract. Entry criterion status: the real training cycle on the new frontend **remains the follow-up validation** |
 
 The six `server/` smoke tests retired with the move; the files live on
@@ -193,7 +132,3 @@ the tree move:
 | `smoke_test_node_presets.py` | `Node.NODE_KIND` / `NodePreset` / `list_presets()` and their introspection |
 | `smoke_test_asset_inspect.py` | asset path sandboxing + `inspect()` real safetensors I/O |
 | `smoke_test_static_caching.py` | `Cache-Control` policy for browser-facing responses (`server/main.py`) |
-
-Both servers run side by side until M8 (8765 legacy, 8766 backend) --
-they share data files read-only, so there is no cutover day, only the
-flip of the default entry point.

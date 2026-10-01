@@ -35,63 +35,6 @@ all -- still wrap `core/`/`manager/` directly, with no independent
 alternative built (also tracked in that same backlog doc). Wrapping is
 the fallback for a domain nobody's rewritten yet, not a destination.
 
-## Top-level layout
-
-```
-convert.py            Legacy CLI entry point (see docs/setup.md)
-convert-cfg.example.toml Template config for convert.py (copy to
-                        convert-cfg.toml, which is gitignored --
-                        it's machine-specific)
-paths.py               Single source of truth for path resolution
-                        (COMFY_DIR, VENV_PYTHON, dataset/model paths).
-                        Both pipelines read this.
-run_server.sh          Node-graph web UI entry point (runs
-                        `python -m backend.cli` since M9)
-
-core/                  Legacy: trainer, optimizers, noise schedule,
-                        LoRA math, UNet wrapper, VAE decode, caching.
-manager/               Legacy: dataset ingestion/storage, a small
-                        sqlite-backed dataset loader, preview generation.
-
-nodes/                 The rewrite: typed Node/Port graph-construction
-                        primitives (core.py) plus domain subpackages:
-  ├─ components/         Rewritten, non-legacy versions of core/-level
-  │                      concerns as they get migrated (see that dir's
-  │                      own README.md for exactly what's landed).
-  ├─ dataset/            Batch sourcing, prefetching, timestep modes.
-  ├─ memory/             DeviceResident ABC, MemoryManager, resource
-  │                      coordination/offload orchestration.
-  ├─ model/              UNet/LoRA/DoRA construction, adapter
-  │                      strategies, frozen-weight storage (incl. NF4),
-  │                      the Resources Controller (see
-  │                      docs/design/resources-controller/README.md).
-  ├─ optimizer/          Algorithm x ExecutionStrategy x Handle
-  │                      composition -- this subpackage is the rewrite's
-  │                      own reference implementation of its house
-  │                      style, cited throughout the design docs.
-  ├─ primitive/           Small standalone value/utility nodes.
-  ├─ train/              The training step pipeline itself
-  │                      (TrainingStepPipeline/StepPhase), the trainer
-  │                      node.
-  └─ smoke_tests/        CPU-only tests for everything above; see
-                         docs/setup.md for how to run them.
-
-backend/               Web server for the nodes/ UI (clean-room
-                        replacement for the old server/, M9): REST
-                        routes per concern (datasets, training, config,
-                        monitoring, graphs) under /api/v1, layered
-                        application (ports/use cases/infrastructure),
-                        graph runtime + saved-graph library, serves
-                        frontend/ (browser editor included).
-archive/               Retired first-cut web layer: server/ +
-                        server_cli.py, moved wholesale at M9 -- still
-                        launchable for reference; its six smoke tests
-                        retired with it.
-
-docs/                  This folder. See the root README.md's map for
-                        what's where.
-```
-
 ## Design principles, in short
 
 Full statement and reasoning: the root `README.md`'s "Goals" section
@@ -103,21 +46,7 @@ runtime object (real state, called every training step)** -- collapsing
 the two is the specific anti-pattern this whole rewrite exists to move
 away from.
 
-## Where the interesting complexity actually lives
-
-If you're trying to understand *why* the codebase looks the way it
-does rather than just *where things are*, these are the sections worth
-reading in full rather than skimming:
-
-- `docs/design/08-validation-and-implementation-status.md`, section 9
-  (`Implementation status`) -- the single most reliable "what's
-  actually real" table in this repo, more current than
-  `docs/status/progress.md`.
-- `docs/design/07-deferred-or-rejected.md`, section 7 (`Deliberately
-  deferred or rejected`) -- saves you from re-proposing something
-  already considered and rejected with real reasoning (GaLore, flow
-  matching, automatic VRAM-pressure eviction, etc.).
-- `docs/design/resources-controller/` -- the most recently active
-  work, and the current best example of how a multi-session redesign
-  gets tracked in this project (status banner at the top, edited in
-  place as phases land).
+For what's actually real versus built-but-unvalidated, read
+`docs/design/08-validation-and-implementation-status.md` section 9.2;
+for the backend layer's decisions and contracts,
+`docs/design/backend/01-architecture.md`.

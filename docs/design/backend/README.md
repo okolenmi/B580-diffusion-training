@@ -6,13 +6,19 @@ The old `server/` was retired to `archive/server/` at M9
 (2026-10-01), untouched, for reference; `run_server.sh`, the README
 and the setup/architecture docs now point at `backend/`.
 
-| # | Doc | Contents |
-|---|-----|----------|
-| 1 | [`01-architecture.md`](01-architecture.md) | Evaluation of the old server, layering rules, file structure, API/error/event contracts, concurrency model, milestone plan. |
-| 2 | [`02-api-reference.md`](02-api-reference.md) | API contract reference: conventions, error-code table, every `/api/v1` endpoint with params/body/response shapes (SSE frame types, graph issue codes, library payload rules). |
-| 3 | [`03-migration-strategy.md`](03-migration-strategy.md) | Migration strategy: frontend decisions (vanilla ES modules, backend-served, monitor-first), parity audit of the 51 legacy endpoints, monitor data-path contract, data cutover, phased decommissioning of `server/`. |
-| 4 | [`04-dataset-format.md`](04-dataset-format.md) | Dataset storage format v2: directory layout, `metadata.db` schema, migration from v1, the manager bridges that must stay byte-identical. |
-| 5 | [`05-graph-runtime.md`](05-graph-runtime.md) | Graph subsystem (M4): `GraphCatalog`/`GraphRuntime` ports, auto-discovery, the validation issue-code table, execution lifecycle + CAS, API surface, deliberate divergences from legacy, deferrals. |
-| 6 | [`06-visual-smoke.md`](06-visual-smoke.md) | What a browser session catches that the suites cannot (JavaScript actually running): the CSS/specificity findings worth not reintroducing, the open-coverage list, and the screenshot caveat. The runnable suite is `backend/tests/visual_smoke.py`. |
-| 7 | [`07-review-2026-10-01.md`](07-review-2026-10-01.md) | Review of the M8a redesign: 17 findings (F-01..F-17) with severity, evidence level (reproduced vs read), locations, fix direction and regression tests, plus quality rules for contributors. Section 7 records a verification pass at `c1dc136` (all findings live there; F-06's upload half was closed by the next batch, marked in the table); reproductions live in `scripts/repro/`. Read before changing supervisors, the progress reader, dataset deletion or the SSE/monitor path. |
-| 8 | [`08-structure-audit.md`](08-structure-audit.md) | Strict-OOP worklist for `backend/` itself (S-01..S-26): wiring honesty, duplication clusters, entity encapsulation, the shared lifecycle machine, port design. Every entry is **Fixed** (with the batch) or **Deferred** with a stated reason — read it before adding a use case or a port. |
+| # | Doc | What it is for |
+|---|-----|----------------|
+| 1 | [`01-architecture.md`](01-architecture.md) | Why this exists (the `server/` autopsy and the verdict), the user-approved decisions, **the ten layering rules a change has to keep**, the deliberate bridges to `core/`/`manager`/`nodes/`, and the concurrency model including the trainer-subprocess contract. |
+| 2 | [`02-api-reference.md`](02-api-reference.md) | The parts of the API contract that OpenAPI cannot state: the browser-door threat model, the error-code table (parsed by `backend/tests/test_error_contract.py`, so it cannot drift from the code), the non-finite-float contract and the client obligation it creates, the event-stream rules, and the behavioural clauses. |
+| 3 | [`03-migration-strategy.md`](03-migration-strategy.md) | Why the frontend is vanilla ES modules served by the backend on one origin, why monitor-first; which legacy endpoints were dropped **and why**; the pinned monitor data-path contract; the run-id collision story and its three guards. |
+| 4 | [`04-dataset-format.md`](04-dataset-format.md) | Storage format v2: directory layout, `metadata.db` schema, why each of v1's five properties was rejected, migration from v1, and the `manager` bridges that must stay byte-identical. **A contract with the trainer — do not "improve" it.** |
+| 5 | [`05-graph-runtime.md`](05-graph-runtime.md) | Graph subsystem: auto-discovery and why it replaced the hand-maintained list, the validation issue-code table and the wire-safe type check, execution lifecycle and CAS, the deliberate divergences from legacy, and **where a graph run actually lives** (in the API process, and what a restart costs). |
+| 6 | [`06-visual-smoke.md`](06-visual-smoke.md) | What a browser session catches that the suites cannot: the CSS/specificity findings worth not reintroducing, the open-coverage list, and the screenshot caveat. The runnable suite is `backend/tests/visual_smoke.py`. |
+| 7 | [`07-review-2026-10-01.md`](07-review-2026-10-01.md) | The register of hard-won constraints: 17 findings (F-01..F-17) with severity and evidence level, **"what is good — do not fix"**, thirteen contributor quality rules, and the repro scripts. Code comments cite this as `docs 07 F-NN`. Read before changing supervisors, the progress reader, dataset deletion or the SSE/monitor path. |
+| 8 | [`08-structure-audit.md`](08-structure-audit.md) | The strict-OOP pass over `backend/` itself: a one-line index of the nineteen fixed findings (each points at the docstring now carrying its reasoning) and the **seven deferred ones in full, with their reasons** — read it before adding a use case or a port. |
+
+What is *not* here any more, deliberately: file trees, endpoint tables,
+milestone logs and implementation-status inventories. They restated the
+code, they could not help but drift, and the 2026-10-01 cleanup removed
+them. Open the module instead; ask the server for the API, since it
+serves its own OpenAPI schema.

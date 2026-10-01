@@ -2,8 +2,8 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (43 checks,
-Playwright). The API/SSE/pages coverage comes from
+checklist below now runs as `backend/tests/visual_smoke.py` (50
+checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
 Findings and fixes from that run are recorded at the bottom.
@@ -26,10 +26,11 @@ exceptions in event handlers. This checklist is that missing layer.
 Covers: idle state (real backend), running state (API mocked with a
 synthetic `RunOut` + history + log), interactions (start-form guard,
 row-click -> log, wipe confirm dialog captured in code), elapsed
-ticker, then a monitor/graph regression pass since all three pages
-share `style.css`. Console is asserted clean across all three pages.
-Desktop-browser execution of the same checklist below stays as the
-manual fallback.
+ticker, a monitor/graph regression pass (all three pages share
+`style.css`), and the config editor (schema-driven form, visibility,
+dirty tracking, E2E save against a throwaway copy). Console is
+asserted clean across every page. Desktop-browser execution of the
+same checklist below stays as the manual fallback.
 
 ## Prerequisites
 
@@ -114,7 +115,31 @@ A scratch DB keeps the check independent of real training history.
 * [x] Network tab: the editor talks only to `/api/v1/graphs/*` (+ the
       shared `/events` stream).
 
-## 4. Record
+## 4. Config editor -- `http://127.0.0.1:8766/config`
+
+* [x] Honest empty state before a config is loaded (a form rendered
+      without values would lie).
+* [x] Form renders from `GET /config/options`: 78 fields in 6 numbered
+      groups, subgroup headers, help text; `visible_when` toggling
+      works (LoRA Rank shows for `lora`, hides for `distillation`).
+* [x] Launch-only options (`start_from`, `reset_optimizer` -- both
+      `persist_locally`) are excluded: they belong to the Training
+      page's start form, are never written to the file (their contract
+      says so), and carry deliberate duplicate ids.
+* [x] Dirty tracking: edits enable Save + show the chip; Revert
+      discards edits by re-reading the file.
+* [x] E2E save against a throwaway copy (absolute path accepted):
+      PATCH merges, the form keeps the saved value, the raw tab
+      refreshes from the written file. Repo config files untouched.
+* [x] Raw tab round-trips `GET/PUT /config/raw`; buffer resync rules:
+      form saves refresh a clean raw buffer, raw writes reload the form.
+* [x] Console clean across all four scenarios (A idle, B running,
+      C monitor+graph regression, D config).
+* [ ] `PUT /config/raw` rejection (invalid TOML -> 422, file
+      untouched) is API-tested (`test_config.py`); not driven in the
+      browser.
+
+## 5. Record
 
 Paste screenshots of each page into the session and list pass/fail
 per checkbox. Fix regressions in the milestone that owns the code --
@@ -158,6 +183,18 @@ viewing only.
    Chromium displayed nothing. Present since the M6 port (visible in
    the original screenshots). Fixed: placeholder gets
    `disabled: true, selected: true`.
+6. **Config widgets had no `id`** (found by the M8a smoke) -- labels
+   pointed at `#f-<dotted id>` but `renderForm` never assigned
+   `input.id`, so label association was broken and the smoke's
+   `select_option("#f-tuning-method")` timed out. Fixed at the render
+   site.
+7. **`live` overlay written under dotted keys** (found by the M8a
+   smoke) -- `onEdit` set `live["tuning.method"]` literally while
+   `getDeep(live, "tuning.method")` reads `live.tuning.method`, so
+   `visible_when` kept evaluating the stale loaded value (rank stayed
+   visible after switching to `distillation`); the initial overlay was
+   also a shallow copy that would have let edits mutate `values`. Fixed
+   with `setDeep` writes + a JSON deep copy on load.
 
 ## Known deferred (not bugs)
 

@@ -17,6 +17,7 @@ Exits non-zero on any failed check. See docs/design/backend/06.
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -254,6 +255,83 @@ def main():
                   f"{name}: core element renders")
             page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
             ctx.close()
+
+        # ---------- D: config editor (loads read-only; the save step
+        # writes a throwaway copy so repo config files stay untouched) ----
+        repo_root = Path(__file__).resolve().parents[2]
+        smoke_cfg = OUT / "cfg_smoke.toml"
+        shutil.copy(repo_root / "runs/hw_validation/legacy_check.toml", smoke_cfg)
+
+        print("== D: config editor ==")
+        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
+        page = ctx.new_page()
+        hook_console(page, "config")
+        page.goto(f"{BASE}/config", wait_until="networkidle")
+
+        check(page.locator("#form-state").is_visible(), "empty state before load")
+        check(page.locator("#form-wrap").is_hidden(), "form hidden before load")
+
+        page.fill("#cfg-path", "runs/hw_validation/legacy_check.toml")
+        page.click("#btn-load")
+        page.wait_for_selector("#config-form .cfg-field", timeout=15000)
+
+        n_fields = page.locator(".cfg-field").count()
+        n_groups = page.locator(".cfg-group").count()
+        check(n_fields > 40, f"form renders {n_fields} fields")
+        check(n_groups >= 6, f"{n_groups} group sections ({n_groups})")
+        check(page.locator('[data-id="start_from"]').count() == 0,
+              "launch-only option start_from excluded from the editor")
+        check(page.locator('[data-id="reset_optimizer"]').count() == 0,
+              "launch-only option reset_optimizer excluded from the editor")
+
+        # visible_when: LoRA fields appear only while method == lora
+        page.select_option("#f-tuning-method", "lora")
+        check(page.locator('[data-id="tuning.rank"]').is_visible(),
+              "rank visible when method = lora")
+        page.select_option("#f-tuning-method", "distillation")
+        check(page.locator('[data-id="tuning.rank"]').is_hidden(),
+              "rank hidden when method = distillation")
+
+        # dirty tracking: an edit enables Save + shows the chip; Revert clears
+        check(page.locator("#dirty-chip").is_visible(), "dirty chip after edits")
+        check(page.locator("#btn-save-form").is_enabled(), "save enabled when dirty")
+        page.click("#btn-revert")
+        page.wait_for_timeout(300)
+        check(page.locator("#dirty-chip").is_hidden(), "chip cleared by revert")
+        check(page.locator("#btn-save-form").is_disabled(), "save disabled after revert")
+
+        # raw tab carries the real file content
+        page.click("#tab-raw")
+        raw_len = len(page.locator("#raw-editor").input_value())
+        check(raw_len > 50, f"raw buffer holds the file ({raw_len} chars)")
+        check(page.locator("#panel-form").is_hidden(), "form panel hidden on raw tab")
+        page.click("#tab-form")
+        check(page.locator("#panel-raw").is_hidden(), "raw panel hidden on form tab")
+
+        # E2E save against a throwaway copy (absolute path) -- never the
+        # repo's own config files.
+        page.fill("#cfg-path", str(smoke_cfg))
+        page.click("#btn-load")
+        page.wait_for_selector("#f-common-steps", timeout=15000)
+        cur_raw = page.input_value("#f-common-steps").strip()
+        new_steps = 1200 if cur_raw == "1100" else 1100
+        page.fill("#f-common-steps", str(new_steps))
+        check(page.locator("#dirty-chip").is_visible(), "dirty chip after steps edit")
+        page.click("#btn-save-form")
+        page.wait_for_timeout(600)
+        check(page.locator("#btn-save-form").is_disabled(),
+              "save disabled again after successful save")
+        check(page.input_value("#f-common-steps") == str(new_steps),
+              "form keeps the saved value")
+        page.click("#tab-raw")
+        content = page.locator("#raw-editor").input_value()
+        check(re.search(rf"\b{new_steps}\b", content) is not None,
+              "raw buffer refreshed from the written file")
+        page.click("#tab-form")
+
+        page.screenshot(path=str(OUT / "config.png"), full_page=True)
+        check((OUT / "config.png").stat().st_size > 20000, "config screenshot captured")
+        ctx.close()
 
         browser.close()
 

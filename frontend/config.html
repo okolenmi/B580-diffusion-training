@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Config Editor</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/config.css">
+</head>
+<body class="layout-fixed">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-name">Distillation</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a class="nav-item" href="/">Training</a>
+            <a class="nav-item" href="/graph">Graph Editor</a>
+            <span class="nav-item nav-item-disabled"
+                  title="M8 -- dataset manager views">Datasets — soon</span>
+            <button class="nav-item active" aria-current="page">Config Editor</button>
+
+            <div class="sidebar-tool">
+                <label class="sidebar-tool-label" for="monitor-id-input">Open a monitor</label>
+                <input id="monitor-id-input" class="cfg-input" type="text"
+                       placeholder="mon-… id" aria-label="Monitor id"
+                       title="Paste a monitor id to open its live dashboard">
+                <button id="btn-open-monitor" class="btn btn-secondary btn-block btn-small">Open monitor →</button>
+            </div>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="system-console">
+                <div class="console-header">System Console</div>
+                <div class="console-lines" id="console-output">
+                    <div class="console-line info">Ready.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="content-area">
+        <header class="page-topbar">
+            <h1>Config Editor</h1>
+            <span class="page-sub">Edit a training config -- form for structure, raw for the TOML document</span>
+            <div class="path-bar">
+                <input id="cfg-path" class="cfg-input" type="text"
+                       placeholder="path relative to project root, e.g. configs/distill.toml"
+                       autocomplete="off" spellcheck="false" aria-label="Config path"
+                       title="Relative to the project root; absolute paths work too">
+                <button id="btn-load" class="btn btn-secondary">Load</button>
+            </div>
+        </header>
+
+        <div class="page-body">
+            <div class="cfg-tabs" role="tablist">
+                <button class="cfg-tab active" id="tab-form" role="tab"
+                        aria-selected="true" aria-controls="panel-form">Form</button>
+                <button class="cfg-tab" id="tab-raw" role="tab"
+                        aria-selected="false" aria-controls="panel-raw">Raw TOML</button>
+                <span class="cfg-dirty" id="dirty-chip" hidden></span>
+            </div>
+
+            <!-- FORM -->
+            <section id="panel-form" role="tabpanel" aria-labelledby="tab-form">
+                <div class="cfg-state" id="form-state">
+                    Enter a config path above and press Load.
+                </div>
+                <div class="cfg-error" id="form-error" role="alert" hidden></div>
+
+                <div id="form-wrap" hidden>
+                    <div class="cfg-toolbar">
+                        <button id="btn-save-form" class="btn btn-start" disabled>✓ Save changes</button>
+                        <button id="btn-revert" class="btn btn-secondary">Revert edits</button>
+                        <span class="cfg-toolbar-hint text-dim" id="save-hint"></span>
+                    </div>
+                    <!-- groups render here; one section per schema group -->
+                    <div id="config-form"></div>
+                </div>
+            </section>
+
+            <!-- RAW -->
+            <section id="panel-raw" role="tabpanel" aria-labelledby="tab-raw" hidden>
+                <div class="cfg-state" id="raw-state">
+                    Enter a config path above and press Load.
+                </div>
+                <div class="cfg-error" id="raw-error" role="alert" hidden></div>
+
+                <div id="raw-wrap" hidden>
+                    <div class="cfg-toolbar">
+                        <button id="btn-save-raw" class="btn btn-start">✓ Write file</button>
+                        <button id="btn-reload-raw" class="btn btn-secondary">Reload from disk</button>
+                        <span class="cfg-toolbar-hint text-dim">
+                            Replaces the whole file; rejected if it does not validate.
+                        </span>
+                    </div>
+                    <textarea id="raw-editor" class="cfg-raw" spellcheck="false"
+                              autocomplete="off" autocapitalize="off"></textarea>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/views/config.js"></script>
+</body>
+</html>

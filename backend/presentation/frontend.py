@@ -2,9 +2,9 @@
 
 Four registrations, deliberately *not* a root mount:
 
-* ``/`` and ``/monitor/{monitor_id}`` and ``/graph`` serve the page
-  files (the monitor page reads its id from the URL, like the legacy
-  dashboard);
+* ``/``, ``/monitor/{monitor_id}``, ``/graph`` and ``/config`` serve
+  the page files (the monitor page reads its id from the URL, like the
+  legacy dashboard);
 * ``/ui/*`` serves the frontend directory (ES modules, css);
 * nothing catches ``/api/...`` misses, so unknown API routes keep
   answering with the JSON error envelope instead of static 404 HTML.
@@ -79,5 +79,9 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     @app.get("/graph", include_in_schema=False)
     def graph_page() -> FileResponse:
         return FileResponse(static_dir / "graph.html", headers=_NO_CACHE)
+
+    @app.get("/config", include_in_schema=False)
+    def config_page() -> FileResponse:
+        return FileResponse(static_dir / "config.html", headers=_NO_CACHE)
 
     app.mount("/ui", _UiStaticFiles(directory=static_dir), name="ui")

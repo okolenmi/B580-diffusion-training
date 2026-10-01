@@ -9,14 +9,15 @@ on a long run (docs 07 F-14).
 from __future__ import annotations
 
 from ..dto import LogResult
+from ..limits import DEFAULT_LOG_LINES, MAX_LOG_LINES
 from ..errors import InvalidQueryError, RunNotFoundError
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 
 
 class GetRunLog:
-    MAX_LINES = 500
-    DEFAULT_LINES = 100
+    MAX_LINES = MAX_LOG_LINES
+    DEFAULT_LINES = DEFAULT_LOG_LINES
 
     def __init__(self, *, runs: RunRepository, artifacts: RunArtifacts) -> None:
         self._runs = runs

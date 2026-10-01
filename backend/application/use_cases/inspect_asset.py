@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import InvalidQueryError
 from ..ports.asset_store import AssetStore
+from ..requests import AssetRequest
 
 
 class InspectAsset:
@@ -18,8 +18,5 @@ class InspectAsset:
         self._assets = assets
 
     def execute(self, kind: str, relative_path: str) -> dict[str, Any]:
-        if not kind:
-            raise InvalidQueryError("asset kind is required")
-        if not relative_path:
-            raise InvalidQueryError("path is required")
-        return self._assets.inspect(kind, relative_path)
+        request = AssetRequest.of(kind, relative_path, path_required=True)
+        return self._assets.inspect(request.kind, request.relative_path)

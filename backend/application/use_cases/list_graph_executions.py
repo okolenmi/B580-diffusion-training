@@ -8,12 +8,13 @@ module-global dict.
 
 from __future__ import annotations
 
+from ..limits import DEFAULT_EXECUTION_PAGE_SIZE, MAX_PAGE_SIZE
 from ..dto import ExecutionListResult, to_execution_summary_dto
 from ..errors import InvalidQueryError
 from ..ports.graph_execution_repository import GraphExecutionRepository
 
-DEFAULT_LIMIT = 50
-MAX_LIMIT = 500  # same bounds as ListRuns -- one source of sanity per API
+DEFAULT_LIMIT = DEFAULT_EXECUTION_PAGE_SIZE
+MAX_LIMIT = MAX_PAGE_SIZE  # one ceiling for every list endpoint
 
 
 class ListGraphExecutions:

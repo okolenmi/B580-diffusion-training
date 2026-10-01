@@ -31,8 +31,8 @@ import threading
 import time
 from pathlib import Path
 
+from .event_publisher import EventPublisher
 from .ports.clock import Clock
-from .ports.event_bus import EventBus
 from .ports.progress_source import ProgressSample, ProgressSource
 from .ports.run_artifacts import RunArtifacts
 from .ports.run_repository import RunRepository
@@ -50,7 +50,7 @@ class RunSupervisor(RunWatcher):
         self,
         *,
         runs: RunRepository,
-        events: EventBus,
+        events: EventPublisher,
         gateway: TrainingGateway,
         progress: ProgressSource,
         artifacts: RunArtifacts,
@@ -179,7 +179,7 @@ class RunSupervisor(RunWatcher):
         )
         if not self._runs.update_if_status(run, expected=RunStatus.RUNNING):
             return False
-        self._events.publish(
+        self._events.emit(
             RunProgressed(
                 run_id=run.id,  # type: ignore[arg-type]
                 step=run.done_steps,
@@ -241,8 +241,7 @@ class RunSupervisor(RunWatcher):
             status_word = "failed"
         if not self._runs.update_if_status(run, expected=RunStatus.RUNNING):
             return
-        for event in run.collect_events():
-            self._events.publish(event)
+        self._events.publish(run)
         self._artifacts.append_log_note(
             run_id,
             f"--- RUN ENDED: status={status_word}, exit_code={exit_code} ---",
@@ -264,8 +263,7 @@ class RunSupervisor(RunWatcher):
             )
             if not self._runs.update_if_status(run, expected=expected):
                 return  # stop/reconcile won the row; their pid handling stands
-            for event in run.collect_events():
-                self._events.publish(event)
+            self._events.publish(run)
             try:
                 self._artifacts.append_log_note(
                     run_id,

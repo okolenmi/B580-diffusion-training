@@ -19,7 +19,7 @@ import logging
 
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
-from ..ports.event_bus import EventBus
+from ..event_publisher import EventPublisher
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ...domain.value_objects import GraphStatus
 
@@ -31,7 +31,7 @@ class ReconcileGraphExecutions:
         self,
         *,
         executions: GraphExecutionRepository,
-        events: EventBus,
+        events: EventPublisher,
         clock: Clock,
     ) -> None:
         self._executions = executions
@@ -55,8 +55,7 @@ class ReconcileGraphExecutions:
                 )
                 continue
             cleaned += 1
-            for event in execution.collect_events():
-                self._events.publish(event)
+            self._events.publish(execution)
             logger.info(
                 "reconciled graph execution %s -> %s",
                 execution.id,

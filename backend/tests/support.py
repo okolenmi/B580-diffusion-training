@@ -38,7 +38,9 @@ from backend.application.ports.training_gateway import (
 )
 from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.errors import ConfigNotFoundError
+from backend.application.project_paths import ProjectPaths
 from backend.application.graph_supervisor import GraphExecutionSupervisor
+from backend.application.event_publisher import EventPublisher
 from backend.application.services import (
     MonitorServices,
     ApplicationServices,
@@ -716,6 +718,8 @@ def build_services(
     """
     runs = runs if runs is not None else InMemoryRunRepository()
     events = events if events is not None else RecordingEventBus()
+    publisher = EventPublisher(events=events)
+    paths = ProjectPaths(root=project_root)
     gateway = gateway if gateway is not None else FakeTrainingGateway()
     inspector = inspector if inspector is not None else FakeConfigInspector()
     clock = clock if clock is not None else FakeClock()
@@ -777,13 +781,13 @@ def build_services(
         graph_supervisor = GraphExecutionSupervisor(
             executions=graph_executions,
             runtime=graph_runtime,
-            events=events,
+            events=publisher,
             clock=clock,
         )
     if supervisor is None:
         supervisor = RunSupervisor(
             runs=runs,
-            events=events,
+            events=publisher,
             gateway=gateway,
             progress=_Jsonl(),
             artifacts=artifacts,
@@ -793,34 +797,34 @@ def build_services(
     return ApplicationServices(
         list_runs=ListRuns(runs),
         get_run=GetRun(runs),
-        delete_runs=DeleteRuns(runs, events),
+        delete_runs=DeleteRuns(runs, events=publisher),
         get_active_run=GetActiveRun(runs),
         start_training=StartTraining(
             runs=runs,
-            events=events,
+            events=publisher,
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
             watcher=supervisor,
             clock=clock,
-            project_root=project_root,
+            paths=paths,
         ),
         stop_training=StopTraining(
-            runs=runs, events=events, gateway=gateway, clock=clock
+            runs=runs, events=publisher, gateway=gateway, clock=clock
         ),
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
-            runs=runs, events=events, gateway=gateway, clock=clock,
+            runs=runs, events=publisher, gateway=gateway, clock=clock,
             watcher=supervisor, artifacts=artifacts,
         ),
         config=ConfigServices(
-            read=GetConfig(files=config_files, project_root=project_root),
-            update=UpdateConfig(files=config_files, project_root=project_root),
-            read_raw=ReadConfigRaw(files=config_files, project_root=project_root),
-            write_raw=WriteConfigRaw(files=config_files, project_root=project_root),
+            read=GetConfig(files=config_files, paths=paths),
+            update=UpdateConfig(files=config_files, paths=paths),
+            read_raw=ReadConfigRaw(files=config_files, paths=paths),
+            write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
             start_options=GetStartOptions(
-                inspector=inspector, runs=runs, project_root=project_root
+                inspector=inspector, runs=runs, paths=paths
             ),
         ),
         settings=SettingsServices(
@@ -878,7 +882,7 @@ def build_services(
             start_execution=StartGraphExecution(
                 executions=graph_executions,
                 runtime=graph_runtime,
-                events=events,
+                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -886,21 +890,22 @@ def build_services(
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
-                events=events,
+                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
-                executions=graph_executions, events=events
+                executions=graph_executions, events=publisher
             ),
             reconcile_executions=ReconcileGraphExecutions(
-                executions=graph_executions, events=events, clock=clock
+                executions=graph_executions, events=publisher, clock=clock
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),
             list_graphs=ListGraphs(library=graph_library),
             delete_graph=DeleteGraph(library=graph_library),
         ),
+        events=publisher,
         event_bus=events,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )

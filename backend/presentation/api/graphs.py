@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
 
+from ...application.limits import DEFAULT_EXECUTION_PAGE_SIZE
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -111,7 +112,7 @@ def run_graph(
 
 @router.get("/executions", response_model=ExecutionListOut)
 def list_executions(
-    limit: int = Query(50),
+    limit: int = Query(DEFAULT_EXECUTION_PAGE_SIZE),
     services: ApplicationServices = Depends(get_services),
 ):
     """Newest-first page; ``limit`` must be 1..500 (else 422)."""

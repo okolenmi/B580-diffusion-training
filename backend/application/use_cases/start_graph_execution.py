@@ -21,7 +21,7 @@ from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
-from ..ports.event_bus import EventBus
+from ..event_publisher import EventPublisher
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import ISSUE_ERROR, GraphRuntime, issue_to_dict
 from ...domain.entities.graph_execution import GraphExecution
@@ -37,7 +37,7 @@ class StartGraphExecution:
         *,
         executions: GraphExecutionRepository,
         runtime: GraphRuntime,
-        events: EventBus,
+        events: EventPublisher,
         launcher: ExecutionLauncher,
         clock: Clock,
     ) -> None:
@@ -72,10 +72,7 @@ class StartGraphExecution:
                 graph=graph, created_at=self._clock.now()
             )
             self._executions.add(execution)  # binds id + buffers Queued
-            self._publish(execution.collect_events())
+            self._events.publish(execution)
             self._launcher.launch(execution.id, graph)
             return to_execution_summary_dto(execution)
 
-    def _publish(self, events: list[DomainEvent]) -> None:
-        for event in events:
-            self._events.publish(event)

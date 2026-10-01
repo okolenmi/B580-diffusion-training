@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ..errors import InvalidQueryError
 from ..ports.asset_store import AssetCatalog, AssetStore
+from ..requests import AssetRequest
 
 
 class ListAssets:
@@ -11,6 +11,4 @@ class ListAssets:
         self._assets = assets
 
     def execute(self, kind: str) -> AssetCatalog:
-        if not kind:
-            raise InvalidQueryError("asset kind is required")
-        return self._assets.catalog(kind)
+        return self._assets.catalog(AssetRequest.of(kind).kind)

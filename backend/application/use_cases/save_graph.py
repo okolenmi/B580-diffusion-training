@@ -12,12 +12,13 @@ compatibility, see the port's docstring).
 
 from __future__ import annotations
 
+from ..limits import MAX_GRAPH_DESCRIPTION
 from ..dto import SaveGraphResult, to_saved_graph_dto
 from ..errors import InvalidQueryError
 from ..ports.graph_library import GraphLibrary, normalize_graph_name
 from ...domain.graph import GRAPH_FORMAT
 
-MAX_DESCRIPTION = 1000
+MAX_DESCRIPTION = MAX_GRAPH_DESCRIPTION
 
 
 class SaveGraph:

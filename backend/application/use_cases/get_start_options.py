@@ -20,21 +20,20 @@ from pathlib import Path
 from ..dto import LastFinishedRun, StartOptionsResult
 from ..errors import InvalidQueryError
 from ..ports.config_inspector import ConfigInspector
+from ..project_paths import ProjectPaths
 from ..ports.run_repository import RunRepository
 
 
 class GetStartOptions:
     def __init__(
-        self, *, inspector: ConfigInspector, runs: RunRepository, project_root: Path
+        self, *, inspector: ConfigInspector, runs: RunRepository, paths: ProjectPaths
     ) -> None:
         self._inspector = inspector
         self._runs = runs
-        self._root = project_root
+        self._paths = paths
 
     def execute(self, config_path: str) -> StartOptionsResult:
-        if not config_path:
-            raise InvalidQueryError("config path is required")
-        description = self._inspector.describe(self._resolve(config_path))
+        description = self._inspector.describe(self._paths.config(config_path))
 
         active = self._runs.find_active()
         last_finished: LastFinishedRun | None = None
@@ -56,7 +55,3 @@ class GetStartOptions:
             has_unfinished_run=active is not None,
             last_finished=last_finished,
         )
-
-    def _resolve(self, raw: str) -> Path:
-        candidate = Path(raw)
-        return candidate if candidate.is_absolute() else self._root / candidate

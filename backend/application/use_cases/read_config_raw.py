@@ -5,20 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..dto import RawConfig
-from ..errors import InvalidQueryError
 from ..ports.config_files import ConfigFiles
+from ..project_paths import ProjectPaths
 
 
 class ReadConfigRaw:
-    def __init__(self, *, files: ConfigFiles, project_root: Path) -> None:
+    def __init__(self, *, files: ConfigFiles, paths: ProjectPaths) -> None:
         self._files = files
-        self._root = project_root
+        self._paths = paths
 
     def execute(self, path: str) -> RawConfig:
-        if not path:
-            raise InvalidQueryError("config path is required")
-        return RawConfig(content=self._files.read_raw(self._resolve(path)))
-
-    def _resolve(self, raw: str) -> Path:
-        candidate = Path(raw)
-        return candidate if candidate.is_absolute() else self._root / candidate
+        return RawConfig(content=self._files.read_raw(self._paths.config(path)))

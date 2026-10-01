@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.application.event_publisher import EventPublisher
 from backend.application.errors import (
     GraphExecutionActiveError,
     GraphExecutionNotFoundError,
@@ -387,7 +388,9 @@ check(reconcile_repo.update_if_status(left_running, expected=GraphStatus.QUEUED)
 
 reconcile_events = RecordingEventBus()
 sweep = ReconcileGraphExecutions(
-    executions=reconcile_repo, events=reconcile_events, clock=FakeClock()
+    executions=reconcile_repo,
+    events=EventPublisher(events=reconcile_events),
+    clock=FakeClock(),
 )
 result = sweep.execute()
 check(result.cleaned == 2, "reconcile fails every unfinished row")

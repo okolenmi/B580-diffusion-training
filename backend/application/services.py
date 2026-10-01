@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .event_publisher import EventPublisher
 from .ports.event_bus import EventBus
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
@@ -171,5 +172,8 @@ class ApplicationServices:
     graphs: GraphServices
     # monitor telemetry (M6)
     monitor: MonitorServices
-    # shared
+    # shared: the publisher every writer drains its aggregate's events
+    # through (docs 08 S-07), and the bus underneath it for the SSE
+    # bridge -- a transport concern, not a use case one.
+    events: EventPublisher
     event_bus: EventBus

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ..dto import CommitResult
 from ..errors import InvalidQueryError
+from ..requests import ItemSelection
 from ..ports.dataset_library import DatasetLibrary
 
 
@@ -20,11 +21,10 @@ class CommitDatasetItems:
     def execute(
         self, name: str, item_ids: list[int], *, set_name: str
     ) -> CommitResult:
-        if not item_ids:
-            raise InvalidQueryError("item_ids must not be empty")
+        selection = ItemSelection.of(item_ids)
         if not set_name or not set_name.strip():
             raise InvalidQueryError("set name must not be empty")
-        set_id = self._library.commit(name, list(item_ids), set_name.strip())
+        set_id = self._library.commit(name, selection.as_list(), set_name.strip())
         return CommitResult(
-            set_id=set_id, set_name=set_name.strip(), added=len(item_ids)
+            set_id=set_id, set_name=set_name.strip(), added=len(selection)
         )

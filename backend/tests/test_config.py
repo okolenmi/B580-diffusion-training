@@ -16,6 +16,7 @@ from backend.application.errors import (
     ConfigNotFoundError,
     InvalidQueryError,
 )
+from backend.application.project_paths import ProjectPaths
 from backend.application.use_cases import (
     GetConfig,
     GetConfigOptions,
@@ -73,10 +74,11 @@ def main() -> None:
 
     root = Path(tempfile.mkdtemp(prefix="cfg-test-"))
     files = CoreConfigFiles()
+    paths = ProjectPaths(root=root)
 
     # -- read -----------------------------------------------------------
     cfg = _write(root, "cfg/test.toml", LORA_TOML)
-    read = GetConfig(files=files, project_root=root)
+    read = GetConfig(files=files, paths=paths)
     data = read.execute("cfg/test.toml")
     check(data["common"]["steps"] == 321, "read returns nested config")
     check(data["tuning"]["method"] == "lora", "read carries union variant")
@@ -102,7 +104,7 @@ def main() -> None:
         check(True, "invalid config rejected (steps below ge=100)")
 
     # -- update (deep merge) --------------------------------------------
-    update = UpdateConfig(files=files, project_root=root)
+    update = UpdateConfig(files=files, paths=paths)
     merged = update.execute("cfg/test.toml", {"common": {"batch_size": 4}})
     check(merged["common"]["batch_size"] == 4, "update applies override")
     check(merged["common"]["steps"] == 321, "update preserves sibling fields")
@@ -132,11 +134,11 @@ def main() -> None:
     check(tolerated["common"]["steps"] == 321, "unknown override keys ignored")
 
     # -- raw -------------------------------------------------------------
-    raw = ReadConfigRaw(files=files, project_root=root)
+    raw = ReadConfigRaw(files=files, paths=paths)
     content = raw.execute("cfg/test.toml").content
     check("steps = 321" in content or "steps=321" in content, "raw read returns text")
 
-    write_raw = WriteConfigRaw(files=files, project_root=root)
+    write_raw = WriteConfigRaw(files=files, paths=paths)
     write_raw.execute("cfg/new.toml", "[common]\nsteps = 777\n")
     check(read.execute("cfg/new.toml")["common"]["steps"] == 777, "raw write creates file")
 

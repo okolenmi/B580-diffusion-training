@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ..dto import DiscardItemsResult
 from ..errors import InvalidQueryError
+from ..requests import ItemSelection
 from ..ports.dataset_library import DatasetLibrary
 
 
@@ -18,8 +19,7 @@ class DiscardDatasetItems:
         self._library = library
 
     def execute(self, name: str, item_ids: list[int]) -> DiscardItemsResult:
-        if not item_ids:
-            raise InvalidQueryError("item_ids must not be empty")
+        selection = ItemSelection.of(item_ids)
         return DiscardItemsResult(
-            deleted=self._library.discard(name, list(item_ids))
+            deleted=self._library.discard(name, selection.as_list())
         )

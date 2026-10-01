@@ -11,20 +11,15 @@ from pathlib import Path
 
 from ..errors import InvalidQueryError
 from ..ports.config_files import ConfigFiles
+from ..project_paths import ProjectPaths
 
 
 class WriteConfigRaw:
-    def __init__(self, *, files: ConfigFiles, project_root: Path) -> None:
+    def __init__(self, *, files: ConfigFiles, paths: ProjectPaths) -> None:
         self._files = files
-        self._root = project_root
+        self._paths = paths
 
     def execute(self, path: str, content: str) -> None:
-        if not path:
-            raise InvalidQueryError("config path is required")
         if not isinstance(content, str):
             raise InvalidQueryError("content must be a string")
-        self._files.replace(self._resolve(path), content)
-
-    def _resolve(self, raw: str) -> Path:
-        candidate = Path(raw)
-        return candidate if candidate.is_absolute() else self._root / candidate
+        self._files.replace(self._paths.config(path), content)

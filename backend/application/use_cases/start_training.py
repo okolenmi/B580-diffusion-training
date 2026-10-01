@@ -13,8 +13,9 @@ from ..errors import (
     TrainingLaunchError,
 )
 from ..ports.clock import Clock
+from ..project_paths import ProjectPaths
 from ..ports.config_inspector import ConfigInspector
-from ..ports.event_bus import EventBus
+from ..event_publisher import EventPublisher
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
@@ -38,13 +39,13 @@ class StartTraining:
         self,
         *,
         runs: RunRepository,
-        events: EventBus,
+        events: EventPublisher,
         gateway: TrainingGateway,
         inspector: ConfigInspector,
         artifacts: RunArtifacts,
         watcher: RunWatcher,
         clock: Clock,
-        project_root: Path,
+        paths: ProjectPaths,
     ) -> None:
         self._runs = runs
         self._events = events
@@ -53,7 +54,7 @@ class StartTraining:
         self._artifacts = artifacts
         self._watcher = watcher
         self._clock = clock
-        self._root = project_root
+        self._paths = paths
         self._lock = threading.Lock()
 
     def execute(self, command: StartTrainingCommand) -> RunDTO:
@@ -69,7 +70,7 @@ class StartTraining:
                     f"expected one of {list(START_FROM_OPTIONS)}"
                 )
 
-            config_path = self._resolve(command.config_path)
+            config_path = self._paths.config(command.config_path)
             summary = self._inspector.summarize(config_path)
 
             run = Run.create(
@@ -114,7 +115,7 @@ class StartTraining:
                     raise TrainingLaunchError(
                         f"run {run.id} was reclaimed during startup launch"
                     )
-                self._publish(run)
+                self._events.publish(run)
                 self._watcher.watch(
                     run_id=run.id,  # type: ignore[arg-type]
                     pid=pid,
@@ -145,24 +146,16 @@ class StartTraining:
                     # The launch entity still buffers RunCreated (the
                     # sqlite repo re-hydrates `current`); publish it
                     # first so the stream stays created -> failed.
-                    self._publish(run)
-                    self._publish(current)
+                    self._events.publish_all(run, current)
                 return
             if current.status is RunStatus.RUNNING and pid is not None:
                 current.mark_failed(
                     at=self._clock.now(), error=f"startup handover failed: {error}"
                 )
                 if self._runs.update_if_status(current, expected=RunStatus.RUNNING):
-                    self._publish(run)
-                    self._publish(current)
+                    self._events.publish(run)
+                    self._events.publish(current)
                     self._gateway.kill(pid)  # nobody watches this process
         except Exception:  # noqa: BLE001 -- already on the failure path
             logger.exception("could not repair run %s after failed start", run.id)
 
-    def _resolve(self, raw: str) -> Path:
-        path = Path(raw)
-        return path if path.is_absolute() else (self._root / path)
-
-    def _publish(self, run: Run) -> None:
-        for event in run.collect_events():
-            self._events.publish(event)

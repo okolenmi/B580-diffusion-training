@@ -39,8 +39,8 @@ import threading
 from ..domain.events import DomainEvent, GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
+from .event_publisher import EventPublisher
 from .ports.clock import Clock
-from .ports.event_bus import EventBus
 from .ports.execution_launcher import ExecutionLauncher
 from .ports.graph_execution_repository import GraphExecutionRepository
 from .ports.graph_runtime import GraphOutcome, GraphRuntime
@@ -54,7 +54,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         *,
         executions: GraphExecutionRepository,
         runtime: GraphRuntime,
-        events: EventBus,
+        events: EventPublisher,
         clock: Clock,
     ) -> None:
         self._executions = executions
@@ -125,7 +125,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             execution, expected=GraphStatus.QUEUED
         ):
             return  # lost the claim race (stop on a queued row, mostly)
-        self._publish(execution.collect_events())  # GraphExecutionStarted
+        self._events.publish(execution)  # GraphExecutionStarted
 
         outcome = self._runtime.execute(
             graph,
@@ -150,7 +150,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 execution, expected=GraphStatus.RUNNING
             ):
                 return  # terminal writer won between get and update
-            self._events.publish(
+            self._events.emit(
                 GraphExecutionProgressed(
                     execution_id=execution_id,
                     node_id=result.node_id,
@@ -183,7 +183,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             execution, expected=GraphStatus.RUNNING
         ):
             return  # lost the terminal CAS; the stop writer's result stands
-        self._publish(execution.collect_events())
+        self._events.publish(execution)
 
     def _fail_leftover(self, execution_id: ExecutionId) -> None:
         """Last-ditch row repair after a supervisor crash: never leave
@@ -198,13 +198,11 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 error="execution supervisor crashed (see server log)",
             )
             if self._executions.update_if_status(execution, expected=expected):
-                self._publish(execution.collect_events())
+                self._events.publish(execution)
         except Exception:  # noqa: BLE001 -- already in the crash path
             logger.exception(
                 "could not fail leftover execution %s after supervisor crash",
                 execution_id,
             )
 
-    def _publish(self, events: list[DomainEvent]) -> None:
-        for event in events:
-            self._events.publish(event)
+

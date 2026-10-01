@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
 
+from ...application.limits import MAX_PAGE_SIZE
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -62,9 +63,9 @@ router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 _ERROR_404 = {"description": "dataset or item not found"}
 _ERROR_409 = {"description": "task already active / not migrated / already exists"}
 
-# Same ceiling as the run log: a page big enough to be useful, small
-# enough that one request cannot ask for the whole dataset by accident.
-MAX_ITEM_PAGE = 500
+# The ceiling the use case enforces, imported rather than repeated, so
+# the OpenAPI doc and the 422 can never disagree (docs 08 S-08).
+MAX_ITEM_PAGE = MAX_PAGE_SIZE
 
 
 @router.get("", response_model=DatasetListOut)

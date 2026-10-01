@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..limits import MAX_PAGE_SIZE
 from ..dto import ListRunsQuery, ListRunsResult, to_run_dto
 from ..errors import InvalidQueryError
 from ..ports.run_repository import RunRepository
@@ -11,7 +12,7 @@ from ...domain.value_objects import RunStatus
 class ListRuns:
     """Single responsibility: validate the query, fetch, project."""
 
-    MAX_LIMIT = 500
+    MAX_LIMIT = MAX_PAGE_SIZE
 
     def __init__(self, runs: RunRepository) -> None:
         self._runs = runs

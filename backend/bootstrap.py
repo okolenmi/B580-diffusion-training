@@ -23,9 +23,11 @@ import logging
 from dataclasses import dataclass
 
 from .application.graph_supervisor import GraphExecutionSupervisor
+from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
 from .application.ports.training_gateway import TrainingGateway
 from .application.dataset_task_sweeper import DatasetTaskSweeper
+from .application.event_publisher import EventPublisher
 from .application.services import (
     ApplicationServices,
     AssetServices,
@@ -145,6 +147,8 @@ def build_container(settings: Settings) -> Container:
 
     run_repository = SqliteRunRepository(database)
     event_bus = CallbackEventBus()
+    publisher = EventPublisher(events=event_bus)
+    paths = ProjectPaths(root=settings.project_root)
     clock = SystemClock()
 
     # Settings first: the workspace layout resolves its override tier
@@ -206,13 +210,13 @@ def build_container(settings: Settings) -> Container:
     graph_supervisor = GraphExecutionSupervisor(
         executions=graph_executions,
         runtime=graph_runtime,
-        events=event_bus,
+        events=publisher,
         clock=clock,
     )
 
     supervisor = RunSupervisor(
         runs=run_repository,
-        events=event_bus,
+        events=publisher,
         gateway=gateway,
         progress=progress,
         artifacts=artifacts,
@@ -222,43 +226,43 @@ def build_container(settings: Settings) -> Container:
     services = ApplicationServices(
         list_runs=ListRuns(run_repository),
         get_run=GetRun(run_repository),
-        delete_runs=DeleteRuns(run_repository, event_bus),
+        delete_runs=DeleteRuns(run_repository, events=publisher),
         get_active_run=GetActiveRun(run_repository),
         start_training=StartTraining(
             runs=run_repository,
-            events=event_bus,
+            events=publisher,
             gateway=gateway,
             inspector=inspector,
             artifacts=artifacts,
             watcher=supervisor,
             clock=clock,
-            project_root=settings.project_root,
+            paths=paths,
         ),
         stop_training=StopTraining(
             runs=run_repository,
-            events=event_bus,
+            events=publisher,
             gateway=gateway,
             clock=clock,
         ),
         get_run_log=GetRunLog(runs=run_repository, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
             runs=run_repository,
-            events=event_bus,
+            events=publisher,
             gateway=gateway,
             clock=clock,
             watcher=supervisor,
             artifacts=artifacts,
         ),
         config=ConfigServices(
-            read=GetConfig(files=config_files, project_root=settings.project_root),
-            update=UpdateConfig(files=config_files, project_root=settings.project_root),
-            read_raw=ReadConfigRaw(files=config_files, project_root=settings.project_root),
-            write_raw=WriteConfigRaw(files=config_files, project_root=settings.project_root),
+            read=GetConfig(files=config_files, paths=paths),
+            update=UpdateConfig(files=config_files, paths=paths),
+            read_raw=ReadConfigRaw(files=config_files, paths=paths),
+            write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
             start_options=GetStartOptions(
                 inspector=inspector,
                 runs=run_repository,
-                project_root=settings.project_root,
+                paths=paths,
             ),
         ),
         settings=SettingsServices(
@@ -318,7 +322,7 @@ def build_container(settings: Settings) -> Container:
             start_execution=StartGraphExecution(
                 executions=graph_executions,
                 runtime=graph_runtime,
-                events=event_bus,
+                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
@@ -326,15 +330,15 @@ def build_container(settings: Settings) -> Container:
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
-                events=event_bus,
+                events=publisher,
                 launcher=graph_supervisor,
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
-                executions=graph_executions, events=event_bus
+                executions=graph_executions, events=publisher
             ),
             reconcile_executions=ReconcileGraphExecutions(
-                executions=graph_executions, events=event_bus, clock=clock
+                executions=graph_executions, events=publisher, clock=clock
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),
@@ -342,6 +346,7 @@ def build_container(settings: Settings) -> Container:
             delete_graph=DeleteGraph(library=graph_library),
         ),
         # shared
+        events=publisher,
         event_bus=event_bus,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )

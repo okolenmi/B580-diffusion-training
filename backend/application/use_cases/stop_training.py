@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..dto import RunDTO, to_run_dto
 from ..errors import RunNotFoundError, RunNotRunningError
 from ..ports.clock import Clock
-from ..ports.event_bus import EventBus
+from ..event_publisher import EventPublisher
 from ..ports.run_repository import RunRepository
 from ..ports.training_gateway import TrainingGateway
 from ...domain.value_objects import RunStatus
@@ -25,7 +25,7 @@ class StopTraining:
         self,
         *,
         runs: RunRepository,
-        events: EventBus,
+        events: EventPublisher,
         gateway: TrainingGateway,
         clock: Clock,
     ) -> None:
@@ -55,6 +55,5 @@ class StopTraining:
                 f"run {run_id} already finished as {won}"
             )
 
-        for event in run.collect_events():
-            self._events.publish(event)
+        self._events.publish(run)
         return to_run_dto(run)

@@ -2,15 +2,15 @@
 
 ``None`` means "untouched", so a cleared caption is sent as ``""`` and
 arrives as a real value (the legacy API's ``is not None`` semantics,
-kept deliberately).
+kept deliberately). The "at least one field must change" and "the
+verdict must be a known one" rules live in ``ItemChangesRequest``
+(docs 08 S-09).
 """
 
 from __future__ import annotations
 
-from ..errors import InvalidQueryError
-from ..ports.dataset_library import DatasetItem, DatasetLibrary, ItemChanges
-
-VALID_TYPES: tuple[str, ...] = ("good", "bad")
+from ..ports.dataset_library import DatasetItem, DatasetLibrary
+from ..requests import ItemChangesRequest
 
 
 class UpdateDatasetItem:
@@ -27,13 +27,7 @@ class UpdateDatasetItem:
         cfg: float | None = None,
         type: str | None = None,
     ) -> DatasetItem:
-        if type is not None and type not in VALID_TYPES:
-            raise InvalidQueryError(
-                f"unknown type {type!r}; expected one of {list(VALID_TYPES)}"
-            )
-        changes = ItemChanges(
+        changes = ItemChangesRequest.single(
             prompt=prompt, neg_prompt=neg_prompt, cfg=cfg, type=type
         )
-        if all(v is None for v in (prompt, neg_prompt, cfg, type)):
-            raise InvalidQueryError("no changes provided")
         return self._library.update_item(name, item_id, changes)

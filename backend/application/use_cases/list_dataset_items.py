@@ -10,12 +10,13 @@ instead of materialising all of it in one request (docs 07 F-14).
 from __future__ import annotations
 
 from ..dto import DatasetItemsResult
+from ..limits import MAX_PAGE_SIZE
 from ..errors import InvalidQueryError
 from ..ports.dataset_library import DatasetLibrary
 
 
 class ListDatasetItems:
-    MAX_LIMIT = 500
+    MAX_LIMIT = MAX_PAGE_SIZE
 
     def __init__(self, *, library: DatasetLibrary) -> None:
         self._library = library

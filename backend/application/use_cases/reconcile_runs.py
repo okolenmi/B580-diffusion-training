@@ -28,7 +28,7 @@ import logging
 
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
-from ..ports.event_bus import EventBus
+from ..event_publisher import EventPublisher
 from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.run_watcher import RunWatcher
@@ -43,7 +43,7 @@ class ReconcileRuns:
         self,
         *,
         runs: RunRepository,
-        events: EventBus,
+        events: EventPublisher,
         gateway: TrainingGateway,
         clock: Clock,
         watcher: RunWatcher,
@@ -99,8 +99,7 @@ class ReconcileRuns:
                 )
                 continue
             cleaned += 1
-            for event in run.collect_events():
-                self._events.publish(event)
+            self._events.publish(run)
             logger.info(
                 "reconciled run %s -> %s", run.id, run.status.value
             )

@@ -8,6 +8,7 @@ from ...application.dto import (
     ListRunsQuery,
     StartTrainingCommand,
 )
+from ...application.limits import DEFAULT_LOG_LINES, DEFAULT_RUN_PAGE_SIZE
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -29,7 +30,7 @@ _ERROR_422 = {"description": "invalid parameter"}
 
 @router.get("/api/v1/runs", response_model=ListRunsOut)
 def list_runs(
-    limit: int = Query(50),
+    limit: int = Query(DEFAULT_RUN_PAGE_SIZE),
     status: str | None = Query(None),
     services: ApplicationServices = Depends(get_services),
 ) -> ListRunsOut:
@@ -107,7 +108,7 @@ def stop_run(
 )
 def run_log(
     run_id: int,
-    lines: int = Query(100),
+    lines: int = Query(DEFAULT_LOG_LINES),
     services: ApplicationServices = Depends(get_services),
 ) -> RunLogOut:
     """Tail of the run's log (empty until the trainer creates it)."""

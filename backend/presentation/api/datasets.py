@@ -202,15 +202,50 @@ def read_dataset_file(
 ):
     """Preview image bytes for the items grid.
 
-    Scoped by contract: the adapter refuses anything outside
-    ``datasets/{name}/`` (``dataset_file_not_found`` 404), so this
-    route can never be steered at the rest of the filesystem.
-    """
+**Allowlist: ``.png``, ``.jpg``, ``.jpeg``, ``.webp`` only**, at most
+32 MB, case-insensitive. Anything else is
+``dataset_file_not_found`` (404) -- including files that exist. The
+adapter enforces the list and the cap, because that is where the disk
+is; see `infrastructure/dataset_files.py`.
+
+Scoped by contract too: the adapter refuses anything outside
+``datasets/{name}/`` (``dataset_file_not_found`` 404), so this route can
+never be steered at the rest of the filesystem.
+
+This route is *only* for the grid's `<img>` (the UI's `previewUrl`).
+It is deliberately not a general file endpoint for a dataset directory:
+it used to be one, and served ``metadata.db``, whole ``.safetensors``
+shards read into memory, and ``.svg`` as active content on this app's
+own origin (docs 08 N-05).
+"""
     payload = services.datasets.read_file.execute(name, rel_path)
+    # Headers are not decoration here. This route serves user-supplied
+    # bytes on the app's own origin, so:
+    #   nosniff          -- stop the browser from sniffing a type we did
+    #                       not declare (and overriding ours anyway);
+    #   CSP sandbox      -- even if a file did get served as active
+    #                       content, `sandbox` denies it script, same-
+    #                       origin access and form submission;
+    #   Content-Disposition attachment -- an image the browser renders
+    #                       inline is fine, but this also prevents any
+    #                       future non-image from being interpreted as
+    #                       a document in this origin;
+    #   private, short max-age -- previews are per-dataset user data,
+    #                       not shared-cacheable, and they change when
+    #                       the item is re-previewed.
+    # The allowlist itself (png/jpg/jpeg/webp, size-capped) is enforced
+    # by the port's adapter, so a .db or a .safetensors shard is a 404
+    # rather than something these headers have to defend against
+    # (docs 08 N-05).
     return Response(
         content=payload.content,
         media_type=payload.media_type,
-        headers={"Cache-Control": "no-cache"},
+        headers={
+            "Cache-Control": "private, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": f'inline; filename="{name}-preview"',
+        },
     )
 
 

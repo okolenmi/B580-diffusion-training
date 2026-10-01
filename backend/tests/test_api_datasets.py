@@ -76,7 +76,22 @@ check(status == 200, f"preview file serves (got {status})")
 check(headers.get("content-type", "").startswith("image/png"),
       f"preview content-type image/png (got {headers.get('content-type')!r})")
 check(isinstance(body, str) and "PNG" in body, "PNG signature present in bytes")
-check(headers.get("cache-control") == "no-cache", "preview revalidates (no-cache)")
+# Changed from no-cache: previews are per-dataset user data that changes
+# when an item is re-previewed, so a shared cache must not keep them and
+# a reload should not re-download unchanged bytes (N-05).
+check(headers.get("cache-control") == "private, max-age=60",
+      f"preview is private and briefly cacheable (got {headers.get('cache-control')!r})")
+
+# Hardening headers: this route serves user-supplied bytes on the app's
+# own origin, so the browser must not be allowed to reinterpret them.
+check(headers.get("x-content-type-options") == "nosniff",
+      f"nosniff (got {headers.get('x-content-type-options')!r})")
+check("sandbox" in headers.get("content-security-policy", ""),
+      f"CSP sandbox (got {headers.get('content-security-policy')!r})")
+check("default-src 'none'" in headers.get("content-security-policy", ""),
+      "CSP denies every source, not just scripts")
+check("content-disposition" in {k.lower() for k in headers},
+      f"content-disposition present (got {sorted(headers)})")
 
 status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/previews/none.png")
 expect_error(status, body, 404, "dataset_file_not_found", "GET missing preview")
@@ -87,6 +102,63 @@ expect_error(status, body, 404, "dataset_not_found", "GET preview, unknown datas
 status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/../../escape.txt")
 expect_error(status, body, 404, "dataset_file_not_found", "traversal refused as not-found")
 check("SECRET" not in str(body), "escape file never read")
+
+# --- the allowlist (docs 08 N-05) -------------------------------------
+# This route is the items grid's <img>. It used to serve every file in
+# the dataset directory, so metadata.db, whole .safetensors shards (read
+# into memory) and .svg as active content on this origin all came back
+# 200. All three must now be indistinguishable from a missing file.
+ds_root = root_a / "datasets" / "api-ds"
+# Not the dataset's real metadata.db -- that is a live sqlite file this
+# suite's own catalog listing opens, and writing junk into it breaks
+# every later case for an unrelated reason. Same shape (a non-image file
+# sitting inside the dataset directory), different name.
+(ds_root / "notes.db").write_bytes(b"SQLite format 3\x00" + b"\0" * 4096)
+(ds_root / "shards").mkdir(parents=True, exist_ok=True)
+(ds_root / "shards" / "s0.safetensors").write_bytes(b"\0" * 5_000_000)
+(ds_root / "previews" / "x.svg").write_text(
+    '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(document.domain)"/>'
+)
+(ds_root / "previews" / "anim.gif").write_bytes(b"GIF89a")
+# An oversized preview: over the cap, and must be refused before the read.
+(ds_root / "previews" / "huge.png").write_bytes(
+    b"\x89PNG\r\n\x1a\n" + b"\0" * (32 * 1024 * 1024)
+)
+
+for rel, label in (
+    ("notes.db", "a non-image file inside the dataset dir"),
+    ("shards/s0.safetensors", "a multi-MB safetensors shard"),
+    ("previews/x.svg", "an svg (executes script on this origin)"),
+    ("previews/anim.gif", "a gif"),
+    ("previews/huge.png", "an oversized png"),
+):
+    status, _, body = asgi_request(app, f"/api/v1/datasets/api-ds/files/{rel}")
+    expect_error(
+        status, body, 404, "dataset_file_not_found",
+        f"non-preview refused: {label}",
+    )
+    check("SQLite format" not in str(body) and "alert(" not in str(body),
+          f"its bytes never reach the client ({label})")
+
+# The allowed set still works, including case-insensitivity, and a real
+# jpg/webp get their own media types.
+(ds_root / "previews" / "p1.JPG").write_bytes(b"\xff\xd8\xff\xe0JFIF")
+(ds_root / "previews" / "p1.webp").write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+for rel, media in (("previews/p1.JPG", "image/jpeg"), ("previews/p1.webp", "image/webp")):
+    status, headers, _ = asgi_request(app, f"/api/v1/datasets/api-ds/files/{rel}")
+    check(status == 200 and headers.get("content-type", "").startswith(media),
+          f"{rel} serves as {media} (got {status} {headers.get('content-type')!r})")
+
+# A symlink out of the tree stays refused, now for two reasons at once:
+# it resolves outside the dataset root, and its suffix is checked too.
+outside = root_a / "outside.png"
+outside.write_bytes(b"\x89PNG\r\n\x1a\n" + b"secret")
+link = ds_root / "previews" / "link.png"
+if not link.exists():
+    link.symlink_to(outside)
+status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/previews/link.png")
+expect_error(status, body, 404, "dataset_file_not_found", "symlink outside refused")
+check("secret" not in str(body), "the symlink target's bytes never arrive")
 
 # assets: catalog-only dataset kind
 status, _, body = asgi_request(app, "/api/v1/assets/dataset")

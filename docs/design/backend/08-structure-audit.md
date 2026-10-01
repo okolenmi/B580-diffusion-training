@@ -341,6 +341,30 @@ already removed the duplication that actually caused bugs.
 ## How the batches map to commits
 
 Each S-batch is one commit, gated by `scripts/full_gate.sh` (legacy +
-22 backend files + `node --check`); the browser layer is unaffected by
-every item here, so `visual_smoke.py` is not re-run except when a
-frontend file changes.
+24 backend files + `node --check`); the browser layer is untouched by
+every item here, so `visual_smoke.py` only needs re-running when a
+frontend file changes. Base: `5b7724f` (doc 07 closed).
+
+| Commit | Batch | Findings |
+|---|---|---|
+| `3269a35` | 1 -- wiring honesty | S-01, S-02, S-03, S-04, S-05, S-25, S-26 |
+| `aa2d2d7` | 2 -- the duplication clusters | S-06 (`ProjectPaths`), S-07 (`EventPublisher`), S-08 (`limits`), S-09 (`requests`) |
+| `7596309` | 3 -- one code -> status source | S-10 |
+| `686543e` | 4 -- the domain owns its rules | S-11, S-12, S-13 (guard), S-15, S-16 |
+| `337ccbb` | 5 -- one finalise path | S-13 (writers), S-14 |
+| `a159959` | 6 -- closed vocabularies | S-24 |
+
+Three of the findings fixed real defects rather than only shape:
+
+* `record_progress` applied `done_steps` before validating
+  `total_steps`, so a "refused" sample still moved the run (S-15);
+* `dataset_file_not_found` existed in code but was missing from the
+  documented error table -- found by the new contract test, which reads
+  the doc (S-10);
+* the task repository's active-status SQL was written beside the tuple
+  that named the same thing, and `ListDatasetTasks` swept rows of other
+  datasets on every read (S-24, S-03).
+
+Two new test files came out of it: `test_value_objects.py` (the
+extracted rules and the vocabularies) and `test_error_contract.py` (the
+documented error table).

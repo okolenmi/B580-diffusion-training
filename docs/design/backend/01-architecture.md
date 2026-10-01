@@ -137,17 +137,25 @@ backend/
 ├── cli.py                    # entry: python -m backend.cli [--host --port --db]
 ├── bootstrap.py              # composition root -> Container (+ startup reconcile)
 ├── domain/                   # imports nothing
-│   ├── value_objects.py      # RunId/RunStatus; ExecutionId/GraphStatus
+│   ├── value_objects.py      # RunId/RunStatus; ExecutionId/GraphStatus;
+│   │                         # TrainingMode, StartFrom; the two transition tables
+│   ├── lifecycle.py          # StatusMachine[S]: the guard both aggregates hold
 │   ├── exceptions.py         # DomainError, InvalidTransitionError
 │   ├── events.py             # DomainEvent + lifecycle + graph execution events
 │   ├── graph.py              # GraphDefinition/GraphNodeSpec/GraphEdgeSpec/NodeResult
 │   └── entities/             # run.py (Run state machine); graph_execution.py
 │                             # (GraphExecution: queued->running->terminal + CAS)
 ├── application/
-│   ├── errors.py             # 24 errors, each with a code -> HTTP status
+│   ├── errors.py             # every error declares its code + HTTP status
 │   ├── dto.py                # Run/config/settings/asset/dataset/graph shapes
+│   ├── project_paths.py      # ProjectPaths: "a path the client named"
+│   ├── requests.py           # AssetRequest/ItemSelection/ItemChangesRequest
+│   ├── limits.py             # the numbers the API and its clients agree on
+│   ├── event_publisher.py    # drain an aggregate's buffer, or emit one event
+│   ├── lifecycle_writer.py   # Run/ExecutionLifecycleWriter: CAS then announce
+│   ├── dataset_task_sweeper.py  # one definition of "this task row is dead"
 │   ├── services.py           # ApplicationServices + Config/Settings/Asset/
-│   │                         # Dataset/Graph groups
+│   │                         # Dataset/Graph/Monitor groups
 │   ├── supervisor.py         # RunSupervisor: one daemon thread per run
 │   ├── graph_supervisor.py   # GraphExecutionSupervisor: one thread per graph run
 │   ├── ports/                # ABCs: RunRepository, EventBus, Clock,
@@ -157,7 +165,8 @@ backend/
 │   │                         # DatasetPreviews (M8f), RunArtifacts,
 │   │                         # ProgressSource, GraphCatalog,
 │   │                         # GraphRuntime, GraphExecutionRepository, GraphLibrary,
-│   │                         # MonitorBus (M6)
+│   │                         # MonitorBus (M6), RunWatcher, ExecutionLauncher
+│   │                         # (the supervisors behind interfaces)
 │   └── use_cases/            # runs (ListRuns..ReconcileRuns); config (Get/Update/
 │                             # raw x2/options/start-options); settings (Get/
 │                             # Update); assets (List/Browse/MakeFolder/Upload/

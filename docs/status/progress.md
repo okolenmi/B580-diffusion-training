@@ -295,6 +295,19 @@ variable-resolution run alive with no OOM -- full numbers in
   stream resync, dataset integrity and run-id collision, the
   Host/Origin guard and raw-TOML fidelity, restart adoption and signal
   safety, plus bounded work and atomic migrations.
+- Structure audit (`docs/design/backend/08-structure-audit.md`): the
+  strict-OOP pass over `backend/` itself, 26 findings (S-01..S-26) in
+  six commits `3269a35`..`a159959`. Nineteen are Fixed -- supervisor
+  ports, one definition each for path resolution, event publishing,
+  bounds, request validation and the code->status table, entity
+  encapsulation, a shared `StatusMachine` plus lifecycle writers,
+  `restore()`-checked rehydration, and closed vocabularies
+  (`TrainingMode`, `TaskStatus`, `IssueSeverity`, `StartFrom`). Seven
+  are Deferred with a stated reason (dataset-task entity,
+  `GraphDefinition` validation, the `MonitorBus` port leak, and four
+  port-split/refactor items). Two new test files pin the extracted
+  rules; three defects were found and fixed on the way, listed at the
+  end of doc 08.
 
 **Testing**
 - 64 smoke tests under `nodes/smoke_tests/` (runnable via

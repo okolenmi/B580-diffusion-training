@@ -208,9 +208,15 @@ dtype decisions -- kept as independent choices rather than one bundled
    and still is a real, unvalidated numerical risk, not "does it run").
    What shipped instead answers the same underlying need
    (configurable optimizer-state memory) a different, better-validated
-   way, ~4x smaller than the bf16 idea's 2x, and verified end to end: a
-   real 20-step AdamW training comparison converges to within 0.0025 max
-   per-parameter difference, not just "produces finite numbers." **One
+   way, ~4x smaller than the bf16 idea's 2x. A real 20-step AdamW
+   training comparison was run and converged to within 0.0025 max
+   per-parameter difference, not just "produces finite numbers" -- but
+   **that comparison was run ad hoc and left no artifact**, so it cannot
+   be re-run or falsified from this repo (verified 2026-10-01: nothing
+   under `nodes/smoke_tests/` covers `Int8BlockStateStore`,
+   `Float32StateStore` or `nodes/quantization.py` at all). Treat the
+   number as a one-time observation, not a pinned guarantee; a test is
+   the missing piece. **One
    shared implementation** (11.0/11.1's own lesson, applied here too):
    `state_precision`'s choices/doc/resolver live once, in the same
    `STRATEGIES`/`resolve_strategy()` shape `strategy_registry.py`

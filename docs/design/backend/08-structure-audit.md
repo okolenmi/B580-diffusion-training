@@ -1,370 +1,140 @@
-# 08 -- Structure audit: strict-OOP worklist (2026-10-01)
+# 08 -- Structure audit: index, and what was deliberately left undone
 
-The external review (doc 07) asked "is this *correct*". This document
-asks "is this *well shaped*": the OOP and layering quality of
-`backend/` itself, after 17 correctness findings had been closed.
+A strict-OOP pass over `backend/` itself, run after the 17 correctness
+findings in doc 07 were closed. It ran as six commits (`3269a35` ..
+`a159959`, 2026-10-01) and **finished nineteen of its twenty-six
+findings**; seven are still open and listed below with their reasons.
 
-Two audits were run over the tree (application layer, domain + ports)
-and their findings are merged and renumbered here as **S-01..S-26** so
-that progress is trackable across commits. Status values:
+Source comments cite these findings as `docs 08 S-NN`, so the ids are
+kept stable even though the audit's own write-up is gone: **each fix now
+lives in the docstring of the code it changed**, with the reasoning next
+to the mechanism. The table is the index, not a description.
 
-* **Fixed** -- landed, with the commit or batch named.
-* **Deferred** -- deliberately not done, with the reason.
-* **Open** -- not started.
+| ID | Finding, in one clause | The reasoning now lives in |
+|---|---|---|
+| S-01 | supervisors injected as concrete classes | `application/ports/run_watcher.py`, `execution_launcher.py` |
+| S-02 | `ReconcileRuns` made adoption deps optional | `application/use_cases/reconcile_runs.py` |
+| S-03 | listing one dataset's tasks rewrote rows of others | `application/dataset_task_sweeper.py` |
+| S-04 | the monitor route reached past the use cases | `application/use_cases/subscribe_monitor.py` |
+| S-05 | the supervisor owned someone else's VRAM cleanup | `infrastructure/graph/runtime.py` |
+| S-06 | `_resolve()` duplicated in six use cases | `application/project_paths.py` |
+| S-07 | "publish the entity's events" duplicated nine times | `application/event_publisher.py` |
+| S-08 | bounds written twice, in two layers | `application/limits.py` |
+| S-09 | validation boilerplate across nine use cases | `application/requests.py` |
+| S-10 | error code -> status table kept in two layers | `application/errors.py`, `presentation/errors.py` |
+| S-11 | both entities were fully mutable | `domain/entities/run.py`, `graph_execution.py` |
+| S-12 | terminal states restated beside the table | `domain/value_objects.py` |
+| S-13 | two copies of the lifecycle guard, and of the writer | `domain/lifecycle.py`, `application/lifecycle_writer.py` |
+| S-14 | `ProgressSample` was reflected over by field name | `application/ports/progress_source.py` |
+| S-15 | `total_steps` monotonicity lived in a thread | `domain/entities/run.py` |
+| S-16 | rehydration had no sanctioned factory | `domain/entities/run.py` (`restore`) |
+| S-24 | closed vocabularies were bare strings | `domain/value_objects.py`, `application/ports/dataset_tasks.py` |
+| S-25, S-26 | dead code, unresolvable annotations | removed; `scripts/full_gate.sh` now lints for the first |
 
-Findings are ordered by leverage, not by severity alone: an item that
-deletes twenty copies of a rule outranks an item that tidies one class.
+Two test files came out of it: `backend/tests/test_value_objects.py` (the
+extracted rules) and `backend/tests/test_error_contract.py`, which
+*parses* the error table out of doc 02 so code and documentation cannot
+drift apart.
 
-## Summary
+Three of the nineteen fixed findings were real defects rather than
+only shape, which is the argument for having run the audit at all:
 
-| ID | Area | Issue | Severity | Status |
-|---|---|---|---|---|
-| [S-01](#s-01) | wiring | Supervisors injected as concrete classes; `start_training.py` annotates a name it never imports | High | **Fixed** (S-batch 1) |
-| [S-02](#s-02) | wiring | `ReconcileRuns` takes `supervisor`/`artifacts` as optional, silently reverting to "kill live trainers" | High | **Fixed** (S-batch 1) |
-| [S-03](#s-03) | layering | `ListDatasetTasks` (a query) CAS-writes rows of *every* dataset while listing one | High | **Fixed** (S-batch 1) |
-| [S-04](#s-04) | layering | The monitor stream endpoint reaches past the use cases to `services.monitor_bus` | Med | **Fixed** (S-batch 1) |
-| [S-05](#s-05) | layering | `GraphExecutionSupervisor` owns device-memory reclamation for the runtime it holds | Med | **Fixed** (S-batch 1) |
-| [S-06](#s-06) | duplication | `_resolve()` byte-identical in 6 use cases; "path is required" in 5 | High | **Fixed** (S-batch 2) |
-| [S-07](#s-07) | duplication | "publish the entity's buffered events" copy-pasted 9 times | Med | **Fixed** (S-batch 2) |
-| [S-08](#s-08) | duplication | Page-size / log-line / description bounds duplicated across use cases and routes | Med | **Fixed** (S-batch 2) |
-| [S-09](#s-09) | duplication | Asset-kind and item-id validation boilerplate across 9 use cases | Low | **Fixed** (S-batch 2) |
-| [S-10](#s-10) | layering | Error-code -> HTTP status table duplicated in two layers (26 strings) | High | **Fixed** (S-batch 3) |
-| [S-11](#s-11) | domain | Both entities are anemic: 17 and 7 public mutable attributes bypass every invariant | High | **Fixed** (S-batch 4) |
-| [S-12](#s-12) | domain | The terminal-state set is hand-maintained beside the transition table, twice per aggregate | Med | **Fixed** (S-batch 4) |
-| [S-13](#s-13) | domain | Two lifecycle machines, two supervisors, two reconcilers, no shared abstraction | Med | **Fixed** (S-batch 4 guard, S-batch 5 writers) |
-| [S-14](#s-14) | domain | `ProgressSample` is interrogated by field-name reflection in the supervisor | Med | **Fixed** (S-batch 5) |
-| [S-15](#s-15) | domain | Two `Run` invariants enforced in the supervisor instead of the entity | Med | **Fixed** (S-batch 4) |
-| [S-16](#s-16) | domain | Rehydration has no sanctioned factory, so a loaded row can violate cross-field rules | Med | **Fixed** (S-batch 4) |
-| [S-17](#s-17) | domain | `DatasetTask` has no entity: its state machine lives in a port plus SQL literals | High | Deferred |
-| [S-18](#s-18) | domain | `GraphDefinition` is shallow-frozen and its structural rules are enforced in an adapter | High | Deferred |
-| [S-19](#s-19) | ports | `MonitorBus` hands the application layer an `asyncio.Queue` of pre-rendered SSE frames | High | Deferred |
-| [S-20](#s-20) | ports | `DatasetLibrary` is 14 methods / five jobs and returns a `Path` | Med | Deferred |
-| [S-21](#s-21) | ports | `continue_ids_above` puts a filesystem concern in a repository port | Med | Deferred |
-| [S-22](#s-22) | ports | Four ports return bare `dict`; the contract lives in the pydantic layer | Med | Deferred |
-| [S-23](#s-23) | ports | `RunRepository`/`GraphExecutionRepository`/`DatasetTasks` restate the same 8 methods | Med | Deferred |
-| [S-24](#s-24) | domain | Closed vocabularies are `str` (`mode`, task status, severity, `start_from`) | Med | **Fixed** (S-batch 6) |
-| [S-25](#s-25) | dead code | Six unused imports/constants/parameters, one unreachable branch | Low | **Fixed** (S-batch 1) |
-| [S-26](#s-26) | housekeeping | Unresolvable forward references in `dto.py`; untyped collection annotations | Low | **Fixed** (S-batch 1) |
+* `Run.record_progress` applied `done_steps` *before* validating
+  `total_steps`, so a progress sample that was then rejected had still
+  moved the run forward;
+* `dataset_file_not_found` existed in code but was missing from the
+  documented error table — found by the contract test that reads the
+  doc;
+* the task repository wrote its active-status SQL beside the tuple that
+  named the same thing, and listing one dataset's tasks rewrote rows
+  belonging to *other* datasets.
 
----
+## S-17 -- `DatasetTask` has no entity
 
-## Fixed
+Its lifecycle lives in `application/ports/dataset_tasks.py` as status
+enums plus raw SQL in the adapter, with zero domain events; the port is
+the only place the vocabulary is declared. The right fix is an entity
+mirroring `Run`, plus task events.
 
-### S-01
-Supervisors injected as concrete classes; `start_training.py` annotates
-a name it never imports
+**Deferred** because it is a data-shape change, not a refactor: the
+persisted vocabulary moves and every dataset-task test changes with it.
+It deserves its own commit and a migration note, not a line in a
+cleanup.
 
-```python
-# application/use_cases/start_training.py:44 (before)
-supervisor: "RunSupervisor",  # noqa: F821 -- application sibling
-```
+## S-18 -- `GraphDefinition`'s structural rules live in an adapter
 
-`RunSupervisor` was never imported in that module -- the `noqa`
-suppressed the undefined name, so the annotation was a lie to any type
-checker, and `reconcile_runs.py` importing the same class properly made
-the two disagree. `GraphExecutionSupervisor` was injected concretely in
-two more use cases.
-
-Now two narrow ports carry exactly what the callers use
-(`application/ports/run_watcher.py`, `application/ports/execution_launcher.py`);
-the supervisors implement them, and `bootstrap.py` is the only module
-that names the concrete classes.
-
-### S-02
-`ReconcileRuns` takes `supervisor`/`artifacts` as optional
-
-```python
-# application/use_cases/reconcile_runs.py:49 (before)
-supervisor: RunSupervisor | None = None,
-```
-
-Both real call sites pass both, so the `None` branch was dead code that
-advertised "kill every live trainer on startup" as a supported
-configuration -- the data loss doc 07 F-11 exists to prevent. Both are
-required now; `ReconcileRuns` takes the `RunWatcher` port (S-01).
-
-### S-03
-`ListDatasetTasks` (a query) wrote rows
-
-`_sweep_dead()` iterated `tasks.list_unfinished()` -- *every* unfinished
-task in *every* dataset -- and CASed them to `failed` while answering a
-read for one dataset. It also duplicated `ReconcileDatasetTasks`.
-
-The sweep moved into `ReconcileDatasetTasks.execute` (startup) and
-`StartDatasetTask.execute` (the two points that own liveness), and
-`ListDatasetTasks` is now a query again.
-
-### S-04
-The monitor endpoint reached past the use cases
-
-`presentation/api/monitor.py` called `services.monitor_bus.subscribe()`
-directly, making `ApplicationServices` a partially-open service locator
-for exactly the two members it claimed to encapsulate. A
-`SubscribeMonitor` use case now sits in front of it, so every
-presentation entry point goes through a use case.
-
-### S-05
-The graph supervisor owned memory reclamation
-
-`GraphExecutionSupervisor._supervise` called `runtime.release_memory()`
-in its own `finally` -- a supervisor reaching into its executor for GPU
-bookkeeping. `GraphRuntime.execute` now releases in its own `finally`,
-where the allocation happened.
-
-### S-06
-`_resolve()` in six copies
-
-```python
-def _resolve(self, raw: str) -> Path:
-    candidate = Path(raw)
-    return candidate if candidate.is_absolute() else self._root / candidate
-```
-
-Five config-path use cases also repeated `if not path: raise
-InvalidQueryError("config path is required")`. `ProjectPaths`
-(`application/project_paths.py`) owns both: `.require(raw)` raises with
-the field name, `.resolve(raw)` resolves under the project root. The
-five constructors lost their bare `project_root: Path`.
-
-### S-07
-The publish loop, nine times
-
-```python
-def _publish(self, run: Run) -> None:
-    for event in run.collect_events():
-        self._events.publish(event)
-```
-
-`EventPublisher` (`application/event_publisher.py`) takes anything with
-`collect_events()`, so supervisors, stop use cases and reconcilers call
-one collaborator instead of re-deriving the loop.
-
-### S-08
-Bounds duplicated across layers
-
-`MAX_ITEM_PAGE = 500` existed in both a use case and a route; the runs
-default of 50, the executions default of 50 and the log default of 100
-were each written twice. `application/limits.py` is the single source;
-routes import the use-case constants they document.
-
-### S-09
-Validation boilerplate across nine use cases
-
-`if not kind: raise InvalidQueryError("asset kind is required")` (five
-classes), `if not item_ids: ...` (three), `if all(v is None ...)` (two).
-`AssetRequest`, `ItemSelection` and `ItemChanges.from_changes()` raise
-once; the use cases delegate.
-
-### S-10
-Error-code -> status, twice
-
-`ApplicationError.code` is a string that `presentation/errors.py`
-re-maps through a 26-entry table; a typo in either place silently
-produces a 400. Each error now carries `status_code` and the handler
-reads it off the class -- adding an error is a one-file change.
-
-### S-11
-Anemic entities
-
-`Run` advertised "the entity owns its invariants" and 17 of its
-attributes were public and writable, so `run.done_steps = -5` or
-`run.finished_at = None` on a completed run was legal Python that no
-check could stop. Both entities now keep state private behind read-only
-properties; the mutator methods remain the only writers, and the
-persistence mappers read through the properties unchanged.
-
-### S-12
-Terminal states maintained by hand
-
-`_TERMINAL` in `value_objects.py` restated, for each aggregate, the set
-of `_ALLOWED` keys whose value is empty -- four coordinated edits per
-new terminal state. Terminal-ness is now derived from the machine
-(`LifecycleMachine.terminal`), so the table is the only source.
-
-### S-13
-Two of everything
-
-`Run` and `GraphExecution` each carried their own `_ALLOWED`,
-`_transition`, `_require_status`, `_require_id`, `_emit` and event
-buffer. `domain/lifecycle.py` now owns the guard as a
-`StatusMachine[S]` the two aggregates *hold* -- deliberately not a base
-class, because what a machine does (watch a status) is smaller than what
-an aggregate is, and inheriting would couple the two lifecycles for no
-gain. The transition table stays beside its enum in `value_objects`,
-which is also what makes `status.is_terminal` derivable (S-12).
-
-The application half -- "compare-and-swap the row, then announce it",
-hand-rolled twelve times across the two supervisors, the two stop use
-cases, the two reconcilers, the start and its repair path -- is
-`LifecycleWriter[R, S]` (`application/lifecycle_writer.py`), bound as
-`RunLifecycleWriter` / `ExecutionLifecycleWriter`. Its `commit()` also
-takes `prior=` for the one case where ordering matters: a start that
-failed between the insert and the launch leaves its `RunCreated` buffer
-behind, and the stream has to read created-then-failed.
-
-### S-14
-Reflection over `ProgressSample`
-
-`supervisor.py` asked "is this sample only a terminal marker?" by
-`getattr`-ing eight field names, so renaming a field would turn the
-check into a silent always-`True`. `ProgressSample.is_terminal_only`
-answers it on the type that knows, next to `has_telemetry` so the field
-list has exactly one home.
-
-### S-15
-Invariants enforced in a background thread
-
-`total_steps` monotonicity ("the plan never shrinks") lived in
-`RunSupervisor._apply_sample`; a second writer calling
-`record_progress` would have erased it. It is now an invariant of
-`record_progress`, pinned in `test_domain_run.py` rather than through
-the supervisor, and the supervisor passes the trainer's number straight
-through instead of deciding. A *smaller* total is ignored rather than
-refused -- a stale sample must not crash the watcher, and the rest of
-that sample is still good.
-
-Moving the rule up also fixed a defect it exposed: `record_progress`
-wrote `done_steps` before checking `total_steps`, so a sample carrying
-a valid step count and an impossible total left the step count applied
-and the call rejected. It now validates everything before writing
-anything.
-
-### S-16
-Rehydration without a factory
-
-The public constructor was the only way to load a row, and it checked
-single fields only, so a loaded aggregate could be `running` with no
-`started_at`, or carry `done_steps > total_steps`. `Run.restore()` and
-`GraphExecution.restore()` are the sanctioned rehydration paths, they
-validate the cross-field rules once, and both persistence mappers now go
-through them -- so an impossible row is reported against the row that
-wrote it rather than three transitions later.
-
-### S-24
-Closed vocabularies as bare strings
-
-`Run.mode` accepted any truthy string; dataset-task status and kind,
-graph issue severity and `start_from` were all `str`, with the task
-adapter writing SQL literals and the port keeping two tuples of strings
-beside them. They are `str`-valued enums now -- `TrainingMode` (the four
-strategies `core.config_model` declares), `TaskStatus` (+ `is_active` /
-`is_terminal`), `TaskKind`, `IssueSeverity` (+ `blocks`), `StartFrom` --
-so `mode="typo"` is a domain error, the active SQL predicate is
-*generated* from the enum, and "does this row still run" has one answer.
-
-Every one is `str`-valued: the columns are TEXT and the JSON bodies
-report the word, so nothing downstream changes shape. The wire schemas
-deliberately keep plain `str` and compare by value -- an unknown `kind`
-or `start_from` must still arrive as a 422 that names the vocabulary,
-not as a `ValueError` from an enum constructor.
-
-The teacher-prompt / resize / text-mode vocabularies stay as the
-constants in `application/requests.py` (S-09): they are request-scoped,
-already centralized in one place, and not persisted.
-
-### S-25 / S-26
-Dead code and unresolvable annotations
-
-Six unused imports/constants/parameters and one unreachable branch
-removed (including a `_fail_leftover(..., event)` parameter that was
-never read). `dto.py`'s quoted annotations that named classes it never
-imported now import them; every collection annotation carries its
-element type.
-
----
-
-## Deferred
-
-These are real, and each is deferred for a stated reason rather than
-by omission.
-
-### S-17 -- `DatasetTask` has no entity
-Its lifecycle lives in `ports/dataset_tasks.py` as status tuples plus
-raw SQL in the adapter (`UPDATE ... SET status = 'running'`), with the
-vocabulary imported *from the port* by a use case, an `assert` as the
-only type check, and zero domain events. The right fix is an entity
-mirroring `Run` plus task events, which changes the persisted
-vocabulary and every dataset-task test. Deferred to a dedicated batch:
-it is a data-shape change, not a refactor, and deserves its own commit
-and migration note.
-
-### S-18 -- `GraphDefinition` structural rules in an adapter
 `GraphDefinition` is `frozen=True`, but `params: dict` is mutable
-through the "immutable" object, and duplicate node ids / dangling edges
-/ cycles are only caught by `GraphRuntime.validate()` in
-`infrastructure/`. Pure graph algebra needs no registry. Deferred: the
-runtime validator already answers 422 with a complete issue list, and
-splitting it would split that contract across two layers with different
-shapes.
+through the "immutable" object, and duplicate node ids / dangling
+edges / cycles are caught only by `GraphRuntime.validate()` in
+`infrastructure/`. Pure graph algebra would need no registry at all.
 
-### S-19 -- `MonitorBus` leaks asyncio and the wire format
-The port hands out an `asyncio.Queue` of pre-rendered `data: {...}`
-frames, so the SSE format is decided by the port and a second consumer
-would have to parse it. The underlying repo-root `monitor_bus.py` is
-shared with the legacy server and its frame format is pinned by its
-smoke test. Deferred until that bridge is allowed to change; the
-port-level defect is documented rather than papered over.
+**Deferred**: the runtime validator already answers 422 with a complete
+issue list, and splitting the rules would split that one contract across
+two layers with different issue shapes — a worse outcome than the
+misplaced code, as long as nobody is fooled into thinking the dataclass
+is immutable.
 
-### S-20 -- `DatasetLibrary` is five jobs
-`list/get/stats/root/create/delete`, the five curation methods, sets,
-and `first_preview` (which duplicates `DatasetPreviews.resolve`).
-`root() -> Path` also turns the port into a filesystem escape hatch.
-Deferred: splitting it is mechanical but touches every dataset use case
-and both bridges; better done with the dataset-task entity (S-17) so the
-port split lands once.
+## S-19 -- the `MonitorBus` port leaks asyncio and the wire format
 
-### S-21 -- `continue_ids_above` in the repository port
-A filesystem high-water mark (scanned in `bootstrap`) reaches a
-SQL `sqlite_sequence` through a repository method. Deferred: the
-method is the reason a colliding run id is impossible, and moving the
-scan inside the adapter would make the persistence layer scan
-directories.
+The port hands the application layer an `asyncio.Queue` of
+pre-rendered `data: {...}` SSE frames, so the SSE format is decided by
+the port and a second consumer would have to parse it.
 
-### S-22 -- Four ports return bare `dict`
+**Deferred until that bridge is allowed to change**: the underlying
+repo-root `monitor_bus.py` is shared with the retired `server/` and its
+frame format is pinned by that project's own smoke test. The port-level
+defect is documented here rather than papered over.
+
+## S-20 -- `DatasetLibrary` is five jobs
+
+`list`/`get`/`stats`/`root`/`create`/`delete`, the five curation
+methods, sets, and `first_preview` (which duplicates
+`DatasetPreviews.resolve`). `root() -> Path` also turns the port into a
+filesystem escape hatch.
+
+**Deferred**: splitting it is mechanical but touches every dataset use
+case and both bridges. Better done together with S-17, so the port split
+lands once instead of twice.
+
+## S-21 -- `continue_ids_above` puts a filesystem concern in a repository port
+
+A filesystem high-water mark (the highest existing `runs/run_*`
+directory) reaches a SQL `sqlite_sequence` through a repository method.
+
+**Deferred**: the method is the reason a colliding run id is
+impossible — the first guard that makes F-04 unreachable rather than
+merely unlikely. Moving the scan inside the adapter would make the
+persistence layer scan directories, which is worse.
+
+## S-22 -- four ports return bare `dict`
+
 `ConfigOptions.schema()`, `AssetStore.inspect()`,
-`NodeCatalog.diagnostics()`, `ConfigFiles.read()` -- the shape is only
-described by the pydantic schemas in presentation. Each wants a frozen
-value object. Deferred: mechanical, but four separate value objects
-whose fields are UI-facing (and therefore change when the UI does).
+`NodeCatalog.diagnostics()`, `ConfigFiles.read()` — the shape is
+described only by the pydantic schemas in presentation.
 
-### S-23 -- Three restatements of the same repository shape
-`RunRepository` and `GraphExecutionRepository` are the same nine
+**Deferred**: mechanical, but four separate value objects whose fields
+are UI-facing, and therefore change whenever the UI does. Worth doing
+when there is a reason to want the type, not as tidying.
+
+## S-23 -- three restatements of the same repository shape
+
+`RunRepository` and `GraphExecutionRepository` are the same set of
 methods (the second port's docstring says so), and `DatasetTasks`
 renames half of them. A generic `LifecycleRepository[E, I, S]` protocol
-would collapse them. Deferred: the ports are small, typed and
-well-documented; a generic would trade three clear signatures for one
-parameterised one, and the shared terminal-writer service (S-13)
-already removed the duplication that actually caused bugs.
+would collapse them.
 
----
+**Deferred deliberately**: the ports are small, typed and well
+documented, and a generic would trade three clear signatures for one
+parameterised one. The duplication that actually *caused* bugs — the
+compare-and-swap-then-announce sequence — is already gone, replaced by
+one `LifecycleWriter` per aggregate.
 
-## How the batches map to commits
+## Two decisions worth keeping visible
 
-Each S-batch is one commit, gated by `scripts/full_gate.sh` (legacy +
-24 backend files + `node --check`); the browser layer is untouched by
-every item here, so `visual_smoke.py` only needs re-running when a
-frontend file changes. Base: `5b7724f` (doc 07 closed).
-
-| Commit | Batch | Findings |
-|---|---|---|
-| `3269a35` | 1 -- wiring honesty | S-01, S-02, S-03, S-04, S-05, S-25, S-26 |
-| `aa2d2d7` | 2 -- the duplication clusters | S-06 (`ProjectPaths`), S-07 (`EventPublisher`), S-08 (`limits`), S-09 (`requests`) |
-| `7596309` | 3 -- one code -> status source | S-10 |
-| `686543e` | 4 -- the domain owns its rules | S-11, S-12, S-13 (guard), S-15, S-16 |
-| `337ccbb` | 5 -- one finalise path | S-13 (writers), S-14 |
-| `a159959` | 6 -- closed vocabularies | S-24 |
-
-Three of the findings fixed real defects rather than only shape:
-
-* `record_progress` applied `done_steps` before validating
-  `total_steps`, so a "refused" sample still moved the run (S-15);
-* `dataset_file_not_found` existed in code but was missing from the
-  documented error table -- found by the new contract test, which reads
-  the doc (S-10);
-* the task repository's active-status SQL was written beside the tuple
-  that named the same thing, and `ListDatasetTasks` swept rows of other
-  datasets on every read (S-24, S-03).
-
-Two new test files came out of it: `test_value_objects.py` (the
-extracted rules and the vocabularies) and `test_error_contract.py` (the
-documented error table).
+* **`StatusMachine` is held, not inherited.** A supervisor-like guard is
+  a smaller thing than an aggregate, and inheriting would couple the run
+  and graph-execution lifecycles for no gain.
+* **Wire schemas keep plain `str` for closed vocabularies.** An unknown
+  `kind` or `start_from` must arrive as a 422 that names the vocabulary,
+  not as a `ValueError` from an enum constructor — so the domain uses
+  `str`-valued enums and the request layer converts, deliberately.

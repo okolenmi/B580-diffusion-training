@@ -1,51 +1,62 @@
-# 02 -- API contract reference
+# 02 -- API contract
 
-Source of truth for request/response *field* level detail is
-`backend/presentation/schemas.py`; this document is the navigable
-contract (endpoint, params, envelope, error codes) the frontend is
-written against. Route table also mirrored in `01-architecture.md` §API.
+**Where the field-level detail lives: the server.** `/openapi.json` is
+served from the route decorators themselves, so every path, query
+constraint, body schema and response model below is discoverable there
+and cannot drift. `backend/presentation/schemas.py` is the source of
+truth for shapes.
 
-Status: **shipped through M6** (48 endpoints under `/api/v1`, plus the
-static page routes in section 10).
-Section 10 (monitor stream + static pages) is the M6 slice whose
-pinned frame contract lives in `03-migration-strategy.md` §4.
+What is worth writing down is the part OpenAPI *cannot* express: the
+behaviours a client has to know, and the promises the server makes to
+the other processes it talks to. That is this document.
 
 ## 1. Conventions
 
-* **Base path**: `/api/v1`. All bodies and responses are JSON
-  (assets upload is raw bytes; SSE is `text/event-stream`).
-* **No authentication, but the browser doors are closed** (docs 07 F-06):
-  every request's `Host` must name this server (loopback names by
-  default, plus anything in `BACKEND_ALLOWED_HOSTS`) — that is what stops
-  DNS rebinding — and a state-changing method (`POST`/`PUT`/`PATCH`/
-  `DELETE`) carrying an `Origin` must match this server's own origin or
-  one in `BACKEND_ALLOWED_ORIGINS`. Refusals are 403 `forbidden_host` /
-  `forbidden_origin` in the ordinary envelope. Requests without an
-  `Origin` (curl, scripts, server-to-server) are not browser cross-site
-  requests and pass; `GET`/`HEAD` stay open.
-* **Timestamps**: ISO 8601 with offset (`2026-09-30T12:00:00+00:00`),
-  serialised from `datetime` fields.
+* **Base path**: `/api/v1`. All bodies and responses are JSON (assets
+  upload is raw bytes; SSE is `text/event-stream`).
+* **No authentication, but the browser doors are closed** (docs 07
+  F-06): this is a documented trade for a single-user tool on loopback,
+  so the two holes that need no credentials are closed instead. Every
+  request's `Host` must name this server (loopback names by default,
+  plus anything in `BACKEND_ALLOWED_HOSTS`) — that is what stops DNS
+  rebinding. A state-changing method (`POST`/`PUT`/`PATCH`/`DELETE`)
+  carrying an `Origin` must match this server's own origin or one in
+  `BACKEND_ALLOWED_ORIGINS`. Refusals are 403 `forbidden_host` /
+  `forbidden_origin` in the ordinary envelope.
+
+  Two deliberate non-refusals: a request with **no** `Origin` is not a
+  browser cross-site request (curl, scripts, the app's own same-origin
+  fetches) and passes; and `GET`/`HEAD` stay open, because a hostile
+  page can only read with those and reads are already scoped to a
+  loopback deployment.
+
+  If the UI is ever served from a different origin — a LAN address with
+  a separately-served frontend — `BACKEND_ALLOWED_ORIGINS` must be set
+  or cross-site writes are refused by design.
+* **Timestamps**: ISO 8601 with offset (`2026-09-30T12:00:00+00:00`).
 * **List responses** are wrapped: `<resource>s: [...]` plus `count`.
-* **Error envelope** — every non-2xx response, including unknown
-  routes and method-not-allowed (no bare `{"detail": ...}` anywhere):
+* **Error envelope** — every non-2xx response, including unknown routes
+  and method-not-allowed (no bare `{"detail": ...}` anywhere):
 
   ```json
   {"error": {"code": "run_not_found", "message": "run 7 not found",
              "details": { ... }}}
   ```
 
-  `details` present only when the use case supplies it (e.g. the full
-  issue list for `graph_invalid`, pydantic field errors for
-  `validation_error` as `{loc, msg, type}` entries).
-* **Error codes** (application codes -> status; every
-  `ApplicationError` subclass declares its own status in
-  `backend/application/errors.py`, so this table *is* that module --
-  pydantic body rejection is 422 `validation_error`):
+  `details` is present only when the use case supplies it (the full
+  issue list for `graph_invalid`, `{loc, msg, type}` entries for
+  `validation_error`).
+* **Error codes** — every `ApplicationError` subclass declares its own
+  `code` *and* HTTP status in `backend/application/errors.py`, and
+  `backend/tests/test_error_contract.py` parses the table below and
+  fails if the two disagree in either direction — so this table is
+  that module, and adding a code is a one-file change plus one row
+  here. Pydantic body rejection is 422 `validation_error`.
 
   | Code | Status | Domain |
   |---|---|---|
   | `invalid_query` | 422 | runs/graphs (limit, status, name range) |
-  | `forbidden_host`, `forbidden_origin` | 403 | requests (Host not served / cross-site state change — see section 1) |
+  | `forbidden_host`, `forbidden_origin` | 403 | requests (Host not served / cross-site state change — see above) |
   | `run_not_found`, `no_active_run` | 404 | runs |
   | `run_already_active`, `run_not_running` | 409 | runs |
   | `run_directory_conflict` | 409 | runs (`runs/run_<id>/` already holds files — never overwritten, docs 07 F-04) |
@@ -62,219 +73,141 @@ pinned frame contract lives in `03-migration-strategy.md` §4.
   | `graph_execution_active`, `graph_execution_not_active` | 409 | graphs |
   | `node_diagnostics_failed` | 400 | graphs |
 
-## 2. Health & events
+## 2. Two boundary contracts clients must honour
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | `{"status": "ok", "version": "..."}` |
-| GET | `/events` | SSE (below) |
+### Non-finite floats
 
-**SSE frames**: `data: {json}` per line; first frame is
-`{"type": "stream_opened", "occurred_at": ...}`; idle gaps emit
-comment heartbeats (`: ping`). Each domain event serialises with a
-`type` field plus its payload and `occurred_at`. Emitted types:
-
-```
-run_created, run_started, run_completed, run_failed, run_cancelled,
-run_progressed, runs_deleted,
-graph_execution_queued, graph_execution_started,
-graph_execution_progressed, graph_execution_finished,
-graph_execution_failed, graph_execution_stopped,
-graph_executions_deleted
-```
-
-`run_progressed`: `{type, occurred_at, run_id, step, total_steps,
-loss, avg_loss, lr, phase, cache_done, cache_total}` — `null`s for
-unknown fields. `graph_execution_progressed`: `execution_id`, `node_id`,
-`index`, `count`. **No replay**: a frame published while a client is
-disconnected is gone for good, so subscribers refetch the REST state on
-every (re)open. Per-subscriber buffer (bounded): progress frames are
-coalesced (a queued one is superseded by the newest), lifecycle frames
-are kept; only an all-lifecycle backlog gives up its oldest frame,
-which is logged and counted.
-
-**Non-finite floats** (`NaN`, `±Inf` — a diverged trainer) never reach
-the wire as JSON: every body, SSE frame and monitor frame goes through
+`NaN` and `±Inf` — a diverged trainer — never reach the wire as JSON.
+Every body, SSE frame and monitor frame goes through
 `backend/json_safe.py`, which sends `null` for the value and adds a
 sibling `nonfinite` map naming the keys it replaced with their kind
 (`{"current_loss": "inf", "avg_loss": "-inf"}`). The marker is attached
 per object, so a list item names its own field (`runs[i].nonfinite`).
-Note SQLite maps `NaN` to `NULL`, so `NaN` only ever reaches the stream
-frames, never a stored row. Clients must render a marker as a loud
-"diverged" state, never as "no measurement".
 
-## 3. Runs (subprocess training)
+SQLite maps `NaN` to `NULL`, so `NaN` only ever reaches the stream
+frames, never a stored row.
 
-| Method | Path | Query / body | Response |
-|---|---|---|---|
-| GET | `/runs` | `limit` (1..500, default 50), `status` (`pending/running/completed/failed/cancelled`) | `ListRunsOut` |
-| GET | `/runs/active` | — | `RunOut`; 404 `no_active_run` |
-| GET | `/runs/{id}` | — | `RunOut`; 404 |
-| POST | `/runs` | body `StartRunIn`: `config_path`, `start_from` (default `"teacher"`), `reset_optimizer` | `RunOut` -> **201**; 409 `run_already_active`, 409 `run_directory_conflict`, 422 `config_invalid`, 500 `training_launch_failed` |
-| POST | `/runs/{id}/stop` | body `StopRunIn`: `force` (default false) | `RunOut`; 409 `run_not_running` |
-| GET | `/runs/{id}/log` | `lines` (1..500) | `{"log": "<tail text>"}` — the tail is read from the **end** of the file (a run's log is the one artifact that grows without bound, docs 07 F-14) |
-| DELETE | `/runs` | — | `{"deleted": N}` (history wipe) |
+**Client obligation:** render a marker as a loud "diverged" state, never
+as "no measurement" and never as a zero. A missing key is a gap; a
+marked key is a failure, and the two must not look alike.
 
-`RunOut`: `id, status, config_path, mode, phase, total_steps,
-done_steps, current_loss, avg_loss, cache_done, cache_total, pid,
-exit_code, error, log_path, created_at, updated_at, started_at,
-finished_at` (nullable where listed), plus the optional `nonfinite`
-marker described in section 2.
+### The event stream
 
-## 4. Config
+`data: {json}` per line; the first frame is
+`{"type": "stream_opened", "occurred_at": ...}`; idle gaps emit comment
+heartbeats (`: ping`). Each domain event serialises with a `type` field
+plus its payload and `occurred_at`; the emitted types are the
+`DomainEvent` subclasses in `backend/domain/events.py`.
 
-Config files are validated TOML at `config_path` relative to the
-project config dir; `path` selects the file.
+`run_progressed`: `{type, occurred_at, run_id, step, total_steps, loss,
+avg_loss, lr, phase, cache_done, cache_total}` — `null`s for unknown
+fields. `graph_execution_progressed`: `execution_id`, `node_id`, `ok`,
+`duration_ms`.
 
-| Method | Path | Query / body | Response |
-|---|---|---|---|
-| GET | `/config` | `path` (**required** -- empty is 422 `invalid_query`) | nested JSON mirroring `TrainingConfig` |
-| PATCH | `/config` | `ConfigPatchIn{path, overrides}` deep-merge | merged config JSON; file untouched unless merged config validates (422 `config_invalid`) |
-| GET | `/config/raw` | `path` | `{"content": "<toml text>"}` |
-| PUT | `/config/raw` | `ConfigRawIn{path, content}` | `{"ok": true}` (create-or-replace; 422 on invalid TOML). **Stores the user's own text**: the document is parsed to validate it, then written verbatim through a temp sibling + rename, so comments, key order and keys the model does not declare survive (docs 07 F-08). `PATCH /config` (the form editor) still rewrites through the model by design |
-| GET | `/config/options` | — | `{"options": [{...field schema...}]}` — schema only, no config read |
-| GET | `/config/start-options` | `path` | `StartOptionsOut`: `start_from: {option: {path, available, label}}`, `has_unfinished_run`, `last_finished` or `null` |
+**No replay.** A frame published while a client is disconnected is gone
+for good, so a subscriber refetches the REST state on every `(re)open`
+— the dashboard does this on open plus on a 30 s safety poll, and the
+run page refetches when its SSE connection drops. Progress frames are
+coalesced per subscriber (a queued one is superseded by the newest) and
+lifecycle frames are kept; only an all-lifecycle backlog gives up its
+oldest frame, which is logged and counted.
 
-404 `config_not_found` for a missing `path`.
+## 3. Behaviours the schemas do not say
 
-## 5. Settings
+**Config.** `PATCH /config` is nested-only: dotted/flat keys and string
+coercion do not exist here. The file must already exist — `PUT
+/config/raw` is the create path. Unknown override keys are *ignored*
+(`TrainingConfig` is permissive by design). Saving never mutates launch
+state and launching never mutates the config: launch options ride the
+`POST /runs` body. `start-options` omits `lora_checkpoint` for non-LoRA
+configs rather than faking it as unavailable. A broken config propagates
+its error instead of degrading to an empty 200.
 
-Tiered override store (`settings.toml`); values are strings.
+**Raw config editing.** `PUT /config/raw` **stores the user's own text**:
+the document is parsed to validate it, then written verbatim through a
+temp sibling + rename, so comments, key order, and keys the model does
+not declare all survive (docs 07 F-08). `PATCH /config` (the form
+editor) still rewrites through the model, by design.
 
-| Method | Path | Body | Response |
-|---|---|---|---|
-| GET | `/settings` | — | `{"stored": {k: v}, "resolved": {k: v\|null}}` |
-| POST | `/settings` | `SettingsIn` (all optional: `default_config, comfy_dir, venv_python, checkpoints_dir, loras_dir`) | same shape; **absent key = untouched, `""` = clear override**; 400 `settings_invalid` |
+**Settings.** Validation is **pure** — it looks, it never acts (docs 07
+F-15), so a rejected update leaves the filesystem exactly as it was. A
+*configured* `venv_python` is used as-is: a stale value fails loudly at
+spawn rather than silently running some other interpreter.
+`venv_python` must be an existing **executable** file, because the value
+is executed on every start — "it exists" is not the contract. Managed
+directories (`checkpoints_dir`, `loras_dir`) are created **after** the
+commit, so an update that fails validation creates nothing. An absent key
+leaves the value untouched; `""` clears the override.
 
-Validation is **pure** -- it looks, it never acts (docs 07 F-15): a
-rejected update leaves the filesystem exactly as it was. What each key
-must satisfy:
+**Assets.** The `dataset` kind is catalog-only — browse, mkdir and
+upload are refused with guidance rather than half-supported. Listings
+exclude `resume/` and dotfiles. `inspect` returns a fixed per-kind
+shape (checkpoint: components; LoRA: dtype/rank/key_count), never a raw
+header dump.
 
-| Key | Accepted when |
-|---|---|
-| `comfy_dir` | it is an existing directory |
-| `venv_python` | it is an existing **executable** file -- the value is executed on every start, so "it exists" is not the contract (F-06) |
-| `checkpoints_dir`, `loras_dir` | absolute, not an existing non-directory, and *creatable*: the nearest existing ancestor is a writable directory. The directory itself is created **after** the commit, so an update that fails validation creates nothing |
+Upload policy: the name must end in **`.safetensors`** (traversal and
+unknown-kind attempts are `invalid_query` too); the body is read as a
+stream that stops at the 8 GiB cap, so a chunked request cannot buffer
+the server past it; the bytes land in a `.part` sibling and are renamed
+into place, so a rejected or failed upload leaves no directory, no file
+and no partial behind.
 
-## 6. Assets
+**Datasets.** Legacy v1 datasets are *shown*, with `stats: null` rather
+than fabricated counts, and every v2-only endpoint refuses them with 409
+`dataset_not_migrated` — delete excepted, so removing a legacy dataset
+never requires migrating it. Three racing actors (the child's reporter,
+the stop endpoint, startup reconciliation) write through a status CAS,
+so exactly one final outcome wins and a late progress tick is a no-op
+rather than a resurrection. Item paging is opt-in: the curation UI still
+asks for everything, and `limit`/`offset` exist so a caller can page
+through a huge dataset instead of materialising it.
 
-Kinds: `checkpoint`, `lora`, `dataset` (last is catalog-only: browse
-and mkdir/upload unsupported — the booleans in the catalog say so).
+Dataset file paths are sandboxed: a path escaping the dataset directory
+is reported as **not-found, never resolved**. `PUT /datasets/{name}
+preview` takes an **item id, never a path** — the server reads the path
+from the dataset's own rows.
 
-| Method | Path | Query / body | Response |
-|---|---|---|---|
-| GET | `/assets/{kind}` | — | `AssetCatalogOut`: `kind, base_dir, files[], options[{value,label}], upload_supported, browse_supported` |
-| GET | `/assets/{kind}/browse` | `path` (relative; `""` = root) | `AssetBrowseOut`: `kind, path, folders[], files[]` |
-| GET | `/assets/{kind}/inspect` | `path` | header-only safetensors metadata: checkpoint `{kind, path, components}` / lora `{kind, path, dtype, rank, key_count}` |
-| PUT | `/assets/{kind}/folders/{path}` | — | `AssetPathOut` -> **201** |
-| PUT | `/assets/{kind}/files/{path}` | raw bytes body (streamed, bounded) | `AssetPathOut` -> **201**; **413** `asset_too_large` if the body or its declared `Content-Length` exceeds **8 GiB** |
+Bulk item edits keep legacy truthy gates (an empty string never clears
+in bulk; use the single-item PATCH for that), and `prepend`/`append` are
+idempotent so re-applying is a no-op.
 
-Upload policy (contract in `application/ports/asset_store.py`,
-enforced presentation + adapter): the name must end in **`.safetensors`**
-(422 `invalid_query` otherwise — traversal/unknown-kind attempts are
-422 too); the body is read as a stream that stops at the cap, so a
-chunked request cannot buffer the server past it; the bytes land in a
-`.part` sibling and are renamed into place, so a rejected or failed
-upload leaves no directory, no file and no partial behind.
+**Graphs.** A structurally bad submission is not a body rejection:
+`/graphs/validate` answers **always 200** with `ok` plus the complete
+issue list, and `/graphs/run` refuses the same graph with 422
+`graph_invalid` carrying every error-severity finding in `details`, so
+the editor can localise all of them in one round trip.
 
-## 7. Datasets
+Execution lifecycle is `queued -> running -> finished | error | stopped`,
+single-active enforced by a DB CAS. Node failures surface as status
+`error`, not as a `finished` execution carrying an `ok: false` result —
+a poller could not tell those apart. Saved library payloads are stored
+**verbatim** and validated at run, never at save, so an old or
+hand-edited payload loads fine and fails loudly only when executed.
 
-Legacy v1 datasets list with `stats: null` (identity only); v2 adds
-stats/sets/tasks. 409 `dataset_not_migrated` when v2 endpoints hit a v1
-dataset.
+**Routing order.** Page routes are registered after the API and never
+under `/api/`, so an unknown API path keeps the JSON error envelope
+instead of falling through to the HTML shell.
 
-| Method | Path | Query / body | Response |
-|---|---|---|---|
-| GET | `/datasets` | — | `DatasetListOut`: `datasets[{info, stats\|null}], count` |
-| POST | `/datasets` | `CreateDatasetIn{name, description?}` | `DatasetSummaryOut` -> **201**; 409 `dataset_exists`, 409 `dataset_directory_conflict` |
-| GET | `/datasets/{name}` | — | `DatasetDetailOut`: `info, stats, sets[], active_tasks[]` |
-| DELETE | `/datasets/{name}` | — | `{"deleted": true}`; 409 while a task is active |
-| GET | `/datasets/{name}/items` | `committed` (bool, optional), `limit` (1..500, **default: no limit, i.e. every row**), `offset` (>=0, default 0) | `DatasetItemsOut`: `items[], count, limit, offset`; 422 for an out-of-range `limit`/`offset`. Paging is opt-in — the curation UI still asks for everything; `limit`/`offset` let a caller page through a huge dataset instead of materialising it (docs 07 F-14) |
-| PATCH | `/datasets/{name}/items` | `BulkUpdateItemsIn{item_ids, prompt?, prompt_mode("set"/"prepend"/"append"), neg_prompt?, neg_prompt_mode(same)?, cfg?, type("good"/"bad")?}` — legacy truthy gates (empty never clears in bulk); `prepend`/`append` are idempotent (re-applying is a no-op) | `{"updated": N}`; 422 `invalid_query` for unknown mode/type or an all-empty change set |
-| PATCH | `/datasets/{name}/items/{id}` | `UpdateItemIn` — every `null` field untouched; `""` clears a caption; explicit `type` replaces the legacy toggle | `DatasetItemOut` |
-| POST | `/datasets/{name}/items/discard` | `ItemIdsIn` | `{"deleted": N}` |
-| GET | `/datasets/{name}/files/{path}` | — | file bytes (item previews); media type from the suffix; 404 `dataset_not_found` / `dataset_file_not_found` (missing **or** escaping the dataset dir — an escape is reported as not-found, never resolved) |
-| PUT | `/datasets/{name}/preview` | `SetPreviewIn{item_id}` — an id, never a path (the server reads the path from the dataset's own rows) | `DatasetPreviewOut{preview_path}`; 404 `dataset_not_found` / `dataset_item_not_found`, 409 `dataset_not_migrated`, 422 `invalid_query` when the item has no preview image or its file is gone |
-| GET | `/datasets/{name}/sets` | — | `DatasetSetsOut`: `sets[{id,name,description,created_at,members}], count` |
-| POST | `/datasets/{name}/sets` | `CommitItemsIn{item_ids, name}` | `CommitOut{set_id, set_name, added}` -> **201** |
-| GET | `/datasets/{name}/tasks` | `active_only` (bool) | `DatasetTasksOut` (a pure read: no row is written, least of all one belonging to another dataset) |
-| POST | `/datasets/{name}/tasks` | `StartDatasetTaskIn` — one body, discriminated by `kind`: **`ingest_lora`** `{image_dir(absolute, not sandboxed), recursive, resize_mode("fit"/"center_crop"/"pad"/"resize"), latent_size, max_aspect_ratio, neg_prompt, seed}` vs **`generate_teacher`** `{prompt_mode("list"/"keywords"), prompts, keywords, keywords_file, template, min/max_keywords, neg_mode("list"/"keywords"), negative_prompt, neg_*…, cfg_min/max, steps_min/max, t_mode("uniform"/"low"/"mid"/"high"/"logit"), t_low/t_high, batch_size, n_conditions, n_samples_per_cond}`; shared `{model(relative to checkpoints dir, sandboxed), seed, latent_size, model_type("eps"/"vpred")}`, `image_dir` defaults empty and is ignored by `generate_teacher` | `DatasetTaskOut` -> **201**; `total` = image count (ingest) or `n_conditions × n_samples_per_cond` (generate); 409 `dataset_task_active`; 422 `invalid_query` for unknown kind/mode/enum, inverted ranges, empty prompt/keyword sources (validated in `application/teacher_prompts.py` *before* the row exists) |
-| POST | `/datasets/{name}/tasks/{id}/stop` | — | `DatasetTaskOut` (SIGKILL); 409 if terminal |
+## 4. The monitor stream
 
-`DatasetItemOut`: `id, source_id, shard_id, prompt, neg_prompt,
-model_type, type, cfg, seed, source_path, latent_h, latent_w,
-preview_path, committed`. `DatasetTaskOut`: `id, dataset, kind, status,
-pid, current, total, error, params, created_at, updated_at`.
-`DatasetSummaryOut`/`DatasetDetailOut` carry `preview_path`: the
-**resolved** card image (stored override when its file still exists,
-else the first non-bad item's preview, else null -- never a dead or
-guessed path).
+`GET /api/v1/monitor/{monitor_id}/stream` is SSE with a
+`{"type": "connected"}` opener, then the bus's pre-rendered frames:
+history replay first (so a dashboard opened mid-run restores its chart),
+then live step reports, plus `{"type": "clear"}` broadcasts when a new
+run claims the id and the terminal `{"type": "run_end", "step",
+"cancelled"}`.
 
-## 8. Graphs
+Payload keys are the trainer's report dict **verbatim** (`step`,
+`total_steps`, `loss`, `lr`, `t`, `weight_t_*`, `prob_t_*`, `*_ms`,
+`vram_*`, `resident_*_mb`, `vram_budget_mb`, `grad_norm`, ...). A frame
+the page does not recognise is ignored, never guessed at.
 
-Submission body for `validate`/`run` (`GraphRunIn`):
-`nodes: [{id, class_name, params}]`, `edges: [{from_node, from_port,
-to_node, to_port}]`. A structurally bad submission is **not** a body
-rejection — the endpoint validates and answers 422 `graph_invalid`
-with the complete issue list in `details`
-(`[{severity, code, message, node_id, edge_index, param}]`, so the
-editor can localise every problem in one round trip.
+This frame format is a contract with `nodes/` and the frontend at once,
+and it is pinned in `03-migration-strategy.md` section 4 (including why
+`monitor_id` is deliberately not the execution id).
 
-| Method | Path | Query / body | Response |
-|---|---|---|---|
-| GET | `/graphs/nodes` | `refresh` (bool) | `GraphCatalogOut`: `count, domains: {domain: [GraphNodeOut]}, load_errors[]` |
-| POST | `/graphs/nodes/{class}/diagnostics` | `DiagnosticsIn{params}` | `{"messages": {input: [lines]}}`; 404 unknown class, 400 `node_diagnostics_failed` |
-| POST | `/graphs/validate` | `GraphRunIn` | `ValidateOut{ok, issues[]}` — **always 200** (`ok=false` = `/run` would refuse) |
-| POST | `/graphs/run` | `GraphRunIn` | `ExecutionSummaryOut` -> **201**; 422 `graph_invalid`, 409 `graph_execution_active` (single-active) |
-| GET | `/graphs/executions` | `limit` (1..500, default 50) | `ExecutionListOut` (summaries, newest first) |
-| DELETE | `/graphs/executions` | — | `{"deleted": N}` (active rows lose their CAS and stop) |
-| GET | `/graphs/executions/{id}` | — | `ExecutionOut`: summary + `results[{node_id, ok, outputs, error, duration_ms}]` + `graph` snapshot; 404 |
-| POST | `/graphs/executions/{id}/stop` | — | `ExecutionOut`; 409 `graph_execution_not_active` if terminal |
-| GET | `/graphs/library` | — | `SavedGraphListOut` (summaries, most recently updated first) |
-| PUT | `/graphs/library/{name}` | `LibraryGraphIn` (graph payload + `description`; unknown keys ride along verbatim) | `SavedGraphOut` -> **201** first save / **200** replace; 422 `invalid_query` (empty or >120-char name) |
-| GET | `/graphs/library/{name}` | — | `SavedGraphOut{name, description, graph, node_count, created_at, updated_at}`; 404 `graph_not_found` |
-| DELETE | `/graphs/library/{name}` | — | `{"deleted": bool}`; 404 |
-
-**Execution lifecycle** (persisted; reconciled at startup):
-`queued -> running -> finished | error | stopped`. Single-active
-enforced with a DB CAS. `NodeResultOut.outputs` values are the node's
-returned mapping (for sources, identity values of their inputs).
-
-**Catalog shape** (`GraphNodeOut`): `class_name, display_name, domain
-(module-path derived), module, doc, bases[], inputs[]/outputs[]` of
-`PortOut{name, type, required, doc, type_mro, default, default_repr,
-path_kind, choices, visible_when, widget_only}`, plus `node_kind,
-presets[], has_diagnostics`. Outputs carry identity defaults (no
-default / no hints).
-
-## 9. Library payload format
-
-Saved graph payloads are stored **verbatim** as submitted (with
-`format` stamped). Validation happens at run, never at save — old or
-hand-edited payloads load fine and fail loudly only when executed.
-Client-side legacy `localStorage` graphs (`ng_graph_v1`) import through
-`PUT /graphs/library/{name}` (see `03-migration-strategy.md` §5).
-
-## 10. Monitor stream + static pages (M6)
-
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/monitor/{monitor_id}/stream` | SSE (below) |
-| GET | `/` | serves `frontend/index.html` (app shell) |
-| GET | `/monitor/{monitor_id}` | serves `frontend/monitor.html` (id read client-side) |
-| GET | `/graph` | serves `frontend/graph.html` (editor, M7) |
-| GET | `/ui/*` | frontend ES modules + css |
-
-**Monitor SSE frames**: `{"type": "connected"}` opener, then the
-bus's pre-rendered `data: {json}` frames -- history replay first (a
-dashboard opened mid-run restores its chart), then live step reports,
-plus `{"type": "clear"}` broadcasts when a new run claims the id and
-the terminal `{"type": "run_end", "step", "cancelled"}`. Payload keys
-are the trainer's report dict verbatim (`step`, `total_steps`,
-`loss`, `lr`, `t`, `weight_t_*`, `prob_t_*`, `*_ms`, `vram_*`,
-`resident_*_mb`, ...); frames without `step` that the page doesn't
-recognise are ignored, never guessed at. The frame contract and the
-port/wiring facts are pinned in `03-migration-strategy.md` §4.
-
-Page routes are registered after the API and never under `/api/`, so
-unknown API routes keep the JSON error envelope (section 1).
+The page routes that serve the UI (`/`, `/monitor/{id}`, `/graph`,
+`/config`, `/run/{id}`, `/datasets`, `/datasets/{name}`, `/help`,
+`/settings`, plus the `/ui/*` asset mount) are registered with
+`include_in_schema=False`, so they do not appear in `/openapi.json` —
+which is why they are listed here.

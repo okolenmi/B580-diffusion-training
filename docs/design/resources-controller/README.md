@@ -69,7 +69,6 @@ just not the tie-breaker for anything this plan touches.
 | File | What's in it |
 |---|---|
 | [`01-context-and-ground-truth.md`](01-context-and-ground-truth.md) | Why this redesign exists, the real ground-truth facts it's built against (not assumed), and the composition-mechanism question that blocked Phase 4 (now resolved). |
-| [`02-phase-1-and-2.md`](02-phase-1-and-2.md) | Lazy resource references + header-only inspection; the server query endpoint. Both done. |
 | [`03-phase-3-interactive-node-support.md`](03-phase-3-interactive-node-support.md) | Editor + `core.py` + introspection support for interactive nodes. |
 | [`04-phase-4-resource-preset-abstraction.md`](04-phase-4-resource-preset-abstraction.md) | The `ResourcePreset` abstraction -- core construction mechanics done. |
 | [`05-phase-5-resources-controller-node.md`](05-phase-5-resources-controller-node.md) | The Resources Controller node itself -- done, scope-corrected along the way. |

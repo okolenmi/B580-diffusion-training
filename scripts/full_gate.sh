@@ -39,6 +39,13 @@ echo "node --check: all modules OK"
 # only -- the project does not adopt a style linter. Skipped with a
 # notice when the interpreter has no ruff, so the gate still runs on a
 # bare venv.
+echo "== documentation links and citations =="
+# Every markdown link and every doc path cited from source must
+# resolve. Two dangling citations had already accumulated before this
+# existed (a deleted tracking doc, an abbreviated path), and nothing
+# renders these docs, so nothing else would notice.
+"$GATE_PYTHON" scripts/check_doc_links.py --quiet
+
 if "$GATE_PYTHON" -c 'import ruff' 2>/dev/null; then
   echo "== backend lint (F, E9) =="
   "$GATE_PYTHON" -m ruff check --select F,E9 backend/

@@ -194,13 +194,16 @@ function mountConsole() {
     document.getElementById("console-output").scrollTop = 1e9;
   });
 
-  /* drag by the header (the minimize button stays clickable) */
+  /* drag by the header (the minimize button stays clickable).
+     Start from the element's LIVE position, not persisted state: stored
+     geometry can go stale after a native resize, and starting from a stale
+     state made the window jump on the first move. */
   head.addEventListener("pointerdown", (ev) => {
     if (ev.target.closest("button")) return;
     const grabX = ev.clientX;
     const grabY = ev.clientY;
-    const startX = state.x;
-    const startY = state.y;
+    const startX = win.offsetLeft;
+    const startY = win.offsetTop;
     head.setPointerCapture(ev.pointerId);
     const move = (e2) => {
       state.x = startX + (e2.clientX - grabX);
@@ -217,15 +220,20 @@ function mountConsole() {
     head.addEventListener("pointerup", up);
   });
 
-  /* native CSS resize (resize: both) -- keep state in sync */
+  /* native CSS resize (resize: both) -- keep state in sync.
+     Read BORDER-BOX metrics (offset*): apply() writes border-box
+     width/height, so reading clientWidth (which excludes the border) and
+     writing it back shrank the window by 2px on every observer/move
+     round-trip -- the window visibly shrank each time it was dragged.
+     No clamping here: clamping stored x without moving the element made
+     the next move() snap; the drag path clamps on its own. */
   new ResizeObserver(() => {
     if (state.min) return;
-    const w = win.clientWidth;
-    const h = win.clientHeight;
+    const w = win.offsetWidth;
+    const h = win.offsetHeight;
     if (w && h && (w !== state.w || h !== state.h)) {
       state.w = w;
       state.h = h;
-      clamp();
       persist();
     }
   }).observe(win);

@@ -296,13 +296,23 @@
     letter-spacing: 0.08em;
     color: var(--text-dim);
 }
-.ds-item-check {
+/* Item selection checkbox.
+   The design-system base rule (style.css `input[type="checkbox"]`,
+   specificity 0-1-1) beats a bare class selector, so this must be
+   contextual (0-2-0) to win: absolute in the thumb's top-left with a
+   fixed hit target. Left as a static flex child it was crushed by the
+   image to a ~2px sliver nobody could click. The custom look (dark
+   square, accent fill + tick when checked) is inherited from the base
+   rule on purpose -- same visual language as "select all". */
+.ds-thumb .ds-item-check {
     position: absolute;
-    top: 8px;
-    left: 8px;
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent);
+    top: 6px;
+    left: 6px;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    z-index: 1;
+    cursor: pointer;
 }
 
 /* ---- item ⋮ trigger + context menu (M8f) ----

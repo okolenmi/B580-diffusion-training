@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (180
+checklist below now runs as `backend/tests/visual_smoke.py` (186
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -38,12 +38,23 @@ never clicked, so the real datasets stay read-only), the M8d shell
 (icon rail inventory + active states +
 hover tips, floating console minimize/FAB/restore/persistence,
 help + settings pages), and the M8e dataset flows (add-data dialog
-option sets + local validation, Browse/Edit modes, the advanced item
+option sets + local validation, Browse/Edit modes (selection is an
+edit-mode tool: browse renders no checkboxes or select-all and hides
+multi-edit mid-selection, and a selection survives the round-trip
+back to edit), the advanced item
 editor's dirty/revert/walk cycle, the multi-edit panel -- all
 read-only against the real curated datasets). Console is asserted
 clean across every page.
 Desktop-browser execution of the same checklist below stays as the
 manual fallback.
+
+Console geometry gestures (resize -> move -> resize, and item
+checkbox measurements) are exercised by
+`scripts/probe_ui_bugs.py` against the same live server:
+
+```bash
+~/.venvs/pw/bin/python scripts/probe_ui_bugs.py
+```
 
 ## Prerequisites
 
@@ -250,7 +261,9 @@ system console) plus the two new pages.
 * [ ] Dragging the console by its header and native corner-resize
       are exercised interactively (desktop session); the automated
       run pins persistence of whatever geometry it gets, not the
-      gestures themselves.
+      gestures themselves -- and `scripts/probe_ui_bugs.py` now
+      drives resize -> move -> resize automatically and asserts the
+      window keeps its size (the 2026-10-01 shrinking-window bug).
 
 ## 8. Dataset add-data + edit modes -- scenario H (M8e)
 
@@ -286,6 +299,10 @@ but never saves, the multi-edit panel renders but never applies.
       demand; counts (selected / apply-target) follow the selection;
       clearing selection hides the panel; still zero task POSTs and
       no confirmation dialog fired (the walk deleted nothing).
+* [x] Selection is edit-mode-only: browse renders no item checkboxes
+      and hides select-all; switching to browse mid-selection hides
+      the panel without dropping the selection, and switching back
+      restores it (2 selected).
 * [x] Screenshot `datasets_edit.png` captured.
 
 ## 9. Record
@@ -344,6 +361,43 @@ viewing only.
    visible after switching to `distillation`); the initial overlay was
    also a shallow copy that would have let edits mutate `values`. Fixed
    with `setDeep` writes + a JSON deep copy on load.
+
+## Findings from the 2026-10-01 post-M9 user reports (all fixed same day)
+
+Reported from a live desktop session; reproduced first with
+`scripts/probe_ui_bugs.py`, then pinned in the smoke.
+
+8. **System console shrank while being dragged; resize seemed
+   ignored** -- `apply()` writes border-box `width`/`height` (the global
+   `box-sizing: border-box`), but the ResizeObserver synced from
+   `clientWidth`/`clientHeight` (border excluded). Every move ->
+   observer -> move round-trip wrote the border-less size back as
+   border-box: **-2px per cycle**, so dragging a 566px window by ~12
+   steps left it at 542px, and a fresh native resize was ratcheted down
+   the next time the window moved. A second defect compounded it: the
+   observer clamped stored `x` without moving the element, so stored
+   state diverged from the visible position and the first drag snapped
+   the window. Fixed: observer reads `offsetWidth`/`offsetHeight`
+   (border-box, exactly what `apply()` writes) and never clamps; the
+   drag starts from the element's live `offsetLeft`/`offsetTop`.
+   Probe pins: move keeps size, resize-after-move sticks.
+9. **Item selection checkboxes collapsed to a ~2px sliver** -- the
+   design-system base rule `input[type="checkbox"]` (specificity
+   0,1,1) outranked `.ds-item-check` (0,1,0), so the checkbox never got
+   `position: absolute` and stayed a flex child of `.ds-thumb`, where
+   the preview image's flex pressure crushed it (2 x 26px measured on
+   all 40 cards). Fixed with a contextual selector `.ds-thumb
+   .ds-item-check` (0,2,0): absolute top-left, fixed 18px hit target,
+   same visual language as "select all". Probe pins 18x18 on every
+   card.
+10. **Browse mode exposed the selection tools** -- item checkboxes and
+    select-all rendered in browse mode; clicking one raised the
+    multi-edit panel while the toolbar still read "Browse". Fixed by
+    contract: selection (checkboxes, select-all, bulk panel) renders
+    only in edit mode; a live selection is preserved (not destroyed)
+    across mode switches. Smoke pins browse rendering zero checkboxes,
+    select-all hidden, the panel hidden mid-selection, and the
+    2-item selection surviving the round-trip.
 
 ## Known deferred (not bugs)
 

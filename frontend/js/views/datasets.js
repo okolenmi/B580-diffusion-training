@@ -389,14 +389,20 @@ async function loadItems() {
 }
 
 function renderItems() {
+  const edit = itemMode === "edit";
   el("items-count").textContent =
     `${items.length} shown · ${selected.size} selected` +
-    (itemMode === "edit" ? " · edit mode" : "");
+    (edit ? " · edit mode" : "");
   const all = items.length > 0 && selected.size === items.length;
   el("select-all").checked = all;
+  // selection (checkboxes, select-all, multi-edit) is an EDIT-mode tool:
+  // in browse mode it is all hidden, so nothing can open multi-edit while
+  // the toolbar still says "browse". A live selection is preserved and
+  // comes back untouched when edit mode returns.
+  el("select-all-label").hidden = !edit;
   const grid = el("items-grid");
   grid.replaceChildren();
-  grid.classList.toggle("edit-mode", itemMode === "edit");
+  grid.classList.toggle("edit-mode", edit);
 
   if (!items.length) {
     showState("items-state",
@@ -427,7 +433,8 @@ function itemCard(item) {
     },
   });
 
-  const thumbKids = [check];
+  // no checkbox in browse mode (edit-mode-only selection, see renderItems)
+  const thumbKids = itemMode === "edit" ? [check] : [];
   if (item.preview_path) {
     const img = h("img", {
       src: previewUrl(item.preview_path),
@@ -782,7 +789,8 @@ async function discardItems(ids) {
 
 function renderBulkBar() {
   const bar = el("bulk-bar");
-  bar.hidden = selected.size === 0;
+  // edit mode only -- browse never shows multi-edit, even mid-selection
+  bar.hidden = itemMode !== "edit" || selected.size === 0;
   el("bulk-count").textContent = `${selected.size} selected`;
   el("bulk-apply-n").textContent = String(selected.size);
 }

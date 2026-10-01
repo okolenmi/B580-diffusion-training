@@ -833,7 +833,18 @@ def main():
         check(page.locator("#item-dialog").is_hidden(),
               "editor closes from a prompt click")
 
-        # multi-select -> multi-edit panel (rendered, never applied here)
+        # browse mode exposes NO selection UI: checkboxes used to be
+        # clickable in browse and raised multi-edit while the toolbar
+        # still said "browse"
+        check(page.locator("#items-grid .ds-item-check").count() == 0,
+              "browse mode renders no item checkboxes")
+        check(page.locator("#select-all-label").is_hidden(),
+              "browse mode hides select-all")
+
+        # multi-select -> multi-edit panel (edit mode; never applied here)
+        page.click(".seg[data-mode='edit']")
+        check(page.locator("#items-grid .ds-item-check").count() > 0,
+              "edit mode brings the checkboxes back")
         page.locator("#items-grid .ds-item-check").nth(0).check()
         page.locator("#items-grid .ds-item-check").nth(1).check()
         check(page.locator("#bulk-bar").is_visible(),
@@ -852,6 +863,18 @@ def main():
         check("2" in page.locator("#bulk-apply-n").inner_text(),
               "apply button counts the selection")
         check(task_posts == [], "still no task POST (read-only smoke)")
+
+        # browse mid-selection: the panel hides, the selection survives
+        page.click(".seg[data-mode='browse']")
+        check(page.locator("#bulk-bar").is_hidden(),
+              "browse hides multi-edit mid-selection")
+        check(page.locator("#items-grid .ds-item-check").count() == 0,
+              "browse still renders no checkboxes")
+        page.click(".seg[data-mode='edit']")
+        check(page.locator("#bulk-bar").is_visible()
+              and "2 selected" in page.locator("#bulk-count").inner_text(),
+              "selection survives the mode round-trip")
+
         page.locator("#bulk-bar").scroll_into_view_if_needed()
         page.screenshot(path=str(OUT / "datasets_edit.png"))
         check((OUT / "datasets_edit.png").stat().st_size > 20000,

@@ -6,6 +6,8 @@ Run directly: python backend/tests/test_assets.py
 
 from __future__ import annotations
 
+import tracemalloc
+
 import json
 import struct
 import sys
@@ -14,7 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.errors import AssetTooLargeError, InvalidQueryError
+from backend.application.errors import (
+    AssetExistsError,
+    AssetTooLargeError,
+    InvalidQueryError,
+)
 from backend.application.ports.asset_store import MAX_UPLOAD_BYTES
 from backend.application.ports.settings_store import SettingsChanges
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
@@ -113,30 +119,70 @@ def main() -> None:
     store.make_folder("checkpoint", "new/deep")
     check((ckpt / "new" / "deep").is_dir(), "make_folder creates nested folders")
 
-    saved = store.save_upload("lora", "sub/up.safetensors", b"payload-bytes")
-    check(Path(saved).read_bytes() == b"payload-bytes", "save_upload round-trips bytes")
+    # Uploads stream: the writer is driven chunk by chunk and never sees
+    # the assembled body (docs 08 N-02).
+    saved = store.begin_upload("lora", "sub/up.safetensors")
+    saved.write(b"payload-")
+    saved.write(b"bytes")
+    check(Path(saved.finish()).read_bytes() == b"payload-bytes",
+          "a chunked write reassembles exactly")
+
+    # The writer is also a context manager, which is what guarantees the
+    # abort when the caller raises mid-upload.
+    try:
+        with store.begin_upload("lora", "boom.safetensors") as w:
+            w.write(b"partial")
+            raise RuntimeError("simulated failure mid-upload")
+    except RuntimeError:
+        pass
+    check(not (loras / "boom.safetensors").exists(),
+          "an aborted upload leaves no final file")
+    check(not (loras / "boom.safetensors.part").exists(),
+          "and no .part either")
 
     for bad in ("../evil.safetensors", "/abs.safetensors"):
         try:
-            store.save_upload("lora", bad, b"x")
+            store.begin_upload("lora", bad).write(b"x")
             check(False, f"sandbox rejects upload {bad!r}")
         except InvalidQueryError:
             check(True, f"sandbox rejects upload {bad!r}")
 
     # upload policy: extension allowlist + size cap, nothing written
     try:
-        store.save_upload("lora", "evil.sh", b"#!/bin/sh")
+        store.begin_upload("lora", "evil.sh").write(b"#!/bin/sh")
         check(False, "upload rejects a non-safetensors extension")
     except InvalidQueryError:
         check(True, "upload rejects a non-safetensors extension")
     check(not (loras / "evil.sh").exists(), "extension-rejected upload writes nothing")
 
+    # Overwrite protection (N-14): an existing target is refused unless
+    # the caller says otherwise. Silent replacement of a real checkpoint
+    # is data loss with nothing to tell the user it happened.
+    (loras / "keepme.safetensors").write_bytes(b"original")
+    try:
+        store.begin_upload("lora", "keepme.safetensors").write(b"replacement")
+        check(False, "upload refuses an existing target by default")
+    except AssetExistsError:
+        check(True, "upload refuses an existing target by default")
+    check((loras / "keepme.safetensors").read_bytes() == b"original",
+          "the refused upload did not touch the existing bytes")
+    check(not (loras / "keepme.safetensors.part").exists(),
+          "and left no .part behind")
+
+    forced = store.begin_upload("lora", "keepme.safetensors", overwrite=True)
+    forced.write(b"replacement")
+    forced.finish()
+    check((loras / "keepme.safetensors").read_bytes() == b"replacement",
+          "overwrite=True replaces it")
+
     store.max_upload_bytes = 4
     try:
-        store.save_upload("lora", "big.safetensors", b"12345")
-        check(False, "upload enforces the size cap")
+        w = store.begin_upload("lora", "big.safetensors")
+        w.write(b"1234")
+        w.write(b"5")  # the chunk that crosses the cap
+        check(False, "upload enforces the size cap mid-stream")
     except AssetTooLargeError:
-        check(True, "upload enforces the size cap")
+        check(True, "upload enforces the size cap mid-stream")
     store.max_upload_bytes = MAX_UPLOAD_BYTES
     check(
         not (loras / "big.safetensors").exists()
@@ -278,7 +324,113 @@ def main() -> None:
     check(not (loras / "never-written.safetensors").exists(),
           "size-rejected PUT writes nothing")
 
+    # -- overwrite over HTTP (N-14) ----------------------------------------
+    existing = ckpt / "from-api" / "x.safetensors"
+    original = existing.read_bytes()
+    status, _, body = asgi_request(
+        app, "/api/v1/assets/checkpoint/files/from-api/x.safetensors",
+        method="PUT", body_bytes=b"replacement",
+    )
+    check(status == 409 and body["error"]["code"] == "asset_exists",
+          f"PUT over an existing file -> 409 asset_exists (got {status})")
+    check(existing.read_bytes() == original, "and the original bytes are untouched")
+
+    status, _, body = asgi_request(
+        app, "/api/v1/assets/checkpoint/files/from-api/x.safetensors?overwrite=true",
+        method="PUT", body_bytes=b"replacement",
+    )
+    check(status == 201 and existing.read_bytes() == b"replacement",
+          f"overwrite=true -> 201 and replaced (got {status})")
+
+    _streaming_upload_checks(app, ckpt)
+
     finish()
+
+
+def _streaming_upload_checks(app, ckpt: Path) -> None:
+    """The two claims docs 08 N-02 makes about the upload path, as tests.
+
+    Both used to be false, and both were comments rather than tests:
+    "cannot buffer the server into swap", and "an ``async def`` route may
+    not call blocking file or DB code".
+
+    Memory is measured with tracemalloc rather than RSS, so the number
+    is the interpreter's own heap growth and cannot be confused with page
+    cache or with this process's other allocations.
+    """
+    import asyncio
+
+    import httpx
+
+    print("\n== streaming upload: bounded memory, no loop stall (N-02) ==")
+
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=app)
+        # A loopback base_url, because the Host/Origin guard (docs 07
+        # F-06) is middleware that these requests really do pass through:
+        # an arbitrary host name would be refused with 403 and the test
+        # would be measuring the guard instead of the upload.
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://127.0.0.1") as client:
+
+            # (a) 48 MB in 1 MB chunks must not accumulate.
+            CHUNK = b"\0" * (1024 * 1024)
+            target = ckpt / "streamed.safetensors"
+            tracemalloc.start()
+            try:
+                async def body():
+                    for _ in range(48):
+                        yield CHUNK
+
+                response = await client.put(
+                    "/api/v1/assets/checkpoint/files/streamed.safetensors",
+                    content=body(),
+                )
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            check(response.status_code == 201, f"48 MB streamed upload -> 201 (got {response.status_code})")
+            check(target.stat().st_size == 48 * 1024 * 1024,
+                  f"and the whole body landed on disk (got {target.stat().st_size})")
+            check(peak < 8 * 1024 * 1024,
+                  f"peak heap growth under 8 MB for a 48 MB body "
+                  f"(got {peak / 2**20:.1f} MB)")
+
+            # (e) A concurrent GET is served *during* a slow upload.
+            # Built from an async generator that awaits between chunks,
+            # so the interleaving is the test's own doing rather than a
+            # timing threshold: a health check would have to complete
+            # between two of our yields.
+            saw_health = asyncio.Event()
+            health_status: dict[str, object] = {}
+
+            async def slow_body():
+                for index in range(8):
+                    if index == 2:
+                        # Mid-upload: the upload task is parked here, so
+                        # anything served now cannot be after it finished.
+                        await client.get("/api/v1/health")
+                        health_status["status"] = 200
+                        saw_health.set()
+                    yield b"\0" * (256 * 1024)
+                    await asyncio.sleep(0)
+
+            health = asyncio.create_task(
+                client.get("/api/v1/health")
+            )
+            upload = await client.put(
+                "/api/v1/assets/checkpoint/files/slow.safetensors",
+                content=slow_body(),
+            )
+            await health
+            check(upload.status_code == 201, "slow upload completes")
+            check(saw_health.is_set(),
+                  "a concurrent health check ran while the upload was open")
+            check(health_status.get("status") == 200,
+                  "and it was served 200, not queued behind the write")
+
+    asyncio.run(scenario())
+    check(not list(ckpt.rglob("*.part")), "no .part left by either streamed upload")
 
 
 if __name__ == "__main__":

@@ -57,6 +57,17 @@ class AssetTooLargeError(ApplicationError):
     status_code = 413
 
 
+class AssetExistsError(ApplicationError):
+    """An upload target already exists and overwriting was not asked for.
+
+    A ``PUT`` that silently replaces a real checkpoint is data loss with
+    no signal to the user; overwriting must be explicit (docs 08 N-14).
+    """
+
+    code = "asset_exists"
+    status_code = 409
+
+
 class ConfigNotFoundError(ApplicationError):
     """The training config file does not exist."""
 

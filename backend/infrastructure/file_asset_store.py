@@ -14,17 +14,30 @@ torch, which has no business being loaded by catalog/browse calls)
 and returns the fixed per-kind contract, never a raw header dump.
 
 Uploads are policy-checked before any write: ``.safetensors`` names
-only (``UPLOAD_SUFFIXES``), capped at ``max_upload_bytes``, written to
-a ``.part`` sibling and renamed, so a rejected or interrupted upload
-leaves nothing behind.
+only (``UPLOAD_SUFFIXES``), an existing target is refused unless the
+caller explicitly asked to overwrite, capped at ``max_upload_bytes``
+*while writing*, and written to a ``.part`` sibling that is renamed on
+commit -- so a rejected, oversized, overwritten-by-accident or
+interrupted upload leaves nothing behind.
+
+The write is streamed chunk by chunk (``begin_upload`` returning a
+writer) rather than handed a finished ``bytes``. At this app's 8 GiB
+cap, buffering the body and then joining the chunks held about twice the
+file in RAM and stalled the event loop for the duration (docs 08 N-02,
+measured).
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ..application.errors import AssetTooLargeError, InvalidQueryError
+from ..application.errors import (
+    AssetExistsError,
+    AssetTooLargeError,
+    InvalidQueryError,
+)
 from ..application.ports.asset_store import (
     MAX_UPLOAD_BYTES,
     UPLOAD_SUFFIXES,
@@ -32,6 +45,7 @@ from ..application.ports.asset_store import (
     AssetCatalog,
     AssetOption,
     AssetStore,
+    AssetUploadWriter,
 )
 from ..application.ports.dataset_library import DatasetLibrary
 from . import path_tiers
@@ -120,7 +134,8 @@ class FileSystemAssetStore(AssetStore):
         resolved.mkdir(parents=True, exist_ok=True)
         return str(resolved)
 
-    def save_upload(self, kind: str, relative_path: str, content: bytes) -> str:
+    def begin_upload(self, kind: str, relative_path: str, *,
+                     overwrite: bool = False) -> AssetUploadWriter:
         # validate everything BEFORE touching the filesystem: a rejected
         # upload must leave no directory, no file, no partial (docs 07,
         # quality rule 3)
@@ -130,26 +145,32 @@ class FileSystemAssetStore(AssetStore):
             raise InvalidQueryError(
                 f"uploads must end in {', '.join(UPLOAD_SUFFIXES)}: {relative_path!r}"
             )
-        if len(content) > self.max_upload_bytes:
-            raise AssetTooLargeError(
-                f"{relative_path!r} is {len(content)} bytes; the cap is "
-                f"{self.max_upload_bytes} bytes"
+        # Refuse to clobber an existing checkpoint unless asked (N-14).
+        # Checked here, before the .part is created, so a refusal leaves
+        # nothing at all behind -- including no directory.
+        if resolved.exists() and not overwrite:
+            raise AssetExistsError(
+                f"{relative_path!r} already exists; pass overwrite=true to "
+                f"replace it"
             )
         resolved.parent.mkdir(parents=True, exist_ok=True)
         # write beside the target, then rename: an interrupted or failed
         # write never leaves a partial file at the final path (.part is
         # invisible to pickers -- they list *.safetensors only)
         partial = resolved.with_name(resolved.name + ".part")
+        # A stale .part from a killed process would be silently
+        # truncated-and-appended by a plain "ab"; start from nothing so a
+        # resumed write can never splice two uploads together.
         try:
-            partial.write_bytes(content)
-            partial.replace(resolved)
-        except OSError:
-            try:
-                partial.unlink()
-            except OSError:
-                pass
-            raise
-        return str(resolved)
+            handle = open(partial, "wb")
+        except OSError as exc:
+            raise InvalidQueryError(f"cannot write {relative_path!r}: {exc}") from exc
+        return _PartialUpload(
+            writer=handle,
+            partial=partial,
+            final=resolved,
+            max_bytes=self.max_upload_bytes,
+        )
 
     def inspect(self, kind: str, relative_path: str) -> dict[str, Any]:
         self._reject_catalog_only(kind, "inspect files in")
@@ -261,3 +282,76 @@ class FileSystemAssetStore(AssetStore):
                 continue  # same dotfile rule as browse: hidden stays hidden
             results.append(str(rel))
         return results
+
+
+class _PartialUpload(AssetUploadWriter):
+    """One in-progress upload: chunks into ``partial``, then renamed.
+
+    The cap is enforced *here*, on the running total, not from a
+    declared length: a chunked request has no content-length to trust,
+    and the whole point of this class is that a body cannot decide how
+    much it costs.
+    """
+
+    def __init__(self, writer, partial: Path, final: Path, max_bytes: int) -> None:
+        self._writer = writer
+        self._partial = partial
+        self._final = final
+        self._max_bytes = max_bytes
+        self._written = 0
+        self._settled = False  # finish() or abort() has run
+
+    def write(self, chunk: bytes) -> None:
+        if self._settled:
+            raise RuntimeError("write() after finish()/abort()")
+        # Check before appending, so an over-cap upload never puts the
+        # offending bytes on disk either.
+        if self._written + len(chunk) > self._max_bytes:
+            self.abort()
+            raise AssetTooLargeError(
+                f"{self._final.name!r} exceeds the "
+                f"{self._max_bytes}-byte cap"
+            )
+        self._writer.write(chunk)
+        self._written += len(chunk)
+
+    def finish(self) -> str:
+        if self._settled:
+            raise RuntimeError("finish() called twice")
+        self._settled = True
+        try:
+            self._writer.flush()
+            os.fsync(self._writer.fileno())
+            self._writer.close()
+            self._partial.replace(self._final)
+        except BaseException:
+            # Includes KeyboardInterrupt/CancelledError: a torn upload
+            # must not leave a partial the next run would append to.
+            self._cleanup()
+            raise
+        return str(self._final)
+
+    def abort(self) -> None:
+        if self._settled:
+            return
+        self._settled = True
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        try:
+            self._writer.close()
+        except OSError:
+            pass  # already closed, or never opened: nothing to undo
+        try:
+            self._partial.unlink()
+        except OSError:
+            pass  # the point is only "no .part remains"
+
+    def __enter__(self) -> "_PartialUpload":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        # Only the unhappy path: on success finish() has already run and
+        # this is a no-op, so `with` cannot double-commit.
+        self.abort()
+        return False

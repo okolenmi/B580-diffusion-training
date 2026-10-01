@@ -265,7 +265,19 @@ function pathWidget({ port, current, commit, note }) {
         note(`Uploaded ${f.name} \u2192 ${rel}`);
         commit(rel, true); // picker repopulates from the fresh catalog
       })
-      .catch((err) => note(`Upload failed: ${err && err.message ? err.message : err}`, "error"))
+      .catch((err) => {
+        // 409 is not a crash: the file is already there and we did not
+        // touch it. Say what happened and how to proceed, rather than
+        // showing the raw envelope code (docs 08 N-14).
+        const hint = err && err.code === "asset_exists"
+          ? " -- it already exists; use Save-As for a different name, or " +
+            "delete it first to replace it"
+          : "";
+        note(
+          `Upload failed: ${err && err.message ? err.message : err}${hint}`,
+          "error",
+        );
+      })
       .finally(() => {
         upload.disabled = false;
         fileInput.value = "";

@@ -45,18 +45,28 @@ export function invalidateAssetCatalog(kind) {
  * file's own name; a plain upload strips any directory the browser may
  * hand over so it lands at the top of the folder. Returns the relative
  * path the server saved it under (the value the param should hold).
- * Rejects with ApiError (413 asset_too_large, 422 invalid_query for a
- * bad name/kind, ...).
+ *
+ * `overwrite` defaults to false: the server refuses to replace an
+ * existing file (409 asset_exists) rather than silently doing it, which
+ * would destroy a real checkpoint with nothing to tell the user. Callers
+ * that mean to replace must say so.
+ *
+ * Rejects with ApiError (409 asset_exists, 413 asset_too_large, 422
+ * invalid_query for a bad name/kind, ...).
  */
-export async function uploadAsset(pathKind, file, nameOverride) {
+export async function uploadAsset(pathKind, file, nameOverride, overwrite = false) {
   const kind = assetKindFor(pathKind);
   const name = nameOverride || file.name.split(/[\\/]/).pop();
   const encoded = name.split("/").map(encodeURIComponent).join("/");
-  const res = await api(`/assets/${encodeURIComponent(kind)}/files/${encoded}`, {
-    method: "PUT",
-    rawBody: file,
-    headers: { "Content-Type": "application/octet-stream" },
-  });
+  const query = overwrite ? "?overwrite=true" : "";
+  const res = await api(
+    `/assets/${encodeURIComponent(kind)}/files/${encoded}${query}`,
+    {
+      method: "PUT",
+      rawBody: file,
+      headers: { "Content-Type": "application/octet-stream" },
+    },
+  );
   invalidateAssetCatalog(kind);
   return res.relative_path;
 }

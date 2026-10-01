@@ -64,7 +64,8 @@ the other processes it talks to. That is this document.
   | `config_invalid` | 422 | config |
   | `training_launch_failed` | 500 | runs |
   | `settings_invalid` | 400 | settings |
-  | `asset_too_large` | 413 | assets (upload body or declared `Content-Length` over the 8 GiB cap) |
+  | `asset_too_large` | 413 | assets (upload body over the 8 GiB cap, or a declared `Content-Length` over it — the body is streamed, so the running total is the authoritative check) |
+| `asset_exists` | 409 | assets (the upload target already exists; pass `?overwrite=true` to replace it — a `PUT` never silently overwrites a checkpoint, docs 08 N-14) |
   | `dataset_not_found`, `dataset_item_not_found`, `dataset_file_not_found`, `dataset_task_not_found` | 404 | datasets |
   | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active`, `dataset_directory_conflict` | 409 | datasets (`dataset_directory_conflict`: the name is taken by a directory that is not a dataset — it is never deleted, docs 07 F-10) |
   | `dataset_task_launch_failed` | 500 | datasets |

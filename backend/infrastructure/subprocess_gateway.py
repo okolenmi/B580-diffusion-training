@@ -14,9 +14,11 @@ Ports the legacy launch pipeline (``control.build_training_command`` +
   signalled.
 - stop: SIGINT to the process group with SIGKILL escalation after a
   grace period (``force`` skips straight to SIGKILL); fallback to a
-  direct signal when the group cannot be addressed.
-- kill: the ``/proc/<pid>/cmdline`` guard against PID reuse (fail-open,
-  as the legacy implementation did).
+  direct signal when the group cannot be addressed. Every signal --
+  ``stop``, the escalation and ``kill`` -- is gated on :meth:`owns`, the
+  ``/proc`` cmdline guard against PID reuse (fail-open when ``/proc``
+  cannot answer), so a stale row cannot point a signal at an unrelated
+  process (docs 07 F-12).
 
 Addressed by PID with an internal pid -> Popen map: state survives the
 supervisor's view of the world, and every pid we spawned in *this*
@@ -37,6 +39,7 @@ from ..application.ports.training_gateway import (
     TrainingGateway,
     TrainingLaunch,
 )
+from .process_identity import cmdline_mentions
 from .workspace import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ class SubprocessTrainingGateway(TrainingGateway):
         self,
         layout: WorkspaceLayout,
         *,
-        stop_grace: float = 3.0,
+        stop_grace: float = 15.0,
         cmdline_marker: str = "core.cli",
     ) -> None:
         self._layout = layout
@@ -171,8 +174,30 @@ class SubprocessTrainingGateway(TrainingGateway):
         try:
             os.kill(pid, 0)
             return True
-        except OSError:
-            return False  # ProcessLookup/Permission/OSError: legacy parity
+        except ProcessLookupError:
+            return False  # no such process
+        except PermissionError:
+            # It exists, it just is not ours to signal. Reading this as
+            # "dead" would tell the supervisor a live trainer finished
+            # (docs 07 F-12).
+            logger.debug("pid %s exists but is not ours to signal", pid)
+            return True
+        except OSError as exc:
+            logger.warning("cannot probe pid %s: %s", pid, exc)
+            return False
+
+    def owns(self, pid: int) -> bool:
+        """PID-reuse guard, asked directly (docs 07 F-12).
+
+        A process we spawned in this process is ours by construction --
+        no /proc race, no marker dependency. For anything else the
+        cmdline must mention our entry point; an unreadable /proc cannot
+        disprove it, which is the legacy fail-open behaviour.
+        """
+        proc = self._procs.get(pid)
+        if proc is not None:
+            return proc.poll() is None
+        return cmdline_mentions(pid, self._marker) is not False
 
     def wait_exit_code(self, pid: int, timeout: float = 5.0) -> int | None:
         proc = self._procs.get(pid)
@@ -188,10 +213,14 @@ class SubprocessTrainingGateway(TrainingGateway):
     # ------------------------------------------------------------------
 
     def stop(self, pid: int, *, force: bool = False) -> bool:
+        if not self._refuse_stranger(pid, "stop"):
+            return False
         delivered = self._signal(pid, signal.SIGKILL if force else signal.SIGINT)
         if delivered and not force:
-            # Escalate: SIGINT may be ignored by a stuck trainer; the
-            # legacy service did the same 3s-after check.
+            # Escalate: SIGINT asks the trainer to save and exit, which
+            # can take a while on a big checkpoint -- so the grace period
+            # is generous by default (docs 07 F-12) rather than the
+            # legacy's 3s, which turned "saving" into "killed".
             threading.Thread(
                 target=self._escalate,
                 args=(pid,),
@@ -202,14 +231,29 @@ class SubprocessTrainingGateway(TrainingGateway):
 
     def _escalate(self, pid: int) -> None:
         threading.Event().wait(self._stop_grace)
-        if self.is_alive(pid):
+        if self.is_alive(pid) and not self._refuse_stranger(pid, "escalation"):
             logger.warning("pid %s ignored SIGINT; escalating to SIGKILL", pid)
             self._signal(pid, signal.SIGKILL)
 
     def kill(self, pid: int) -> bool:
-        if not self._looks_like_our_training_process(pid):
+        if not self._refuse_stranger(pid, "kill"):
             return False
         return self._signal(pid, signal.SIGKILL)
+
+    def _refuse_stranger(self, pid: int, action: str) -> bool:
+        """False when this pid is provably not our trainer -- refuse it.
+
+        Every signal goes through here, not just ``kill``: a stale row
+        whose pid was recycled must not be able to SIGINT an unrelated
+        process (docs 07 F-12).
+        """
+        if self.owns(pid):
+            return True
+        logger.warning(
+            "refusing to %s pid %s: it is not this project's trainer "
+            "(pid reused?)", action, pid,
+        )
+        return False
 
     @staticmethod
     def _signal(pid: int, sig: int) -> bool:
@@ -222,16 +266,3 @@ class SubprocessTrainingGateway(TrainingGateway):
                 return True
             except OSError:
                 return False
-
-    def _looks_like_our_training_process(self, pid: int) -> bool:
-        """PID-reuse guard (legacy port): /proc cmdline must mention our
-        entry point. Fails open (True) when /proc is unavailable -- a
-        mitigation for the common case, not a hard guarantee."""
-        cmdline_path = Path(f"/proc/{pid}/cmdline")
-        if not cmdline_path.exists():
-            return True
-        try:
-            cmdline = cmdline_path.read_bytes().decode(errors="replace")
-            return self._marker in cmdline
-        except OSError:
-            return True

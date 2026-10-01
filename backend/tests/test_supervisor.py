@@ -18,6 +18,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.dto import StartTrainingCommand
+from backend.infrastructure.jsonl_progress_source import JsonlProgressSource
 from backend.tests.support import (
     FakeClock,
     FakeConfigInspector,
@@ -27,6 +28,7 @@ from backend.tests.support import (
     build_services,
     check,
     finish,
+    seed_run,
     wait_until,
 )
 
@@ -380,6 +382,77 @@ def test_supervisor_crash_repairs_the_row() -> None:
         check(dto.status.value == "running", "retry actually spawned")
 
 
+def test_terminal_lines_are_evidence_not_telemetry() -> None:
+    print("\n== reader: terminal lines carry the trainer's verdict ==")
+    path = Path(tempfile.mkdtemp(prefix="progress-")) / "log.progress.jsonl"
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"phase": "step", "step": 5, "loss": 0.5}) + "\n")
+        fh.write(json.dumps({"phase": "finished"}) + "\n")
+        fh.write(json.dumps({"phase": "something-new"}) + "\n")
+    samples = JsonlProgressSource().read_new(path)
+    kinds = [(s.step, s.terminal) for s in samples]
+    check(
+        kinds == [(5, None), (None, "finished")],
+        f"a step sample, then the verdict, then nothing (got {kinds})",
+    )
+    check(
+        samples[1].phase is None and samples[1].loss is None,
+        "the terminal sample asserts no telemetry",
+    )
+
+
+def _adopted_scenario(terminal: str | None) -> tuple[object, int]:
+    """One restart: a running row whose trainer is still alive, adopted."""
+    tmp = tempfile.TemporaryDirectory()
+    env = _env(tmp.name)
+    seed_run(env.repo, env.clock, start=True, pid=4242)  # id 1, still running
+    run_id = 1
+    env.gateway.alive.add(4242)
+    supervisor = env.services.start_training._supervisor
+    supervisor.adopt(
+        run_id=run_id, pid=4242, progress_path=env.progress_path
+    )
+    if terminal is not None:
+        env.emit({"phase": terminal})
+    env.gateway.alive.discard(4242)
+    wait_until(
+        lambda: env.repo.get(run_id).status.value in {"completed", "failed"}
+    )
+    return env, run_id
+
+
+def test_adopted_run_finalises_on_the_trainers_own_word() -> None:
+    # docs 07 F-11: an adopted trainer is not our child, so its exit code
+    # cannot be read. The trainer's terminal line decides -- and a
+    # missing line is a failure, never a hopeful "completed".
+    print("\n== supervisor: adopted runs finalise on the trainer's word ==")
+
+    env, run_id = _adopted_scenario("finished")
+    run = env.repo.get(run_id)
+    check(run.status.value == "completed", f"finished -> completed (got {run.status.value})")
+    check(run.exit_code is None, "exit code honestly unknown, not invented")
+    check(run.done_steps == 0, "no progress was replayed from the empty history")
+
+    env, run_id = _adopted_scenario("error")
+    run = env.repo.get(run_id)
+    check(run.status.value == "failed", f"error -> failed (got {run.status.value})")
+    check(
+        run.error == "trainer reported an error",
+        f"the trainer's own reason is kept (got {run.error!r})",
+    )
+
+    env, run_id = _adopted_scenario(None)
+    run = env.repo.get(run_id)
+    check(
+        run.status.value == "failed",
+        f"no terminal line -> failed, never completed (got {run.status.value})",
+    )
+    check(
+        run.error is not None and "no terminal progress line" in run.error,
+        f"and it says why (got {run.error!r})",
+    )
+
+
 def main() -> None:
     test_progress_then_completion()
     test_failed_exit_code()
@@ -390,6 +463,8 @@ def main() -> None:
     test_torn_progress_line_is_recovered()
     test_final_samples_survive_process_exit()
     test_supervisor_crash_repairs_the_row()
+    test_terminal_lines_are_evidence_not_telemetry()
+    test_adopted_run_finalises_on_the_trainers_own_word()
     finish()
 
 

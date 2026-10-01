@@ -120,9 +120,15 @@ class LogResult:
 
 @dataclass(frozen=True, slots=True)
 class ReconcileResult:
-    """Outcome of the startup sweep: rows moved out of unfinished."""
+    """Outcome of the startup sweep.
+
+    ``cleaned`` counts rows moved out of unfinished; ``adopted`` counts
+    trainers that were still alive and got re-attached to instead of
+    killed (docs 07 F-11).
+    """
 
     cleaned: int
+    adopted: int = 0
 
 
 @dataclass(frozen=True, slots=True)

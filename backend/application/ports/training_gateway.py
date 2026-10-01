@@ -46,20 +46,39 @@ class TrainingGateway(ABC):
 
     @abstractmethod
     def is_alive(self, pid: int) -> bool:
-        """Process-exists check (reaps our own children as a side effect)."""
+        """Process-exists check (reaps our own children as a side effect).
+
+        A pid owned by another user answers ``True`` (it exists; we just
+        may not signal it) -- "cannot signal it" must never be read as
+        "it is gone" (docs 07 F-12).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def owns(self, pid: int) -> bool:
+        """Is this pid still a training process of ours?
+
+        The PID-reuse guard, asked directly: every signal this gateway
+        sends is gated on it, so a stale row cannot point a SIGINT or a
+        SIGKILL at an unrelated process (docs 07 F-12). ``True`` when the
+        pid cannot be disproved (``/proc`` unavailable), matching the
+        legacy fail-open posture.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def wait_exit_code(self, pid: int, timeout: float = 5.0) -> int | None:
         """Exit code once the process is dead; ``None`` if still alive
-        or the pid is not ours to reap."""
+        or the pid is not ours to reap (an adopted trainer is not our
+        child, so its exit code is genuinely unavailable)."""
         raise NotImplementedError
 
     @abstractmethod
     def stop(self, pid: int, *, force: bool = False) -> bool:
         """Graceful stop (SIGINT to the process group) with escalation to
         SIGKILL after a grace period; ``force`` skips straight to SIGKILL.
-        Returns whether the initial signal was delivered."""
+        Returns whether the initial signal was delivered -- ``False``
+        also when the pid is not ours to signal."""
         raise NotImplementedError
 
     @abstractmethod

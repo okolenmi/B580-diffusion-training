@@ -36,6 +36,7 @@ from backend.tests.support import (
     check,
     finish,
     seed_run,
+    wait_until,
 )
 
 
@@ -373,53 +374,70 @@ def test_get_run_log() -> None:
 
 
 def test_reconcile_runs() -> None:
-    print("\n== ReconcileRuns (startup sweep) ==")
+    print("\n== ReconcileRuns (startup sweep, adoption included) ==")
     with tempfile.TemporaryDirectory() as tmp:
         env = _env(tmp)
         result = env.services.reconcile_runs.execute()
-        check(result.cleaned == 0, "empty database sweeps nothing")
+        check(result.cleaned == 0 and result.adopted == 0, "empty database sweeps nothing")
 
         seed_run(env.repo, env.clock, start=False)  # id 1: abandoned mid-launch
 
-        orphan = seed_run(env.repo, env.clock, start=True, pid=777)  # id 2
-        env.gateway.alive.add(777)  # leftover process still running
+        survivor = seed_run(env.repo, env.clock, start=True, pid=777)  # id 2
+        env.gateway.alive.add(777)  # still training when the server died
 
         gone = seed_run(env.repo, env.clock, start=True, pid=888)  # id 3
         check(888 not in env.gateway.alive, "pid 888 is already gone")
 
-        seed_run(env.repo, env.clock, start=True, pid=None)  # id 4: no pid
+        stranger = seed_run(env.repo, env.clock, start=True, pid=999)  # id 4
+        env.gateway.alive.add(999)  # a live process...
+        env.gateway.foreign.add(999)  # ...that is not our trainer (pid reuse)
+
+        seed_run(env.repo, env.clock, start=True, pid=None)  # id 5: no pid
 
         result = env.services.reconcile_runs.execute()
-        check(result.cleaned == 4, f"all four rows finalised (got {result.cleaned})")
+        check(result.cleaned == 4, f"four rows finalised (got {result.cleaned})")
+        check(result.adopted == 1, f"one run adopted (got {result.adopted})")
 
         check(env.repo.get(1).status.value == "failed", "created -> failed")
         check(
             env.repo.get(1).error == "server stopped before the run launched",
             "mid-launch failure reason",
         )
-        check(env.repo.get(2).status.value == "cancelled", "live orphan cancelled")
-        check(
-            env.repo.get(2).error is not None
-            and "orphan cleanup" in env.repo.get(2).error,
-            "orphan reason recorded",
-        )
         check(env.repo.get(3).status.value == "failed", "dead orphan -> failed")
-        check(env.repo.get(4).status.value == "failed", "pidless run -> failed")
-        check(env.repo.find_active() is None, "nothing active after the sweep")
-        # Newest-first sweep: id 3 (gone) attempted before id 2 (alive).
+        check(env.repo.get(4).status.value == "failed", "a stranger is never adopted")
+        check(999 in env.gateway.alive, "and the stranger was never signalled")
+        check(env.repo.get(5).status.value == "failed", "pidless run -> failed")
+
+        # The trainer that was still alive keeps running, and the server
+        # is watching it again (docs 07 F-11).
+        check(env.repo.get(2).status.value == "running", "live trainer stays running")
         check(
-            env.gateway.killed == [888, 777],
-            f"kill attempted for both pid'd runs (got {env.gateway.killed})",
+            env.gateway.killed == [999, 888],
+            f"kill attempted only where no adoption applied (got {env.gateway.killed})",
         )
+        check(survivor.id == 2, "sanity: the adopted row is the survivor")
+        progress = env.runs_dir / "run_2" / "log.progress.jsonl"
+        progress.parent.mkdir(parents=True, exist_ok=True)
+        progress.write_text(
+            '{"phase":"step","step":3,"total":10,"loss":0.5}\n', encoding="utf-8"
+        )
+        wait_until(lambda: env.repo.get(2).done_steps == 3)
+        check(
+            env.repo.get(2).done_steps == 3,
+            "the adopted run reports progress again",
+        )
+        log = (env.runs_dir / "run_2" / "log.txt").read_text(encoding="utf-8")
+        check("REAPTIED" in log, f"the re-attachment is recorded in the log (got {log!r})")
 
         types = env.events.types()
-        check(types.count("run_failed") == 3, "three run_failed events")
-        check(types.count("run_cancelled") == 1, "one run_cancelled event")
+        check(types.count("run_failed") == 4, "four run_failed events")
+        check(types.count("run_cancelled") == 0, "no run was cancelled out from under a trainer")
 
-        # Second sweep is a no-op.
+        # Second sweep leaves the adopted row alone (it is still running).
+        again = env.services.reconcile_runs.execute()
         check(
-            env.services.reconcile_runs.execute().cleaned == 0,
-            "sweep is idempotent",
+            again.adopted == 1 and env.repo.get(2).status.value == "running",
+            f"sweep is idempotent for an adopted run (got {again})",
         )
 
 

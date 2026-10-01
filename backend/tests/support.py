@@ -288,6 +288,7 @@ class FakeTrainingGateway(TrainingGateway):
         self.stopped: list[tuple[int, bool]] = []
         self.killed: list[int] = []
         self.alive: set[int] = set()
+        self.foreign: set[int] = set()  # pids whose number was recycled
         self.exit_codes: dict[int, int] = {}
         self.spawn_error: Exception | None = None
         self.next_pid = 4242
@@ -305,6 +306,11 @@ class FakeTrainingGateway(TrainingGateway):
     def is_alive(self, pid: int) -> bool:
         return pid in self.alive
 
+    def owns(self, pid: int) -> bool:
+        """Identity: every scripted pid is ours unless the test says
+        otherwise (``foreign`` marks a recycled pid number)."""
+        return pid not in self.foreign
+
     def wait_exit_code(self, pid: int, timeout: float = 5.0) -> int | None:
         if pid in self.alive:
             return None
@@ -317,7 +323,9 @@ class FakeTrainingGateway(TrainingGateway):
 
     def kill(self, pid: int) -> bool:
         self.killed.append(pid)
-        if pid not in self.alive:
+        # Same contract as the real adapter: a pid that is not ours is
+        # never signalled, whatever kill() is called for.
+        if pid in self.foreign or pid not in self.alive:
             return False
         self.alive.discard(pid)
         return True
@@ -796,7 +804,8 @@ def build_services(
         ),
         get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
         reconcile_runs=ReconcileRuns(
-            runs=runs, events=events, gateway=gateway, clock=clock
+            runs=runs, events=events, gateway=gateway, clock=clock,
+            supervisor=supervisor, artifacts=artifacts,
         ),
         config=ConfigServices(
             read=GetConfig(files=config_files, project_root=project_root),

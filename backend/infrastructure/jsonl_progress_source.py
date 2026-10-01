@@ -45,6 +45,9 @@ from ..application.ports.progress_source import ProgressSource, ProgressSample
 
 logger = logging.getLogger(__name__)
 
+# The trainer's own end-of-run verdicts (see ProgressSample.terminal).
+_TERMINAL_PHASES = ("finished", "error")
+
 
 def _int_field(value: object, default: int | None) -> int | None:
     """Coerce a count field to a non-negative int.
@@ -170,4 +173,10 @@ class JsonlProgressSource(ProgressSource):
                 lr=_float_field(data.get("lr")),
                 phase="training",
             )
-        return None  # terminal ("finished"/"error") or unknown: no telemetry
+        # Terminal lines assert nothing about *telemetry*, but they do
+        # carry the trainer's own verdict on how it ended: that is the
+        # only exit evidence there is for an adopted trainer, whose exit
+        # code this process cannot read (docs 07 F-11).
+        if phase in _TERMINAL_PHASES:
+            return ProgressSample(terminal=phase)
+        return None  # unknown line: no telemetry

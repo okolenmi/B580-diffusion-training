@@ -154,6 +154,23 @@ race); terminal -> 409 `graph_execution_not_active` naming the winner.
 Late progress/results from the thread then lose their CAS and are
 dropped -- exactly one writer owns each transition.
 
+**Where it runs, and what a restart costs.** Unlike `core.cli` training
+(docs 03 §5), a node-graph run executes *inside the API server process*,
+on a daemon thread. Two consequences are deliberate for now, and are
+stated here rather than discovered later:
+
+* **A server restart loses an in-flight graph run.** The thread dies
+  with the process; startup reconcile fails the row ("died mid-flight",
+  partial results kept) -- there is no process to re-attach to, because
+  there is no separate process (docs 07 F-13). A `core.cli` trainer, by
+  contrast, survives a restart and is re-adopted.
+* **A device fault or OOM kill takes the server with the run.** The
+  event loop also shares the machine with training threads.
+
+Subprocess isolation for graph runs (the same "own session + re-adopt"
+shape `core.cli` already uses) is recorded as follow-up work, not an
+accident of the design.
+
 Node-build failure now ends the run as `error` with the failed node's
 message (**divergence**: legacy surfaced node failures as status
 `finished` with an `ok:false` result -- a poller could not tell).

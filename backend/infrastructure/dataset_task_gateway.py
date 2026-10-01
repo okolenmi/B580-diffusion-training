@@ -38,6 +38,7 @@ from ..application.ports.dataset_task_gateway import (
     DatasetTaskGateway,
     DatasetTaskLaunch,
 )
+from .process_identity import cmdline_mentions
 from .workspace import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -159,12 +160,9 @@ class SubprocessDatasetTaskGateway(DatasetTaskGateway):
 
     def _cmdline_marker_match(self, pid: int) -> bool | None:
         """True: our worker. False: something else (incl. a zombie --
-        its /proc cmdline is empty). None: /proc unavailable."""
-        cmdline_path = Path(f"/proc/{pid}/cmdline")
-        if not cmdline_path.exists():
-            return None
-        try:
-            cmdline = cmdline_path.read_bytes().decode(errors="replace")
-        except OSError:
-            return None
-        return self._marker in cmdline
+        its /proc cmdline is empty). None: /proc unavailable.
+
+        Shared with the training gateway so the two cannot drift on what
+        "is this pid still ours" means (docs 07 F-12).
+        """
+        return cmdline_mentions(pid, self._marker)

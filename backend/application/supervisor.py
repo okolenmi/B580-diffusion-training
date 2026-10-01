@@ -63,11 +63,53 @@ class RunSupervisor:
         self._artifacts = artifacts
         self._clock = clock
         self._poll = poll_interval
+        self._lock = threading.Lock()
+        # RunIds we re-attached to rather than spawned: their exit code
+        # is not readable, so finalisation uses the trainer's own
+        # terminal line instead (docs 07 F-11).
+        self._adopted: set[RunId] = set()
+        self._terminal: dict[RunId, str] = {}
 
     def watch(
         self, *, run_id: RunId, pid: int, progress_path: Path
     ) -> threading.Thread:
         """Start watching a spawned run; returns the daemon thread."""
+        return self._start(run_id, pid, progress_path, adopted=False)
+
+    def adopt(
+        self, *, run_id: RunId, pid: int, progress_path: Path
+    ) -> threading.Thread:
+        """Re-attach to a trainer this process did not spawn.
+
+        Trainers are started in their own session so they survive a
+        server restart; the legacy server killed those orphans anyway,
+        losing hours of work (docs 07 F-11). Adoption keeps the run
+        honest about what is knowable:
+
+        * the progress file is tailed from *here* -- the history it
+          already holds is consumed without being applied, so an adopted
+          run cannot rewind to a step from before the restart;
+        * the exit code is unreadable (the process is not our child), so
+          the trainer's own terminal line decides completed vs failed;
+        * a log note records the re-attachment.
+        """
+        self._progress.read_new(progress_path)  # consume history, apply none
+        return self._start(run_id, pid, progress_path, adopted=True)
+
+    def _start(
+        self, run_id: RunId, pid: int, progress_path: Path, *, adopted: bool
+    ) -> threading.Thread:
+        with self._lock:
+            if adopted:
+                self._adopted.add(run_id)
+        try:
+            self._artifacts.append_log_note(
+                run_id,
+                f"--- RUN {'REAPTIED (adopted after a server restart)' if adopted else ''}"
+                f" -- server watching pid {pid} ---",
+            )
+        except Exception:  # noqa: BLE001 -- the note must never block watching
+            logger.exception("could not append the watch note for run %s", run_id)
         thread = threading.Thread(
             target=self._guard,
             args=(run_id, pid, progress_path),
@@ -115,6 +157,17 @@ class RunSupervisor:
         return True
 
     def _apply_sample(self, run: Run, sample: ProgressSample) -> bool:
+        if sample.terminal is not None:
+            self._terminal[run.id] = sample.terminal  # type: ignore[index]
+        if sample.terminal is not None and all(
+            getattr(sample, field) is None
+            for field in ("step", "total", "loss", "avg", "lr", "phase",
+                          "cache_done", "cache_total")
+        ):
+            # A pure terminal line: nothing to apply, but it is evidence
+            # -- and the client should hear about the run's end through
+            # the normal lifecycle path, not through telemetry.
+            return True
         total = run.total_steps
         if sample.total is not None and sample.total > total:
             total = sample.total  # trainer discovered a larger total
@@ -152,7 +205,32 @@ class RunSupervisor:
         if run is None or run.status is not RunStatus.RUNNING:
             return  # stop request or reconcile beat us to the row
         at = self._clock.now()
-        if exit_code == 0:
+        adopted = run_id in self._adopted
+        verdict = self._terminal.get(run_id)
+        self._adopted.discard(run_id)
+        self._terminal.pop(run_id, None)
+        if adopted:
+            # An adopted trainer is not our child: its exit code cannot
+            # be read, so the trainer's own last word decides -- and a
+            # missing word is a failure, never a hopeful "completed"
+            # (docs 07 F-11).
+            exit_code = None  # honest in the marker: unreadable, not zero
+            if verdict == "finished":
+                run.mark_completed(at=at)
+                status_word = "completed"
+            else:
+                run.mark_failed(
+                    at=at,
+                    error=(
+                        "trainer reported an error"
+                        if verdict == "error"
+                        else "process exited with no terminal progress line "
+                             "(adopted after a server restart; its exit "
+                             "code cannot be read)"
+                    ),
+                )
+                status_word = "failed"
+        elif exit_code == 0:
             run.mark_completed(at=at)
             status_word = "completed"
         elif exit_code is None:

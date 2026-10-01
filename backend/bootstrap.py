@@ -234,6 +234,8 @@ def build_container(settings: Settings) -> Container:
             events=event_bus,
             gateway=gateway,
             clock=clock,
+            supervisor=supervisor,
+            artifacts=artifacts,
         ),
         config=ConfigServices(
             read=GetConfig(files=config_files, project_root=settings.project_root),
@@ -340,6 +342,12 @@ def build_container(settings: Settings) -> Container:
     reconciled = services.reconcile_runs.execute()
     if reconciled.cleaned:
         logger.info("reconciled %d unfinished run(s) at startup", reconciled.cleaned)
+    if reconciled.adopted:
+        logger.info(
+            "adopted %d still-training run(s) after the restart "
+            "(their trainers were left running)",
+            reconciled.adopted,
+        )
     dataset_reconciled = services.datasets.reconcile_tasks.execute()
     if dataset_reconciled.cleaned:
         logger.info(

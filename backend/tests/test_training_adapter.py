@@ -165,10 +165,56 @@ def test_spawn_wraps_launch_failures() -> None:
         )
 
 
+def test_signal_safety() -> None:
+    # docs 07 F-12: every signal is gated on the PID-reuse guard, and
+    # "cannot signal it" must never be read as "it is gone".
+    print("\n== signal safety: owns() gates stop/kill, liveness is honest ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = _write_config(tmp)
+        layout = WorkspaceLayout(_PROJECT_ROOT, runs_dir=Path(tmp) / "runs")
+        gateway = SubprocessTrainingGateway(layout)
+
+        # This process is certainly not a core.cli trainer.
+        stranger = os.getpid()
+        check(gateway.owns(stranger) is False, "this python is not our trainer")
+        check(
+            gateway.kill(stranger) is False,
+            "kill refuses a pid that is not ours (and so does not signal it)",
+        )
+        check(
+            gateway.stop(stranger, force=True) is False,
+            "stop refuses it too -- the guard is not kill-only",
+        )
+        check(
+            os.kill(stranger, 0) is None,
+            "the process is still there (nothing was signalled)",
+        )
+
+        # A pid that does not exist: dead, and nobody else's.
+        check(gateway.is_alive(999999) is False, "a missing pid is not alive")
+        check(gateway.owns(999999) is not False, "a missing pid cannot be disproved")
+
+        # Our own child: alive while running, owned by construction, and
+        # killed through the group like any other. The command is
+        # stubbed to a plain sleeper so the assertions do not race a
+        # real trainer's start-up time.
+        gateway._build_command = lambda launch: ["/bin/sleep", "30"]  # type: ignore[method-assign]
+        pid = gateway.spawn(_launch(config_path, tmp))
+        check(gateway.is_alive(pid) is True, "a spawned trainer is alive")
+        check(gateway.owns(pid) is True, "a spawned trainer is ours (no /proc race)")
+        check(gateway.stop(pid, force=True) is True, "stop delivers to our own child")
+        check(
+            gateway.wait_exit_code(pid, timeout=5.0) is not None,
+            "and the exit code is ours to read",
+        )
+        check(gateway.is_alive(pid) is False, "reaped once it is gone")
+
+
 def main() -> None:
     test_real_inspector()
     test_command_builder_flags()
     test_spawn_wraps_launch_failures()
+    test_signal_safety()
     finish()
 
 

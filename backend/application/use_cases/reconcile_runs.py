@@ -1,15 +1,25 @@
 """ReconcileRuns -- startup sweep of runs left unfinished by a prior process.
 
 Called once from the composition root before the server accepts
-requests. Each unfinished row is finalised through compare-and-swap so
-a racing writer (impossible at startup, but the CAS keeps the
-invariant enforced in one place) can never be overwritten:
+requests. Each unfinished row is either **adopted** or finalised,
+through compare-and-swap so a racing writer (impossible at startup, but
+the CAS keeps the invariant enforced in one place) can never be
+overwritten:
 
 - ``created``  -> failed  (the server died before the spawn completed)
 - ``running``, no pid      -> failed  (nothing to reconcile against)
+- ``running``, pid alive and still ours -> **adopted**: the supervisor
+  re-attaches and keeps watching (docs 07 F-11). Trainers are started in
+  their own session precisely so they survive a server restart; killing
+  them here -- as the legacy server did -- threw away hours of work for
+  no reason.
 - ``running``, kill() True -> cancelled (leftover process reaped)
 - ``running``, kill() False-> failed  (process already gone or PID
   reused by something that is no longer our trainer)
+
+Adoption deliberately does not touch the row: it stays ``running`` with
+the pid it always had. Clients refetch authoritative state when they
+(re)connect, so no event is needed for a change none of them saw.
 """
 
 from __future__ import annotations
@@ -19,9 +29,11 @@ import logging
 from ..dto import ReconcileResult
 from ..ports.clock import Clock
 from ..ports.event_bus import EventBus
+from ..ports.run_artifacts import RunArtifacts
 from ..ports.run_repository import RunRepository
 from ..ports.training_gateway import TrainingGateway
 from ...domain.value_objects import RunStatus
+from ..supervisor import RunSupervisor
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +46,22 @@ class ReconcileRuns:
         events: EventBus,
         gateway: TrainingGateway,
         clock: Clock,
+        supervisor: RunSupervisor | None = None,
+        artifacts: RunArtifacts | None = None,
     ) -> None:
         self._runs = runs
         self._events = events
         self._gateway = gateway
         self._clock = clock
+        # Both optional so a caller without them keeps the legacy
+        # kill-the-orphan behaviour; the real container always passes
+        # them (bootstrap wires both).
+        self._supervisor = supervisor
+        self._artifacts = artifacts
 
     def execute(self) -> ReconcileResult:
         cleaned = 0
+        adopted = 0
         for run in self._runs.list_unfinished():
             expected = RunStatus.RUNNING
             if run.status is RunStatus.CREATED:
@@ -55,6 +75,13 @@ class ReconcileRuns:
                     at=self._clock.now(),
                     error="orphan cleanup: no pid stored",
                 )
+            elif self._adopt(run):
+                adopted += 1
+                logger.info(
+                    "reconciled run %s -> adopted (pid %s still training)",
+                    run.id, run.pid,
+                )
+                continue
             elif self._gateway.kill(run.pid):
                 run.cancel(
                     at=self._clock.now(),
@@ -77,4 +104,23 @@ class ReconcileRuns:
             logger.info(
                 "reconciled run %s -> %s", run.id, run.status.value
             )
-        return ReconcileResult(cleaned=cleaned)
+        return ReconcileResult(cleaned=cleaned, adopted=adopted)
+
+    def _adopt(self, run) -> bool:
+        """Re-attach to a trainer that survived the server. True = adopted.
+
+        Every precondition is checked *before* anything is started: the
+        process must exist, still look like this project's trainer, and
+        have somewhere to write progress we can tail.
+        """
+        if self._supervisor is None or self._artifacts is None:
+            return False
+        if run.id is None or run.pid is None:
+            return False
+        if not self._gateway.is_alive(run.pid) or not self._gateway.owns(run.pid):
+            return False
+        progress = self._artifacts.paths_for(run.id).progress
+        self._supervisor.adopt(
+            run_id=run.id, pid=run.pid, progress_path=progress
+        )
+        return True

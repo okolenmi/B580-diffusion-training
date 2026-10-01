@@ -3,7 +3,10 @@
    --border, --accent, ...) come from style.css; this file only adds the
    three-column editor layout, the canvas/node visuals and the panels.
 
-   Layout: [palette+library | toolbar/canvas/executions | issues/inspector/log]
+   Layout: [palette+library | toolbar/canvas/executions | issues/inspector]
+   Both rails are collapsible (toolbar toggles, persisted in
+   localStorage) so the canvas can take the full viewport; the
+   executions history is a <details> drawer collapsed by default.
    The canvas is a scrollable plane; nodes are absolutely positioned DOM,
    edges are one SVG layer sized to the plane.
    --------------------------------------------------------------------------- */
@@ -43,7 +46,17 @@ body.editor-body {
 }
 .ed-brand { font-weight: 600; font-size: 0.9rem; }
 
-.ed-search { margin: 0.6rem 0.6rem 0; }
+/* Compact search: `.cfg-input`'s width:100% + horizontal margins overflowed
+   the 280px rail (the box stuck out over the canvas), and the form-sized
+   padding/type looked oversized next to the palette rows. Width auto in a
+   column flexbox stretches to the rail minus these margins. */
+.ed-search {
+    margin: 0.6rem;
+    width: auto;
+    align-self: stretch;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.82rem;
+}
 .ed-scroll {
     flex: 1;
     overflow-y: auto;
@@ -59,7 +72,29 @@ body.editor-body {
     min-height: 0;
 }
 .ed-inspector-section { flex: 1; overflow-y: auto; }
-.ed-executions { max-height: 30vh; }
+
+/* ---- executions drawer (<details>, collapsed by default) ---- */
+
+.ed-executions > summary { cursor: pointer; list-style: none; }
+.ed-executions > summary::-webkit-details-marker { display: none; }
+.ed-executions > summary::before {
+    content: "\25B8";
+    display: inline-block;
+    margin-right: 0.4rem;
+    transition: transform 0.15s;
+    color: var(--text-dim);
+}
+.ed-executions[open] > summary::before { transform: rotate(90deg); }
+.ed-executions > summary.ed-section-head {
+    margin-bottom: 0;
+    justify-content: flex-start; /* marker + label stay together (space-between
+                                    would fling the label to the far edge) */
+}
+.ed-exec-wipe {
+    align-self: flex-end;
+    margin-bottom: 0.45rem;
+}
+.ed-executions[open] .ed-list { max-height: 24vh; overflow-y: auto; }
 
 .ed-section-head {
     display: flex;
@@ -383,14 +418,38 @@ body.editor-body {
     white-space: pre-wrap;
 }
 
-/* ---- console ---- */
+/* ---- console: removed ----
+   The page-local log (#ed-log) is gone -- every editor note goes to the
+   floating system console (#console-output, shell.js), like all views. */
 
-.ed-log {
-    height: 110px;
-    overflow-y: auto;
-    white-space: pre-wrap;
+/* ---- collapsible rails --------------------------------------------------
+   The toolbar toggles add/remove body classes; the grid tracks collapse to
+   0 so the canvas genuinely grows (a display:none aside would leave an
+   empty 280px/340px track). Specificity `body.editor-body.*` beats the
+   base and media-query rules regardless of order; overflow hides the rail
+   contents while they squeeze shut. */
+
+body.editor-body {
+    transition: grid-template-columns 0.18s ease;
 }
+body.editor-body.ed-left-off { grid-template-columns: 0 minmax(0, 1fr) 340px; }
+body.editor-body.ed-right-off { grid-template-columns: 280px minmax(0, 1fr) 0; }
+body.editor-body.ed-left-off.ed-right-off {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+.ed-palette, .ed-right { overflow: hidden; }
+body.editor-body.ed-left-off .ed-palette { border-right-width: 0; }
+body.editor-body.ed-right-off .ed-right { border-left-width: 0; }
 
 @media (max-width: 1100px) {
     body.editor-body { grid-template-columns: 220px minmax(0, 1fr) 280px; }
+    body.editor-body.ed-left-off { grid-template-columns: 0 minmax(0, 1fr) 280px; }
+    body.editor-body.ed-right-off { grid-template-columns: 220px minmax(0, 1fr) 0; }
+    body.editor-body.ed-left-off.ed-right-off {
+        grid-template-columns: 0 minmax(0, 1fr) 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.editor-body { transition: none; }
 }

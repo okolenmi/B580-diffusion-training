@@ -271,6 +271,59 @@ def main():
             check(page.locator("#fconsole").count() == 1,
                   f"{name}: floating console mounted")
             page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+
+            if name == "graph":
+                # layout contract (graph visibility pass): no page-local
+                # console (notes ride the floating one), the search fits
+                # its rail, rails collapse to a true 0 track, and the
+                # executions drawer starts collapsed
+                check(page.locator("#ed-log").count() == 0,
+                      "graph: page-local console removed")
+                fits = page.evaluate(
+                    """() => {
+                        const i = document.getElementById('palette-search')
+                                      .getBoundingClientRect();
+                        const a = document.querySelector('.ed-palette')
+                                      .getBoundingClientRect();
+                        return i.width > 0 && i.right <= a.right + 0.5
+                            && i.left >= a.left - 0.5;
+                    }""")
+                check(fits, "graph: search box fits the palette rail")
+                page.click("#btn-validate")
+                check(page.locator("#console-output .console-line",
+                                   has_text="Canvas is empty.").count() > 0,
+                      "graph: notes land in the floating console")
+                check(page.locator("#exec-section")
+                          .get_attribute("open") is None,
+                      "graph: executions drawer collapsed by default")
+                page.click("#exec-section > summary")
+                check(page.locator("#exec-list").is_visible(),
+                      "graph: executions drawer expands")
+                page.click("#exec-section > summary")
+                for btn_sel, rail_sel in (
+                    ("#btn-toggle-left", ".ed-palette"),
+                    ("#btn-toggle-right", ".ed-right"),
+                ):
+                    page.click(btn_sel)
+                    page.wait_for_timeout(250)  # grid transition settles
+                    box = page.locator(rail_sel).bounding_box()
+                    check(box is not None and box["width"] == 0,
+                          f"graph: {rail_sel} rail collapses to 0")
+                    page.click(btn_sel)
+                    page.wait_for_timeout(250)
+                    box = page.locator(rail_sel).bounding_box()
+                    check(box is not None and box["width"] > 100,
+                          f"graph: {rail_sel} rail restores")
+                # canvas keeps the room it gained (toolbar + collapsed
+                # drawer are the only chrome above/below it)
+                grow = page.evaluate(
+                    """() => {
+                        const c = document.getElementById('graph-canvas')
+                                      .getBoundingClientRect();
+                        return c.height / window.innerHeight;
+                    }""")
+                check(grow > 0.85,
+                      f"graph: canvas fills most of the viewport ({grow:.0%})")
             ctx.close()
 
         # ---------- D: config editor (loads read-only; the save step

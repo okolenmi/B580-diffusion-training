@@ -1,13 +1,16 @@
 /* ---------------------------------------------------------------------------
    editor.js -- graph editor page entry (M7).
 
-   Boots the catalog, GraphDoc and panels; owns the two cross-cutting
+   Boots the catalog, GraphDoc and panels; owns the three cross-cutting
    concerns:
      - doc.onChange -> canvas re-render (always) + inspector refresh
        (structural changes only; "params" commits come from the inspector
        itself so text inputs keep focus);
      - one /events SSE subscription -> executions.onEvent (graph lifecycle)
-       with the console as the human-readable tail.
+       with the floating system console as the human-readable tail;
+      - the collapsible layout (left/right rails + executions drawer),
+        persisted in localStorage so the canvas keeps its gained space
+        across visits.
 
    Everything network-shaped goes through api.js (single envelope decoder).
    --------------------------------------------------------------------------- */
@@ -22,10 +25,12 @@ import { Library } from "./editor/library.js";
 
 const el = (id) => document.getElementById(id);
 
-/* ---- page console (same capped pattern as views/dashboard.js) ---- */
+/* ---- system console: same capped pattern as views/dashboard.js ----
+   There is no page-local log anymore: every note rides the floating
+   console the shell mounts (#console-output). */
 
 function log(message, kind = "info") {
-  const out = el("ed-log");
+  const out = el("console-output");
   const line = document.createElement("div");
   line.className = `console-line ${kind}`;
   line.textContent = message;
@@ -38,6 +43,53 @@ function logError(err) {
   if (err instanceof ApiError) log(`${err.code}: ${err.message}`, "error");
   else log(String((err && err.message) || err), "error");
 }
+
+/* ---- layout: collapsible rails + executions drawer (persisted) ----
+   Defaults: both rails visible, executions collapsed -- the canvas is
+   the page, everything else is furniture it can do without. */
+
+const LAYOUT_KEY = "ed.layout.v1";
+const layout = Object.assign(
+  { left: true, right: true, exec: false },
+  (() => {
+    try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {}; }
+    catch { return {}; } // corrupted storage: defaults win
+  })(),
+);
+
+function applyLayout() {
+  document.body.classList.toggle("ed-left-off", !layout.left);
+  document.body.classList.toggle("ed-right-off", !layout.right);
+  el("exec-section").open = layout.exec;
+  el("btn-toggle-left").setAttribute("aria-pressed", String(layout.left));
+  el("btn-toggle-right").setAttribute("aria-pressed", String(layout.right));
+}
+
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); }
+  catch { /* private mode / quota: layout is a convenience, not data */ }
+}
+
+function bindLayoutControls() {
+  el("btn-toggle-left").addEventListener("click", () => {
+    layout.left = !layout.left;
+    applyLayout();
+    saveLayout();
+  });
+  el("btn-toggle-right").addEventListener("click", () => {
+    layout.right = !layout.right;
+    applyLayout();
+    saveLayout();
+  });
+  // the drawer opens/closes by its own <summary>; remember which
+  el("exec-section").addEventListener("toggle", () => {
+    layout.exec = el("exec-section").open;
+    saveLayout();
+  });
+}
+
+applyLayout(); // as early as a deferred module allows
+bindLayoutControls();
 
 /* ---- issues panel ---- */
 

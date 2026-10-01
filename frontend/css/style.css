@@ -240,9 +240,9 @@ input[type="checkbox"]:checked::after {
 /* Utilities */
 .text-dim { color: var(--text-dim); }
 
-/* Lines pane: the container the floating console (shell.css) and the
-   editor's execution log (.ed-log) both scroll inside. Consumers size
-   it (flex or fixed height); this owns the shared typography. */
+/* Lines pane: the container the floating console (shell.css) scrolls
+   inside (every view logs here). Consumers size it (flex or fixed
+   height); this owns the shared typography. */
 .console-lines {
     font-family: var(--font-mono);
     font-size: 0.75rem;

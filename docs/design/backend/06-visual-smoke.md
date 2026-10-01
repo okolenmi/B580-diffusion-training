@@ -2,7 +2,7 @@
 
 Status: **executed 2026-10-01** from a desktop-app browser session
 against a scratch-DB backend on 8766, **automated the same day** -- the
-checklist below now runs as `backend/tests/visual_smoke.py` (186
+checklist below now runs as `backend/tests/visual_smoke.py` (196
 checks, Playwright). The API/SSE/pages coverage comes from
 `backend/tests/run_all.py` and the full gate; this checklist is the
 missing layer -- JavaScript actually running in a real browser.
@@ -139,6 +139,14 @@ A scratch DB keeps the check independent of real training history.
       keeps unknown classes as placeholders with a console warning.
 * [x] Network tab: the editor talks only to `/api/v1/graphs/*` (+ the
       shared `/events` stream).
+* [x] Layout pass (graph visibility): the node search fits its rail
+      (the `.cfg-input` width:100% + margins used to overflow it), the
+      page-local Console section is gone and every editor note lands in
+      the floating system console, both rails collapse to a true 0
+      grid track from the toolbar toggles (`Nodes` / `Inspector`,
+      persisted in `localStorage`), the Executions history is a
+      `<details>` drawer collapsed by default (expands in place), and
+      the canvas fills ~91% of the viewport.
 
 ## 4. Config editor -- `http://127.0.0.1:8766/config`
 
@@ -398,6 +406,19 @@ Reported from a live desktop session; reproduced first with
     across mode switches. Smoke pins browse rendering zero checkboxes,
     select-all hidden, the panel hidden mid-selection, and the
     2-item selection surviving the round-trip.
+11. **Node search box overflowed the palette rail** (reported from the
+    live graph editor) -- `.ed-search` carries `.cfg-input`, whose
+    `width: 100%` was combined with horizontal margins, so the box was
+    1.2rem wider than the 280px rail and stuck out over the canvas;
+    the form-sized padding/type also looked oversized next to the
+    palette rows. Fixed: `width: auto` + `align-self: stretch` (fills
+    the rail minus its margins) with compact padding/font-size. Same
+    pass removed the page-local Console section (notes now ride the
+    floating console, the shell's documented contract), made both rails
+    collapsible from the toolbar (grid tracks animate to 0 so the
+    canvas truly grows; state persisted), and turned Executions into a
+    drawer collapsed by default -- canvas went from ~66% to 91% of the
+    viewport height.
 
 ## Known deferred (not bugs)
 

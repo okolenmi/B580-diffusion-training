@@ -39,14 +39,20 @@
         </div>
     </aside>
 
-    <!-- Center: toolbar, canvas, execution history. -->
+    <!-- Center: toolbar, canvas, executions drawer (collapsed by default). -->
     <main class="ed-main">
         <div class="ed-toolbar">
+            <button id="btn-toggle-left" class="btn btn-secondary btn-small"
+                    aria-pressed="true"
+                    title="Show or hide the node palette (left rail)">Nodes</button>
             <button id="btn-validate" class="btn btn-secondary btn-small">Validate</button>
             <button id="btn-run" class="btn btn-small">&#9654; Run</button>
             <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
             <span id="ed-selection" class="ed-hint"></span>
             <span class="ed-spacer"></span>
+            <button id="btn-toggle-right" class="btn btn-secondary btn-small"
+                    aria-pressed="true"
+                    title="Show or hide the right panel (issues + inspector)">Inspector</button>
             <button id="btn-clear" class="btn btn-secondary btn-small">Clear canvas</button>
         </div>
 
@@ -56,18 +62,19 @@
             </div>
         </div>
 
-        <div class="ed-section ed-executions">
-            <div class="ed-section-head">
-                <span>Executions</span>
-                <button id="btn-wipe-exec" class="btn btn-secondary btn-small">Wipe history</button>
-            </div>
+        <details class="ed-section ed-executions" id="exec-section">
+            <summary class="ed-section-head"><span>Executions</span></summary>
+            <button id="btn-wipe-exec" class="btn btn-secondary btn-small ed-exec-wipe">
+                Wipe history
+            </button>
             <div id="exec-list" class="ed-list">
                 <div class="console-line info">No executions yet.</div>
             </div>
-        </div>
+        </details>
     </main>
 
-    <!-- Right: validate issues, node inspector, page console. -->
+    <!-- Right: validate issues + node inspector. Log output lives in the
+         floating system console (shell.js), not in a page-local one. -->
     <aside class="ed-right">
         <div class="ed-section">
             <div class="ed-section-head"><span>Issues</span></div>
@@ -80,13 +87,6 @@
             <div class="ed-section-head"><span>Inspector</span></div>
             <div id="inspector" class="ed-inspector">
                 <div class="console-line info">Select a node.</div>
-            </div>
-        </div>
-
-        <div class="ed-section">
-            <div class="ed-section-head"><span>Console</span></div>
-            <div id="ed-log" class="console-lines ed-log">
-                <div class="console-line info">Ready.</div>
             </div>
         </div>
     </aside>

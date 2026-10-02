@@ -26,6 +26,6 @@
     "backend/tests/test_assets.py|C901": 1,
     "backend/tests/test_graph_catalog.py|E402": 2,
     "backend/tests/visual_smoke.py|C901": 1,
-    "backend/tests/visual_smoke.py|E731": 2
+    "backend/tests/visual_smoke.py|E731": 1
   }
 }

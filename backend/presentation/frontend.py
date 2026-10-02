@@ -3,10 +3,16 @@
 Page routes, deliberately *not* a root mount:
 
 * ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/config``,
-  ``/run/{run_id}``, ``/datasets``, ``/datasets/{name}``, ``/help`` and
-  ``/settings`` serve the page files (monitor/dataset/run ids live in
-  the URL; the HTML is generic and the client script reads it, like the
-  legacy dashboard);
+  ``/datasets``, ``/datasets/{name}``, ``/help`` and ``/settings`` serve
+  the page files (monitor/dataset ids live in the URL; the HTML is
+  generic and the client script reads it, like the legacy dashboard);
+* ``/run/{run_id}`` used to be here and is deliberately not any more. The
+  run detail page went with the supervised-subprocess route (docs 11), and
+  the route outlived its ``run.html`` -- so an old bookmark or a stale
+  link got a 500 from ``FileResponse`` rather than a 404. Deleting the
+  route is the honest answer: there is no run page, and ``test_pages.py``
+  now checks that every registered page route has a file behind it, which
+  is the check that would have caught the mismatch;
 * ``/ui/*`` serves the frontend directory (ES modules, css);
 * nothing catches ``/api/...`` misses, so unknown API routes keep
   answering with the JSON error envelope instead of static 404 HTML.
@@ -90,10 +96,6 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     @app.get("/config", include_in_schema=False)
     def config_page() -> FileResponse:
         return FileResponse(static_dir / "config.html", headers=_NO_CACHE)
-
-    @app.get("/run/{run_id}", include_in_schema=False)
-    def run_page(run_id: str) -> FileResponse:
-        return FileResponse(static_dir / "run.html", headers=_NO_CACHE)
 
     @app.get("/datasets", include_in_schema=False)
     def datasets_page() -> FileResponse:

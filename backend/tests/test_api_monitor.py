@@ -47,11 +47,16 @@ def test_monitor_stream() -> None:
             done = asyncio.Event()
 
             async def receive():
-                # No body is ever sent; a disconnect unblocks the
-                # response task only once the test is finished with it.
+                # Waits on the event rather than sleeping, so the
+                # disconnect actually arrives once the last frame lands.
+                # `await asyncio.sleep(3600)` looked equivalent and was
+                # not: nothing ever woke it, so the stream never ended and
+                # the test died on wait_for's TimeoutError with all four
+                # frames already delivered. Only visible because this test
+                # was not being called at all.
                 if done.is_set():
                     return {"type": "http.disconnect"}
-                await asyncio.sleep(3600)
+                await done.wait()
                 return {"type": "http.disconnect"}
 
             async def send(message):
@@ -173,5 +178,18 @@ def test_subscriber_backlog_is_bounded() -> None:
         asyncio.run(scenario())
 
 
-test_subscriber_backlog_is_bounded()
-finish()
+def main() -> None:
+    """Call every test in this file, then report.
+
+    Two of the three were defined and never called: the SSE end-to-end
+    test and the error-envelope test. The file therefore ran one of its
+    three tests and reported green, which is how a `receive()` that could
+    never wake up survived in the gate.
+    """
+    test_monitor_stream()
+    test_api_miss_keeps_error_envelope()
+    test_subscriber_backlog_is_bounded()
+    finish()
+
+
+main()

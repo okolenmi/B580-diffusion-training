@@ -1,9 +1,9 @@
-"""Visual smoke for the main pages: idle state, mocked running state,
-interactions, the config editor (schema form + raw), run detail views,
-a regression pass over monitor/graph (they share style.css), the
-dataset manager against the real library (incl. the M8f card preview
-thumbs and the item ⋮ context menu), and the M8d shell (icon rail,
-floating console, help/settings).
+"""Visual smoke for the pages that exist: the landing page, a regression
+pass over monitor/graph (they share style.css), the config editor
+(schema form + raw), the dataset manager against the real library (incl.
+the M8f card preview thumbs and the item context menu), and the shell
+(icon rail, floating console, help/settings), plus the dataset add-data
+dialog and item edit modes.
 
 Not auto-discovered by run_all.py (no ``test_`` prefix): it needs a
 LIVE backend and the Playwright venv.
@@ -16,13 +16,21 @@ LIVE backend and the Playwright venv.
 
 BASE and SMOKE_OUT override the backend URL and screenshot directory.
 Exits non-zero on any failed check. See docs/design/backend/06.
+
+**Three sections were deleted rather than repaired.** The training
+dashboard (idle state, mocked running state, resync-on-open) and the run
+detail page went with the supervised-subprocess route (docs 11), so their
+selectors matched nothing and this file died on its first missing one --
+which is why it stayed broken for as long as it did, and why the six dead
+links on the landing page and the ``/run/{id}`` 500 both survived
+untested. Section A now checks the landing page instead, including that
+every nav destination resolves, because that is the check that would have
+caught them.
 """
-import json
 import os
 import re
 import shutil
 import sys
-from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -54,254 +62,62 @@ def hook_console(page, tag):
 
 
 def is_expected_noise(text):
-    # Browser network-log lines for deliberate contract 404s: the idle
-    # probe of /runs/active (no_active_run) and scenario E1's probe of
-    # a run id that never existed (run_not_found) -- both render honest
-    # states in-app; the browser still logs the resource status.
+    # Browser network-log lines for deliberate contract 404s. The two that
+    # used to be here -- the idle probe of /runs/active and scenario E1's
+    # probe of a run id that never existed -- were for endpoints that went
+    # with the supervised-subprocess route, so they can no longer be
+    # produced and matching on them would quietly accept noise forever.
+    #
+    # What remains: the editor probes /api/v1/graphs/executions before one
+    # exists on a fresh install, which is a real 404 the app renders
+    # honestly.
     if "404" not in text:
         return False
-    return "runs/active" in text or "runs/9999" in text
+    return "graphs/executions" in text
 
 
 def main():
-    now = datetime.now(UTC)
-    iso = lambda dt: dt.isoformat()
-
-    active_run = {
-        "id": 13,
-        "status": "running",
-        "config_path": "configs/distill.toml",
-        "mode": "lora",
-        "phase": "training",
-        "total_steps": 1000,
-        "done_steps": 412,
-        "current_loss": 0.03412,
-        "avg_loss": 0.03998,
-        "cache_done": 3,
-        "cache_total": 10,
-        "pid": 4242,
-        "exit_code": None,
-        "error": None,
-        "log_path": "/tmp/runs/13.log",
-        "created_at": iso(now - timedelta(seconds=2530)),
-        "updated_at": iso(now - timedelta(seconds=5)),
-        "started_at": iso(now - timedelta(seconds=2520)),
-        "finished_at": None,
-    }
-    history = [
-        active_run,
-        {
-            "id": 12, "status": "completed", "config_path": "configs/distill.toml",
-            "mode": "lora", "phase": None, "total_steps": 1000, "done_steps": 1000,
-            "current_loss": 0.021, "avg_loss": 0.0289, "cache_done": None,
-            "cache_total": None, "pid": None, "exit_code": 0, "error": None,
-            "log_path": "/tmp/runs/12.log",
-            "created_at": iso(now - timedelta(hours=5)),
-            "updated_at": iso(now - timedelta(hours=3)),
-            "started_at": iso(now - timedelta(hours=5)),
-            "finished_at": iso(now - timedelta(hours=3)),
-        },
-        {
-            "id": 11, "status": "failed", "config_path": "configs/experiments/long.toml",
-            "mode": "full", "phase": None, "total_steps": 0, "done_steps": 417,
-            "current_loss": None, "avg_loss": 0.0512, "cache_done": None,
-            "cache_total": None, "pid": None, "exit_code": 1, "error": "CUDA OOM",
-            "log_path": "/tmp/runs/11.log",
-            "created_at": iso(now - timedelta(days=2)),
-            "updated_at": iso(now - timedelta(days=2, seconds=-1800)),
-            "started_at": iso(now - timedelta(days=2)),
-            "finished_at": iso(now - timedelta(days=2, seconds=-1800)),
-        },
-    ]
-    log_text = "\n".join(f"[train] step {i} loss {0.05 - i * 0.001:.4f}" for i in range(40))
-
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
-        # ---------- A: idle, against the real backend ----------
-        print("== A: idle state (real backend) ==")
+        # ---------- A: the landing page, against the real backend ----------
+        # Was "idle state": the training dashboard with its status badge,
+        # start form, run history table and log pane. All of it left with
+        # the supervised-subprocess route (docs 11), and / is now a landing
+        # page whose whole job is to get you to a real destination -- so
+        # that is what this checks, including that every link resolves.
+        print("== A: landing page (real backend) ==")
         ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
         page = ctx.new_page()
         hook_console(page, "A")
         page.goto(f"{BASE}/", wait_until="networkidle")
 
-        check(page.locator("#hero-idle").is_visible(), "idle hero visible")
-        check(page.locator("#hero-run").is_hidden(), "running hero hidden")
-        check(page.locator("#btn-stop").is_hidden(), "stop button hidden when idle")
-        check(page.locator("#btn-kill").is_hidden(), "kill button hidden when idle")
-        check(page.locator("#status-badge").inner_text().strip().upper() == "IDLE", "badge = Idle")
-        check(page.locator(".page-topbar h1").inner_text() == "System tracker",
-              "topbar title (renamed from Training)")
-        check(page.locator(".util-strip").is_visible(), "monitor hand-off strip visible")
+        check(page.locator(".page-topbar h1").inner_text() == "Diffusion training",
+              "topbar title")
+        check(page.locator(".hero").is_visible(), "hero visible")
+        check(page.locator("a.btn-start").is_visible(), "the primary link to the editor")
         check(
-            page.locator("table.runs-table th").count() == 6,
-            "history table has 6 column headers",
+            page.locator("a.btn-start").get_attribute("href") == "/graph",
+            f"primary link points at the route, not a filename "
+            f"(got {page.locator('a.btn-start').get_attribute('href')!r})",
         )
-        check(page.locator(".log-pane").is_visible(), "log pane visible")
-        # placeholder must actually render (disabled+unselected renders blank)
-        sel = page.evaluate(
-            """() => { const s = document.getElementById('start-from');"""
-            """ return {i: s.selectedIndex, t: s.options[0] ? s.options[0].label : ''}; }"""
+        # Every destination the nav offers must actually be served. They
+        # were all "/graph.html" and friends once, so every one of them was
+        # a 404 and the landing page could not be navigated away from --
+        # and nothing caught it, because this file died on its first
+        # missing selector before reaching any of it.
+        nav_links = page.eval_on_selector_all(
+            ".page-nav a", "els => els.map(e => e.getAttribute('href'))"
         )
-        check(sel["i"] == 0 and "config path" in sel["t"],
-              f"start-from placeholder renders ({sel})")
-        check(page.locator("#btn-wipe").is_disabled(), "wipe disabled with no history")
+        check(len(nav_links) >= 5, f"the nav has destinations ({nav_links})")
+        for href in nav_links:
+            status = page.evaluate(
+                """async (h) => (await fetch(h, {method: 'GET'})).status""", href
+            )
+            check(status == 200, f"nav link {href} resolves (got {status})")
 
-        # form guard: empty config -> inline error, no request
-        page.click("#btn-start")
-        check(
-            page.locator("#start-error").is_visible()
-            and "Config path is required" in page.locator("#start-error").inner_text(),
-            "inline start error on empty config",
-        )
-        page.fill("#cfg-path", "configs/distill.toml")
-        check(
-            page.locator("#start-error").is_hidden(),
-            "error clears when typing",
-        )
-
-        page.screenshot(path=str(OUT / "idle.png"), full_page=True)
-        check((OUT / "idle.png").stat().st_size > 20000, "idle screenshot captured")
-        ctx.close()
-
-        # ---------- B: running + history, API mocked ----------
-        print("== B: running state (API mocked) ==")
-        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
-        page = ctx.new_page()
-        hook_console(page, "B")
-        dialogs: list[str] = []
-        page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
-
-        page.route(
-            re.compile(r"/api/v1/runs/active"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps(active_run)),
-        )
-        page.route(
-            re.compile(r"/api/v1/runs\?limit=20"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"runs": history, "count": len(history)})),
-        )
-        page.route(
-            re.compile(r"/api/v1/runs/\d+/log"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"log": log_text, "lines": 40})),
-        )
-        page.goto(f"{BASE}/", wait_until="networkidle")
-
-        check(page.locator("#hero-run").is_visible(), "running hero visible")
-        check(page.locator("#hero-idle").is_hidden(), "idle hero hidden")
-        check(page.locator("#btn-stop").is_visible(), "stop button visible")
-        check(page.locator("#btn-kill").is_visible(), "kill button visible")
-        badge = page.locator("#status-badge").inner_text().strip().upper()
-        check(badge == "RUNNING · TRAINING", f"badge shows phase ({badge!r})")
-        check(page.locator("#run-id").inner_text() == "#13", "run id in hero")
-        meta = page.locator("#run-meta").inner_text()
-        check("configs/distill.toml" in meta and "lora" in meta, f"meta = config · mode ({meta!r})")
-        ptext = page.locator("#progress-text").inner_text()
-        check(ptext == "412 / 1000 · 41%", f"progress label ({ptext!r})")
-        fill_w = page.evaluate("document.getElementById('progress-fill').style.width")
-        check(fill_w == "41.2%", f"progress fill width ({fill_w})")
-        check(page.locator("#cache-progress-wrap").evaluate("e => getComputedStyle(e).display") != "none",
-              "cache sub-bar shown while caching")
-        check("cache 3/10" in page.locator("#cache-text").text_content(), "cache label")
-        loss = page.locator("#metric-loss").inner_text()
-        check(loss == "0.03412", f"loss metric ({loss})")
-
-        # elapsed ticker: wait >1s, text must advance
-        elapsed1 = page.locator("#run-elapsed").inner_text()
-        page.wait_for_timeout(1600)
-        elapsed2 = page.locator("#run-elapsed").inner_text()
-        check(elapsed1 != elapsed2, f"elapsed ticker advances ({elapsed1} -> {elapsed2})")
-
-        # history: 3 rows + status chips + selection drives log
-        check(page.locator("#history-list tr").count() == 3, "3 history rows")
-        check(page.locator("#btn-wipe").is_enabled(), "wipe enabled with history")
-        check(page.locator("#history-list .status-completed").count() == 1, "completed chip")
-        check(page.locator("#history-list .status-failed").count() == 1, "failed chip")
-        check(page.locator("#history-list .status-running").count() == 1, "running chip")
-        # boot auto-shows the active run's log (id 13)
-        check(page.locator("#log-title").inner_text() == "#13", "active run log shown on boot")
-        check("step 39" in page.locator("#log-body").inner_text(), "log body filled")
-        # click the completed run's row
-        page.click("#history-list tr[data-run-id='12']")
-        page.wait_for_timeout(300)
-        check(page.locator("#log-title").inner_text() == "#12", "row click switches log")
-        check(
-            page.locator("#history-list tr[data-run-id='12']").evaluate(
-                "e => e.classList.contains('selected')"
-            ),
-            "clicked row marked selected",
-        )
-        # hand-off: the quick log links to the full /run/{id} detail
-        check(page.locator("#log-open").is_visible(), "'open full' link shown with a selection")
-        check(page.locator("#log-open").get_attribute("href") == "/run/12",
-              "open-full href follows selection")
-
-        page.screenshot(path=str(OUT / "running.png"), full_page=True)
-        check((OUT / "running.png").stat().st_size > 20000, "running screenshot captured")
-
-        # wipe -> confirm dialog captured (handled in code, never blocks)
-        page.click("#btn-wipe")
-        page.wait_for_timeout(300)
-        check(
-            any("Delete ALL run history" in m for m in dialogs),
-            f"wipe confirm captured ({dialogs})",
-        )
-        ctx.close()
-
-        # ---------- B2: diverged run + resync-on-open (docs 07 F-03/F-09) ----------
-        print("== B2: diverged values + resync on stream open ==")
-        diverged = dict(
-            active_run, current_loss=None, avg_loss=None,
-            nonfinite={"current_loss": "nan", "avg_loss": "inf"},
-        )
-        active_hits: list[str] = []
-
-        def serve_active(route):
-            active_hits.append(route.request.url)
-            route.fulfill(status=200, content_type="application/json",
-                          body=json.dumps(diverged))
-
-        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
-        page = ctx.new_page()
-        hook_console(page, "B2")
-        page.route(re.compile(r"/api/v1/runs/active"), serve_active)
-        page.route(
-            re.compile(r"/api/v1/runs\?limit=20"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"runs": [diverged, history[1]], "count": 2})),
-        )
-        page.route(
-            re.compile(r"/api/v1/runs/\d+/log"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"log": log_text, "lines": 40})),
-        )
-        page.goto(f"{BASE}/", wait_until="networkidle")
-        page.wait_for_timeout(600)
-
-        loss_text = page.locator("#metric-loss").inner_text()
-        check(
-            "NaN" in loss_text and "diverged" in loss_text,
-            f"diverged loss is loud, not an em dash ({loss_text!r})",
-        )
-        check(
-            page.locator("#metric-loss").evaluate("e => e.classList.contains('value-bad')"),
-            "diverged loss carries the loud class",
-        )
-        avg_text = page.locator("#metric-avg").inner_text()
-        check("diverged" in avg_text, f"diverged avg says so too ({avg_text!r})")
-        cell = page.locator("#history-list tr[data-run-id='13'] .col-num").nth(1)
-        check("diverged" in cell.inner_text(), f"history cell keeps the marker ({cell.inner_text()!r})")
-        check(cell.evaluate("e => e.classList.contains('value-bad')"), "history cell styled loud")
-
-        # /events has no replay: the page refetches the DB on every open.
-        check(
-            len(active_hits) >= 2,
-            f"active run refetched when the stream opened ({len(active_hits)} calls)",
-        )
-        page.screenshot(path=str(OUT / "diverged.png"), full_page=True)
-        check((OUT / "diverged.png").stat().st_size > 20000, "diverged screenshot captured")
+        page.screenshot(path=str(OUT / "landing.png"), full_page=True)
+        check((OUT / "landing.png").stat().st_size > 20000, "landing screenshot captured")
         ctx.close()
 
         # ---------- C: monitor + graph regression (shared CSS surgery) ----------
@@ -741,83 +557,6 @@ def main():
         check((OUT / "config.png").stat().st_size > 20000, "config screenshot captured")
         ctx.close()
 
-        # ---------- E: run detail (/run/{id}) ----------
-        print("== E: run detail ==")
-
-        # E1: honest 404 against the real backend (scratch DB, no runs)
-        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
-        page = ctx.new_page()
-        hook_console(page, "E404")
-        page.goto(f"{BASE}/run/9999", wait_until="networkidle")
-        check(page.locator("#run-grid").is_hidden(), "404: details stay hidden")
-        check("not found" in page.locator("#run-state").inner_text().lower(),
-              "404: honest not-found state")
-        ctx.close()
-
-        # E2: completed run mocked -- every field renders, log tails
-        ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
-        page = ctx.new_page()
-        hook_console(page, "E")
-        run12 = next(r for r in history if r["id"] == 12)
-        run11 = next(r for r in history if r["id"] == 11)
-        page.route(
-            re.compile(r"/api/v1/runs/12/log"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"log": log_text, "lines": 40})),
-        )
-        page.route(
-            re.compile(r"/api/v1/runs/12$"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps(run12)),
-        )
-        page.goto(f"{BASE}/run/12", wait_until="networkidle")
-        page.wait_for_selector("#run-grid", state="visible", timeout=15000)
-
-        check(page.locator("#run-title").inner_text() == "Run #12", "title = Run #12")
-        badge_cls = page.locator("#status-badge").get_attribute("class")
-        check("status-completed" in badge_cls, f"completed badge class ({badge_cls})")
-        n_rows = page.locator("#run-details dt").count()
-        check(n_rows == 16, f"16 detail rows ({n_rows})")
-        ddetails = page.locator("#run-details").inner_text()
-        check("1000 / 1000" in ddetails, "steps rendered")
-        # row order is pinned by render(): Exit code is index 9
-        check(page.locator("#run-details dd").nth(9).inner_text().strip() == "0",
-              "exit code 0 rendered")
-        check("ago" in ddetails, "relative time in absolute timestamps")
-        # Error row is index 10; a clean run renders "—" with class mono
-        # (the error class only applies when run.error is truthy)
-        check(page.locator("#run-details dd").nth(10).inner_text() == "—",
-              "error empty (—) for a clean run")
-        check("step 39" in page.locator("#log-body").inner_text(), "log tail filled")
-        # .log-pane is shared chrome in style.css -- if it drifts back to a
-        # page stylesheet, run detail loses line structure silently
-        ws = page.locator("#log-body").evaluate("e => getComputedStyle(e).whiteSpace")
-        check(ws == "pre-wrap", f"log pane keeps line structure ({ws})")
-        page.screenshot(path=str(OUT / "run.png"), full_page=True)
-        check((OUT / "run.png").stat().st_size > 20000, "run screenshot captured")
-
-        # E3: failed run -- error renders in red, exit code shown
-        page.route(
-            re.compile(r"/api/v1/runs/11/log"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps({"log": log_text, "lines": 40})),
-        )
-        page.route(
-            re.compile(r"/api/v1/runs/11$"),
-            lambda r: r.fulfill(status=200, content_type="application/json",
-                                body=json.dumps(run11)),
-        )
-        page.goto(f"{BASE}/run/11", wait_until="networkidle")
-        page.wait_for_selector("#run-grid", state="visible", timeout=15000)
-        err_dd = page.locator("#run-details dd.error")
-        check(err_dd.count() == 1 and err_dd.inner_text() == "CUDA OOM",
-              "failed run shows its error text with the error class")
-        err_color = err_dd.evaluate("e => getComputedStyle(e).color")
-        norm_color = page.locator("#run-details dd.mono").first.evaluate(
-            "e => getComputedStyle(e).color")
-        check(err_color != norm_color, f"error rendered in red ({err_color})")
-        ctx.close()
-
         # ---------- F: dataset manager (/datasets, real backend) ----------
         print("== F: dataset manager ==")
         ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
@@ -843,10 +582,13 @@ def main():
         except Exception as exc:  # noqa: BLE001 -- report, don't kill the run
             check(False, f"a real card's preview image loads ({type(exc).__name__})")
 
-        # the M8d rail hands off to the dataset manager
-        page.goto(f"{BASE}/", wait_until="networkidle")
-        check(page.locator("a.rail-item[href='/datasets']").count() == 1,
-              "rail links to /datasets")
+        # Was: "the M8d rail hands off to the dataset manager", asserted by
+        # looking for a rail item on /. The landing page has no rail, so
+        # that always counted zero. The same promise is now kept twice over
+        # by the checks that actually have somewhere to look: section A
+        # follows every landing-page nav link and section G clicks the rail
+        # item to /datasets. Repeating it here would only re-add a check
+        # with no page behind it.
         page.goto(f"{BASE}/datasets", wait_until="networkidle")
         page.wait_for_selector("#ds-grid", state="visible", timeout=15000)
 
@@ -1013,12 +755,17 @@ def main():
         ctx.close()
 
         # ---------- G: shell -- rail + floating console + help/settings ----
+        # Started on /graph, not /. The landing page is a bare page -- it
+        # loads neither shell.js nor the rail -- so every rail and console
+        # check below used to run against a page that has neither and fail
+        # on the first one. The shell is mounted on every other page, which
+        # is where it is worth asserting.
         print("== G: shell (rail, console, help, settings) ==")
         ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
         page = ctx.new_page()
         hook_console(page, "G")
 
-        page.goto(f"{BASE}/", wait_until="networkidle")
+        page.goto(f"{BASE}/graph", wait_until="networkidle")
 
         # rail: inventory, honest disabled slot, active state, hover tips
         check(page.locator(".rail").is_visible(), "icon rail visible")
@@ -1027,8 +774,8 @@ def main():
         soon = page.locator(".rail-item.rail-soon")
         check(soon.count() == 1 and soon.get_attribute("aria-disabled") == "true",
               "workflows slot present and honestly disabled")
-        check(page.locator("a.rail-item[href='/']").get_attribute("aria-current")
-              == "page", "tracker marked active on /")
+        check(page.locator("a.rail-item[href='/graph']").get_attribute("aria-current")
+              == "page", "the current destination is marked active")
         page.hover("a.rail-item[href='/graph']")
         # is_visible() ignores opacity -- assert the tip actually faded in
         try:
@@ -1102,9 +849,9 @@ def main():
         check((OUT / "settings.png").stat().st_size > 15000,
               "settings screenshot captured")
 
-        # the money shot: rail + floating console over the main page
-        page.goto(f"{BASE}/", wait_until="networkidle")
-        page.wait_for_selector("#hero-idle", state="visible", timeout=15000)
+        # the money shot: rail + floating console over a real page
+        page.goto(f"{BASE}/graph", wait_until="networkidle")
+        page.wait_for_selector(".rail", state="visible", timeout=15000)
         page.screenshot(path=str(OUT / "shell.png"), full_page=True)
         check((OUT / "shell.png").stat().st_size > 20000,
               "shell screenshot captured")

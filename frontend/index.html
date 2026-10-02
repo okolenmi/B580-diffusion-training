@@ -23,17 +23,27 @@
                     &mdash; the execution page streams progress and lets you stop it.
                 </p>
                 <p>
-                    <a class="btn btn-start" href="/graph.html">Open graph editor →</a>
+                    <a class="btn btn-start" href="/graph">Open graph editor →</a>
                 </p>
             </section>
 
+            <!-- Routes, not filenames. These were /graph.html and friends,
+                 which the server never served: pages are registered at
+                 /graph, /datasets, /config, /settings and /help, so every
+                 link here was a 404 and the landing page could not be
+                 navigated away from.
+
+                 No Monitor link: that page is /monitor/{monitor_id} and a
+                 landing page has no monitor id to name. It is reached from
+                 the graph editor ("Look inside" on a monitor node), which
+                 is the only place the id exists. Linking to a placeholder
+                 would be worse than not linking. -->
             <nav class="page-nav">
-                <a href="/graph.html">Graph editor</a>
-                <a href="/datasets.html">Datasets</a>
-                <a href="/config.html">Config</a>
-                <a href="/settings.html">Settings</a>
-                <a href="/monitor.html">Monitor</a>
-                <a href="/help.html">Help</a>
+                <a href="/graph">Graph editor</a>
+                <a href="/datasets">Datasets</a>
+                <a href="/config">Config</a>
+                <a href="/settings">Settings</a>
+                <a href="/help">Help</a>
             </nav>
         </div>
     </main>

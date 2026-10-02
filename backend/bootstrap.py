@@ -177,6 +177,7 @@ def build_container(settings: Settings) -> Container:
     graph_executions = SqliteGraphExecutionRepository(database)
     graph_library = SqliteGraphLibrary(database)
     execution_writer = ExecutionLifecycleWriter(
+        clock=clock,
         repository=graph_executions, events=publisher
     )
     graph_supervisor = GraphExecutionSupervisor(

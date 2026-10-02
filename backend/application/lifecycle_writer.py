@@ -19,6 +19,16 @@ One service per aggregate, built in the composition root, with the
 repository and the publisher it needs. It also owns the insert-then-
 announce shape (``StartTraining``, ``StartGraphExecution``), which is the
 same rule with nothing to race against.
+
+"Once" means *for the aggregates that announce*. Dataset tasks are the
+other aggregate with a terminal state, and their compare-and-swap is a
+different mechanism: three port methods that work by id inside the
+adapter (``finish_if_active`` / ``fail_if_active`` / ``kill_if_active``)
+and publish nothing. They could not use this service without the port
+being redesigned and a dataset-task event family being invented -- which
+is a change with a reason behind it, not a cleanup. Until then, a fix to
+the announce-after-write ordering does need making twice, and this note
+is where that is recorded.
 """
 
 from __future__ import annotations
@@ -94,4 +104,35 @@ class LifecycleWriter(Generic[R, S]):
 
 
 class ExecutionLifecycleWriter(LifecycleWriter[GraphExecution, GraphStatus]):
-    """The graph-execution flavour."""
+    """The graph-execution flavour, and where its terminal-repair rule lives.
+
+    Three callers need "this row cannot still be running -- put it in a
+    terminal state and say so": the supervisor that owns the thread, the
+    startup sweep that finds rows a dead process left, and (before
+    2026-10-02) the run supervisor's equivalent. Each wrote its own copy
+    of the same three steps -- read the status, mark failed with a note,
+    CAS from the status just read -- and a fix to that sequence would have
+    had to be made three times.
+
+    ``fail_if_unfinished`` is that sequence once. The *note* stays the
+    caller's, deliberately: "the supervisor crashed" and "the server
+    restarted" are different facts and only the caller knows which one it
+    is reporting.
+    """
+
+    def __init__(self, *, repository, events, clock) -> None:
+        super().__init__(repository=repository, events=events)
+        self._clock = clock
+
+    def fail_if_unfinished(self, execution: GraphExecution, *, error: str) -> bool:
+        """Move an unfinished execution to ``failed`` with ``error``.
+
+        False if it was already terminal, or if another writer moved it
+        first -- in which case this changes and announces nothing, which
+        is the same outcome the caller would have had by checking first.
+        """
+        if execution.status.is_terminal:
+            return False
+        expected = execution.status
+        execution.mark_failed(at=self._clock.now(), error=error)
+        return self.commit(execution, expected=expected)

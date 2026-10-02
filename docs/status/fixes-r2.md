@@ -59,15 +59,44 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   and the argv `-m core.cli` — code the `core/` removal will disturb. The
   PID-reuse guard fixed in `75e3fed` lives in the same module, which is
   an argument for not churning it.
-* **WP-20 is now unblocked.** `core/` moved to `archive/core/` on
-  2026-10-02 and the backend's support for it was removed, which took
-  `subprocess_gateway.py` -- the file that hardcoded
-  `cmdline_marker="core.cli"` -- with it. The `RunSupervisor` /
-  `GraphExecutionSupervisor` unification WP-20 was really after is
-  smaller than it looked: the run supervisor no longer exists. What
-  remains to compare is `GraphExecutionSupervisor` against
-  `DatasetTaskSweeper`, which is two classes rather than four, and one
-  of which has no events.
+* **WP-20: mostly dissolved, one real extraction done** (`21c93b5`).
+  The review named `RunSupervisor` vs `GraphExecutionSupervisor`
+  hand-rolling the same lifecycle, and a `ProcessGateway` base shared by
+  the training and dataset-task gateways. Both pairs lost a member when
+  `core/` went, so most of the finding was resolved by removal rather
+  than by refactoring, and inventing an abstraction from what remained
+  would have been solving a problem that no longer exists. Measured
+  rather than assumed:
+
+  - `GraphExecutionSupervisor` (205 lines: thread per execution, cancel
+    registry, per-node progress, terminal CAS) and
+    `DatasetTaskSweeper` (89 lines: a repair pass, no thread, no events)
+    are **not two copies of one thing** -- a sweeper judges dead rows, a
+    supervisor owns a run's life. Nothing to unify.
+  - `ProcessGateway`: `SubprocessTrainingGateway` is deleted;
+    `SubprocessDatasetTaskGateway` is the only one left, and the
+    identity logic it would have shared already lives once in
+    `process_identity.py`.
+
+  What *was* real: the graph-execution terminal-repair rule was written
+  twice in the same package -- `GraphExecutionSupervisor._fail_leftover`
+  (crash repair) and `ReconcileGraphExecutions` (startup sweep) both
+  read the status, marked failed with a note, and CAS'd from what they
+  read. That is now `ExecutionLifecycleWriter.fail_if_unfinished`, which
+  takes a clock and keeps the note caller-supplied (a crash and a
+  restart are different facts). Pinned in `test_value_objects.py`,
+  including the two properties that matter: a terminal row is not
+  re-failed or re-announced, and a lost CAS announces nothing.
+
+  Left alone deliberately: the dataset-task CAS (`finish_if_active` /
+  `fail_if_active` / `kill_if_active`) is a *different mechanism* -- it
+  works by id inside the adapter and announces nothing, where the graph
+  writer works on an entity the caller holds and publishes. Unifying
+  them means redesigning the `DatasetTasks` port and adding a dataset-task
+  event family, for no defect that has been observed. The claim in
+  `lifecycle_writer.py`'s docstring that CAS-then-announce is "defined
+  once" is therefore still true for the aggregates that announce, and
+  now says which those are.
 * **WP-19 declined.** Every target is a test file or a schema module, and
   splitting them to hit a line count rather than to fix a comprehension
   problem adds indirection and a large reviewable diff for no measured

@@ -188,14 +188,12 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         the row active (it would block the next start until restart)."""
         try:
             execution = self._executions.get(execution_id)
-            if execution is None or execution.status.is_terminal:
+            if execution is None:
                 return
-            expected = execution.status
-            execution.mark_failed(
-                at=self._clock.now(),
+            self._writer.fail_if_unfinished(
+                execution,
                 error="execution supervisor crashed (see server log)",
             )
-            self._writer.commit(execution, expected=expected)
         except Exception:  # noqa: BLE001 -- already in the crash path
             logger.exception(
                 "could not fail leftover execution %s after supervisor crash",

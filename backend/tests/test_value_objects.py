@@ -39,11 +39,15 @@ from backend.application.requests import (  # noqa: E402
     ItemChangesRequest,
     ItemSelection,
 )
-from backend.application.lifecycle_writer import LifecycleWriter  # noqa: E402
+from backend.application.lifecycle_writer import (  # noqa: E402
+    ExecutionLifecycleWriter,
+    LifecycleWriter,
+)
 from backend.application.ports.dataset_tasks import TaskKind, TaskStatus  # noqa: E402
 from backend.application.ports.graph_runtime import IssueSeverity  # noqa: E402
 from backend.domain.events import DomainEvent, GraphExecutionStarted  # noqa: E402
-from backend.tests.support import check, finish  # noqa: E402
+from backend.domain.value_objects import GraphStatus  # noqa: E402
+from backend.tests.support import FakeClock, check, finish  # noqa: E402
 
 
 class _Bus:
@@ -55,14 +59,40 @@ class _Bus:
 
 
 class _Aggregate:
-    """Anything with an event buffer -- the shape the publisher needs."""
+    """Anything with an event buffer -- the shape the publisher needs.
 
-    def __init__(self, *events: DomainEvent) -> None:
+    ``status`` / ``mark_failed`` are here for ``fail_if_unfinished``,
+    the one writer method that inspects the row rather than only writing
+    it. They use the real ``GraphStatus`` so the terminal test under
+    test is the production one -- a stand-in would pass here and diverge
+    from what actually decides.
+    """
+
+    def __init__(
+        self, *events: DomainEvent, status: GraphStatus = GraphStatus.RUNNING
+    ) -> None:
         self._events = list(events)
+        self.status = status
+        self.error: str | None = None
+
+    def mark_failed(self, *, at, error: str) -> None:
+        self.status = GraphStatus.ERROR
+        self.error = error
 
     def collect_events(self) -> list[DomainEvent]:
         drained, self._events = self._events, []
         return drained
+
+
+def _status_word(expected) -> str:
+    """The wire word for a status, whether it arrived as an enum or a str.
+
+    The generic lifecycle tests pass plain strings; the
+    ``fail_if_unfinished`` tests pass the real ``GraphStatus``. The fake
+    records what the writer *compared against*, which is the thing under
+    test, so it has to read the same either way.
+    """
+    return getattr(expected, "value", expected)
 
 
 def _expect_error(fn, exc_type, fragment: str, label: str) -> None:
@@ -293,7 +323,7 @@ class _Repo:
         return aggregate
 
     def update_if_status(self, aggregate, *, expected) -> bool:
-        self.calls.append(f"cas:{expected}")
+        self.calls.append("cas:" + _status_word(expected))
         return self.wins
 
 
@@ -347,6 +377,65 @@ def test_lifecycle_writer() -> None:
         isinstance(stored, _Aggregate) and len(bus3.published) == 3,
         "insert persists and announces (nothing to race against)",
     )
+
+
+def test_fail_if_unfinished() -> None:
+    """The terminal-repair rule, pinned where it now lives.
+
+    Three callers share it (the supervisor's crash repair, the startup
+    sweep, and before 2026-10-02 the run supervisor), and each had its
+    own copy. What matters is not that it fails the row -- it is that it
+    fails it *only when it was unfinished, and announces only if the CAS
+    was won*.
+    """
+    print("\n== ExecutionLifecycleWriter.fail_if_unfinished: one repair rule ==")
+    clock = FakeClock()
+
+    def make(wins: bool, status: str = "running"):
+        bus = _Bus()
+        repo = _Repo(wins=wins)
+        writer = ExecutionLifecycleWriter(
+            repository=repo, events=EventPublisher(events=bus), clock=clock
+        )
+        return writer, bus, repo
+
+    # A row still running: marked failed, CAS'd from what was read, announced.
+    writer, bus, repo = make(wins=True)
+    row = _Aggregate(GraphExecutionStarted(execution_id=1), status=GraphStatus.RUNNING)
+    check(writer.fail_if_unfinished(row, error="server restarted") is True,
+          "an unfinished row is failed")
+    check(repo.calls == ["cas:running"],
+          f"and the CAS is taken from the status just read (got {repo.calls})")
+    check(row.status is GraphStatus.ERROR and row.error == "server restarted",
+          "the row is now terminal, carrying the caller's note")
+    check(len(bus.published) == 1,
+          f"and the row's buffer is announced exactly once (got "
+          f"{len(bus.published)})")
+
+    # Already terminal: nothing happens, and specifically nothing is
+    # announced. A sweep that re-failed a finished row would emit a second
+    # terminal event for work that already reported one.
+    writer, bus, repo = make(wins=True)
+    done = _Aggregate(GraphExecutionStarted(execution_id=2), status=GraphStatus.FINISHED)
+    check(writer.fail_if_unfinished(done, error="whatever") is False,
+          "a terminal row is left alone")
+    check(repo.calls == [] and len(bus.published) == 0,
+          "with no write and no event -- not even the note")
+
+    # Another writer got there first: the repair loses, and says nothing.
+    writer, bus, repo = make(wins=False)
+    racing = _Aggregate(GraphExecutionStarted(execution_id=3), status=GraphStatus.RUNNING)
+    check(writer.fail_if_unfinished(racing, error="server restarted") is False,
+          "a lost CAS reports failure")
+    check(len(bus.published) == 0,
+          "and announces nothing -- the other writer's result stands")
+
+    # The note is the caller's, and it reaches the row.
+    writer, bus, _ = make(wins=True)
+    row = _Aggregate(GraphExecutionStarted(execution_id=4), status=GraphStatus.QUEUED)
+    writer.fail_if_unfinished(row, error="server stopped before the execution started")
+    check(row.error == "server stopped before the execution started",
+          f"the caller's note is what lands on the row (got {row.error!r})")
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +503,7 @@ def main() -> None:
     test_item_selection()
     test_item_changes_request()
     test_lifecycle_writer()
+    test_fail_if_unfinished()
     test_task_status()
     test_issue_severity()
     finish()

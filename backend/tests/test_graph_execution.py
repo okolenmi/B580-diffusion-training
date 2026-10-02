@@ -405,13 +405,15 @@ check(reconcile_repo.update_if_status(left_running, expected=GraphStatus.QUEUED)
       "fixture: one row left running")
 
 reconcile_events = RecordingEventBus()
+reconcile_clock = FakeClock()
 sweep = ReconcileGraphExecutions(
     executions=reconcile_repo,
     writer=ExecutionLifecycleWriter(
+        clock=reconcile_clock,
         repository=reconcile_repo,
         events=EventPublisher(events=reconcile_events),
     ),
-    clock=FakeClock(),
+    clock=reconcile_clock,
 )
 result = sweep.execute()
 check(result.cleaned == 2, "reconcile fails every unfinished row")

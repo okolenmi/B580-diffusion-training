@@ -10,7 +10,9 @@ non-terminal row is debris:
   flight" -- whatever nodes completed are already in ``results``).
 
 CAS-protected like every other terminal writer (impossible to race at
-startup, but the invariant stays enforced in one place).
+startup, but the invariant stays enforced in one place) -- via
+``ExecutionLifecycleWriter.fail_if_unfinished``, which the supervisor's
+own crash-repair path uses too.
 """
 
 from __future__ import annotations
@@ -41,14 +43,12 @@ class ReconcileGraphExecutions:
     def execute(self) -> ReconcileResult:
         cleaned = 0
         for execution in self._executions.list_unfinished():
-            expected = execution.status
-            if expected is GraphStatus.QUEUED:
+            if execution.status is GraphStatus.QUEUED:
                 error = "server stopped before the execution started"
             else:
                 error = "server restarted while the execution was in flight"
-            execution.mark_failed(at=self._clock.now(), error=error)
 
-            if not self._writer.commit(execution, expected=expected):
+            if not self._writer.fail_if_unfinished(execution, error=error):
                 logger.warning(
                     "reconcile: execution %s was finalised by another writer",
                     execution.id,

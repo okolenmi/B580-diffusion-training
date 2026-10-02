@@ -670,6 +670,7 @@ def build_services(
         if graph_library is None:
             graph_library = SqliteGraphLibrary(graphs_db)
     execution_writer = ExecutionLifecycleWriter(
+        clock=clock,
         repository=graph_executions, events=publisher
     )
     if graph_supervisor is None:

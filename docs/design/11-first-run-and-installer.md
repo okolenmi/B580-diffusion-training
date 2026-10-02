@@ -73,11 +73,18 @@ run_server.sh
                                                reasons, nothing else     │
                                                                           │
        2. where do model files live?  ◄────────────────────────────────────┘
-            ├─ ComfyUI's own location (default)
-            └─ this project's storage, for large files
+            main:   ComfyUI's own location (default)
+                 or this project's storage, for large files
+            reserve: optional second root, consulted only if main misses
 
        3. the rest of the configuration
 ```
+
+The venv step is two lists and a constraints file: `requirements.txt` for
+our own venv (torch included), `requirements-comfy-additions.txt` for
+theirs (torch excluded), and `-c` a freeze of what their venv already
+holds. Any conflict fails; nothing already installed is touched. That is
+what "soft install" has to mean for it to be safe.
 
 ### 1. Dependency check, before the server
 
@@ -93,6 +100,8 @@ The requirement list has to be data, not prose, and it has to distinguish:
 * **provided by the ComfyUI venv** — torch and the XPU stack, which this
   project does not install into its own venv and should not try to
 
+The last category is why the lists are split (section 2a).
+
 That last category is the one that makes the ComfyUI-venv option
 attractive *and* risky, and it is the next section.
 
@@ -102,24 +111,26 @@ Reusing ComfyUI's venv saves real disk — torch plus the XPU backend is
 multiple gigabytes, and a user who already has ComfyUI has it already.
 That is a good reason and the user's stated one.
 
-**The cost is that we would be modifying a venv the user did not create,
-that another application depends on.** `pip install` into it may upgrade
-or remove a package ComfyUI needs, and the failure mode is "ComfyUI broke
-and the installer did it". Specific requirements for doing this safely:
+**The cost is that we would be installing into a venv the user did not
+create, that another application depends on.** Unconstrained, that ends as
+"ComfyUI broke and the installer did it".
 
-* **Never silently.** The user is asked; the answer is recorded in the
-  project config so the next run does not ask again.
-* **Dry run first.** Show the planned changes (`--dry-run` diff of what
-  would be installed, upgraded, downgraded or removed) and require
-  confirmation. A plain version bump of `fastapi` is fine; anything that
-  would *remove* a package ComfyUI imports is not, and should be refused
-  outright with the reason.
-* **Record a receipt.** What was installed, at what versions, so a later
-  "ComfyUI stopped working" can be traced to a version. Without this the
-  feature is unrecoverable in practice.
+It does not have to end that way, and the reason is the next section:
+install only the *additions*, under a constraints file that makes changing
+anything already present impossible. **"ComfyUI broke" becomes unreachable
+rather than merely unlikely** — which is a better property than a
+carefully-reviewed upgrade path.
+
+What still needs deciding, and cannot be engineered away:
+
+* **Never silently.** The user is asked, and the answer is recorded so the
+  next run does not ask again.
 * **Never touch it during a normal start.** Only during an explicit
   install step. A server that re-resolves its venv on every boot is a
   server that can break a user's ComfyUI on a Tuesday.
+* **Freeze what we installed**, into the project's config, so the next
+  time the user can be told what the additions were instead of being asked
+  to diff a pip log.
 
 ### 3. When installing into the ComfyUI venv fails
 
@@ -141,20 +152,119 @@ A conflict is expected, not exceptional — ComfyUI pins its own stack.
 This is a deliberate narrowness. The alternative — resolving conflicts
 automatically — is the thing that would break a user's ComfyUI.
 
+### 2a. Two requirement lists, and a soft install
+
+The reason this can be safe is that the installer is not installing
+"this project's dependencies" into ComfyUI's venv. It is installing
+**the additions**, and it is built so that *nothing already installed can
+change*.
+
+| List | Contents | Used for |
+|---|---|---|
+| `requirements.txt` (full) | everything, **including** torch and the XPU stack | our own venv |
+| `requirements-comfy-additions.txt` | only the server's own packages — fastapi, uvicorn, python-multipart, tomli_w. **No torch.** | inside ComfyUI's venv |
+
+The split is the first half of the safety. torch and the accelerator stack
+are exactly what ComfyUI already has and pins; listing them in our
+additions would invite pip to "fix" a version it thinks is wrong, which is
+the failure we are avoiding. Anything in the additions list must be a
+package ComfyUI has no reason to pin.
+
+The second half is a **constraints file built from the target venv's
+current state**:
+
+```
+pip freeze --all > comfy-constraints.txt          # the user never sees this
+pip install -r requirements-comfy-additions.txt -c comfy-constraints.txt
+```
+
+A constraints file says "these exact versions are already here and must
+not move". pip then *cannot* upgrade, downgrade or remove anything already
+present — it stops and reports instead. That turns "we hope it does not
+break ComfyUI" into "it is not able to break ComfyUI".
+
+So the soft install has exactly one failure mode, and it is the right one:
+
+> **Any conflict fails the install. Nothing is overridden. Nothing already
+> installed is touched.**
+
+Which is the "if something fails, tell me and stop" path of the flow
+above — reached by construction rather than by catching an error and
+apologising.
+
+Two details worth writing down:
+
+* **A refusal is a good outcome.** "Refused: your venv has fastapi
+  0.111 and we need >=0.115, and I will not change your ComfyUI's copy" is
+  a successful run. The user then picks the new-venv option knowingly.
+* **Freeze what we actually installed**, into the project's config, so the
+  next run of the installer can tell the user what the additions were
+  rather than asking them to diff a pip log.
+
 ### 4. Where model files live, and looking in two places
 
-The user chooses:
+The user chooses a **main** and may add a **reserve**:
 
-* **ComfyUI's own location** — `<comfy>/models/{checkpoints,loras}`. The
-  default, already what `paths.py` resolves, and shares models with
-  ComfyUI for free.
-* **This project's own storage**, for large files. Checkpoints are
-  routinely gigabytes; keeping them beside ComfyUI's `models/` is a
-  default that suits a laptop badly.
+* **ComfyUI's own location** — `<comfy>/models/{checkpoints,loras}` — is
+  the natural default for main. Already what `paths.py` resolves, and it
+  shares models with ComfyUI for free.
+* **This project's own storage** is the other main, for large files.
+  Checkpoints are routinely gigabytes; keeping them beside ComfyUI's
+  `models/` is a default that suits a laptop badly.
+* A **reserve** is a second root that is consulted only when the main does
+  not have the file.
 
-**And then nodes that look for a LoRA or a checkpoint must look in both
-places.** That is the part with real design in it, because model
-resolution today is *one root with an override*:
+That is the whole idea: main is where things go, reserve is somewhere to
+*also look*. The reason it is worth having is a real failure mode — a save
+that did not land where it was supposed to. The model exists, it is on
+disk somewhere, and without a second root the only options are "fail" or
+"go find it by hand".
+
+#### The rule, and where it stops helping
+
+The question worth answering precisely, because it decides the
+implementation:
+
+> **Resolution is by lookup, not by fallback-on-error.** Ask "is this name
+> in main?" If yes, that is the answer. If no, ask the reserve. A name in
+> both is **main's**, without checking whether main's copy is any good.
+
+So, concretely:
+
+| Operation | Rule |
+|---|---|
+| Resolve a named model | main first, then reserve; first hit wins |
+| List (picker, browse) | union of both, main's entries first |
+| Upload, save, anything that creates | **main only** |
+| Show in the picker | which root each file came from |
+
+Nothing is "tried" and nothing is "probed". That is what makes it cheap —
+no file is opened to decide where it lives — and it means the answer is
+the same every time, which is what makes it debuggable.
+
+**The limit, stated because it is the case the reserve does *not* save.**
+If a save was interrupted, the likely result is a *truncated file in main*,
+not a missing one. A truncated file in main is found in main, so the
+reserve is shadowed and does not help. The reserve rescues the case where
+main genuinely has nothing; it does not rescue a corrupt file in main.
+
+Two honest options for that, and the first is the default:
+
+1. **Main is authoritative.** The picker shows which root a file came
+   from, and the user deletes the bad one. One less thing to get wrong, and
+   "I deleted it and it re-downloaded" beats a silent fallback.
+2. **Validate on read, fall back on a bad header.** A safetensors header is
+   a few hundred bytes and a truncated file is trivially detectable — but
+   this means opening files to decide resolution, which is the wrong shape
+   for a picker listing thousands of models. Possible as a targeted check
+   when a load *fails*, not as part of resolution.
+
+This is the honest boundary of the feature, and it is better to write it
+down than to let someone discover it.
+
+#### What has to change
+
+Model resolution today is *one root with an override*, in five places:
 
 * `path_tiers.checkpoints_dir` / `loras_dir` return one `Path`.
 * `models_dir` sets one root.
@@ -162,33 +272,20 @@ resolution today is *one root with an override*:
 * The asset pickers and browse endpoints list one directory.
 * `nodes/` code resolves model paths through `paths.py`, one directory.
 
-The change is from *a root* to **an ordered list of roots, with the
-first as primary**. The principle that makes it tractable:
+All five become main-plus-reserve. The `models_dir` setting has to keep
+working as-is — it is documented and in use — so it becomes the *main*,
+and a new optional key carries the reserve. **Not** a migration.
 
-> **Read from many, write to one.**
+Consequences to design for:
 
-Listing and search union across the roots in order, with the primary
-first, so the picker's default selection is the primary's file when the
-same name exists in both. Uploads, and anything else that creates a file,
-always target the primary — a file written to root 2 that the picker lists
-from root 1 would be a genuinely confusing bug.
-
-Consequences to design for, not discover later:
-
-* **A name in two roots.** Not an error. The primary wins for writes, and
-  the picker should show *which* root a file came from, or a user
-  debugging a "wrong version" problem has no way to tell.
-* **A settings surface change.** One `models_dir` becomes a primary plus
-  an ordered list. The existing single-value key has to keep working
-  (it is a documented, in-use setting) — treat it as the one-element
-  case, not as something to migrate.
-* **`WorkspaceDirs` grows from a single root to a list.** Its docstring
-  already says it exists because this project depends on another
-  project's layout and that dependency should be a configuration point;
-  this is that assumption being tested.
-* **Every consumer has to be found**, not just the obvious ones. A
+* **`WorkspaceDirs` grows.** It already exists because this project depends
+  on another project's layout and that dependency should be a
+  configuration point; this is that assumption being tested, and it
+  already has per-directory fields that can take the reserve.
+* **Every consumer has to be found, not just the obvious ones.** A
   one-root resolver left unchanged in one place is a picker that quietly
-  shows only half the files.
+  shows half the files — and the bug is invisible, because half the files
+  *is* a plausible-looking answer.
 
 ### 5. The rest of the configuration
 
@@ -225,7 +322,9 @@ not a paragraph here:
 
 * **We may install into a venv the user did not create.** With the safety
   requirements above, and the consequences if they are skipped.
-* **Model files are searched in several roots, written to one.**
+* **Model files are searched in main-then-reserve, written to main only**,
+  and main wins even when main's copy is broken — the one case the reserve
+  cannot rescue.
 * **No authentication, but the installer is a local surface** — it writes
   to the filesystem and runs package installs, so it is exactly the
   capability ADR 0001 declines to add authentication for. It must be
@@ -240,5 +339,7 @@ not a paragraph here:
 * Whether the ComfyUI-venv option is offered at all on a machine where the
   ComfyUI install cannot be verified.
 * Whether "this project's own storage" is a directory this project defines,
-  or a filesystem the user mounts. The plan only needs *a primary root
-  and an ordered list of others*.
+  or a filesystem the user mounts. The plan only needs *a main and a
+  reserve*.
+* Whether the reserve is offered as a suggestion or just accepted as a
+  path. Nothing here assumes it is discovered automatically.

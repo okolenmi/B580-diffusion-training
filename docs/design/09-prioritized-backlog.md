@@ -14,11 +14,13 @@ say what is missing, instead of starting and letting the failure surface
 as a `ModuleNotFoundError` traceback. That is a small change with most of
 the user-visible benefit.
 
-Two things in that plan are worth noticing before anything is built: we
-would be installing into a venv the user did not create, and model lookup
-would become "read from several roots, write to one" rather than the
-single-root-with-override it is today. Both change what existing code has
-to assume.
+Two things in that plan are worth noticing before anything is built. We
+would be installing into a venv the user did not create -- made safe by
+splitting the requirements into "everything" and "additions only" and
+installing the latter under a constraints file of what that venv already
+holds, so nothing already installed can move. And model lookup would
+become main-then-reserve rather than the single-root-with-override it is
+today, which changes what existing code has to assume in five places.
 
 1. **Verify `NF4WeightStore`'s quality against a real training run**
    (3.3). The diffusion-specific quality question -- does NF4's real ~9%

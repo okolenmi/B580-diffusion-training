@@ -27,14 +27,10 @@ Run directly: python backend/tests/test_graph_adoption.py
 from __future__ import annotations
 
 import datetime
-import io
 import sys
 import tempfile
 import threading
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -46,15 +42,22 @@ from backend.application.ports.graph_task_gateway import (
     GraphTaskGateway,
     GraphTaskLaunch,
 )
-from backend.domain.graph import GraphDefinition
-from backend.domain.value_objects import ExecutionId
+from backend.domain.graph import GraphDefinition, GraphNodeSpec
+from backend.domain.value_objects import ExecutionId, GraphStatus
 from backend.infrastructure.graph_event_stream import (
+    EventKind,
     ExecutionEventTail,
     ExecutionEventWriter,
 )
 from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
 from backend.infrastructure.workspace import WorkspaceLayout
-from backend.tests.support import FakeClock, RecordingEventBus, check, finish, wait_until
+from backend.tests.support import (
+    FakeClock,
+    RecordingEventBus,
+    check,
+    run_tests_concurrently,
+    wait_until,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP = Path(tempfile.mkdtemp(prefix="backend-graph-adopt-"))
@@ -154,10 +157,10 @@ class StubExecutions:
     ``running``, and the re-read is honest.
     """
 
-    def __init__(self, execution_id: int = 1) -> None:
+    def __init__(self, execution_id: int = 1, *, graph: GraphDefinition | None = None) -> None:
         from backend.domain.entities.graph_execution import GraphExecution
 
-        self._execution = GraphExecution.create(graph=GraphDefinition(), created_at=_NOW)
+        self._execution = GraphExecution.create(graph=graph or GraphDefinition(), created_at=_NOW)
         self._execution.assign_id(ExecutionId(execution_id))
         self._execution.mark_running(at=_NOW)
 
@@ -413,6 +416,165 @@ def test_the_default_is_the_child() -> None:
     )
 
 
+def test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash() -> None:
+    print("\n== the outcome arrives after the last poll, not before it ==")
+    # Found live, not thought of: a 3000-node graph whose child finished
+    # and exited while the watcher was still persisting the batch it had
+    # already read. The event file ended with a clean outcome; the row
+    # said "exited without reporting an outcome (crashed, or a device
+    # fault killed it)".
+    #
+    # The ordering is reproduced rather than raced for: the fake child
+    # writes the rest of its records at the moment the watcher asks
+    # whether it is still alive, which is precisely when a real child
+    # that is faster than the watcher does it -- it finishes writing and
+    # exits between the watcher's poll and its liveness check.
+    gateway = _LateFinishingGateway(TMP / "unused.jsonl")
+    executions = StubExecutions(9, graph=_graph_of(800))
+    supervisor = _supervisor(gateway, executions=executions)
+    gateway.found = 7777
+    # Where the supervisor looks, not where the test picked: adoption
+    # resolves the event file from the execution id, so a fake writing to
+    # a path of its own choosing would find nothing and fail for a reason
+    # that has nothing to do with the bug.
+    gateway.event_path = supervisor._paths_for(ExecutionId(9))["events"]
+
+    # The part the watcher reads first: half the graph, no outcome.
+    gateway.write(
+        *(
+            {"kind": "node", "node_id": f"n{i}", "ok": True, "outputs": {},
+             "error": None, "duration_ms": 1.0}
+            for i in range(400)
+        )
+    )
+
+    check(supervisor.adopt(ExecutionId(9)) == 7777, "the run is adopted")
+    check(
+        _wait_for(lambda: gateway.finished),
+        f"the child finished and exited (got finished={gateway.finished})",
+    )
+    check(
+        _wait_for(lambda: executions.get(ExecutionId(9)).status.is_terminal),
+        f"the watcher finalised the row (got "
+        f"{executions.get(ExecutionId(9)).status})",
+    )
+    final = executions.get(ExecutionId(9))
+    check(
+        final.status is GraphStatus.FINISHED,
+        "as **finished**, read from the outcome record the child wrote -- "
+        "before this was fixed the row said the process crashed, which is "
+        f"how a successful run gets reported as a hardware fault "
+        f"(got {final.status}: {final.error})",
+    )
+    check(
+        final.results[-1].node_id == "n799",
+        "and every node result is on the row, including the 400 the "
+        f"watcher had not read when liveness said no (got "
+        f"{len(final.results)} results, last {final.results[-1].node_id})",
+    )
+
+
+def _graph_of(node_count: int) -> GraphDefinition:
+    """A graph with ``node_count`` distinct nodes, for the domain's own rule.
+
+    The entity refuses to load a row carrying more results than the graph
+    has nodes, so a stub whose graph was empty would be asserting against
+    a row that cannot exist.
+    """
+    return GraphDefinition(
+        nodes=tuple(
+            GraphNodeSpec(id=f"n{i}", class_name="FloatConstantNode", params={})
+            for i in range(node_count)
+        )
+    )
+
+
+class _LateFinishingGateway(RecordingGateway):
+    """Writes the rest of its records when asked whether it is alive."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.finished = False
+        self._rest = [
+            {"kind": "node", "node_id": f"n{i}", "ok": True, "outputs": {},
+             "error": None, "duration_ms": 1.0}
+            for i in range(400, 800)
+        ] + [{"kind": "outcome", "error": None, "results_count": 800}]
+
+    def is_alive(self, pid: int) -> bool:
+        if self.finished:
+            return False
+        self.write(*self._rest)
+        self.finished = True
+        return False  # it exited as it finished writing
+
+
+def test_a_new_run_does_not_inherit_the_last_one_s_records() -> None:
+    print("\n== execution 1 today is not execution 1 yesterday's file ==")
+    # Observed live: deleting backend.db restarts row ids at 1, so a new
+    # execution 1 lands on the previous execution 1's event file. Records
+    # are appended, so the new run inherited 3000 stale node records; the
+    # watcher read 6000 results for a 3000-node graph, which the domain
+    # refuses to load, and the row was stuck running forever with every
+    # read and write of it raising.
+    scratch = TMP / "reused-id"
+    scratch.mkdir(parents=True, exist_ok=True)
+    events = scratch / "execution_1.events.jsonl"
+
+    stale = ExecutionEventWriter(events)
+    stale.node({"node_id": "n0", "ok": True, "outputs": {}, "error": None,
+                "duration_ms": 1.0})
+    stale.outcome(error="a previous run's ending", results_count=1)
+    stale.close()
+    check(events.stat().st_size > 0, "the previous run left records behind")
+
+    written: list[int] = []
+
+    class _Recording(RecordingGateway):
+        """Writes one record at spawn, the way a child would."""
+
+        def spawn(self, launch):
+            writer = ExecutionEventWriter(self.event_path)
+            writer.node({"node_id": "fresh", "ok": True, "outputs": {},
+                         "error": None, "duration_ms": 1.0})
+            writer.outcome(error=None, results_count=1)
+            writer.close()
+            written.append(1)
+            return 1
+
+    gateway = _Recording(events)
+    supervisor = _supervisor(gateway)
+    supervisor._paths_for = lambda execution_id: {
+        "graph": scratch / "execution_1.graph.json",
+        "events": events,
+        "log": scratch / "execution_1.log",
+    }
+    # Written where launch says it will be, so the assertion is about the
+    # real path rather than about a path the test substituted afterwards.
+    scratch.joinpath("execution_1.graph.json").write_text("{}", encoding="utf-8")
+
+    written_now: list[str] = []
+    original_spawn = gateway.spawn
+
+    def spawn_capturing(launch):
+        pid = original_spawn(launch)
+        written_now.append(launch.event_path.name)
+        return pid
+
+    gateway.spawn = spawn_capturing  # type: ignore[method-assign]
+    supervisor.launch(ExecutionId(1), _graph_of(1))
+
+    check(written_now == ["execution_1.events.jsonl"],
+          f"the child was told where to write (got {written_now})")
+    check(
+        [e.payload.get("node_id")
+         for e in ExecutionEventTail(events).poll()
+         if e.kind is EventKind.NODE] == ["fresh"],
+        "and the only node record in the file is this run's -- not the "
+        "previous run's, which would be read as this graph's own results",
+    )
+
+
 def main() -> None:
     tests = [
         test_replay_skips_node_results_but_keeps_monitor_history,
@@ -421,30 +583,10 @@ def main() -> None:
         test_an_in_process_run_is_never_adoptable,
         test_adoption_counts_are_reported_separately,
         test_the_default_is_the_child,
+        test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash,
+        test_a_new_run_does_not_inherit_the_last_one_s_records,
     ]
-    results: dict = {}
-    with ThreadPoolExecutor(max_workers=len(tests)) as pool:
-        futures = {pool.submit(run_capturing, t): t for t in tests}
-        for future in as_completed(futures):
-            test = futures[future]
-            output, error = future.result()
-            if error is not None:
-                output += f"\n  !! {test.__name__} raised\n{error}"
-            results[test.__name__] = output
-    for test in tests:
-        print(results[test.__name__], end="")
-    finish()
-
-
-def run_capturing(test):
-    buffer = io.StringIO()
-    error = None
-    with redirect_stdout(buffer):
-        try:
-            test()
-        except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
-            error = "".join(traceback.format_exception(exc))
-    return buffer.getvalue(), error
+    run_tests_concurrently(tests)
 
 
 if __name__ == "__main__":

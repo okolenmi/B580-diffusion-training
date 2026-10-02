@@ -111,6 +111,22 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         paths = self._paths_for(execution_id)
         paths["events"].parent.mkdir(parents=True, exist_ok=True)
         paths["graph"].write_text(json.dumps(graph.as_dict()), encoding="utf-8")
+        # The event file starts empty, every time, before the child is
+        # spawned. Records are appended (one write(2) per record, so a
+        # SIGKILL cannot tear the last one), which means a *new* run at a
+        # path that still holds an old run's records would inherit them --
+        # and that is not the unreachable case it looks like: delete the
+        # database and row ids start again at 1, so the next execution 1
+        # lands on the previous execution 1's file. The watcher then reads
+        # 6000 node records for a 3000-node graph, the row grows past the
+        # domain's "no more results than nodes" rule, and every subsequent
+        # read *and* write of it raises, leaving the row stuck running
+        # forever. Observed live.
+        #
+        # Adoption is the case this must not touch, and does not: `adopt`
+        # never comes through here, and it is exactly the one path that
+        # needs the old records kept.
+        paths["events"].write_text("", encoding="utf-8")
 
         launch = GraphTaskLaunch(
             execution_id=execution_id,
@@ -280,8 +296,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         the top over a span that already happened, and node records in
         that span must not be recorded again.
         """
-        outcome_error: str | None = None
-        saw_outcome = False
+        outcomes: list[dict] = []
         try:
             if not catch_up and not self._claim(execution_id):
                 # A stop won the row while the child was still starting.
@@ -290,16 +305,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 self._gateway.kill(pid)
                 return
             while True:
-                for event in tail.poll():
-                    kind = event.kind
-                    if kind is EventKind.NODE:
-                        if not catch_up:
-                            self._record_node(execution_id, event.payload)
-                    elif kind is EventKind.MONITOR:
-                        self._republish_monitor(event.payload)
-                    else:  # OUTCOME
-                        saw_outcome = True
-                        outcome_error = event.payload.get("error")
+                outcomes += self._apply(execution_id, tail.poll(), catch_up)
                 if catch_up and tail.caught_up:
                     # Exactly caught up, not "a poll came back empty": a
                     # poll is also empty while the child is mid-line, and
@@ -309,6 +315,19 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                     with self._lock:
                         self._replaying.discard(execution_id)
                 if not self._gateway.is_alive(pid):
+                    # A final drain, and this is a correctness fix rather
+                    # than tidiness. The child writes its outcome record
+                    # and *then* exits, so everything it ever said is on
+                    # disk by the time liveness says no. A watcher that
+                    # was mid-batch when that happened -- persisting one
+                    # node result per CAS is slow enough on a long graph
+                    # that a fast child finishes underneath it -- would
+                    # otherwise break without ever reading the outcome,
+                    # and report a successful run as
+                    # "exited without reporting an outcome". Observed live
+                    # on a 3000-node graph: the event file ended with a
+                    # clean outcome, and the row said the process crashed.
+                    outcomes += self._apply(execution_id, tail.poll(), catch_up)
                     break
                 execution = self._executions.get(execution_id)
                 if execution is None or execution.status.is_terminal:
@@ -320,7 +339,33 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         except Exception:  # noqa: BLE001 -- the thread must not die silently
             logger.exception("watcher for graph execution %s crashed", execution_id)
         finally:
-            self._finish(execution_id, pid, saw_outcome, outcome_error)
+            self._finish(
+                execution_id,
+                pid,
+                bool(outcomes),
+                outcomes[-1].get("error") if outcomes else None,
+            )
+
+    def _apply(
+        self, execution_id: ExecutionId, events, catch_up: bool
+    ) -> list[dict]:
+        """Apply one batch of records; return the outcome records in it.
+
+        A batch, rather than a record, because that is what a poll
+        returns and because the two calls the watcher makes of it -- the
+        steady one and the final drain -- must apply records identically.
+        """
+        outcomes: list[dict] = []
+        for event in events:
+            kind = event.kind
+            if kind is EventKind.NODE:
+                if not catch_up:
+                    self._record_node(execution_id, event.payload)
+            elif kind is EventKind.MONITOR:
+                self._republish_monitor(event.payload)
+            else:  # OUTCOME
+                outcomes.append(event.payload)
+        return outcomes
 
     def _record_node(self, execution_id: ExecutionId, payload: dict) -> None:
         """Persist a finished node's result and announce its progress.

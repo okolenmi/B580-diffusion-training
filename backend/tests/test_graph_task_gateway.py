@@ -21,15 +21,12 @@ Run directly: python backend/tests/test_graph_task_gateway.py
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
+from dataclasses import replace
 import tempfile
-import threading
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -46,7 +43,7 @@ from backend.infrastructure.graph_event_stream import (
 from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
 from backend.infrastructure.process_identity import cmdline_mentions
 from backend.infrastructure.workspace import WorkspaceLayout
-from backend.tests.support import check, finish, wait_until
+from backend.tests.support import check, run_tests_concurrently, wait_until
 
 TMP = Path(tempfile.mkdtemp(prefix="backend-graph-child-"))
 GATEWAY = SubprocessGraphTaskGateway(WorkspaceLayout(Path(__file__).resolve().parents[2]))
@@ -282,103 +279,49 @@ def test_signals_are_refused_for_a_pid_that_is_not_ours() -> None:
                 "test process is still running, which is the proof")
 
 
-class _ThreadRoutedStdout:
-    """``sys.stdout`` that sends each thread's output to its own buffer.
-
-    Not ``contextlib.redirect_stdout``, which swaps ``sys.stdout`` for the
-    whole process: five tests entering it concurrently tangle its stack, so
-    some threads' output lands in a buffer nobody prints and the log
-    silently loses four of the five sections. Routing on a thread-local
-    instead has no shared state to get wrong.
-
-    ``write`` returns the character count because ``print`` inspects it;
-    a ``None`` here truncates the output rather than merely reordering it.
-    """
-
-    def __init__(self, real) -> None:
-        self._real = real
-        self._local = threading.local()
-        self._saved = None
-
-    def __enter__(self) -> _ThreadRoutedStdout:
-        self._saved = sys.stdout
-        sys.stdout = self
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        sys.stdout = self._saved
-
-    def bind(self, buffer) -> None:
-        self._local.buffer = buffer
-
-    def unbind(self) -> None:
-        self._local.buffer = None
-
-    def write(self, text: str) -> int:
-        target = getattr(self._local, "buffer", None)
-        if target is None:
-            return self._real.write(text)
-        target.write(text)
-        return len(text)
-
-    def flush(self) -> None:
-        target = getattr(self._local, "buffer", None)
-        (target if target is not None else self._real).flush()
-
-
-def run_capturing(router: _ThreadRoutedStdout, test):
-    """Run one test, returning its output instead of printing it live."""
-    buffer = io.StringIO()
-    error = None
-    router.bind(buffer)
-    try:
-        test()
-    except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
-        error = "".join(traceback.format_exception(exc))
-    finally:
-        router.unbind()
-    return buffer.getvalue(), error
-
-
 def test_a_launch_failure_is_loud_and_typed() -> None:
     print("\n== a child that cannot start raises, rather than returning a pid ==")
     # The supervisor's row-repair path hangs off this: a spawn failure must
     # be an exception it can catch, because there is no watcher to notice
     # anything and the row would sit queued forever, blocking the
     # single-active check.
-    # The project root is real on purpose: Popen validates ``cwd`` before
-    # it ever looks at the executable, so a bogus root would fail for the
-    # wrong reason and this would stop testing the interpreter.
-    broken = SubprocessGraphTaskGateway(
-        WorkspaceLayout(Path(__file__).resolve().parents[2])
-    )
-    real_python = os.environ.get("VENV_PYTHON")
-    os.environ["VENV_PYTHON"] = str(TMP / "no-such-python")
+    #
+    # The failure is forced through the log path rather than through
+    # ``VENV_PYTHON``. The env var is the obvious way to point the gateway
+    # at an interpreter that is not there, and it was the first thing
+    # tried -- and it breaks these tests the moment they run
+    # concurrently: the environment is process-global, so the other tests
+    # in this file spawn their children while it is patched and hand Popen
+    # a path that does not exist. It failed about one suite run in three,
+    # in a *different* test, which is the worst place a flake can live.
+    # A per-layout ``settings_kv`` does not help either: venv_python()
+    # consults the environment before the settings tier, and the repo's
+    # .env sets it.
+    #
+    # A log path that is a directory is a real spawn failure -- the scratch
+    # tree is not writable -- and it needs no process-global state.
+    blocked = TMP / "log_is_a_directory"
+    blocked.mkdir(parents=True, exist_ok=True)
+    launch = _launch(9, [_float_node("a", 1.0)])
+    blocked_launch = replace(launch, log_path=blocked)
     try:
-        broken.spawn(_launch(9, [_float_node("a", 1.0)]))
+        GATEWAY.spawn(blocked_launch)
         check(False, "spawn raised GraphLaunchError")
     except GraphLaunchError as exc:
         check(
-            "no-such-python" in str(exc),
+            "log_is_a_directory" in str(exc) or "Is a directory" in str(exc),
             f"and the message names what could not be launched (got {exc})",
         )
     except Exception as exc:  # noqa: BLE001 -- wrong type is the failure
         check(False, f"raised GraphLaunchError, got {type(exc).__name__}: {exc}")
-    finally:
-        if real_python is None:
-            os.environ.pop("VENV_PYTHON", None)
-        else:
-            os.environ["VENV_PYTHON"] = real_python
     check(True, "and the row-repair path is reachable")
 
 
 def main() -> None:
-    # Concurrent because the expensive thing here is a process starting, and
-    # the five tests are independent processes by construction -- each
-    # spawns its own child, and the gateway's only shared state is a lock
-    # around the pid map. Run in sequence the file costs five child
-    # startups and the backend suite goes from 6.3s to 15s; run together it
-    # costs about one.
+    # Concurrent because each test costs a real child-process startup and
+    # the tests are independent processes by construction; see
+    # support.run_tests_concurrently. Five serial startups took the backend
+    # suite from 6.3s to 15s, and together they cost about one.
     tests = [
         test_child_runs_a_graph_end_to_end,
         test_a_refused_graph_is_reported_by_the_child,
@@ -387,21 +330,7 @@ def main() -> None:
         test_signals_are_refused_for_a_pid_that_is_not_ours,
         test_a_launch_failure_is_loud_and_typed,
     ]
-    results: dict = {}
-    with _ThreadRoutedStdout(sys.stdout) as router:
-        with ThreadPoolExecutor(max_workers=len(tests)) as pool:
-            futures = {pool.submit(run_capturing, router, t): t for t in tests}
-            for future in as_completed(futures):
-                test = futures[future]
-                output, error = future.result()
-                if error is not None:
-                    output += f"\n  !! {test.__name__} raised\n{error}"
-                results[test.__name__] = output
-    # Printed in the original order, so a failure reads as a sequence
-    # rather than as whichever line won the race.
-    for test in tests:
-        print(results[test.__name__], end="")
-    finish()
+    run_tests_concurrently(tests)
 
 
 if __name__ == "__main__":

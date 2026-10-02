@@ -43,7 +43,10 @@ change -- see the note at the end about what it caught.
 | WP-17 | decision records; a check for documented numbers | `e65643d` | found the migration strategy claiming 47 endpoints against an actual 50 |
 | WP-21 | event contract: `seq`, lifecycle replay ring, `Last-Event-ID`, generated JSON Schema | `1295946`, `555e61d` | renamed `cache_total` and watched the check name `run.js: e.cache_total`; 70 payload/schema pairs cross-checked against real `jsonschema` |
 
-Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
+| WP-20 | the one compare-and-swap; `ExecutionLifecycleWriter.fail_if_unfinished` | `9a1eff0`, `244ba73` | the dataset adapter's five hand-rolled guarded UPDATEs became one `finalize_if_active` |
+| WP-22 | process isolation for graph execution | `bcfa939`, `903737c`, `1d77bf2`, `8ec48cd` | `docs/design/13-process-isolation.md`; a SIGKILLed child fails its row while the server keeps serving, and a run survives a server restart |
+
+Phase 3: complete. WP-19 declined, WP-21 done, WP-20 done, WP-22 done.
 
 * **WP-21 is done**, in the two halves it was specified as. One
   deliberate deviation: the review asks for the delivery-class table
@@ -109,9 +112,36 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   problem adds indirection and a large reviewable diff for no measured
   gain. The review's numbers are stale as well (it gives
   `presentation/schemas.py` as 997; it is 1008).
-* **WP-22 deferred** as premature: process isolation for graph execution
-  is a large change to a path that works, bought against a risk that has
-  not yet been observed.
+* **WP-22 was deferred, then done.** The original judgement was that
+  isolation is a large change to a path that works, bought against a
+  risk not yet observed. That was right when it was written and stopped
+  being right once the device-fault question was settled as a driver
+  problem (`docs/known-issues/resolved.md`): the isolation is not buying
+  insurance against a rare fault, it is buying back the server.
+
+  Four commits, one per step, each green:
+
+  | step | commit | what it established |
+  | --- | --- | --- |
+  | 1–2 | `bcfa939` | the event file is the only channel; both gateways call one producer |
+  | 3 | `903737c` | the child path, real children, mutation-checked |
+  | 4 | `1d77bf2` | adoption across a restart, pid found by argv rather than stored |
+  | 5 | `8ec48cd` | default flipped to `child`, and the backend's logging made visible |
+
+  What it bought, measured on a live server rather than argued: a
+  `SIGKILL` of the run's process now fails that run's row and leaves the
+  server serving, where before it killed the server too; and a run
+  survives the server being killed underneath it, because a child in its
+  own session outlives its parent.
+
+  What it cost, also measured: ~1.95 s of startup per run, and one
+  operator-visible change they should expect — after a restart the log
+  now says `adopted N still-running graph execution(s)` instead of
+  failing the row, which is the point but is also a new line to read.
+
+  `BACKEND_GRAPH_EXECUTION=inprocess` is the rollback. Giving up
+  isolation also gives up adoption, since a thread cannot outlive the
+  process it is in.
 
 `docs/design/11-core-removal.md` records the five edges `core/` had,
 what each became, and what the route cost.

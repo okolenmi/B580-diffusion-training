@@ -8,10 +8,14 @@ runs standalone -- ``check()`` prints PASS/FAIL per assertion, and
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
 import tempfile
+import threading
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
@@ -206,6 +210,97 @@ def wait_until(predicate, *, timeout: float = 2.0, interval: float = 0.01) -> bo
             return True
         time.sleep(interval)
     return predicate()
+
+
+class _ThreadRoutedStdout:
+    """``sys.stdout`` that sends each thread's output to its own buffer.
+
+    Not ``contextlib.redirect_stdout``, which swaps ``sys.stdout`` for the
+    whole process: several tests entering it concurrently tangle its
+    stack, so some threads' output lands in a buffer nobody prints and
+    the log silently loses most of the file. Routing on a thread-local
+    instead has no shared state to get wrong.
+
+    ``write`` returns the character count because ``print`` inspects it; a
+    ``None`` here truncates the output rather than merely reordering it.
+    """
+
+    def __init__(self, real) -> None:
+        self._real = real
+        self._local = threading.local()
+        self._saved = None
+
+    def __enter__(self):
+        self._saved = sys.stdout
+        sys.stdout = self
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        sys.stdout = self._saved
+
+    def bind(self, buffer) -> None:
+        self._local.buffer = buffer
+
+    def unbind(self) -> None:
+        self._local.buffer = None
+
+    def write(self, text: str) -> int:
+        target = getattr(self._local, "buffer", None)
+        if target is None:
+            return self._real.write(text)
+        target.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        target = getattr(self._local, "buffer", None)
+        (target if target is not None else self._real).flush()
+
+
+def run_tests_concurrently(tests) -> None:
+    """Run ``tests`` concurrently and print each one's output in order.
+
+    For tests that are independent but each cost real wall time -- a
+    child process starting, a supervisor thread reaching a state. In
+    sequence they add up; together they overlap.
+
+    Output is buffered per test and printed in the original order, so a
+    failure still reads as a sequence rather than as whichever line won
+    the race. Then ``finish()``, which turns accumulated failures into an
+    exit code.
+    """
+    results: dict = {}
+    with _ThreadRoutedStdout(sys.stdout) as router:
+        with ThreadPoolExecutor(max_workers=len(tests)) as pool:
+            futures = {pool.submit(_run_capturing, router, t): t for t in tests}
+            for future in as_completed(futures):
+                test = futures[future]
+                output, error = future.result()
+                if error is not None:
+                    # Recorded as a failure, not just printed. A test that
+                    # raises used to leave the run green, because the
+                    # exception landed in a buffer and no check() ever
+                    # ran -- which is the worst possible failure mode for
+                    # a test suite: it looks like it passed.
+                    FAILURES.append(f"{test.__name__} raised")
+                    output += f"\n  !! {test.__name__} raised\n{error}"
+                results[test.__name__] = output
+    for test in tests:
+        print(results[test.__name__], end="")
+    finish()
+
+
+def _run_capturing(router: _ThreadRoutedStdout, test):
+    """Run one test, returning its output instead of printing it live."""
+    buffer = io.StringIO()
+    error = None
+    router.bind(buffer)
+    try:
+        test()
+    except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
+        error = "".join(traceback.format_exception(exc))
+    finally:
+        router.unbind()
+    return buffer.getvalue(), error
 
 
 # --------------------------------------------------------------------------

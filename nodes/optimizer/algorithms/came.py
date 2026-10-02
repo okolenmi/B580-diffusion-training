@@ -36,7 +36,7 @@ passed `grad` is safe to mutate. Every current caller passes
 `scratch is grad` (the same object) -- this class relies on that
 specifically.
 
-See nodes/smoke_tests/smoke_test_composed_came.py for the equivalence
+See nodes/smoke_tests/gpu/smoke_test_composed_came.py for the equivalence
 verification (bit-exact comparison between the two code paths, and
 against core.optimizers.ChunkedXPUCAME).
 """

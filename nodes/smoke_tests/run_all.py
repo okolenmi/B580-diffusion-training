@@ -1,11 +1,15 @@
-"""Run every smoke_test_*.py in this directory and print a combined summary.
+"""Run every smoke test and print a combined summary.
 
-    python nodes/smoke_tests/run_all.py                     # parallel
+    python nodes/smoke_tests/run_all.py                     # pool, then gpu/
     python nodes/smoke_tests/run_all.py --jobs 1           # strictly sequential
     python nodes/smoke_tests/run_all.py memory adafactor    # filename-substring filters
-    python nodes/smoke_tests/run_all.py --serial-only       # just the sensitive list
+    python nodes/smoke_tests/run_all.py --serial-only       # skip the pool
+    python nodes/smoke_tests/run_all.py --no-gpu           # skip gpu/
 
 Exits 0 only if every test that ran exited 0.
+
+`gpu/` is the accelerator tests, run last and one at a time; see the
+README there for why and for what belongs in it.
 
 Convenience only -- each file remains independently runnable and
 independently meaningful; this doesn't replace reading a given test's own
@@ -22,17 +26,18 @@ Measured serially: **119.9s over 66 files**, with the cost spread evenly
 That shape parallelises well, and with nothing longer than 4.4s there is
 no long-tail problem: the floor is the slowest file plus pool overhead.
 
-The reason it is not *all* parallel is the list below. The maintainer of
-this runner is right that these tests do not collectively strain 12 GB of
-VRAM -- measured, they are small. The residual risk is not exhaustion, it
-is **interference**: several of them assert on device state
-(`xpu_empty_cache`/`xpu_synchronize` ordering, residency transitions,
-offload behaviour). Two of those running at once are measuring each
-other's allocations, so a failure would mean nothing and a pass would
-prove less than it appears to. They cost ~15s in total, which is a cheap
-price for not having to wonder which was which.
+The reason it is not *all* parallel is the list below. These tests do not
+collectively strain 12 GB of VRAM -- measured, they are small. The
+residual risk is not exhaustion, it is **interference**: several of them
+assert on device state (`xpu_empty_cache`/`xpu_synchronize` ordering,
+residency transitions, offload behaviour). Two of those running at once are
+measuring each other's allocations, so a failure would mean nothing and a
+pass would prove less than it appears to. They cost ~15s in total, which is
+a cheap price for not having to wonder which was which.
 
 So: an explicit, auditable serial list, and everything else in parallel.
+`gpu/` is serial for the same reason and stricter: it must be the only
+thing holding device memory when it asserts.
 
 Multiprocessing uses the **spawn** context deliberately. The default
 `fork` start method crashes the pool here -- a forked child inheriting a
@@ -58,6 +63,9 @@ _HERE = Path(__file__).resolve().parent
 #: rather than pattern-matched so that adding a test to this list is a
 #: decision someone can see, and so a test that only *looks* like these
 #: does not get serialised by accident.
+#:
+#: Keys are filenames in this directory only. The device tests that assert
+#: on device state belong in `gpu/`, which is already serial.
 SERIAL_TESTS: dict[str, str] = {
     "smoke_test_device_context_equivalence.py":
         "asserts the xpu_empty_cache/xpu_synchronize call order",
@@ -65,12 +73,6 @@ SERIAL_TESTS: dict[str, str] = {
         "asserts on allocator and residency state",
     "smoke_test_sdxl_text_encoder_offload.py":
         "asserts an offload actually released device memory",
-    "smoke_test_composed_adafactor.py":
-        "heavy XPU allocation; longest test in the suite at ~4s",
-    "smoke_test_composed_came.py":
-        "heavy XPU allocation; ~4.4s, the slowest in the suite",
-    "smoke_test_composed_adamw.py":
-        "heavy XPU allocation",
     "smoke_test_adafactor_tiny_parameter_gap.py":
         "measures a parameter gap on device; sensitive to neighbours",
     "smoke_test_nf4_lora_layer.py":
@@ -85,7 +87,28 @@ def discover_tests(filters: list[str]) -> list[Path]:
     return tests
 
 
-def run_one(job: tuple[str, str]) -> tuple[str, int, str]:
+#: The accelerator tests. A directory rather than a name pattern, so
+#: adding one needs no edit here.
+GPU_DIR = _HERE / "gpu"
+
+
+def discover_gpu_tests(filters: list[str]) -> list[Path]:
+    """The `gpu/` files, matched the same way as the main directory.
+
+    Filters match on filename rather than path, so `run_all.py came`
+    finds a test in here. The `smoke_test_` prefix is also what keeps
+    `xpu_mempool_hardware_check.py` out: it is manual-only, per the
+    README there.
+    """
+    if not GPU_DIR.is_dir():
+        return []
+    tests = sorted(p for p in GPU_DIR.glob("smoke_test_*.py") if p.is_file())
+    if filters:
+        tests = [t for t in tests if any(f in t.name for f in filters)]
+    return tests
+
+
+def run_one(job: tuple[str, str, str]) -> tuple[str, int, str]:
     """Run one smoke test in its own TMPDIR. Never raises.
 
     The per-file TMPDIR is the same reasoning as the backend runner's: the
@@ -95,13 +118,13 @@ def run_one(job: tuple[str, str]) -> tuple[str, int, str]:
     enough to run at once -- without it two of them could pick the same
     path.
     """
-    name, scratch_root = job
+    name, scratch_root, where = job
     scratch = Path(scratch_root) / Path(name).stem
     scratch.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "TMPDIR": str(scratch)}
     try:
         proc = subprocess.run(
-            [sys.executable, str(_HERE / name)],
+            [sys.executable, str(Path(where) / name)],
             capture_output=True, text=True, env=env, timeout=900,
         )
         return name, proc.returncode, (proc.stdout or "") + (proc.stderr or "")
@@ -118,14 +141,21 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=min(6, os.cpu_count() or 1),
                         help="parallel workers for the non-sensitive tests")
     parser.add_argument("--serial-only", action="store_true",
-                        help="run only the sensitive list, one at a time")
+                        help="skip the parallel pool: run only tests that go "
+                             "one at a time -- the sensitive list and gpu/. "
+                             "Pair with --no-gpu for the sensitive list alone")
     parser.add_argument("--quiet", action="store_true",
                         help="summary only; per-test output is suppressed")
+    parser.add_argument("--no-gpu", action="store_true",
+                        help="skip the gpu/ pass (for a machine with no "
+                             "accelerator, or to time the CPU suite alone)")
     args = parser.parse_args()
 
     tests = discover_tests(args.filters)
-    if not tests:
-        print(f"No smoke_test_*.py files matched filters {args.filters!r} in {_HERE}")
+    gpu_tests = [] if args.no_gpu else discover_gpu_tests(args.filters)
+    if not tests and not gpu_tests:
+        print(f"No smoke_test_*.py files matched filters {args.filters!r} "
+              f"in {_HERE} or {GPU_DIR}")
         sys.exit(1)
 
     serial = [t for t in tests if t.name in SERIAL_TESTS]
@@ -139,12 +169,15 @@ def main() -> None:
     if args.serial_only:
         parallel = []
 
-    print(f"Running {len(tests)} test file(s): "
+    print(f"Running {len(tests) + len(gpu_tests)} test file(s): "
           f"{len(parallel)} parallel (jobs={args.jobs}), "
-          f"{len(serial)} one at a time")
+          f"{len(serial)} sensitive one at a time, "
+          f"{len(gpu_tests)} in gpu/")
     for t in tests:
         tag = "serial " if t.name in SERIAL_TESTS else "parallel"
         print(f"  [{tag}] {t.name}")
+    for t in gpu_tests:
+        print(f"  [gpu   ] gpu/{t.name}")
 
     scratch_root = tempfile.mkdtemp(prefix="smoke-testrun-")
     results: list[tuple[str, int]] = []
@@ -152,14 +185,14 @@ def main() -> None:
         # The sensitive list first and alone, so nothing else is holding
         # device memory while it runs.
         for t in serial:
-            name, rc, output = run_one((t.name, scratch_root))
+            name, rc, output = run_one((t.name, scratch_root, str(_HERE)))
             results.append((name, rc))
             if not args.quiet:
                 print(f"\n{'='*70}\n{name}\n  serial: {SERIAL_TESTS[name]}\n{'='*70}")
                 print(output.rstrip())
 
         if parallel:
-            jobs = [(t.name, scratch_root) for t in parallel]
+            jobs = [(t.name, scratch_root, str(_HERE)) for t in parallel]
             # spawn, not fork: see the module docstring.
             with ProcessPoolExecutor(
                 max_workers=max(1, args.jobs),
@@ -172,14 +205,31 @@ def main() -> None:
                     if not args.quiet:
                         print(f"\n{'='*70}\n{name}\n{'='*70}")
                         print(output.rstrip())
+
+        # gpu/ last, one at a time, with nothing else in flight. A test
+        # that asserts on device state has to be the only thing holding
+        # device memory when it asserts -- that is the whole reason the
+        # pool is not simply left to schedule these.
+        for t in gpu_tests:
+            name, rc, output = run_one((t.name, scratch_root, str(GPU_DIR)))
+            results.append((name, rc))
+            if not args.quiet:
+                print(f"\n{'='*70}\ngpu/{name}\n{'='*70}")
+                print(output.rstrip())
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
     print(f"\n{'='*70}\nSUMMARY\n{'='*70}")
     failed = [name for name, rc in results if rc != 0]
+    gpu_names = {t.name for t in gpu_tests}
     for name, rc in results:
         status = "PASS" if rc == 0 else f"FAIL (exit {rc})"
-        marker = " [serial]" if name in SERIAL_TESTS else ""
+        if name in gpu_names:
+            marker = " [gpu]"
+        elif name in SERIAL_TESTS:
+            marker = " [serial]"
+        else:
+            marker = ""
         print(f"  {status}: {name}{marker}")
 
     if failed:

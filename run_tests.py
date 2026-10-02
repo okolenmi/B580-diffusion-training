@@ -36,6 +36,14 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _SUITES = ("nodes", "manager")
 
+#: Extra subdirectories of `<suite>/smoke_tests/` to search, per suite.
+#:
+#: `nodes/smoke_tests/gpu/` holds the tests that need the accelerator.
+#: Without this the gate would run none of them, since they are no longer
+#: directly in `smoke_tests/`. A missing directory is not an error, so this
+#: also works on a checkout from before the move.
+_EXTRA_DIRS: dict[str, tuple[str, ...]] = {"nodes": ("gpu",)}
+
 
 def _has_torch(python: str) -> bool:
     try:
@@ -100,6 +108,10 @@ def discover_tests(filters: list[str]) -> list[tuple[str, Path]]:
     for suite in _SUITES:
         suite_dir = _HERE / suite / "smoke_tests"
         found = sorted(suite_dir.glob("smoke_test_*.py"))
+        for extra in _EXTRA_DIRS.get(suite, ()):
+            extra_dir = suite_dir / extra
+            if extra_dir.is_dir():
+                found += sorted(extra_dir.glob("smoke_test_*.py"))
         if filters:
             found = [p for p in found if any(f in p.name for f in filters)]
         tests.extend((suite, p) for p in found)
@@ -111,7 +123,7 @@ def main() -> None:
     tests = discover_tests(filters)
     if not tests:
         print(f"No smoke_test_*.py files matched filters {filters!r} under "
-              f"{', '.join(_SUITES)}/*/smoke_tests/")
+              f"{', '.join(_SUITES)}/*/smoke_tests/ (and any extra dirs)")
         sys.exit(1)
 
     python = resolve_interpreter()

@@ -37,7 +37,7 @@ this implementation and the legacy reference reproduce this identically.
 magnitude -- effective step size is just `lr`.
 
 See nodes/smoke_tests/smoke_test_adafactor_equivalence.py and
-nodes/smoke_tests/smoke_test_composed_adafactor.py for the equivalence
+nodes/smoke_tests/gpu/smoke_test_composed_adafactor.py for the equivalence
 verification against core/optimizers.py's reference implementation.
 """
 

@@ -1,55 +1,22 @@
-"""Real-hardware smoke test for ComposedCAMEOptimizerNode.
+"""Real-hardware smoke test for ComposedAdafactorOptimizerNode.
 
-Run this directly: `python nodes/smoke_tests/smoke_test_composed_came.py`
+Run this directly: `python nodes/smoke_tests/smoke_test_composed_adafactor.py`
 Or for just one strategy: `python ... --strategy chunked`
 
-Everything in nodes/optimizer/{algorithms,strategies,composed*}.py can be
-verified using a numpy-backed fake tensor (no real torch, no real
-device), which catches real formula/logic bugs cheaply, but structurally
-cannot catch anything specific to real torch/device behavior: dtype
-casting, actual XPU/CPU tensor placement, or whether training can
-correctly continue after a real offload-to-CPU-and-reload-to-device round
-trip. This script exercises exactly those, on whatever real device is
-actually available, for every registered strategy (currently "simple" and
-"chunked" -- see strategy_registry.py's STRATEGIES).
+Mirrors smoke_test_composed_came.py's structure and purpose exactly --
+see that file's module docstring for why real device/torch behavior
+(dtype casting, actual tensor placement, offload/reload round trips)
+needs its own check beyond pure numerical equivalence. The numerical
+correctness of AdafactorAlgorithm's actual formula is checked separately
+in smoke_test_adafactor_equivalence.py, against the legacy reference
+directly -- this file doesn't re-derive that, it only exercises the real
+device/lifecycle plumbing around it.
 
-What it checks per strategy, in order:
-  1. A real toy linear-regression fit via actual torch autograd
-     (loss.backward(), not a hand-computed gradient) -- does loss decrease?
-  2. Every OptimizerHandle lifecycle method against real device tensors:
-     decay_states, reset_states, offload_states_to_cpu,
-     reload_states_to_device, update_lr, free_states.
-  3. Specifically: does the offload -> reload round trip preserve state
-     values exactly (direct tensor equality against a pre-offload
-     snapshot -- the strongest, most direct check: no dependency on
-     downstream training dynamics at all), and does training continue
-     sensibly afterward? The second half deliberately compares resumed
-     loss against the *original* starting loss, not the loss immediately
-     before offload -- an adaptive, gradient-normalized optimizer that
-     converges very tightly (confirmed happening for real with
-     AdafactorAlgorithm on this same toy problem, down to ~1e-6 or
-     lower) keeps taking full-sized normalized steps even after reaching
-     the optimum and visibly oscillates around it (confirmed by direct
-     investigation: the same oscillation happens with zero offload/
-     reload involved at all, just continued training) -- so comparing
-     against a near-machine-zero reference point is comparing noise to
-     noise, and produced a real false failure in
-     smoke_test_composed_adafactor.py during real-XPU testing before
-     being caught and fixed here. Comparing against the original
-     starting loss keeps the check meaningful (still genuinely catches
-     state corruption -- confirmed by simulating a real corruption bug
-     and checking both the old and new comparisons against it) without
-     being fooled by an optimizer's own healthy dynamics near
-     convergence. CAME's own numbers here never approached that regime,
-     so this fix doesn't change what CAME's check reports -- it's a
-     robustness fix for a case CAME's test just hadn't hit yet.
-  4. For "chunked" specifically: does its MemoryManager (nodes/memory/
-     manager.py) actually cache its scratch buffer across step() calls
-     instead of reallocating every time, and does offload_states_to_cpu()
-     correctly free that cached buffer? See strategies/chunked.py's
-     module docstring for why this matters -- a cached buffer that isn't
-     freed on offload is exactly the reset-vs-free asymmetry bug class
-     MemoryManager exists to prevent.
+What it checks per strategy, in order: same four checks as
+smoke_test_composed_came.py (toy regression via real autograd, every
+lifecycle method, an offload -> reload round trip with training resumed
+after, and -- chunked only -- MemoryManager caching/cleanup). See that
+file for the detailed reasoning behind each; not repeated here.
 
 Prints a clear PASS/FAIL summary per strategy, plus an overall summary.
 Does not touch core/, manager/, server/, or the training pipeline in any
@@ -60,11 +27,11 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import torch
 
-from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode
+from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode
 from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES
 
 
@@ -85,7 +52,7 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
     true_W = torch.randn(4, 6, device=device) * 0.5
     W = (torch.randn(4, 6, device=device) * 0.1).requires_grad_(True)
 
-    node = ComposedCAMEOptimizerNode()
+    node = ComposedAdafactorOptimizerNode()
     handle = node.build(params=[W], lr=0.05, device=device, strategy=strategy_name)["optimizer"]
 
     losses = []
@@ -140,7 +107,9 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
 
     # Strongest, most direct check: does the round trip preserve values
     # exactly, independent of any downstream training-dynamics noise? See
-    # module docstring for why this was added.
+    # smoke_test_composed_came.py's module docstring for why this was added
+    # (it's what caught and fixed the false failure this file originally hit
+    # on real XPU hardware).
     values_match = all(torch.equal(pre_offload_snapshot[name], t)
                         for name, t in handle.states[0].items())
     if not values_match:
@@ -162,9 +131,13 @@ def run_for_strategy(strategy_name: str, device: str) -> list:
         handle.zero_grad()
 
     # Compared against the ORIGINAL starting loss, not the loss immediately
-    # before offload -- see module docstring for why that's the robust
-    # comparison, not the fragile one, once an optimizer has converged very
-    # tightly.
+    # before offload -- see smoke_test_composed_came.py's module docstring.
+    # AdafactorAlgorithm's gradient-normalized update keeps taking full-sized
+    # steps even after converging to near machine-zero loss on this toy
+    # problem, so it visibly (and correctly) oscillates around the optimum --
+    # confirmed this happens with zero offload/reload involved at all.
+    # Comparing against a near-zero "just before offload" reference point
+    # was comparing noise to noise and produced a real false failure here.
     if any(torch.isnan(torch.tensor(l)) or torch.isinf(torch.tensor(l)) for l in resumed_losses):
         failures.append(f"[{strategy_name}] NaN/Inf loss after offload/reload round trip")
         print(f"    FAIL: NaN/Inf appeared in post-reload training")

@@ -49,35 +49,35 @@ shared `MemoryManager` through optimizer construction as part of
 whichever future item first has a concrete reason to, rather than
 speculatively now.
 
-**Run the backend suite in parallel (cheap, and it gets worse every time a
-test is added).** `backend/tests/run_all.py` runs 26 files in sequence, one
-interpreter each. Measured on this machine:
+**Run the test suites in parallel. Done** (`277b16f`, and the `nodes/`
+runner alongside it).
 
-| | |
-|---|---|
-| serial suite | **21.5s** |
-| slowest file | `test_api_graphs.py`, 2.77s |
-| top 5 files | 11.5s — **53% of the total** |
-| cores available | 6 |
+The backend suite was **21.5s serial** with the top five files 53% of it
+and the CPU 58% idle; `backend/tests/run_all.py` now runs the files in a
+`ProcessPoolExecutor`, **22.69s -> 6.32s on 6 jobs**. Each file keeps its
+own `TMPDIR`, removed afterwards -- which both contains the litter every
+test file leaves behind (see `docs/known-issues/open.md`) and is what makes
+the files independent enough to run at once. Output order is preserved:
+`pool.map` yields in submission order, because a log interleaving 26 files
+makes a failure much harder to find.
 
-So the floor for a parallel run is roughly the slowest file (2.8s) plus
-pool overhead, and a `ProcessPoolExecutor` over the files should land
-around 5-6s: a **~4x** cut on every gate run. The files are already
-independent — each builds its own temporaries, and `run_all.py` already
-runs them in separate processes with a per-file `TMPDIR`, which is exactly
-the isolation a pool needs. The change is small.
+`nodes/smoke_tests/run_all.py` was **119.9s serial** over 66 files, with
+the cost spread evenly (ten slowest = 26%, longest single file 4.4s), so
+it parallelises well -- but **not all of it**. An explicit serial list runs
+first and alone for the tests that assert on *device state*
+(`device_context_equivalence` asserts the `xpu_empty_cache` call order,
+`memory_manager` asserts allocator and residency, `sdxl_text_encoder_offload`
+asserts memory was actually released). These do not strain VRAM -- that was
+measured, not assumed -- but two of them at once are measuring each other's
+allocations, so a failure would mean nothing. **113.5s -> 46.5s**, and the
+serial list is now 43% of what remains: the next lever is trimming that
+list, which trades risk-reduction for speed and should be a deliberate
+call rather than a default.
 
-Worth doing for a reason beyond the seconds: **the cost is per-file and the
-number of files only goes up.** Every test added makes every gate run
-slower, in a repo whose whole quality argument rests on running the gate.
-This is the change that stops that from compounding. `scripts/coverage_report.py`
-and `scripts/mutation_report.py` both already do the parallel version for
-their own sub-processes, so the pattern exists in the repo — this would
-apply it to the suite itself.
-
-Two things to preserve when doing it: the per-file `TMPDIR` (it is what
-makes the files independent, and `run_all.py` also relies on it to clean
-up), and the exit code, since `run_all.py` is what the gate calls.
+Multiprocessing there uses the **spawn** context, not the default `fork`:
+a forked child inheriting a torch/XPU-initialised parent crashes the
+pool, and it does so as `ConnectionResetError` from the forkserver rather
+than anything legible.
 
 **Validation work, not construction -- real code exists for both, what's
 missing is a real run:**

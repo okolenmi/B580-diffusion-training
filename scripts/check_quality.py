@@ -75,7 +75,9 @@ def ruff_counts() -> tuple[dict[str, int], bool]:
         findings = json.loads(out or "[]")
     except json.JSONDecodeError:
         print(out, file=sys.stderr)
-        raise SystemExit("ruff produced output this script cannot read")
+        raise SystemExit(
+            "ruff produced output this script cannot read"
+        ) from None
 
     counter: Counter[str] = Counter()
     for item in findings:
@@ -137,6 +139,23 @@ def mypy_counts() -> tuple[dict[str, int], bool]:
     return dict(counter), True
 
 
+def compare(baseline: dict, current: dict, tools: list[str]) -> tuple[list[str], list[str]]:
+    """(regressions, improvements) as human-readable lines."""
+    regressions: list[str] = []
+    improvements: list[str] = []
+    for name in tools:
+        before = baseline.get(name, {})
+        after = current[name]
+        for key in sorted(set(before) | set(after)):
+            old_count = before.get(key, 0)
+            new_count = after.get(key, 0)
+            if new_count > old_count:
+                regressions.append(f"{name}: {key}: {old_count} -> {new_count}")
+            elif new_count < old_count:
+                improvements.append(f"{name}: {key}: {old_count} -> {new_count}")
+    return regressions, improvements
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -149,9 +168,7 @@ def main() -> int:
     mypy, mypy_ok = mypy_counts()
 
     current = {"ruff": ruff, "mypy": mypy}
-    tools = [
-        name for name, ok in (("ruff", ruff_ok), ("mypy", mypy_ok)) if ok
-    ]
+    tools = [name for name, ok in (("ruff", ruff_ok), ("mypy", mypy_ok)) if ok]
     unavailable = [
         name for name, ok in (("ruff", ruff_ok), ("mypy", mypy_ok)) if not ok
     ]
@@ -180,19 +197,7 @@ def main() -> int:
         return 1
 
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-
-    regressions: list[str] = []
-    improvements: list[str] = []
-    for name in tools:
-        before = baseline.get(name, {})
-        after = current[name]
-        for key in sorted(set(before) | set(after)):
-            old = before.get(key, 0)
-            new = after.get(key, 0)
-            if new > old:
-                regressions.append(f"{name}: {key}: {old} -> {new}")
-            elif new < old:
-                improvements.append(f"{name}: {key}: {old} -> {new}")
+    regressions, improvements = compare(baseline, current, tools)
 
     for line in improvements:
         print(f"  improved  {line}")

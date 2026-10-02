@@ -82,3 +82,12 @@ exclude = ["^backend/tests/", "^archive/"]
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = false     # a stale ignore is not an error yet
+[tool.mutmut]
+# Read by scripts/mutation_report.py, which drives mutmut's mutation
+# engine with this repository's own script-style test runner (mutmut's
+# built-in runner is pytest; these tests are `python
+# backend/tests/test_x.py` scripts using a check()/finish() pair).
+#
+# `source_paths` exists because mutmut's pragma handler reads its
+# configuration before doing anything else and refuses to guess.
+source_paths = ["backend"]

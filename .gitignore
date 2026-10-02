@@ -62,6 +62,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+# mutmut's working copy: a full mutated tree of backend/, regenerated on
+# every run. Never worth committing, and large enough to be noticed.
+mutants/
+.mutmut-cache/
 
 # Translations
 *.mo

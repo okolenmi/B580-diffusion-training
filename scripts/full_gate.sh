@@ -73,6 +73,23 @@ echo "== documentation links and citations =="
 # renders these docs, so nothing else would notice.
 "$GATE_PYTHON" scripts/check_doc_links.py --quiet
 
+# Branch coverage, as a report. No threshold and it cannot fail: a target
+# picked today would be a number chosen by assertion rather than by
+# evidence, and a threshold nobody believes is one that gets commented
+# out. The value is that the number moves and is visible, and that the
+# least-covered modules are named rather than averaged away
+# (docs 08 Q12).
+#
+# Costs ~25s: one coverage run per test file, in its own process, because
+# these are script-style tests with module-level work that do not survive
+# being combined into one interpreter. Set COVERAGE_REPORT=0 to skip.
+if [ "${COVERAGE_REPORT:-1}" = "1" ]; then
+  echo "== branch coverage (report only, no threshold) =="
+  "$GATE_PYTHON" scripts/coverage_report.py
+else
+  echo "== branch coverage skipped (COVERAGE_REPORT=0) =="
+fi
+
 # Numbers the docs assert and the code determines. The migration-strategy
 # doc claimed 47 backend endpoints against an actual 50 when this was
 # written, and the review that asked for the check had said 48 -- a

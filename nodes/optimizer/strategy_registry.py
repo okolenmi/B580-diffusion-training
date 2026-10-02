@@ -49,6 +49,42 @@ STRATEGIES = {
     "shape_grouped_foreach": ShapeGroupedForeachStrategy,
 }
 
+DEFAULT_STRATEGY = "shape_grouped_foreach"
+"""What every Composed*OptimizerNode's ``strategy`` Port defaults to.
+
+Here rather than written into each of the three nodes for the same reason
+``STRATEGY_DOC`` is here: a value three files repeat is three things that
+can disagree, and a disagreement about a *default* is invisible -- nothing
+fails, two nodes quietly stop behaving like their documented twin.
+
+Measured on the B580, 2026-10-02, ``hw_validate.py main`` with "1024
+aes", 100 steps, batch 1, rank 64, seed 1234, one process per run
+(steady steps/sec; the losses are the same values across every arm, to
+~1.9e-5, as the equivalence smoke tests require):
+
+    adafactor   simple 0.590 -> shape_grouped_foreach 1.007   1.71x
+    adamw       simple 0.919 -> shape_grouped_foreach 1.027   1.12x
+    came        simple 0.471 -> shape_grouped_foreach 0.972   2.06x
+
+Not the whole matrix, and deliberately so: the three defaults had to be
+decided, each was measured against the one thing it was being replaced
+by, and a full cross-product would not have changed a decision. What was
+worth measuring *was* whether the win was the "foreach" or the
+"shape_grouped", since those are separable: shape_grouped alone is
+0.991 against foreach alone at 0.574, so the grouping does essentially
+all of the work and ``torch._foreach_*`` on its own is slightly slower
+than plain ``simple``.
+
+Two caveats that bound this rather than decorate it. It is one parameter
+population -- LoRA rank 64 on SDXL, which is the case this optimizer work
+targets -- and a different rank or target-module set moves the shape
+distribution. And peak reserved memory goes *up* by ~100-200 MB per run,
+which matters only if a caller is already at the card's ceiling.
+
+Override per call when a caller needs something else; the port accepts
+any name in STRATEGIES.
+"""
+
 # Generated from STRATEGIES itself, not hand-written -- cannot list a name
 # that isn't (or fail to list one that is) actually registered.
 STRATEGY_DOC = (

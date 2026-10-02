@@ -33,17 +33,24 @@ still doesn't pass that threshold, because doing so would only be correct
 against FusedXPUAdafactor, and this Node's reference was Chunked, whose
 tiny-parameter mechanism is the unrelated cross-parameter one above.
 
-**The honest residue.** That leaves one unmeasured trade: Chunked's
-concatenation collapsed hundreds of small parameters' clip/EMA/normalize
-into one kernel launch each, and no strategy here reproduces exactly
-that. strategy="foreach" recovers much of the launch-overhead win via
-torch._foreach_* without the contamination, and is the setting to reach
-for on a graph with many small LoRA matrices. The remaining delta has not
-been quantified on real hardware -- see docs/known-issues/open.md for
-the measurement that would settle it. Writing an unbenchmarked batching
-strategy to close it was the alternative, and would have violated this
-project's own rule that a technique earns a place only with real
-evidence.
+**The residue, measured.** That left one trade: Chunked's concatenation
+collapsed hundreds of small parameters' clip/EMA/normalize into one kernel
+launch each, and no strategy here reproduces exactly that. Measured on
+the B580 2026-10-02 (hw_validate.py, "1024 aes", 100 steps, batch 1,
+rank 64, seed 1234): ``strategy="foreach"`` was the *wrong* answer --
+0.574 steps/sec against ``simple``'s 0.590, so slightly slower and 350 MB
+more reserved. ``strategy="shape_grouped_foreach"`` is 1.007, i.e.
+**1.71x** ``simple`` while computing the same values, and
+``shape_grouped`` alone is 0.991, so the win is the shape grouping rather
+than torch._foreach_*. ``DEFAULT_STRATEGY`` is now that one, and no
+``TinyBatchedStrategy`` was written -- the grouping it would have
+implemented is what ``shape_grouped`` already does. Full table and its
+caveats in ``strategy_registry.DEFAULT_STRATEGY``; the measurement is
+recorded in docs/known-issues/resolved.md.
+
+Worth keeping as a lesson: the hypothesis this section used to state --
+that ``foreach`` recovers the launch overhead -- was plausible, was
+written down, and was wrong. The number cost one afternoon to find.
 
 FusedXPUAdafactor (composed_fused_adafactor.py's equivalent concern) has
 its own, genuinely per-parameter tiny-parameter mechanism.
@@ -87,7 +94,7 @@ from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .state_store import STATE_PRECISIONS, STATE_PRECISION_DOC, resolve_state_store
-from .strategy_registry import STRATEGIES, STRATEGY_DOC, resolve_strategy
+from .strategy_registry import DEFAULT_STRATEGY, STRATEGIES, STRATEGY_DOC, resolve_strategy
 
 
 class ComposedAdafactorOptimizerNode(OptimizerNode):
@@ -115,7 +122,8 @@ class ComposedAdafactorOptimizerNode(OptimizerNode):
                                   "0.0 -- see module docstring for why this Node defaults "
                                   "conservatively instead."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
-        "strategy": Port(name="strategy", type=str, required=False, default="simple",
+        "strategy": Port(name="strategy", type=str, required=False,
+                          default=DEFAULT_STRATEGY,
                           choices=tuple(STRATEGIES), doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,

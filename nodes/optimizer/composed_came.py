@@ -31,7 +31,7 @@ from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .state_store import STATE_PRECISIONS, STATE_PRECISION_DOC, resolve_state_store
-from .strategy_registry import STRATEGIES, STRATEGY_DOC, resolve_strategy
+from .strategy_registry import DEFAULT_STRATEGY, STRATEGIES, STRATEGY_DOC, resolve_strategy
 
 
 class ComposedCAMEOptimizerNode(OptimizerNode):
@@ -52,7 +52,8 @@ class ComposedCAMEOptimizerNode(OptimizerNode):
                                   "scale_parameter -- CAME's own weight decay came from the "
                                   "same generic mechanism, not a CAME-specific addition)."),
         "device": Port(name="device", type=str, required=False, default="xpu"),
-        "strategy": Port(name="strategy", type=str, required=False, default="simple",
+        "strategy": Port(name="strategy", type=str, required=False,
+                          default=DEFAULT_STRATEGY,
                           choices=tuple(STRATEGIES), doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,

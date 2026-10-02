@@ -42,7 +42,7 @@ from .composed import ComposedOptimizerHandle, ParameterGroupPolicy
 from .handle import OptimizerHandle
 from .node import OptimizerNode
 from .state_store import STATE_PRECISIONS, STATE_PRECISION_DOC, resolve_state_store
-from .strategy_registry import STRATEGIES, STRATEGY_DOC, resolve_strategy
+from .strategy_registry import DEFAULT_STRATEGY, STRATEGIES, STRATEGY_DOC, resolve_strategy
 
 
 class ComposedAdamWOptimizerNode(OptimizerNode):
@@ -55,7 +55,8 @@ class ComposedAdamWOptimizerNode(OptimizerNode):
         "eps": Port(name="eps", type=float, required=False, default=1e-8),
         "weight_decay": Port(name="weight_decay", type=float, required=False, default=1e-2),
         "device": Port(name="device", type=str, required=False, default="xpu"),
-        "strategy": Port(name="strategy", type=str, required=False, default="simple",
+        "strategy": Port(name="strategy", type=str, required=False,
+                          default=DEFAULT_STRATEGY,
                           choices=tuple(STRATEGIES), doc=STRATEGY_DOC),
         "group_policy": Port(
             name="group_policy", type=ParameterGroupPolicy, required=False, default=None,

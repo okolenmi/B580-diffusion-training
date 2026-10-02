@@ -300,19 +300,24 @@ sweep, which meant reading dataset A rewrote rows of dataset B
   trainer's own last progress line decides (`finished` -> completed,
   `error` -> failed, **no line -> failed with that reason**, never a
   hopeful "completed").
-* **Graph executions (M4)**: `GraphExecutionSupervisor` runs one
-  daemon thread per run against the same CAS rules
-  (`update_if_status` on `graph_executions`); `StartGraphExecution`
-  holds a lock across validate + active-check + insert, and **one
-  execution may be active at a time** (409
-  `graph_execution_active`) -- deliberate: one B580, and graph nodes
-  can build in-process training loops. Cancellation is cooperative
-  twice: the stop use case sets the thread's event first, then CASes
-  `queued|running -> stopped` (3 refetch attempts for the claim
-  race); the executor checks the event between nodes and passes it
-  into every node's `ExecutionContext`. `ReconcileGraphExecutions`
-  sweeps non-terminal rows at composition time with the same
-  "server stopped/restarted" reasons.
+* **Graph executions (M4)**: `GraphExecutionSupervisor` supervises one
+  run at a time against the same CAS rules (`update_if_status` on
+  `graph_executions`). The run itself executes in a **child process**
+  behind `GraphTaskGateway`, reported through an append-only event file
+  the supervisor tails -- see
+  [`13-process-isolation.md`](../13-process-isolation.md) for the
+  channel, the stop semantics, adoption across a restart, and the
+  measured cost. `StartGraphExecution` holds a lock across validate +
+  active-check + insert, and **one execution may be active at a time**
+  (409 `graph_execution_active`) -- deliberate: one B580, and graph
+  nodes can build real training loops. Cancellation is cooperative
+  twice: the stop use case signals the child first (`SIGINT`, so its
+  runtime notices between steps), then CASes `queued|running ->
+  stopped` (3 refetch attempts for the claim race); a run that ignores
+  the request is hard-killed after the grace period, and
+  `ReconcileGraphExecutions` sweeps non-terminal rows at composition
+  time -- adopting a still-running child rather than failing it, and
+  failing the rest with the same "server stopped/restarted" reasons.
 
 ## 9. Non-goals
 

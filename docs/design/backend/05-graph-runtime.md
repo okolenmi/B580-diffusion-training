@@ -93,22 +93,49 @@ per declared type; `tuple` accepts list or tuple; `Path` accepts `str` or
    parallel runs; one B580 + in-process training nodes makes that an OOM
    waiting to happen, consistent with single-run/single-task rules);
 3. insert `queued` row, publish `GraphExecutionQueued`;
-4. `supervisor.launch(execution_id, graph)` -> daemon thread, returns
+4. `supervisor.launch(execution_id, graph)` -> spawn the run, return
    201 `{execution_id, status: "queued"}`.
 
-Supervisor thread: CAS `queued -> running` (loss = stop/reconcile won ->
-exit silently), publish `Started`, then `runtime.execute` with a
-per-node callback that CAS-persists partial results + publishes
-`Progressed`. On completion: `error` if the outcome carries one, else
-`stopped` if the cancel event is set, else `finished` -- CAS
-`running -> final` (a lost CAS means the stop use case already wrote
-`stopped`; its results stand, the thread's are discarded), publish the
-buffered events (through the shared `ExecutionLifecycleWriter`, which
-does the CAS-then-announce in one place). `GraphRuntime.execute` runs
-`release_memory()` in its own `finally`, so the caller cannot forget it.
-A crashed thread
-best-effort fails the row (never leaves `running` stuck blocking the
-next start).
+The supervisor's watcher: CAS `queued -> running` (loss = stop/reconcile
+won -> kill the run, exit silently), publish `Started`, then tail the
+run's event file, CAS-persisting each node result and publishing
+`Progressed`. On completion: `error` if the run's outcome carries one, no
+outcome record at all if the process died, else `stopped` if a stop was
+requested, else `finished` -- CAS `running -> final` (a lost CAS means the
+stop use case already wrote `stopped`; its results stand, the watcher's
+are discarded), publish the buffered events (through the shared
+`ExecutionLifecycleWriter`, which does the CAS-then-announce in one place).
+`GraphRuntime.execute` runs `release_memory()` in its own `finally`, in
+whichever process ran the graph, so neither the supervisor nor the child
+can forget it. A watcher that crashes best-effort fails the row (never
+leaves `running` stuck blocking the next start).
+
+**Where it runs, and what a restart costs** — see
+[`13-process-isolation.md`](../13-process-isolation.md): the run lives in a
+child process behind `GraphTaskGateway`, and a run that outlives the
+server is re-adopted rather than failed.
+
+**A scaling limit, measured.** Persisting a node result is a
+compare-and-swap on the whole row, and `results` is one JSON column that
+grows with the node count -- so the supervision cost is quadratic in node
+count. Measured end to end, less the ~1.95 s of child startup:
+
+| nodes | 100 | 400 | 1600 | 3200 |
+|---|---|---|---|---|
+| excess over startup | 0.1 s | 0.15 s | 11.9 s | 54.7 s |
+
+Doubling the nodes quadruples the time. It is invisible at real graph
+sizes -- a hand-built graph against a 35-class palette is tens of nodes,
+where the whole run is the child's startup -- and it was only found by
+deliberately feeding a 3200-node graph of trivial nodes, which is not
+something the system is used for.
+
+Not fixed deliberately. The cheap fix is to batch result writes, and that
+trades away the property the round-2 review asked for: partial results
+surviving a crash. The real fix is a different storage shape -- results as
+rows rather than a JSON blob — which is a migration and would change the
+entity's `results` tuple invariant. Both are larger than the problem they
+solve, so the limit is recorded here instead.
 
 `StopGraphExecution`: set the cancel event first (nodes poll
 cooperatively), then CAS to `stopped` with the pre-read status as the
@@ -117,22 +144,6 @@ race); terminal -> 409 `graph_execution_not_active` naming the winner.
 Late progress/results from the thread then lose their CAS and are
 dropped -- exactly one writer owns each transition.
 
-**Where it runs, and what a restart costs.** Unlike `core.cli` training
-(docs 03 §5), a node-graph run executes *inside the API server process*,
-on a daemon thread. Two consequences are deliberate for now, and are
-stated here rather than discovered later:
-
-* **A server restart loses an in-flight graph run.** The thread dies
-  with the process; startup reconcile fails the row ("died mid-flight",
-  partial results kept) -- there is no process to re-attach to, because
-  there is no separate process (docs 07 F-13). A `core.cli` trainer, by
-  contrast, survives a restart and is re-adopted.
-* **A device fault or OOM kill takes the server with the run.** The
-  event loop also shares the machine with training threads.
-
-Subprocess isolation for graph runs (the same "own session + re-adopt"
-shape `core.cli` already uses) is recorded as follow-up work, not an
-accident of the design.
 
 Node-build failure now ends the run as `error` with the failed node's
 message (**divergence**: legacy surfaced node failures as status

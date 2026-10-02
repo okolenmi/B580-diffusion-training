@@ -300,6 +300,37 @@ def main() -> None:
         "last_finished surfaces the newest finished run",
     )
 
+    # -- the XPU-only optimizer choices (docs/decisions/0004-b580-only) ---
+    #
+    # `xpu-adafactor` exists because it behaves well on this project's one
+    # supported device, and the Adafactor scale parameter only appears when
+    # an Adafactor flavour is chosen. Nothing else in the suite covers this,
+    # so a refactor of the UI metadata could quietly drop the XPU option and
+    # leave the config page offering optimizers that are wrong for the
+    # hardware. Written against the flat option list `execute()` returns,
+    # keyed by `id` -- not the nested metadata table in config_ui_data.py,
+    # which is an input to it rather than the thing the UI is driven by.
+    print("\n== optimizer choices suit the device ==")
+
+    by_id = {opt["id"]: opt for opt in schema}
+    optimizer = by_id["common.optimizer"]
+    values = [c["value"] for c in optimizer["choices"]]
+    check("xpu-adafactor" in values,
+          f"the XPU Adafactor choice is offered (got {values})")
+    labelled = {c["value"]: c["label"] for c in optimizer["choices"]}
+    check(labelled["xpu-adafactor"] == "XPU Adafactor",
+          f"and is labelled as such rather than shown as a raw enum "
+          f"(got {labelled['xpu-adafactor']!r})")
+
+    scale_when = by_id["common.adafactor_scale_param"]["visible_when"]
+    shown_for = scale_when.get("common.optimizer", [])
+    check("xpu-adafactor" in shown_for,
+          f"the scale parameter appears when it is chosen (got {shown_for})")
+    check("fused-adafactor" in shown_for,
+          "and when the fused flavour is chosen")
+    check("adamw" not in shown_for,
+          f"but not for AdamW, which has no scale parameter (got {shown_for})")
+
     finish()
 
 

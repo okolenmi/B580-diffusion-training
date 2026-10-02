@@ -73,6 +73,15 @@ echo "== documentation links and citations =="
 # renders these docs, so nothing else would notice.
 "$GATE_PYTHON" scripts/check_doc_links.py --quiet
 
+# Numbers the docs assert and the code determines. The migration-strategy
+# doc claimed 47 backend endpoints against an actual 50 when this was
+# written, and the review that asked for the check had said 48 -- a
+# number wrong in a design document is read as current and used as a
+# baseline. Nothing renders the docs and no test asserted against them,
+# so nothing else would have noticed (docs 08 Q11).
+echo "== documented numbers =="
+"$GATE_PYTHON" scripts/check_docs.py
+
 if "$GATE_PYTHON" -c 'import ruff' 2>/dev/null; then
   echo "== backend lint (F, E9) =="
   "$GATE_PYTHON" -m ruff check --select F,E9 backend/

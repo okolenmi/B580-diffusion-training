@@ -117,7 +117,11 @@ Two entry points if you do not know where to start:
 
 For the backend specifically, `docs/design/backend/README.md` indexes
 those docs, and `01-architecture.md` holds the layering rules a change
-has to keep.
+has to keep. [`docs/decisions/`](docs/decisions/README.md) holds the
+short records for choices a reader would otherwise have to re-derive --
+no authentication, in-process graph training, trainer adoption, and the
+B580-only device assumption -- each ending in the test that would fail if
+the decision were quietly reversed.
 
 ## Current status, in one paragraph
 

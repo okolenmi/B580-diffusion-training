@@ -168,23 +168,54 @@ class SubprocessTrainingGateway(TrainingGateway):
     # ------------------------------------------------------------------
 
     def is_alive(self, pid: int) -> bool:
+        """Is this pid still the process we think it is?
+
+        Three cases, because they need different evidence:
+
+        * **We spawned it.** `Popen.poll()` is authoritative and cannot be
+          confused by a recycled number.
+        * **We adopted it** (the server restarted). `os.kill(pid, 0)` only
+          answers "does *a* process hold this number" -- so once the
+          trainer dies and the number is reused, the supervisor sees
+          "alive" forever, the row stays `running`, and `stop()` is then
+          refused as "not our trainer". Only a backend restart clears it
+          (docs 08 N-07). So for an adopted pid, the liveness signal has
+          to be the same one `owns()` uses: does its cmdline still look
+          like our trainer?
+        * **PermissionError.** The process exists and is simply not ours
+          to signal. Reading that as "dead" would tell the supervisor a
+          live trainer finished (docs 07 F-12).
+
+        "Cannot tell" stays alive. A cmdline we cannot read is not
+        evidence of death, and the cost of guessing wrong here is a stuck
+        run rather than a spurious completion.
+        """
         proc = self._procs.get(pid)
-        if proc is not None and proc.poll() is not None:
-            return False  # reaped: no longer alive (nor a zombie)
+        if proc is not None:
+            return proc.poll() is None
+
         try:
             os.kill(pid, 0)
-            return True
         except ProcessLookupError:
             return False  # no such process
         except PermissionError:
-            # It exists, it just is not ours to signal. Reading this as
-            # "dead" would tell the supervisor a live trainer finished
-            # (docs 07 F-12).
+            # It exists, it just is not ours to signal.
             logger.debug("pid %s exists but is not ours to signal", pid)
             return True
         except OSError as exc:
             logger.warning("cannot probe pid %s: %s", pid, exc)
             return False
+
+        # The number is taken. For a pid this process did not spawn, that
+        # only means something if it is still *our* trainer.
+        verdict = cmdline_mentions(pid, self._marker)
+        if verdict is False:
+            logger.info(
+                "pid %s is alive but is not this project's trainer "
+                "(recycled pid): reporting it as gone", pid,
+            )
+            return False
+        return True
 
     def owns(self, pid: int) -> bool:
         """PID-reuse guard, asked directly (docs 07 F-12).

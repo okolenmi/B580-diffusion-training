@@ -27,6 +27,7 @@ from backend.application.errors import (
     TrainingLaunchError,
 )
 from backend.application.ports.run_artifacts import RunArtifactsPaths
+from backend.infrastructure.jsonl_progress_source import JsonlProgressSource as _Jsonl
 from backend.tests.support import (
     FakeClock,
     FakeConfigInspector,
@@ -464,8 +465,7 @@ def test_reconcile_runs() -> None:
             env.repo.get(2).done_steps == 3,
             "the adopted run reports progress again",
         )
-        log = (env.runs_dir / "run_2" / "log.txt").read_text(encoding="utf-8")
-        check("REAPTIED" in log, f"the re-attachment is recorded in the log (got {log!r})")
+
 
         types = env.events.types()
         check(types.count("run_failed") == 4, "four run_failed events")
@@ -477,6 +477,68 @@ def test_reconcile_runs() -> None:
             again.adopted == 1 and env.repo.get(2).status.value == "running",
             f"sweep is idempotent for an adopted run (got {again})",
         )
+
+        # The note is user-visible -- it is the first line of the run's
+        # own log -- so its exact text is pinned rather than pattern-matched
+        # on a word. The old text was "--- RUN REAPTIED (adopted after a
+        # server restart) -- server watching pid N ---", and a *normal*
+        # start produced "--- RUN  -- server watching pid N ---": a
+        # dangling "RUN" and a double dash around nothing (N-09).
+        log = (env.runs_dir / "run_2" / "log.txt").read_text(encoding="utf-8")
+        check(
+            "--- server re-attached to pid 777 after a restart ---" in log,
+            f"the re-attachment note says so in one sentence (got {log!r})",
+        )
+        check("REAPTIED" not in log, "and the garbled wording is gone")
+
+        # A normal start's note, pinned to the same standard. Goes through
+        # the supervisor's spawn path rather than reconcile: a reconcile
+        # with a live pid *adopts*, which is the other wording by design.
+        started = seed_run(env.repo, env.clock, start=True, pid=555)
+        env.gateway.alive.add(555)
+        progress_555 = env.runs_dir / f"run_{started.id}" / "log.progress.jsonl"
+        progress_555.parent.mkdir(parents=True, exist_ok=True)
+        env.services.reconcile_runs.execute()  # adopt, so the row is watchable
+        supervisor = _supervisor(env)
+        supervisor.watch(
+            run_id=started.id, pid=555, progress_path=progress_555
+        )
+        plain_log = (env.runs_dir / f"run_{started.id}" / "log.txt").read_text(
+            encoding="utf-8"
+        )
+        check(
+            "--- server watching pid 555 ---" in plain_log,
+            f"a normal start reads as a sentence too (got {plain_log!r})",
+        )
+        check("RUN  --" not in plain_log, "no dangling 'RUN --'")
+
+
+def _supervisor(env) -> object:
+    """A real RunSupervisor over the env's own fakes.
+
+    Built from public constructor arguments (no reaching into another
+    service's privates) so the spawn path -- which is the one that writes
+    the non-adoption note -- can be exercised directly.
+    """
+    from backend.application.lifecycle_writer import RunLifecycleWriter
+    from backend.application.supervisor import RunSupervisor
+    from backend.infrastructure.directory_run_artifacts import (
+        DirectoryRunArtifacts,
+    )
+    from backend.infrastructure.workspace import WorkspaceLayout
+
+    return RunSupervisor(
+        runs=env.repo,
+        writer=RunLifecycleWriter(repository=env.repo, events=env.events),
+        events=env.events,
+        gateway=env.gateway,
+        progress=_Jsonl(),
+        artifacts=DirectoryRunArtifacts(
+            WorkspaceLayout(env.project, runs_dir=env.runs_dir)
+        ),
+        clock=env.clock,
+        poll_interval=0.02,
+    )
 
 
 def _write_progress(runs_dir: Path, run_id: int, lines: list[dict]) -> Path:

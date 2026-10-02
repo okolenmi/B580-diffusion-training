@@ -12,6 +12,7 @@ Run directly: python backend/tests/test_training_adapter.py
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -208,6 +209,45 @@ def test_signal_safety() -> None:
             "and the exit code is ours to read",
         )
         check(gateway.is_alive(pid) is False, "reaped once it is gone")
+
+        # --- N-07: an adopted pid is checked by identity, not by number ---
+        #
+        # A pid this process did not spawn used to be "alive" whenever
+        # *any* process held that number. Once the trainer died and the
+        # number was reused, the supervisor would watch a stranger
+        # forever: the row stayed `running`, and stop() was then refused
+        # as "not our trainer", so only a backend restart cleared it.
+        #
+        # Driven with a real process outside this gateway, because the
+        # failure is specifically "alive but not ours" -- a fake could
+        # not express it.
+        sleeper = subprocess.Popen(["/bin/sleep", "30"])
+        try:
+            by_marker = SubprocessTrainingGateway(
+                layout, cmdline_marker="definitely-not-in-its-cmdline"
+            )
+            check(
+                by_marker.is_alive(sleeper.pid) is False,
+                "a live process that is not our trainer is reported as gone",
+            )
+            check(
+                by_marker.is_alive(sleeper.pid) is False,
+                "and stays reported as gone (not a one-shot check)",
+            )
+            check(
+                sleeper.poll() is None,
+                "the stranger itself was not killed -- this is a liveness "
+                "verdict, not a signal",
+            )
+
+            matching = SubprocessTrainingGateway(layout, cmdline_marker="sleep")
+            check(
+                matching.is_alive(sleeper.pid) is True,
+                "the same process is alive when its cmdline does match",
+            )
+        finally:
+            sleeper.kill()
+            sleeper.wait(timeout=5)
 
 
 def main() -> None:

@@ -106,10 +106,18 @@ class RunSupervisor(RunWatcher):
             if adopted:
                 self._adopted.add(run_id)
         try:
+            # Two whole sentences rather than one spliced one. The old
+            # text read "--- RUN REAPTIED (adopted after a server
+            # restart) -- server watching pid N ---" for a re-attachment
+            # and, for a normal start, "--- RUN  -- server watching pid
+            # N ---" -- a dangling "RUN" and a double dash with nothing
+            # between them. Users read this log; it is the first thing in
+            # the file and it was the worst-written line in it (N-09).
             self._artifacts.append_log_note(
                 run_id,
-                f"--- RUN {'REAPTIED (adopted after a server restart)' if adopted else ''}"
-                f" -- server watching pid {pid} ---",
+                f"--- server re-attached to pid {pid} after a restart ---"
+                if adopted
+                else f"--- server watching pid {pid} ---",
             )
         except Exception:  # noqa: BLE001 -- the note must never block watching
             logger.exception("could not append the watch note for run %s", run_id)

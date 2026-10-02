@@ -31,7 +31,7 @@ from backend.application.ports.training_gateway import TrainingLaunch
 from backend.infrastructure.core_config_inspector import CoreConfigInspector
 from backend.infrastructure.subprocess_gateway import SubprocessTrainingGateway
 from backend.infrastructure.workspace import WorkspaceLayout
-from backend.tests.support import check, finish
+from backend.tests.support import check, finish, wait_until
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -249,6 +249,31 @@ def test_signal_safety() -> None:
         # not express it.
         sleeper = subprocess.Popen(["/bin/sleep", "30"])
         try:
+            # Wait for the exec before asking anything about its cmdline.
+            #
+            # Between fork and execve a child's /proc cmdline still reads
+            # back as its *parent's*, so until this completes the process
+            # has no cmdline of its own and the guard cannot have an
+            # opinion -- correctly so, it answers "cannot tell"
+            # (process_identity.cmdline_mentions). Asking anyway made this
+            # test a coin flip: it wanted a firm "not ours" and got
+            # "not yet know", which are different answers to a question
+            # the process itself has not finished answering.
+            #
+            # The wait is what the assertions below always assumed; it was
+            # previously free to lose the race and only did so rarely
+            # enough to look like flakiness in the suite.
+            own = f"/proc/{os.getpid()}/cmdline"
+            check(
+                wait_until(
+                    lambda: Path(f"/proc/{sleeper.pid}/cmdline").exists()
+                    and Path(f"/proc/{sleeper.pid}/cmdline").read_bytes()
+                    != Path(own).read_bytes(),
+                    timeout=5.0,
+                ),
+                "the stranger has exec'd, so its cmdline is its own",
+            )
+
             by_marker = SubprocessTrainingGateway(
                 layout, cmdline_marker="definitely-not-in-its-cmdline"
             )

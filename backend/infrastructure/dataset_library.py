@@ -137,6 +137,13 @@ class SqliteDatasetLibrary(DatasetLibrary):
         shutil.rmtree(directory)
 
     def delete(self, name: str) -> bool:
+        """Remove the dataset directory outright.
+
+        No sweep_orphan_shards() call here, deliberately: this removes the
+        whole tree, so orphan shards go with it. The sweep exists for
+        *partial* removal (discard), where a file can outlive its row.
+        Calling it first would be a no-op that implies it does something
+        (docs 08 N-12)."""
         directory = self._validate_dir(name)
         if not directory.exists():
             return False
@@ -362,7 +369,63 @@ class SqliteDatasetLibrary(DatasetLibrary):
                     "discard left %s behind (its rows are already deleted): %s",
                     path, exc,
                 )
+        # Best-effort, logged, never able to fail the discard: the rows
+        # are gone and a leftover file is harmless disk. This second pass
+        # exists because the loop above already knows which shard files it
+        # failed on, and retrying once immediately clears the common case
+        # (a reader that had the file open a moment ago).
+        swept = self._sweep_orphan_shards(directory, name)
+        if swept:
+            logger.info("discard swept %d orphan shard file(s) in %s", swept, name)
         return deleted
+
+    def sweep_orphan_shards(self, name: str) -> int:
+        """The public entry point for the same cleanup (docs 08 N-12)."""
+        directory = self._existing_dir(name)
+        self._require_v2(directory, name)
+        return self._sweep_orphan_shards(directory, name)
+
+    def _sweep_orphan_shards(self, directory: Path, name: str) -> int:
+        """Remove shard files no ``shards`` row references.
+
+        Walks ``shards/`` rather than trusting a remembered failure list,
+        so it also clears orphans left by a crash, an earlier process, or
+        a partially-completed discard -- anything, in other words, that a
+        "remember what failed last time" list would miss.
+
+        A file whose row still exists is never touched: that is the whole
+        difference between an orphan and real data.
+        """
+        shards_dir = directory / "shards"
+        if not shards_dir.is_dir():
+            return 0
+        try:
+            with self._connect(directory / "metadata.db") as conn:
+                referenced = {
+                    str(directory / row["file_path"])
+                    for row in conn.execute("SELECT file_path FROM shards")
+                }
+        except (OSError, sqlite3.Error) as exc:
+            # Cannot know what is referenced, so cannot know what is safe
+            # to delete. Refusing is the only correct answer.
+            logger.warning(
+                "cannot sweep orphan shards of %s: %s (nothing removed)", name, exc
+            )
+            return 0
+
+        removed = 0
+        for path in shards_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            if str(path.resolve()) in referenced or str(path) in referenced:
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                # One locked file must not stop the sweep of the rest.
+                logger.warning("orphan shard %s not removed: %s", path, exc)
+        return removed
 
     # -- training sets -----------------------------------------------------
 

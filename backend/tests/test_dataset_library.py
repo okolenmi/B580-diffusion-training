@@ -188,6 +188,7 @@ check(library.stats("raw").shards == 0, "empty shard row removed")
 # -- never a dangling row.
 
 import logging  # noqa: E402 -- local to this scenario
+import shutil  # noqa: E402
 
 make_v2_dataset(root, "ordered", items=2)
 ordered_dir = datasets / "ordered"
@@ -231,6 +232,68 @@ check(
     any(ordered_shard.name in message for message in records),
     f"the leftover is reported, not swallowed (got {records})",
 )
+
+# -- the orphan sweep (docs 08 N-12) ---------------------------------------
+#
+# An orphan file is the acceptable outcome of the ordering above, but
+# nothing ever retried it: the row is gone, so no future discard would
+# look at that shard again. These checks pin that the sweep removes it,
+# that a file a row still references is never touched, and that one
+# locked file does not stop the sweep of the rest.
+
+make_v2_dataset(root, "sweep", items=2)
+sweep_dir = datasets / "sweep"
+kept_shard = sweep_dir / "shards" / "referenced.safetensors"
+loose_shard = sweep_dir / "shards" / "loose.safetensors"
+
+# Give one item a row that still points at a real shard file.
+with library._connect(sweep_dir / "metadata.db") as conn:  # noqa: SLF001
+    conn.execute(
+        "INSERT INTO shards (id, file_path, created_at) VALUES "
+        "(99, 'shards/referenced.safetensors', ?)",
+        ("2026-10-02 00:00:00",),
+    )
+kept_shard.write_bytes(b"still-referenced")
+loose_shard.write_bytes(b"nobody-references-this")
+
+removed = library.sweep_orphan_shards("sweep")
+check(removed == 1, f"exactly the unreferenced shard is removed (got {removed})")
+check(not loose_shard.exists(), "the orphan is gone")
+check(kept_shard.exists(), "a file a row still references is never removed")
+
+# Idempotent: a second sweep finds nothing to do.
+check(library.sweep_orphan_shards("sweep") == 0, "a second sweep is a no-op")
+
+# One locked file must not stop the others being cleaned up.
+blocked = sweep_dir / "shards" / "blocked.safetensors"
+freeable = sweep_dir / "shards" / "freeable.safetensors"
+blocked.write_bytes(b"locked")
+freeable.write_bytes(b"freeable")
+real_unlink2 = Path.unlink
+
+
+def _failing_unlink2(self, *args, **kwargs):
+    if self.name == blocked.name:
+        raise OSError("injected: locked")
+    return real_unlink2(self, *args, **kwargs)
+
+
+Path.unlink = _failing_unlink2
+try:
+    removed = library.sweep_orphan_shards("sweep")
+finally:
+    Path.unlink = real_unlink2
+
+check(removed == 1, f"the sweep continues past a locked file (got {removed})")
+check(not freeable.exists(), "and still removes the ones it can")
+check(blocked.exists(), "the locked one is left for next time")
+check(kept_shard.exists(), "and the referenced shard is still untouched")
+
+# A dataset with no shards/ directory is not an error.
+make_v2_dataset(root, "nosweeps", items=1)
+shutil.rmtree(datasets / "nosweeps" / "shards")
+check(library.sweep_orphan_shards("nosweeps") == 0,
+      "a dataset with no shards/ sweeps cleanly")
 
 # -- legacy (v1) refusal ----------------------------------------------------
 

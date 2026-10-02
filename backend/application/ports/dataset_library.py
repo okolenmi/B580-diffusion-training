@@ -209,6 +209,24 @@ class DatasetLibrary(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def sweep_orphan_shards(self, name: str) -> int:
+        """Delete shard files under ``shards/`` that no ``shards`` row
+        references; return how many were removed.
+
+        A shard is only ever removed after its last trajectory row is
+        gone, and the unlink can fail after the commit -- a locked file
+        on Windows, a permission problem, a reader mid-scan. The row is
+        already deleted at that point, so the file is unreferenced and
+        nothing will ever retry it. The choice at discard time was right
+        (an orphan file beats a dangling row); this is what cleans up
+        afterwards, without an HTTP endpoint (docs 08 N-12).
+
+        Never raises for an individual unlink failure: one locked file
+        must not stop the sweep of the others.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def list_sets(self, name: str) -> tuple[TrainingSetInfo, ...]:
         """Training sets with member counts, newest first."""
         raise NotImplementedError

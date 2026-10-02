@@ -12,6 +12,7 @@ import json
 import sys
 import tempfile
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
@@ -261,20 +262,59 @@ class RecordingEventBus(CallbackEventBus):
         return [event.event_type for event in self.published]
 
 
+def _snapshot(run: Run) -> Run:
+    """A stored copy of `run` that holds state, not history.
+
+    The event buffer is drained off the copy. SQLite stores columns and
+    `Run.restore()` rebuilds an aggregate with an *empty* buffer, so a
+    read there can never replay an event someone has already published;
+    a plain deepcopy carries the buffer across, and the next read hands
+    back an entity that still claims to owe `run_created`.
+
+    That is not hypothetical. The failure-repair path commits a run it
+    read back (`current = self._runs.get(...)`), so a stored snapshot
+    that kept the buffer made `StartTraining` publish run_created twice
+    on a failed start -- and the test asserting `["run_created",
+    "run_failed"]` only passed because the old aliasing fake handed back
+    the *same* object the writer had already drained. The aliasing was
+    hiding this, which is exactly what a contract test is for.
+
+    Draining is `collect_events()` because it is the public drain; the
+    events belong to the caller's entity, which the writer publishes.
+    """
+    stored = deepcopy(run)
+    stored.collect_events()
+    return stored
+
+
 class InMemoryRunRepository(RunRepository):
     """Same semantics as the SQLite port, no persistence.
 
-    ``_statuses`` mirrors the persisted status separately from the
-    entity objects (which callers mutate *before* writing): the CAS
-    must see what the "row" said, not what some in-flight entity copy
-    now says.
+    Writes store a *snapshot*, not the object handed in, and every read
+    returns a fresh copy of the snapshot. That is what the SQLite adapter
+    necessarily does -- it cannot hand back a live row object -- and the
+    fake used to differ, which the repository contract found
+    (backend/tests/contracts/run_repository_contract.py).
+
+    Concretely, the fake used to store the caller's reference, so a
+    caller that mutated its entity *without writing* saw the change come
+    back out of `find_active()` and `list_runs()`: an in-flight mutation
+    was indistinguishable from a committed one. It kept a parallel
+    ``_statuses`` dict to stop the compare-and-swap from being fooled,
+    which fixed the CAS but not the reads -- `find_active()` would filter
+    on the mirror and then return an entity whose own `.status` said
+    something else. A snapshot makes the workaround unnecessary rather
+    than patching one hole in it: ``_statuses`` is gone.
+
+    `add` still returns the object it was given, and `assign_id` still
+    mutates it, because the caller's entity is where the buffered domain
+    events live and those are the caller's to collect.
     """
 
     _UNFINISHED = (RunStatus.CREATED, RunStatus.RUNNING)
 
     def __init__(self) -> None:
         self._runs: dict[int, Run] = {}
-        self._statuses: dict[int, RunStatus] = {}
         self._next_id = 1
 
     def add(self, run: Run) -> Run:
@@ -282,63 +322,57 @@ class InMemoryRunRepository(RunRepository):
             raise DomainError(f"run already has id {run.id}")
         run.assign_id(RunId(self._next_id))
         self._next_id += 1
-        self._runs[run.id] = run
-        self._statuses[run.id] = run.status
+        self._runs[run.require_id()] = _snapshot(run)
         return run
 
     def get(self, run_id: RunId) -> Run | None:
-        return self._runs.get(run_id)
+        stored = self._runs.get(run_id)
+        return deepcopy(stored) if stored is not None else None
 
     def list_runs(self, *, limit: int = 50,
                     status: RunStatus | None = None) -> list[Run]:
         runs = [r for r in self._runs.values() if status is None or r.status is status]
-        runs.sort(key=lambda r: r.id, reverse=True)
-        return runs[:limit]
+        runs.sort(key=lambda r: r.require_id(), reverse=True)
+        return [deepcopy(r) for r in runs[:limit]]
 
     def update(self, run: Run) -> bool:
         if run.id is None:
             raise DomainError("cannot update an unpersisted run (no id yet)")
         if run.id not in self._runs:
             return False
-        self._runs[run.id] = run
-        self._statuses[run.id] = run.status
+        self._runs[run.id] = _snapshot(run)
         return True
 
     def update_if_status(self, run: Run, expected: RunStatus) -> bool:
         if run.id is None:
             raise DomainError("cannot update an unpersisted run (no id yet)")
-        if run.id not in self._runs:
+        stored = self._runs.get(run.id)
+        if stored is None or stored.status is not expected:
             return False
-        if self._statuses.get(run.id) is not expected:
-            return False
-        self._runs[run.id] = run
-        self._statuses[run.id] = run.status
+        self._runs[run.id] = _snapshot(run)
         return True
 
     def find_active(self) -> Run | None:
         unfinished = [
-            r
-            for r in self._runs.values()
-            if self._statuses.get(r.id) in self._UNFINISHED
+            r for r in self._runs.values() if r.status in self._UNFINISHED
         ]
-        return max(unfinished, key=lambda r: r.id) if unfinished else None
+        if not unfinished:
+            return None
+        return deepcopy(max(unfinished, key=lambda r: r.require_id()))
 
     def continue_ids_above(self, run_id: RunId) -> None:
         self._next_id = max(self._next_id, int(run_id) + 1)
 
     def list_unfinished(self) -> list[Run]:
         unfinished = [
-            r
-            for r in self._runs.values()
-            if self._statuses.get(r.id) in self._UNFINISHED
+            r for r in self._runs.values() if r.status in self._UNFINISHED
         ]
-        unfinished.sort(key=lambda r: r.id, reverse=True)
-        return unfinished
+        unfinished.sort(key=lambda r: r.require_id(), reverse=True)
+        return [deepcopy(r) for r in unfinished]
 
     def delete_all(self) -> int:
         deleted = len(self._runs)
         self._runs.clear()
-        self._statuses.clear()
         return deleted
 
 

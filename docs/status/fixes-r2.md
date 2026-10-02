@@ -29,10 +29,13 @@ Branch: `fixes/review-r2`.
 findings is now either fixed (N-01..N-09, N-12, N-14) or, for N-02/N-14,
 fixed and measured. Nothing from the review's Phase 1 or 1B remains.
 
-Phase 2: WP-11..WP-18. **WP-11 (ruff+mypy with a committed baseline)
-gates the rest** -- the code already carries `# noqa: BLE001` and
-`# type: ignore` markers for tools that are not run, which is how N-11's
-50 mypy errors and 92 ruff findings survived review.
+Phase 2: WP-11..WP-18. WP-11 is done and it now gates every subsequent
+change -- see the note at the end about what it caught.
+
+| WP | What | Commit | Evidence |
+| --- | --- | --- | --- |
+| WP-11 | ruff+mypy against a committed baseline | `308074d` | `scripts/quality_baseline.json`; verified failing on an injected error |
+| WP-12 | no method named `list`; `require_id()` instead of `id` + ignore | `c4126ff` | mypy 39 -> 25, no `valid-type` left, 24/24 backend |
 
 Phase 3: WP-19..WP-22, explicitly blocked on the `core/` removal being
 merged. That removal is now largely done on this branch (the node graph

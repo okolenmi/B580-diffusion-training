@@ -26,6 +26,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     "venv_python",
     "checkpoints_dir",
     "loras_dir",
+    "models_dir",
 )
 
 RESOLVED_KEYS: tuple[str, ...] = (
@@ -33,6 +34,7 @@ RESOLVED_KEYS: tuple[str, ...] = (
     "venv_python",
     "checkpoints_dir",
     "loras_dir",
+    "models_dir",
 )
 
 
@@ -53,6 +55,7 @@ class SettingsChanges:
     venv_python: str | None = None
     checkpoints_dir: str | None = None
     loras_dir: str | None = None
+    models_dir: str | None = None
 
 
 class SettingsStore(ABC):

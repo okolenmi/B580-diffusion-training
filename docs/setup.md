@@ -174,6 +174,49 @@ and `loras_dir` -- `backend/infrastructure/path_tiers.py` owns that
 order, and it is the reason an old `.env` value can appear to be
 ignored.
 
+### Where model files live
+
+This app reads and writes inside **ComfyUI's** directory layout --
+`models/checkpoints`, `models/loras`, and the repo's own `datasets/`.
+That is the default and it is what you want in the normal case: nothing
+to configure, and the picker shows the models you already have.
+
+It is also a dependency on another project's layout, which is worth
+being able to undo in one place rather than three. There are now two:
+
+**As an operator**, through the settings API (or the Config page):
+
+```
+POST /api/v1/settings   {"models_dir": "/srv/models"}
+```
+
+`checkpoints_dir` and `loras_dir` then resolve to `/srv/models/checkpoints`
+and `/srv/models/loras`. An explicit `checkpoints_dir`/`loras_dir` still
+wins over `models_dir` -- that one is a deliberate choice about a single
+directory. Send `{"models_dir": ""}` to clear it and go back to
+ComfyUI's layout. `models_dir` must point at a directory that exists;
+the resolver never creates one on the strength of a settings value.
+
+**In code**, when you need the paths in hand rather than in the
+database:
+
+```python
+from backend.infrastructure.workspace import WorkspaceDirs, WorkspaceLayout
+
+layout = WorkspaceLayout(
+    project_root,
+    dirs=WorkspaceDirs(checkpoints=tmp / "ckpt", loras=tmp / "loras"),
+)
+```
+
+Every field of `WorkspaceDirs` is optional; unnamed directories resolve
+as usual, so you can redirect one and leave the rest alone. This is how
+the tests that need a throwaway model layout do it -- which is the point.
+Before it existed, a test wanting temporary directories had to know the
+name of each settings key *and* that two of them live under
+`<comfy>/models/`, and a test that got that wrong silently resolved
+against the real ComfyUI and passed for the wrong reason.
+
 `run_tests.py` picks the interpreter itself: the tests import torch,
 which lives in your ComfyUI venv, not in whatever system `python`
 happens to be first on PATH. If the running interpreter has no torch,

@@ -136,6 +136,12 @@ F-15), so a rejected update leaves the filesystem exactly as it was. A
 spawn rather than silently running some other interpreter.
 `venv_python` must be an existing **executable** file, because the value
 is executed on every start — "it exists" is not the contract. Managed
+`models_dir` is a single key for the whole model tree: set it and
+`checkpoints_dir`/`loras_dir` resolve under it, unless they are
+individually overridden (the specific wins over the coarse). It is how
+the app is pointed somewhere other than a ComfyUI checkout, which is
+the default layout; see `docs/setup.md`.
+
 directories (`checkpoints_dir`, `loras_dir`) are created **after** the
 commit, so an update that fails validation creates nothing. An absent key
 leaves the value untouched; `""` clears the override.

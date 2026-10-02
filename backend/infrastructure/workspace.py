@@ -21,16 +21,61 @@ resolve.
 computed locally (same convention: ``run_<id>/log.txt`` +
 ``log.progress.jsonl``) without touching the real ``runs/`` folder or
 importing the repo module.
+
+``dirs=`` is the answer to "where does model data live, if not in the
+place ComfyUI keeps it" -- see :class:`WorkspaceDirs`. It is the
+supported seam for pointing the whole app somewhere else, and every
+field is optional, so a caller that names one directory does not have
+to name the rest.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
 
 from . import path_tiers
 
 GetSetting = Callable[[str, str], str]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceDirs:
+    """Every directory model data is read from or written to.
+
+    **Why this exists.** This app reads and writes inside another
+    project's directory layout -- ComfyUI's ``models/checkpoints``,
+    ``models/loras``, and the repository's ``datasets/``. That is a real
+    and currently-correct dependency, but it is not a universal one:
+    anything that is not ComfyUI (a different model manager, a mounted
+    volume, a container with its own layout) needs those directories
+    pointed somewhere else, and until now the only way to do that was to
+    know three independent settings keys *and* the relationship between
+    them. That knowledge was then duplicated in every test that needed a
+    temporary layout.
+
+    So: one object, passed to one constructor, naming every directory.
+    Each field left ``None`` resolves as usual, which means
+      * ComfyUI's layout stays the default and nothing about normal
+        operation changes;
+      * a caller can override exactly one directory without restating
+        the others;
+      * a caller that needs the whole layout redirected says so in one
+        call instead of three string keys.
+
+    ``comfy`` is here too, because it is the trainer's working directory
+    and is coupled to the rest in exactly the same way.
+
+    Not in this class: ``runs``. Run artifacts are ours alone rather than
+    borrowed from another project, and ``runs_dir=`` already overrides
+    them.
+    """
+
+    comfy: Path | None = None
+    checkpoints: Path | None = None
+    loras: Path | None = None
+    datasets: Path | None = None
 
 
 class WorkspaceLayout:
@@ -40,10 +85,12 @@ class WorkspaceLayout:
         *,
         runs_dir: Path | None = None,
         settings_kv: GetSetting | None = None,
+        dirs: WorkspaceDirs | None = None,
     ) -> None:
         self._root = project_root
         self._runs_dir = runs_dir
         self._settings_kv = settings_kv
+        self._dirs = dirs or WorkspaceDirs()
 
     # -- settings tier -------------------------------------------------
 
@@ -66,6 +113,8 @@ class WorkspaceLayout:
         identified and no setting overrides one -- reported as
         ``null`` by the settings endpoint rather than hidden.
         """
+        if self._dirs.comfy is not None:
+            return self._dirs.comfy
         return path_tiers.comfy_dir(self._root, self._setting)
 
     @property
@@ -74,14 +123,20 @@ class WorkspaceLayout:
 
     @property
     def checkpoints_dir(self) -> Path:
+        if self._dirs.checkpoints is not None:
+            return self._dirs.checkpoints
         return path_tiers.checkpoints_dir(self._root, self._setting)
 
     @property
     def loras_dir(self) -> Path:
+        if self._dirs.loras is not None:
+            return self._dirs.loras
         return path_tiers.loras_dir(self._root, self._setting)
 
     @property
     def datasets_dir(self) -> Path:
+        if self._dirs.datasets is not None:
+            return self._dirs.datasets
         return path_tiers.datasets_dir(self._root)
 
     # -- run artifacts -------------------------------------------------

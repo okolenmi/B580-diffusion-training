@@ -214,6 +214,7 @@ class SettingsIn(BaseModel):
     venv_python: str | None = None
     checkpoints_dir: str | None = None
     loras_dir: str | None = None
+    models_dir: str | None = None
 
     def to_changes(self) -> SettingsChanges:
         return SettingsChanges(
@@ -222,6 +223,7 @@ class SettingsIn(BaseModel):
             venv_python=self.venv_python,
             checkpoints_dir=self.checkpoints_dir,
             loras_dir=self.loras_dir,
+            models_dir=self.models_dir,
         )
 
 

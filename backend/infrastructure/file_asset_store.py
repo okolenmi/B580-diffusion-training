@@ -262,7 +262,24 @@ class FileSystemAssetStore(AssetStore):
         if parsed.is_absolute() or ".." in parsed.parts or "" in parsed.parts:
             raise InvalidQueryError(f"invalid relative path: {relative!r}")
         base_resolved = base.resolve()
-        resolved = (base_resolved / Path(*parsed.parts)).resolve()
+        try:
+            resolved = (base_resolved / Path(*parsed.parts)).resolve()
+        except (OSError, ValueError, RuntimeError) as exc:
+            # A path this store cannot turn into a real path is refused,
+            # not raised. The one that matters is an embedded NUL:
+            # ``a\x00b`` passes every check above (not absolute, no "..",
+            # no empty part) and then blows up inside pathlib with
+            # "embedded null character in path", which reached a route as
+            # an unhandled ValueError -- a 500 for a request that should be
+            # a 422, on an API documented as reachable from another machine
+            # (found by the property test, docs 08 Q5).
+            #
+            # RuntimeError is here because resolve() reports a symlink loop
+            # that way. All three mean the same thing: this path cannot be
+            # resolved, so there is nothing safe to return.
+            raise InvalidQueryError(
+                f"invalid relative path: {relative!r} ({exc})"
+            ) from exc
         if resolved != base_resolved and not resolved.is_relative_to(base_resolved):
             raise InvalidQueryError(f"path escapes the {kind} directory: {relative!r}")
         return resolved

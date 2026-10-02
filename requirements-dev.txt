@@ -6,3 +6,8 @@
 # this line is a no-op.
 mypy
 ruff
+
+# Property-based tests at the untrusted boundaries
+# (backend/tests/test_property_boundaries.py). Without it that file errors
+# on import; every other test file is unaffected.
+hypothesis

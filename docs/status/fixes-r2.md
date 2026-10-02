@@ -38,6 +38,8 @@ change -- see the note at the end about what it caught.
 | WP-12 | no method named `list`; `require_id()` instead of `id` + ignore | `c4126ff` | mypy 39 -> 25, no `valid-type` left, 24/24 backend |
 | WP-13 | repository contract, fake vs SQLite adapter | `6522c60` | found real drift in the fake; both now pass one contract |
 | WP-14 | budgets in one module; dataset items paged | `27cb7c0` | 1,200 rows -> 3 pages, every id exactly once; verified live |
+| WP-15 | one console, one message box, one error sentence | `3d2403a` | `frontend/tests/` 30 cases; found the suite's 2.1 GB of leaked /tmp |
+| WP-16 | property tests at the untrusted boundaries | `see log` | found a NUL byte turning a 422 into a 500; truncation verified at every byte offset |
 
 Phase 3: WP-19..WP-22, explicitly blocked on the `core/` removal being
 merged. That removal is now largely done on this branch (the node graph

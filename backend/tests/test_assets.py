@@ -24,17 +24,24 @@ from backend.application.errors import (
 from backend.application.ports.asset_store import MAX_UPLOAD_BYTES
 from backend.application.ports.settings_store import SettingsChanges
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
-from backend.infrastructure.workspace import WorkspaceLayout
+from backend.infrastructure.workspace import WorkspaceDirs, WorkspaceLayout
 from backend.presentation.app import create_app
 from backend.tests.support import asgi_request, build_services, check, finish
 
 
 def _layout(root: Path, ckpt: Path, loras: Path) -> WorkspaceLayout:
-    overrides = {"checkpoints_dir": str(ckpt), "loras_dir": str(loras)}
+    """Model directories pinned to this test's own, via WorkspaceDirs.
+
+    Same shape as this helper's earlier version but naming directories
+    instead of settings keys: the keys were two strings whose meaning
+    ("which directory do checkpoints live in") had to be known
+    separately, and a test that set one of them would silently fall
+    through to the developer's real ComfyUI for the other.
+    """
     return WorkspaceLayout(
         root,
         runs_dir=root / "runs",
-        settings_kv=lambda key, default: overrides.get(key, default),
+        dirs=WorkspaceDirs(checkpoints=ckpt, loras=loras),
     )
 
 

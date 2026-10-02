@@ -36,6 +36,10 @@ from .persistence.sqlite import SqliteDatabase
 logger = logging.getLogger(__name__)
 
 
+def _str_or_none(path: Path | None) -> str | None:
+    return None if path is None else str(path)
+
+
 class SqliteSettingsStore(SettingsStore):
     def __init__(self, database: SqliteDatabase, project_root: Path) -> None:
         self._db = database
@@ -54,6 +58,13 @@ class SqliteSettingsStore(SettingsStore):
             "venv_python": path_tiers.venv_python(self._root, self.get),
             "checkpoints_dir": str(path_tiers.checkpoints_dir(self._root, self.get)),
             "loras_dir": str(path_tiers.loras_dir(self._root, self.get)),
+            # None, not a fabricated string: models_dir is unset unless
+            # someone set it, and the two directories above are already
+            # reported concretely. Reporting "the models root is None"
+            # here is the honest answer -- the settings endpoint must not
+            # invent a root it did not resolve (same rule as comfy_dir
+            # being null when nothing identifies an install).
+            "models_dir": _str_or_none(path_tiers.models_dir(self._root, self.get)),
         }
         return SettingsView(stored=stored, resolved=resolved)
 
@@ -113,7 +124,7 @@ class SqliteSettingsStore(SettingsStore):
         # checkpoints/loras are *managed* by this tool, so a missing
         # directory is acceptable -- but "acceptable" is decided by
         # looking at the parent, never by creating anything (F-15, F-06).
-        for key in ("checkpoints_dir", "loras_dir"):
+        for key in ("checkpoints_dir", "loras_dir", "models_dir"):
             value = getattr(changes, key)
             if value:
                 errors.update(self._creatable_problem(key, value))
@@ -156,7 +167,7 @@ class SqliteSettingsStore(SettingsStore):
         inert -- the resolvers only accept an existing directory -- so it
         is logged rather than silently swallowed.
         """
-        for key in ("checkpoints_dir", "loras_dir"):
+        for key in ("checkpoints_dir", "loras_dir", "models_dir"):
             value = getattr(changes, key)
             if not value:
                 continue

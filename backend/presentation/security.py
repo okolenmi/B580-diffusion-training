@@ -90,6 +90,16 @@ def host_name(value: str) -> str:
     ``127.0.0.1:8766`` and ``127.0.0.1`` name the same server, and the
     port carries no meaning for the rebinding defence (it changes where
     the browser connects, not who is asking).
+
+    **The trim happens before the port is split off, and that order is
+    deliberate.** Trimming afterwards would be tidier -- it would mean the
+    result never has leading or trailing whitespace -- but it would let a
+    header with junk after the port match an allowlisted host: ``Host:
+    evil<U+0085>:80`` would normalise to ``evil`` and be allowed, where
+    today it stays ``evil<U+0085>`` and is refused. For a
+    DNS-rebinding defence, "the whole header must be recognised" is the
+    property worth keeping, so the function does not try to produce a
+    tidier string than the header actually was.
     """
     value = value.strip().lower()
     if value.startswith("["):  # IPv6 literal: [::1] or [::1]:8766

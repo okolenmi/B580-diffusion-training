@@ -35,8 +35,14 @@ def main() -> None:
     # -- defaults ---------------------------------------------------------
     view = store.read()
     check(all(view.stored[k] == "" for k in view.stored), "defaults: nothing stored")
-    check(set(view.resolved) == {"comfy_dir", "venv_python", "checkpoints_dir", "loras_dir"},
-          "resolved exposes the four path settings")
+    check(set(view.resolved) == {"comfy_dir", "venv_python", "checkpoints_dir",
+                                 "loras_dir", "models_dir"},
+          "resolved exposes the path settings")
+    # None, not a string: nothing was set, and the two concrete
+    # directories above already say where things actually resolve. A
+    # fabricated models root would be a claim nobody made.
+    check(view.resolved["models_dir"] is None,
+          f"models_dir is null when unset (got {view.resolved['models_dir']!r})")
     check(isinstance(view.resolved["venv_python"], str) and view.resolved["venv_python"],
           "venv_python always resolves")
     check(isinstance(view.resolved["checkpoints_dir"], str) and view.resolved["checkpoints_dir"],
@@ -213,6 +219,87 @@ def main() -> None:
     )
     check(status == 200 and body["stored"]["checkpoints_dir"] == "",
           "POST empty string clears the override")
+
+    # -- the one place to point the app somewhere else ---------------------
+    #
+    # This app reads and writes inside ComfyUI's directory layout. That is
+    # the accepted arrangement and it stays the default -- but it is not a
+    # universal one, so there has to be an obvious way to say "not here".
+    # There were two before, neither of them obvious: a WorkspaceDirs
+    # object for code, and a models_dir setting for an operator. Both are
+    # tested here, and both are tested for *not* changing what happens
+    # when nobody uses them.
+    print("\n== redirecting the whole layout ==")
+
+    from backend.infrastructure import path_tiers
+    from backend.infrastructure.workspace import WorkspaceDirs
+
+    models_root = root / "elsewhere" / "models"
+    (models_root / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (models_root / "loras").mkdir(parents=True, exist_ok=True)
+
+    # -- the setting: one key for the whole tree --------------------------
+    redirected = path_tiers.models_dir(root, lambda key, default: {
+        "models_dir": str(models_root),
+    }.get(key, default))
+    check(redirected == models_root,
+          f"models_dir resolves to what was set (got {redirected})")
+    check(path_tiers.checkpoints_dir(root, lambda key, default: {
+        "models_dir": str(models_root)}.get(key, default)) == models_root / "checkpoints",
+        "and checkpoints hangs off it")
+    check(path_tiers.loras_dir(root, lambda key, default: {
+        "models_dir": str(models_root)}.get(key, default)) == models_root / "loras",
+        "and loras too")
+
+    # A specific override still beats the coarse one -- someone who has
+    # set loras_dir deliberately means that directory.
+    specific = root / "elsewhere" / "one-lora-dir"
+    specific.mkdir(parents=True, exist_ok=True)
+    check(path_tiers.loras_dir(root, lambda key, default: {
+        "models_dir": str(models_root), "loras_dir": str(specific),
+    }.get(key, default)) == specific,
+        "an explicit loras_dir still wins over models_dir")
+
+    # Unset means unset: no invented root.
+    check(path_tiers.models_dir(root, lambda key, default: default) is None,
+          "unset models_dir is None, not a guess")
+    # A directory that does not exist is not accepted -- the resolvers
+    # only take an existing directory, so a typo cannot silently point
+    # the app somewhere empty.
+    check(path_tiers.models_dir(
+        root, lambda key, default: {"models_dir": str(root / "nope")}.get(key, default)
+    ) is None,
+        "a missing models_dir is not accepted")
+
+    # -- the code seam: WorkspaceDirs -------------------------------------
+    layout = WorkspaceLayout(root, runs_dir=root / "runs")
+    check(layout.checkpoints_dir != models_root / "checkpoints",
+          "with no WorkspaceDirs nothing is redirected")
+
+    elsewhere = root / "elsewhere"
+    pinned = WorkspaceLayout(
+        root,
+        runs_dir=root / "runs",
+        dirs=WorkspaceDirs(
+            comfy=elsewhere,
+            checkpoints=models_root / "checkpoints",
+            loras=models_root / "loras",
+            datasets=elsewhere / "datasets",
+        ),
+    )
+    check(pinned.checkpoints_dir == models_root / "checkpoints", "checkpoints redirected")
+    check(pinned.loras_dir == models_root / "loras", "loras redirected")
+    check(pinned.comfy_dir == elsewhere, "the trainer's cwd with it")
+    check(pinned.datasets_dir == elsewhere / "datasets", "and datasets")
+    check(pinned.runs_dir == root / "runs",
+          "run artifacts are unaffected -- they are ours, not borrowed")
+
+    # One field is enough; the rest still resolve as usual.
+    partial = WorkspaceLayout(root, runs_dir=root / "runs",
+                              dirs=WorkspaceDirs(loras=elsewhere / "l"))
+    check(partial.loras_dir == elsewhere / "l", "the named directory is used")
+    check(partial.checkpoints_dir != elsewhere / "l",
+          "and the unnamed ones still resolve normally")
 
     finish()
 

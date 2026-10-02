@@ -35,10 +35,10 @@ class GetStartOptions:
 
         active = self._runs.find_active()
         last_finished: LastFinishedRun | None = None
-        for run in self._runs.list(limit=10):
+        for run in self._runs.list_runs(limit=10):
             if run.status.is_terminal:
                 last_finished = LastFinishedRun(
-                    id=run.id,  # type: ignore[arg-type]
+                    id=run.require_id(),
                     config_path=run.config_path,
                     mode=run.mode,
                     done_steps=run.done_steps,

@@ -162,7 +162,7 @@ def test_start_config_errors() -> None:
         except InvalidQueryError as exc:
             check(exc.code == "invalid_query", "422 invalid_query code")
 
-        check(env.repo.list() == [], "no run rows created by failed starts")
+        check(env.repo.list_runs() == [], "no run rows created by failed starts")
         check(env.gateway.spawned == [], "nothing spawned")
 
 

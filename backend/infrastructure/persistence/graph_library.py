@@ -64,7 +64,7 @@ class SqliteGraphLibrary(GraphLibrary):
             ).fetchone()
         return _row_to_saved(row) if row else None
 
-    def list(self) -> tuple[SavedGraph, ...]:
+    def list_graphs(self) -> tuple[SavedGraph, ...]:
         with self._db.connection() as conn:
             rows = conn.execute(
                 "SELECT name, description, graph, created_at, updated_at "

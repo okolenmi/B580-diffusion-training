@@ -71,6 +71,6 @@ class StartGraphExecution:
                 graph=graph, created_at=self._clock.now()
             )
             self._writer.insert(execution)  # binds id, buffers Queued, announces
-            self._launcher.launch(execution.id, graph)
+            self._launcher.launch(execution.require_id(), graph)
             return to_execution_summary_dto(execution)
 

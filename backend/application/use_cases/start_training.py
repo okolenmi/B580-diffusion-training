@@ -89,9 +89,9 @@ class StartTraining:
             # every future start until restart (docs 07 F-02).
             pid: int | None = None
             try:
-                paths = self._artifacts.prepare(run.id)  # type: ignore[arg-type]
+                paths = self._artifacts.prepare(run.require_id())
                 launch = TrainingLaunch(
-                    run_id=run.id,  # type: ignore[arg-type]
+                    run_id=run.require_id(),
                     config_path=config_path,
                     mode=summary.mode,
                     total_steps=summary.total_steps,
@@ -117,7 +117,7 @@ class StartTraining:
                         f"run {run.id} was reclaimed during startup launch"
                     )
                 self._watcher.watch(
-                    run_id=run.id,  # type: ignore[arg-type]
+                    run_id=run.require_id(),
                     pid=pid,
                     progress_path=paths.progress,
                 )
@@ -136,7 +136,7 @@ class StartTraining:
         reached running but the watcher never attached -- kill the
         orphan and fail it. Reclaims by other writers are left alone."""
         try:
-            current = self._runs.get(run.id)
+            current = self._runs.get(run.require_id())
             if current is None or current.status.is_terminal:
                 return
             error = str(exc) or type(exc).__name__

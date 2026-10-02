@@ -142,7 +142,8 @@ class SqliteRunRepository(RunRepository):
             ).fetchone()
         return _row_to_run(row) if row else None
 
-    def list(self, *, limit: int = 50, status: RunStatus | None = None) -> list[Run]:
+    def list_runs(self, *, limit: int = 50,
+                    status: RunStatus | None = None) -> list[Run]:
         query = f"SELECT {_COLUMNS} FROM runs"
         params: list[object] = []
         if status is not None:

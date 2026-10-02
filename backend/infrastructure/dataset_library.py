@@ -60,7 +60,7 @@ class SqliteDatasetLibrary(DatasetLibrary):
 
     # -- listing / identity ----------------------------------------------
 
-    def list(self) -> tuple[DatasetSummary, ...]:
+    def list_datasets(self) -> tuple[DatasetSummary, ...]:
         base = self._layout.datasets_dir
         if not base.is_dir():
             return ()

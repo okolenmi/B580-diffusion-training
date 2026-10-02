@@ -128,7 +128,7 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             ).fetchone()
         return _row_to_execution(row) if row else None
 
-    def list(self, *, limit: int = 50) -> list[GraphExecution]:
+    def list_executions(self, *, limit: int = 50) -> list[GraphExecution]:
         with self._db.connection() as conn:
             rows = conn.execute(
                 f"SELECT {_COLUMNS} FROM graph_executions "

@@ -13,6 +13,6 @@ class ListGraphs:
 
     def execute(self) -> SavedGraphListResult:
         summaries = tuple(
-            to_saved_graph_summary(saved) for saved in self._library.list()
+            to_saved_graph_summary(saved) for saved in self._library.list_graphs()
         )
         return SavedGraphListResult(graphs=summaries, count=len(summaries))

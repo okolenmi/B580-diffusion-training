@@ -124,7 +124,7 @@ class DatasetLibrary(ABC):
     """CRUD + curation over the datasets directory."""
 
     @abstractmethod
-    def list(self) -> tuple[DatasetSummary, ...]:
+    def list_datasets(self) -> tuple[DatasetSummary, ...]:
         """Every dataset directory that contains a ``metadata.db``."""
         raise NotImplementedError
 

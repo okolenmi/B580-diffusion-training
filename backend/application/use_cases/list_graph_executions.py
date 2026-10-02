@@ -26,6 +26,6 @@ class ListGraphExecutions:
             raise InvalidQueryError(
                 f"limit must be between 1 and {MAX_LIMIT}, got {limit}"
             )
-        found = self._executions.list(limit=limit)
+        found = self._executions.list_executions(limit=limit)
         summaries = tuple(to_execution_summary_dto(item) for item in found)
         return ExecutionListResult(executions=summaries, count=len(summaries))

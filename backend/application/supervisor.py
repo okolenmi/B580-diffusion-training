@@ -183,7 +183,7 @@ class RunSupervisor(RunWatcher):
             return False
         self._events.emit(
             RunProgressed(
-                run_id=run.id,  # type: ignore[arg-type]
+                run_id=run.require_id(),
                 step=run.done_steps,
                 total_steps=run.total_steps,
                 loss=run.current_loss,

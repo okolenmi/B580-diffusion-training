@@ -22,6 +22,6 @@ class ListDatasets:
     def execute(self) -> DatasetListResult:
         summaries = tuple(
             replace(s, preview_path=self._previews.resolve(s.info.name))
-            for s in self._library.list()
+            for s in self._library.list_datasets()
         )
         return DatasetListResult(datasets=summaries, count=len(summaries))

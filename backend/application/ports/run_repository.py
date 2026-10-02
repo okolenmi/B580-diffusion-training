@@ -25,7 +25,8 @@ class RunRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list(self, *, limit: int = 50, status: RunStatus | None = None) -> list[Run]:
+    def list_runs(self, *, limit: int = 50,
+                    status: RunStatus | None = None) -> list[Run]:
         """Newest-first page of runs, optionally filtered by status."""
         raise NotImplementedError
 

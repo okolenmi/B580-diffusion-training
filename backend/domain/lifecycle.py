@@ -31,15 +31,26 @@ from .events import DomainEvent
 from .exceptions import DomainError, InvalidTransitionError
 
 S = TypeVar("S")
+# IdT, not I: ruff E741 flags a bare capital I as ambiguous
+# (confusable with l and 1), which it is on a line that also
+# carries entity_id.
+IdT = TypeVar("IdT")
 """A lifecycle status: a ``str``-valued enum member, compared by value."""
 
 
-class StatusMachine(Generic[S]):
+class StatusMachine(Generic[S, IdT]):
     """Guards one aggregate's status, identity and event buffer.
 
     ``label`` is what error messages call the aggregate ("run",
     "execution") so the messages are the ones the API has always
     returned.
+
+    Generic in the id type as well as the status. It was ``object``
+    before, which meant ``require_id() -> object`` and a
+    ``# type: ignore[return-value]`` at both aggregates' forwarding
+    methods -- the very ignores that were suppressing the ``Run.id is
+    RunId | None`` problem one layer up (docs 08 Q2). Two instantiations
+    exist, so the parameter costs nothing.
     """
 
     def __init__(
@@ -48,7 +59,7 @@ class StatusMachine(Generic[S]):
         transitions: dict[S, frozenset[S]],
         status: S,
         label: str,
-        entity_id: object | None = None,
+        entity_id: IdT | None = None,
     ) -> None:
         self._transitions = transitions
         self._status = status
@@ -65,7 +76,7 @@ class StatusMachine(Generic[S]):
         return self._status
 
     @property
-    def entity_id(self) -> object | None:
+    def entity_id(self) -> IdT | None:
         """The persisted id, or ``None`` before the INSERT."""
         return self._id
 
@@ -99,7 +110,7 @@ class StatusMachine(Generic[S]):
                 f"{_value(self._status)} (needs {_value(status)})"
             )
 
-    def bind(self, entity_id: object, event: DomainEvent) -> None:
+    def bind(self, entity_id: IdT, event: DomainEvent) -> None:
         """Attach a persisted id and buffer the event that announces it.
 
         Exactly once: re-binding raises, because the buffered events
@@ -117,8 +128,14 @@ class StatusMachine(Generic[S]):
         self._id = entity_id
         self._events.append(event)
 
-    def require_id(self) -> object:
-        """The persisted id, or ``DomainError`` if there is none yet."""
+    def require_id(self) -> IdT:
+        """The persisted id, or ``DomainError`` if there is none yet.
+
+        The counterpart to ``entity_id``, and the one call sites want:
+        a run that has been inserted always has an id, and an aggregate
+        reaching for its own id before persisting is a programming
+        error, not a state to handle.
+        """
         if self._id is None:
             raise DomainError(
                 f"{self._label} has no id yet -- persist it first"

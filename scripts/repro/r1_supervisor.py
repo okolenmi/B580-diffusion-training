@@ -68,4 +68,4 @@ with tempfile.TemporaryDirectory() as tmp:
     svc.start_training._artifacts.prepare = real_prepare      # operator fixes permissions
     try: svc.start_training.execute(StartTrainingCommand(config_path="configs/t.toml"))
     except Exception as e: print("  retry after fixing ->", type(e).__name__, e)
-    print("  rows:", [(r.id, r.status.value) for r in repo.list(limit=10)] if hasattr(repo,'list') else "n/a")
+    print("  rows:", [(r.id, r.status.value) for r in repo.list_runs(limit=10)] if hasattr(repo,'list_runs') else "n/a")

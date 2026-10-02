@@ -39,7 +39,7 @@ class GraphExecutionRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list(self, *, limit: int = 50) -> list[GraphExecution]:
+    def list_executions(self, *, limit: int = 50) -> list[GraphExecution]:
         """Newest-first page of executions."""
         raise NotImplementedError
 

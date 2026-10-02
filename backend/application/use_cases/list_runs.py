@@ -24,7 +24,7 @@ class ListRuns:
             raise InvalidQueryError(
                 f"limit must be between 1 and {self.MAX_LIMIT}, got {query.limit}"
             )
-        found = self._runs.list(limit=query.limit, status=status)
+        found = self._runs.list_runs(limit=query.limit, status=status)
         dtos = tuple(to_run_dto(run) for run in found)
         return ListRunsResult(runs=dtos, count=len(dtos))
 

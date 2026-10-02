@@ -104,18 +104,18 @@ def test_listing_and_filters() -> None:
         runs[1].mark_started(pid=5, at=clock.now())
         repo.update(runs[1])
 
-        listed = repo.list()
+        listed = repo.list_runs()
         check(
             [r.id for r in listed] == [3, 2, 1],
             f"newest first (got {[r.id for r in listed]})",
         )
-        check(len(repo.list(limit=2)) == 2, "limit caps the page")
-        only_running = repo.list(status=RunStatus.RUNNING)
+        check(len(repo.list_runs(limit=2)) == 2, "limit caps the page")
+        only_running = repo.list_runs(status=RunStatus.RUNNING)
         check(
             len(only_running) == 1 and only_running[0].id == 2,
             "status filter narrows correctly",
         )
-        check(repo.list(status=RunStatus.FAILED) == [], "empty filter result")
+        check(repo.list_runs(status=RunStatus.FAILED) == [], "empty filter result")
 
 
 def test_find_active_and_delete() -> None:

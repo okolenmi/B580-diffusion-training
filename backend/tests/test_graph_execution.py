@@ -194,7 +194,7 @@ repo.add(other)
 check(repo.find_active().id in (row.id, other.id),
       "find_active returns a queued/running row")
 check(
-    [item.id for item in repo.list(limit=10)] == [other.id, row.id],
+    [item.id for item in repo.list_executions(limit=10)] == [other.id, row.id],
     "list is newest-first",
 )
 check(

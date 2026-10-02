@@ -94,7 +94,7 @@ class Run:
         if isinstance(status, str) and not isinstance(status, RunStatus):
             status = RunStatus(status)
 
-        self._life: StatusMachine[RunStatus] = StatusMachine(
+        self._life: StatusMachine[RunStatus, RunId] = StatusMachine(
             transitions=RUN_TRANSITIONS, status=status, label="run", entity_id=id
         )
         self._config_path = config_path
@@ -273,7 +273,7 @@ class Run:
 
     def mark_started(self, *, pid: int | None, at: datetime) -> None:
         """Process launched: ``created`` -> ``running``."""
-        run_id = self._require_id()  # before any mutation: fail cleanly
+        run_id = self.require_id()  # before any mutation: fail cleanly
         self._life.move(RunStatus.RUNNING)
         self._pid = pid
         self._started_at = at
@@ -318,7 +318,7 @@ class Run:
         for value, label in ((cache_done, "cache_done"), (cache_total, "cache_total")):
             if value is not None and value < 0:
                 raise DomainError(f"{label} cannot be negative")
-        self._require_id()
+        self.require_id()
 
         self._done_steps = done_steps
         if current_loss is not None:
@@ -337,7 +337,7 @@ class Run:
 
     def mark_completed(self, *, at: datetime) -> None:
         """Process exited cleanly: ``running`` -> ``completed``."""
-        run_id = self._require_id()
+        run_id = self.require_id()
         self._life.move(RunStatus.COMPLETED)
         self._stamp(at)
         self._life.buffer(
@@ -348,7 +348,7 @@ class Run:
         self, *, at: datetime, error: str | None = None, exit_code: int | None = None
     ) -> None:
         """Process died: ``running`` -> ``failed``."""
-        run_id = self._require_id()
+        run_id = self.require_id()
         self._life.move(RunStatus.FAILED)
         self._error = error
         self._exit_code = exit_code
@@ -364,7 +364,7 @@ class Run:
         is recorded in ``error`` -- for a cancelled run that field is the
         termination note, not a failure.
         """
-        run_id = self._require_id()
+        run_id = self.require_id()
         self._life.move(RunStatus.CANCELLED)
         if reason is not None:
             self._error = reason
@@ -405,8 +405,18 @@ class Run:
                 f"total_steps {self._total_steps}"
             )
 
-    def _require_id(self) -> RunId:
-        return self._life.require_id()  # type: ignore[return-value]
+    def require_id(self) -> RunId:
+        """The persisted id, or ``DomainError`` if the row is not saved.
+
+        ``id`` is ``RunId | None`` because an aggregate has no identity
+        until it is inserted. That is the right model, but it means
+        every caller that has *just* inserted or loaded the aggregate
+        had to either assert or ``# type: ignore`` -- five of them did
+        the latter (docs 08 Q2). This is the honest version of that
+        assertion: the case where it raises cannot happen, and if it
+        ever did, the message says which aggregate and why.
+        """
+        return self._life.require_id()
 
     def __repr__(self) -> str:
         return (

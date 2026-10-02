@@ -57,7 +57,7 @@ class GraphExecution:
         if isinstance(status, str) and not isinstance(status, GraphStatus):
             status = GraphStatus(status)
 
-        self._life: StatusMachine[GraphStatus] = StatusMachine(
+        self._life: StatusMachine[GraphStatus, ExecutionId] = StatusMachine(
             transitions=GRAPH_TRANSITIONS,
             status=status,
             label="execution",
@@ -167,7 +167,7 @@ class GraphExecution:
 
     def mark_running(self, *, at: datetime) -> None:
         """Worker claimed the row: ``queued`` -> ``running``."""
-        execution_id = self._require_id()
+        execution_id = self.require_id()
         self._life.move(GraphStatus.RUNNING)
         self._started_at = at
         self._updated_at = at
@@ -184,13 +184,13 @@ class GraphExecution:
         method only grows the results tuple and stamps ``updated_at``.
         """
         self._life.require(GraphStatus.RUNNING, action="record a node result")
-        self._require_id()
+        self.require_id()
         self._results = (*self._results, result)
         self._updated_at = at
 
     def mark_finished(self, *, at: datetime) -> None:
         """Every node built: ``running`` -> ``finished``."""
-        execution_id = self._require_id()
+        execution_id = self.require_id()
         self._life.move(GraphStatus.FINISHED)
         self._updated_at = at
         self._finished_at = at
@@ -202,7 +202,7 @@ class GraphExecution:
 
     def mark_failed(self, *, at: datetime, error: str) -> None:
         """Failure: ``queued``/``running`` -> ``error`` with the reason."""
-        execution_id = self._require_id()
+        execution_id = self.require_id()
         self._life.move(GraphStatus.ERROR)
         self._error = error
         self._updated_at = at
@@ -217,7 +217,7 @@ class GraphExecution:
         ``reason`` is recorded in ``error`` -- for a stopped execution
         that field is the termination note, not a failure.
         """
-        execution_id = self._require_id()
+        execution_id = self.require_id()
         self._life.move(GraphStatus.STOPPED)
         self._error = reason
         self._updated_at = at
@@ -258,8 +258,18 @@ class GraphExecution:
                 f"{len(self._graph.nodes)}-node graph"
             )
 
-    def _require_id(self) -> ExecutionId:
-        return self._life.require_id()  # type: ignore[return-value]
+    def require_id(self) -> ExecutionId:
+        """The persisted id, or ``DomainError`` if the row is not saved.
+
+        ``id`` is ``ExecutionId | None`` because an aggregate has no identity
+        until it is inserted. That is the right model, but it means
+        every caller that has *just* inserted or loaded the aggregate
+        had to either assert or ``# type: ignore`` -- five of them did
+        the latter (docs 08 Q2). This is the honest version of that
+        assertion: the case where it raises cannot happen, and if it
+        ever did, the message says which aggregate and why.
+        """
+        return self._life.require_id()
 
     def __repr__(self) -> str:
         return (

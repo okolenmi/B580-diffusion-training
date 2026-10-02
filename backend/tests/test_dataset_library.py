@@ -48,7 +48,7 @@ def expect(exc_type, fn, label):
 
 # -- listing ---------------------------------------------------------------
 
-check(library.list() == (), "empty library lists nothing")
+check(library.list_datasets() == (), "empty library lists nothing")
 
 # -- create (manager bridge: torch + byte-identical schema) ----------------
 
@@ -90,7 +90,7 @@ check(
 # -- raw fixture: summaries / stats ----------------------------------------
 
 make_v2_dataset(root, "raw", items=4)
-by_name = {s.info.name: s for s in library.list()}
+by_name = {s.info.name: s for s in library.list_datasets()}
 check(set(by_name) == {"bridge-ds", "ghost", "raw"}, "list sees all three datasets")
 check(by_name["raw"].stats is not None, "v2 dataset has stats")
 check(by_name["bridge-ds"].stats is not None and by_name["bridge-ds"].stats.items == 0,
@@ -298,7 +298,7 @@ check(library.sweep_orphan_shards("nosweeps") == 0,
 # -- legacy (v1) refusal ----------------------------------------------------
 
 make_v1_dataset(root, "legacy")
-by_name = {s.info.name: s for s in library.list()}
+by_name = {s.info.name: s for s in library.list_datasets()}
 check("legacy" in by_name, "v1 dataset still listed")
 check(by_name["legacy"].info.format_version == 0, "v1 reported with its real version")
 check(by_name["legacy"].stats is None, "v1 stats are None (never fabricated)")
@@ -312,7 +312,8 @@ expect(DatasetNotMigratedError, lambda: library.list_sets("legacy"),
 expect(DatasetNotMigratedError,
        lambda: library.commit("legacy", [1], "s"), "v1 commit refused")
 check(library.delete("legacy") is True, "v1 delete allowed without migrating")
-check("legacy" not in {s.info.name for s in library.list()}, "v1 gone from list")
+check("legacy" not in {s.info.name for s in library.list_datasets()},
+      "v1 gone from list")
 
 # -- name validation + not-found --------------------------------------------
 

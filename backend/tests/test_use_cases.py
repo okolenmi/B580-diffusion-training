@@ -112,7 +112,7 @@ def test_delete_runs() -> None:
     seed_run(repo, clock)
     result = services.delete_runs.execute()
     check(result.deleted == 2, "delete reports rows removed")
-    check(len(repo.list()) == 0, "history is empty afterwards")
+    check(len(repo.list_runs()) == 0, "history is empty afterwards")
     published = events.published
     check(
         len(published) == 1

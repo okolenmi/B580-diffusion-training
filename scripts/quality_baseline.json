@@ -1,15 +1,7 @@
 {
   "mypy": {
-    "backend/application/ports/dataset_library.py|valid-type": 3,
-    "backend/application/ports/graph_execution_repository.py|valid-type": 1,
-    "backend/application/ports/run_repository.py|valid-type": 1,
-    "backend/application/use_cases/reconcile_graph_executions.py|attr-defined": 1,
-    "backend/application/use_cases/reconcile_runs.py|attr-defined": 1,
-    "backend/application/use_cases/start_graph_execution.py|arg-type": 1,
-    "backend/application/use_cases/start_training.py|arg-type": 1,
     "backend/infrastructure/config_schema.py|call-arg": 1,
     "backend/infrastructure/dataset_library.py|arg-type": 1,
-    "backend/infrastructure/dataset_library.py|valid-type": 3,
     "backend/infrastructure/dataset_task_worker.py|arg-type": 2,
     "backend/infrastructure/dataset_tasks.py|arg-type": 1,
     "backend/infrastructure/graph/discovery.py|assignment": 1,
@@ -20,9 +12,7 @@
     "backend/infrastructure/jsonl_progress_source.py|arg-type": 1,
     "backend/infrastructure/jsonl_progress_source.py|call-overload": 1,
     "backend/infrastructure/persistence/graph_execution_repository.py|arg-type": 1,
-    "backend/infrastructure/persistence/graph_execution_repository.py|valid-type": 1,
     "backend/infrastructure/persistence/run_repository.py|arg-type": 1,
-    "backend/infrastructure/persistence/run_repository.py|valid-type": 1,
     "backend/presentation/errors.py|arg-type": 1,
     "backend/presentation/schemas.py|arg-type": 1
   },

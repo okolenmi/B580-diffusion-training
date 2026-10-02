@@ -72,7 +72,7 @@ class GraphLibrary(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list(self) -> tuple[SavedGraph, ...]:
+    def list_graphs(self) -> tuple[SavedGraph, ...]:
         """Every saved graph, most recently updated first."""
         raise NotImplementedError
 

@@ -91,7 +91,7 @@ class FileSystemAssetStore(AssetStore):
         metadata.db skipped); no files are ever surfaced here."""
         if self._datasets is None:  # pragma: no cover - composition bug
             raise InvalidQueryError("dataset catalog is not wired")
-        names = [summary.info.name for summary in self._datasets.list()]
+        names = [summary.info.name for summary in self._datasets.list_datasets()]
         return AssetCatalog(
             kind="dataset",
             base_dir=str(self._layout.datasets_dir),

@@ -289,7 +289,8 @@ class InMemoryRunRepository(RunRepository):
     def get(self, run_id: RunId) -> Run | None:
         return self._runs.get(run_id)
 
-    def list(self, *, limit: int = 50, status: RunStatus | None = None) -> list[Run]:
+    def list_runs(self, *, limit: int = 50,
+                    status: RunStatus | None = None) -> list[Run]:
         runs = [r for r in self._runs.values() if status is None or r.status is status]
         runs.sort(key=lambda r: r.id, reverse=True)
         return runs[:limit]

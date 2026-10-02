@@ -15,14 +15,14 @@ Branch: `fixes/review-r2`.
 | WP-01 | N-04 SSE drops per-node graph events | `60bbaff` | `test_json_safe.py::test_client_buffer` + `test_delivery_class_assignment`; the review's `r13_sse_coalescing.py` now delivers A..F instead of only F |
 | WP-02 | N-05 dataset file endpoint serves any file | `10e457c` | `test_api_datasets.py` allowlist/header cases; `r11_dataset_file_endpoint.py` now 404s metadata-equivalent, a shard and an svg |
 | WP-03 | N-02 upload blocks the loop and doubles RAM; N-14 silent overwrite | `ce3bb8b` | `test_assets.py::test_assets` streaming checks (0.2 MB peak for a 48 MB body; a health check served *during* an open upload), plus the store-level abort/overwrite cases |
+| WP-04 | N-06 run page re-broke resync / non-finite / silent catch | `d79ba82` | `frontend/tests/events.test.mjs` (13 node:test cases, no browser) |
+| WP-05 | N-08 monitor bus can raise into the training thread | `d5eccfe` | `smoke_test_monitor_bus.py`: bad frame does not raise, does not poison the replay, warns once |
+| WP-06 | N-12 orphan shard files after a failed discard | `b4a5b88` | `test_dataset_library.py`: unreferenced removed, referenced untouched, a locked file does not stop the sweep |
 | WP-07 | N-03 a finished run recorded failed 0/100 | `51ac7f4` | `test_start_stop.py::test_reconcile_reads_the_progress_file_of_a_dead_run`; `r10_finished_while_down.py` now prints `completed done=100/100` |
 
 ## Still open
 
-Phase 1 Track A: WP-04 (frontend shared event module; `run.js` has no
-resync, ignores the `nonfinite` marker, and swallows parse errors),
-WP-05 (monitor bus can raise into the training thread), WP-06 (orphan
-shard sweep after a failed `discard`).
+**Phase 1 Track A is complete.**
 
 Phase 1B: WP-08 (adopted-pid liveness by number only -- a recycled pid
 keeps a run `running` and `stop()` refused), WP-09 (garbled log note),

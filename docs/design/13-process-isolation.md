@@ -162,12 +162,15 @@ user can still find it in `ps`.
 are lost.** They are in the event file, but the replay deliberately
 skips them to avoid double-counting. Bounded by one record per node.
 
-**`inprocess` is not adoptable, by construction.** A thread cannot
+****`inprocess` is not adoptable, by construction.** A thread cannot
 outlive its process, and `InProcessGraphTaskGateway.find_running`
 returns `None` — the honest answer, not a limitation to apologise for. So
 setting `BACKEND_GRAPH_EXECUTION=inprocess` gives up adoption as well as
 isolation; that is the price of the rollback, and worth knowing before
 reaching for it.
+
+**One active execution, unchanged.** Nothing here altered that; see
+`start_graph_execution.py` for why.
 
 ## Verified against a running server
 
@@ -184,10 +187,13 @@ with `BACKEND_GRAPH_EXECUTION=child`:
 That third row is the property the whole change exists for: before it, a
 `SIGKILL` of the running process was the server's own death.
 
-## Two bugs this found, both of which the tests had passed
+## Two failure modes worth knowing about
 
-Worth recording because both were invisible to the test suite as it stood,
-and both would have shipped.
+Both of these were found by running a 3000-node graph through a live
+server rather than by the suite, and both passed every test that existed
+at the time. They are recorded because the shapes recur — the first is a
+property of any watcher that polls a file a writer is still appending to,
+and the second of any path named after a database id.
 
 **A successful run reported as a hardware fault.** The watcher polls, then
 checks liveness, then loops. The child writes its outcome record and
@@ -204,22 +210,18 @@ more when the child is gone.
 **A new run inherited the previous one's results.** Records are appended,
 which is what makes a `SIGKILL` unable to tear the last one — and which
 means a new run at a path that still holds an old run's records reads
-them as its own. I had reasoned that this was unreachable because row ids
-are not reused. They are: delete `backend.db` and ids restart at 1, so
-the next execution 1 lands on the previous execution 1's file. The
-watcher then read 6000 results for a 3000-node graph, which the domain
-refuses to load — and because every subsequent read *and* write raised,
-the row stayed `running` forever. `launch` now truncates the event file
-before spawning. Adoption is the one path that must keep the old records,
-and it does not go through `launch`.
+them as its own. Row ids are not reused — except that they are: delete
+`backend.db` and ids restart at 1, so the next execution 1 lands on the
+previous execution 1's file. The watcher then read 6000 results for a
+3000-node graph, which the domain refuses to load — and because every
+subsequent read *and* write raised, the row stayed `running` forever,
+answering the executions list with a 500. `launch` truncates the event
+file before spawning. Adoption is the one path that must keep the old
+records, and it does not go through `launch`.
 
 The second one is the more interesting failure: the domain's "no more
 results than nodes" rule is what caught it, by refusing to load a row the
 persistence layer had happily written.
-
-
-**One active execution, as before.** Nothing here changed that; see
-`start_graph_execution.py` for why.
 
 ## Where the pieces are
 

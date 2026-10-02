@@ -52,54 +52,47 @@ a `MemoryManager`-backed scratch buffer for the dequantized tensor
 allocation per forward call is already correct, just not maximally
 efficient).
 
-**Four real gaps found and closed across two sessions of wiring in
-DoRA's checkpoint round-trip, one real gap narrowed and left honestly
-open (3.1).** Every one of the first three shares the same root cause:
-`DoRALinear`/`DoRAConv2d` (`dora_layer.py`) hold their `lora_A`/`lora_B`
-nested one level down (`self._lora.lora_A`), built via composition, not
-inheritance -- so any code elsewhere that assumes a LoRA layer's
-direction lives as its own direct attribute, rather than going through
-the `get_lora_weights()` contract every layer kind actually implements,
-silently mishandles a DoRA layer specifically. Each instance below was
-found independently, by actually exercising the real path, not by
-auditing for this pattern in advance -- the pattern only became visible
-once enough of them had turned up to name it.
+**Four gaps in DoRA's checkpoint round-trip, now closed; one narrowed and
+left honestly open (3.1).** Every one of the closed four shares the same
+root cause: `DoRALinear`/`DoRAConv2d` (`dora_layer.py`) hold their
+`lora_A`/`lora_B` nested one level down (`self._lora.lora_A`), built by
+composition rather than inheritance -- so any code that assumes a LoRA
+layer's direction lives as its own direct attribute, rather than going
+through the `get_lora_weights()` contract every layer kind implements,
+mishandles a DoRA layer specifically and silently. The pattern only became
+visible once enough independent instances had turned up to name it.
 
 The checkpoint gap itself is closed for the common case: `.dora_scale`
-(direction, magnitude, and alpha) now round-trips exactly through
-`LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` for a DoRA layer
-that's never been phase-split -- see 3.1.
+(direction, magnitude, and alpha) round-trips exactly through
+`LoRACheckpointSaverNode`/`LoRACheckpointLoaderNode` for a DoRA layer that
+has never been phase-split -- see 3.1.
 
-Found in the process, and *not* the gap that was being looked for:
-`nodes/model/lora_phases.py`'s `split_into_new_generation` (the function
+**Phase-splitting a DoRA layer raised `AttributeError`, for a combination
+the graph editor's type contracts had accepted as legal throughout.**
+`nodes/model/lora_phases.py`'s `split_into_new_generation` (what
 `LoRAPhaseSplitNode` calls) reached for `layer.lora_A`/`layer.lora_B` as
-direct attributes when freezing the previous generation, so
-phase-splitting a DoRA layer raised a plain `AttributeError` the instant
-anyone actually wired `DoRAAdapter` into `LoRAPhaseSplitNode` -- a
-combination the graph editor's own type contracts have accepted as
-legal this whole time, with nothing about it hinting the combination had
-never actually been exercised. Fixed by freezing through
-`get_lora_weights()` instead of assuming the attribute layout
-underneath -- `LinearLoRAGeneration`/`Conv2dLoRAGeneration._build_params()`
-had the identical assumption one level up and needed the same fix. A
-second, genuinely silent issue the same fix would have missed on its
-own: `get_lora_weights()` returns direction only, so `magnitude` needed
-freezing explicitly too, or a fresh phase-2 optimizer would have kept a
-"frozen" phase's magnitude receiving real gradient updates for as long
-as phase 2 trained. Both fixed; verified with an actual gradient-
-isolation check (magnitude provably untouched, bit-for-bit, after
-training the new generation), not just that it no longer crashes.
+direct attributes when freezing the previous generation. Fixed by
+freezing through `get_lora_weights()` instead of assuming the layout
+underneath; `LinearLoRAGeneration`/`Conv2dLoRAGeneration._build_params()`
+had the identical assumption one level up and needed the same fix.
 
-Found in a second pass, deliberately looking for other instances of the
-same pattern, and by far the most severe of the four: **a real DoRA
-training run through `ComfyUNetLoRANode(adapter_strategy=DoRAAdapter())`
-trained nothing at all**, in two independent, both-necessary ways.
+**A second, genuinely silent issue that the same fix would have missed on
+its own.** `get_lora_weights()` returns direction only, so `magnitude`
+needed freezing explicitly too -- otherwise a fresh phase-2 optimizer
+would have kept a "frozen" phase's magnitude receiving real gradient
+updates for as long as phase 2 trained. Verified with an actual
+gradient-isolation check (magnitude provably untouched, bit for bit,
+after training the new generation), not just that it no longer crashes.
+
+**A real DoRA training run through
+`ComfyUNetLoRANode(adapter_strategy=DoRAAdapter())` trained nothing at
+all**, in two independent, both-necessary ways.
 `unet_wrapper.ComfyUNetWrapper._init_lora()`
 freezes every model parameter, then re-enables `requires_grad` only for
 whatever passes `hasattr(layer, "lora_A")` -- False for a bare DoRA
 layer, so `lora_A`, `lora_B`, and `magnitude` (which that function
 doesn't even know exists -- it predates DoRA) all stayed frozen, with no
-error and nothing printed. `nodes/model/adapter_injection.py`'s new
+error and nothing printed. `nodes/model/adapter_injection.py`'s
 `reenable_dora_requires_grad()` fixes this from outside `core/`, the
 same way `adapter_strategy_scope` already works around a different
 `core/` assumption. That alone would still not have been enough:

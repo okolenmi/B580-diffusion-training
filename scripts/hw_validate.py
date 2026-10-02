@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 import time
 import traceback
@@ -165,6 +166,32 @@ def summarize(jsonl_path: Path) -> dict:
 
 
 # ------------------------------------------------------------------ graphs
+def _optimizer_node(args):
+    """The optimizer class this run should build.
+
+    Imported lazily: three modules, each pulling its own strategy set, and
+    a run that only wants AdamW should not pay for the other two.
+    """
+    if args.optimizer == "adamw":
+        from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
+        return ComposedAdamWOptimizerNode
+    if args.optimizer == "came":
+        from nodes.optimizer.composed_came import ComposedCAMEOptimizerNode
+        return ComposedCAMEOptimizerNode
+    from nodes.optimizer.composed_adafactor import ComposedAdafactorOptimizerNode
+    return ComposedAdafactorOptimizerNode
+
+
+def _strategy(args) -> dict:
+    """``{"strategy": ...}`` when asked for, empty otherwise.
+
+    Empty rather than a default, because each node has its own default
+    and passing one here would silently override it -- so "whatever this
+    node does by default" could not otherwise be expressed.
+    """
+    return {"strategy": args.strategy} if args.strategy else {}
+
+
 def build_common(ctx, args, probe: MemProbe):
     """Pieces shared by both routes: weights, batches, LR schedule, VRAM budget."""
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
@@ -188,7 +215,6 @@ def run_main_route(args, ctx) -> str:
     from nodes.model.text_encoder import SDXLTextEncoderNode
     from nodes.model.text_encoder_cache import CachingTextEncoderNode
     from nodes.model.parameters import ModelParametersNode
-    from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
     from nodes.train.supervised import SupervisedLoRATrainerNode
 
     probe = MemProbe()
@@ -203,8 +229,9 @@ def run_main_route(args, ctx) -> str:
         encoder=encoder, resource_control=control)["encoder"]
     args._floor_stages["text_encoder_on_device"] = probe.snapshot()
     params = ModelParametersNode(ctx).build(model=model)["params"]
-    optimizer = ComposedAdamWOptimizerNode(ctx).build(
-        params=params, lr=args.lr, state_precision=args.state_precision)["optimizer"]
+    optimizer = _optimizer_node(args)(ctx).build(
+        params=params, lr=args.lr, state_precision=args.state_precision,
+        **_strategy(args))["optimizer"]
 
     load_stats = probe.snapshot()
     probe.reset_peak()
@@ -228,7 +255,6 @@ def run_managed_route(args, ctx) -> str:
     from nodes.model.resources_controller import ResourcesControllerNode
     from nodes.model.lora_training_config import LoRATrainingConfigNode
     from nodes.model.trainer_parameters import TrainerParametersNode
-    from nodes.optimizer.composed_adamw import ComposedAdamWOptimizerNode
     from nodes.train.managed import ManagedLoRATrainerNode
 
     probe = MemProbe()
@@ -244,8 +270,9 @@ def run_managed_route(args, ctx) -> str:
         cache_text_encoder=args.cache_text_encoder)["trainer"]
     args._floor_stages["trainer_model"] = probe.snapshot()
     params = TrainerParametersNode(ctx).build(trainer=trainer)["params"]
-    optimizer = ComposedAdamWOptimizerNode(ctx).build(
-        params=params, lr=args.lr, state_precision=args.state_precision)["optimizer"]
+    optimizer = _optimizer_node(args)(ctx).build(
+        params=params, lr=args.lr, state_precision=args.state_precision,
+        **_strategy(args))["optimizer"]
 
     load_stats = probe.snapshot()
     probe.reset_peak()
@@ -303,6 +330,24 @@ def main() -> None:
     common.add_argument("--rank", type=int, default=64)
     common.add_argument("--alpha", type=float, default=32.0)
     common.add_argument("--lr", type=float, default=1e-4)
+    common.add_argument("--optimizer", default="adamw",
+                        choices=["adamw", "adafactor", "came"],
+                        help="which Composed optimizer node to build. Affects "
+                             "step time and optimizer footprint only -- the "
+                             "equivalence results in nodes/smoke_tests/ are "
+                             "about the maths, which is not what this measures")
+    common.add_argument("--strategy", default=None,
+                        help="optimizer batching strategy (names in "
+                             "nodes/optimizer/strategy_registry.py). Unset "
+                             "means each node's own default, which is "
+                             "'simple' -- so naming it explicitly is what "
+                             "makes a comparison honest")
+    common.add_argument("--seed", type=int, default=1234,
+                        help="seeds the dataset order and the model init, so "
+                             "two runs that differ only in what is being "
+                             "measured do identical work. Without this a "
+                             "comparison mixes the thing under test with "
+                             "whichever images each run happened to draw")
     common.add_argument("--state-precision", default="float32",
                         choices=["float32", "int8_blockwise"])
     common.add_argument("--budget", type=float, default=11500.0)
@@ -346,6 +391,17 @@ def main() -> None:
         sys.path.insert(0, str(comfy_dir))
     if not (comfy_dir / "comfy").exists():
         print(f"Warning: ComfyUI not found at {comfy_dir}")
+
+    # Seeded before anything is constructed, because the dataset source
+    # builds a shuffling sampler at construction time: seeding afterwards
+    # would fix the dropout and the init but not the batch order, which is
+    # the thing that actually differed between runs when this was added.
+    # The first comparison run (foreach vs simple) showed different
+    # loss_first values for exactly this reason.
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.xpu.is_available():
+        torch.xpu.manual_seed_all(args.seed)
 
     out_dir = OUT_DIR / args.label
     out_dir.mkdir(parents=True, exist_ok=True)

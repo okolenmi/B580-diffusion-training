@@ -2,35 +2,69 @@
 
 # Open
 
-- **[2026-10] Retiring `AdafactorOptimizerNode` traded an unmeasured
-  batched-tiny-parameter optimization for canonical per-parameter math;
-  nobody has measured what that cost.** `nodes/optimizer/adafactor.py` is
-  deleted, so `ComposedAdafactorOptimizerNode` is the only Adafactor node
-  (2026-10-02). It was retired rather than its behavior reimplemented, on
-  purpose: `ChunkedXPUAdafactor`'s tiny-parameter path concatenates every
-  parameter under 10,000 elements into one shared clip/EMA state, and
-  Part C of `nodes/smoke_tests/smoke_test_adafactor_tiny_parameter_gap.py`
-  measured that this *contaminates* results -- a parameter's update
-  depends on unrelated parameters' gradients sharing its batch. Adopting
-  it would mean putting that coupling back deliberately.
+- **[2026-10] Adafactor `foreach` as the replacement for the retired
+  batched-tiny-parameter path: measured, and the answer was "no, but a
+  different strategy already had".** Measured 2026-10-02 on the B580, so
+  this no longer belongs in "Open" -- the measurement is recorded here
+  because the *conclusion* still has a consequence for a config choice,
+  and because the hypothesis it tested turned out to be wrong in an
+  instructive way.
 
-  What is genuinely lost is performance, not correctness: that
-  concatenation turned hundreds of small parameters' clip/EMA/normalize
-  into one kernel launch each. `strategy="foreach"` recovers much of the
-  launch-overhead win through `torch._foreach_*` without contaminating
-  anything, and is what to reach for on a graph with many small LoRA
-  matrices. **Unmeasured: whether that is in fact fast enough on the
-  B580.** Nothing here has run on hardware -- every equivalence result in
-  that smoke test is CPU torch.
+  **What was being asked.** `nodes/optimizer/adafactor.py` is deleted, so
+  `ComposedAdafactorOptimizerNode` is the only Adafactor node. It was
+  retired rather than reimplemented because `ChunkedXPUAdafactor`'s
+  tiny-parameter path concatenates every parameter under 10,000 elements
+  into one shared clip/EMA state, and
+  `smoke_test_adafactor_tiny_parameter_gap.py` Part C measured that this
+  *contaminates* results -- a parameter's update depends on unrelated
+  parameters' gradients sharing its batch. Correctness was never lost.
+  What was lost was performance, and the entry's own hypothesis was that
+  `strategy="foreach"` recovered it through `torch._foreach_*`.
 
-  To settle it: train the same config and seed twice, once with
-  `strategy="foreach"` and once with `strategy="simple"`, on a graph with
-  the realistic number of small LoRA matrices, and compare wall-clock
-  per step. Then, if foreach is short of the old behavior, the remaining
-  work is a `TinyBatchedStrategy` grouping "every parameter under a size
-  threshold, any shape" -- but it should be written only with that
-  measurement in hand, since writing it blind is exactly what this
-  project's own rule against unevidenced techniques forbids.
+  **The measurement.** `scripts/hw_validate.py main`, `1024 aes`,
+  100 steps, batch 1, rank 64, seed 1234, same process-per-run harness
+  throughout. 1.70 s/step ≈ 1.0 s/step of that is optimizer work, so
+  this is not a rounding difference:
+
+  | optimizer | strategy | n | steps/s | sec/step | peak reserved |
+  |---|---|---|---|---|---|
+  | adafactor | `shape_grouped_foreach` | 2 | **1.007** | 0.993 | 7984 MB |
+  | adafactor | `shape_grouped` | 2 | 0.991 | 1.009 | 7984 MB |
+  | adamw | (default `simple`) | 1 | 0.919 | 1.088 | 8592 MB |
+  | adafactor | `simple` | 3 | 0.590 | 1.694 | 7884 MB |
+  | adafactor | `foreach` | 1 | 0.574 | 1.742 | 8234 MB |
+  | adafactor | `chunked` | 1 | 0.567 | 1.764 | 7886 MB |
+  | came | (default `simple`) | 1 | 0.471 | 2.123 | 8248 MB |
+
+  Losses agree across every Adafactor strategy to 1.9e-5 (first step) and
+  3.5e-5 (last) -- the same numbers, as the equivalence smoke tests
+  require. Not bit-identical, which fp32 on a GPU is not.
+
+  **The hypothesis was wrong.** `foreach` is *slower* than `simple` here
+  (0.97x) and reserves 350 MB more. `torch._foreach_*` is not the win on
+  this hardware.
+
+  **The win was the shape grouping, and it already existed.**
+  `shape_grouped_foreach` is **1.71x** `simple` and 10% faster than AdamW
+  -- while computing the same values. Isolating the two halves:
+  `shape_grouped` alone is 0.991, so the grouping does essentially all
+  of it and the `_foreach` suffix adds ~1.6% on top. The lesson for the
+  next time something looks like it needs a new batching strategy: ask
+  what shape the work is, not how many launches it takes.
+
+  **Consequence.** No `TinyBatchedStrategy` is needed. The one it would
+  have been written for -- grouping every parameter under a size
+  threshold, any shape -- is what `shape_grouped` already does, and it
+  is the fastest option measured. Nothing else changes; the default is
+  still `simple`, because changing a node's default is a decision about
+  what most callers want, not something this measurement made.
+
+  **Caveats, because they bound the claim.** One dataset (`1024 aes`),
+  batch 1, rank 64, one card, fp32 state. AdamW and CAME are n=1. The
+  result is about *this* parameter population: LoRA rank 64 on SDXL,
+  which is the case the retired code was written for. A different rank or
+  target-module set moves the shape distribution and could move the
+  ranking.
 
 ## Measured and closed
 

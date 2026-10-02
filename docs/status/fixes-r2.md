@@ -19,14 +19,15 @@ Branch: `fixes/review-r2`.
 | WP-05 | N-08 monitor bus can raise into the training thread | `d5eccfe` | `smoke_test_monitor_bus.py`: bad frame does not raise, does not poison the replay, warns once |
 | WP-06 | N-12 orphan shard files after a failed discard | `b4a5b88` | `test_dataset_library.py`: unreferenced removed, referenced untouched, a locked file does not stop the sweep |
 | WP-07 | N-03 a finished run recorded failed 0/100 | `51ac7f4` | `test_start_stop.py::test_reconcile_reads_the_progress_file_of_a_dead_run`; `r10_finished_while_down.py` now prints `completed done=100/100` |
+| WP-08 | N-07 adopted-pid liveness by number only | `a1e0358` | `test_training_adapter.py`, driven with a real `sleep 30`; verified failing against the old `is_alive` |
+| WP-09 | N-09 garbled log note | `a1e0358` | `test_start_stop.py` pins both exact strings |
+| WP-10 | N-01 test_training_adapter needs a ComfyUI dir | `3c3df85` | passes with `.env` hidden, which is what makes the old code fail |
 
 ## Still open
 
-**Phase 1 Track A is complete.**
-
-Phase 1B: WP-08 (adopted-pid liveness by number only -- a recycled pid
-keeps a run `running` and `stop()` refused), WP-09 (garbled log note),
-WP-10 (hermetic tests; `test_training_adapter.py` needs `COMFY_DIR`).
+**Phases 1 and 1B are complete** -- every one of the 12 round-2
+findings is now either fixed (N-01..N-09, N-12, N-14) or, for N-02/N-14,
+fixed and measured. Nothing from the review's Phase 1 or 1B remains.
 
 Phase 2: WP-11..WP-18. **WP-11 (ruff+mypy with a committed baseline)
 gates the rest** -- the code already carries `# noqa: BLE001` and
@@ -61,3 +62,7 @@ assuming.
 * **Palette counts in `test_graph_discovery.py`/`test_api_graphs.py` are
   derived, not literal** (`support.concrete_node_classes()`), so adding
   or retiring a node does not require editing tests.
+* **`env -u COMFY_DIR` does not simulate a fresh clone.** `path_tiers`
+  loads the repo's gitignored `.env`, which sets `COMFY_DIR`. Hide
+  `.env` as well when checking whether a test depends on the developer's
+  machine (that is how N-01 was actually reproduced).

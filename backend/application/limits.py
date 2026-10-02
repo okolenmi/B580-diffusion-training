@@ -57,6 +57,20 @@ resident.
 
 # --- event stream ----------------------------------------------------------
 
+EVENT_REPLAY_RING = 512
+"""Lifecycle events kept for replay to a reconnecting client.
+
+The answer to "a browser tab slept through `run_completed` and now
+believes the run is still running". 512 covers a very long unattended
+run at the supervisor's polling rate; past that a client is told
+`resync_required` and refetches, which for a single-user loopback tool is
+cheaper and always correct (docs 09 event contract).
+
+Not a byte budget and not a promise of durability: it is a ring in memory,
+lost on restart, and only lifecycle events are kept -- deltas are
+coalesced per client anyway.
+"""
+
 SSE_QUEUE_MAX = 256
 """Frames buffered per subscriber before the slowest one loses frames.
 

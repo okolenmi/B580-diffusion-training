@@ -21,8 +21,17 @@ missing replay**, not a design choice. It costs a full refetch per
 reconnect, and it is still racy — an event published between the refetch
 and the subscription is lost.
 
-`EventSource` already sends a `Last-Event-ID` header on automatic
-reconnection. Nothing reads it.
+`EventSource` sends a `Last-Event-ID` header on automatic
+reconnection — **but only if the server emitted an SSE `id:` field** for
+the frames it wants tracked. This server did not, so nothing was ever
+sent. The feature therefore requires the server to opt in: every bus
+event is written as an `id: <seq>` line followed by its `data:` line
+(`_frame` in `presentation/sse.py`). Without that line the header is
+absent and this note describes a browser that does not exist.
+
+The sequence is *also* inside the JSON payload. Redundant on purpose: it
+costs ~12 bytes and it means a reader that only consumes `data` — the
+tests, and any hand-written client — still has the id it needs.
 
 ## Decision
 

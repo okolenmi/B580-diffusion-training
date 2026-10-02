@@ -260,13 +260,17 @@ async function boot() {
     log("Canvas cleared.", "warn");
   });
 
-  // live events (SSE notifies, API stays the source of truth). /events has
-  // no replay, so onOpen -- which fires on every (re)open -- is where the
-  // authoritative state is refetched (docs 07 F-09).
-  // subscribeEvents owns three things this used to re-implement: resync
-  // on every open, counting unreadable frames out loud, and the transport
-  // error notice. The behaviour is unchanged -- it was already correct
-  // here -- but there is now one copy of it (docs 08 N-06).
+  // Live events; the API stays the source of truth. subscribeEvents
+  // decides *when* to refetch it -- on the server's `resync_required`,
+  // which is set on the first connect and on a reconnect the replay ring
+  // cannot cover (docs 09 event contract; docs 07 F-09 for why a
+  // refetch is needed at all).
+  //
+  // It also owns three things this used to re-implement: deciding when to
+  // resync, counting unreadable frames out loud, and the transport error
+  // notice (docs 08 N-06). The behaviour here is unchanged from that
+  // refactor -- it was already correct -- but there is now one copy of
+  // it, and the resync is no longer unconditional.
   subscribeEvents({
     onEvent: (e) => executions.onEvent(e),
     onResync: (reason) => {

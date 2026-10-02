@@ -1,8 +1,10 @@
 /* Unit tests for lib/events.js, driven by a fake EventSource.
    The behaviours pinned here are the ones that used to differ between
-   views (docs 08 N-06): resync on every open including the first,
-   unreadable frames counted and reported rather than swallowed, and a
-   valid frame still reaching the handler after a bad one.
+   views (docs 08 N-06) and the one WP-21 changed: whether to refetch is
+   the server's call (stream_opened.resync_required), not "the socket
+   opened". Also: unreadable frames counted and reported rather than
+   swallowed, and a valid frame still reaching the handler after a bad
+   one.
    Run: node --test frontend/tests  */
 
 import { test } from "node:test";
@@ -28,13 +30,70 @@ const source = () => lastSource;
 const frame = (obj) => ({ data: JSON.stringify(obj) });
 const badFrame = () => ({ data: "{not json" });
 
-test("resync runs on EVERY open, including the first", () => {
+const opened = (resyncRequired) =>
+  frame(
+    resyncRequired === undefined
+      ? { type: "stream_opened" }
+      : { type: "stream_opened", resync_required: resyncRequired },
+  );
+
+test("resync runs when the server says it could not replay", () => {
   const resync = [];
   subscribeEvents({ onEvent: () => {}, onResync: (r) => resync.push(r) });
-  source().onopen();
-  source().onopen();
-  source().onopen();
-  assert.equal(resync.length, 3, "three opens, three resyncs");
+  source().onmessage(opened(true));
+  assert.equal(resync.length, 1, "one un-replayable connect, one resync");
+  assert.match(resync[0], /could not replay/);
+});
+
+test("resync is SKIPPED when the server replayed the gap", () => {
+  // This is the entire point of the replay ring. The old code refetched
+  // on every open because it had to: it could not know whether it had a
+  // hole. Refetching anyway would make the feature invisible -- correct,
+  // but paying full price for it.
+  const resync = [];
+  subscribeEvents({ onEvent: () => {}, onResync: (r) => resync.push(r) });
+  source().onmessage(opened(false));
+  assert.equal(resync.length, 0, "a covered reconnect needs no refetch");
+});
+
+test("an ABSENT resync_required refetches -- absence is not a yes", () => {
+  // An older server, or a proxy that eats the opening frame. Reading
+  // "unknown" as "I am current" is exactly how a page ends up believing a
+  // finished run is still running.
+  const resync = [];
+  subscribeEvents({ onEvent: () => {}, onResync: (r) => resync.push(r) });
+  source().onmessage(opened(undefined));
+  assert.equal(resync.length, 1, "unknown coverage means refetch");
+});
+
+test("resync happens BEFORE the frame reaches onEvent", () => {
+  // Otherwise a view's handler runs against data the resync is about to
+  // replace, and its patch is applied to state it has not seen yet.
+  const order = [];
+  subscribeEvents({
+    onEvent: (e) => order.push(`event:${e.type}`),
+    onResync: () => order.push("resync"),
+  });
+  source().onmessage(opened(true));
+  assert.deepEqual(order, ["resync", "event:stream_opened"]);
+});
+
+test("stream_opened is still forwarded to onEvent", () => {
+  const seen = [];
+  subscribeEvents({ onEvent: (e) => seen.push(e) });
+  source().onmessage(opened(false));
+  assert.equal(seen.length, 1, "a view may want last_seq, or to log it");
+  assert.equal(seen[0].type, "stream_opened");
+});
+
+test("the socket opening no longer implies a refetch", () => {
+  // onOpen says the socket is up. It says nothing about whether this
+  // client holds current data; conflating the two was the workaround
+  // this feature replaces.
+  const resync = [];
+  subscribeEvents({ onEvent: () => {}, onResync: (r) => resync.push(r) });
+  assert.equal(source().onopen, undefined, "no onOpen handler is installed");
+  assert.equal(resync.length, 0);
 });
 
 test("a valid frame reaches onEvent", () => {

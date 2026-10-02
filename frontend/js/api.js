@@ -66,13 +66,21 @@ export async function api(path, opts = {}) {
  * Subscribe to an SSE endpoint. Returns the source so the caller can
  * close it (page teardown).
  *
- * EventSource reconnects on its own and the server never replays: a
- * frame published while the client was away is gone for good. So
- * `onOpen` fires on EVERY (re)connect and is where a subscriber
- * refetches its authoritative state (docs 07 F-09); `onMessage` is for
- * live patches only. The caller owns message routing (see monitor.js /
- * views/dashboard.js), including what to do with an unparsable frame --
- * it must be surfaced, never dropped quietly.
+ * `onOpen` fires on EVERY (re)connect -- it says the socket is up, not
+ * that the client now holds current data. Those are different questions,
+ * and conflating them was the reason this module refetched on every
+ * open (docs 07 F-09, review WP-21).
+ *
+ * The server now replays what a reconnecting client missed
+ * (`docs/design/backend/09-event-contract.md`): it emits an SSE `id:`
+ * field per event, which EventSource remembers and sends back as
+ * `Last-Event-ID` on automatic reconnection. So the authoritative
+ * refetch belongs on the `stream_opened` frame and its
+ * `resync_required` flag -- not on `onOpen`.
+ *
+ * The caller owns message routing (see monitor.js / views/dashboard.js),
+ * including what to do with an unparsable frame -- it must be surfaced,
+ * never dropped quietly.
  */
 export function sse(path, { onMessage, onOpen, onError } = {}) {
   const source = new EventSource(BASE + path);

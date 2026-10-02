@@ -142,8 +142,14 @@ def test_client_buffer() -> None:
     """
 
     async def scenario() -> None:
+        async def next_frame(buf: ClientBuffer) -> str | None:
+            """``get`` yields ``(seq, payload)``; these checks are about
+            payloads, and the sequence side is pinned separately below."""
+            return (await buf.get(0.01))[1]
+
         buf = ClientBuffer(maxsize=16)
-        check(await buf.get(0.01) is None, "empty buffer times out (heartbeat)")
+        check(await buf.get(0.01) == (None, None),
+              "empty buffer times out as (None, None) -- the heartbeat path")
 
         # --- state: coalesce, keyed ---
         # Real payloads, because a state frame's coalescing key is
@@ -152,18 +158,23 @@ def test_client_buffer() -> None:
         # below, which asserts exactly that.
         p1 = '{"type":"run_progressed","run_id":1,"step":1}'
         p2 = '{"type":"run_progressed","run_id":1,"step":2}'
-        buf.put("run_progressed", p1)
-        buf.put("run_progressed", p2)
+        buf.put("run_progressed", p1, seq=1)
+        buf.put("run_progressed", p2, seq=2)
         check(len(buf) == 1, f"same-run progress coalesces to the newest (got {len(buf)})")
         check(buf.coalesced == 1, f"coalesced counter (got {buf.coalesced})")
-        check(await buf.get(0.01) == p2, "the surviving frame is the newest")
+        seq, payload = await buf.get(0.01)
+        check(payload == p2, "the surviving frame is the newest")
+        check(seq == 2,
+              f"and carries the newest seq, not the superseded one's "
+              f"(got {seq}) -- Last-Event-ID replay drops frames by seq, so "
+              f"a stale seq would let a live frame be replayed as new")
 
         # A different run's newest sample is not superseded by this one's.
         other = '{"type":"run_progressed","run_id":2,"step":1}'
         buf.put("run_progressed", other)
         buf.put("run_progressed", p1)
         check(len(buf) == 2, f"two runs' samples coexist (got {len(buf)})")
-        check([await buf.get(0.01), await buf.get(0.01)] == [other, p1],
+        check([await next_frame(buf), await next_frame(buf)] == [other, p1],
               "and both runs' samples arrive, in order")
 
         # --- delta: N-04. Six node events must arrive as six ---
@@ -173,7 +184,7 @@ def test_client_buffer() -> None:
         for node in "ABCDEF":
             buf.put("graph_execution_progressed", f"n{node}")
         check(len(buf) == 8, f"1 state + 1 lifecycle + 6 deltas all queued (got {len(buf)})")
-        got = [await buf.get(0.01) for _ in range(8)]
+        got = [await next_frame(buf) for _ in range(8)]
         check(
             got == [p3, "c1", "nA", "nB", "nC", "nD", "nE", "nF"],
             f"every node event survives a run's progress frame (got {got})",
@@ -204,7 +215,7 @@ def test_client_buffer() -> None:
         check(only_lifecycle.dropped == 1,
               f"all-lifecycle buffer: oldest evicted and counted (got {only_lifecycle.dropped})")
         check(only_lifecycle.dropped_delta == 0, "not miscounted as a delta loss")
-        got = [await only_lifecycle.get(0.01), await only_lifecycle.get(0.01)]
+        got = [await next_frame(only_lifecycle), await next_frame(only_lifecycle)]
         check(
             got == ["run_started", "run_completed"],
             f"newest lifecycle frames survive in order (got {got})",

@@ -179,9 +179,13 @@ async function boot() {
 
   await loadRun();
   await loadLog();
-  // onResync runs on every open, first included: /events has no replay,
-  // so anything published before this page subscribed is missing, and
-  // without this a missed run_completed leaves the page on "running".
+  // onResync runs when the server cannot replay the gap -- and on the
+  // FIRST connect it always cannot, because a page that has never
+  // subscribed has no Last-Event-ID. Without it, a run_completed
+  // published before this page loaded is missed and the page sits on
+  // "running". On a later reconnect the server replays instead, and the
+  // refetch is skipped -- which is the point of the feature
+  // (docs/design/backend/09-event-contract.md).
   subscribeEvents({
     onEvent: handleEvent,
     onResync: () => loadRun().then(loadLog),

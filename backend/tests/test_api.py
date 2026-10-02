@@ -225,8 +225,8 @@ def test_delete_runs() -> None:
         check(status == 200 and body == {"deleted": 2}, f"deleted 2 (got {status} {body!r})")
         check(
             len(published) == 1
-            and isinstance(published[0], RunsDeleted)
-            and published[0].deleted == 2,
+            and isinstance(published[0].event, RunsDeleted)
+            and published[0].event.deleted == 2,
             "RunsDeleted event published on the real bus",
         )
 

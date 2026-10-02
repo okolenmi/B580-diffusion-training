@@ -482,11 +482,11 @@ async function boot() {
   await refreshHistory();
   if (activeRun) await showLog(activeRun.id);
 
-  // subscribeEvents runs onResync on every open, first included -- which
-  // is also the resync after a dropped connection or a backgrounded tab,
-  // and the one that catches frames published before this page
-  // subscribed. startSafetyPoll covers the case where nothing happens at
-  // all. Same behaviour as the inline version this replaced.
+  // subscribeEvents runs onResync when the server could not replay what
+  // we missed -- on the first connect, after a backgrounded tab, and
+  // after a dropped connection the ring cannot cover. A reconnect it CAN
+  // cover skips the full refetch (docs 09 event contract).
+  // startSafetyPoll covers the case where nothing happens at all.
   subscribeEvents({
     onEvent: handleEvent,
     onResync: () => { startSafetyPoll(); resync(); },

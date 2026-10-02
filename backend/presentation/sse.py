@@ -53,8 +53,9 @@ from datetime import datetime, UTC
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
-from ..application.ports.event_bus import EventBus
+from ..application.ports.event_bus import EventBus, Replay, Sequenced
 from ..domain.events import DomainEvent
+from ..application.event_delivery import delivery_class
 from ..application.limits import SSE_HEARTBEAT_SECONDS, SSE_QUEUE_MAX
 from ..json_safe import sanitize, strict_dumps
 
@@ -65,22 +66,6 @@ logger = logging.getLogger(__name__)
 # below and renaming a constant inside one module is churn, not clarity.
 QUEUE_MAX = SSE_QUEUE_MAX
 HEARTBEAT_SECONDS = SSE_HEARTBEAT_SECONDS
-
-# Delivery classes, keyed by event type. Anything absent is lifecycle,
-# which is the safe default: it means "never drop for someone else's
-# sake", not "coalescible because it is probably redundant".
-STATE_EVENT_TYPES = frozenset({"run_progressed"})
-DELTA_EVENT_TYPES = frozenset({"graph_execution_progressed"})
-
-
-def delivery_class(event_type: str) -> str:
-    """``"state"``, ``"delta"`` or ``"lifecycle"`` for one event type."""
-    if event_type in DELTA_EVENT_TYPES:
-        return "delta"
-    if event_type in STATE_EVENT_TYPES:
-        return "state"
-    return "lifecycle"
-
 
 def coalesce_key(event_type: str, payload: str) -> str | None:
     """The identity whose *newest* value supersedes an older one, or
@@ -103,16 +88,26 @@ def coalesce_key(event_type: str, payload: str) -> str | None:
     return None if run_id is None else f"run:{run_id}"
 
 
-def serialize_event(event: DomainEvent) -> str:
-    """JSON payload for one event: ``type``, ``occurred_at``, fields.
+def serialize_event(event: DomainEvent, seq: int | None = None) -> str:
+    """JSON payload for one event: ``seq``, ``type``, ``occurred_at``, fields.
 
     Always strict JSON: a non-finite float is ``null`` with its path
     named in ``nonfinite`` (docs 07 F-03).
+
+    ``seq`` is what a client sends back as ``Last-Event-ID``, so it is
+    part of the payload rather than the SSE ``id:`` field -- one JSON
+    frame carries everything, and a client that reads only ``data`` still
+    has it. Omitting it is allowed for the synthetic frames this module
+    itself sends (``stream_opened`` and friends), which are not bus
+    events and have no place in the sequence.
     """
-    payload: dict = {
+    payload: dict = {}
+    if seq is not None:
+        payload["seq"] = seq
+    payload.update({
         "type": event.event_type,
         "occurred_at": event.occurred_at.isoformat(),
-    }
+    })
     for key, value in asdict(event).items():
         if key != "occurred_at":
             payload[key] = value
@@ -127,7 +122,7 @@ class ClientBuffer:
     """
 
     def __init__(self, maxsize: int = QUEUE_MAX) -> None:
-        self._items: deque[tuple[str, str, str | None]] = deque()
+        self._items: deque[tuple[str, str, str | None, int | None]] = deque()
         self._maxsize = maxsize
         self._wake = asyncio.Event()
         self.coalesced = 0     # state frames superseded by a newer one
@@ -137,7 +132,8 @@ class ClientBuffer:
     def __len__(self) -> int:
         return len(self._items)
 
-    def put(self, event_type: str, payload: str, key: str | None = None) -> None:
+    def put(self, event_type: str, payload: str, key: str | None = None,
+            seq: int | None = None) -> None:
         """Append one frame, making room first if the buffer is full.
 
         `key` is the coalescing identity, computed by the caller (the
@@ -166,13 +162,13 @@ class ClientBuffer:
             self.coalesced += self._drop_key(key)
         if len(self._items) >= self._maxsize:
             self._make_room(event_type)
-        self._items.append((event_type, payload, key))
+        self._items.append((event_type, payload, key, seq))
         self._wake.set()
 
     def _drop_key(self, key: str) -> int:
         indexes = [
             index
-            for index, (_kind, _payload, queued_key) in enumerate(self._items)
+            for index, (_kind, _payload, queued_key, _seq) in enumerate(self._items)
             if queued_key == key
         ]
         for index in reversed(indexes):
@@ -189,7 +185,7 @@ class ClientBuffer:
         oldest frame of any kind -- which at that point can only be
         lifecycle, since state and delta have both been tried.
         """
-        for index, (kind, _payload, _key) in enumerate(self._items):
+        for index, (kind, _payload, _key, _seq) in enumerate(self._items):
             if delivery_class(kind) == "state":
                 del self._items[index]
                 self.coalesced += 1
@@ -199,7 +195,7 @@ class ClientBuffer:
                 )
                 return
 
-        for index, (kind, _payload, _key) in enumerate(self._items):
+        for index, (kind, _payload, _key, _seq) in enumerate(self._items):
             if delivery_class(kind) == "delta":
                 del self._items[index]
                 self.dropped_delta += 1
@@ -211,50 +207,142 @@ class ClientBuffer:
                 )
                 return
 
-        dropped_type, _payload, _key = self._items.popleft()
+        dropped_type, _payload, _key, _seq = self._items.popleft()
         self.dropped += 1
         logger.warning(
             "SSE buffer full of lifecycle events for a slow client -- "
             "dropped the oldest %s to make room for %s", dropped_type, incoming,
         )
 
-    async def get(self, timeout: float) -> str | None:
-        """Next payload, or ``None`` when nothing arrives within timeout."""
+    async def get(self, timeout: float) -> tuple[int | None, str | None]:
+        """Next ``(seq, payload)``, or ``(None, None)`` on timeout.
+
+        The sequence number travels with the frame so the stream can drop
+        anything the replay already delivered -- the client cannot see the
+        difference otherwise, and a duplicate lifecycle event is a row
+        applied twice.
+        """
         while not self._items:
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout)
             except TimeoutError:
-                return None
-        return self._items.popleft()[1]
+                return None, None
+        _kind, payload, _key, seq = self._items.popleft()
+        return seq, payload
+
+
+def _last_event_id(request: Request) -> int | None:
+    """The client's ``Last-Event-ID``, if it is one we can use.
+
+    `EventSource` sends it automatically on every automatic reconnect, so
+    this is not a client-side change -- it is what the browser already
+    does, finally being read. A header that is absent, unparsable, or
+    not a positive integer is treated as *absent*: the client then gets
+    live events and ``resync_required`` if the bus cannot say more, which
+    is the same place it would have started without this feature.
+    """
+    raw = request.headers.get("last-event-id")
+    if raw is None:
+        return None
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        logger.info("ignoring unparsable Last-Event-ID %r", raw)
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _frame(payload: str, seq: int | None) -> str:
+    """One SSE frame: an ``id:`` line, then the ``data:`` line.
+
+    The ``id:`` line is the load-bearing half. `EventSource` tracks the
+    last id it saw and sends it back as ``Last-Event-ID`` **on automatic
+    reconnection only**, so without it this whole feature would never
+    fire for the browser that motivates it -- the client would have to
+    track the sequence itself, which is the client-side change the design
+    note says is not needed.
+
+    The sequence is *also* inside the JSON payload, which is redundant on
+    purpose: it costs 12 bytes and it means a client that consumes
+    `data` without touching the SSE framing (the tests, and any
+    hand-written reader) still has the id it needs to reconnect.
+    """
+    if seq is None:
+        return f"data: {payload}\n\n"
+    return f"id: {seq}\ndata: {payload}\n\n"
 
 
 async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
-    """Subscribe before returning so no event can be missed by the client."""
+    """One client stream: optional replay, then live.
+
+    **Subscribe first, then replay.** The opposite order has a hole: an
+    event published between the replay and the subscription is lost
+    forever, which is the bug this whole feature exists to fix. Doing it
+    in this order means such an event is delivered *twice* instead, which
+    the client can detect -- frames carry their `seq`, so anything the
+    replay already covered is dropped on the way out.
+    """
     loop = asyncio.get_running_loop()
     buffer = ClientBuffer()
+    last_seen = _last_event_id(request)
 
-    def on_event(event: DomainEvent) -> None:
-        payload = serialize_event(event)
-        loop.call_soon_threadsafe(buffer.put, event.event_type, payload)
+    def on_event(sequenced: Sequenced) -> None:
+        payload = serialize_event(sequenced.event, sequenced.seq)
+        loop.call_soon_threadsafe(
+            buffer.put, sequenced.event_type, payload, None, sequenced.seq
+        )
 
     subscription = bus.subscribe(on_event)
+    replay = (
+        bus.replay_since(last_seen) if last_seen is not None
+        else Replay(events=(), complete=True)
+    )
+    # Nothing published while we were subscribing is above the replay's
+    # reach, so this is the watermark the live path must skip back to.
+    replayed_through = max(
+        (item.seq for item in replay.events), default=last_seen or 0
+    )
 
     async def generate():
         try:
             opened = sanitize({
                 "type": "stream_opened",
                 "occurred_at": datetime.now(UTC).isoformat(),
+                # "Refetch the source of truth." True when the client
+                # sent no Last-Event-ID -- a first connect has missed
+                # everything published before it subscribed, whatever the
+                # ring holds -- and when the ring cannot cover what it did
+                # miss. False only when a replay covered the whole gap.
+                #
+                # The flag is deliberately about lifecycle events alone:
+                # a missed *delta* is not recoverable by refetching the
+                # runs table, and pretending otherwise would make the
+                # frontend refetch on every reconnect forever.
+                "resync_required": last_seen is None or not replay.complete,
+                # Where the client is once it has read this frame AND the
+                # replay that follows it -- so it is the end of the replay,
+                # not the id it sent. Named for that: "last_seq" was read
+                # as the latter by the first test to use it.
+                "replayed_through": replayed_through or None,
             })
             yield f"data: {strict_dumps(opened)}\n\n"
+            for missed in replay.events:
+                yield _frame(
+                    serialize_event(missed.event, missed.seq), missed.seq
+                )
             while True:
                 if await request.is_disconnected():
                     break
-                item = await buffer.get(HEARTBEAT_SECONDS)
-                if item is None:
+                seq, payload = await buffer.get(HEARTBEAT_SECONDS)
+                if payload is None:
                     yield ": ping\n\n"
                     continue
-                yield f"data: {item}\n\n"
+                if seq is not None and seq <= replayed_through:
+                    continue  # already delivered by the replay above
+                yield _frame(payload, seq)
         finally:
             subscription.close()
         logger.info(

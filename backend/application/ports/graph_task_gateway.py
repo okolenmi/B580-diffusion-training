@@ -58,18 +58,6 @@ class GraphTaskLaunch:
     event_path: Path
     log_path: Path
 
-    @property
-    def scratch_name(self) -> str:
-        """The stem shared by this run's three files, without an extension.
-
-        Derived rather than passed so the three paths cannot disagree about
-        which run they belong to. The supervisor needs the same stem to
-        find a run it did not start (``adopt``), and deriving it in one
-        place is what stops the two from drifting apart -- a mismatch would
-        not be a failed adoption, it would be a silent *wrong* adoption:
-        one run's history replayed into another's row.
-        """
-        return f"execution_{self.execution_id}"
 
 
 class GraphTaskGateway(ABC):

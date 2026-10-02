@@ -55,7 +55,7 @@ from fastapi.responses import StreamingResponse
 
 from ..application.ports.event_bus import EventBus, Replay, Sequenced
 from ..domain.events import DomainEvent
-from ..application.event_delivery import delivery_class
+from ..application.event_delivery import delivery_class, is_coalescible
 from ..application.limits import SSE_HEARTBEAT_SECONDS, SSE_QUEUE_MAX
 from ..json_safe import sanitize, strict_dumps
 
@@ -76,8 +76,13 @@ def coalesce_key(event_type: str, payload: str) -> str | None:
     each other, two samples for different runs do not. A delta event
     returns ``None`` unconditionally -- the caller must never treat
     "has a key" as permission to evict, or N-04 comes straight back.
+
+    ``is_coalescible`` is the predicate rather than a ``== "state"``
+    re-derivation: "may this be coalesced" and "is this a state event"
+    happen to coincide today because state is the only coalescible class,
+    but they are different questions, and this one is the one being asked.
     """
-    if delivery_class(event_type) != "state":
+    if not is_coalescible(event_type):
         return None
     try:
         import json

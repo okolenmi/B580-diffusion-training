@@ -169,11 +169,13 @@ class ComfyUNetWrapper:
             self.device = str(device)
         return self
 
-    def enable_gradient_checkpointing(self):
-        """Reduce VRAM by discarding activations (recomputed on backward)."""
-        for module in self.model.modules():
-            if hasattr(module, 'use_checkpoint'):
-                module.use_checkpoint = True
+    # `enable_gradient_checkpointing()` used to live here: it walked
+    # `self.model.modules()` and set `module.use_checkpoint = True` on
+    # anything that had the attribute. It had no call sites, and
+    # checkpointing no longer works that way -- it is a strategy object
+    # applied around the forward (`nodes/model/gradient_checkpointing.py`),
+    # chosen per call site rather than by mutating the model once. Setting
+    # a bool on modules was the monkeypatch that strategy replaced.
 
 
 # ---------------------------------------------------------------------------

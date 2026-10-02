@@ -113,9 +113,15 @@ So it is not mistaken for load-bearing by anyone reading the archive:
 
 * `cache_utils.py::shuffle_and_rebatch_cache` — zero call sites anywhere.
 * `unet_wrapper.py::clear_embedder_cache` (now
-  `nodes/model/unet_wrapper.py`) — imported, never called.
-* `unet_wrapper.py::ComfyUNetWrapper.enable_gradient_checkpointing` — no
-  call sites; superseded by `nodes/model/gradient_checkpointing.py`.
+  `nodes/model/unet_wrapper.py`) — imported by `archive/core`, never
+  called. Left in place rather than removed, because the archive
+  re-exports it and the archive is meant to stay runnable; deleting a
+  dead function is not worth breaking `python -m archive.core.cli`.
+* `unet_wrapper.py::ComfyUNetWrapper.enable_gradient_checkpointing` — was
+  dead, and has been removed from `nodes/model/unet_wrapper.py`.
+  Checkpointing is now a strategy applied around the forward
+  (`nodes/model/gradient_checkpointing.py`), chosen per call site rather
+  than by mutating the model once.
 * `lora.py::GroupedLoRALinear.forward` (now `nodes/model/lora.py`) — an
   explicit `pass`.
 * `__init__.py`'s `load_config` alias — kept for compatibility, unused.

@@ -90,7 +90,7 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
 
   Followed up, because leaving a duplicated rule on the grounds that it
   was tidier to leave it is not a defence: the dataset-task terminal CAS
-  is now the same statement (`d3a0e91`). `finish_if_active` /
+  is now the same statement (`244ba73`). `finish_if_active` /
   `fail_if_active` / `kill_if_active` were three port methods and two
   near-identical bodies in one adapter, plus two more hand-rolled
   guarded UPDATEs in `update_progress` -- five copies of one rule in a

@@ -107,14 +107,48 @@ growing without bound.
 
 ## The other half: proving the frontend only reads fields that exist
 
-Separately implemented, because it is a different kind of check. A JSON
-Schema is generated from the event dataclasses, and a test parses the
-frontend's handlers for `e.<field>` / `event.<field>` references and
-fails on any field the schema does not declare.
-
 The bug class is silent and has no other guard: the backend renames a
 field, every frame stops carrying it, and the frontend reads `undefined`
 and renders an em dash or a blank — with no error anywhere. Line coverage
 is green on both sides. Mutation testing on `sse.py` found the same class
 of thing by accident, in the form of surviving string-literal mutations
 for header names nobody asserts.
+
+`presentation/event_schema.py` generates a JSON Schema per event from the
+dataclasses; `tests/test_event_contract.py` does three things with it.
+
+**The schema describes the wire, not the dataclass.** The first draft
+generated from the dataclasses alone was wrong, and the test caught it:
+the frame a client receives also carries `type`, `seq`, and — for a
+diverged loss — `nonfinite`, none of which are declared on any event.
+`frontend/js/views/run.js` reads `e.nonfinite` specifically so a NaN loss
+renders as an error rather than as a blank, so a schema without it would
+have flagged the one field most worth having. Those three keys belong to
+this layer, so the generator lives here rather than in `domain/`.
+
+**Real frames are checked against it.** Every event is constructed, run
+through the actual serializer, and validated against its own schema — so a
+field added to a dataclass, or a key added by the serializer, shows up as
+a failure rather than as silence. The validator is hand-written because
+`jsonschema` is not a dependency of this project (it is here only as a
+transitive dependency of ComfyUI's `matrix-nio`). It raises on any
+construct it does not understand rather than passing it, and the test
+cross-checks it against the real `jsonschema` on **70** payload/schema
+pairs whenever that package is importable — so the subset is verified,
+not merely intended.
+
+**The frontend is checked against the schema.** Which is the part worth
+having. Two details decide whether it produces signal or noise:
+
+- A variable counts as a frame only if it is compared `.type`-against a
+  wire type name. Without that, `opt.type === "checkbox"` in
+  `views/config.js` and `input.type = "number"` are the same shape as a
+  frame read, and a naive scan drowns in them.
+- Reads are checked against the **union** of every event's fields, not
+  per event type. So a field renamed on one event while still present on
+  another would pass. That gap is real and is not worth closing with
+  brace-matching regex over JavaScript: the failure this must catch is a
+  name that exists *nowhere*, which the union catches exactly.
+
+Verified by renaming `RunProgressed.cache_total` and watching the check
+report `frontend/js/views/run.js: ['e'].cache_total` — then reverting.

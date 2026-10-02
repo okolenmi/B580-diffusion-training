@@ -25,21 +25,31 @@ class DomainEvent:
 
     occurred_at: datetime = field(default_factory=_utcnow)
 
-    @property
-    def event_type(self) -> str:
+    @classmethod
+    def wire_name(cls) -> str:
         """Stable wire name, e.g. ``RunCompleted`` -> ``run_completed``.
 
         Derived from the class name so the naming lives with the event
         itself; presentation only embeds it in the payload.
+
+        A classmethod because generating the event schema
+        (``presentation/event_schema.py``) needs every event's name
+        *without* constructing one -- events have required fields.
+        Deriving it in a single place is the point: a second copy of this
+        algorithm inside the generator is a second thing to keep correct.
         """
-        name = type(self).__name__
         out = ""
-        for char in name:
+        for char in cls.__name__:
             if char.isupper():
                 out += "_" + char.lower()
             else:
                 out += char
         return out.strip("_")
+
+    @property
+    def event_type(self) -> str:
+        """This event's wire name. See ``wire_name``."""
+        return type(self).wire_name()
 
 
 # --------------------------------------------------------------------------

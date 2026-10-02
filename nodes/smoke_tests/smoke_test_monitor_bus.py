@@ -166,6 +166,97 @@ def test_async_bus_behavior():
     asyncio.run(_async_checks())
 
 
+def test_report_never_raises_into_the_caller():
+    """docs 08 N-08: report() runs json.dumps on the *calling* thread,
+    which is the training step. An unserializable value (a tensor, a
+    Path, a set) would raise straight into a training loop -- and only
+    while a dashboard happened to be connected, so it would look like a
+    monitor-dependent training crash."""
+    bus = MonitorBus()
+    node = TrainingProgressMonitorNode(ExecutionContext(monitor_bus=bus))
+    handle = node.build(monitor_id="t")["monitor"]
+
+    class Unserializable:
+        pass
+
+    handle.report({"step": 1})
+    # The call must simply not raise.
+    handle.report({"step": 2, "tensor": Unserializable()})
+    handle.report({"step": 3})
+
+    kept = list(bus._history["t"])
+    check([f.get("step") for f in kept] == [1, 3],
+          f"the bad frame is dropped, the good ones around it survive "
+          f"(got {[f.get('step') for f in kept]})")
+
+    # And it must not poison the replay: a later subscriber replays
+    # history, so a stored unserializable frame would fail there too.
+    async def replay():
+        q = bus.subscribe("t")
+        frames = []
+        while not q.empty():
+            frames.append(q.get_nowait())
+        return frames
+
+    frames = asyncio.run(replay())
+    check(len(frames) == 2,
+          f"replay returns only the serializable frames (got {len(frames)})")
+    check(all("data:" in f for f in frames), "and each is a well-formed frame")
+
+
+def test_a_live_subscriber_sees_the_frames_after_a_bad_one():
+    """The guard must not take the bus down: a subscriber attached
+    across the bad frame still gets what comes after it."""
+    bus = MonitorBus()
+    seen = []
+
+    async def scenario():
+        q = bus.subscribe("t")
+        node = TrainingProgressMonitorNode(ExecutionContext(monitor_bus=bus))
+        handle = node.build(monitor_id="t")["monitor"]
+        # build() broadcasts a clear frame to live subscribers; drain it.
+        await asyncio.sleep(0)
+        while not q.empty():
+            seen.append(q.get_nowait())
+
+        handle.report({"step": 1})
+        handle.report({"bad": object()})
+        handle.report({"step": 2})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        while not q.empty():
+            seen.append(q.get_nowait())
+
+    asyncio.run(scenario())
+    payloads = [f for f in seen if "step" in f]
+    check(any('"step": 1' in f for f in payloads), "step 1 reached the subscriber")
+    check(any('"step": 2' in f for f in payloads),
+          f"and step 2 after the bad frame too (got {payloads})")
+
+
+def test_unserializable_frames_warn_once_not_per_frame():
+    """A stream that is broken in a loop must say so once, not once per
+    frame, or the log is all warning and nothing else."""
+    bus = MonitorBus()
+    node = TrainingProgressMonitorNode(ExecutionContext(monitor_bus=bus))
+    handle = node.build(monitor_id="t")["monitor"]
+
+    class Unserializable:
+        pass
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        for i in range(20):
+            handle.report({"n": i, "bad": Unserializable()})
+    lines = [ln for ln in buf.getvalue().splitlines() if "unserializable" in ln]
+    check(len(lines) == 1,
+          f"20 bad frames produce exactly one warning (got {len(lines)})")
+    check("TypeError" in lines[0], f"and it names the cause (got {lines[0]!r})")
+
+
 def main():
     test_no_module_level_singleton()
     test_context_injection_reaches_handle()
@@ -175,6 +266,9 @@ def main():
     test_a_second_build_against_the_same_monitor_id_clears_the_first_runs_history()
     test_clear_broadcasts_to_a_live_subscriber()
     test_async_bus_behavior()
+    test_report_never_raises_into_the_caller()
+    test_a_live_subscriber_sees_the_frames_after_a_bad_one()
+    test_unserializable_frames_warn_once_not_per_frame()
     print("All monitor_bus checks passed.")
 
 

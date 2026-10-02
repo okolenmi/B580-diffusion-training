@@ -56,6 +56,39 @@ class MonitorBus:
         self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Exception types already warned about, so a stream that is
+        # broken in a loop says it once instead of once per frame (the
+        # backend adapter sanitizes before reporting, so this only fires
+        # for a caller that does not -- see _encode).
+        self._warned: set[type] = set()
+
+    def _encode(self, item: dict) -> str | None:
+        """``data: {...}\n\n`` for one item, or None if it cannot be
+        serialized.
+
+        Both callers of json.dumps run on somebody else's thread: report()
+        is called by graph execution from a FastAPI worker thread, and
+        subscribe() runs on the event loop. An unserializable value --
+        a torch tensor, a Path, a set -- would raise straight into the
+        caller, and for report() that caller is a training step. A
+        monitor feed losing one frame is not worth taking a run down
+        for (docs 08 N-08).
+
+        The frame is dropped rather than replaced: the review's rule is
+        that a bad frame is data we cannot show, and inventing a
+        substitute would be a number nobody measured.
+        """
+        try:
+            return f"data: {json.dumps(item)}\n\n"
+        except (TypeError, ValueError) as exc:
+            if type(exc) not in self._warned:
+                self._warned.add(type(exc))
+                print(
+                    f"monitor bus: dropping an unserializable frame "
+                    f"({type(exc).__name__}: {exc}); further frames of this "
+                    f"kind will be dropped silently"
+                )
+            return None
 
     def subscribe(self, monitor_id: str) -> asyncio.Queue:
         """Call only from within a running event loop (an async route
@@ -64,7 +97,9 @@ class MonitorBus:
             self._loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         for item in self._history[monitor_id]:
-            q.put_nowait(f"data: {json.dumps(item)}\n\n")
+            payload = self._encode(item)
+            if payload is not None:
+                q.put_nowait(payload)
         self._subscribers[monitor_id].append(q)
         return q
 
@@ -104,11 +139,18 @@ class MonitorBus:
 
     def report(self, monitor_id: str, data: dict) -> None:
         """Safe to call from any thread -- this is the side graph
-        execution actually calls, from a FastAPI worker thread."""
+        execution actually calls, from a FastAPI worker thread.
+
+        Cannot raise: a frame that will not serialize is dropped (and
+        not stored), so a weird value in one report cannot end a
+        training step or poison the replay for every later subscriber.
+        """
+        payload = self._encode(data)
+        if payload is None:
+            return
         self._history[monitor_id].append(data)
         if self._loop is None:
             return  # nothing subscribed yet; history above still keeps it for later
-        payload = f"data: {json.dumps(data)}\n\n"
         for q in list(self._subscribers.get(monitor_id, [])):
             self._loop.call_soon_threadsafe(self._safe_put, q, payload)
 

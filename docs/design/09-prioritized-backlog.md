@@ -49,6 +49,36 @@ shared `MemoryManager` through optimizer construction as part of
 whichever future item first has a concrete reason to, rather than
 speculatively now.
 
+**Run the backend suite in parallel (cheap, and it gets worse every time a
+test is added).** `backend/tests/run_all.py` runs 26 files in sequence, one
+interpreter each. Measured on this machine:
+
+| | |
+|---|---|
+| serial suite | **21.5s** |
+| slowest file | `test_api_graphs.py`, 2.77s |
+| top 5 files | 11.5s — **53% of the total** |
+| cores available | 6 |
+
+So the floor for a parallel run is roughly the slowest file (2.8s) plus
+pool overhead, and a `ProcessPoolExecutor` over the files should land
+around 5-6s: a **~4x** cut on every gate run. The files are already
+independent — each builds its own temporaries, and `run_all.py` already
+runs them in separate processes with a per-file `TMPDIR`, which is exactly
+the isolation a pool needs. The change is small.
+
+Worth doing for a reason beyond the seconds: **the cost is per-file and the
+number of files only goes up.** Every test added makes every gate run
+slower, in a repo whose whole quality argument rests on running the gate.
+This is the change that stops that from compounding. `scripts/coverage_report.py`
+and `scripts/mutation_report.py` both already do the parallel version for
+their own sub-processes, so the pattern exists in the repo — this would
+apply it to the suite itself.
+
+Two things to preserve when doing it: the per-file `TMPDIR` (it is what
+makes the files independent, and `run_all.py` also relies on it to clean
+up), and the exit code, since `run_all.py` is what the gate calls.
+
 **Validation work, not construction -- real code exists for both, what's
 missing is a real run:**
 

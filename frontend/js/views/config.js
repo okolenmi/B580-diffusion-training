@@ -204,8 +204,13 @@ async function attachDatalist(input, kind) {
       }
       document.body.appendChild(list);
       datalists.set(kind, list.id);
-    } catch {
-      return; // no suggestions
+    } catch (err) {
+      // Suggestion list is best-effort: a failure leaves the field
+      // exactly as usable as it was, so this is not shown to the user --
+      // but it is logged, because "no suggestions" and "the server was
+      // unreachable" look identical otherwise.
+      console.warn("config: could not load suggestions", err);
+      return;
     }
   }
   const id = datalists.get(kind);

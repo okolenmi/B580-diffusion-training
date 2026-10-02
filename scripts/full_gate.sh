@@ -33,6 +33,16 @@ for f in $(find frontend/js -name '*.js'); do
 done
 echo "node --check: all modules OK"
 
+# Frontend unit tests (pure logic, no browser). Skipped with a notice
+# when node is unavailable rather than failing the gate, matching how
+# ruff is treated above -- but a *failing* test is never skipped.
+if command -v node >/dev/null 2>&1; then
+  echo "== frontend unit tests =="
+  node --test frontend/tests
+else
+  echo "== frontend unit tests skipped (node not installed) =="
+fi
+
 # Unused imports, undefined names, syntax errors. The structure audit
 # (docs 08 S-25) removed a pile of dead imports by hand; this keeps them
 # from coming back, and it is the same check that found them. F + E9

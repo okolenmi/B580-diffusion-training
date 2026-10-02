@@ -1313,8 +1313,11 @@ async function boot() {
     for (const opt of catalog.options || []) {
       dl.appendChild(h("option", { value: opt.value }));
     }
-  } catch {
-    // no suggestions is not an error
+  } catch (err) {
+    // A catalog-only asset kind has no suggestions to offer; that is the
+    // expected path, not a failure. Logged so a genuine fetch error is
+    // still distinguishable from "there is nothing to suggest".
+    console.warn("datasets: no checkpoint suggestions available", err);
   }
 
   // item context menu (M8f): one option, closed by outside click / Escape

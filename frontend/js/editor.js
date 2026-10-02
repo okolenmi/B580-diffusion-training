@@ -15,7 +15,8 @@
    Everything network-shaped goes through api.js (single envelope decoder).
    --------------------------------------------------------------------------- */
 
-import { api, sse, ApiError } from "./api.js";
+import { api, ApiError } from "./api.js";
+import { subscribeEvents } from "./lib/events.js";
 import { GraphDoc } from "./editor/state.js";
 import { Canvas } from "./editor/canvas.js";
 import { Inspector } from "./editor/inspector.js";
@@ -53,7 +54,12 @@ const layout = Object.assign(
   { left: true, right: true, exec: false },
   (() => {
     try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {}; }
-    catch { return {}; } // corrupted storage: defaults win
+    catch (err) {
+      // Corrupted storage -> defaults win. Benign, but quiet here reads
+      // as "nothing was ever saved".
+      console.warn("editor: stored graph unreadable, starting empty", err);
+      return {};
+    }
   })(),
 );
 
@@ -271,23 +277,18 @@ async function boot() {
   // live events (SSE notifies, API stays the source of truth). /events has
   // no replay, so onOpen -- which fires on every (re)open -- is where the
   // authoritative state is refetched (docs 07 F-09).
-  let badEventFrames = 0;
-  sse("/events", {
-    onOpen: () => {
-      log("Event stream connected (state resynced).");
+  // subscribeEvents owns three things this used to re-implement: resync
+  // on every open, counting unreadable frames out loud, and the transport
+  // error notice. The behaviour is unchanged -- it was already correct
+  // here -- but there is now one copy of it (docs 08 N-06).
+  subscribeEvents({
+    onEvent: (e) => executions.onEvent(e),
+    onResync: (reason) => {
+      log(reason);
       executions.resync();
     },
-    onError: () => log("Event stream reconnecting…", "warn"),
-    onMessage: (msg) => {
-      try {
-        executions.onEvent(JSON.parse(msg.data));
-      } catch {
-        // Never guess what an unreadable frame said: count it and say so
-        // out loud (a quiet drop reads like a stalled run).
-        badEventFrames += 1;
-        log(`Unreadable event frame dropped (${badEventFrames} so far).`, "error");
-      }
-    },
+    onNotice: (m) => log(m, "error"),
+    onError: (m) => log(m, "warn"),
   });
 
   log("Editor ready.");

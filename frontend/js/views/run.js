@@ -11,7 +11,9 @@
    not an exception.
    --------------------------------------------------------------------------- */
 
-import { api, sse, ApiError } from "../api.js";
+import { api, ApiError } from "../api.js";
+import { subscribeEvents, startSafetyPoll } from "../lib/events.js";
+import { fmtDuration, fmtTime } from "../lib/format.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -92,12 +94,6 @@ function render() {
   el("run-grid").hidden = false;
 }
 
-function fmtTime(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return `${d.toLocaleString()} (${fmtRel(d.getTime())})`;
-}
-
 function durationText() {
   if (!run) return "—";
   if (!run.started_at) return "—";
@@ -161,9 +157,7 @@ function syncTimers() {
 
 /* ---- live updates ---- */
 
-function handleEvent(raw) {
-  let e;
-  try { e = JSON.parse(raw.data); } catch { return; }
+function handleEvent(e) {
   if (e.type === "run_progressed" && e.run_id === runId && run) {
     run.done_steps = e.step;
     run.total_steps = e.total_steps;
@@ -171,6 +165,12 @@ function handleEvent(raw) {
     run.avg_loss = e.avg_loss;
     run.cache_done = e.cache_done;
     run.cache_total = e.cache_total;
+    // Carry the marker: the server sends a diverged loss as `null` plus
+    // `nonfinite: {loss: "nan"}`. Without copying it across, render()
+    // formats the null and the page shows an em dash for the exact run
+    // a user opens this page to investigate (docs 08 N-06).
+    if (e.nonfinite) run.nonfinite = e.nonfinite;
+    else delete run.nonfinite;
     render();
     syncTimers();
     return;
@@ -180,29 +180,6 @@ function handleEvent(raw) {
     log(`Run #${runId} reached terminal state -- reloading.`, "info");
     loadRun().then(loadLog);
   }
-}
-
-/* ---- formatting (same helpers as dashboard.js) ---- */
-
-function fmtDuration(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${String(m % 60).padStart(2, "0")}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
-}
-
-function fmtRel(ts) {
-  if (!Number.isFinite(ts)) return "just now";
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 5) return "just now";
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 /* ---- boot ---- */
@@ -216,7 +193,18 @@ async function boot() {
 
   await loadRun();
   await loadLog();
-  sse("/events", { onMessage: handleEvent });
+  // onResync runs on every open, first included: /events has no replay,
+  // so anything published before this page subscribed is missing, and
+  // without this a missed run_completed leaves the page on "running".
+  subscribeEvents({
+    onEvent: handleEvent,
+    onResync: () => loadRun().then(loadLog),
+    onNotice: (m) => log(m, "error"),
+    onError: (m) => log(m, "warn"),
+  });
+  // And a slow poll for the case where nothing happens at all: no error,
+  // no reconnect, just a frame that never arrived.
+  startSafetyPoll(() => loadRun(), 30000);
 }
 
 boot().catch(logError);

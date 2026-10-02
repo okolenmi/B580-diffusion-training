@@ -394,8 +394,15 @@ export class Canvas {
         body: { params: this.doc.paramsFor(node) },
       });
       messages = res.messages || {};
-    } catch {
-      return; // transient failure: the next change schedules again
+    } catch (err) {
+      // Transient: the next param change schedules the diagnostics
+      // request again, so this is not fatal. It was completely silent,
+      // which meant a permanently failing request looked exactly like
+      // "the node has no diagnostics" -- the user could not tell the
+      // server was unreachable from the panel being empty.
+      this.onNote("Diagnostics request failed; will retry on next change.", "warn");
+      console.warn("canvas: diagnostics request failed", err);
+      return;
     }
     if (this._diagSeq.get(id) !== seq) return;      // superseded by a newer request
     const fresh = this.doc.nodes.get(id);

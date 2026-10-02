@@ -42,7 +42,12 @@ export async function api(path, opts = {}) {
     try {
       data = JSON.parse(text);
     } catch {
-      data = null; // non-JSON body (shouldn't happen on /api/v1)
+      // A non-JSON body should not happen on /api/v1; if it does, the
+      // server's own error text is lost and the caller gets the generic
+      // message below. Worth a line in the console so that is visible
+      // rather than inferred from a vague UI message.
+      console.warn("api: non-JSON response body", res.status, url);
+      data = null;
     }
   }
   if (!res.ok) {

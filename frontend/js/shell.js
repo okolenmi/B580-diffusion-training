@@ -102,8 +102,11 @@ function loadGeometry() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {
-    /* corrupted or unavailable storage: fall back to defaults */
+  } catch (err) {
+    // Corrupted or unavailable storage: fall back to defaults. Benign,
+    // but said once so a browser denying localStorage (private mode,
+    // blocked cookies) is not indistinguishable from "no saved geometry".
+    console.warn("shell: stored geometry unreadable, using defaults", err);
   }
   return null;
 }
@@ -111,8 +114,12 @@ function loadGeometry() {
 function saveGeometry(state) {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
-  } catch {
-    /* private mode / quota -- geometry is a convenience, not data */
+  } catch (err) {
+    // Private mode or a full quota: geometry is a convenience, not data,
+    // so this must not interrupt anything. Logged because the symptom
+    // otherwise appears later and elsewhere ("my layout never sticks")
+    // with nothing pointing at the cause.
+    console.warn("shell: could not persist geometry", err);
   }
 }
 

@@ -18,8 +18,10 @@
    surfaces in exactly one place (the console log below).
    --------------------------------------------------------------------------- */
 
-import { api, sse, ApiError } from "../api.js";
+import { api, ApiError } from "../api.js";
+import { subscribeEvents } from "../lib/events.js";
 import { renderMeasured } from "../lib/value.js";
+import { fmtDuration, fmtNum, fmtRel } from "../lib/format.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -50,7 +52,6 @@ let historyRuns = [];     // newest first
 let shownLogRun = null;   // run id whose log is on screen (or null)
 let elapsedTimer = null;  // 1s ticker, only while a run is active
 let safetyTimer = null;   // slow resync, so a missed event cannot stick (F-09)
-let badFrames = 0;        // frames we could not parse -- counted, shown
 
 /* /events has no replay: a frame sent while the tab was asleep, while
    the socket was reconnecting, or before this page subscribed (the
@@ -400,17 +401,7 @@ async function loadStartOptions() {
 
 /* ---- live progress over the domain-event stream ---- */
 
-/* A frame we cannot parse is data we cannot show. It is counted and
-   said out loud, never swallowed: a silent drop looks exactly like a
-   run that stopped reporting (docs 07 F-03, review rule 5). */
-function noteBadFrame() {
-  badFrames += 1;
-  log(`Unreadable event frame dropped (${badFrames} so far).`, "error");
-}
-
-function handleEvent(raw) {
-  let e;
-  try { e = JSON.parse(raw.data); } catch { noteBadFrame(); return; }
+function handleEvent(e) {
   switch (e.type) {
     case "run_started":
       log(`Run #${e.run_id} started.`, "success");
@@ -508,42 +499,18 @@ async function boot() {
   await refreshHistory();
   if (activeRun) await showLog(activeRun.id);
 
-  // onOpen fires on every (re)connect, so the refetch is also the
-  // resync after a dropped connection or a backgrounded tab.
-  sse("/events", {
-    onMessage: handleEvent,
-    onOpen: () => { startSafetyPoll(); resync(); },
-    onError: () => log("Event stream reconnecting…", "warn"),
+  // subscribeEvents runs onResync on every open, first included -- which
+  // is also the resync after a dropped connection or a backgrounded tab,
+  // and the one that catches frames published before this page
+  // subscribed. startSafetyPoll covers the case where nothing happens at
+  // all. Same behaviour as the inline version this replaced.
+  subscribeEvents({
+    onEvent: handleEvent,
+    onResync: () => { startSafetyPoll(); resync(); },
+    onNotice: (m) => log(m, "error"),
+    onError: (m) => log(m, "warn"),
   });
   log("Connected to /api/v1/events.", "info");
-}
-
-/* ---- formatting ---- */
-
-function fmtNum(v) {
-  if (v === undefined || v === null) return "—";
-  return v >= 1 ? v.toFixed(4) : v >= 0.001 ? v.toFixed(5) : v.toExponential(2);
-}
-
-function fmtDuration(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${String(m % 60).padStart(2, "0")}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
-}
-
-function fmtRel(ts) {
-  if (!Number.isFinite(ts)) return "—";
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 5) return "just now";
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 boot().catch(logError);

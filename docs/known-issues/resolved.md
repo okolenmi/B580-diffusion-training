@@ -2,17 +2,18 @@
 
 # Resolved
 
-Fourteen entries, from several provenances. Five were moved here from
-[`pending-testing.md`](pending-testing.md) after being run on real
-hardware on 2026-09-28 (Intel Arc B580, 12 GB, torch 2.12.1+xpu), via
-`scripts/hw_validate.py` / `scripts/hw_validation_batch.sh`; each of
-those entries' "Confirmed" paragraph carries the measured result. The
-two topmost entries are not from that batch: 2026-09-29's is a
-review-caught bug, fixed in the encoder rather than in the test that
-caught it, and the one below it a user-reported wrong number in this
-project's own documentation, investigated and corrected on hardware the
-same day. The rest were found and fixed in place during 2026-07
-through 2026-09, with no hardware run.
+Cases that were real bugs, were fixed, and are worth remembering — either
+because the failure mode is easy to reintroduce or because the measurement
+is the only record of it. See the [index](README.md) for the rule that the
+hardware numbers here are not to be trimmed: `runs/` and `datasets/` are
+gitignored, so VRAM figures, steps-per-second and OOM thresholds exist
+nowhere else.
+
+Entries carry a **Confirmed** line when they were run on hardware rather
+than reasoned about. Those runs were on an Intel Arc B580, 12 GB,
+torch 2.12.1+xpu, through `scripts/hw_validate.py` and
+`scripts/hw_validation_batch.sh`; the ones without it were found and fixed
+by inspection.
 
 - **[2026-09-29] A cold `CachingTextEncoder.encode()` called
   `ensure_loaded()` twice (once per cache half), and the test that
@@ -397,3 +398,21 @@ through 2026-09, with no hardware run.
   target-module set moves the shape distribution and could move the
   ranking.
 
+- **The backend test suite leaked its scratch directories.** Every file
+  under `backend/tests/` creates scratch with `tempfile.mkdtemp`, which
+  returns a name and hands back no handle, so nothing removed them. One
+  full suite run left ~40 directories behind; over many runs that reached
+  **4,834 directories and 2.1 GB**. `/tmp` here is a 20 GB tmpfs, so it
+  was not disk that filled but RAM -- which makes the failure mode worse
+  than slow: a test can fail because it could not create its scratch
+  directory, and the failure gets attributed to a test with nothing wrong
+  with it. One such failure was seen (`test_graph_execution.py`, once, not
+  reproducible).
+
+  Fixed in `backend/tests/run_all.py`: each file gets its own `TMPDIR`,
+  which `tempfile` honours, and it is removed afterwards. A full suite run
+  now leaves nothing behind -- re-measured, the count of `/tmp/tmp*`
+  directories is unchanged across a run. `run_all.py` is the gate's entry
+  point, so this covers every gate run; running a single test file
+  directly still leaves what that file makes, which is the honest
+  boundary.

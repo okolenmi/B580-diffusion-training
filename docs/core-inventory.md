@@ -19,10 +19,60 @@ expected, and a more important one attached.
 
 | Consumer | How it reaches `core/` | Breaks if `core/` goes |
 |---|---|---|
-| `python -m core.cli` (CLI) | direct; also the backend's spawned subprocess | The command-line trainer, entirely |
+| `python -m core.cli` (CLI) | direct; also the backend's spawned subprocess | The runnable path. **Not** the training logic -- see below |
 | `backend/` (web) | **spawns `<venv python> -m core.cli --config ...`** as the training subprocess (`infrastructure/subprocess_gateway.py:124`) | Every run started from the UI |
 | `manager/builder.py` | imports 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, and `clip_encode` -- all via the shims below) | Dataset ingestion, and therefore every run that has data |
-| `nodes/` (rewrite) | **nothing** -- imports no `core.*` at all since 2026-10-02 | nothing |
+| `nodes/` library (rewrite) | **nothing** -- imports no `core.*` at all since 2026-10-02 | nothing |
+| `nodes/smoke_tests/` | **9 equivalence tests import `core/` as the reference** they measure against: `core.optimizers` (6), `core.noise_schedule` (2), `core.model_io`, `core.comfy_setup` | The ability to prove the rewrite is equivalent to what it replaced -- see below |
+
+**This document was wrong about `core/` twice, in opposite directions, and
+both errors are corrected here (2026-10-02).**
+
+*First:* it said `nodes/` had no dependency on `core/` at all. True of the
+library, and the wrong question — `nodes/smoke_tests/` has **nine
+equivalence tests that import `core/` as the reference implementation**,
+comparing the rewrite's optimizers, noise schedules and transforms against
+it. Reading the row would have said "nothing breaks if `core/` goes", and
+acting on that would delete the yardstick the rewrite is measured with.
+
+*Second, and worse:* a correction written the same day claimed `core/` "is
+the trainer the backend spawns". **It is not the trainer.** That was
+inferred from "the backend launches `python -m core.cli`" — which is a
+fact about *which binary is launched*, not about who does the work.
+Measured, rather than argued:
+
+| Probe | Result |
+|---|---|
+| Import every `nodes/` module with `core/` made **unimportable** | **96 of 96 succeed, 0 failures** |
+| Run `smoke_test_managed_trainer.py` with `core/` unimportable | **passes** — real forward, real backward, real `ComposedAdamWOptimizerHandle`, real `optimizer.step()`, LoRA written to `.safetensors` |
+
+`nodes/train/node.py` is the step loop (`TrainerNode`: *"runs the requested
+number of optimizer updates"*), and `nodes/train/managed.py` is the
+pipeline around it. Neither imports `core/`. **The rewrite trains without
+the old trainer.**
+
+### So what is `core/` actually for?
+
+| Still on the `core/` path | Why |
+|---|---|
+| `backend/` spawns `python -m core.cli` | Every run started from the UI. **This is the runnable path, not the training logic.** |
+| `manager/builder.py` imports 8 modules | Dataset ingestion, so every run that has data |
+| 4 `backend/` bridges (`config_io`, `config_model`, `comfy_setup`, `xpu_env`) | Deliberate, each commented as a bridge |
+| 9 equivalence smoke tests | The yardstick |
+
+**What `core/` is not:** the trainer. `nodes/` is.
+
+### The one thing standing between here and deleting it
+
+`nodes/` has **no entry point** — no `main`, no `if __name__` block, no CLI.
+It is a library that can train and nothing that can be launched. The
+backend supervises a *subprocess*, so something has to be runnable; today
+that is `core/cli.py`. Deleting `core/` therefore needs one thing: a small
+driver that builds the graph and runs it. The training machinery, the
+optimizers, the step pipeline and the saving all exist and are proven.
+
+That is the honest size of the remaining work — one entry point, not a
+rewrite — and it is worth doing before any further work in this area.
 
 The second row is the one that surprises people. The node-graph rewrite
 is a *graph around* the trainer, not a replacement for it: pressing

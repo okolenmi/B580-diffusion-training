@@ -48,6 +48,24 @@
   generation's VAE decode, the reported trigger) remains the next
   concrete step here.
 
+  **2026-10-02: the repro path no longer exists.** The reported trigger
+  needs training-in-process to preview-sample, and preview sampling only
+  existed on the `core/` route -- `nodes/` has none, so a graph
+  execution cannot reach it. `core/` is now `archive/core/` and the
+  backend no longer spawns it. `manager/preview.py` still holds a VAE
+  decoder, but nothing in `backend/` imports it: it is dataset-task
+  territory, and that runs in its own child process.
+
+  So this entry can no longer be reproduced, and not because anyone
+  reproduced it and it went away. The remaining useful work is the
+  opposite of a repro: decide whether the *shape* of the report is worth
+  guarding against in the route that now exists, given that the one
+  route it was reported against had explicit `xpu_synchronize()` at
+  every offload/reload transition (checked, does not match) and the
+  `nodes/` route has been run under sustained pressure with no hang
+  (see the `C_pressure` entry in `resolved.md`). Left open because
+  "the path is gone" is not the same as "the cause is understood".
+
 - **[2026-10] Retiring `AdafactorOptimizerNode` traded an unmeasured
   batched-tiny-parameter optimization for canonical per-parameter math;
   nobody has measured what that cost.** `nodes/optimizer/adafactor.py` is

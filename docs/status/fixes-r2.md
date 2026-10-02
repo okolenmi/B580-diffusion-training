@@ -113,8 +113,8 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   is a large change to a path that works, bought against a risk that has
   not yet been observed.
 
-`docs/design/11-core-removal.md` records what removing `core/` still
-takes, and in what order.
+`docs/design/11-core-removal.md` records the five edges `core/` had,
+what each became, and what the route cost.
 
 ## Notes for whoever continues
 

@@ -278,3 +278,44 @@ through 2026-09, with no hardware run.
   schedule); cache size and micro-batch loop scale internally by
   `grad_accum` instead. Confirmed working by user (correct step count,
   expected per-step timing).
+
+- **[2026-07] "Device lost" errors and silent training hangs after VRAM
+  pressure.** Resolved 2026-10-02 by diagnosis from the person who
+  reported it: **a driver problem, not an offload bug in this codebase.**
+  Two independent things follow from that, and they are recorded
+  separately because only the first is a diagnosis.
+
+  *Why the code was not at fault.* The reported shape -- something
+  offloaded under pressure and not correctly loaded back, with free VRAM
+  available afterwards -- had already been checked here against
+  `archive/core/trainer.py`: every offload/reload transition called
+  `xpu_synchronize()` explicitly, and the observed VRAM spike was at
+  exactly the reload-after-preview transition that the sync there
+  addresses. A matching hang-after-offload report on the same B580
+  hardware was traced elsewhere to a missing `device` argument on
+  `synchronize_device()`'s non-CUDA path -- i.e. to a driver/oneapi
+  layer, which is where this now points.
+
+  *Why the route that produced it is gone.* The trigger needs
+  training-in-process to preview-sample. Preview sampling only existed on
+  the `core/` route; `nodes/` has none, so a graph execution cannot reach
+  it. `core/` moved to `archive/core/` on 2026-10-02 and the backend no
+  longer spawns it, so the repro is unreachable regardless.
+
+  *Why the route that replaced it is not exposed to it.* The live route
+  has a ceiling rather than a hope. `VRAMBudgetControllerNode` takes
+  `vram_budget_mb`, the trainer polls the resulting `ResourceBudget` at
+  its own step boundaries, and `strict=True` **raises** instead of
+  continuing over budget (`nodes/memory/control_handle.py`) -- so a
+  ceiling set below the card's real capacity turns "drive the driver into
+  a device-lost fault" into "stop and say so". The budget is measured
+  against the allocator's `memory_reserved`, with a `vram_reserve_mb`
+  margin left deliberately unused.
+
+  Left worth remembering, not worth chasing: nothing here was diagnosed
+  by measurement on this machine. The `nodes/` route had already been
+  run under sustained pressure with no hang (`hw_validate.py` label
+  `C_pressure`), so what closed this is the reporter's read of the
+  cause plus the removal of the route -- not a reproduction that stopped
+  happening.
+

@@ -11,6 +11,7 @@ importing any other backend module does nothing on its own.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -33,6 +34,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Logging first, before anything that logs during start-up. Placed
+    # here rather than just before uvicorn.run because the interesting
+    # start-up lines come from build_container's startup reconcile --
+    # including "adopted N still-running graph execution(s)", which is
+    # the one line that tells an operator who just restarted the server
+    # that a run was re-attached to rather than thrown away. Configuring
+    # logging after it means exactly those lines are the ones lost, since
+    # without a handler Python's last resort shows WARNING and nothing
+    # else.
+    #
+    # uvicorn's ``log_level`` configures uvicorn's own loggers only, so
+    # it does not cover the backend's twelve logger.info calls.
+    logging.basicConfig(
+        level=os.environ.get("BACKEND_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    )
 
     # Entry-point parity with the retired server_cli (archived with M9):
     # both gateways spawn children via os.environ.copy(), so the XPU

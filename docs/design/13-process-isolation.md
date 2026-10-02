@@ -120,7 +120,11 @@ has.
 
 ## Choosing the mode
 
-`BACKEND_GRAPH_EXECUTION=child|inprocess`, default **`inprocess`**.
+`BACKEND_GRAPH_EXECUTION=child|inprocess`, default **`child`**.
+
+`child` is the default because isolation is the entire reason for putting
+the run in another process, and the cost is measured rather than assumed
+(below): ~1.95 s of startup per run, against runs that take minutes.
 
 The in-process gateway is not "the old way round a new interface": it
 calls the same `run_execution` with a `threading.Event` where the child
@@ -160,10 +164,25 @@ skips them to avoid double-counting. Bounded by one record per node.
 
 **`inprocess` is not adoptable, by construction.** A thread cannot
 outlive its process, and `InProcessGraphTaskGateway.find_running`
-returns `None` — the honest answer, not a limitation to apologise for.
-With the default still `inprocess`, adoption is code that only runs if
-you opt in. It is exercised by `test_graph_adoption.py` either way, but
-only the `child` setting makes it live.
+returns `None` — the honest answer, not a limitation to apologise for. So
+setting `BACKEND_GRAPH_EXECUTION=inprocess` gives up adoption as well as
+isolation; that is the price of the rollback, and worth knowing before
+reaching for it.
+
+## Verified against a running server
+
+Not only in tests. On this machine, against a live server on port 8791
+with `BACKEND_GRAPH_EXECUTION=child`:
+
+| what was done | what happened |
+|---|---|
+| a 3-node graph through `POST /api/v1/graphs/run` | `finished` in 2.01 s, all three node results present (start to finish: 2.01 s, which is the startup) |
+| `POST .../stop` on a 20 000-node run | `stopped`, "stop requested"; the child ran a few more nodes before noticing, which is what cooperative means |
+| `SIGKILL` the child mid-run | row went to `error`: *"execution process exited without reporting an outcome (crashed, or a device fault killed it) -- see the execution log"*. **The server kept serving**, and a new run started immediately |
+| `SIGKILL` the **server** mid-run, restart it | `adopted graph execution 1, still running as pid 538971`, then `adopted 1 still-running graph execution(s)`; results kept climbing under the new server, and a later `stop` ended it cleanly |
+
+That third row is the property the whole change exists for: before it, a
+`SIGKILL` of the running process was the server's own death.
 
 **One active execution, as before.** Nothing here changed that; see
 `start_graph_execution.py` for why.

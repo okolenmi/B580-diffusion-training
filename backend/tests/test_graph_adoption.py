@@ -383,6 +383,36 @@ def test_adoption_counts_are_reported_separately() -> None:
           "they are separate fields rather than one")
 
 
+def test_the_default_is_the_child() -> None:
+    print("\n== the default is isolation, and stays that way ==")
+    from backend.config import (
+        DEFAULT_GRAPH_EXECUTION_MODE,
+        GRAPH_EXECUTION_CHILD,
+        Settings,
+    )
+
+    # Pinned because the default was deliberately left on the old path
+    # while the new one was being built, and flipping it was the last
+    # step rather than the first. A later edit that moved it back would
+    # otherwise pass every test in the suite: the tests build their own
+    # gateway explicitly, so the default is the one thing they never
+    # exercise.
+    check(DEFAULT_GRAPH_EXECUTION_MODE == GRAPH_EXECUTION_CHILD,
+          f"the named default is the child gateway (got {DEFAULT_GRAPH_EXECUTION_MODE!r})")
+    check(Settings.load({}).graph_execution_mode == GRAPH_EXECUTION_CHILD,
+          "and an unset environment gets it")
+    check(Settings(project_root=Path(".")).graph_execution_mode == GRAPH_EXECUTION_CHILD,
+          "and so does a constructed Settings, whose field default and the "
+          "env default are separate paths that could disagree")
+
+    # The rollback has to keep working, or "flip it back" is not a plan.
+    check(
+        Settings.load({"BACKEND_GRAPH_EXECUTION": "inprocess"}).graph_execution_mode
+        == "inprocess",
+        "and the rollback still overrides it",
+    )
+
+
 def main() -> None:
     tests = [
         test_replay_skips_node_results_but_keeps_monitor_history,
@@ -390,6 +420,7 @@ def main() -> None:
         test_a_run_with_no_event_file_is_not_adopted,
         test_an_in_process_run_is_never_adoptable,
         test_adoption_counts_are_reported_separately,
+        test_the_default_is_the_child,
     ]
     results: dict = {}
     with ThreadPoolExecutor(max_workers=len(tests)) as pool:

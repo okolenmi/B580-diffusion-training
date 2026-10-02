@@ -28,12 +28,23 @@ _DEFAULT_DB_PATH = _PROJECT_ROOT / "backend" / "data" / "backend.db"
 
 #: How a graph execution runs. ``child`` isolates it from the API server
 #: process (WP-22: a device fault or an OOM kill takes the run down, not
-#: the server); ``inprocess`` runs the same code on a thread here. The
-#: values are the setting's wire shape, so the composition root maps them
-#: straight onto a gateway rather than re-parsing a string.
+#: the server, and a run survives a restart); ``inprocess`` runs the same
+#: producer on a thread here. The values are the setting's wire shape, so
+#: the composition root maps them straight onto a gateway rather than
+#: re-parsing a string.
+#:
+#: ``child`` is the default because isolation is the whole point of
+#: putting the run in another process, and the cost is measured: ~1.95s
+#: of startup per run, against runs that take minutes. ``inprocess``
+#: remains because it is the rollback -- if the child path breaks
+#: something on hardware nobody tested, one variable undoes it.
 GRAPH_EXECUTION_CHILD = "child"
 GRAPH_EXECUTION_INPROCESS = "inprocess"
 GRAPH_EXECUTION_MODES = (GRAPH_EXECUTION_CHILD, GRAPH_EXECUTION_INPROCESS)
+#: Named once, because the field default, the env default and the
+#: unrecognised-value fallback are three separate code paths and spelling
+#: the mode in each of them is how a "default" ends up meaning two things.
+DEFAULT_GRAPH_EXECUTION_MODE = GRAPH_EXECUTION_CHILD
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +60,7 @@ class Settings:
     #: built, not what the user configured about their project -- and
     #: because it must be readable before anything is wired, so a failed
     #: rollout is one variable away from being undone.
-    graph_execution_mode: str = GRAPH_EXECUTION_INPROCESS
+    graph_execution_mode: str = DEFAULT_GRAPH_EXECUTION_MODE
 
     @classmethod
     def load(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -60,20 +71,20 @@ class Settings:
         may override individual fields on top of this via
         ``dataclasses.replace``.
 
-        An unrecognised ``BACKEND_GRAPH_EXECUTION`` falls back to the
-        default instead of raising: this is read during start-up, and a
-        typo in a convenience variable should not stop a server that is
-        otherwise fine from starting.
+        An unrecognised ``BACKEND_GRAPH_EXECUTION`` falls back to
+        ``DEFAULT_GRAPH_EXECUTION_MODE`` instead of raising: this is read
+        during start-up, and a typo in a convenience variable should not
+        stop a server that is otherwise fine from starting.
         """
         env = os.environ if env is None else env
         db_path = env.get("BACKEND_DB_PATH")
-        mode = env.get("BACKEND_GRAPH_EXECUTION", GRAPH_EXECUTION_INPROCESS)
+        mode = env.get("BACKEND_GRAPH_EXECUTION", DEFAULT_GRAPH_EXECUTION_MODE)
         if mode not in GRAPH_EXECUTION_MODES:
             logger.warning(
                 "ignoring BACKEND_GRAPH_EXECUTION=%r; expected one of %s",
                 mode, ", ".join(GRAPH_EXECUTION_MODES),
             )
-            mode = GRAPH_EXECUTION_INPROCESS
+            mode = DEFAULT_GRAPH_EXECUTION_MODE
         return cls(
             project_root=_PROJECT_ROOT,
             host=env.get("BACKEND_HOST", _DEFAULT_HOST),

@@ -41,7 +41,7 @@ change -- see the note at the end about what it caught.
 | WP-15 | one console, one message box, one error sentence | `3d2403a` | `frontend/tests/` 30 cases; found the suite's 2.1 GB of leaked /tmp |
 | WP-16 | property tests at the untrusted boundaries; one place to point the app away from ComfyUI | `f66d47b` | found a NUL byte turning a 422 into a 500; truncation verified at every byte offset; live-verified redirect |
 | WP-17 | decision records; a check for documented numbers | `e65643d` | found the migration strategy claiming 47 endpoints against an actual 50 |
-| WP-21 | event contract: `seq`, lifecycle replay ring, `Last-Event-ID`, generated JSON Schema | `1295946`, `aeb0bd1` | renamed `cache_total` and watched the check name `run.js: e.cache_total`; 70 payload/schema pairs cross-checked against real `jsonschema` |
+| WP-21 | event contract: `seq`, lifecycle replay ring, `Last-Event-ID`, generated JSON Schema | `1295946`, `555e61d` | renamed `cache_total` and watched the check name `run.js: e.cache_total`; 70 payload/schema pairs cross-checked against real `jsonschema` |
 
 Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
 

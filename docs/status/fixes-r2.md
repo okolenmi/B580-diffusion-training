@@ -59,7 +59,7 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   and the argv `-m core.cli` — code the `core/` removal will disturb. The
   PID-reuse guard fixed in `75e3fed` lives in the same module, which is
   an argument for not churning it.
-* **WP-20: mostly dissolved, one real extraction done** (`21c93b5`).
+* **WP-20: mostly dissolved, one real extraction done** (`9a1eff0`).
   The review named `RunSupervisor` vs `GraphExecutionSupervisor`
   hand-rolling the same lifecycle, and a `ProcessGateway` base shared by
   the training and dataset-task gateways. Both pairs lost a member when

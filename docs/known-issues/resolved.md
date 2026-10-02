@@ -100,9 +100,10 @@ by inspection.
   `use_checkpoint=True` actually reach SDXL's
   `BasicTransformerBlock` stacks (ComfyUI's
   `BasicTransformerBlock.__init__` never assigns its `checkpoint`
-  argument, so only `ResBlock` was ever checkpointed -- see the
-  original entry's root-cause work in git history for this file's
-  pre-move version). **Confirmed:** two identical main-route runs on
+  argument, and `BasicTransformerBlock.forward()` never calls
+  `checkpoint()` anywhere in its body despite taking that parameter --
+  so only `ResBlock` was ever checkpointed). **Confirmed:** two
+  identical main-route runs on
   the uniform 1024-dataset (40 steps, rank 64, budget 11500), differing
   only in whether `enable_attention_block_checkpointing()` was
   active: with the patch (`A_after`) -- 40/40 steps, per-step peak

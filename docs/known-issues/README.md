@@ -15,3 +15,10 @@ Two rules that matter before editing anything here:
 |---|---|
 | [`open.md`](open.md) | Confirmed or suspected issues with no fix landed yet, plus one closed-by-measurement finding. Check here first if you've hit something odd. |
 | [`resolved.md`](resolved.md) | Worth mentioning resolved cases (don't add new if they don't give valuable information) |
+| [`pending-testing.md`](pending-testing.md) | Fixes believed correct but exercised only on CPU, or whose effect is unmeasured. Each entry says what is unproven and how to confirm it on hardware. |
+| [`deferred.md`](deferred.md) | Known and deliberately not acted on, with the reason. Not the same as *open* — nothing here is waiting for a decision. |
+
+An entry belongs in exactly one of these. The usual wrong move is leaving
+a closed item where it was filed "for context": a note that says it moved
+somewhere else is a changelog entry, and the copy it keeps is the part
+that rots.

@@ -36,6 +36,32 @@ from backend.tests.support import check, finish
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _layout(runs_dir: Path, comfy: Path | None = None) -> WorkspaceLayout:
+    """A layout with its own world (docs 08 N-01).
+
+    Without a `settings_kv` supplying `comfy_dir`, `path_tiers.comfy_dir`
+    falls back to *this machine's* ComfyUI install -- so this file passed
+    locally and failed on a fresh clone, which is the worst possible
+    combination: green here, red there, with nothing in the code
+    explaining the difference. Tests must not depend on the developer's
+    directory layout (quality rule 8).
+
+    `comfy` defaults to a directory *beside* `runs_dir`, so it is inside
+    the caller's TemporaryDirectory and nothing can reach a real model
+    directory even if a future assertion goes looking. (An earlier
+    version minted its own mkdtemp per call, which leaked a directory on
+    every call of every test run.)
+    """
+    comfy = comfy or runs_dir.parent / "fake-comfy"
+    comfy.mkdir(parents=True, exist_ok=True)
+    overrides = {"comfy_dir": str(comfy)}
+    return WorkspaceLayout(
+        _PROJECT_ROOT,
+        runs_dir=runs_dir,
+        settings_kv=lambda key, default: overrides.get(key, default),
+    )
+
+
 def _write_config(directory: str, name: str = "cfg.toml") -> Path:
     path = Path(directory) / name
     write_config(path, TrainingConfig())
@@ -61,7 +87,7 @@ def _launch(config_path: Path, tmp: str, **overrides) -> TrainingLaunch:
 def test_real_inspector() -> None:
     print("\n== CoreConfigInspector over the real config model ==")
     with tempfile.TemporaryDirectory() as tmp:
-        inspector = CoreConfigInspector(WorkspaceLayout(Path(tmp)))
+        inspector = CoreConfigInspector(_layout(Path(tmp) / "runs", Path(tmp)))
         good = _write_config(tmp)
         summary = inspector.summarize(good)
         check(
@@ -88,7 +114,7 @@ def test_command_builder_flags() -> None:
     print("\n== SubprocessTrainingGateway._build_command (real config) ==")
     with tempfile.TemporaryDirectory() as tmp:
         config_path = _write_config(tmp)
-        layout = WorkspaceLayout(_PROJECT_ROOT, runs_dir=Path(tmp) / "runs")
+        layout = _layout(Path(tmp) / "runs")
         gateway = SubprocessTrainingGateway(layout)
 
         teacher = gateway._build_command(_launch(config_path, tmp))
@@ -139,7 +165,7 @@ def test_spawn_wraps_launch_failures() -> None:
     print("\n== spawn raises TrainingLaunchError, never OSError ==")
     with tempfile.TemporaryDirectory() as tmp:
         config_path = _write_config(tmp)
-        layout = WorkspaceLayout(_PROJECT_ROOT, runs_dir=Path(tmp) / "runs")
+        layout = _layout(Path(tmp) / "runs")
         gateway = SubprocessTrainingGateway(layout)
         launch = _launch(config_path, tmp)
 
@@ -172,7 +198,7 @@ def test_signal_safety() -> None:
     print("\n== signal safety: owns() gates stop/kill, liveness is honest ==")
     with tempfile.TemporaryDirectory() as tmp:
         config_path = _write_config(tmp)
-        layout = WorkspaceLayout(_PROJECT_ROOT, runs_dir=Path(tmp) / "runs")
+        layout = _layout(Path(tmp) / "runs")
         gateway = SubprocessTrainingGateway(layout)
 
         # This process is certainly not a core.cli trainer.

@@ -29,17 +29,21 @@ from .ports.graph_library import SavedGraph
 
 @dataclass(frozen=True, slots=True)
 class ReconcileResult:
-    """Outcome of a startup sweep: rows moved out of an unfinished state.
+    """Outcome of a startup sweep of unfinished rows.
 
-    Shared by the dataset-task and graph-execution reconcilers. It used to
-    carry an ``adopted`` count as well -- trainers found still alive and
-    re-attached to rather than killed -- which was specific to the
-    supervised-subprocess route, where a half-trained run outlived the
-    server that owned it. Neither remaining sweep adopts anything: both
-    own the process outright, so an unfinished row means it died.
+    Shared by the dataset-task and graph-execution reconcilers, which is
+    why ``adopted`` exists on a type a reconciler that adopts nothing can
+    still produce: a graph run lives in its own session and can outlive
+    the server that started it, so that sweep has a second outcome
+    besides "row moved out of an unfinished state" and counting them
+    together would hide how much work was thrown away.
+
+    ``cleaned`` is the count that failed; ``adopted`` is the count that
+    was re-attached to and is still running.
     """
 
     cleaned: int
+    adopted: int = 0
 
 
 @dataclass(frozen=True, slots=True)

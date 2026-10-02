@@ -36,6 +36,7 @@ from backend.application.use_cases import ReconcileGraphExecutions
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.exceptions import DomainError, InvalidTransitionError
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec, NodeResult
+from backend.application.ports.execution_launcher import ExecutionLauncher
 from backend.domain.value_objects import ExecutionId, GraphStatus
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.persistence.graph_execution_repository import (
@@ -79,6 +80,25 @@ VALID = make(
 
 def codes(events) -> list[str]:
     return [event.event_type for event in events]
+
+
+class NothingToAdopt(ExecutionLauncher):
+    """A launcher with no runs of its own to find.
+
+    The default for the reconcile tests: they are about what happens to
+    rows nobody is watching, and the case where something *is* still
+    running is the adoption tests in test_graph_task_gateway.py, which
+    needs a real child to be true.
+    """
+
+    def launch(self, execution_id, graph) -> None:
+        raise AssertionError("the reconcile tests never launch")
+
+    def cancel(self, execution_id) -> None:
+        raise AssertionError("the reconcile tests never cancel")
+
+    def adopt(self, execution_id):
+        return None
 
 
 # ==========================================================================
@@ -413,10 +433,13 @@ sweep = ReconcileGraphExecutions(
         repository=reconcile_repo,
         events=EventPublisher(events=reconcile_events),
     ),
+    launcher=NothingToAdopt(),
     clock=reconcile_clock,
 )
 result = sweep.execute()
-check(result.cleaned == 2, "reconcile fails every unfinished row")
+check(result.cleaned == 2 and result.adopted == 0,
+      f"reconcile fails every unfinished row (got cleaned={result.cleaned} "
+      f"adopted={result.adopted})")
 check(
     reconcile_repo.get(left_queued.id).status is GraphStatus.ERROR
     and reconcile_repo.get(left_queued.id).error

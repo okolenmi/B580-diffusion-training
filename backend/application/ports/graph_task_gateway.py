@@ -58,6 +58,19 @@ class GraphTaskLaunch:
     event_path: Path
     log_path: Path
 
+    @property
+    def scratch_name(self) -> str:
+        """The stem shared by this run's three files, without an extension.
+
+        Derived rather than passed so the three paths cannot disagree about
+        which run they belong to. The supervisor needs the same stem to
+        find a run it did not start (``adopt``), and deriving it in one
+        place is what stops the two from drifting apart -- a mismatch would
+        not be a failed adoption, it would be a silent *wrong* adoption:
+        one run's history replayed into another's row.
+        """
+        return f"execution_{self.execution_id}"
+
 
 class GraphTaskGateway(ABC):
     @abstractmethod
@@ -89,6 +102,22 @@ class GraphTaskGateway(ABC):
     @abstractmethod
     def is_alive(self, pid: int) -> bool:
         """True only for a live process that is one of our graph children."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def find_running(self, execution_id: ExecutionId) -> int | None:
+        """The pid of a still-running child for ``execution_id``, if any.
+
+        Asked once per unfinished row at startup, and the whole reason the
+        port has this method: a child outlives the server that started it
+        (its own session, its own parent after a restart), so a restart is
+        not by itself a reason to throw the run away.
+
+        ``None`` for "no such child" and for "cannot tell" alike, because
+        the caller's response to both is the same -- fail the row -- and
+        claiming to know when ``/proc`` could not answer would be a lie
+        with consequences.
+        """
         raise NotImplementedError
 
 

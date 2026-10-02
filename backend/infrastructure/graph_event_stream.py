@@ -165,6 +165,21 @@ class ExecutionEventTail:
     def offset(self) -> int:
         return self._offset
 
+    @property
+    def caught_up(self) -> bool:
+        """Has everything written so far been consumed as whole records?
+
+        Not the same as "the last poll returned nothing". A poll returns
+        nothing both when the writer is idle and when it is mid-line, and
+        the difference matters to adoption: the watcher uses this to close
+        a replay window, and closing it early would replay node results
+        the row already holds.
+        """
+        try:
+            return self._path.stat().st_size == self._offset
+        except OSError:
+            return True  # gone: there is nothing left to catch up to
+
     def reset(self) -> None:
         self._offset = 0
 

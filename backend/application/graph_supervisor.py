@@ -91,6 +91,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         self._lock = threading.Lock()
         self._pids: dict[ExecutionId, int] = {}
         self._stop_requested: set[ExecutionId] = set()
+        self._replaying: set[ExecutionId] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -111,15 +112,14 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         paths["events"].parent.mkdir(parents=True, exist_ok=True)
         paths["graph"].write_text(json.dumps(graph.as_dict()), encoding="utf-8")
 
+        launch = GraphTaskLaunch(
+            execution_id=execution_id,
+            graph_path=paths["graph"],
+            event_path=paths["events"],
+            log_path=paths["log"],
+        )
         try:
-            pid = self._gateway.spawn(
-                GraphTaskLaunch(
-                    execution_id=execution_id,
-                    graph_path=paths["graph"],
-                    event_path=paths["events"],
-                    log_path=paths["log"],
-                )
-            )
+            pid = self._gateway.spawn(launch)
         except Exception:
             # The row was already inserted by the use case, and a row left
             # queued blocks the single-active check until a restart. This
@@ -175,6 +175,62 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             daemon=True,
         ).start()
 
+    def adopt(self, execution_id: ExecutionId) -> int | None:
+        """Re-attach to a run that outlived the server that started it.
+
+        A child lives in its own session, so it survives its parent's
+        death; a restart is therefore not by itself a reason to throw a
+        run away. Asked once per unfinished row at startup, before the
+        reconciler gives up on it.
+
+        Replays the event file from the start rather than resuming at the
+        end, and the point of that replay is the *monitor* history: it is
+        the only trace of the run that lives outside the row, and it is
+        what makes a dashboard opened after the restart show the run's
+        curve instead of an empty chart until the next report.
+
+        Node records are skipped during the replay for the opposite reason.
+        The row already holds their results -- they were CAS-persisted
+        before the restart -- so replaying them would append each one
+        twice, and the domain refuses to load a row with more results than
+        nodes. It would also re-announce progress events the event store
+        is about to replay to reconnecting clients on its own (docs 07
+        F-08).
+
+        Returns the pid, or ``None`` when there is nothing to adopt -- no
+        live child, no event file, or a run that had not yet started
+        writing. All three mean the same thing to the caller.
+        """
+        pid = self._gateway.find_running(execution_id)
+        if pid is None:
+            return None
+        paths = self._paths_for(execution_id)
+        if not paths["events"].exists():
+            # A live child whose event file is missing means the scratch
+            # was cleaned out from under it. Its output would go
+            # nowhere, so the run is not observable and not adoptable.
+            logger.warning(
+                "graph execution %s has a live child (pid %s) but no event "
+                "file at %s; not adopting", execution_id, pid, paths["events"],
+            )
+            return None
+        with self._lock:
+            self._pids[execution_id] = pid
+            self._replaying.add(execution_id)
+        tail = self._make_tail(paths["events"])
+        tail.reset()  # from the top on purpose -- see the docstring
+        logger.info(
+            "adopted graph execution %s, still running as pid %s",
+            execution_id, pid,
+        )
+        threading.Thread(
+            target=self._watch,
+            args=(execution_id, pid, tail, True),
+            name=f"backend-graph-adopt-{execution_id}",
+            daemon=True,
+        ).start()
+        return pid
+
     def _escalate(self, execution_id: ExecutionId, pid: int) -> None:
         """Hard-kill a run that ignored a cooperative stop."""
         threading.Event().wait(self._stop_grace)
@@ -205,7 +261,13 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         execution.mark_running(at=self._clock.now())
         return self._writer.commit(execution, expected=GraphStatus.QUEUED)
 
-    def _watch(self, execution_id: ExecutionId, pid: int, tail) -> None:
+    def _watch(
+        self,
+        execution_id: ExecutionId,
+        pid: int,
+        tail,
+        catch_up: bool = False,
+    ) -> None:
         """Tail one run's event file until it ends, then finalise.
 
         The mirror image of the in-process callback loop this replaced,
@@ -213,11 +275,15 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         trusting its own memory (the authoritative status lives there),
         and contains its own exceptions (losing progress reporting must
         never lose the run -- the final write carries the results anyway).
+
+        ``catch_up`` is set only by ``adopt``: the file is being read from
+        the top over a span that already happened, and node records in
+        that span must not be recorded again.
         """
         outcome_error: str | None = None
         saw_outcome = False
         try:
-            if not self._claim(execution_id):
+            if not catch_up and not self._claim(execution_id):
                 # A stop won the row while the child was still starting.
                 # It never wrote anything, and nothing is going to read
                 # its event file, so it goes now.
@@ -227,12 +293,21 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 for event in tail.poll():
                     kind = event.kind
                     if kind is EventKind.NODE:
-                        self._record_node(execution_id, event.payload)
+                        if not catch_up:
+                            self._record_node(execution_id, event.payload)
                     elif kind is EventKind.MONITOR:
                         self._republish_monitor(event.payload)
                     else:  # OUTCOME
                         saw_outcome = True
                         outcome_error = event.payload.get("error")
+                if catch_up and tail.caught_up:
+                    # Exactly caught up, not "a poll came back empty": a
+                    # poll is also empty while the child is mid-line, and
+                    # treating that as caught-up would start recording node
+                    # results the row already has.
+                    catch_up = False
+                    with self._lock:
+                        self._replaying.discard(execution_id)
                 if not self._gateway.is_alive(pid):
                     break
                 execution = self._executions.get(execution_id)
@@ -372,9 +447,22 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         with self._lock:
             self._pids.pop(execution_id, None)
             self._stop_requested.discard(execution_id)
+            self._replaying.discard(execution_id)
         reap = getattr(self._gateway, "reap", None)
         if reap is not None:
             reap(pid)
+
+    def _replayed(self, execution_id: ExecutionId) -> bool:
+        """Has this adopted run finished catching up on its history?
+
+        Exists because "the replay window closed" is the one fact the
+        adoption tests need to observe and there is no way to observe it
+        from outside -- the watcher catches up inside its own loop, and
+        without a signal the only honest thing a test can do is sleep and
+        hope, which asserts the race rather than the behaviour.
+        """
+        with self._lock:
+            return execution_id not in self._replaying
 
     def _fail_leftover(self, execution_id: ExecutionId) -> None:
         """Last-ditch row repair: never leave the row active.

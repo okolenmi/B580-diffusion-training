@@ -774,6 +774,7 @@ def build_services(
             reconcile_executions=ReconcileGraphExecutions(
                 executions=graph_executions,
                 writer=execution_writer,
+                launcher=graph_supervisor,
                 clock=clock,
             ),
             save_graph=SaveGraph(library=graph_library),

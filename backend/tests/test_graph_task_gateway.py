@@ -300,12 +300,12 @@ class _ThreadRoutedStdout:
         self._local = threading.local()
         self._saved = None
 
-    def __enter__(self) -> "_ThreadRoutedStdout":
+    def __enter__(self) -> _ThreadRoutedStdout:
         self._saved = sys.stdout
         sys.stdout = self
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *_exc) -> None:
         sys.stdout = self._saved
 
     def bind(self, buffer) -> None:

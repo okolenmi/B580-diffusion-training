@@ -119,7 +119,14 @@ def test_vanished_and_zombie() -> None:
     # way out.
     zombie = subprocess.Popen(["/bin/true"])
     zombie_pid = zombie.pid
-    time.sleep(0.05)
+    # Waited for, not slept on. A fixed sleep was a latent flake here:
+    # it assumed /bin/true exits within 50ms, which holds on an idle
+    # machine and stops holding the moment the suite has real work running
+    # alongside it -- and it failed the *whole* file, on an assertion
+    # about a process that had simply not exited yet.
+    check(_wait_until(lambda: _read_cmdline(zombie_pid) == ""),
+          f"the unreaped child becomes a zombie, whose cmdline reads empty "
+          f"(got {_read_cmdline(zombie_pid)!r})")
     check(_read_cmdline(zombie_pid) == "",
           f"the unreaped child has an empty cmdline (got "
           f"{_read_cmdline(zombie_pid)!r})")
@@ -142,6 +149,15 @@ def test_parent_pid_parsing() -> None:
 
     check(_parent_pid(999_999_999) is None,
           "a pid with no /proc entry has no readable parent")
+
+
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return False
 
 
 def _wait_for_cmdline(pid: int, timeout: float = 5.0) -> str | None:

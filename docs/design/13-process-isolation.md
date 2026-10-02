@@ -1,0 +1,185 @@
+# Process isolation for graph execution
+
+*[← design index](README.md)* · see also
+[`11-core-removal.md`](11-core-removal.md),
+[`12-training-modes.md`](12-training-modes.md)
+
+Graph execution used to run in a thread inside the API server process.
+It now runs in a child, behind a port, supervised by tailing a file.
+
+The problem that prompted it: a device fault, an OOM kill or a driver
+reset took the server **and** the run down together, and a long node
+build competed with everything else in the process. With the run out
+here, the worst outcome is that *that* process dies and the row says so.
+
+## What moves and what does not
+
+| | Before | After |
+|---|---|---|
+| `ReflectedGraphRuntime.execute` | a `GraphExecutionSupervisor` thread | `backend/infrastructure/graph_task_worker.py`, a child |
+| `GraphRuntime.validate` | in-process | **in-process, unchanged** — it is pure, cheap, and the editor needs it on every keystroke |
+| live monitor reports | `SharedMonitorBus`, in-process | appended to the event file, republished by the watcher onto the server's own bus |
+| node results | `on_node_done` callback | `node` records in the event file |
+| how it ended | the return value | an `outcome` record |
+
+Both gateways call the *same* producer,
+`graph_task_worker.run_execution`. The alternative was two
+implementations of "run a graph and report it", and they would not have
+stayed identical.
+
+## The event file is the only channel
+
+A pipe would couple the two lifecycles in exactly the way isolation is
+meant to break: close the parent and the child gets `EPIPE` on its next
+write, so a server restart would kill the run it was supposed to
+survive. A file has no such coupling.
+
+Three record kinds, one JSON object per line:
+
+| kind | meaning |
+|---|---|
+| `node` | a node finished; the payload is a described `NodeResult` |
+| `monitor` | a live monitor report: `monitor_id`, `data` |
+| `outcome` | the run ended: `error`, `results_count` |
+
+`outcome` is the one that earns its keep. Without it, "the graph
+failed" and "the process died" are the same absence, and a run killed by
+a device fault would be reported as a **success** because nobody wrote
+down a problem.
+
+Records are written per record with a fresh append-mode handle rather
+than through a buffer held for the whole run. That costs one
+open/write/close per report and buys two things a held-open handle does
+not: no user-space buffer, so a `SIGKILL` cannot lose an
+already-written record; and each append is one `write(2)` under
+`O_APPEND`, which the kernel does as a single step, so records cannot
+interleave with another writer's.
+
+The reader still consumes whole lines only, and still tolerates a torn
+tail. "Far more often than not" is not "always" — the deleted
+`JsonlProgressSource` had the same rule for the same reason (docs 07
+F-07).
+
+### Why the monitor reports go through the file
+
+`SharedMonitorBus` keeps its history in a per-process `deque` and hands
+each subscriber an `asyncio.Queue`. Neither is reachable from a child.
+Routing reports through the file keeps the server's own bus as the
+single source of what a dashboard sees — including "opened the page
+mid-run and saw the whole curve", because the file *is* the history.
+
+## Stop
+
+Cooperative first. `request_stop` sends `SIGINT` to the child's process
+group; the child's handler sets the cancel event and the runtime notices
+at the next step boundary. A stop that the child ignores is escalated to
+`SIGKILL` after a grace period (15 s), by the supervisor, so exactly one
+place decides a run is not stopping.
+
+Sending `SIGINT` rather than killing outright is what lets a stopping
+run flush its event file and run `release_memory` — the same reason the
+retired training route used the same escalation (docs 07 F-12).
+
+Both signals are refused for a pid whose cmdline does not name our
+worker module. `kill(pid, 0)` answers "does *a* process hold this
+number", and after a reboot it will happily answer yes about something
+else. The test for this is the server itself: with the guard removed,
+`test_graph_task_gateway.py` SIGINTs its own test runner.
+
+## Adoption across a restart
+
+A child in its own session outlives the server that started it. So a
+restart is no longer the end of a run that is still going, and
+`ReconcileGraphExecutions` offers each unfinished row to the launcher
+before failing it.
+
+**The pid is discovered, not stored.** A pid kept in a row is a claim
+about the past; read it after a reboot and it names whatever process the
+number was recycled to. Instead `find_by_argv` reads live `/proc` and
+matches the child's *own* argv: the worker module as an exact token,
+plus `--execution <id>` as an exact `flag value` pair. Exactness is the
+point — a substring test would let `--execution 1` match the child
+running `--execution 15`, and an adopted run gets its history replayed
+into a row that is not its own.
+
+**The replay re-reads the file from the top, and skips node records
+while it catches up.** The monitor history is the reason: it is the only
+trace of the run that lives outside the row, and it is what makes a
+dashboard opened after the restart show the curve instead of an empty
+chart. Node records are skipped for the opposite reason — the row
+already holds their results, so replaying them would append each twice,
+and the domain refuses to load a row with more results than nodes. It
+would also re-announce progress events the event store is about to
+replay to reconnecting clients on its own (docs 07 F-08).
+
+The replay window closes on `ExecutionEventTail.caught_up` — "every
+byte written so far has been consumed as whole records" — and not on "the
+last poll returned nothing", which is also true while the child is
+mid-line. Closing it early would record node results the row already
+has.
+
+## Choosing the mode
+
+`BACKEND_GRAPH_EXECUTION=child|inprocess`, default **`inprocess`**.
+
+The in-process gateway is not "the old way round a new interface": it
+calls the same `run_execution` with a `threading.Event` where the child
+has a `SIGINT` handler. It exists for two reasons.
+
+*Rollout.* Until the child path is the default, the supervisor, the
+watcher, the event format and the reconcile all have to be exercisable on
+every run. If only the child path were exercised, the code that replaced
+the old path would be untested until the moment it became the only path.
+Being able to select either makes the flip one line rather than a leap.
+
+*Rollback.* If the child path breaks something on hardware nobody tested,
+the default goes back without a revert.
+
+An unrecognised value falls back to the default rather than raising: this
+is read during start-up, and a typo in a convenience variable should not
+stop a server that is otherwise fine from starting.
+
+## Limits, measured
+
+*Child startup is ~1.95 s*, nearly all of it importing torch and walking
+`nodes/` (measured on this machine: 1.98 s and 1.95 s on two runs of a
+two-node graph). This is per run, not per node, so it is noise against a
+training step and visible only for short graphs. It is why the child
+tests run concurrently — five serial startups took the backend suite from
+6.3 s to 15 s.
+
+**Adoption cannot resurrect a run that never wrote anything.** The event
+file is what the watcher reads, so a run whose child produced no output
+is not observable. Its row fails, and its child is left alone rather than
+killed: the supervisor does not own a process it did not start, and a
+user can still find it in `ps`.
+
+**Node results written between the last successful CAS and the restart
+are lost.** They are in the event file, but the replay deliberately
+skips them to avoid double-counting. Bounded by one record per node.
+
+**`inprocess` is not adoptable, by construction.** A thread cannot
+outlive its process, and `InProcessGraphTaskGateway.find_running`
+returns `None` — the honest answer, not a limitation to apologise for.
+With the default still `inprocess`, adoption is code that only runs if
+you opt in. It is exercised by `test_graph_adoption.py` either way, but
+only the `child` setting makes it live.
+
+**One active execution, as before.** Nothing here changed that; see
+`start_graph_execution.py` for why.
+
+## Where the pieces are
+
+| file | role |
+|---|---|
+| `application/ports/graph_task_stream.py` | the record protocol (`EventKind`, `ExecutionEvent`) |
+| `application/ports/graph_task_gateway.py` | `spawn` / `request_stop` / `kill` / `is_alive` / `find_running` |
+| `application/graph_supervisor.py` | claims the row, tails, finalises, adopts |
+| `infrastructure/graph_event_stream.py` | the file: `ExecutionEventWriter`, `ExecutionEventTail` |
+| `infrastructure/graph_task_worker.py` | the child, and the shared producer `run_execution` |
+| `infrastructure/graph_task_gateway.py` | the two gateways |
+| `infrastructure/process_identity.py` | the pid-reuse guard and pid discovery |
+
+The protocol lives in `application/ports/` and the file does not, because
+the supervisor has to know what a `node` record means without importing a
+file reader — `application` may not import `infrastructure`.

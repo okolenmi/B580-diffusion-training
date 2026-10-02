@@ -1,10 +1,16 @@
 """Process identity -- one implementation of the PID-reuse guard.
 
-Both subprocess gateways (training and dataset tasks) answer the same
-question before they signal anything: *is this pid still the process we
-started, or has the number been recycled?* Signals do not come with a
-name, so the guard is the only thing standing between a stale row and an
-unrelated process on the same machine (docs 07 F-12).
+Three subprocess gateways have asked the same two questions, and both
+answers live here because both are answered by reading ``/proc``:
+
+* *is this pid still the process we started, or has the number been
+  recycled?* (``cmdline_mentions``) Every gateway asks before it signals
+  anything, because signals do not come with a name, so the guard is the
+  only thing standing between a stale row and an unrelated process on the
+  same machine (docs 07 F-12).
+* *which pids are running our child, and for which run?*
+  (``find_by_argv``) The graph gateway asks this after a restart, to
+  adopt a run whose server died but whose child did not.
 
 The contract is three-valued on purpose:
 
@@ -21,6 +27,7 @@ The contract is three-valued on purpose:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -62,6 +69,80 @@ def cmdline_mentions(pid: int, marker: str) -> bool | None:
         )
         return None
     return False
+
+
+def argv_of(pid: int) -> list[str] | None:
+    """``/proc/<pid>/cmdline`` split into argv, or ``None`` if unreadable.
+
+    Split on NUL because that is what the kernel writes: argv entries are
+    NUL-terminated, so one entry per element with no escaping to reason
+    about. An empty argv is a real answer, not a failure -- that is what a
+    zombie reads as, and "the process is gone as far as we are concerned"
+    is exactly the right reading of one.
+    """
+    raw = _read_cmdline(pid)
+    if raw is None:
+        return None
+    return [part for part in raw.split("\x00") if part]
+
+
+def find_by_argv(marker: str, *pairs: str) -> list[int]:
+    """Live pids whose argv contains ``marker`` and every ``(flag, value)``.
+
+    Exact token matching rather than a substring test, which is the whole
+    reason this takes argv and not a joined string: ``--execution 1`` must
+    not match the child running ``--execution 15``. Joining the cmdline
+    and searching for ``"1"`` would adopt somebody else's run on the first
+    id past nine, and an adopted run gets its history replayed into a row
+    that is not its own.
+
+    Pids come back in ascending order, so a caller with more than one
+    match gets a deterministic answer rather than whichever the
+    directory happened to list first.
+
+    A pid whose argv cannot be read is skipped, not guessed at: it cannot
+    be confirmed, and the alternative -- treating an unreadable process as
+    a candidate -- would adopt things on the strength of a read failure.
+    """
+    if len(pairs) % 2:
+        raise ValueError(
+            f"pairs must be (flag, value) tuples, got {pairs!r}"
+        )
+    found: list[int] = []
+    for entry in _proc_pids():
+        argv = argv_of(entry)
+        if argv is None or marker not in argv:
+            continue
+        if all(_has_pair(argv, flag, value) for flag, value in _pairs(pairs)):
+            found.append(entry)
+    return found
+
+
+def _pairs(flat: tuple[str, ...]):
+    for index in range(0, len(flat), 2):
+        yield flat[index], flat[index + 1]
+
+
+def _has_pair(argv: list[str], flag: str, value: str) -> bool:
+    """Is ``flag value`` an adjacent pair somewhere in ``argv``?"""
+    return any(
+        argv[index] == flag and argv[index + 1] == value
+        for index in range(len(argv) - 1)
+    )
+
+
+def _proc_pids() -> list[int]:
+    try:
+        entries = os.listdir("/proc")
+    except OSError as exc:
+        logger.warning("cannot list /proc (%s); no process discovery", exc)
+        return []
+    pids: list[int] = []
+    for entry in entries:
+        if entry.isdigit():
+            pids.append(int(entry))
+    pids.sort()
+    return pids
 
 
 def _read_cmdline(pid: int) -> str | None:

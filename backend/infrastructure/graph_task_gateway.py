@@ -29,7 +29,7 @@ from ..application.ports.graph_task_gateway import (
     GraphTaskGateway,
     GraphTaskLaunch,
 )
-from .process_identity import cmdline_mentions
+from .process_identity import cmdline_mentions, find_by_argv
 from .workspace import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -151,6 +151,34 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
     def _cmdline_marker_match(self, pid: int) -> bool | None:
         return cmdline_mentions(pid, CMDLINE_MARKER)
 
+    # -- adoption ---------------------------------------------------------
+
+    def find_running(self, execution_id) -> int | None:
+        """Find the child for this execution by what it says it is.
+
+        Discovered rather than stored, and that is the point. A pid kept
+        in a row is a claim about the past: read it after a reboot and it
+        names whatever process the number was recycled to, which is
+        precisely the mistake the pid-reuse guard exists to prevent. The
+        child's own argv says which execution it is serving, so this asks
+        the live system instead of trusting a record.
+
+        Returns ``None`` on a second match as well as on none. Two
+        children claiming one execution is not a situation to guess about
+        -- adopting one of them would replay one run's history into a row
+        the other is still writing.
+        """
+        matches = find_by_argv(CMDLINE_MARKER, "--execution", str(execution_id))
+        if len(matches) != 1:
+            if matches:
+                logger.error(
+                    "graph execution %s: %d live children claim it (%s); "
+                    "not adopting either",
+                    execution_id, len(matches), matches,
+                )
+            return None
+        return matches[0]
+
 class InProcessGraphTaskGateway(GraphTaskGateway):
     """Runs the child *body* on a thread, in this process.
 
@@ -241,6 +269,16 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
         with self._lock:
             thread = self._threads.get(pid)
         return thread is not None and thread.is_alive()
+
+    def find_running(self, _execution_id) -> int | None:
+        """Always ``None``: a thread cannot outlive the process it is in.
+
+        Not a limitation to apologise for -- it is the honest answer, and
+        the one the reconciler's fallback path is built around. An
+        in-process run dies with the server, so a restart genuinely is
+        the end of it; there is nothing to look for.
+        """
+        return None
 
     def reap(self, pid: int) -> None:
         """Drop the finished thread and cancel event.

@@ -31,3 +31,13 @@ class ExecutionLauncher(ABC):
         status compare-and-swap, not by this call.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def adopt(self, execution_id: ExecutionId) -> int | None:
+        """Re-attach to a run still going after a restart; None if none.
+
+        Only meaningful for a supervisor whose runs live in their own
+        process, and the honest answer from one whose runs are threads is
+        ``None`` -- those die with the server, so there is nothing to find.
+        """
+        raise NotImplementedError

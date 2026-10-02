@@ -17,6 +17,8 @@
 
 import { api, ApiError } from "./api.js";
 import { subscribeEvents } from "./lib/events.js";
+import { el } from "./lib/dom.js";
+import { log, logError } from "./lib/log.js";
 import { GraphDoc } from "./editor/state.js";
 import { Canvas } from "./editor/canvas.js";
 import { Inspector } from "./editor/inspector.js";
@@ -24,26 +26,10 @@ import { Palette } from "./editor/palette.js";
 import { Executions } from "./editor/executions.js";
 import { Library } from "./editor/library.js";
 
-const el = (id) => document.getElementById(id);
 
 /* ---- system console: same capped pattern as views/dashboard.js ----
    There is no page-local log anymore: every note rides the floating
    console the shell mounts (#console-output). */
-
-function log(message, kind = "info") {
-  const out = el("console-output");
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  while (out.children.length > 60) out.removeChild(out.firstChild);
-  out.scrollTop = out.scrollHeight;
-}
-
-function logError(err) {
-  if (err instanceof ApiError) log(`${err.code}: ${err.message}`, "error");
-  else log(String((err && err.message) || err), "error");
-}
 
 /* ---- layout: collapsible rails + executions drawer (persisted) ----
    Defaults: both rails visible, executions collapsed -- the canvas is

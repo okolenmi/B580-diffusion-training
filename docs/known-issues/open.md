@@ -164,3 +164,28 @@ hardware, and closed. Nothing is outstanding.
   measured elsewhere still applies to this operating point, where
   checkpointing's activation residency costs less than its saved
   compute.
+
+## The backend test suite leaked its scratch directories (found 2026-10-02)
+
+Every file under `backend/tests/` creates scratch with
+`tempfile.mkdtemp`, which returns a name and hands back no handle, so
+nothing removed them. One full suite run left ~40 directories behind, and
+over many runs that reached **4,834 directories and 2.1 GB on the machine
+that noticed**.
+
+`/tmp` here is a 20 GB tmpfs, so it was not disk that filled but RAM --
+which makes the failure mode worse than slow: at the wrong moment a test
+fails because it could not create its scratch directory, and the failure
+is attributed to a test that has nothing wrong with it. One such failure
+was seen (`test_graph_execution.py`, once, not reproducible) and the real
+cause is very unlikely to be a race in that file at all.
+
+Fixed in `backend/tests/run_all.py`: each file gets its own `TMPDIR`,
+which `tempfile` honours, and it is removed afterwards. A full suite run
+now leaves nothing in `/tmp` at all -- verified. `run_all.py` is the gate's
+entry point, so this covers every gate run; running a single test file
+directly still leaves what that file makes, which is the honest boundary.
+
+*Not fixed:* the ~85 bare `tmpXXXXXXXX` directories in `/tmp` are not
+ours (they carry no project prefix and appeared alongside other tools'
+output), and `/tmp/opencode` is deliberately left alone.

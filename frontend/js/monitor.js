@@ -23,6 +23,7 @@
 
 import { LossChart } from "./lib/loss_chart.js";
 import { nonfiniteText, setValue } from "./lib/value.js";
+import { el } from "./lib/dom.js";
 
 // The managed/main trainers' per-t loss diagnostics (nodes/train/loss.py's
 // t_bucket_losses keys) plotted alongside the total, one color per series:
@@ -60,7 +61,6 @@ const TIMING_TOTAL_COLOR = "#cfd8dc";
 // "no truncation in practice" and matches MonitorBus's HISTORY_LIMIT.
 const MAX_RECORDS = 100000;
 
-const el = (id) => document.getElementById(id);
 
 class MonitorDashboard {
   constructor(monitorId, els) {

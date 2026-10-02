@@ -17,31 +17,12 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
+import { el, showMessage } from "../lib/dom.js";
+import { errText } from "../lib/errors.js";
+import { log, logError } from "../lib/log.js";
 
-const el = (id) => document.getElementById(id);
 
 /* ---- system console (same convention as dashboard.js) ---- */
-
-function log(message, kind = "info") {
-  const out = el("console-output");
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  while (out.children.length > 60) out.removeChild(out.firstChild);
-  out.scrollTop = out.scrollHeight;
-}
-
-function logError(err) {
-  if (err instanceof ApiError) log(`${err.code}: ${err.message}`, "error");
-  else log(String(err && err.message ? err.message : err), "error");
-}
-
-function errText(err) {
-  return err instanceof ApiError
-    ? `${err.code}: ${err.message}`
-    : String(err && err.message ? err.message : err);
-}
 
 /* ---- state ---- */
 
@@ -129,7 +110,7 @@ function renderForm() {
 
       const control = document.createElement("div");
       control.className = "cfg-control";
-      const input = buildWidget(opt);
+      const input = buildConfigField(opt);
       input.id = widgetId(opt.id);
       control.appendChild(input);
       if (opt.help) {
@@ -155,7 +136,11 @@ function renderForm() {
 
 const widgetId = (id) => "f-" + id.replace(/\./g, "-");
 
-function buildWidget(opt) {
+/* Named buildConfigField, not buildWidget: editor/widgets.js exports a
+   `buildWidget` that builds a *node port editor* from {doc, node, port}.
+   Same name, unrelated function -- which is worse than duplication,
+   because it looks like something that could be shared and is not. */
+function buildConfigField(opt) {
   if (opt.type === "checkbox") {
     const input = document.createElement("input");
     input.type = "checkbox";
@@ -335,22 +320,17 @@ function updateToolbar() {
   }
 }
 
-function showError(which, message) {
-  which.textContent = message;
-  which.hidden = !message;
-}
-
 /* ---- load ---- */
 
 async function loadConfig(newPath) {
   if (!newPath) {
-    showError(el("form-error"), "Enter a config path (relative to the project root).");
+    showMessage("form-error", "Enter a config path (relative to the project root).");
     el("cfg-path").focus();
     return;
   }
   try {
-    showError(el("form-error"), "");
-    showError(el("raw-error"), "");
+    showMessage("form-error", "");
+    showMessage("raw-error", "");
     const [cfg, rawRes] = await Promise.all([
       api(`/config?path=${encodeURIComponent(newPath)}`),
       api(`/config/raw?path=${encodeURIComponent(newPath)}`),
@@ -376,7 +356,7 @@ async function loadConfig(newPath) {
     log(`Loaded ${newPath}.`, "info");
   } catch (err) {
     logError(err);
-    showError(el("form-error"), errText(err));
+    showMessage("form-error", errText(err));
   }
 }
 
@@ -410,7 +390,7 @@ async function saveForm() {
     applyValues();
     evalVisibility();
     updateToolbar();
-    showError(el("form-error"), "");
+    showMessage("form-error", "");
     log(`Saved ${n} field(s) to ${path}.`, "success");
     // the file on disk changed -- refresh the raw buffer (unless the
     // user is mid-edit there; their buffer wins, disk is re-read on
@@ -422,7 +402,7 @@ async function saveForm() {
     }
   } catch (err) {
     logError(err); // config_invalid -> file untouched server-side
-    showError(el("form-error"), errText(err));
+    showMessage("form-error", errText(err));
   }
 }
 
@@ -434,11 +414,11 @@ async function revertForm() {
     applyValues();
     evalVisibility();
     updateToolbar();
-    showError(el("form-error"), "");
+    showMessage("form-error", "");
     log("Reverted unsaved form edits.", "info");
   } catch (err) {
     logError(err);
-    showError(el("form-error"), errText(err));
+    showMessage("form-error", errText(err));
   }
 }
 
@@ -464,10 +444,10 @@ async function saveRaw() {
     applyValues();
     evalVisibility();
     updateToolbar();
-    showError(el("raw-error"), "");
+    showMessage("raw-error", "");
   } catch (err) {
     logError(err); // config_invalid -> file untouched server-side
-    showError(el("raw-error"), errText(err));
+    showMessage("raw-error", errText(err));
   }
 }
 
@@ -479,17 +459,20 @@ async function reloadRaw() {
     el("raw-editor").value = raw;
     rawDirty = false;
     updateToolbar();
-    showError(el("raw-error"), "");
+    showMessage("raw-error", "");
     log("Reloaded raw from disk.", "info");
   } catch (err) {
     logError(err);
-    showError(el("raw-error"), errText(err));
+    showMessage("raw-error", errText(err));
   }
 }
 
 /* ---- tabs ---- */
 
-function showTab(which) {
+/* Named showConfigTab rather than showTab: config.js and datasets.js each
+   had one, and they toggle different tab sets (form / raw), so the
+   shared name suggested a helper that does not exist. */
+function showConfigTab(which) {
   const form = which === "form";
   el("tab-form").classList.toggle("active", form);
   el("tab-raw").classList.toggle("active", !form);
@@ -506,8 +489,8 @@ async function boot() {
   el("cfg-path").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") loadConfig(el("cfg-path").value.trim());
   });
-  el("tab-form").addEventListener("click", () => showTab("form"));
-  el("tab-raw").addEventListener("click", () => showTab("raw"));
+  el("tab-form").addEventListener("click", () => showConfigTab("form"));
+  el("tab-raw").addEventListener("click", () => showConfigTab("raw"));
   el("btn-save-form").addEventListener("click", saveForm);
   el("btn-revert").addEventListener("click", revertForm);
   el("btn-save-raw").addEventListener("click", saveRaw);
@@ -524,7 +507,7 @@ async function boot() {
     schema = res.options || [];
   } catch (err) {
     logError(err);
-    showError(el("form-error"), errText(err));
+    showMessage("form-error", errText(err));
     return;
   }
 

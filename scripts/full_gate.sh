@@ -39,6 +39,23 @@ echo "node --check: all modules OK"
 if command -v node >/dev/null 2>&1; then
   echo "== frontend unit tests =="
   node --test frontend/tests
+
+  # Type-check the lib/ modules. @ts-check and JSDoc are already on them,
+  # so this is the step that makes the annotations mean anything instead of
+  # being decoration -- the same argument as running the linter the code
+  # already carries noqa comments for (docs 08 Q8).
+  #
+  # `tsc` is not installed in this environment and is NOT added as a
+  # dependency: it would mean a node_modules tree in a repo that has none.
+  # So this skips with a notice, the same posture ruff takes. When tsc is
+  # available it runs, and a type error fails the gate.
+  if command -v tsc >/dev/null 2>&1; then
+    echo "== frontend lib type-check (tsc --checkJs) =="
+    tsc --noEmit --checkJs --target es2022 --module esnext \
+        --moduleResolution bundler --lib es2022,dom frontend/js/lib/*.js
+  else
+    echo "== frontend lib type-check skipped (tsc not installed) =="
+  fi
 else
   echo "== frontend unit tests skipped (node not installed) =="
 fi

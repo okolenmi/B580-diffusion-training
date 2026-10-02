@@ -26,6 +26,7 @@ hold, and neither may leak an un-written mutation into a read.
 
 from __future__ import annotations
 
+import itertools
 import sys
 import tempfile
 from pathlib import Path
@@ -40,10 +41,21 @@ from backend.tests.contracts.run_repository_contract import run_contract
 from backend.tests.support import FakeClock, InMemoryRunRepository, check, finish
 
 
+# One temp root for the whole file, removed on exit. A factory using
+# `tempfile.mkdtemp` per call is the pattern that filled /tmp with four
+# thousand directories: it returns a name and nobody owns it. A
+# TemporaryDirectory is owned, so there is nothing to remember to clean up.
+_SCRATCH = tempfile.TemporaryDirectory(prefix="run-contract-")
+# `mkdtemp(prefix=...)` under the owned root, rather than at the default
+# location: the contract asks for dozens of empty databases.
+_N = itertools.count()
+
+
 def _sqlite_factory() -> SqliteRunRepository:
     """A fresh temp DB per repository, so each block starts empty."""
-    tmp = tempfile.mkdtemp(prefix="run-contract-")
-    db = SqliteDatabase(Path(tmp) / "runs.db")
+    root = Path(_SCRATCH.name) / f"db{next(_N)}"
+    root.mkdir(parents=True, exist_ok=True)
+    db = SqliteDatabase(root / "runs.db")
     db.initialize()
     return SqliteRunRepository(db)
 

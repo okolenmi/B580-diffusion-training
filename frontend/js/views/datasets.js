@@ -29,8 +29,10 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
+import { el, showMessage } from "../lib/dom.js";
+import { errText } from "../lib/errors.js";
+import { log, logError } from "../lib/log.js";
 
-const el = (id) => document.getElementById(id);
 
 /* tiny DOM builder: attrs {class, text, onclick, ...}; no innerHTML
    with server/user data anywhere (prompts are arbitrary text) */
@@ -47,27 +49,6 @@ function h(tag, attrs = {}, ...children) {
 }
 
 /* ---- system console (same convention as dashboard.js) ---- */
-
-function log(message, kind = "info") {
-  const out = el("console-output");
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  while (out.children.length > 60) out.removeChild(out.firstChild);
-  out.scrollTop = out.scrollHeight;
-}
-
-function logError(err) {
-  if (err instanceof ApiError) log(`${err.code}: ${err.message}`, "error");
-  else log(String(err && err.message ? err.message : err), "error");
-}
-
-function errText(err) {
-  return err instanceof ApiError
-    ? `${err.code}: ${err.message}`
-    : String(err && err.message ? err.message : err);
-}
 
 /* ---- state ---- */
 
@@ -165,17 +146,10 @@ function setTopbar(title, sub) {
   el("ds-sub").textContent = sub;
 }
 
-function showState(id, message) {
-  el(id).textContent = message;
-  el(id).hidden = !message;
-}
-
-function showError(id, message) {
-  el(id).textContent = message || "";
-  el(id).hidden = !message;
-}
-
-function showTab(which) {
+/* Named showDatasetTab rather than showTab: config.js and datasets.js each
+   had one, and they toggle different tab sets (items / sets / tasks), so the
+   shared name suggested a helper that does not exist. */
+function showDatasetTab(which) {
   closeItemMenu(); // anchors live in the items grid
   for (const name of ["items", "sets", "tasks"]) {
     el(`tab-${name}`).classList.toggle("active", name === which);
@@ -196,23 +170,23 @@ async function showList() {
 }
 
 async function renderList() {
-  showState("list-state", "Loading…");
+  showMessage("list-state", "Loading…");
   el("ds-grid").hidden = true;
   let res;
   try {
     res = await api("/datasets");
   } catch (err) {
     logError(err);
-    showState("list-state", errText(err));
+    showMessage("list-state", errText(err));
     return;
   }
   const grid = el("ds-grid");
   grid.replaceChildren();
   if (!res.datasets.length) {
-    showState("list-state", "No datasets yet -- create one above.");
+    showMessage("list-state", "No datasets yet -- create one above.");
     return;
   }
-  showState("list-state", "");
+  showMessage("list-state", "");
   for (const entry of res.datasets) {
     grid.appendChild(datasetCard(entry));
   }
@@ -286,16 +260,16 @@ async function deleteDataset(name) {
     await renderList();
   } catch (err) {
     logError(err); // 409 dataset_task_active lands here
-    showError("create-error", errText(err));
+    showMessage("create-error", errText(err));
     el("create-card").hidden = false; // surface it somewhere visible
   }
 }
 
 async function createDataset() {
   const name = el("new-name").value.trim();
-  showError("create-error", "");
+  showMessage("create-error", "");
   if (!name) {
-    showError("create-error", "Name is required.");
+    showMessage("create-error", "Name is required.");
     el("new-name").focus();
     return;
   }
@@ -311,7 +285,7 @@ async function createDataset() {
     await renderList();
   } catch (err) {
     logError(err);
-    showError("create-error", errText(err));
+    showMessage("create-error", errText(err));
   }
 }
 
@@ -321,7 +295,7 @@ async function openDetail(name) {
   datasetName = name;
   showView("detail");
   setTopbar(name, "");
-  showState("detail-state", "Loading…");
+  showMessage("detail-state", "Loading…");
   el("detail-wrap").hidden = true;
   stopPoll();
   selected = new Set();     // ids collide across datasets -- never carry over
@@ -334,13 +308,13 @@ async function openDetail(name) {
     logError(err);
     const hint = err instanceof ApiError && err.code === "dataset_not_migrated"
       ? ` -- ${err.message}` : "";
-    showState("detail-state", `Dataset '${name}' could not be opened${hint}`);
+    showMessage("detail-state", `Dataset '${name}' could not be opened${hint}`);
     return;
   }
 
   setTopbar(detail.info.name, detail.info.description || "");
   renderStats();
-  showState("detail-state", "");
+  showMessage("detail-state", "");
   el("detail-wrap").hidden = false;
 
   try {
@@ -466,7 +440,7 @@ function renderItems() {
   grid.classList.toggle("edit-mode", edit);
 
   if (!items.length) {
-    showState("items-state",
+    showMessage("items-state",
       itemFilter === "pending"
         ? "Nothing awaiting review -- every item is already used or bad."
         : itemFilter === "used"
@@ -474,7 +448,7 @@ function renderItems() {
           : "This dataset has no items yet. Use Add data (Tasks tab) " +
             "to generate or import images.");
   } else {
-    showState("items-state", "");
+    showMessage("items-state", "");
   }
   renderBulkBar();
   for (const item of items) grid.appendChild(itemCard(item));
@@ -748,7 +722,7 @@ function fillEditor(item) {
   renderEditorType();
   renderEditorMeta(item);
   renderEditorMedia(item);
-  showError("item-ed-error", "");
+  showMessage("item-ed-error", "");
   syncEditorDirty();
 }
 
@@ -807,7 +781,7 @@ async function saveEditor() {
     if (body.type !== undefined) reloadDetail(); // bad count lives in stats
   } catch (err) {
     logError(err);
-    showError("item-ed-error", errText(err));
+    showMessage("item-ed-error", errText(err));
   }
 }
 
@@ -823,7 +797,7 @@ async function toggleType(item) {
     reloadDetail(); // bad count lives in stats
   } catch (err) {
     logError(err);
-    showError("items-error", errText(err));
+    showMessage("items-error", errText(err));
   }
 }
 
@@ -843,7 +817,7 @@ async function discardItems(ids) {
     reloadDetail();
   } catch (err) {
     logError(err);
-    showError("items-error", errText(err));
+    showMessage("items-error", errText(err));
   }
 }
 
@@ -880,13 +854,13 @@ function setBulkType(value) {
 
 async function applyBulk() {
   if (!selected.size) return;
-  showError("items-error", "");
+  showMessage("items-error", "");
   const ids = [...selected];
   let body;
   if (bulkField === "prompt" || bulkField === "neg_prompt") {
     const value = el("bulk-text").value;
     if (!value) {
-      showError("items-error", "Enter a value to apply to the selection.");
+      showMessage("items-error", "Enter a value to apply to the selection.");
       el("bulk-text").focus();
       return;
     }
@@ -897,14 +871,14 @@ async function applyBulk() {
   } else if (bulkField === "cfg") {
     const raw = el("bulk-cfg").value.trim();
     if (raw === "") {
-      showError("items-error", "Enter a CFG value to apply.");
+      showMessage("items-error", "Enter a CFG value to apply.");
       el("bulk-cfg").focus();
       return;
     }
     body = { item_ids: ids, cfg: Number(raw) };
   } else {
     if (!bulkType) {
-      showError("items-error", "Pick good or bad first.");
+      showMessage("items-error", "Pick good or bad first.");
       return;
     }
     body = { item_ids: ids, type: bulkType };
@@ -924,16 +898,16 @@ async function applyBulk() {
     if (bulkField === "type") reloadDetail(); // bad count lives in stats
   } catch (err) {
     logError(err); // 422 invalid_query: mode/type/value guards
-    showError("items-error", errText(err));
+    showMessage("items-error", errText(err));
   }
 }
 
 async function commitToSet() {
   if (!selected.size) return;
   const name = el("set-name").value.trim();
-  showError("items-error", "");
+  showMessage("items-error", "");
   if (!name) {
-    showError("items-error", "Set name is required to commit.");
+    showMessage("items-error", "Set name is required to commit.");
     el("set-name").focus();
     return;
   }
@@ -947,10 +921,10 @@ async function commitToSet() {
     selected.clear();
     renderItems();
     await reloadDetail();
-    showTab("sets");
+    showDatasetTab("sets");
   } catch (err) {
     logError(err);
-    showError("items-error", errText(err));
+    showMessage("items-error", errText(err));
   }
 }
 
@@ -961,11 +935,11 @@ function renderSets() {
   list.replaceChildren();
   const sets = detail ? detail.sets : [];
   if (!sets.length) {
-    showState("sets-state",
+    showMessage("sets-state",
       "No training sets yet -- select items on the Items tab and commit them.");
     return;
   }
-  showState("sets-state", "");
+  showMessage("sets-state", "");
   for (const set of sets) {
     list.appendChild(h("div", { class: "ds-set" },
       h("b", { text: set.name }),
@@ -987,11 +961,11 @@ function renderTasks() {
   const list = el("tasks-list");
   list.replaceChildren();
   if (!tasks.length) {
-    showState("tasks-state",
+    showMessage("tasks-state",
       "No dataset tasks yet -- use Add data to generate or import images.");
     return;
   }
-  showState("tasks-state", "");
+  showMessage("tasks-state", "");
   for (const task of tasks) {
     const active = task.status === "pending" || task.status === "running";
     const pct = task.total > 0
@@ -1054,7 +1028,7 @@ const RESIZE_DESC = {
 function openAddDialog(name, tab) {
   addTarget = name;
   el("add-ds-name").textContent = name;
-  showError("add-error", "");
+  showMessage("add-error", "");
   setAddTab(tab || addTab);
   updateAddHints();
   const dlg = el("add-dialog");
@@ -1124,14 +1098,14 @@ function activeSegData(groupId, key) {
 }
 
 function addFieldError(message, inputId) {
-  showError("add-error", message);
+  showMessage("add-error", message);
   if (inputId) el(inputId).focus();
 }
 
 function startAddTask() {
   const name = addTarget;
   if (!name) return;
-  showError("add-error", "");
+  showMessage("add-error", "");
   const model = el("add-model").value.trim();
   if (!model) return addFieldError("Checkpoint is required.", "add-model");
 
@@ -1220,12 +1194,12 @@ function startAddTask() {
     if (fromList) {
       location.href = `/datasets/${encodeURIComponent(name)}`;
     } else {
-      showTab("tasks");
+      showDatasetTab("tasks");
       loadTasks().then(renderTasks).catch(logError);
     }
   }).catch((err) => {
     logError(err); // 409 dataset_task_active, 422 invalid_query, ...
-    showError("add-error", errText(err));
+    showMessage("add-error", errText(err));
   });
 }
 
@@ -1289,7 +1263,7 @@ async function boot() {
     if (ev.key === "Enter") createDataset();
   });
   for (const name of ["items", "sets", "tasks"]) {
-    el(`tab-${name}`).addEventListener("click", () => showTab(name));
+    el(`tab-${name}`).addEventListener("click", () => showDatasetTab(name));
   }
 
   // toolbar: mode + filters + selection
@@ -1306,7 +1280,7 @@ async function boot() {
       renderItems();
     } catch (err) {
       logError(err);
-      showError("items-error", errText(err));
+      showMessage("items-error", errText(err));
     }
   });
   el("btn-loadmore").addEventListener("click", loadMore);
@@ -1333,7 +1307,7 @@ async function boot() {
   el("btn-add-data-tab").addEventListener("click", () =>
     openAddDialog(datasetName));
   el("add-close").addEventListener("click", () => el("add-dialog").close());
-  el("add-dialog").addEventListener("close", () => showError("add-error", ""));
+  el("add-dialog").addEventListener("close", () => showMessage("add-error", ""));
   el("add-tab-generate").addEventListener("click", () => setAddTab("generate"));
   el("add-tab-import").addEventListener("click", () => setAddTab("import"));
   bindSeg("add-prompt-mode", "pmode", setAddPromptMode);

@@ -12,6 +12,7 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
+import { errText } from "../lib/errors.js";
 
 export class Library {
   constructor({ list, nameInput, saveBtn, importBtn }, doc, { onNote, onLoaded }) {
@@ -32,7 +33,7 @@ export class Library {
       const data = await api("/graphs/library");
       this.render(data.graphs || []);
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -83,7 +84,7 @@ export class Library {
       this.nameInput.value = "";
       await this.refresh();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -100,7 +101,7 @@ export class Library {
       );
       if (this.onLoaded) this.onLoaded();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -111,7 +112,7 @@ export class Library {
       this.onNote(`Deleted "${name}".`, "warn");
       await this.refresh();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -153,7 +154,3 @@ function _miniBtn(label, onClick, extraClass = "") {
   return b;
 }
 
-function _errText(err) {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  return String((err && err.message) || err);
-}

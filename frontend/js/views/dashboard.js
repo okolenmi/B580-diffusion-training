@@ -20,30 +20,13 @@
 
 import { api, ApiError } from "../api.js";
 import { subscribeEvents } from "../lib/events.js";
+import { el } from "../lib/dom.js";
+import { log, logError } from "../lib/log.js";
 import { renderMeasured } from "../lib/value.js";
 import { fmtDuration, fmtNum, fmtRel } from "../lib/format.js";
 
-const el = (id) => document.getElementById(id);
 
 /* ---- system console: capped, auto-scrolled, one entry per event ---- */
-
-function log(message, kind = "info") {
-  const out = el("console-output");
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  while (out.children.length > 60) out.removeChild(out.firstChild);
-  out.scrollTop = out.scrollHeight;
-}
-
-function logError(err) {
-  if (err instanceof ApiError) {
-    log(`${err.code}: ${err.message}`, "error");
-  } else {
-    log(String(err && err.message ? err.message : err), "error");
-  }
-}
 
 /* ---- state ---- */
 

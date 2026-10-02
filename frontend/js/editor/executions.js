@@ -13,6 +13,7 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
+import { errText } from "../lib/errors.js";
 
 const ACTIVE = new Set(["queued", "running"]);
 const TERMINAL = new Set(["finished", "error", "stopped"]);
@@ -52,7 +53,7 @@ export class Executions {
       this.render();
       this._schedulePoll();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -84,7 +85,7 @@ export class Executions {
       }
       if (detail.error) this.onNote(`Execution #${id}: ${detail.error}`, "error");
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -118,7 +119,7 @@ export class Executions {
         this.onNote("Another execution is active -- stop it first.", "warn");
         this.refresh();
       } else {
-        this.onNote(_errText(err), "error");
+        this.onNote(errText(err), "error");
       }
       return null;
     }
@@ -141,7 +142,7 @@ export class Executions {
       this.onNote(`Execution #${exec.execution_id} stopped.`, "warn");
       await this.refresh();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -154,7 +155,7 @@ export class Executions {
       this.onNote(`Deleted ${res.deleted} execution(s).`, "warn");
       await this.refresh();
     } catch (err) {
-      this.onNote(_errText(err), "error");
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -210,11 +211,6 @@ export class Executions {
       return row;
     });
   }
-}
-
-function _errText(err) {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  return String((err && err.message) || err);
 }
 
 function _ago(iso) {

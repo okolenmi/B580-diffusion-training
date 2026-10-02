@@ -12,25 +12,11 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
+import { el } from "../lib/dom.js";
+import { log, logError } from "../lib/log.js";
 import { subscribeEvents, startSafetyPoll } from "../lib/events.js";
 import { fmtDuration, fmtTime } from "../lib/format.js";
 
-const el = (id) => document.getElementById(id);
-
-function log(message, kind = "info") {
-  const out = el("console-output");
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  while (out.children.length > 60) out.removeChild(out.firstChild);
-  out.scrollTop = out.scrollHeight;
-}
-
-function logError(err) {
-  if (err instanceof ApiError) log(`${err.code}: ${err.message}`, "error");
-  else log(String(err && err.message ? err.message : err), "error");
-}
 
 /* ---- state ---- */
 

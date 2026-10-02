@@ -13,6 +13,7 @@ Run:  python backend/tests/test_value_objects.py
 
 from __future__ import annotations
 
+import datetime
 import sys
 import tempfile
 from pathlib import Path
@@ -45,7 +46,10 @@ from backend.application.lifecycle_writer import (  # noqa: E402
 )
 from backend.application.ports.dataset_tasks import TaskKind, TaskStatus  # noqa: E402
 from backend.application.ports.graph_runtime import IssueSeverity  # noqa: E402
+from backend.domain.entities.graph_execution import GraphExecution  # noqa: E402
+from backend.domain.exceptions import DomainError  # noqa: E402
 from backend.domain.events import DomainEvent, GraphExecutionStarted  # noqa: E402
+from backend.domain.graph import GraphDefinition  # noqa: E402
 from backend.domain.value_objects import GraphStatus  # noqa: E402
 from backend.tests.support import FakeClock, check, finish  # noqa: E402
 
@@ -495,7 +499,97 @@ def test_issue_severity() -> None:
     )
 
 
+#: The same instant FakeClock starts at, so these rows carry the
+#: timestamps the rest of the file already assumes.
+NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_bind_rejects_a_non_positive_or_non_integer_id() -> None:
+    """`bind()`'s id guard, branch by branch.
+
+    Found by `scripts/mutation_report.py lifecycle.py`: both `or` -> `and`
+    mutations of this line survived, meaning no test reached either the
+    `bool` branch or the `< 1` branch. The code is correct; only the
+    suite's knowledge of it was missing, which is the case line coverage
+    cannot see because the line *is* covered.
+
+    One of the two mutants would let `True` through as an id -- `bool` is a
+    subclass of `int`, and the explicit `isinstance(entity_id, bool)` is the
+    only thing rejecting it. The other makes a string raise `TypeError`
+    from `"a" < 1` instead of the intended `DomainError`.
+    """
+    print("\n== S-?? StatusMachine.bind: the id guard, each branch ==")
+    def bind(bad_id):
+        GraphExecution.create(graph=GraphDefinition(), created_at=NOW).assign_id(bad_id)
+
+    # A bool is an int, and must still be refused: an id of True is 1
+    # wearing a disguise, and it would serialise as a different number.
+    _expect_error(
+        lambda: bind(True), DomainError, "must be a positive integer",
+        "True is refused despite isinstance(True, int) being true",
+    )
+    _expect_error(
+        lambda: bind(False), DomainError, "must be a positive integer",
+        "and so is False",
+    )
+
+    # Zero and negatives. This is the `< 1` half of the guard, which is
+    # why the check is `< 1` and not `<= 0` -- neither is wrong, but only
+    # this one rejects both in a single comparison.
+    for bad in (0, -1, -999):
+        _expect_error(
+            lambda bad=bad: bind(bad), DomainError,
+            f"must be a positive integer, got {bad!r}",
+            f"{bad!r} is refused",
+        )
+
+    # The type half. Reaches the comparison on a non-int, so the mutant
+    # that reorders the guards raises TypeError here instead of DomainError.
+    _expect_error(
+        lambda: bind("1"), DomainError, "must be a positive integer",
+        "a numeric string is refused with DomainError, not TypeError",
+    )
+    _expect_error(
+        lambda: bind(1.0), DomainError, "must be a positive integer",
+        "and so is a float, which is integral but not an int",
+    )
+    _expect_error(
+        lambda: bind(None), DomainError, "must be a positive integer",
+        "and None",
+    )
+
+    # The accepted case, so the guard is not simply refusing everything.
+    ok = GraphExecution.create(graph=GraphDefinition(), created_at=NOW)
+    ok.assign_id(7)
+    check(ok.id == 7, "1 and above are accepted, and the id sticks")
+
+    # Exactly once: a second bind would emit events claiming a different
+    # identity than the ones already buffered.
+    _expect_error(
+        lambda: ok.assign_id(8), DomainError, "already has id 7",
+        "re-binding an already-identified row is refused",
+    )
+
+    # The repr is what a traceback or a debugger shows, so it is worth
+    # pinning that it names the label, the table and the current state --
+    # a StatusMachine printed as its default object repr tells you nothing
+    # about which row you are looking at.
+    machine = ok._life
+    text = repr(machine)
+    check(
+        text.startswith("StatusMachine(") and "execution" in text
+        and "queued" in text,
+        f"the machine's repr names its label, table and state (got {text!r})",
+    )
+    check(
+        "<new>"
+        in repr(GraphExecution.create(graph=GraphDefinition(), created_at=NOW)._life),
+        "and an unbound one says `<new>` rather than claiming an id",
+    )
+
+
 def main() -> None:
+    test_bind_rejects_a_non_positive_or_non_integer_id()
     test_project_paths()
     test_event_publisher()
     test_limits()

@@ -178,6 +178,44 @@ def test_reset_replays_from_the_start() -> None:
               "restarted mid-run must be able to show a dashboard what it missed")
 
 
+def test_two_writers_can_share_one_directory() -> None:
+    print("\n== the directory already exists when the writer opens ==")
+    # Found by scripts/mutation_report.py graph_event_stream.py:
+    # mkdir(exist_ok=True) -> mkdir(exist_ok=False) survived, because
+    # every test here opened a path whose parent did not exist yet. It is
+    # not unreachable: the supervisor creates the execution's scratch
+    # directory before spawning, so the writer's own mkdir always finds it
+    # there -- and with exist_ok=False that raises, the constructor's
+    # OSError handler marks the writer unavailable, and every record the
+    # run produces is silently dropped. The server would then watch an
+    # empty file and report the run as crashed on completion.
+    path = _path(tmp_parent := tempfile.mkdtemp(prefix="graph-event-shared-"))
+    path.parent.mkdir(parents=True, exist_ok=True)  # the supervisor's mkdir
+
+    first = ExecutionEventWriter(path)
+    first.node({"node_id": "a", "ok": True, "outputs": {}, "error": None,
+                "duration_ms": 1.0})
+    first.close()
+
+    second = ExecutionEventWriter(path)
+    check(
+        second.available,
+        "a second writer on an existing directory still opens -- the "
+        "supervisor's scratch directory is always there before a child runs",
+    )
+    second.node({"node_id": "b", "ok": True, "outputs": {}, "error": None,
+                 "duration_ms": 1.0})
+    second.close()
+
+    # And it appends rather than replacing, so the first writer's record
+    # survives: that is the property the reader's reset() depends on.
+    check(
+        [e.payload["node_id"] for e in ExecutionEventTail(path).poll()] == ["a", "b"],
+        "and it appends, so the earlier record is still there",
+    )
+    del tmp_parent
+
+
 def main() -> None:
     test_round_trip()
     test_torn_tail_is_withheld()

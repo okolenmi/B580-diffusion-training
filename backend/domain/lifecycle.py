@@ -85,10 +85,6 @@ class StatusMachine(Generic[S, IdT]):
         """How the aggregate is named in error messages."""
         return str(self._id) if self._id is not None else "<new>"
 
-    def ends_lifecycle(self, status: S) -> bool:
-        """Is ``status`` a state with no way out?"""
-        return not self._transitions[status]
-
     # ------------------------------------------------------------------
     # Guards
     # ------------------------------------------------------------------

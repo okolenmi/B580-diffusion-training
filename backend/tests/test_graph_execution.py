@@ -620,4 +620,59 @@ for overrides, fragment, label in (
     except DomainError as exc:
         check(fragment in str(exc), f"{label} refused (got {exc})")
 
+# ==========================================================================
+# Section A2: from_dict's tolerance is load-bearing, so it is pinned
+# ==========================================================================
+print("-- from_dict --")
+
+# Found by scripts/mutation_report.py graph.py: all 29 survivors there
+# were the same shape -- the default in a str(raw.get(key, "")) mutated to
+# None, "" or junk -- for every field of from_dict. Nothing supplied a
+# payload missing those keys, so the tolerance its own docstring promises
+# ("missing params defaults to {}, unknown keys are ignored") was a claim
+# about code no test had exercised.
+g = GraphDefinition.from_dict({"format": 1})
+check(g.nodes == () and g.edges == (),
+      f"an empty payload decodes to an empty graph (got {g.as_dict()})")
+
+g = GraphDefinition.from_dict({"nodes": [{"id": "a"}], "edges": [{}]})
+check(len(g.nodes) == 1 and g.nodes[0].id == "a",
+      "a node with no class_name still decodes")
+check(g.nodes[0].class_name == "",
+      f"and the class name defaults to empty, not None or junk "
+      f"(got {g.nodes[0].class_name!r})")
+check(g.nodes[0].params == {},
+      f"and params defaults to an empty dict (got {g.nodes[0].params!r})")
+check(len(g.edges) == 1 and g.edges[0].from_node == "",
+      "an edge with every field absent decodes to empty strings")
+check(all(getattr(g.edges[0], f) == "" for f in
+          ("from_node", "from_port", "to_node", "to_port")),
+      "all four edge fields, not just the first")
+
+# A node with no id at all is a different case from a node with no
+# class_name, and it is the one that reaches the `str()` call: a payload
+# with no `nodes` key never enters the comprehension at all, so an
+# empty-payload test does not cover it. `validate()` is what refuses an
+# empty id -- the decoder's job is only to decline inventing one.
+g = GraphDefinition.from_dict({"nodes": [{"class_name": "SumNode"}]})
+check(len(g.nodes) == 1 and g.nodes[0].id == "",
+      f"a node with no id decodes to an empty id, not None or junk "
+      f"(got {g.nodes[0].id!r})")
+
+g = GraphDefinition.from_dict({
+    "format": 1,
+    "nodes": [{"id": "a", "class_name": "SumNode", "params": {"b": 2.0},
+               "unknown_key": "ignored"}],
+    "unknown_top_level": [1, 2, 3],
+})
+check(g.nodes[0].params == {"b": 2.0},
+      f"unknown keys inside a node are ignored, not folded into params "
+      f"(got {g.nodes[0].params})")
+check(len(g.nodes) == 1,
+      "and an unknown top-level key does not become a node")
+
+check(GraphDefinition.from_dict(VALID.as_dict()) == VALID,
+      "a round trip through as_dict/from_dict is lossless, which is the "
+      "contract that actually matters -- it is how saved graphs load")
+
 finish()

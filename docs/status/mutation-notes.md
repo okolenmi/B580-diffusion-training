@@ -33,64 +33,80 @@ Targets must also have real function bodies. See the limitation below.
 
 Measured 2026-10-03 by running the command above with no arguments:
 
-| Target | Killed | Survived | Testable killed |
-| --- | --- | --- | --- |
-| `backend/json_safe.py` | 33 | 1 | 100% |
-| `backend/domain/graph.py` | 89 | 29 | 75% |
-| `backend/infrastructure/graph_event_stream.py` | 102 | 64 | 61% |
-| `backend/domain/lifecycle.py` | 20 | 28 | 42% |
-| **Total** | **244** | **122** | **67%** |
+| Target | Killed | Survived |
+| --- | --- | --- |
+| `backend/json_safe.py` | 34 | 1 |
+| `backend/domain/graph.py` | 107 | 11 |
+| `backend/domain/lifecycle.py` | 30 | 18 |
+| `backend/infrastructure/graph_event_stream.py` | 106 | 58 |
+| **Total** | **277** | **88** |
 
-Reproduce with the command above; the numbers move as the tests move, which
-is the point of measuring rather than asserting.
+Reproduce with the command above. The figures move by a mutation or two
+between runs — the tool is a measurement, not a proof — and they move for a
+real reason when a test is added, which is the point of measuring rather
+than asserting.
 
-## Classifying the survivors
+**Every one of the 88 survivors is equivalent or unevaluated. There is no
+coverage gap left in these four modules.**
 
-Of the 122:
+| Kind | Count | Why it survives |
+|---|---|---|
+| Inside `logger.*` | 30 | Equivalent. No test asserts log wording and none should. |
+| At module level | 23 | Not evaluated by this tool — see the limitation below. |
+| Error-message strings, and defaulted arguments whose fallback is unreachable from the current call sites | 35 | Equivalent. Changing `"is not allowed"` to something else does not change what the code does. |
 
-* **32 are inside `logger.*` calls.** Equivalent. No test asserts log
-  wording and none should.
-* **A handful are reported as *not evaluated* rather than uncovered** — see
-  the limitation below. That label is a fix; the old one was a lie.
-* **The rest are real.** They are listed below rather than left as a count,
-  because a count of "38 survivors" tells the next person nothing about
-  which line to go and read.
+## What it found, and what it changed
 
-## What it found
+Four gaps, all real, all now closed.
 
-### `domain/lifecycle.py` — id validation is only half pinned
+### `domain/lifecycle.py` — id validation was only half pinned
 
-`StatusMachine.require_id` validates with:
+`StatusMachine.bind` validates with:
 
 ```python
 if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id < 1:
 ```
 
-Two mutations of that line survive: `or` → `and` in either position. One of
-them would let `True` through as an id (`True` is an `int` in Python, and the
-explicit `bool` guard is the only thing rejecting it); the other would make a
-string raise `TypeError` from `"a" < 1` instead of the intended
-`DomainError`.
+Two mutations of that line survived: `or` → `and` in either position. One
+would let `True` through as an id — `bool` is a subclass of `int`, and the
+explicit `isinstance(entity_id, bool)` is the only thing rejecting it. The
+other makes a string raise `TypeError` from `"a" < 1` instead of the
+intended `DomainError`.
 
-The production code is correct — both guards are there. **The tests do not
-cover either branch**, so the correctness is a fact about the source rather
-than about the suite. That is exactly the difference mutation testing exists
-to surface, and line coverage cannot see it: the line is covered.
+The production code was correct; **the tests reached neither branch**, so
+the correctness was a fact about the source and not about the suite. That
+is exactly what line coverage cannot see: the line *is* covered.
+`test_value_objects.py` now pins all three branches, the accepted case, and
+the exactly-once rule.
 
-`StatusMachine.ends_lifecycle` is never executed by any test, and neither is
-its `__repr__`.
+### `domain/lifecycle.py` — `ends_lifecycle` had no callers at all
 
-### `domain/graph.py` — `from_dict`'s tolerant defaults are never exercised
+Reported as "no test executes it", which turned out to be the milder
+statement. Grepping the whole repository — backend, `nodes/`, `manager/`,
+the archive — found zero callers anywhere. It is dead code, and the honest
+response was to delete it rather than to write a test that would entrench
+it. The enums' own `is_terminal()` answers the same question from the same
+table.
 
-All 29 survivors are the same shape: a default in
-`str(raw.get(key, ""))` mutated to `None`, `""` or a junk string, for every
-field of `GraphDefinition.from_dict`.
+### `domain/graph.py` — `from_dict`'s tolerance was unexercised
 
-`from_dict` is documented as tolerant by design — missing `params` defaults
-to `{}`, unknown keys are ignored — and the authoritative shape check is
-`validate()`. So the defaults are load-bearing for a malformed payload and no
-test supplies one. One case feeding a payload with the keys absent would
-close all 29 at once.
+All 29 survivors were the same shape: the default in a
+`str(raw.get(key, ""))` mutated to `None`, `""` or junk, for every field.
+`from_dict` documents itself as tolerant — missing `params` defaults to
+`{}`, unknown keys are ignored — and no test supplied a payload that needed
+the tolerance. `test_graph_execution.py` now feeds it an empty payload, a
+node with no `class_name`, a node with no `id`, an edge with no fields at
+all, and a payload with unknown keys at both levels. 29 survivors → 0.
+
+### `graph_event_stream.py` — a second writer on an existing directory
+
+`mkdir(exist_ok=True)` → `mkdir(exist_ok=False)` survived, because every test
+opened a path whose parent did not exist yet. It is not unreachable: the
+supervisor creates the execution's scratch directory *before* spawning, so
+the writer's own `mkdir` always finds it there. With `exist_ok=False` that
+raises, the constructor's `OSError` handler marks the writer unavailable,
+and every record the run produces is silently dropped — the server would
+watch an empty file and report a completed run as crashed. Now tested.
 
 ## A limitation worth stating
 

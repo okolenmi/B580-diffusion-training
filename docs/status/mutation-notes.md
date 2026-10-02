@@ -1,122 +1,131 @@
-# Mutation notes
+# Test-quality measurement
 
-How the round-2 review's WP-18 was carried out, and what survived.
+Line coverage answers "was this code run". It does not answer the question
+that matters about a test: **if the code were wrong, would this test notice?**
 
-**The point is not zero survivors.** It is that every survivor is either
-killed by a test or has a written reason it is equivalent. A surviving
-mutation says a test passes without checking the thing the test is about. An
-*equivalent* mutation says the code states the same thing twice, which is a
-milder finding and not worth a test.
+Mutation testing answers that by breaking the code on purpose and seeing
+what notices. A mutation that survives tells you a test passes without
+checking the thing the test is about.
 
-Produced by `scripts/mutation_report.py` against the four modules the review
-named:
+The distinction that matters is between a survivor that is a **gap** and one
+that is **equivalent**. A gap is a test that is not testing what it appears
+to test. An equivalent mutant is a change that does not change behaviour —
+usually a message string, or a default that nothing can reach. The second is
+not a bug and does not deserve a test; a report that does not separate them
+is just a number.
 
-| Module | Mutations | Killed | Survived | Before the tests below |
-|---|---|---|---|---|
-| `application/supervisor.py` | 231 | 168 | 63 | 73% killed |
-| `infrastructure/jsonl_progress_source.py` | 260 | 178 | 82 | 70% killed, up from 58% |
-| `application/use_cases/reconcile_runs.py` | 156 | 78 | 78 | 51% killed |
-| `presentation/sse.py` | 198 | 105 | 93 | 56% killed |
-| **Total** | **845** | **529** | **316** | **63% killed** |
+## Running it
 
-## What the survivors turned out to be
+```bash
+/home/okolenmi/comfy/venv/bin/python scripts/mutation_report.py              # every target
+/home/okolenmi/comfy/venv/bin/python scripts/mutation_report.py graph.py    # one
+```
 
-The number alone is not the finding; the *shape* of the survivors is.
-Classified by hand from the 316:
+Targets are `TARGETS` in the script. They are pure-logic modules with no
+torch, no device and no server, and each is chosen because tests reach most
+of its lines — a module nothing calls makes every mutant "survive" by
+default, which measures nothing. `scripts/mutation_report.py`'s own docstring
+has the mechanics and the two mutmut behaviours that matter.
 
-| Kind | Share | Verdict |
-|---|---|---|
-| Mutations inside `logger.*(...)` — message text and arguments | ~65% | **Equivalent.** No test asserts log wording, and none should. `"skipping non-JSON progress line in %s"` -> `"SKIPPING..."` is not a behaviour change. |
-| Unreachable — the mutation is in a function no test executes | 23 of 845 | A real coverage gap, reported as such rather than as a mutant. |
-| Degenerate numeric comparisons | the rest | **Equivalent.** `last_newline == -1` -> `== 1` describes a two-byte chunk. |
-| Genuine coverage gaps | 4 | **Fixed.** Below. |
+Targets must also have real function bodies. See the limitation below.
 
-So the headline is not "37% of mutations survive". It is: *the tests do
-not check log messages, which is correct*, and four real holes existed.
+## Current measurement
 
-## The four holes, and what closed them
+Measured 2026-10-03 by running the command above with no arguments:
 
-All four were in `jsonl_progress_source.py`, all found by mutation, none
-visible to line coverage — every one of those statements *is* executed.
+| Target | Killed | Survived | Testable killed |
+| --- | --- | --- | --- |
+| `backend/json_safe.py` | 33 | 1 | 100% |
+| `backend/domain/graph.py` | 89 | 29 | 75% |
+| `backend/infrastructure/graph_event_stream.py` | 102 | 64 | 61% |
+| `backend/domain/lifecycle.py` | 20 | 28 | 42% |
+| **Total** | **244** | **122** | **67%** |
 
-1. **The cache phases were never read by the real reader.**
-   `test_supervisor.py` covers `cache_start` / `cache` / `cache_done` —
-   through a **fake** progress source. `JsonlProgressSource._sample` never
-   saw a cache line, so mutating `data.get("total")` to `data.get("TOTAL")`
-   in all three branches changed nothing observable. A fake and the thing
-   it stands in for drift quietly, and only this found it.
+Reproduce with the command above; the numbers move as the tests move, which
+is the point of measuring rather than asserting.
 
-2. **`total_steps: 0` — zero was indistinguishable from absent.**
-   `_int_field` rejects negatives but must keep zero, and the `or 0` / `or 1`
-   expressions at most call sites rewrite a falsy counter *before* the
-   coercer sees it. So `number >= 0` -> `> 0` survived: no record in the
-   suite carried a `0` that reached the coercer.
+## Classifying the survivors
 
-3. **A file that shrank was never tested.** The reader keeps a byte offset;
-   if the file is replaced with a shorter one, `size < offset` has to reset
-   it, or the reader reads nothing forever. `offset = 0` -> `offset = 1`
-   survived because nothing ever made a file smaller.
+Of the 122:
 
-4. **A blank line, and an unexpected exception inside `_sample`, both ended
-   the tail.** `continue` -> `break` survived in *three* separate skip
-   branches. All-garbage input hides it (`continue` and `break` both yield
-   nothing); all-good input never reaches the branch. The fix is mixed input
-   with the good records *after* the bad ones, and a blank line — which is
-   what a flushed write leaves behind. The third branch is the defensive
-   `except` whose whole purpose is "never end the tail", and which cannot
-   be reached by feeding bad input at all because `_sample` is written not
-   to raise; it is exercised by making it raise.
+* **32 are inside `logger.*` calls.** Equivalent. No test asserts log
+  wording and none should.
+* **A handful are reported as *not evaluated* rather than uncovered** — see
+  the limitation below. That label is a fix; the old one was a lie.
+* **The rest are real.** They are listed below rather than left as a count,
+  because a count of "38 survivors" tells the next person nothing about
+  which line to go and read.
 
-`backend/tests/test_progress_reader.py` now covers all of it, and the
-reader's kill rate went from **58% to 70%**.
+## What it found
 
-One correction the process caught: a first draft of that file asserted a
-negative loss becomes `None`. It does not — only `_int_field` rejects
-negatives, because the *domain* rejects a negative step. The test was wrong
-about the code, not the reverse, and "fixing" the code would have changed a
-behaviour nobody asked to change. The test now pins the asymmetry from both
-sides.
+### `domain/lifecycle.py` — id validation is only half pinned
 
-## What the runner got wrong on the way, and what it cost
+`StatusMachine.require_id` validates with:
 
-Worth recording because both failures were silent in the way that matters.
+```python
+if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id < 1:
+```
 
-* **The coverage mapping reported that nothing covers `supervisor.py`**,
-  when three test files plainly do. It used `--parallel-mode` and read the
-  result with the `CoverageData` API; switching to one `--data-file` per
-  test plus `coverage json` fixed it. A mapping that says "no coverage"
-  when there is coverage is the worst failure available for a component
-  whose only job is to say which tests to run — it turns every mutant into
-  a false survivor.
-* **Matching on any executed line said 25 of 26 test files covered
-  `supervisor.py`**, because *importing* it runs its module-level lines,
-  and an import cannot kill a mutation inside `_guard`. Narrowing to lines
-  inside a function body cut it to 11, and narrowing further to the
-  mutated function itself cut the per-mutant cost by an order of magnitude.
-* **`MetadataWrapper` deep-copies by default**, so matching a mutation's
-  `original_node` by identity silently matched nothing: 57 mutations, 57
-  no-ops, reported as 0% killed. `unsafe_skip_copy=True` keeps identity.
-* **It was serial, on a machine with six idle cores.** 58.8% idle while
-  making progress: exactly one test subprocess alive at a time. The tests
-  were never the cost — they run in 0.35-0.98s and import no torch — it was
-  231 mutants x one interpreter each, in a row. Giving each worker its own
-  copy of the repository (which also stops the tool touching the real tree
-  at all) took supervisor.py from ~22 minutes to **3m08s**. The coverage
-  pass that maps tests to targets then became the bottleneck, so it is
-  parallel too: sse.py went 2m01 -> 1m20 for all 198.
-  Verified equivalent rather than assumed: `--serial` runs mutants in ROOT
-  the old way, and on a 40-mutation slice of sse.py the two paths produce
-  **byte-identical verdicts**.
+Two mutations of that line survive: `or` → `and` in either position. One of
+them would let `True` through as an id (`True` is an `int` in Python, and the
+explicit `bool` guard is the only thing rejecting it); the other would make a
+string raise `TypeError` from `"a" < 1` instead of the intended
+`DomainError`.
 
-* **The first full run took four minutes on one mutant** and would have
-  taken hours, because a mutant that makes a test *hang* waits out the
-  timeout, and the default was 300s. A hang is a legitimate kill — a
-  mutation that stops a test finishing is an observable change — but the
-  price per hang has to match the tests' normal runtime, not dwarf it.
-* **Being killed partway through left a mutant in the working tree.** A
-  tool that rewrites source files in place has to restore them on every
-  exit path, including a signal; it did not, and it did once.
+The production code is correct — both guards are there. **The tests do not
+cover either branch**, so the correctness is a fact about the source rather
+than about the suite. That is exactly the difference mutation testing exists
+to surface, and line coverage cannot see it: the line is covered.
 
-The last two are the same lesson: the tool rewrites real files and runs
-real tests, so its failure modes are silent ones unless they are handled
-explicitly.
+`StatusMachine.ends_lifecycle` is never executed by any test, and neither is
+its `__repr__`.
+
+### `domain/graph.py` — `from_dict`'s tolerant defaults are never exercised
+
+All 29 survivors are the same shape: a default in
+`str(raw.get(key, ""))` mutated to `None`, `""` or a junk string, for every
+field of `GraphDefinition.from_dict`.
+
+`from_dict` is documented as tolerant by design — missing `params` defaults
+to `{}`, unknown keys are ignored — and the authoritative shape check is
+`validate()`. So the defaults are load-bearing for a malformed payload and no
+test supplies one. One case feeding a payload with the keys absent would
+close all 29 at once.
+
+## A limitation worth stating
+
+The tool assigns candidate tests to a mutation by looking for tests that
+executed the **function body** the mutation sits in. That narrowing exists
+because it is otherwise useless: importing a module runs its module-level
+lines, so "this line executed" is true of any test that merely imports the
+file, and every mutant would look covered by the whole suite.
+
+The cost is that module-level mutations are invisible to it. A module that is
+mostly module-level data therefore cannot be measured by this tool at all.
+
+This was not a hypothetical. An earlier target list included
+`domain/value_objects.py`, which is 97% covered — and the tool reported it as
+**0% killed, 62 survivors, "NO TEST EXECUTES IT"** for every one. The module is
+enums and transition tables; almost all of its mutations are at module level;
+the filter never asked the question it appeared to be answering. The message
+now says *not evaluated* for those, which is the truth, and the module is no
+longer a target.
+
+Two consequences to keep in mind:
+
+* A kill rate from this tool is a floor on what the tests check, not a
+  measure of the whole file.
+* `backend/domain/value_objects.py` and `backend/domain/graph.py`'s transition
+  tables are **not** measured here. The lifecycle machine that enforces them
+  is covered, and `test_value_objects.py` exercises the tables through it —
+  but that is a separate argument, not a number this tool produced.
+
+## A reporting bug this surfaced
+
+Before the fix, a mutant that no test was assigned to was reported as
+`NO TEST EXECUTES IT` — including mutants the tool had never tried to
+evaluate. A mapping that reports "no coverage" where coverage exists is the
+worst failure available for a component whose only job is to say which tests
+to run, because it converts every mutant into a false survivor. It is now
+split into *no test executes it* (a real gap) and *not evaluated* (outside the
+tool's reach).

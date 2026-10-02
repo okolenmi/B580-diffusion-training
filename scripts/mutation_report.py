@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Mutation report for the four modules the round-2 review named.
+"""Mutation report: how good are the tests, really.
 
-    python scripts/mutation_report.py                 # all four
-    python scripts/mutation_report.py supervisor.py   # just one
+    python scripts/mutation_report.py                    # every target
+    python scripts/mutation_report.py limits.py          # just one
 
 **Report only.** The point is not "zero survivors" -- it is that every
 survivor is either killed by a test or has a written reason it is
@@ -62,11 +62,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+#: Modules worth measuring, and modules that still exist. The previous
+#: list named four and three of them were removed with the supervised
+#: subprocess route, so the tool could not run at all: it died on the
+#: first missing file with a bare ``FileNotFoundError`` and no hint that
+#: the target list was the problem.
+#:
+#: Chosen by measured line coverage rather than by taste, because a module
+#: no test reaches makes every mutant "survive" by default and the number
+#: says nothing. They also have to have real function bodies: see
+#: ``_body_lines`` and the note on module-level mutants below -- a module
+#: that is mostly module-level data cannot be measured by this tool at
+#: all, which is why ``domain/value_objects.py`` is *not* here despite
+#: being 97% covered.
 TARGETS = [
-    "backend/application/supervisor.py",
-    "backend/infrastructure/jsonl_progress_source.py",
-    "backend/application/use_cases/reconcile_runs.py",
-    "backend/presentation/sse.py",
+    "backend/domain/graph.py",
+    "backend/domain/lifecycle.py",
+    "backend/infrastructure/graph_event_stream.py",
+    "backend/json_safe.py",
 ]
 
 
@@ -161,7 +174,6 @@ def tests_covering(targets: list[str], jobs: int) -> dict[str, dict[str, set[int
     which tests to run.
     """
     bodies = {t: _body_lines(ROOT / t) for t in targets}
-    wanted = {(ROOT / t).resolve() for t in targets}
     found: dict[str, dict[str, set[int]]] = {t: {} for t in targets}
 
     tests = [p.name for p in sorted((ROOT / "backend" / "tests").glob("test_*.py"))]
@@ -185,48 +197,7 @@ def tests_covering(targets: list[str], jobs: int) -> dict[str, dict[str, set[int
                         found[target][name] = hit
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
-    _ = wanted  # resolved set kept for clarity of intent above
     return {k: dict(sorted(v.items())) for k, v in found.items()}
-
-
-def _function_index(path: Path) -> list[tuple[int, int, str]]:
-    """(first_line, last_line, name) for every function and method."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    out: list[tuple[int, int, str]] = []
-
-    def walk(node, prefix: str = "") -> None:
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                name = f"{prefix}{child.name}"
-                out.append((child.lineno, child.end_lineno or child.lineno, name))
-                walk(child, f"{name}.")
-            elif isinstance(child, ast.ClassDef):
-                walk(child, f"{prefix}{child.name}.")
-            else:
-                walk(child, prefix)
-
-    walk(tree)
-    return sorted(out)
-
-
-def _enclosing(index: list[tuple[int, int, str]], line: int) -> tuple[int, str]:
-    """(function's last line, name) for the innermost function containing
-    `line`, or (line, "<module>") when there is none."""
-    best = None
-    for first, last, name in index:
-        if first <= line <= last and (best is None or (last - first) < (best[0] - best[1])):
-            best = (first, last, name)
-    return (best[1], best[2]) if best else (line, "<module>")
-
-
-def _body_lines(path: Path) -> set[int]:
-    """Line numbers that live inside a function or method body."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    lines: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            lines.update(range(node.body[0].lineno, node.end_lineno + 1))
-    return lines
 
 
 def mutations_of(path: Path) -> tuple[list, object, str]:
@@ -369,7 +340,26 @@ def plan_work(
         candidates = [name for name, seen in tests.items() if seen & span]
         if not candidates:
             unreachable += 1
-            survivors.append(f"line {line} in {where} -- NO TEST EXECUTES IT")
+            # Two different reasons land here and they must not be
+            # reported the same way. A mutant inside a function that no
+            # test reaches is a real coverage gap. A mutant at module
+            # level is *outside what this tool can decide* -- the
+            # candidate tests only know about function bodies, so "no
+            # candidate" says nothing about whether a test would have
+            # caught it.
+            #
+            # Reporting both as "NO TEST EXECUTES IT" is how a 97%-covered
+            # module like domain/value_objects.py came out as 0% killed:
+            # nearly all of its mutants are enum members and transition
+            # table entries, all at module level, all "uncovered" by a
+            # filter that never asked.
+            if where == "<module>":
+                survivors.append(
+                    f"line {line} at module level -- NOT EVALUATED "
+                    f"(this tool only assigns tests to function bodies)"
+                )
+            else:
+                survivors.append(f"line {line} in {where} -- NO TEST EXECUTES IT")
             continue
         jobs.append((target, mutated, candidates, args.timeout))
     return jobs, survivors, unreachable

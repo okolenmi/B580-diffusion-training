@@ -41,10 +41,15 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 failures: list[str] = []
 console_noise: list[str] = []
+#: Every label passed to `check`, in order. Kept so the run can report how
+#: many checks it actually made: a suite whose count is only ever quoted in
+#: a document goes stale silently, because nothing re-derives the number.
+checked: list[str] = []
 
 
 def check(cond, label):
     print(("  ok  " if cond else "  FAIL") + f"  {label}")
+    checked.append(label)
     if not cond:
         failures.append(label)
 
@@ -1023,11 +1028,11 @@ def main():
     check(not unexpected, "console clean across all pages")
 
     if failures:
-        print(f"\nFAILED: {len(failures)} check(s)")
+        print(f"\nFAILED: {len(failures)} of {len(checked)} check(s)")
         for f in failures:
             print("  -", f)
         sys.exit(1)
-    print("\nALL CHECKS PASSED")
+    print(f"\nALL CHECKS PASSED ({len(checked)} checks)")
 
 
 if __name__ == "__main__":

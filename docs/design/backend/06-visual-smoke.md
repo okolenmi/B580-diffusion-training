@@ -1,17 +1,17 @@
-# 06 -- Browser findings and coverage (2026-10-01)
+# 06 -- Browser findings and coverage
 
-Status: **executed 2026-10-01** from a desktop-app browser session
-against a scratch-DB backend on 8766, **automated the same day** -- the
-coverage now runs as `backend/tests/visual_smoke.py` (236 checks,
-Playwright; last full run 2026-10-01, exit 0). The API/SSE/pages layer
-comes from `backend/tests/run_all.py` and the full gate; a real browser
-is the missing layer -- JavaScript actually running. What that run
-found is recorded below; what it does not yet check is listed further
-down.
+The missing test layer. `backend/tests/run_all.py` and the full gate cover
+the API, the SSE frame contracts, and that the pages and assets *serve*.
+None of that runs JavaScript, and a page whose module wiring is broken
+serves perfectly. A real browser is the only thing that catches it.
 
-The runnable suite is `backend/tests/visual_smoke.py`; its invocation is
-below. It needs a live server plus the Playwright venv, which is why it
-is not part of `scripts/full_gate.sh`.
+That layer is `backend/tests/visual_smoke.py`, whose invocation is below.
+It prints its own check count on completion, so the number is never a
+figure quoted in this document. It needs a live server plus the
+Playwright venv, which is why it is not part of `scripts/full_gate.sh`.
+
+What the browser layer found is recorded below; what it does not yet
+check is listed under *Coverage not yet checked*.
 
 ## Why this exists
 
@@ -56,22 +56,32 @@ A scratch DB keeps the check independent of real training history.
 
 ## Coverage not yet checked
 
-* **App shell + training controls**
-  * [ ] **deferred with training tests**: the same controls against a
-        *real* active run (process actually stopping/saving).
+* **Graph executions**
+  * [ ] The smoke test never starts an execution. It checks the panel is
+        rendered (`#exec-list`), nothing more: no run is launched, so no
+        node result, progress frame, terminal status or stop button is
+        ever driven through the UI.
+  * [ ] **This is not only a missing test -- the page makes it awkward.**
+        `/graph` polls `/api/v1/graphs/executions` every 2.5 s while any
+        execution is non-terminal, and holds an event stream open, so
+        **Playwright's `networkidle` can never fire while a run is
+        active**. Measured: idle, `networkidle` on `/graph` settles in
+        0.6 s (3 of 3); with a 3200-node run going, it times out every
+        time (3 of 3 at a 12 s limit), while
+        `domcontentloaded` + `wait_for_selector('.rail')` takes 0.2 s.
+        The nine `networkidle` waits in `visual_smoke.py` are therefore
+        only safe because no run is active. Any section that starts a run
+        must wait on a concrete element instead, and must stop the run
+        before the next `networkidle`.
 * **Monitor dashboard**
   * [ ] **needs a live producer**: points appear live, mid-stream reload
         replays history, `clear` empties the chart, CSV export + series
         toggles on real data (the M6 harness covered the frame contract;
-        real-data rendering waits for the training-test gate).
+        real-data rendering waits for a producer that emits real frames).
 * **Config editor**
   * [ ] `PUT /config/raw` rejection (invalid TOML -> 422, file
         untouched) is API-tested (`test_config.py`); not driven in the
         browser.
-* **Run detail**
-  * [ ] Live active-run refresh (5s log tail + 1s duration ticker +
-        terminal-event SSE reload) is exercised only through its code
-        path; the smoke has no real running run on `/run/{id}`.
 * **Dataset manager**
   * [ ] Item mutations (prompt edit, good/bad toggle, discard, bulk
         apply, commit-to-set, **set card preview**) are covered by
@@ -86,25 +96,31 @@ A scratch DB keeps the check independent of real training history.
   * [ ] Dragging the console by its header and native corner-resize
         are exercised interactively (desktop session); the automated
         run pins persistence of whatever geometry it gets, not the
-        gestures themselves -- and `scripts/probe_ui_bugs.py` now
-        drives resize -> move -> resize automatically and asserts the
-        window keeps its size (the 2026-10-01 shrinking-window bug).
+        gestures themselves -- and `scripts/probe_ui_bugs.py` drives
+        resize -> move -> resize automatically and asserts the window
+        keeps its size (the shrinking-window bug, finding 8 below).
 
-## Screenshot caveat
+## Two rules for this checklist
 
 Fix regressions in the milestone that owns the code -- do not adjust the
 checklist to match broken behavior.
 
-Caveat from the 2026-10-01 desktop run: the desktop app's `screenshot`
-tool served stale frames (byte counts matched new captures, but the
-images rendered earlier states). DOM inspection via `evaluate` and the
-console reader were authoritative; treat desktop screenshots as
-advisory. **Superseded for testing purposes**: the Playwright suite
-above takes real frame-buffer screenshots from headless Chromium and
-is the driver for this checklist now; the desktop browser is for
-viewing only.
+The desktop app's `screenshot` tool has served stale frames: byte counts
+matched fresh captures while the images showed earlier states. DOM
+inspection via `evaluate` and the console reader were authoritative. This
+only matters for the desktop browser, which is for viewing; the Playwright
+suite takes real frame-buffer screenshots from headless Chromium and is
+the driver for everything below.
 
-## Findings from the 2026-10-01 run (all fixed in the same session)
+## Bugs this checklist found
+
+Twelve, all fixed. Two routes in: the Playwright suite above catches them
+on a run, and `scripts/probe_ui_bugs.py` reproduces the ones a user
+reports from a live desktop session before they are pinned in the smoke.
+Each entry records the root cause, because in every case the symptom was
+in one layer and the cause was in another -- a stylesheet specificity
+fight, a geometry round-trip, or a port that renamed something the other
+half of the port still expected.
 
 1. **`hidden` attribute did nothing on class-styled elements** --
    `STOP & SAVE`/`FORCE KILL` rendered with no active run, and palette
@@ -124,32 +140,26 @@ viewing only.
 3. **Cache-phase progress bar could never render** -- dashboard.js
    toggled `hidden` while the ported CSS expects the legacy `.active`
    class pair. Fixed to match the ported CSS (`.classList` toggles).
-4. **Stale `_suppressClick`** (found while testing) -- a wire released
+4. **Stale `_suppressClick`** -- a wire released
    off-canvas left the flag set, eating the next canvas click. Fixed:
    any new `pointerdown` clears it.
-5. **"Continue from" select rendered blank** (found by the Playwright
-   suite during the main-page redesign) -- the placeholder option was
+5. **"Continue from" select rendered blank** -- the placeholder option was
    `disabled` without `selected`, leaving `selectedIndex` at `-1`, so
    Chromium displayed nothing. Present since the M6 port (visible in
    the original screenshots). Fixed: placeholder gets
    `disabled: true, selected: true`.
-6. **Config widgets had no `id`** (found by the M8a smoke) -- labels
+6. **Config widgets had no `id`** -- labels
    pointed at `#f-<dotted id>` but `renderForm` never assigned
    `input.id`, so label association was broken and the smoke's
    `select_option("#f-tuning-method")` timed out. Fixed at the render
    site.
-7. **`live` overlay written under dotted keys** (found by the M8a
-   smoke) -- `onEdit` set `live["tuning.method"]` literally while
+7. **`live` overlay written under dotted keys** -- `onEdit` set `live["tuning.method"]` literally while
    `getDeep(live, "tuning.method")` reads `live.tuning.method`, so
    `visible_when` kept evaluating the stale loaded value (rank stayed
    visible after switching to `distillation`); the initial overlay was
    also a shallow copy that would have let edits mutate `values`. Fixed
    with `setDeep` writes + a JSON deep copy on load.
 
-## Findings from the 2026-10-01 post-M9 user reports (all fixed same day)
-
-Reported from a live desktop session; reproduced first with
-`scripts/probe_ui_bugs.py`, then pinned in the smoke.
 
 8. **System console shrank while being dragged; resize seemed
    ignored** -- `apply()` writes border-box `width`/`height` (the global
@@ -182,8 +192,7 @@ Reported from a live desktop session; reproduced first with
     across mode switches. Smoke pins browse rendering zero checkboxes,
     select-all hidden, the panel hidden mid-selection, and the
     2-item selection surviving the round-trip.
-11. **Node search box overflowed the palette rail** (reported from the
-    live graph editor) -- `.ed-search` carries `.cfg-input`, whose
+11. **Node search box overflowed the palette rail** -- `.ed-search` carries `.cfg-input`, whose
     `width: 100%` was combined with horizontal margins, so the box was
     1.2rem wider than the 280px rail and stuck out over the canvas;
     the form-sized padding/type also looked oversized next to the
@@ -196,10 +205,9 @@ Reported from a live desktop session; reproduced first with
     drawer collapsed by default -- canvas went from ~66% to 91% of the
     viewport height.
 
-## Findings from the 2026-10-01 infinite-canvas pass (all fixed same day)
 
 12. **Consecutive palette drops stacked on one point, making wire
-    starts ambiguous** (found while probing the infinite canvas) -- with
+    starts ambiguous** -- with
     the view centered on the origin, `dropPosition` produced negative
     coordinates and `state.addNode` clamped them with `Math.max(0, ...)`,
     so every drop landed at exactly (0, 0); a wire dragged from that

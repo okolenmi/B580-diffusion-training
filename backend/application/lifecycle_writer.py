@@ -30,7 +30,12 @@ from ..domain.entities.graph_execution import GraphExecution
 from ..domain.entities.run import Run
 from ..domain.value_objects import GraphStatus, RunStatus
 
-S = TypeVar("S")
+# S appears only in parameter position (``expected: S``), which is
+# contravariant. Declaring it invariant made StatusRepository narrower
+# than intended -- exactly backwards for a protocol whose stated purpose
+# is to be *narrower* than the full repository port (mypy: "invariant
+# type variable in protocol where contravariant one is expected").
+S = TypeVar("S", contravariant=True)
 R = TypeVar("R", bound=EventSource)
 """An aggregate that buffers its domain events -- ``Run``,
 ``GraphExecution``, and anything shaped like them."""

@@ -76,17 +76,28 @@ class GraphExecution:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, *, graph: GraphDefinition, created_at: datetime) -> "GraphExecution":
+    def create(cls, *, graph: GraphDefinition, created_at: datetime) -> GraphExecution:
         """Register a new execution in ``queued`` state (no id yet)."""
         return cls(status=GraphStatus.QUEUED, graph=graph, created_at=created_at)
 
     @classmethod
-    def restore(cls, **fields: object) -> "GraphExecution":
+    def restore(cls, **fields: object) -> GraphExecution:
         """Rebuild an execution from a persisted row, cross-field rules
         checked (see ``Run.restore`` for why: a loaded aggregate can be
         impossible as a whole even when every column is well-formed)."""
         status = fields.get("status")
-        execution = cls(**fields)  # type: ignore[arg-type] -- the mapper's kwargs
+        execution = cls(**fields)  # type: ignore[arg-type]  # a mapper's **fields is dict[str, object]
+        # by construction; the constructor wants each field's own
+        # type. Not a convenience ignore -- the _require_consistent
+        # call below is the runtime check, and the row's types come
+        # from the reader.
+        #
+        # The two-space-then-# form of the reason is not a style
+        # choice: mypy 2.4 accepts a trailing reason only after a
+        # second '#'. Written as `# type: ignore[arg-type] -- ...`
+        # this marker suppresses NOTHING and mypy reports it as an
+        # invalid ignore -- which is how the four arg-type errors
+        # below this line were visible at all.
         assert isinstance(status, (GraphStatus, str))
         execution._require_consistent(GraphStatus(status))
         return execution

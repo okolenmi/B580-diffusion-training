@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -52,7 +52,7 @@ from backend.tests.support import (
     wait_until,
 )
 
-NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 
 
 def node(node_id: str, class_name: str, **params) -> GraphNodeSpec:

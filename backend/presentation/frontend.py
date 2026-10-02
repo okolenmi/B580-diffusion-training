@@ -50,7 +50,12 @@ class _UiStaticFiles(StaticFiles):
 
     def file_response(
         self,
-        full_path: os.PathLike,
+        # Exactly the supertype's annotation. Bare `os.PathLike` is
+        # `PathLike[Any]`, which is *wider* than the `str | PathLike[str]`
+        # Starlette declares, so this was not a valid override (mypy
+        # override / Liskov). Narrowing it to match also states that the
+        # value is a real path, not an arbitrary one.
+        full_path: str | os.PathLike[str],
         stat_result: os.stat_result,
         scope: Scope,
         status_code: int = 200,

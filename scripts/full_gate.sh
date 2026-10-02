@@ -63,4 +63,17 @@ else
   echo "== backend lint skipped (ruff not installed in the gate interpreter) =="
 fi
 
+# The wider ruff + mypy run, measured against scripts/quality_baseline.json
+# (docs 08 N-11). The F,E9 check above stays because it is the subset that
+# must be zero outright -- undefined names are always a bug, whereas a
+# complexity score or a variance warning is a judgement call. This one
+# fails on the count going *up* for any rule in any file, and says where
+# it went down. A tool nobody runs is not a gate, so it runs here.
+#
+# Skipped with a notice when the gate interpreter has neither tool, for the
+# same reason as above. mypy alone is optional: it is a dev dependency,
+# not something the app needs to run.
+echo "== quality baseline (ruff, mypy) =="
+"$GATE_PYTHON" scripts/check_quality.py
+
 echo "FULL GATE: ALL GREEN"

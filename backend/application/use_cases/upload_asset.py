@@ -50,12 +50,15 @@ class UploadSession:
         """Give up: no final file, no partial. Never raises."""
         self._writer.abort()
 
-    def __enter__(self) -> "UploadSession":
+    def __enter__(self) -> UploadSession:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> None:
+        # Typed None, not bool, and no `return False`: this never
+        # suppresses an exception, and an __exit__ annotated `-> bool`
+        # says it might -- which costs a type-checker-visible guarantee
+        # that an upload failure actually propagates (mypy exit-return).
         self.abort()  # a no-op after a successful finish()
-        return False
 
 
 class UploadAsset:

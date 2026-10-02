@@ -101,7 +101,7 @@ class GraphDefinition:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "GraphDefinition":
+    def from_dict(cls, payload: dict) -> GraphDefinition:
         """Parse a stored/submitted payload back into specs.
 
         Tolerant by design (it reads our own snapshots): missing

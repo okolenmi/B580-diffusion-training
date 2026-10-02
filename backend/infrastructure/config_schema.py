@@ -70,7 +70,11 @@ def _default_value(field_info: FieldInfo) -> Any:
     if field_info.default_factory is not None:
         try:
             return field_info.default_factory()
-        except Exception:
+        except Exception:  # noqa: BLE001 -- any factory failure means
+            # "this field has no derivable default", which is what the
+            # schema reports as a missing default. A pydantic factory is
+            # arbitrary caller code; naming its exception types here
+            # would couple schema derivation to whatever they raise.
             return None
     return None
 
@@ -149,56 +153,69 @@ def _walk(model: type[BaseModel], prefix: str, base_visible_when: dict | None,
             # listed first in the Union" -- those aren't the same thing
             # (e.g. TrainingConfig.tuning defaults to DistillationTuning
             # even though LoRATuning is listed first).
-            disc_values = [
-                get_args(member.model_fields[_discriminator_field_name(member)].annotation)[0]
-                for member in union_members
-                if _discriminator_field_name(member) is not None
-            ]
-            if disc_values:
-                first_member = union_members[0]
-                disc_name = _discriminator_field_name(first_member)
+            # One pass over the members, collecting what both blocks
+            # below need. This used to be a comprehension that called
+            # _discriminator_field_name twice per member -- once in the
+            # guard, once in the expression, which is correct only
+            # because the function happens to be pure, and nothing said
+            # so -- followed by a second loop calling it a third and
+            # fourth time for the same members.
+            #
+            # The member is kept alongside the name and value because the
+            # walk below needs all three. Reading the name off
+            # `union_members[0]` (which is what this used to do) is wrong
+            # whenever the first member has no discriminator and a later
+            # one does: the name comes back None, the option's path
+            # becomes "config.None", and getattr silently falls back to
+            # the default. The `if disc_values` guard was already
+            # assuming that a member with a discriminator exists.
+            disc_members: list[tuple[type, str, Any]] = []
+            for member in union_members:
+                member_disc = _discriminator_field_name(member)
+                if member_disc is None:
+                    continue
+                member_info = member.model_fields[member_disc]
+                disc_members.append(
+                    (member, member_disc, get_args(member_info.annotation)[0])
+                )
+
+            if disc_members:
+                _, disc_name, first_value = disc_members[0]
                 disc_path = f"{path}.{disc_name}"
                 actual_default_instance = _default_value(field_info)
                 actual_default = (
-                    getattr(actual_default_instance, disc_name, disc_values[0])
-                    if actual_default_instance is not None else disc_values[0]
+                    getattr(actual_default_instance, disc_name, first_value)
+                    if actual_default_instance is not None else first_value
                 )
                 out[disc_path] = {
                     "type": "select",
-                    "choices": list(disc_values),
+                    "choices": [value for _, _, value in disc_members],
                     "default": actual_default,
                     **({"visible_when": base_visible_when} if base_visible_when else {}),
                 }
 
-            for member in union_members:
-                disc_name = _discriminator_field_name(member)
-                if disc_name is None:
-                    continue
-                disc_info = member.model_fields[disc_name]
-                disc_value = get_args(disc_info.annotation)[0]
-                disc_path = f"{path}.{disc_name}"
+                for member, member_disc, disc_value in disc_members:
+                    member_visible = {f"{path}.{member_disc}": disc_value}
+                    if base_visible_when:
+                        member_visible = {**base_visible_when, **member_visible}
 
-                member_visible = {disc_path: disc_value}
-                if base_visible_when:
-                    member_visible = {**base_visible_when, **member_visible}
-
-                for sub_name, sub_info in member.model_fields.items():
-                    if sub_name == disc_name:
-                        continue
-                    sub_path = f"{path}.{sub_name}"
-                    sub_tp, _ = _unwrap_optional(sub_info.annotation)
-                    if _is_basemodel(sub_tp) or _union_members(sub_tp) is not None:
-                        # Not currently needed (no nested submodel/union
-                        # inside a tuning/cache variant), but handle it
-                        # instead of silently dropping fields if it's ever
-                        # added.
-                        _walk(sub_tp, sub_path, member_visible, out)
-                        continue
-                    leaf = _leaf_option(sub_info, sub_tp)
-                    if leaf is None:
-                        continue
-                    leaf["visible_when"] = member_visible
-                    out[sub_path] = leaf
+                    for sub_name, sub_info in member.model_fields.items():
+                        if sub_name == member_disc:
+                            continue
+                        sub_path = f"{path}.{sub_name}"
+                        sub_tp, _ = _unwrap_optional(sub_info.annotation)
+                        if _is_basemodel(sub_tp) or _union_members(sub_tp) is not None:
+                            # Not currently needed (no nested
+                            # submodel/union inside a tuning/cache
+                            # variant), but handle it instead of silently
+                            # dropping fields if it's ever added.
+                            _walk(sub_tp, sub_path, member_visible, out)
+                            continue
+                        leaf = _leaf_option(sub_info, sub_tp)
+                        if leaf is None:
+                            continue
+                        leaf["visible_when"] = member_visible
+                        out[sub_path] = leaf
             continue
 
         if _is_basemodel(tp):

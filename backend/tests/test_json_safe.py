@@ -110,7 +110,7 @@ def test_serialize_event_nonfinite() -> None:
     event = RunProgressed(
         run_id=1, step=7, total_steps=100, loss=NAN, avg_loss=INF, lr=1e-4,
         phase="training", cache_done=None, cache_total=None,
-        occurred_at=dt.datetime.now(dt.timezone.utc),
+        occurred_at=dt.datetime.now(dt.UTC),
     )
     text = serialize_event(event)
     payload = strict_loads(text)  # raises == F-03 reproduces

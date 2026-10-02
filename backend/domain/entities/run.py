@@ -148,8 +148,19 @@ class Run:
         where they can be reported against the row that broke them.
         """
         status = fields.get("status")
-        run = cls(**fields)  # type: ignore[arg-type] -- the mapper's kwargs
-        assert isinstance(status, RunStatus) or isinstance(status, str)
+        run = cls(**fields)  # type: ignore[arg-type]  # a mapper's **fields is dict[str, object]
+        # by construction; the constructor wants each field's own
+        # type. Not a convenience ignore -- the _require_consistent
+        # call below is the runtime check, and the row's types come
+        # from the reader.
+        #
+        # The two-space-then-# form of the reason is not a style
+        # choice: mypy 2.4 accepts a trailing reason only after a
+        # second '#'. Written as `# type: ignore[arg-type] -- ...`
+        # this marker suppresses NOTHING and mypy reports it as an
+        # invalid ignore -- which is how the four arg-type errors
+        # below this line were visible at all.
+        assert isinstance(status, (RunStatus, str))
         run._require_consistent(RunStatus(status))
         return run
 

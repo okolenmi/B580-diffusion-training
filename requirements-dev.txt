@@ -1,0 +1,8 @@
+# Development-only tools. Not needed to *run* the app -- installing this
+# is what makes `scripts/check_quality.py` able to check mypy rather than
+# skip it with a notice.
+#
+# ruff is also present in most ComfyUI venvs already; if yours has it,
+# this line is a no-op.
+mypy
+ruff

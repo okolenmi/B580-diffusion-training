@@ -1,0 +1,84 @@
+# Tooling configuration for this repository.
+#
+# ruff is installed and run in scripts/full_gate.sh. mypy is configured
+# here and run by scripts/check_quality.py; install it with
+# `pip install -r requirements-dev.txt` (it is not needed to *run* the
+# app, only to check it).
+#
+# The review that asked for this (docs 08 N-11) noted the code already
+# carried `# noqa: BLE001` and `# type: ignore` markers for two tools
+# that were not being run -- which is how 50 mypy errors and 92 ruff
+# findings survived a review cycle. Running a tool the code already
+# claims to conform to is the cheapest quality gate available.
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88          # not enforced (E501 is ignored); the markers below
+                          # are about correctness, not line width
+extend-exclude = ["archive"]
+
+[tool.ruff.lint]
+# E   pycodestyle errors (real ones: unused imports, undefined names)
+# F   pyflakes (unused imports, undefined names, f-string bugs)
+# B   bugbear (mutable defaults, except-hash, ...)
+# BLE blind except -- the project uses broad excepts deliberately at
+#     thread and subprocess boundaries; those carry `# noqa: BLE001`
+#     with a stated reason, and the marker is now checked to be real
+# BLE001 instead of decorative.
+# UP  pyupgrade
+# SIM simplify
+# C901 complexity (limit below; doc 08 Q7 wants nothing above ~12)
+# RET return
+# ARG unused arguments -- a port's signature is not ours to trim
+# ASYNC blocking calls in async def -- this is quality rule 5, and it is
+#     what would have caught N-02 before review
+select = ["E", "F", "B", "BLE", "UP", "SIM", "C901", "RET", "ARG", "ASYNC"]
+
+ignore = [
+  "E501",    # line length is not a correctness signal here
+  "B008",    # FastAPI's Depends(...) in defaults is the framework idiom
+  "SIM105",  # contextlib.suppress is not clearer than try/except pass
+  "UP042",   # see the note below: StrEnum changes str() on an enum
+]
+
+# UP042 wants `class X(str, Enum)` -> `enum.StrEnum`. That is NOT a safe
+# fix here: for the str-mixin form `str(X.A)` is "X.A", while StrEnum
+# makes it "a". Any code that stringifies a config or status enum would
+# change its output. Ignored deliberately, not overlooked -- the two
+# enums it wants to rewrite are in domain code where that difference is
+# exactly what must not drift.
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, inject failures, and use noqa as subject matter; the
+# point of running ruff on tests is syntax and undefined names (F), which
+# stay on.
+"backend/tests/*" = ["ARG", "BLE", "SIM", "RET", "B011"]
+"backend/tests/support.py" = ["ARG", "BLE", "SIM", "RET", "E402"]
+# B023 only here, and only because these closures capture `page`, which
+# is assigned per `with browser_context()` block and every closure is
+# called inside its own block, before the next assignment. It is not
+# ignored for all tests: a real B023 in test_dataset_library.py was found
+# and fixed while this config was being written (a lambda bound its
+# parameter and then read the loop variable in its body).
+"backend/tests/visual_smoke.py" = ["B023"]
+# ARG001 in presentation: a route handler's signature is FastAPI's
+# contract, not ours. `request` is how middleware is reached, and a
+# route that does not read it yet still must accept it. Dropping the
+# parameters would make the next person re-add them.
+"backend/presentation/*" = ["ARG001"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.mypy]
+python_version = "3.14"
+packages = ["backend"]
+ignore_missing_imports = true
+follow_imports = "silent"
+exclude = ["^backend/tests/", "^archive/"]
+# Not strict yet. The baseline file records where we are; a count that
+# rises fails. Raising strictness is a separate, deliberate step -- the
+# point is that the number can only go down from here.
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = false     # a stale ignore is not an error yet

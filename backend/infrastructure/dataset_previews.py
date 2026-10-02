@@ -10,7 +10,7 @@ instead of serving a dead URL.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from ..application.errors import DatasetNotFoundError
 from ..application.ports.dataset_library import DatasetLibrary
@@ -56,7 +56,7 @@ class SqliteDatasetPreviews(DatasetPreviews):
                 "ON CONFLICT(dataset) DO UPDATE SET "
                 "preview_path = excluded.preview_path, "
                 "updated_at = excluded.updated_at",
-                (name, preview_path, datetime.now(timezone.utc).isoformat()),
+                (name, preview_path, datetime.now(UTC).isoformat()),
             )
 
     def remove(self, name: str) -> None:

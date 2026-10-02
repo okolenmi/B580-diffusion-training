@@ -54,7 +54,7 @@ class AssetRequest:
         relative_path: str = "",
         *,
         path_required: bool = False,
-    ) -> "AssetRequest":
+    ) -> AssetRequest:
         if not kind:
             raise InvalidQueryError("asset kind is required")
         if path_required and not relative_path:
@@ -69,7 +69,7 @@ class ItemSelection:
     ids: tuple[int, ...]
 
     @classmethod
-    def of(cls, item_ids: list[int]) -> "ItemSelection":
+    def of(cls, item_ids: list[int]) -> ItemSelection:
         if not item_ids:
             raise InvalidQueryError("item_ids must not be empty")
         return cls(ids=tuple(item_ids))

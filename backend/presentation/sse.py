@@ -48,7 +48,7 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
@@ -220,7 +220,7 @@ class ClientBuffer:
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return None
         return self._items.popleft()[1]
 
@@ -240,7 +240,7 @@ async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
         try:
             opened = sanitize({
                 "type": "stream_opened",
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "occurred_at": datetime.now(UTC).isoformat(),
             })
             yield f"data: {strict_dumps(opened)}\n\n"
             while True:

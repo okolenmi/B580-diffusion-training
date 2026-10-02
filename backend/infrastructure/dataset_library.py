@@ -22,7 +22,7 @@ import logging
 import shutil
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from ..application.errors import (
@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 
 def _dt(epoch: float | None) -> datetime:
     if not epoch:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-    return datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+        return datetime.fromtimestamp(0, tz=UTC)
+    return datetime.fromtimestamp(float(epoch), tz=UTC)
 
 
 class SqliteDatasetLibrary(DatasetLibrary):
@@ -511,7 +511,7 @@ class SqliteDatasetLibrary(DatasetLibrary):
                 "SELECT name, description, created_at FROM info"
             ).fetchone()
         created = _dt(row["created_at"]) if row else datetime.fromtimestamp(
-            0, tz=timezone.utc
+            0, tz=UTC
         )
         return DatasetInfo(
             name=str(row["name"]) if row else directory.name,

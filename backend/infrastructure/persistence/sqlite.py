@@ -26,7 +26,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 
@@ -78,7 +78,7 @@ class SqliteDatabase:
             if migration.stem in applied:
                 continue
             body = migration.read_text(encoding="utf-8")
-            stamp = datetime.now(timezone.utc).isoformat()
+            stamp = datetime.now(UTC).isoformat()
             with self.connection() as conn:
                 try:
                     conn.executescript(

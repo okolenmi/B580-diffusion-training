@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from ..application.ports.clock import Clock
 
@@ -11,4 +11,4 @@ class SystemClock(Clock):
     """Wall-clock time in UTC."""
 
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)

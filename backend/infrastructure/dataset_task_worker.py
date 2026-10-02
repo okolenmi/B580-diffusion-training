@@ -132,7 +132,13 @@ def main(argv: list[str] | None = None) -> int:
             # is the backstop for a stale/foreign row.
             reporter.failed(f"unknown task kind {args.kind!r}")
             return 2
-    except Exception as exc:  # builder usually reports first; CAS dedupes
+    except Exception as exc:  # noqa: BLE001 -- process-level backstop:
+        # this is main() of a child process whose whole job is to report
+        # whatever happened. Naming exception types here would mean
+        # re-deciding, in another module, which failures are reportable --
+        # and any gap between that list and the builder's becomes an
+        # unhandled crash with no report at all.
+        # builder usually reports first; CAS dedupes
         reporter.failed(f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
         return 1

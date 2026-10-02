@@ -162,7 +162,12 @@ class FileSystemAssetStore(AssetStore):
         # truncated-and-appended by a plain "ab"; start from nothing so a
         # resumed write can never splice two uploads together.
         try:
-            handle = open(partial, "wb")
+            # No context manager: this handle is the writer's, and it
+            # outlives this function -- write()/finish()/abort() all use
+            # it, and finish() is what closes it (or abort() does, on the
+            # failure path). A `with` here would close it before the
+            # first chunk.
+            handle = open(partial, "wb")  # noqa: SIM115 -- see above
         except OSError as exc:
             raise InvalidQueryError(f"cannot write {relative_path!r}: {exc}") from exc
         return _PartialUpload(
@@ -347,11 +352,12 @@ class _PartialUpload(AssetUploadWriter):
         except OSError:
             pass  # the point is only "no .part remains"
 
-    def __enter__(self) -> "_PartialUpload":
+    def __enter__(self) -> _PartialUpload:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> None:
+        # Never suppresses -- see UploadSession.__exit__ for why the
+        # return type is None rather than bool (mypy exit-return).
         # Only the unhappy path: on success finish() has already run and
         # this is a no-op, so `with` cannot double-commit.
         self.abort()
-        return False

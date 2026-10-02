@@ -317,7 +317,11 @@ check("legacy" not in {s.info.name for s in library.list()}, "v1 gone from list"
 # -- name validation + not-found --------------------------------------------
 
 for bad in ("", "   ", "../evil", "a/b", "a\\b", ".", "..", ".hidden", " padded "):
-    expect(InvalidQueryError, lambda b=bad: library.get(bad),
+    # The body uses `b`, the bound parameter -- not `bad`. Binding it and
+    # then reading the loop variable is the bug ruff B023 exists to catch:
+    # every iteration would have asserted against the *last* value, and
+    # this passed only because every value in the tuple is invalid.
+    expect(InvalidQueryError, lambda b=bad: library.get(b),
            f"invalid name {bad!r} refused")
 expect(DatasetNotFoundError, lambda: library.get("nope"), "get unknown -> not found")
 expect(DatasetNotFoundError, lambda: library.root("nope"), "root unknown -> not found")

@@ -12,7 +12,7 @@ import json
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -237,7 +237,7 @@ class FakeClock:
     when a test says so."""
 
     def __init__(self, start: datetime | None = None) -> None:
-        self._now = start or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        self._now = start or datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._now

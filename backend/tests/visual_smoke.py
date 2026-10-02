@@ -22,7 +22,7 @@ import os
 import re
 import shutil
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -64,7 +64,7 @@ def is_expected_noise(text):
 
 
 def main():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     iso = lambda dt: dt.isoformat()
 
     active_run = {

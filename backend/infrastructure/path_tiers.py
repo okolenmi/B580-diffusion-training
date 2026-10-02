@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 GetSetting = Callable[[str, str], str]
 

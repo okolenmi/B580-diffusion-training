@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class _CallbackSubscription(Subscription):
-    def __init__(self, bus: "CallbackEventBus", handler: EventHandler) -> None:
+    def __init__(self, bus: CallbackEventBus, handler: EventHandler) -> None:
         self._bus = bus
         self._handler = handler
         self._closed = False

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from collections.abc import Mapping
 
 # Pure path arithmetic (no I/O, no mutation) -- allowed at import.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

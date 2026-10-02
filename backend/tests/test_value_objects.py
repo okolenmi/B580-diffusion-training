@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -402,7 +402,7 @@ def test_progress_sample_terminal_only() -> None:
 
 def test_training_mode() -> None:
     print("\n== TrainingMode: tuning.method is a vocabulary (S-24) ==")
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     run = Run.create(config_path="c.toml", mode="distillation", total_steps=10, created_at=now)
     check(run.mode is TrainingMode.DISTILLATION, "the string is coerced to the enum")
     check(run.mode == "distillation", "and still compares equal to the wire word")

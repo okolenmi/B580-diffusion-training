@@ -39,6 +39,6 @@ class SubscribeMonitor:
             self._bus.unsubscribe(monitor_id, queue)
 
     @staticmethod
-    async def _frames(queue: "asyncio.Queue[str]") -> AsyncIterator[str]:
+    async def _frames(queue: asyncio.Queue[str]) -> AsyncIterator[str]:
         while True:
             yield await queue.get()

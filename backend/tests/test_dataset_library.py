@@ -379,4 +379,79 @@ check(library.first_preview("pv") is None,
 check(library.get_item("pv", 4).preview_path == "previews/p4.png",
       "get_item still reads the bad row's own preview")
 
+# -- paging: a dataset is the one collection whose size is unbounded ------
+#
+# It grows by ingestion, not by user action, so "return every row" grew
+# the response until the browser stopped rendering it -- and the UI had
+# no way to know it had only seen part of the data (docs 07 F-14,
+# docs 08 Q10). These checks pin the default page, the total, and that
+# paging covers every row exactly once.
+
+make_v2_dataset(root, "big", items=1200, previews=False)
+
+from backend.application.use_cases.list_dataset_items import (  # noqa: E402
+    ListDatasetItems,
+)
+
+items_use_case = ListDatasetItems(library=library)
+
+# count_items at the adapter: the whole filtered result, not a page.
+check(library.count_items("big") == 1200,
+      f"count_items counts every row (got {library.count_items('big')})")
+check(library.count_items("big", committed=False) == 1200,
+      "every row is pending")
+check(library.count_items("big", committed=True) == 0,
+      "and none is committed")
+
+# The default page, without asking for one.
+default_page = items_use_case.execute("big")
+check(len(default_page.items) == 500,
+      f"the default page is 500 rows (got {len(default_page.items)})")
+check(default_page.limit == 500, f"and says so (got {default_page.limit})")
+check(default_page.total == 1200,
+      f"total describes the whole result (got {default_page.total})")
+check(default_page.next_offset == 500,
+      f"next_offset points at the next page (got {default_page.next_offset})")
+check(default_page.items[0].id == 1 and default_page.items[-1].id == 500,
+      "the page is the first 500 by id")
+
+# An explicit limit is honoured, and an explicit offset moves the window.
+second = items_use_case.execute("big", limit=500, offset=500)
+check(second.items[0].id == 501,
+      f"offset 500 starts at row 501 (got {second.items[0].id})")
+check(second.next_offset == 1000, f"next_offset advances (got {second.next_offset})")
+
+# The last page says so, rather than offering an offset that returns
+# nothing -- an empty page mid-dataset must not be mistaken for the end.
+last = items_use_case.execute("big", limit=500, offset=1000)
+check(len(last.items) == 200, f"the last page has the remainder (got {len(last.items)})")
+check(last.next_offset is None, f"the last page reports no next (got {last.next_offset})")
+
+# Paging covers all 1,200 exactly once: no gap, no duplicate.
+seen: list[int] = []
+offset = 0
+pages = 0
+while True:
+    page = items_use_case.execute("big", offset=offset)
+    seen.extend(item.id for item in page.items)
+    pages += 1
+    if page.next_offset is None:
+        break
+    offset = page.next_offset
+check(pages == 3, f"1,200 rows take 3 default pages (got {pages})")
+check(len(seen) == 1200, f"paging returned every row (got {len(seen)})")
+check(len(set(seen)) == 1200, f"and none twice ({len(seen) - len(set(seen))} duplicates)")
+check(seen == sorted(seen), "and in id order")
+check(seen == list(range(1, 1201)), "with no gap in the ids")
+
+# A filtered count is the count of that filter, not of everything -- or a
+# client cannot tell "no more rows" from "no rows match".
+pending = items_use_case.execute("big", committed=False, limit=10)
+check(pending.total == 1200, f"pending filter total (got {pending.total})")
+check(pending.next_offset == 10, f"and it still knows there is more (got {pending.next_offset})")
+none_committed = items_use_case.execute("big", committed=True, limit=10)
+check(none_committed.total == 0, f"no committed rows -> total 0 (got {none_committed.total})")
+check(none_committed.next_offset is None,
+      f"and no next page even though a limit was given (got {none_committed.next_offset})")
+
 finish()

@@ -39,6 +39,7 @@ from ..application.ports.training_gateway import (
     TrainingGateway,
     TrainingLaunch,
 )
+from ..application.limits import DEFAULT_STOP_GRACE_SECONDS
 from .process_identity import cmdline_mentions
 from .workspace import WorkspaceLayout
 
@@ -50,7 +51,7 @@ class SubprocessTrainingGateway(TrainingGateway):
         self,
         layout: WorkspaceLayout,
         *,
-        stop_grace: float = 15.0,
+        stop_grace: float = DEFAULT_STOP_GRACE_SECONDS,
         cmdline_marker: str = "core.cli",
     ) -> None:
         self._layout = layout

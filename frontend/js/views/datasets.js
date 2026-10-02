@@ -77,6 +77,14 @@ let items = [];           // current filter's rows
 let itemFilter = "all";   // all | pending | used
 let itemMode = "browse";  // browse | edit (toolbar toggle)
 let selected = new Set(); // item ids marked in the grid
+// Paging state for the items grid. The API pages at 500 by default
+// (backend WP-14): `itemsTotal` is the size of the whole filtered
+// dataset and `itemsNextOffset` is null once the last page is in --
+// which is the only honest way to say "no more", since an empty page
+// can also mean "you are past the end".
+let itemsTotal = 0;
+let itemsNextOffset = null;
+let loadingMore = false;
 let tasks = [];           // all task rows for the dataset
 let pollTimer = null;
 
@@ -379,19 +387,72 @@ async function reloadDetail() {
 
 /* ---- items ---- */
 
+/* Load the first page, replacing whatever is on screen. `loadMore()`
+   is the append case; both go through one fetch so the query string and
+   the response handling cannot drift apart. */
 async function loadItems() {
-  const q = itemFilter === "pending" ? "?committed=false"
-    : itemFilter === "used" ? "?committed=true" : "";
-  const res = await api(dsApi(`/items${q}`));
+  const res = await fetchItems(null);
   items = res.items;
+  itemsTotal = res.total ?? items.length;
+  itemsNextOffset = res.next_offset ?? null;
   selected = new Set([...selected].filter((id) =>
     items.some((it) => it.id === id))); // drop rows that left the filter
+  renderLoadMore();
+}
+
+/* Append the next page. Guarded against a double click: without this,
+ * two clicks on a slow response request the same offset twice and the
+ * grid shows every row of that page twice. */
+async function loadMore() {
+  if (itemsNextOffset === null || loadingMore) return;
+  loadingMore = true;
+  el("btn-loadmore").disabled = true;
+  try {
+    const res = await fetchItems(itemsNextOffset);
+    // Guard against a filter change landing mid-flight: an append from a
+    // different filter would splice unrelated rows into this grid.
+    const seen = new Set(items.map((it) => it.id));
+    for (const it of res.items) if (!seen.has(it.id)) items.push(it);
+    itemsTotal = res.total ?? itemsTotal;
+    itemsNextOffset = res.next_offset ?? null;
+    renderItems();
+    renderLoadMore();
+  } finally {
+    loadingMore = false;
+    el("btn-loadmore").disabled = false;
+  }
+}
+
+function fetchItems(offset) {
+  const params = new URLSearchParams();
+  if (itemFilter === "pending") params.set("committed", "false");
+  else if (itemFilter === "used") params.set("committed", "true");
+  if (offset !== null && offset !== undefined) params.set("offset", String(offset));
+  const query = params.toString();
+  return api(dsApi(`/items${query ? `?${query}` : ""}`));
+}
+
+/* The affordance and the count exist together: a button with no
+   "showing 500 of 12,000" beside it invites the reader to assume they
+   are looking at everything. */
+function renderLoadMore() {
+  const box = el("items-loadmore");
+  if (itemsNextOffset === null) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  el("items-loadmore-text").textContent =
+    `showing ${items.length} of ${itemsTotal}`;
 }
 
 function renderItems() {
   const edit = itemMode === "edit";
   el("items-count").textContent =
-    `${items.length} shown · ${selected.size} selected` +
+    (itemsTotal > items.length
+      ? `${items.length} of ${itemsTotal} shown · `
+      : `${items.length} shown · `) +
+    `${selected.size} selected` +
     (edit ? " · edit mode" : "");
   const all = items.length > 0 && selected.size === items.length;
   el("select-all").checked = all;
@@ -672,7 +733,12 @@ function fillEditor(item) {
     type: item.type,
   };
   el("item-ed-id").textContent = `#${item.id}`;
-  el("item-ed-pos").textContent = `${idx + 1} of ${items.length} shown`;
+  // `items.length` is the loaded page count, not the dataset size. Naming
+  // both keeps the position meaningful (you can page past it) without
+  // implying the dataset ends here.
+  el("item-ed-pos").textContent = itemsTotal > items.length
+    ? `${idx + 1} of ${items.length} loaded (${itemsTotal} in dataset)`
+    : `${idx + 1} of ${items.length}`;
   el("item-ed-prev").disabled = idx === 0;
   el("item-ed-next").disabled = idx === items.length - 1;
   el("item-ed-prompt").value = item.prompt;
@@ -1243,6 +1309,7 @@ async function boot() {
       showError("items-error", errText(err));
     }
   });
+  el("btn-loadmore").addEventListener("click", loadMore);
   el("select-all").addEventListener("change", (ev) => {
     selected = ev.target.checked ? new Set(items.map((it) => it.id)) : new Set();
     renderItems();

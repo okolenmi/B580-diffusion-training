@@ -19,14 +19,23 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from ..limits import MAX_UPLOAD_BYTES
+
+__all__ = ["MAX_UPLOAD_BYTES", "AssetOption", "AssetStore"]
+
 #: Upload policy (the contract both presentation and the adapter honour):
 #: model folders hold safetensors only -- the pickers list ``*.safetensors``
 #: and the inspectors read nothing else, so any other name is rejected
 #: before a byte is written.
 UPLOAD_SUFFIXES = (".safetensors",)
 
-#: Hard cap for one upload body, bytes (8 GiB -- larger than any single
-#: checkpoint this app manages). Presentation refuses a larger declared
+#: Hard cap for one upload body, bytes -- re-exported from
+#: ``application/limits.py``, where every budget in this system lives, so
+#: there is one place to look and one place to change it. It is named here
+#: too because this is the port that documents the upload policy and a
+#: re-exported name is a pointer, not a second copy of the number.
+#: 8 GiB -- larger than any single
+#: checkpoint this app manages. Presentation refuses a larger declared
 #: Content-Length before reading the body and stops reading at the cap;
 #: the adapter re-checks every chunk *while writing*, so the cap holds
 #: even if the body lies about its length.
@@ -35,7 +44,6 @@ UPLOAD_SUFFIXES = (".safetensors",)
 #: body of that size, then joining the chunks, holds about twice the
 #: file in RAM. It used to (docs 08 N-02, measured at 971 ms of event-loop
 #: stall for 600 MB, and ~2x RAM).
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)

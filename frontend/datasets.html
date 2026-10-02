@@ -144,6 +144,18 @@
 
                         <div class="state-box" id="items-state" hidden></div>
                         <div class="ds-items" id="items-grid"></div>
+
+                        <!-- The API pages items (default 500). Without this the
+                             grid would silently show the first page as if it
+                             were the whole dataset, so the button and the
+                             count exist together: one asks for more, the other
+                             says how much is left. -->
+                        <div class="ds-loadmore" id="items-loadmore" hidden>
+                            <span class="text-dim" id="items-loadmore-text"></span>
+                            <button class="btn btn-secondary" id="btn-loadmore">
+                                Load more
+                            </button>
+                        </div>
                     </section>
 
                     <!-- SETS -->

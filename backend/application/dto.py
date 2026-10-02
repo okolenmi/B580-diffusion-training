@@ -198,10 +198,21 @@ class DatasetListResult:
 
 @dataclass(frozen=True, slots=True)
 class DatasetItemsResult:
+    """One page of items, plus enough to say whether there are more.
+
+    ``count`` is the size of *this page* and ``total`` the size of the
+    whole filtered result; keeping both is what lets a client render
+    "showing 500 of 12,000" rather than a truncated list presented as
+    the whole set (docs 08 Q10). ``next_offset`` is the offset of the
+    next page, or ``None`` when there is none.
+    """
+
     items: tuple[DatasetItem, ...]
     count: int
-    limit: int | None = None   # None = every row was requested
+    limit: int | None = None   # the page size actually served
     offset: int = 0
+    total: int | None = None
+    next_offset: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

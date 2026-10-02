@@ -159,9 +159,13 @@ than fabricated counts, and every v2-only endpoint refuses them with 409
 never requires migrating it. Three racing actors (the child's reporter,
 the stop endpoint, startup reconciliation) write through a status CAS,
 so exactly one final outcome wins and a late progress tick is a no-op
-rather than a resurrection. Item paging is opt-in: the curation UI still
-asks for everything, and `limit`/`offset` exist so a caller can page
-through a huge dataset instead of materialising it.
+rather than a resurrection. Item listing is **paged by default** at 500
+rows: a dataset grows by ingestion rather than by user action, so
+"return everything" was a response whose size nobody bounded. The page
+carries `total` (rows matching the filter in the whole dataset) and
+`next_offset` (`null` on the last page) so a client can tell a
+truncated page from the whole set instead of presenting one as the
+other.
 
 Dataset file paths are sandboxed: a path escaping the dataset directory
 is reported as **not-found, never resolved**. `PUT /datasets/{name}

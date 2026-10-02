@@ -29,6 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..application.errors import DatasetFileNotFoundError, DatasetNotFoundError
+from ..application.limits import MAX_PREVIEW_BYTES
 from ..application.ports.dataset_files import DatasetFile, DatasetFiles
 
 #: The preview extensions this route serves. Anything else is a 404.
@@ -41,7 +42,6 @@ PREVIEW_SUFFIXES: dict[str, str] = {
 
 #: Largest preview served, checked with ``stat()`` *before* the read, so
 #: an oversized file is never pulled into memory just to be rejected.
-MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
 
 class FsDatasetFiles(DatasetFiles):

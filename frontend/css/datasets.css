@@ -677,3 +677,17 @@
     .topbar-actions { margin-left: 0; }
     .item-ed-body { grid-template-columns: 1fr; }
 }
+
+/* Paging affordance for the items grid. Centred and visually secondary:
+   it is a continuation, not a primary action, and it only appears when
+   there is genuinely more to fetch. */
+.ds-loadmore {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px 0 4px;
+}
+.ds-loadmore .text-dim {
+    font-variant-numeric: tabular-nums;
+}

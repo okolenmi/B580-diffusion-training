@@ -18,8 +18,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-MAX_GRAPH_NAME = 120
-"""Longest accepted library name (validated by ``normalize_graph_name``)."""
+from ..limits import MAX_GRAPH_NAME
+
+__all__ = ["MAX_GRAPH_NAME", "GraphLibrary", "SavedGraph", "normalize_graph_name"]
+
+"""Longest accepted library name (validated by ``normalize_graph_name``).
+
+Re-exported from ``application/limits.py``, where every budget in this
+system lives: named here because this is the port that defines the
+policy, and a re-export is a pointer rather than a second copy of the
+number."""
 
 
 def normalize_graph_name(raw: str) -> str:

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from ...application.limits import MAX_PAGE_SIZE
+from ...application.limits import DEFAULT_DATASET_ITEM_PAGE_SIZE, MAX_PAGE_SIZE
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -66,6 +66,10 @@ _ERROR_409 = {"description": "task already active / not migrated / already exist
 # The ceiling the use case enforces, imported rather than repeated, so
 # the OpenAPI doc and the 422 can never disagree (docs 08 S-08).
 MAX_ITEM_PAGE = MAX_PAGE_SIZE
+# The route's documented default and the use case's applied default
+# are the same constant, so a 422 and an OpenAPI description cannot
+# disagree about what "no limit" means.
+DEFAULT_DATASET_ITEM_PAGE = DEFAULT_DATASET_ITEM_PAGE_SIZE
 
 
 @router.get("", response_model=DatasetListOut)
@@ -107,16 +111,19 @@ def list_dataset_items(
     name: str,
     committed: bool | None = Query(None),
     limit: int | None = Query(
-        None, ge=1, le=MAX_ITEM_PAGE, description="rows per page (default: all)"
+        None,
+        ge=1,
+        le=MAX_ITEM_PAGE,
+        description=f"rows per page (default: {DEFAULT_DATASET_ITEM_PAGE_SIZE})",
     ),
     offset: int = Query(0, ge=0),
     services: ApplicationServices = Depends(get_services),
 ):
-    """Trajectory rows, optionally by training-set membership.
+    """One page of trajectory rows, optionally by training-set membership.
 
-    Paging is opt-in: without `limit` the whole dataset comes back, so
-    the curation UI is unchanged -- but a caller that does ask for a page
-    gets one instead of the entire dataset in memory (docs 07 F-14).
+    Paged by default (docs 08 Q10). The response carries `total` and
+    `next_offset` so a client can tell a truncated page from the whole
+    set and ask for the rest; `next_offset` is null on the last page.
     """
     result = services.datasets.items.execute(
         name, committed=committed, limit=limit, offset=offset
@@ -126,6 +133,8 @@ def list_dataset_items(
         count=result.count,
         limit=result.limit,
         offset=result.offset,
+        total=result.total,
+        next_offset=result.next_offset,
     )
 
 

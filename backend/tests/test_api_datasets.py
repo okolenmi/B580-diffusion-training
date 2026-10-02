@@ -227,19 +227,54 @@ make_v2_dataset(root_b, "flow", items=4)
 status, _, body = asgi_request(app, "/api/v1/datasets/flow/items")
 check(status == 200 and body["count"] == 4, "list items")
 
-# Paging is opt-in (docs 07 F-14): the default still returns everything,
-# and a caller that asks for a page gets exactly one.
-check(body["limit"] is None and body["offset"] == 0, "unpaged by default")
+# Paged by default (docs 07 F-14, docs 08 Q10). This used to assert
+# `limit is None` -- the "return everything" default -- which is exactly
+# what cannot stand: a dataset grows by ingestion, so the unpaged
+# response grew without bound and the UI could not tell a truncated list
+# from the whole set. What matters now is that the response says which
+# window it served and what was left over.
+from backend.application.limits import DEFAULT_DATASET_ITEM_PAGE_SIZE  # noqa: E402
+
+check(
+    body["limit"] == DEFAULT_DATASET_ITEM_PAGE_SIZE and body["offset"] == 0,
+    f"the default window is the default page size "
+    f"(got limit={body['limit']}, offset={body['offset']})",
+)
+check(
+    body["total"] == 4,
+    f"total describes the whole dataset, not the page (got {body['total']})",
+)
+check(
+    body["next_offset"] is None,
+    f"a dataset smaller than a page has no next page (got {body['next_offset']})",
+)
 status, _, page = asgi_request(app, "/api/v1/datasets/flow/items?limit=2")
 check(
     status == 200 and page["count"] == 2 and page["limit"] == 2
     and [item["id"] for item in page["items"]] == [1, 2],
     f"limit pages the rows (got {[i['id'] for i in page['items']]})",
 )
+check(
+    page["total"] == 4 and page["next_offset"] == 2,
+    f"a non-final page says where the next one starts "
+    f"(got total={page['total']}, next_offset={page['next_offset']})",
+)
 status, _, tail = asgi_request(app, "/api/v1/datasets/flow/items?limit=2&offset=2")
 check(
     [item["id"] for item in tail["items"]] == [3, 4],
     f"offset continues the page (got {[i['id'] for i in tail['items']]})",
+)
+# Rows 3-4 are the last of four, so this page ends the result.
+check(
+    tail["total"] == 4 and tail["next_offset"] is None,
+    f"the final page reports no next (got total={tail['total']}, "
+    f"next_offset={tail['next_offset']})",
+)
+status, _, end = asgi_request(app, "/api/v1/datasets/flow/items?limit=2&offset=4")
+check(
+    end["items"] == [] and end["next_offset"] is None,
+    f"past the end is an empty page with no next "
+    f"(got {end['items']}, {end['next_offset']})",
 )
 status, _, err = asgi_request(app, "/api/v1/datasets/flow/items?limit=501")
 expect_error(

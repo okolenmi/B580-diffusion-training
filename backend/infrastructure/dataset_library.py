@@ -169,12 +169,8 @@ class SqliteDatasetLibrary(DatasetLibrary):
             "WHERE sm.trajectory_id = t.id)) AS committed "
             "FROM trajectories t"
         )
+        sql += _committed_filter(committed) + " ORDER BY t.id"
         params: tuple = ()
-        if committed is True:
-            sql += " WHERE committed"
-        elif committed is False:
-            sql += " WHERE NOT committed"
-        sql += " ORDER BY t.id"
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
             params = (limit, offset)
@@ -184,6 +180,27 @@ class SqliteDatasetLibrary(DatasetLibrary):
         with self._connect(directory / "metadata.db") as conn:
             rows = conn.execute(sql, params).fetchall()
         return tuple(_row_to_item(r) for r in rows)
+
+    def count_items(
+        self, name: str, *, committed: bool | None = None
+    ) -> int:
+        directory = self._existing_dir(name)
+        self._require_v2(directory, name)
+        # The same filter as list_items, shared by construction, and
+        # deliberately without the ORDER BY: a count does not care which
+        # row comes first, and on a large table the sort is the expensive
+        # part.
+        sql = (
+            "SELECT COUNT(*) FROM ("
+            "  SELECT t.id, (EXISTS (SELECT 1 FROM set_members sm "
+            "  WHERE sm.trajectory_id = t.id)) AS committed"
+            "  FROM trajectories t"
+            + _committed_filter(committed)
+            + ")"
+        )
+        with self._connect(directory / "metadata.db") as conn:
+            row = conn.execute(sql).fetchone()
+        return int(row[0])
 
     def get_item(self, name: str, item_id: int) -> DatasetItem:
         directory = self._existing_dir(name)
@@ -576,6 +593,20 @@ class SqliteDatasetLibrary(DatasetLibrary):
             raise
         finally:
             conn.close()
+
+
+def _committed_filter(committed: bool | None) -> str:
+    """The WHERE clause a `committed` membership filter implies.
+
+    One definition because a count that filters differently from the
+    page it describes is worse than no count: a client would keep asking
+    for pages of a filter that has no rows.
+    """
+    if committed is True:
+        return " WHERE committed"
+    if committed is False:
+        return " WHERE NOT committed"
+    return ""
 
 
 def _row_to_item(row) -> DatasetItem:

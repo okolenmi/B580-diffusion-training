@@ -167,11 +167,28 @@ class DatasetLibrary(ABC):
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[DatasetItem, ...]:
-        """All items, or filtered by training-set membership.
+        """A page of items, ordered by id, or filtered by membership.
 
         ``limit``/``offset`` page the result (``LIMIT``/``OFFSET`` in
-        SQL, ordered by id so pages are stable); ``limit=None`` returns
-        every row, which is what the curation UI asks for (docs 07 F-14).
+        SQL, ordered by id so pages are stable and cover every row
+        exactly once). ``limit=None`` returns every row and is no longer
+        what the curation UI asks for: dataset size is unbounded by
+        ingestion, so "return it all" grew the response until the browser
+        stopped rendering it (docs 08 Q10).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_items(
+        self, name: str, *, committed: bool | None = None
+    ) -> int:
+        """How many items ``list_items`` would return for this filter.
+
+        Separate from ``len(list_items(...))`` on purpose: the count must
+        describe the whole result, not the page that came back, and
+        asking a page to carry the total would make every page cost a
+        full scan. Must apply the same ``committed`` filter, or a client
+        cannot tell "no more rows" from "no rows match".
         """
         raise NotImplementedError
 

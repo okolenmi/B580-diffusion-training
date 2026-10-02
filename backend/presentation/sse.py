@@ -55,12 +55,16 @@ from fastapi.responses import StreamingResponse
 
 from ..application.ports.event_bus import EventBus
 from ..domain.events import DomainEvent
+from ..application.limits import SSE_HEARTBEAT_SECONDS, SSE_QUEUE_MAX
 from ..json_safe import sanitize, strict_dumps
 
 logger = logging.getLogger(__name__)
 
-QUEUE_MAX = 256
-HEARTBEAT_SECONDS = 15.0
+# Both live in application/limits.py with every other budget. Aliased to
+# the historical local names because they are read in several places
+# below and renaming a constant inside one module is churn, not clarity.
+QUEUE_MAX = SSE_QUEUE_MAX
+HEARTBEAT_SECONDS = SSE_HEARTBEAT_SECONDS
 
 # Delivery classes, keyed by event type. Anything absent is lifecycle,
 # which is the safe default: it means "never drop for someone else's

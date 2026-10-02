@@ -342,11 +342,16 @@ class DatasetItemOut(BaseModel):
 class DatasetItemsOut(BaseModel):
     items: list[DatasetItemOut]
     count: int
-    # Echo of the window actually served (docs 07 F-14): `limit` is null
-    # when the request asked for everything, which is the default the
-    # curation UI uses.
+    """Rows in *this page* -- not the size of the result."""
+    # The window actually served (docs 07 F-14, docs 08 Q10). `limit` is
+    # always populated now: there is no "everything" window any more,
+    # because dataset size is unbounded by ingestion.
     limit: int | None = None
     offset: int = 0
+    total: int | None = None
+    """Rows matching the filter in the whole dataset."""
+    next_offset: int | None = None
+    """Offset of the next page; null when this is the last one."""
 
 
 class TrainingSetOut(BaseModel):

@@ -27,6 +27,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from ..application.ports.dataset_tasks import TaskStatus
+
 
 class _Reporter:
     """Duck-typed ``progress``/``finished``/``failed`` for the builder.
@@ -44,10 +46,12 @@ class _Reporter:
         self._tasks.update_progress(self._task_id, current, pid=os.getpid())
 
     def finished(self) -> None:
-        self._tasks.finish_if_active(self._task_id)
+        self._tasks.finalize_if_active(self._task_id, TaskStatus.FINISHED)
 
     def failed(self, error: str) -> None:
-        self._tasks.fail_if_active(self._task_id, str(error))
+        self._tasks.finalize_if_active(
+            self._task_id, TaskStatus.FAILED, error=str(error)
+        )
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

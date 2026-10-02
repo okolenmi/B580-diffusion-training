@@ -23,7 +23,7 @@ import logging
 
 from .ports.clock import Clock
 from .ports.dataset_task_gateway import DatasetTaskGateway
-from .ports.dataset_tasks import DatasetTasks, DatasetTask
+from .ports.dataset_tasks import DatasetTasks, DatasetTask, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,9 @@ class DatasetTaskSweeper:
             if reason is None:
                 continue
             note = note_for_dead if reason is DEAD_PROCESS_NOTE else reason
-            if self._tasks.fail_if_active(task.id, note):
+            if self._tasks.finalize_if_active(
+                task.id, TaskStatus.FAILED, error=note
+            ):
                 swept += 1
         return swept
 

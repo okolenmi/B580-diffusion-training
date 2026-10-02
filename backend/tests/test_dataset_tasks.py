@@ -22,7 +22,7 @@ from backend.application.errors import (
     DatasetTaskNotFoundError,
     InvalidQueryError,
 )
-from backend.application.ports.dataset_tasks import TaskKind
+from backend.application.ports.dataset_tasks import TaskKind, TaskStatus
 from backend.application.use_cases import (
     ListDatasetTasks,
     ReconcileDatasetTasks,
@@ -31,6 +31,7 @@ from backend.application.use_cases import (
 )
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
+from backend.infrastructure.persistence.cas import compare_and_swap_status
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.workspace import WorkspaceLayout
 from backend.tests.support import (
@@ -72,16 +73,21 @@ check(repo.update_progress(task.id, 3, pid=99) is True, "progress CAS wins")
 running = repo.get(task.id)
 check(running.status == "running" and running.current == 3 and running.pid == 99,
       "progress writes status/count/pid")
-check(repo.finish_if_active(task.id) is True, "finish CAS wins")
-check(repo.finish_if_active(task.id) is False, "second finish loses")
-check(repo.fail_if_active(task.id, "late") is False, "fail after finish loses")
-check(repo.kill_if_active(task.id) is False, "kill after finish loses")
+check(repo.finalize_if_active(task.id, TaskStatus.FINISHED) is True,
+      "finish CAS wins")
+check(repo.finalize_if_active(task.id, TaskStatus.FINISHED) is False,
+      "second finish loses")
+check(repo.finalize_if_active(task.id, TaskStatus.FAILED, error="late") is False,
+      "fail after finish loses")
+check(repo.finalize_if_active(task.id, TaskStatus.KILLED) is False,
+      "kill after finish loses")
 check(repo.find_active("d") is None, "terminal row is not active")
 check(len(repo.list_for("d", active_only=True)) == 0, "active_only hides it")
 check(len(repo.list_for("d")) == 1, "history kept")
 
 t2 = repo.add(dataset="d", kind=TaskKind.INGEST_LORA, total=5, params={})
-check(repo.kill_if_active(t2.id) is True, "kill wins on pending")
+check(repo.finalize_if_active(t2.id, TaskStatus.KILLED) is True,
+      "kill wins on pending")
 check(repo.update_progress(t2.id, 1, pid=7) is False, "progress cannot resurrect")
 check(repo.get(t2.id).status == "killed", "row stays killed")
 
@@ -225,5 +231,81 @@ check([t.id for t in history.tasks] == [fresh.id, gone.id],
       "history returns newest first")
 expect(DatasetNotFoundError, lambda: listing.execute("no-such"),
        "listing an unknown dataset refused")
+
+# ---------------------------------------------------------------------------
+# The shared compare-and-swap, on its own
+# ---------------------------------------------------------------------------
+#
+# Every terminal transition in the backend is this one statement -- graph
+# executions and dataset tasks both go through it (2026-10-02), so its
+# two defining properties are pinned here rather than inferred from two
+# adapters that each used to have their own copy.
+
+_cas_db = SqliteDatabase(
+    Path(tempfile.mkdtemp(prefix="backend-cas-")) / "cas.db"
+)
+_cas_db.initialize()
+with _cas_db.connection() as _conn:
+    _conn.execute(
+        "CREATE TABLE things (id INTEGER PRIMARY KEY, status TEXT, note TEXT)"
+    )
+    for _id in (1, 2, 3):
+        _conn.execute(
+            "INSERT INTO things (id, status) VALUES (?, ?)", (_id, "running")
+        )
+
+with _cas_db.connection() as _conn:
+    check(
+        compare_and_swap_status(
+            _conn, table="things", row_id=1,
+            from_statuses=("running",), to_status="finished",
+        ) is True,
+        "a row in an expected status is swapped",
+    )
+    check(
+        compare_and_swap_status(
+            _conn, table="things", row_id=1,
+            from_statuses=("running",), to_status="failed",
+        ) is False,
+        "and the second swap from the same expected status loses",
+    )
+    row = _conn.execute(
+        "SELECT status, note FROM things WHERE id = 1"
+    ).fetchone()
+    check(row[0] == "finished" and row[1] is None,
+          f"the winner's status stands and no column it did not set moved "
+          f"(got {tuple(row)})")
+
+    check(
+        compare_and_swap_status(
+            _conn, table="things", row_id=2,
+            from_statuses=("pending", "running"), to_status="killed",
+            set_columns={"note": "stopped"},
+        ) is True,
+        "several accepted statuses: any of them wins",
+    )
+    note = _conn.execute(
+        "SELECT note FROM things WHERE id = 2"
+    ).fetchone()[0]
+    check(note == "stopped", f"and the extra column was written (got {note!r})")
+
+    check(
+        compare_and_swap_status(
+            _conn, table="things", row_id=3,
+            from_statuses=("running",), to_status="finished",
+        ) is True,
+        "a different row is independent",
+    )
+
+    try:
+        compare_and_swap_status(
+            _conn, table="things", row_id=3, from_statuses=(), to_status="x"
+        )
+        check(False, "an unguarded swap must be refused")
+    except ValueError:
+        check(True,
+              "an empty expected-status set is refused rather than turning "
+              "into an UPDATE that matches everything -- that is a "
+              "different operation and almost never what the caller meant")
 
 finish()

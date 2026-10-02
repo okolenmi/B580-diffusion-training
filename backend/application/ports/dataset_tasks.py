@@ -122,16 +122,19 @@ class DatasetTasks(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def finish_if_active(self, task_id: int) -> bool:
-        """CAS: active -> finished. False when someone already won."""
-        raise NotImplementedError
+    def finalize_if_active(
+        self, task_id: int, status: TaskStatus, *, error: str | None = None
+    ) -> bool:
+        """CAS: active -> ``status`` (a terminal one). False when someone
+        already won.
 
-    @abstractmethod
-    def fail_if_active(self, task_id: int, error: str) -> bool:
-        """CAS: active -> failed with reason."""
-        raise NotImplementedError
+        ``error`` is written only when given, so ``finished`` and
+        ``killed`` leave whatever reason was there alone -- a killed task
+        keeps the error that explains why it was stuck, rather than
+        having it overwritten with the fact that it was stopped.
 
-    @abstractmethod
-    def kill_if_active(self, task_id: int) -> bool:
-        """CAS: active -> killed (the stop path)."""
+        One method, not one per terminal status: the three that used to
+        exist were the same statement with a different word in it, and
+        ``TaskStatus.is_terminal`` is where the vocabulary is enforced.
+        """
         raise NotImplementedError

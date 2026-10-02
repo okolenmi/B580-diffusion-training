@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from .cas import compare_and_swap_status
 from ...application.ports.graph_execution_repository import GraphExecutionRepository
 from ...domain.entities.graph_execution import GraphExecution
 from ...domain.exceptions import DomainError
@@ -153,13 +154,21 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
     ) -> bool:
         if execution.id is None:
             raise DomainError("cannot update an unpersisted execution (no id yet)")
-        assignments = ", ".join(f"{name} = ?" for name in _MUTABLE)
+        # _MUTABLE leads with "status" and the shared statement takes
+        # that one separately, so the two aggregates cannot disagree
+        # about where the new status goes. Read it from the entity
+        # rather than from the values tuple: same value, but typed, and
+        # it says where it came from.
+        _status, *rest = self._mutable_values(execution)
         with self._db.connection() as conn:
-            cursor = conn.execute(
-                f"UPDATE graph_executions SET {assignments} WHERE id = ? AND status = ?",
-                (*self._mutable_values(execution), execution.id, expected.value),
+            return compare_and_swap_status(
+                conn,
+                table="graph_executions",
+                row_id=execution.id,
+                from_statuses=(expected.value,),
+                to_status=execution.status.value,
+                set_columns=dict(zip(_MUTABLE[1:], rest, strict=True)),
             )
-        return cursor.rowcount > 0
 
     def find_active(self) -> GraphExecution | None:
         with self._db.connection() as conn:

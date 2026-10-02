@@ -88,15 +88,22 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   including the two properties that matter: a terminal row is not
   re-failed or re-announced, and a lost CAS announces nothing.
 
-  Left alone deliberately: the dataset-task CAS (`finish_if_active` /
-  `fail_if_active` / `kill_if_active`) is a *different mechanism* -- it
-  works by id inside the adapter and announces nothing, where the graph
-  writer works on an entity the caller holds and publishes. Unifying
-  them means redesigning the `DatasetTasks` port and adding a dataset-task
-  event family, for no defect that has been observed. The claim in
-  `lifecycle_writer.py`'s docstring that CAS-then-announce is "defined
-  once" is therefore still true for the aggregates that announce, and
-  now says which those are.
+  Followed up, because leaving a duplicated rule on the grounds that it
+  was tidier to leave it is not a defence: the dataset-task terminal CAS
+  is now the same statement (`d3a0e91`). `finish_if_active` /
+  `fail_if_active` / `kill_if_active` were three port methods and two
+  near-identical bodies in one adapter, plus two more hand-rolled
+  guarded UPDATEs in `update_progress` -- five copies of one rule in a
+  single file. They are now one `finalize_if_active(task_id, status,
+  error=None)` over `infrastructure/persistence/cas.py`, which the
+  graph-execution repository calls too.
+
+  What is still two things, deliberately: the statement (`cas.py`) and
+  the announcement (`application/lifecycle_writer.py`). Dataset tasks
+  have no events, so they call the first without the second. Giving them
+  events is a feature decision, not a cleanup -- and until it is made,
+  each half has one definition rather than the pair having one, which
+  was the actual complaint.
 * **WP-19 declined.** Every target is a test file or a schema module, and
   splitting them to hit a line count rather than to fix a comprehension
   problem adds indirection and a large reviewable diff for no measured

@@ -142,7 +142,9 @@ class StartDatasetTask:
                     )
                 )
             except DatasetTaskLaunchError as exc:
-                self._tasks.fail_if_active(task.id, str(exc))
+                self._tasks.finalize_if_active(
+                    task.id, TaskStatus.FAILED, error=str(exc)
+                )
                 raise
             # Record the pid immediately: stop() must be able to kill the
             # child during the seconds it spends importing torch before

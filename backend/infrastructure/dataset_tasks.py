@@ -1,12 +1,17 @@
 """SqliteDatasetTasks -- dataset task rows in backend.db.
 
-Compare-and-swap mirrors ``SqliteRunRepository``: every finaliser
-(``finish``/``fail``/``kill``, used by the child reporter, the stop
-use case, and reconciliation) writes through
-``WHERE status IN ('pending','running')`` so exactly one outcome wins
-and the losers get ``False`` instead of clobbering it. ``update_progress``
-is the same CAS -- a progress tick arriving after the task was killed
-is a no-op, not a resurrection.
+Every status change here goes through ``compare_and_swap_status``, the
+one guarded statement shared with the graph-execution repository: so
+exactly one writer wins and the losers get ``False`` instead of
+clobbering it. ``finalize_if_active`` covers every terminal outcome
+(finished / failed / killed, used by the child reporter, the stop use
+case and reconciliation), and ``update_progress`` is the same CAS -- a
+progress tick arriving after the task was killed is a no-op, not a
+resurrection.
+
+This adapter used to write that statement itself, five times, in three
+near-identical port methods. One definition is easier to reason about
+and, more to the point, is fixed once.
 
 The child process uses this class through its own ``SqliteDatabase``
 instance (one connection per thread per process; WAL lets it write
@@ -25,12 +30,18 @@ from ..application.ports.dataset_tasks import (
     TaskKind,
     TaskStatus,
 )
+from .persistence.cas import compare_and_swap_status
 from .persistence.sqlite import SqliteDatabase
 
 # The active set is derived from the enum, so SQL cannot drift from what
-# ``TaskStatus.is_active`` says (docs 08 S-24).
+# ``TaskStatus.is_active`` says (docs 08 S-24). Kept as words as well as
+# an SQL fragment, because the guarded-UPDATE helper takes the values and
+# the SELECTs want the fragment.
+_ACTIVE_STATUSES: tuple[str, ...] = tuple(
+    s.value for s in TaskStatus if s.is_active
+)
 _ACTIVE_SQL = "status IN ({})".format(
-    ", ".join(f"'{s.value}'" for s in TaskStatus if s.is_active)
+    ", ".join(f"'{s}'" for s in _ACTIVE_STATUSES)
 )
 
 
@@ -155,48 +166,44 @@ class SqliteDatasetTasks(DatasetTasks):
     def update_progress(
         self, task_id: int, current: int, pid: int | None = None
     ) -> bool:
-        now = self._clock.now().isoformat()
+        columns: dict[str, object] = {"current_val": current}
+        if pid is not None:
+            columns["pid"] = pid
         with self._db.connection() as conn:
-            if pid is None:
-                cur = conn.execute(
-                    "UPDATE dataset_tasks SET status = ?, current_val = ?, "
-                    f"updated_at = ? WHERE id = ? AND {_ACTIVE_SQL}",
-                    (TaskStatus.RUNNING.value, current, now, task_id),
-                )
-            else:
-                cur = conn.execute(
-                    "UPDATE dataset_tasks SET status = ?, current_val = ?, "
-                    f"pid = ?, updated_at = ? WHERE id = ? AND {_ACTIVE_SQL}",
-                    (TaskStatus.RUNNING.value, current, pid, now, task_id),
-                )
-            return cur.rowcount == 1
-
-    def finish_if_active(self, task_id: int) -> bool:
-        return self._finalize(task_id, TaskStatus.FINISHED)
-
-    def fail_if_active(self, task_id: int, error: str) -> bool:
-        now = self._clock.now().isoformat()
-        with self._db.connection() as conn:
-            cur = conn.execute(
-                "UPDATE dataset_tasks SET status = ?, error = ?, "
-                f"updated_at = ? WHERE id = ? AND {_ACTIVE_SQL}",
-                (TaskStatus.FAILED.value, error[:2000], now, task_id),
+            return compare_and_swap_status(
+                conn,
+                table="dataset_tasks",
+                row_id=task_id,
+                from_statuses=_ACTIVE_STATUSES,
+                to_status=TaskStatus.RUNNING.value,
+                set_columns={**columns, "updated_at": self._clock.now().isoformat()},
             )
-            return cur.rowcount == 1
 
-    def kill_if_active(self, task_id: int) -> bool:
-        return self._finalize(task_id, TaskStatus.KILLED)
+    def finalize_if_active(
+        self, task_id: int, status: TaskStatus, *, error: str | None = None
+    ) -> bool:
+        """active -> ``status``. One method for finished / failed / killed.
 
-    # -- internals -------------------------------------------------------
-
-    def _finalize(self, task_id: int, status: TaskStatus) -> bool:
+        Three near-identical methods used to live here, two of them
+        sharing a private helper and the third repeating it to add an
+        ``error`` column. They differed only in which status they wrote
+        and whether they wrote a reason, so the difference is now a
+        parameter and the statement is shared with every other
+        terminal transition in the backend.
+        """
         if not status.is_terminal:
             raise ValueError(f"{status.value} is not a terminal task status")
-        now = self._clock.now().isoformat()
+        columns: dict[str, object] = {}
+        if error is not None:
+            columns["error"] = error[:2000]
         with self._db.connection() as conn:
-            cur = conn.execute(
-                f"UPDATE dataset_tasks SET status = ?, updated_at = ? "
-                f"WHERE id = ? AND {_ACTIVE_SQL}",
-                (status.value, now, task_id),
+            return compare_and_swap_status(
+                conn,
+                table="dataset_tasks",
+                row_id=task_id,
+                from_statuses=_ACTIVE_STATUSES,
+                to_status=status.value,
+                set_columns={**columns, "updated_at": self._clock.now().isoformat()},
             )
-            return cur.rowcount == 1
+
+    # -- internals -------------------------------------------------------

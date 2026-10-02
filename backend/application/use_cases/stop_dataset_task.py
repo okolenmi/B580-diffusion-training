@@ -28,5 +28,5 @@ class StopDatasetTask:
             )
         if task.pid is not None:
             self._gateway.kill(task.pid)
-        self._tasks.kill_if_active(task_id)
+        self._tasks.finalize_if_active(task_id, TaskStatus.KILLED)
         return self._tasks.get(task_id) or task

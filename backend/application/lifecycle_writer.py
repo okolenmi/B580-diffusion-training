@@ -20,15 +20,16 @@ repository and the publisher it needs. It also owns the insert-then-
 announce shape (``StartTraining``, ``StartGraphExecution``), which is the
 same rule with nothing to race against.
 
-"Once" means *for the aggregates that announce*. Dataset tasks are the
-other aggregate with a terminal state, and their compare-and-swap is a
-different mechanism: three port methods that work by id inside the
-adapter (``finish_if_active`` / ``fail_if_active`` / ``kill_if_active``)
-and publish nothing. They could not use this service without the port
-being redesigned and a dataset-task event family being invented -- which
-is a change with a reason behind it, not a cleanup. Until then, a fix to
-the announce-after-write ordering does need making twice, and this note
-is where that is recorded.
+The *statement* is shared with the other aggregate that has a terminal
+state. ``infrastructure/persistence/cas.py`` holds it, and dataset-task
+rows go through the same one; what this service adds on top is the
+second half, announcing. Dataset tasks have no events, so they call the
+statement directly and publish nothing.
+
+So the two halves now have one definition each, rather than one rule
+written twice: the swap in ``cas.py``, the announcement here. Giving
+dataset tasks events would let them use this service too, and is a
+feature decision rather than a cleanup.
 """
 
 from __future__ import annotations

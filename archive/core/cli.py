@@ -68,7 +68,7 @@ Examples:
     cli = p.parse_args()
 
     if cli.reset_config:
-        from .config_io import write_default_config
+        from nodes.config_io import write_default_config
         write_default_config(cli.reset_config)
         sys.exit(0)
 
@@ -78,20 +78,20 @@ Examples:
     config_path = Path(cli.config)
 
     if not config_path.exists():
-        from .config_io import write_default_config
+        from nodes.config_io import write_default_config
         write_default_config(config_path)
         print(f"  Edit {config_path} and run again.")
         sys.exit(0)
 
-    from .config_io import read_config, write_config
-    from .config_model import TrainingConfig
+    from nodes.config_io import read_config, write_config
+    from nodes.config_model import TrainingConfig
 
     config = read_config(config_path)
 
     # Apply CLI overrides
     changed = False
     if cli.mode:
-        from .config_model import LoRATuning, CyclicTuning, DistillationTuning, FullTuning
+        from nodes.config_model import LoRATuning, CyclicTuning, DistillationTuning, FullTuning
         modes = {
             "lora": LoRATuning,
             "cyclic": CyclicTuning,

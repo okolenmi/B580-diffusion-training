@@ -27,7 +27,7 @@ import { Executions } from "./editor/executions.js";
 import { Library } from "./editor/library.js";
 
 
-/* ---- system console: same capped pattern as views/dashboard.js ----
+/* ---- system console: same capped pattern as the old dashboard ----
    There is no page-local log anymore: every note rides the floating
    console the shell mounts (#console-output). */
 

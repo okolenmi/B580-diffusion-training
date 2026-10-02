@@ -331,14 +331,21 @@ def main() -> None:
 
     args = p.parse_args()
 
+    import sys
+
     import torch
-    from core.comfy_setup import setup_comfy
     from nodes.core import ExecutionContext
+    from paths import get_comfy_dir
 
     # The node route's model/text-encoder construction imports comfy.*
-    # (ComfyUI's own packages) -- server/main.py ends up here via
-    # core.comfy_setup too; a standalone script has to do it explicitly.
-    setup_comfy()
+    # (ComfyUI's own packages). A standalone script has to put ComfyUI on
+    # sys.path itself; this used to be core.comfy_setup.setup_comfy(),
+    # which was only these three lines wrapped around paths.get_comfy_dir().
+    comfy_dir = get_comfy_dir()
+    if str(comfy_dir) not in sys.path:
+        sys.path.insert(0, str(comfy_dir))
+    if not (comfy_dir / "comfy").exists():
+        print(f"Warning: ComfyUI not found at {comfy_dir}")
 
     out_dir = OUT_DIR / args.label
     out_dir.mkdir(parents=True, exist_ok=True)

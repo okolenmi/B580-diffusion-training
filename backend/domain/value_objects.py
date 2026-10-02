@@ -55,7 +55,7 @@ class RunStatus(str, Enum):
 class TrainingMode(str, Enum):
     """``tuning.method`` -- what a run actually trains.
 
-    The four values are the ones ``core.config_model`` declares (four
+    The four values are the ones ``nodes.config_model`` declares (four
     ``Literal`` unions, one per tuning strategy). ``Run.mode`` used to
     be a bare ``str``, so a typo or a fifth strategy reached the database
     as a run that could never be read back as anything meaningful; a

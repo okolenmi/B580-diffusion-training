@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.comfy_setup import xpu_empty_cache, xpu_memory_stats, xpu_synchronize
+from archive.core.comfy_setup import xpu_empty_cache, xpu_memory_stats, xpu_synchronize
 from nodes.components.device import (DeviceContext, _CUDADeviceContext,
                                       _NullDeviceContext, _XPUDeviceContext)
 

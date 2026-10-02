@@ -45,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from core.noise_schedule import T_MODES as CORE_T_MODES
+from archive.core.noise_schedule import T_MODES as CORE_T_MODES
 from manager.t_sampling import TrainTimeSampler, parse_exact_t_values
 from nodes.dataset.managed import ManagedDatasetSourceNode
 from nodes.dataset.timestep_modes import T_MODES as NODES_T_MODES, T_MODES_TRAIN_TIME

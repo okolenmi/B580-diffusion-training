@@ -96,7 +96,18 @@ def _json_type(annotation: Any) -> dict:
     failure this whole module is about.
     """
     if annotation in _SCALARS:
-        return {"type": _SCALARS[annotation]}
+        kind = _SCALARS[annotation]
+        if annotation is float:
+            # A float must be nullable on the wire even when the
+            # annotation is not `float | None`. `json_safe.sanitize`
+            # replaces any non-finite float with null and names it in
+            # `nonfinite` (docs 07 F-03) -- so a plain `float` field
+            # legitimately arrives as null on exactly the frame a user
+            # most wants to see, the diverged one. Making it nullable only
+            # for floats is not a concession: ints cannot be NaN, so
+            # nothing ever nulls them.
+            return {"anyOf": [{"type": kind}, {"type": "null"}]}
+        return {"type": kind}
 
     # X | None -- PEP 604 at runtime is typing.Union.
     if get_origin(annotation) is Union:

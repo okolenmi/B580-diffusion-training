@@ -5,11 +5,12 @@ Order of business:
 1. ``Settings`` arrive fully built (from the CLI);
 2. infrastructure objects are constructed (database + migrations,
    repository, event bus, clock, settings store, workspace layout,
-   training gateway, config inspector/files/options, assets store,
-   artifacts, progress source);
-3. the supervisor and use cases are constructed with those ports;
-4. ``ReconcileRuns`` / ``ReconcileDatasetTasks`` sweep rows left
-   unfinished by a previous process (before any request can race them);
+   config inspector/files/options, assets store, dataset and graph
+   subsystems);
+3. the supervisors and use cases are constructed with those ports;
+4. ``ReconcileDatasetTasks`` / ``ReconcileGraphExecutions`` sweep rows
+   left unfinished by a previous process (before any request can race
+   them);
 5. the aggregate goes to ``presentation.create_app``.
 
 Nothing else in the backend may know which concrete classes exist --
@@ -23,15 +24,11 @@ import logging
 from dataclasses import dataclass
 
 from .application.graph_supervisor import GraphExecutionSupervisor
+from .application.lifecycle_writer import ExecutionLifecycleWriter
 from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
-from .application.ports.training_gateway import TrainingGateway
 from .application.dataset_task_sweeper import DatasetTaskSweeper
 from .application.event_publisher import EventPublisher
-from .application.lifecycle_writer import (
-    ExecutionLifecycleWriter,
-    RunLifecycleWriter,
-)
 from .application.services import (
     ApplicationServices,
     AssetServices,
@@ -41,7 +38,6 @@ from .application.services import (
     MonitorServices,
     SettingsServices,
 )
-from .application.supervisor import RunSupervisor
 from .application.use_cases import (
     BrowseAssets,
     BulkUpdateDatasetItems,
@@ -50,18 +46,13 @@ from .application.use_cases import (
     DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
-    DeleteRuns,
     DiscardDatasetItems,
-    GetActiveRun,
     GetConfig,
     GetConfigOptions,
     GetDataset,
     GetGraph,
     GetGraphExecution,
-    GetRun,
-    GetRunLog,
     GetSettings,
-    GetStartOptions,
     InspectAsset,
     ListAssets,
     ListDatasetItems,
@@ -71,23 +62,19 @@ from .application.use_cases import (
     ListGraphExecutions,
     ListGraphs,
     ListNodeCatalog,
-    ListRuns,
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
     ReadDatasetFile,
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
-    ReconcileRuns,
     SaveGraph,
     SetDatasetPreview,
     StartDatasetTask,
     StartGraphExecution,
-    StartTraining,
     SubscribeMonitor,
     StopDatasetTask,
     StopGraphExecution,
-    StopTraining,
     UpdateConfig,
     UpdateDatasetItem,
     UpdateSettings,
@@ -99,29 +86,24 @@ from .config import Settings
 from .infrastructure.clock import SystemClock
 from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
-from .infrastructure.core_config_inspector import CoreConfigInspector
 from .infrastructure.dataset_files import FsDatasetFiles
 from .infrastructure.dataset_library import SqliteDatasetLibrary
 from .infrastructure.dataset_previews import SqliteDatasetPreviews
 from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
-from .infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .infrastructure.graph.catalog import DiscoveredGraphCatalog
 from .infrastructure.graph.discovery import NodeRegistry
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
-from .infrastructure.jsonl_progress_source import JsonlProgressSource
 from .application.ports.monitor_bus import MonitorBus
 from .infrastructure.monitor_bus import SharedMonitorBus
 from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from .infrastructure.persistence.graph_library import SqliteGraphLibrary
-from .infrastructure.persistence.run_repository import SqliteRunRepository
 from .infrastructure.persistence.sqlite import SqliteDatabase
 from .infrastructure.settings_store import SqliteSettingsStore
-from .infrastructure.subprocess_gateway import SubprocessTrainingGateway
 from .infrastructure.workspace import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -134,8 +116,7 @@ class Container:
     settings: Settings
     database: SqliteDatabase
     clock: Clock
-    supervisor: RunSupervisor
-    gateway: TrainingGateway
+    graph_supervisor: GraphExecutionSupervisor
     services: ApplicationServices
     # The monitor adapter stays reachable for the few callers that
     # legitimately *publish* telemetry (tests; the graph runtime's
@@ -149,7 +130,6 @@ def build_container(settings: Settings) -> Container:
     database = SqliteDatabase(settings.db_path)
     database.initialize()
 
-    run_repository = SqliteRunRepository(database)
     event_bus = CallbackEventBus()
     publisher = EventPublisher(events=event_bus)
     paths = ProjectPaths(root=settings.project_root)
@@ -162,23 +142,8 @@ def build_container(settings: Settings) -> Container:
     layout = WorkspaceLayout(
         settings.project_root, settings_kv=settings_store.get
     )
-    artifacts = DirectoryRunArtifacts(layout)
-    progress = JsonlProgressSource()
-    gateway = SubprocessTrainingGateway(layout)
-    inspector = CoreConfigInspector(layout)
     config_files = CoreConfigFiles()
     config_options = PydanticConfigOptions()
-
-    # A fresh database numbers runs from 1, but runs/run_<id>/ may already
-    # hold a legacy run: the trainer opens its log with "w", so a
-    # colliding id would truncate that history. Continue the sequence
-    # above whatever is on disk instead (docs 07 F-04).
-    legacy_high_water = artifacts.highest_existing_run_id()
-    if legacy_high_water:
-        run_repository.continue_ids_above(legacy_high_water)
-        logger.info(
-            "run ids continue above the existing runs/run_%d directory", legacy_high_water
-        )
 
     # Dataset domain (M3b): library reads each dataset's own metadata.db,
     # task rows live in backend.db, and the fork gateway spawns children
@@ -222,61 +187,13 @@ def build_container(settings: Settings) -> Container:
         clock=clock,
     )
 
-    # One writer per aggregate: CAS-then-announce is defined once
-    # (application/lifecycle_writer.py), not at every call site.
-    run_writer = RunLifecycleWriter(repository=run_repository, events=publisher)
-    supervisor = RunSupervisor(
-        runs=run_repository,
-        writer=run_writer,
-        events=publisher,
-        gateway=gateway,
-        progress=progress,
-        artifacts=artifacts,
-        clock=clock,
-    )
-
     services = ApplicationServices(
-        list_runs=ListRuns(run_repository),
-        get_run=GetRun(run_repository),
-        delete_runs=DeleteRuns(run_repository, events=publisher),
-        get_active_run=GetActiveRun(run_repository),
-        start_training=StartTraining(
-            runs=run_repository,
-            writer=run_writer,
-            gateway=gateway,
-            inspector=inspector,
-            artifacts=artifacts,
-            watcher=supervisor,
-            clock=clock,
-            paths=paths,
-        ),
-        stop_training=StopTraining(
-            runs=run_repository,
-            writer=run_writer,
-            gateway=gateway,
-            clock=clock,
-        ),
-        get_run_log=GetRunLog(runs=run_repository, artifacts=artifacts),
-        reconcile_runs=ReconcileRuns(
-            runs=run_repository,
-            writer=run_writer,
-            gateway=gateway,
-            clock=clock,
-            watcher=supervisor,
-            artifacts=artifacts,
-            progress=progress,
-        ),
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
             update=UpdateConfig(files=config_files, paths=paths),
             read_raw=ReadConfigRaw(files=config_files, paths=paths),
             write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
-            start_options=GetStartOptions(
-                inspector=inspector,
-                runs=run_repository,
-                paths=paths,
-            ),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),
@@ -368,15 +285,6 @@ def build_container(settings: Settings) -> Container:
 
     # Startup sweep: nothing may observe an unfinished row from a dead
     # process once the server accepts requests.
-    reconciled = services.reconcile_runs.execute()
-    if reconciled.cleaned:
-        logger.info("reconciled %d unfinished run(s) at startup", reconciled.cleaned)
-    if reconciled.adopted:
-        logger.info(
-            "adopted %d still-training run(s) after the restart "
-            "(their trainers were left running)",
-            reconciled.adopted,
-        )
     dataset_reconciled = services.datasets.reconcile_tasks.execute()
     if dataset_reconciled.cleaned:
         logger.info(
@@ -394,8 +302,7 @@ def build_container(settings: Settings) -> Container:
         settings=settings,
         database=database,
         clock=clock,
-        supervisor=supervisor,
-        gateway=gateway,
+        graph_supervisor=graph_supervisor,
         services=services,
         monitor_bus=monitor_bus,
     )

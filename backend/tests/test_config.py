@@ -34,7 +34,6 @@ from backend.tests.support import (
     check,
     finish,
     asgi_request,
-    seed_run,
 )
 
 LORA_TOML = """
@@ -232,11 +231,7 @@ def main() -> None:
     check(not described.start_from["resume"].available, "missing resume unavailable")
 
     # -- API surface -------------------------------------------------------
-    from backend.tests.support import FakeClock, InMemoryRunRepository
-
-    runs = InMemoryRunRepository()
-    clock = FakeClock()
-    services = build_services(runs=runs, clock=clock, project_root=root)
+    services = build_services(project_root=root)
     app = create_app(services)
 
     status, _, body = asgi_request(app, "/api/v1/config?path=cfg/test.toml")
@@ -276,29 +271,12 @@ def main() -> None:
     status, _, body = asgi_request(app, "/api/v1/config/options")
     check(status == 200 and len(body["options"]) > 40, "GET options schema")
 
-    # start-options through the API (fake inspector, scripted description)
-    status, _, body = asgi_request(app, "/api/v1/config/start-options?path=cfg/test.toml")
-    check(status == 200, "GET start-options 200")
-    check(body["has_unfinished_run"] is False, "no active run -> false")
-    check(body["last_finished"] is None, "no finished run -> null")
-    check("teacher" in body["start_from"], "start_from map present")
-    check("lora_checkpoint" not in body["start_from"],
-          "fake description's absent key stays absent over HTTP")
-
-    seed_run(runs, clock, start=True)
-    status, _, body = asgi_request(app, "/api/v1/config/start-options?path=cfg/test.toml")
-    check(body["has_unfinished_run"] is True, "running run -> has_unfinished_run true")
-
-    seed = seed_run(runs, clock, start=True)
-    seed.mark_completed(at=clock.now())
-    runs.update(seed)
-    status, _, body = asgi_request(app, "/api/v1/config/start-options?path=cfg/test.toml")
-    check(
-        body["last_finished"] is not None
-        and body["last_finished"]["id"] == seed.id
-        and body["last_finished"]["status"] == "completed",
-        "last_finished surfaces the newest finished run",
-    )
+    # The route that used to sit here was /config/start-options: the
+    # "continue from" picker, which reported whether a run was active and
+    # which was the last one finished. Both halves were about the
+    # supervised-subprocess route and are gone with it (training starts
+    # from a graph execution now). Its absence is asserted from
+    # test_error_contract.py's route inventory.
 
     # -- the XPU-only optimizer choices (docs/decisions/0004-b580-only) ---
     #

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from core.noise_schedule import eps_to_x0
+from nodes.components.noise_schedule import eps_to_x0
 from manager.db import add_shard, add_source, init_local_db
 from manager.loader import ManagedDatasetLoader
 from manager.storage import ShardLoader, ShardWriter
@@ -79,7 +79,7 @@ def check_fresh_resampling_each_iteration(tmpdir: Path):
 
     for batch in (batch1, batch2):
         at, st = None, None
-        from core.noise_schedule import get_alpha_sigma
+        from nodes.components.noise_schedule import get_alpha_sigma
         at, st = get_alpha_sigma(batch["t"])
         x0_recovered = eps_to_x0(batch["target"], batch["x_t"],
                                   at.view(-1, 1, 1, 1), st.view(-1, 1, 1, 1))

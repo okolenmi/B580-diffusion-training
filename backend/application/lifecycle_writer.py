@@ -27,8 +27,7 @@ from typing import Generic, Protocol, TypeVar
 
 from .event_publisher import EventPublisher, EventSource
 from ..domain.entities.graph_execution import GraphExecution
-from ..domain.entities.run import Run
-from ..domain.value_objects import GraphStatus, RunStatus
+from ..domain.value_objects import GraphStatus
 
 # S appears only in parameter position (``expected: S``), which is
 # contravariant. Declaring it invariant made StatusRepository narrower
@@ -37,7 +36,7 @@ from ..domain.value_objects import GraphStatus, RunStatus
 # type variable in protocol where contravariant one is expected").
 S = TypeVar("S", contravariant=True)
 R = TypeVar("R", bound=EventSource)
-"""An aggregate that buffers its domain events -- ``Run``,
+"""An aggregate that buffers its domain events --
 ``GraphExecution``, and anything shaped like them."""
 
 
@@ -92,11 +91,6 @@ class LifecycleWriter(Generic[R, S]):
             return False
         self._events.publish_all(*prior, aggregate)
         return True
-
-
-class RunLifecycleWriter(LifecycleWriter[Run, RunStatus]):
-    """The run flavour, so a call site cannot hand it the wrong kind of
-    repository (the generic base is what a test would build)."""
 
 
 class ExecutionLifecycleWriter(LifecycleWriter[GraphExecution, GraphStatus]):

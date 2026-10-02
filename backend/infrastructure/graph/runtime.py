@@ -54,14 +54,16 @@ _WIRE_SAFE_TYPES = (bool, int, float, str, list, dict, tuple)
 
 
 def _default_memory_releaser() -> None:
-    """gc, then the device caching allocator (lazy bridge: importing
-    ``core.comfy_setup`` pulls the torch/ComfyUI chain, so it happens
-    on the first *run*, never at startup)."""
+    """gc, then the device caching allocator.
+
+    Imported lazily: ``nodes.components.device`` pulls in torch, so this
+    must happen on the first *run*, never at startup.
+    """
     gc.collect()
     try:
-        from core.comfy_setup import xpu_empty_cache  # noqa: PLC0415 -- lazy bridge
+        from nodes.components.device import DeviceContext  # noqa: PLC0415
 
-        xpu_empty_cache()
+        DeviceContext.for_device("xpu").empty_cache()
     except Exception as exc:  # noqa: BLE001 -- best-effort, never masks a result
         logger.info("xpu cache release unavailable (non-fatal): %s", exc)
 

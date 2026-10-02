@@ -37,7 +37,19 @@ DELTA = "delta"
 LIFECYCLE = "lifecycle"
 
 #: Kinds whose newest value supersedes an older one.
-STATE_EVENT_TYPES = frozenset({"run_progressed"})
+#:
+#: **Empty.** The only member was `run_progressed`, which went with the
+#: supervised-subprocess route. No remaining event is a periodic sample of
+#: something's current position -- `graph_execution_progressed` reports a
+#: node *completing*, which is a fact that happened and must arrive, so it
+#: is a delta and never coalesced.
+#:
+#: The class is kept because the rest of the mechanism depends on it:
+#: `ClientBuffer` orders its overflow sacrifices by class, and a delta must
+#: be distinguishable from a lifecycle event to be protected from both
+#: coalescing and eviction. Adding a state event is a one-line entry here,
+#: and `coalesce_key` already gives it a key.
+STATE_EVENT_TYPES: frozenset[str] = frozenset()
 
 #: Kinds that are only meaningful in order, so never coalesced.
 DELTA_EVENT_TYPES = frozenset({"graph_execution_progressed"})

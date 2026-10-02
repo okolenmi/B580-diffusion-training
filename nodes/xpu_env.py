@@ -1,6 +1,6 @@
 """SYCL/Level-Zero performance environment variables for Intel XPU --
 single source of truth, called from every real process entry point
-(core/cli.py, backend/cli.py since M9 -- formerly server_cli.py, now
+(nodes/cli.py, backend/cli.py since M9 -- formerly server_cli.py, now
 archive/server_cli.py) before anything else in that process touches
 torch/XPU.
 

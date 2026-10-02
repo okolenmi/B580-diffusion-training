@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     # both gateways spawn children via os.environ.copy(), so the XPU
     # perf env must be set in THIS process before anything spawns. Pure
     # os.environ writes, no torch import -- safe before any child.
-    from core.xpu_env import set_xpu_perf_env_vars  # noqa: PLC0415
+    from nodes.xpu_env import set_xpu_perf_env_vars  # noqa: PLC0415
 
     set_xpu_perf_env_vars()
 

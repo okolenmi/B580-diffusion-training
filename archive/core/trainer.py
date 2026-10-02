@@ -20,7 +20,7 @@ from safetensors.torch import load_file
 from .cache_random import build_teacher_cache as build_random_cache
 from .cache_trajectory import build_teacher_cache_trajectory as build_trajectory_cache
 from .comfy_setup import xpu_empty_cache, xpu_synchronize, vram_snapshot
-from .config_model import TrainingConfig, LoRATuning, CyclicTuning
+from nodes.config_model import TrainingConfig, LoRATuning, CyclicTuning
 from .lora import LoRAConfig
 from .noise_schedule import get_alpha_sigma
 from .optimizer_builder import build_optimizer
@@ -698,7 +698,7 @@ class Trainer:
 
         if hasattr(cache_cfg, "traj_steps_min"):
             # Trajectory cache
-            from .config_model import TrajectoryCache
+            from nodes.config_model import TrajectoryCache
             assert isinstance(cache_cfg, TrajectoryCache)
 
             return build_trajectory_cache(
@@ -744,7 +744,7 @@ class Trainer:
             )
         else:
             # Random cache
-            from .config_model import RandomCache
+            from nodes.config_model import RandomCache
             assert isinstance(cache_cfg, RandomCache)
             return build_random_cache(
                 self.teacher_unet_sd, comm.teacher_type, comm.student_type,

@@ -12,9 +12,7 @@ from datetime import datetime
 
 from ..domain.entities.graph_execution import GraphExecution
 from ..domain.graph import NodeResult
-from ..domain.entities.run import Run
-from ..domain.value_objects import GraphStatus, RunStatus, StartFrom
-from .ports.config_inspector import StartOption
+from ..domain.value_objects import GraphStatus
 from .ports.dataset_library import (
     DatasetInfo,
     DatasetItem,
@@ -26,117 +24,22 @@ from .ports.dataset_tasks import DatasetTask
 from .ports.graph_runtime import GraphIssue
 from .ports.graph_library import SavedGraph
 
-
-@dataclass(frozen=True, slots=True)
-class RunDTO:
-    """Immutable projection of a run for read-side consumers."""
-
-    id: int
-    status: RunStatus
-    config_path: str
-    mode: str
-    phase: str | None
-    total_steps: int
-    done_steps: int
-    current_loss: float | None
-    avg_loss: float | None
-    cache_done: int | None
-    cache_total: int | None
-    pid: int | None
-    exit_code: int | None
-    error: str | None
-    log_path: str | None
-    created_at: datetime
-    updated_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
-
-
-def to_run_dto(run: Run) -> RunDTO:
-    """Map a domain entity to its read-side projection."""
-    if run.id is None:
-        raise ValueError("cannot project an unpersisted run (no id yet)")
-    return RunDTO(
-        id=run.id,
-        status=run.status,
-        config_path=run.config_path,
-        mode=run.mode,
-        phase=run.phase,
-        total_steps=run.total_steps,
-        done_steps=run.done_steps,
-        current_loss=run.current_loss,
-        avg_loss=run.avg_loss,
-        cache_done=run.cache_done,
-        cache_total=run.cache_total,
-        pid=run.pid,
-        exit_code=run.exit_code,
-        error=run.error,
-        log_path=run.log_path,
-        created_at=run.created_at,
-        updated_at=run.updated_at,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
-    )
-
-
 # --------------------------------------------------------------------------
 # Use-case inputs / outputs
-# --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ListRunsQuery:
-    """Read-side query; ``status`` stays a string until the use case
-    validates it -- query strings are untrusted input."""
-
-    limit: int = 50
-    status: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ListRunsResult:
-    runs: tuple[RunDTO, ...]
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class DeleteRunsResult:
-    deleted: int
-
-
-@dataclass(frozen=True, slots=True)
-class StartTrainingCommand:
-    """Launch request; relative ``config_path`` anchors at project root.
-
-    ``start_from`` stays a plain ``str`` on purpose: the wire schema is
-    where an unknown value must still arrive as a 422 with the
-    vocabulary in the message, which the use case does against the
-    ``StartFrom`` enum (docs 08 S-24).
-    """
-
-    config_path: str
-    start_from: str = StartFrom.TEACHER.value
-    reset_optimizer: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class LogResult:
-    """Tail of a run's log; empty string when the file does not exist."""
-
-    log: str
-
 
 @dataclass(frozen=True, slots=True)
 class ReconcileResult:
-    """Outcome of the startup sweep.
+    """Outcome of a startup sweep: rows moved out of an unfinished state.
 
-    ``cleaned`` counts rows moved out of unfinished; ``adopted`` counts
-    trainers that were still alive and got re-attached to instead of
-    killed (docs 07 F-11).
+    Shared by the dataset-task and graph-execution reconcilers. It used to
+    carry an ``adopted`` count as well -- trainers found still alive and
+    re-attached to rather than killed -- which was specific to the
+    supervised-subprocess route, where a half-trained run outlived the
+    server that owned it. Neither remaining sweep adopts anything: both
+    own the process outright, so an unfinished row means it died.
     """
 
     cleaned: int
-    adopted: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,32 +47,6 @@ class RawConfig:
     """A config file's exact text (raw editor round-trip)."""
 
     content: str
-
-
-@dataclass(frozen=True, slots=True)
-class LastFinishedRun:
-    """Most recent run that reached a terminal state (oldest-first
-    queries never surface one: the caller scans newest-first)."""
-
-    id: int
-    config_path: str
-    mode: str
-    done_steps: int
-    total_steps: int
-    avg_loss: float | None
-    status: str
-
-
-@dataclass(frozen=True, slots=True)
-class StartOptionsResult:
-    """The "continue from" picker's data: what each option would use
-    and whether it exists, plus enough run history to warn about
-    unfinished work."""
-
-    start_from: dict[str, StartOption]
-    has_unfinished_run: bool
-    last_finished: LastFinishedRun | None
-
 
 # --------------------------------------------------------------------------
 # Datasets (M3b)

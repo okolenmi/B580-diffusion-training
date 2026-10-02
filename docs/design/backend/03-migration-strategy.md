@@ -30,15 +30,15 @@ Rules that keep it fast and expandable:
 
 ## 3. Parity audit: legacy surface vs backend API
 
-51 legacy endpoints vs 50 backend endpoints -- and they are not a
+51 legacy endpoints vs 42 backend endpoints -- and they are not a
 1:1 mapping. Families:
 
 | Legacy family | Status |
 |---|---|
 | config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | **parity** (PATCH merges nested partials; tree shape improved) |
-| training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | **parity** (start is JSON, not multipart form) |
-| `/run/reset` | **dropped**: legacy in-memory service reset; backend state lives in the DB (delete + restart covers it) |
-| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | **resolved** (3.1): `events`/`previews`/`logs/clear` all dropped; the rest shipped |
+| training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | **dropped 2026-10-02**: the supervised-subprocess route they described spawned `python -m core.cli` and was removed with `core/`. Training is started as a graph execution -- see the nodegraph row and `docs/design/11-core-removal.md`. |
+| `/run/reset` | **dropped**: legacy in-memory service reset; backend state lives in the DB |
+| runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | **dropped 2026-10-02**, with the route above. Graph executions have their own history (`/executions`, `/executions/{id}`), which is where "what ran, when, how did it end" now lives. |
 | `/sse` | **parity+** (all domain events, generic encoder, heartbeat) |
 | settings (`GET/POST /settings`, `/files/{kind}`) | **resolved** (3.1): `/files/{kind}` dropped -- the config editor uses a path input + datalists |
 | datasets (trajectories CRUD, training-sets, tasks, checkpoints) | **parity** (toggle -> explicit `type`; pending -> `committed=false`; reject -> `discard`); both task kinds since M8e (`ingest_lora` + `generate_teacher`, vs legacy `type=lora`/`teacher`); bulk edit exceeds legacy (neg modes + verdict, M8e); **view shipped M8c, add-data + edit modes M8e, card preview + `⋮` menu M8f (beyond legacy)** |
@@ -52,9 +52,9 @@ Rules that keep it fast and expandable:
 | Gap | Resolution |
 |---|---|
 | Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. **Shipped in M6.** |
-| Run previews (`runs/run_{id}/previews/` manifest + images) | **Drop** (M8 decision): the producer is `core/preview_sampler.py` on the unsupported `core/` route -- `nodes/` (the supported route) never writes previews, so no new run will ever have a manifest. The run detail page serves the full `RunOut` + log instead. |
+| Run previews (`runs/run_{id}/previews/` manifest + images) | **Drop** (M8 decision): the producer was `core/preview_sampler.py`, which went to `archive/` with the rest of `core/`. |
 | Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs (the M8b run detail shipped without one). |
-| `/runs/logs/clear` | **Drop**: `DELETE /runs` (history wipe) plus per-run artifacts on disk cover the intent. |
+| `/runs/logs/clear` | **Drop**: superseded, then dropped with the route. `DELETE /executions` wipes execution history. |
 | `/files/{kind}` (settings file browser) | **Drop** (M8 decision): the config editor shipped with a path input + datalists and never needed a browser; revisit only if the settings tab's redesign asks for one. |
 | Dataset preview images (legacy: static mount `/datasets/{name}/{preview_path}`) | **Port** (M8c): served through `GET /api/v1/datasets/{name}/files/{path}` with containment enforced by the adapter (02 section 7). **Shipped in M8c.** |
 | `/run/reset` | **Dropped** (table above). |

@@ -1,28 +1,41 @@
 # What `core/` is, and what only it has
 
-`core/` is **the training engine**: ~7,700 lines across 23 modules,
-and every training path in this repository runs through it -- including
-the web UI's, which launches `python -m core.cli` as a supervised
-subprocess.
+`core/` **was** ~7,700 lines across 23 modules, and it was described in
+this file as "the training engine" -- the trainer every real run uses.
+That was wrong, twice over, and both errors are recorded here rather than
+edited away.
 
-It was long described as "legacy", which described when it was written
-rather than what it does, and the label was actively misleading: it
-implied dead or superseded code, and it is the trainer every real run
-uses. As of 2026-10-02 the `nodes/` rewrite no longer imports any of
-it, so what is left here is a record of the parts nothing else
-provides.
+**It was never the training engine.** The training is `nodes/train/`.
+Proven by running a real training step -- forward, backward, a real
+`optimizer.step()`, LoRA written to `.safetensors` -- with `core/` made
+unimportable. All 96 `nodes/` modules import without it. What misled this
+document was a true fact: the backend *launched* `python -m core.cli` as a
+supervised subprocess. That is a statement about which binary ran, not
+about who did the work, and reading it as the latter is the specific
+error this file has now made twice.
+
+**It is not the trainer any more, nor the runnable path.** On 2026-10-02
+`core/` moved to `archive/core/` and the backend's support for it was
+removed: the supervised-subprocess route that spawned it, and the run
+stack around it, are gone (`docs/design/11-core-removal.md`). Training is
+a graph execution, which `nodes/` implements.
+
+So what is left here is a record of what `core/` had that `nodes/` did
+not, for the day someone wants `cyclic` / `distillation` / `full` back
+(`docs/design/12-training-modes.md`).
 
 The question "what is unique in `core/`?" has a shorter answer than
 expected, and a more important one attached.
 
-## The three things that depend on it
+## What depended on it, and what happens now
 
-| Consumer | How it reaches `core/` | Breaks if `core/` goes |
+| Consumer | How it reached `core/` | Status |
 |---|---|---|
-| `python -m core.cli` (CLI) | direct; also the backend's spawned subprocess | The runnable path. **Not** the training logic -- see below |
-| `backend/` (web) | **spawns `<venv python> -m core.cli --config ...`** as the training subprocess (`infrastructure/subprocess_gateway.py:124`) | Every run started from the UI |
-| `manager/builder.py` | imports 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, and `clip_encode` -- all via the shims below) | Dataset ingestion, and therefore every run that has data |
-| `nodes/` library (rewrite) | **nothing** -- imports no `core.*` at all since 2026-10-02 | nothing |
+| `backend/` (web) | spawned `<venv python> -m core.cli --config ...` as the training subprocess | **Gone.** `subprocess_gateway.py` and the run stack it fed were removed; training is a graph execution |
+| `manager/builder.py` | imported 8 modules (`lora`, `model_io`, `noise_schedule`, `seed`, `unet_wrapper`, `vae_decode`, `comfy_setup`, `clip_encode`) | **Repointed.** Three were already shims onto `nodes/`; the diffusion helpers became `nodes/components/{noise_schedule,model_io}.py`; `vae_decode` became `nodes/model/vae_decode.py` |
+| `backend/` config + XPU helpers | `config_io`, `config_model`, `comfy_setup`, `xpu_env` | **Repointed** -- see `11-core-removal.md` |
+| `nodes/` library (rewrite) | never imported any of it | unchanged |
+| `nodes/smoke_tests/` (9 equivalence tests) | used it as the reference implementation | **Repointed** to `archive.core.*`, so they still run |
 | `nodes/smoke_tests/` | **9 equivalence tests import `core/` as the reference** they measure against: `core.optimizers` (6), `core.noise_schedule` (2), `core.model_io`, `core.comfy_setup` | The ability to prove the rewrite is equivalent to what it replaced -- see below |
 
 **This document was wrong about `core/` twice, in opposite directions, and

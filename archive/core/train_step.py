@@ -17,7 +17,7 @@ from torch import nn
 from tqdm import tqdm
 
 from .comfy_setup import xpu_empty_cache, vram_snapshot
-from .config_model import CommonSettings
+from nodes.config_model import CommonSettings
 from .lora import compute_lora_gate, set_lora_gate
 from .model_io import comfy_input_transform, raw_to_denoised, raw_to_target
 from .noise_schedule import get_alpha_sigma

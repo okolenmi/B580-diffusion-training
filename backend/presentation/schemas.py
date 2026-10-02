@@ -16,9 +16,7 @@ from ..application.dto import (
     DatasetDetail,
     GraphExecutionDTO,
     GraphExecutionSummaryDTO,
-    RunDTO,
     StartDatasetTaskCommand,
-    StartOptionsResult,
     TeacherTaskParams,
 )
 from ..application.ports.asset_store import AssetCatalog, AssetBrowse
@@ -34,86 +32,17 @@ from ..application.ports.dataset_library import (
 )
 from ..application.ports.dataset_tasks import DatasetTask, TaskKind
 from ..application.ports.settings_store import SettingsChanges, SettingsView
-from ..domain.value_objects import GraphStatus, RunStatus
+from ..domain.value_objects import GraphStatus
 
 
-class RunOut(BaseModel):
-    id: int
-    status: RunStatus
-    config_path: str
-    mode: str
-    phase: str | None = None
-    total_steps: int
-    done_steps: int
-    current_loss: float | None = None
-    avg_loss: float | None = None
-    cache_done: int | None = None
-    cache_total: int | None = None
-    pid: int | None = None
-    exit_code: int | None = None
-    error: str | None = None
-    log_path: str | None = None
-    created_at: datetime
-    updated_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-
-
-class ListRunsOut(BaseModel):
-    runs: list[RunOut]
-    count: int
-
-
-class DeleteRunsOut(BaseModel):
-    deleted: int
-
-
-class StartRunIn(BaseModel):
-    """Launch request. ``start_from`` stays a plain string: the use
-    case validates it (one source of truth for allowed values)."""
-
-    config_path: str = Field(min_length=1)
-    start_from: str = "teacher"
-    reset_optimizer: bool = False
-
-
-class StopRunIn(BaseModel):
-    force: bool = False
-
-
-class RunLogOut(BaseModel):
-    log: str
+# --------------------------------------------------------------------------
+# Health
+# --------------------------------------------------------------------------
 
 
 class HealthOut(BaseModel):
     status: str
     version: str
-
-
-def run_out(dto: RunDTO) -> RunOut:
-    """Map application DTO -> response model."""
-    return RunOut(
-        id=dto.id,
-        status=dto.status,
-        config_path=dto.config_path,
-        mode=dto.mode,
-        phase=dto.phase,
-        total_steps=dto.total_steps,
-        done_steps=dto.done_steps,
-        current_loss=dto.current_loss,
-        avg_loss=dto.avg_loss,
-        cache_done=dto.cache_done,
-        cache_total=dto.cache_total,
-        pid=dto.pid,
-        exit_code=dto.exit_code,
-        error=dto.error,
-        log_path=dto.log_path,
-        created_at=dto.created_at,
-        updated_at=dto.updated_at,
-        started_at=dto.started_at,
-        finished_at=dto.finished_at,
-    )
-
 
 # --------------------------------------------------------------------------
 # Config
@@ -151,45 +80,6 @@ class StartOptionOut(BaseModel):
     path: str
     available: bool
     label: str
-
-
-class LastFinishedOut(BaseModel):
-    id: int
-    config_path: str
-    mode: str
-    done_steps: int
-    total_steps: int
-    avg_loss: float | None = None
-    status: str
-
-
-class StartOptionsOut(BaseModel):
-    start_from: dict[str, StartOptionOut]
-    has_unfinished_run: bool
-    last_finished: LastFinishedOut | None = None
-
-
-def start_options_out(dto: StartOptionsResult) -> StartOptionsOut:
-    return StartOptionsOut(
-        start_from={
-            key: StartOptionOut(path=opt.path, available=opt.available, label=opt.label)
-            for key, opt in dto.start_from.items()
-        },
-        has_unfinished_run=dto.has_unfinished_run,
-        last_finished=(
-            None
-            if dto.last_finished is None
-            else LastFinishedOut(
-                id=dto.last_finished.id,
-                config_path=dto.last_finished.config_path,
-                mode=dto.last_finished.mode,
-                done_steps=dto.last_finished.done_steps,
-                total_steps=dto.last_finished.total_steps,
-                avg_loss=dto.last_finished.avg_loss,
-                status=dto.last_finished.status,
-            )
-        ),
-    )
 
 
 # --------------------------------------------------------------------------

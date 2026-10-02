@@ -126,7 +126,7 @@ if TYPE_CHECKING:  # pragma: no cover -- import-time cost is the point
         shuffle_and_rebatch_cache,
         warn_batch_mismatch,
     )
-    from .config_io import (
+    from nodes.config_io import (
         config_from_toml_string,
         config_to_toml_string,
         read_config,
@@ -135,7 +135,7 @@ if TYPE_CHECKING:  # pragma: no cover -- import-time cost is the point
         write_config,
         write_default_config,
     )
-    from .config_model import (
+    from nodes.config_model import (
         CacheConfig,
         CommonSettings,
         CyclicTuning,

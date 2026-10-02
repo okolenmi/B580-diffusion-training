@@ -8,8 +8,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.vae_decode import VAEDecoder
-from core.comfy_setup import xpu_empty_cache
+from nodes.model.vae_decode import VAEDecoder
+from nodes.components.device import DeviceContext
 
 
 class PreviewGenerator:
@@ -47,11 +47,11 @@ class PreviewGenerator:
             pil_img.save(str(output_path), "WEBP", quality=80)
             
             del decoded, img_np, pil_img
-            xpu_empty_cache()
+            DeviceContext.for_device("xpu").empty_cache()
 
     def free(self):
         if self.vae:
             self.vae.free()
             self.vae = None
         gc.collect()
-        xpu_empty_cache()
+        DeviceContext.for_device("xpu").empty_cache()

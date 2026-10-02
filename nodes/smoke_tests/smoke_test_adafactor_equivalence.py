@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import ChunkedXPUAdafactor
+from archive.core.optimizers import ChunkedXPUAdafactor
 from nodes.optimizer.algorithms.adafactor import AdafactorAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy

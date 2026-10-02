@@ -53,9 +53,9 @@ def main():
         sys.path.append(str(comfy_dir))
 
     import torch
-    from core.config_io import read_config
-    from core.lora import LoRAConfig, LoRALinear
-    from core.unet_wrapper import ComfyUNetWrapper
+    from nodes.config_io import read_config
+    from nodes.model.lora import LoRAConfig, LoRALinear
+    from nodes.model.unet_wrapper import ComfyUNetWrapper
     from safetensors.torch import load_file
 
     device = cli.device

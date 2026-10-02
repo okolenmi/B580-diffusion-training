@@ -20,7 +20,7 @@ export class ApiError extends Error {
 }
 
 /**
- * @param {string} path  path under /api/v1 (e.g. "/runs?limit=20")
+ * @param {string} path  path under /api/v1 (e.g. "/graphs?limit=20")
  * @param {object} [opts] {method, body} -- body objects are JSON-encoded
  *                        unless opts.rawBody is given (bytes/string sent as-is).
  * @returns {Promise<any>} parsed JSON body (or null for empty responses)
@@ -78,7 +78,7 @@ export async function api(path, opts = {}) {
  * refetch belongs on the `stream_opened` frame and its
  * `resync_required` flag -- not on `onOpen`.
  *
- * The caller owns message routing (see monitor.js / views/dashboard.js),
+ * The caller owns message routing (see monitor.js / editor.js),
  * including what to do with an unparsable frame -- it must be surfaced,
  * never dropped quietly.
  */

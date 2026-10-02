@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 
-from .value_objects import RunId
 
 
 def _utcnow() -> datetime:
@@ -50,82 +49,6 @@ class DomainEvent:
     def event_type(self) -> str:
         """This event's wire name. See ``wire_name``."""
         return type(self).wire_name()
-
-
-# --------------------------------------------------------------------------
-# Run lifecycle
-# --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class RunCreated(DomainEvent):
-    """A run was registered and received its id."""
-
-    run_id: RunId
-    config_path: str
-    mode: str
-    total_steps: int
-
-
-@dataclass(frozen=True)
-class RunStarted(DomainEvent):
-    """The training process is alive."""
-
-    run_id: RunId
-    pid: int | None
-
-
-@dataclass(frozen=True)
-class RunCompleted(DomainEvent):
-    """The training process exited successfully."""
-
-    run_id: RunId
-    done_steps: int
-
-
-@dataclass(frozen=True)
-class RunFailed(DomainEvent):
-    """The training process died with an error."""
-
-    run_id: RunId
-    error: str | None
-    exit_code: int | None
-
-
-@dataclass(frozen=True)
-class RunCancelled(DomainEvent):
-    """The run was stopped on request or swept by orphan cleanup."""
-
-    run_id: RunId
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
-class RunProgressed(DomainEvent):
-    """Telemetry: a progress sample was applied to a running run.
-
-    Unlike lifecycle events, this one is published directly by the
-    supervisor, never buffered by the entity -- ``Run.record_progress``
-    deliberately emits nothing, keeping high-frequency step updates out
-    of the aggregate's event buffer (that invariant is test-pinned).
-    """
-
-    run_id: RunId
-    step: int
-    total_steps: int
-    loss: float | None
-    avg_loss: float | None
-    lr: float | None
-    phase: str | None
-    cache_done: int | None
-    cache_total: int | None
-
-
-@dataclass(frozen=True)
-class RunsDeleted(DomainEvent):
-    """Run history was wiped (a batch deletion, not tied to one run)."""
-
-    deleted: int
 
 
 # --------------------------------------------------------------------------

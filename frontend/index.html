@@ -3,154 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System tracker</title>
+    <title>Diffusion training</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/ui/css/style.css">
     <link rel="stylesheet" href="/ui/css/shell.css">
-    <link rel="stylesheet" href="/ui/css/training.css">
 </head>
 <body class="layout-fixed">
     <main class="content-area">
         <header class="page-topbar">
-            <h1>System tracker</h1>
-            <div id="status-badge" class="status-badge status-idle">Idle</div>
-            <span class="page-sub">Start, control and review training runs</span>
+            <h1>Diffusion training</h1>
+            <span class="page-sub">LoRA training runs from a saved graph</span>
         </header>
 
-        <!-- Manual monitor hand-off: monitors are attached to runs and
-             workflows (their links open them); this strip is the escape
-             hatch for pasting an id from a URL. -->
-        <div class="util-strip">
-            <span class="util-label">Monitor</span>
-            <input id="monitor-id-input" class="cfg-input" type="text"
-                   placeholder="mon-… id" aria-label="Monitor id"
-                   title="Paste a monitor id to open its live dashboard">
-            <button id="btn-open-monitor" class="btn btn-secondary btn-small">Open monitor →</button>
-            <span class="util-hint text-dim">The id is in the monitor page URL.</span>
-        </div>
-
         <div class="page-body">
-            <!-- Hero: exactly one of two states. Live metrics live here
-                 (fed by /events); when idle, the start form takes over --
-                 there is never a row of empty stat cards. -->
             <section class="hero">
-                <!-- RUNNING -->
-                <div class="hero-run" id="hero-run" hidden>
-                    <div class="hero-run-head">
-                        <div class="hero-run-title">
-                            <span class="hero-run-id" id="run-id">#—</span>
-                            <span class="hero-run-phase" id="run-phase"></span>
-                            <span class="hero-run-elapsed" id="run-elapsed">—</span>
-                            <span class="hero-run-meta" id="run-meta"></span>
-                        </div>
-                        <div class="hero-actions">
-                            <button id="btn-stop" class="btn btn-secondary" hidden>⏸ Stop &amp; save</button>
-                            <button id="btn-kill" class="btn btn-kill" hidden>⏹ Force kill</button>
-                        </div>
-                    </div>
-
-                    <div class="hero-progress">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progress-fill"></div>
-                        </div>
-                        <span class="hero-progress-label" id="progress-text">—</span>
-                        <!-- visibility is the .progress-sub/.active class
-                             pair (the `hidden` attribute cannot override
-                             .progress-sub's own display:none default) -->
-                        <div class="progress-sub" id="cache-progress-wrap">
-                            <div class="progress-bar progress-bar-secondary">
-                                <div class="progress-fill progress-fill-cache" id="cache-fill"></div>
-                            </div>
-                            <span class="progress-labels-sub" id="cache-text"></span>
-                        </div>
-                    </div>
-
-                    <div class="hero-metrics">
-                        <div class="hero-metric">
-                            <span class="hero-metric-label">Loss</span>
-                            <span class="hero-metric-value accent" id="metric-loss">—</span>
-                        </div>
-                        <div class="hero-metric">
-                            <span class="hero-metric-label">Avg loss</span>
-                            <span class="hero-metric-value" id="metric-avg">—</span>
-                        </div>
-                        <div class="hero-metric">
-                            <span class="hero-metric-label">LR</span>
-                            <span class="hero-metric-value" id="metric-lr">—</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- IDLE -->
-                <div class="hero-idle" id="hero-idle">
-                    <div class="hero-idle-head">
-                        <h2>No active run</h2>
-                        <div class="hero-last" id="last-run"></div>
-                    </div>
-
-                    <form class="start-form" id="start-form" novalidate>
-                        <div class="start-row">
-                            <div class="field field-grow">
-                                <label for="cfg-path">Config path</label>
-                                <input id="cfg-path" type="text" placeholder="configs/distill.toml"
-                                       autocomplete="off" spellcheck="false">
-                            </div>
-                            <div class="field">
-                                <label for="start-from">Continue from</label>
-                                <select id="start-from"></select>
-                            </div>
-                        </div>
-                        <div class="start-row">
-                            <label class="check">
-                                <input type="checkbox" id="reset-optimizer">
-                                <span>Reset optimizer state</span>
-                            </label>
-                            <div class="start-error" id="start-error" role="alert" hidden></div>
-                            <button type="submit" id="btn-start" class="btn btn-start">▶ Start run</button>
-                        </div>
-                    </form>
-                </div>
+                <h2>Start training in the graph editor</h2>
+                <p class="text-dim">
+                    Training is a graph execution. Build or open a graph, then run it
+                    &mdash; the execution page streams progress and lets you stop it.
+                </p>
+                <p>
+                    <a class="btn btn-start" href="/graph.html">Open graph editor →</a>
+                </p>
             </section>
 
-            <!-- Past: run history (selection drives the log) + log tail. -->
-            <div class="runs-grid">
-                <section class="card">
-                    <div class="card-header">
-                        <span>Run history</span>
-                        <button id="btn-wipe" class="btn btn-danger btn-small">Wipe history</button>
-                    </div>
-                    <div class="runs-table-wrap">
-                        <table class="runs-table">
-                            <thead>
-                                <tr>
-                                    <th scope="col">#</th>
-                                    <th scope="col">Status</th>
-                                    <th scope="col">Config</th>
-                                    <th scope="col">Steps</th>
-                                    <th scope="col">Avg loss</th>
-                                    <th scope="col">Started</th>
-                                </tr>
-                            </thead>
-                            <tbody id="history-list">
-                                <tr><td class="empty" colspan="6">Loading…</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <section class="card">
-                    <div class="card-header">
-                        <span>Run log <span id="log-title" class="text-dim"></span>
-                            <a id="log-open" class="log-open" hidden>open full ↗</a></span>
-                        <button id="btn-refresh-log" class="btn btn-secondary btn-small">Refresh</button>
-                    </div>
-                    <div class="log-pane" id="log-body" data-empty="No run selected -- click a row in the history."></div>
-                </section>
-            </div>
+            <nav class="page-nav">
+                <a href="/graph.html">Graph editor</a>
+                <a href="/datasets.html">Datasets</a>
+                <a href="/config.html">Config</a>
+                <a href="/settings.html">Settings</a>
+                <a href="/monitor.html">Monitor</a>
+                <a href="/help.html">Help</a>
+            </nav>
         </div>
     </main>
-
-    <script type="module" src="/ui/js/shell.js"></script>
-    <script type="module" src="/ui/js/views/dashboard.js"></script>
 </body>
 </html>

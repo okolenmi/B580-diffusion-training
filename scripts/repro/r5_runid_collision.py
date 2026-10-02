@@ -8,8 +8,8 @@ from backend.infrastructure.workspace import WorkspaceLayout
 from backend.infrastructure.subprocess_gateway import SubprocessTrainingGateway
 from backend.application.errors import TrainingLaunchError
 from backend.application.ports.training_gateway import TrainingLaunch
-from core.config_io import write_config
-from core.config_model import TrainingConfig
+from nodes.config_io import write_config
+from nodes.config_model import TrainingConfig
 
 with tempfile.TemporaryDirectory() as tmp:
     tmp=Path(tmp); runs=tmp/"runs"; (runs/"run_1").mkdir(parents=True)

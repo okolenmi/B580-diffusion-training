@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import ChunkedXPUCAME
+from archive.core.optimizers import ChunkedXPUCAME
 from nodes.optimizer.algorithms.came import CAMEAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategies.simple import SimpleLoopStrategy

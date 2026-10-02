@@ -17,9 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.domain.events import RunProgressed
+from backend.domain.events import GraphExecutionProgressed
 from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.json_safe import sanitize, strict_dumps
+from backend.application import event_delivery
 from backend.presentation.sse import (
     ClientBuffer,
     coalesce_key,
@@ -105,26 +106,37 @@ def test_strict_dumps_guard() -> None:
 
 
 def test_serialize_event_nonfinite() -> None:
-    # r8's exact event -- this is the reproduction of docs 07 F-03.
-    print("\n== SSE serializer: a diverged loss never ships bare NaN ==")
-    event = RunProgressed(
-        run_id=1, step=7, total_steps=100, loss=NAN, avg_loss=INF, lr=1e-4,
-        phase="training", cache_done=None, cache_total=None,
+    # The reproduction of docs 07 F-03, rebuilt on the events that still
+    # exist. It needs a non-finite *float field*, which after the run
+    # events' removal is `duration_ms`; nothing about the bug is specific
+    # to what the field means, only to it being a float that diverged.
+    print("\n== SSE serializer: a diverged value never ships bare NaN ==")
+    event = GraphExecutionProgressed(
+        execution_id=1, node_id="nA", ok=True, duration_ms=NAN,
         occurred_at=dt.datetime.now(dt.UTC),
     )
     text = serialize_event(event)
     payload = strict_loads(text)  # raises == F-03 reproduces
     check(isinstance(payload, dict), "frame parses with a strict parser")
-    check(payload["loss"] is None, f"loss is null (got {payload['loss']!r})")
-    check(payload["avg_loss"] is None, "avg_loss is null")
+    check(payload["duration_ms"] is None,
+          f"the diverged float is null (got {payload['duration_ms']!r})")
     check(
-        payload["nonfinite"] == {"loss": "nan", "avg_loss": "inf"},
-        f"paths named with kinds (got {payload.get('nonfinite')})",
+        payload["nonfinite"] == {"duration_ms": "nan"},
+        f"its path is named with its kind (got {payload.get('nonfinite')})",
     )
     check(
-        payload["step"] == 7 and payload["lr"] == 1e-4 and payload["type"] == "run_progressed",
+        payload["node_id"] == "nA" and payload["ok"] is True
+        and payload["type"] == "graph_execution_progressed",
         "the finite fields of the same frame survive",
     )
+
+    inf_event = GraphExecutionProgressed(
+        execution_id=1, node_id="nB", ok=True, duration_ms=INF,
+        occurred_at=dt.datetime.now(dt.UTC),
+    )
+    inf_payload = strict_loads(serialize_event(inf_event))
+    check(inf_payload["nonfinite"] == {"duration_ms": "inf"},
+          "infinity is distinguished from NaN in the marker")
     check("NaN" not in text and "Infinity" not in text, "no bare tokens in the bytes")
 
 
@@ -132,14 +144,34 @@ def test_client_buffer() -> None:
     """Coalescing is decided by delivery class (docs 07 F-09, corrected by
     docs 08 N-04). Three classes, three rules:
 
-    state -- coalesce per key, so a newer sample for the same run
-      supersedes only that run's queued sample;
+    state -- coalesce per key, so a newer sample for the same subject
+      supersedes only that subject's queued sample. **No production event
+      is currently a state event** -- `run_progressed` went with the
+      supervised-subprocess route -- so this half is exercised with a
+      declared-but-unused kind. That is deliberate: the rule is real code
+      with real consequences (an overflow that coalesces the wrong thing
+      loses frames silently), and testing it only when an event happens to
+      fit is how it rots.
     delta -- never coalesced and never evicted, because every node's
       completion is a fact that happened and all of them must arrive;
     lifecycle -- never dropped for the sake of a newer frame of any
       other kind, and only sacrificed at a full buffer once state and
       delta have both been tried.
     """
+
+    # A state kind that nothing currently emits. See the docstring: this is
+    # the coalescing rule under test, not a claim that anything emits it.
+    #
+    # It has to be put *into the table* to be a state kind -- `delivery_class`
+    # reads the module global, so declaring it here is what makes the
+    # coalescing path reachable at all. Restored immediately after, and the
+    # fact that the table is empty in production is asserted at the end, so
+    # this cannot quietly become a second, hidden state event.
+    STATE_KIND = "hypothetical_state_sample"
+    original_states = set(event_delivery.STATE_EVENT_TYPES)
+    event_delivery.STATE_EVENT_TYPES = frozenset(
+        original_states | {STATE_KIND}
+    )
 
     async def scenario() -> None:
         async def next_frame(buf: ClientBuffer) -> str | None:
@@ -156,11 +188,11 @@ def test_client_buffer() -> None:
         # derived from its own run_id. That also means a hand-passed key
         # cannot rescue an unkeyable frame -- see the explicit-key case
         # below, which asserts exactly that.
-        p1 = '{"type":"run_progressed","run_id":1,"step":1}'
-        p2 = '{"type":"run_progressed","run_id":1,"step":2}'
-        buf.put("run_progressed", p1, seq=1)
-        buf.put("run_progressed", p2, seq=2)
-        check(len(buf) == 1, f"same-run progress coalesces to the newest (got {len(buf)})")
+        p1 = f'{{"type":"{STATE_KIND}","run_id":1,"step":1}}'
+        p2 = f'{{"type":"{STATE_KIND}","run_id":1,"step":2}}'
+        buf.put(STATE_KIND, p1, seq=1)
+        buf.put(STATE_KIND, p2, seq=2)
+        check(len(buf) == 1, f"same-subject samples coalesce to the newest (got {len(buf)})")
         check(buf.coalesced == 1, f"coalesced counter (got {buf.coalesced})")
         seq, payload = await buf.get(0.01)
         check(payload == p2, "the surviving frame is the newest")
@@ -170,24 +202,24 @@ def test_client_buffer() -> None:
               f"a stale seq would let a live frame be replayed as new")
 
         # A different run's newest sample is not superseded by this one's.
-        other = '{"type":"run_progressed","run_id":2,"step":1}'
-        buf.put("run_progressed", other)
-        buf.put("run_progressed", p1)
-        check(len(buf) == 2, f"two runs' samples coexist (got {len(buf)})")
+        other = f'{{"type":"{STATE_KIND}","run_id":2,"step":1}}'
+        buf.put(STATE_KIND, other)
+        buf.put(STATE_KIND, p1)
+        check(len(buf) == 2, f"two subjects' samples coexist (got {len(buf)})")
         check([await next_frame(buf), await next_frame(buf)] == [other, p1],
-              "and both runs' samples arrive, in order")
+              "and both subjects' samples arrive, in order")
 
         # --- delta: N-04. Six node events must arrive as six ---
-        p3 = '{"type":"run_progressed","run_id":1,"step":3}'
-        buf.put("run_progressed", p3)
-        buf.put("run_completed", "c1")
+        p3 = f'{{"type":"{STATE_KIND}","run_id":1,"step":3}}'
+        buf.put(STATE_KIND, p3)
+        buf.put("graph_execution_finished", "c1")
         for node in "ABCDEF":
             buf.put("graph_execution_progressed", f"n{node}")
         check(len(buf) == 8, f"1 state + 1 lifecycle + 6 deltas all queued (got {len(buf)})")
         got = [await next_frame(buf) for _ in range(8)]
         check(
             got == [p3, "c1", "nA", "nB", "nC", "nD", "nE", "nF"],
-            f"every node event survives a run's progress frame (got {got})",
+            f"every node event survives a state frame (got {got})",
         )
         check(buf.coalesced == 1, f"no coalescing happened among the deltas (got {buf.coalesced})")
 
@@ -223,6 +255,12 @@ def test_client_buffer() -> None:
 
     asyncio.run(scenario())
 
+    event_delivery.STATE_EVENT_TYPES = frozenset(original_states)
+    check(not event_delivery.STATE_EVENT_TYPES,
+          "no event is a state event in production -- the table this test "
+          "temporarily extended is empty again, and stays empty until a "
+          "periodic-sample event actually exists")
+
 
 def test_delivery_class_assignment() -> None:
     """The class table is the policy; a wrong entry silently reintroduces
@@ -230,23 +268,38 @@ def test_delivery_class_assignment() -> None:
     print("\n== SSE: delivery classes are what the buffer assumes (N-04) ==")
     check(delivery_class("graph_execution_progressed") == "delta",
           "per-node graph progress is a delta: every one must arrive")
-    check(delivery_class("run_progressed") == "state",
-          "run progress is state: newest wins")
-    for kind in ("run_created", "run_started", "run_completed", "run_failed",
-                 "run_cancelled", "stream_opened"):
+    check(not event_delivery.STATE_EVENT_TYPES,
+          "nothing is a state event any more -- run_progressed went with "
+          "the subprocess route (got "
+          f"{sorted(event_delivery.STATE_EVENT_TYPES)})")
+    for kind in ("graph_execution_queued", "graph_execution_started",
+                 "graph_execution_finished", "graph_execution_failed",
+                 "graph_execution_stopped", "graph_executions_deleted",
+                 "stream_opened"):
         check(delivery_class(kind) == "lifecycle",
               f"{kind} is lifecycle (got {delivery_class(kind)})")
 
     check(coalesce_key("graph_execution_progressed", '{"node_id":"a"}') is None,
           "a delta never gets a coalescing key")
-    check(coalesce_key("run_completed", '{"run_id":1}') is None,
+    check(coalesce_key("graph_execution_finished", '{"execution_id":1}') is None,
           "a lifecycle event never gets one either")
-    check(coalesce_key("run_progressed", '{"run_id":7,"step":1}') == "run:7",
-          "run progress is keyed by its run")
-    check(coalesce_key("run_progressed", '{"step":1}') is None,
-          "progress with no run_id is not coalesced rather than coalesced wrongly")
-    check(coalesce_key("run_progressed", "not json") is None,
-          "an unparseable payload is not coalesced")
+
+    # The key-building half, with the state class forced on: `coalesce_key`
+    # returns None for a non-state kind before it ever looks at the payload,
+    # so this is the only way to reach -- and therefore the only way to
+    # test -- the key rules themselves.
+    original = event_delivery.STATE_EVENT_TYPES
+    event_delivery.STATE_EVENT_TYPES = frozenset({"state_probe"})
+    try:
+        check(coalesce_key("state_probe", '{"run_id":7,"step":1}') == "run:7",
+              "a state sample is keyed by its run")
+        check(coalesce_key("state_probe", '{"step":1}') is None,
+              "a state sample with no run_id is not coalesced rather than "
+              "coalesced wrongly")
+        check(coalesce_key("state_probe", "not json") is None,
+              "an unparseable payload is not coalesced")
+    finally:
+        event_delivery.STATE_EVENT_TYPES = original
 
 
 def test_monitor_frames_are_strict() -> None:

@@ -1,4 +1,4 @@
-"""Derives base option metadata directly from core.config_model's Pydantic
+"""Derives base option metadata directly from nodes.config_model's Pydantic
 models, via runtime introspection (model_fields, constraint metadata, Union
 members) -- not by hand-duplicating it.
 
@@ -232,7 +232,7 @@ def _walk(model: type[BaseModel], prefix: str, base_visible_when: dict | None,
 
 def build_schema_options() -> dict[str, SchemaOption]:
     """Introspect TrainingConfig and return {dotted_path: SchemaOption}."""
-    from core.config_model import TrainingConfig  # repo bridge
+    from nodes.config_model import TrainingConfig
 
     out: dict[str, SchemaOption] = {}
     _walk(TrainingConfig, "", None, out)

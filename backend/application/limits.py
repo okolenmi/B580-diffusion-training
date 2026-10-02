@@ -13,13 +13,7 @@ them, so a doc and a 422 can no longer disagree.
 MAX_PAGE_SIZE = 500
 """Ceiling for any list endpoint's ``limit``."""
 
-DEFAULT_RUN_PAGE_SIZE = 50
 DEFAULT_EXECUTION_PAGE_SIZE = 50
-
-# --- run log tail ----------------------------------------------------------
-
-MAX_LOG_LINES = 500
-DEFAULT_LOG_LINES = 100
 
 # --- dataset curation -----------------------------------------------------
 

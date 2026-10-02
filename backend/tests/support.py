@@ -12,7 +12,6 @@ import json
 import sys
 import tempfile
 import time
-from copy import deepcopy
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
@@ -32,11 +31,6 @@ from backend.application.ports.graph_execution_repository import (
 from backend.application.ports.graph_library import GraphLibrary
 from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
-from backend.application.ports.run_repository import RunRepository
-from backend.application.ports.training_gateway import (
-    TrainingGateway,
-    TrainingLaunch,
-)
 from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.errors import ConfigNotFoundError
 from backend.application.project_paths import ProjectPaths
@@ -44,7 +38,6 @@ from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.event_publisher import EventPublisher
 from backend.application.lifecycle_writer import (
     ExecutionLifecycleWriter,
-    RunLifecycleWriter,
 )
 from backend.application.services import (
     MonitorServices,
@@ -55,7 +48,6 @@ from backend.application.services import (
     GraphServices,
     SettingsServices,
 )
-from backend.application.supervisor import RunSupervisor
 from backend.application.use_cases import (
     SubscribeMonitor,
     BrowseAssets,
@@ -65,18 +57,13 @@ from backend.application.use_cases import (
     DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
-    DeleteRuns,
     DiscardDatasetItems,
-    GetActiveRun,
     GetConfig,
     GetConfigOptions,
     GetDataset,
     GetGraph,
     GetGraphExecution,
-    GetRun,
-    GetRunLog,
     GetSettings,
-    GetStartOptions,
     InspectAsset,
     ListAssets,
     ListDatasetItems,
@@ -86,22 +73,18 @@ from backend.application.use_cases import (
     ListGraphExecutions,
     ListGraphs,
     ListNodeCatalog,
-    ListRuns,
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
     ReadDatasetFile,
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
-    ReconcileRuns,
     SaveGraph,
     SetDatasetPreview,
     StartDatasetTask,
     StartGraphExecution,
-    StartTraining,
     StopDatasetTask,
     StopGraphExecution,
-    StopTraining,
     UpdateConfig,
     UpdateDatasetItem,
     UpdateSettings,
@@ -109,10 +92,7 @@ from backend.application.use_cases import (
     ValidateGraph,
     WriteConfigRaw,
 )
-from backend.domain.entities.run import Run
 from backend.domain.events import DomainEvent
-from backend.domain.exceptions import DomainError
-from backend.domain.value_objects import RunId, RunStatus
 from backend.application.ports.dataset_task_gateway import (
     DatasetTaskGateway,
     DatasetTaskLaunch,
@@ -123,13 +103,11 @@ from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_previews import SqliteDatasetPreviews
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
-from backend.infrastructure.directory_run_artifacts import DirectoryRunArtifacts
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
-from backend.infrastructure.jsonl_progress_source import JsonlProgressSource as _Jsonl
 from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -262,176 +240,6 @@ class RecordingEventBus(CallbackEventBus):
         return [event.event_type for event in self.published]
 
 
-def _snapshot(run: Run) -> Run:
-    """A stored copy of `run` that holds state, not history.
-
-    The event buffer is drained off the copy. SQLite stores columns and
-    `Run.restore()` rebuilds an aggregate with an *empty* buffer, so a
-    read there can never replay an event someone has already published;
-    a plain deepcopy carries the buffer across, and the next read hands
-    back an entity that still claims to owe `run_created`.
-
-    That is not hypothetical. The failure-repair path commits a run it
-    read back (`current = self._runs.get(...)`), so a stored snapshot
-    that kept the buffer made `StartTraining` publish run_created twice
-    on a failed start -- and the test asserting `["run_created",
-    "run_failed"]` only passed because the old aliasing fake handed back
-    the *same* object the writer had already drained. The aliasing was
-    hiding this, which is exactly what a contract test is for.
-
-    Draining is `collect_events()` because it is the public drain; the
-    events belong to the caller's entity, which the writer publishes.
-    """
-    stored = deepcopy(run)
-    stored.collect_events()
-    return stored
-
-
-class InMemoryRunRepository(RunRepository):
-    """Same semantics as the SQLite port, no persistence.
-
-    Writes store a *snapshot*, not the object handed in, and every read
-    returns a fresh copy of the snapshot. That is what the SQLite adapter
-    necessarily does -- it cannot hand back a live row object -- and the
-    fake used to differ, which the repository contract found
-    (backend/tests/contracts/run_repository_contract.py).
-
-    Concretely, the fake used to store the caller's reference, so a
-    caller that mutated its entity *without writing* saw the change come
-    back out of `find_active()` and `list_runs()`: an in-flight mutation
-    was indistinguishable from a committed one. It kept a parallel
-    ``_statuses`` dict to stop the compare-and-swap from being fooled,
-    which fixed the CAS but not the reads -- `find_active()` would filter
-    on the mirror and then return an entity whose own `.status` said
-    something else. A snapshot makes the workaround unnecessary rather
-    than patching one hole in it: ``_statuses`` is gone.
-
-    `add` still returns the object it was given, and `assign_id` still
-    mutates it, because the caller's entity is where the buffered domain
-    events live and those are the caller's to collect.
-    """
-
-    _UNFINISHED = (RunStatus.CREATED, RunStatus.RUNNING)
-
-    def __init__(self) -> None:
-        self._runs: dict[int, Run] = {}
-        self._next_id = 1
-
-    def add(self, run: Run) -> Run:
-        if run.id is not None:
-            raise DomainError(f"run already has id {run.id}")
-        run.assign_id(RunId(self._next_id))
-        self._next_id += 1
-        self._runs[run.require_id()] = _snapshot(run)
-        return run
-
-    def get(self, run_id: RunId) -> Run | None:
-        stored = self._runs.get(run_id)
-        return deepcopy(stored) if stored is not None else None
-
-    def list_runs(self, *, limit: int = 50,
-                    status: RunStatus | None = None) -> list[Run]:
-        runs = [r for r in self._runs.values() if status is None or r.status is status]
-        runs.sort(key=lambda r: r.require_id(), reverse=True)
-        return [deepcopy(r) for r in runs[:limit]]
-
-    def update(self, run: Run) -> bool:
-        if run.id is None:
-            raise DomainError("cannot update an unpersisted run (no id yet)")
-        if run.id not in self._runs:
-            return False
-        self._runs[run.id] = _snapshot(run)
-        return True
-
-    def update_if_status(self, run: Run, expected: RunStatus) -> bool:
-        if run.id is None:
-            raise DomainError("cannot update an unpersisted run (no id yet)")
-        stored = self._runs.get(run.id)
-        if stored is None or stored.status is not expected:
-            return False
-        self._runs[run.id] = _snapshot(run)
-        return True
-
-    def find_active(self) -> Run | None:
-        unfinished = [
-            r for r in self._runs.values() if r.status in self._UNFINISHED
-        ]
-        if not unfinished:
-            return None
-        return deepcopy(max(unfinished, key=lambda r: r.require_id()))
-
-    def continue_ids_above(self, run_id: RunId) -> None:
-        self._next_id = max(self._next_id, int(run_id) + 1)
-
-    def list_unfinished(self) -> list[Run]:
-        unfinished = [
-            r for r in self._runs.values() if r.status in self._UNFINISHED
-        ]
-        unfinished.sort(key=lambda r: r.require_id(), reverse=True)
-        return [deepcopy(r) for r in unfinished]
-
-    def delete_all(self) -> int:
-        deleted = len(self._runs)
-        self._runs.clear()
-        return deleted
-
-
-class FakeTrainingGateway(TrainingGateway):
-    """Scriptable gateway: tests decide what is alive and how it exits.
-
-    spawn() registers the pid as alive with exit code 0; tests kill it
-    by discarding the pid from ``alive`` (setting ``exit_codes[pid]``
-    first for a non-zero exit). ``spawn_error`` fails the launch.
-    """
-
-    def __init__(self) -> None:
-        self.spawned: list[TrainingLaunch] = []
-        self.stopped: list[tuple[int, bool]] = []
-        self.killed: list[int] = []
-        self.alive: set[int] = set()
-        self.foreign: set[int] = set()  # pids whose number was recycled
-        self.exit_codes: dict[int, int] = {}
-        self.spawn_error: Exception | None = None
-        self.next_pid = 4242
-
-    def spawn(self, launch: TrainingLaunch) -> int:
-        if self.spawn_error is not None:
-            raise self.spawn_error
-        self.spawned.append(launch)
-        pid = self.next_pid
-        self.next_pid += 1
-        self.alive.add(pid)
-        self.exit_codes[pid] = 0
-        return pid
-
-    def is_alive(self, pid: int) -> bool:
-        return pid in self.alive
-
-    def owns(self, pid: int) -> bool:
-        """Identity: every scripted pid is ours unless the test says
-        otherwise (``foreign`` marks a recycled pid number)."""
-        return pid not in self.foreign
-
-    def wait_exit_code(self, pid: int, timeout: float = 5.0) -> int | None:
-        if pid in self.alive:
-            return None
-        return self.exit_codes.get(pid)
-
-    def stop(self, pid: int, *, force: bool = False) -> bool:
-        self.stopped.append((pid, force))
-        self.alive.discard(pid)
-        return True
-
-    def kill(self, pid: int) -> bool:
-        self.killed.append(pid)
-        # Same contract as the real adapter: a pid that is not ours is
-        # never signalled, whatever kill() is called for.
-        if pid in self.foreign or pid not in self.alive:
-            return False
-        self.alive.discard(pid)
-        return True
-
-
 class FakeDatasetTaskGateway(DatasetTaskGateway):
     """Scriptable fork gateway: spawn registers a fake pid as alive;
     tests kill it by discarding from ``alive``; ``spawn_error`` fails
@@ -459,8 +267,6 @@ class FakeDatasetTaskGateway(DatasetTaskGateway):
 
     def is_alive(self, pid: int) -> bool:
         return pid in self.alive
-
-
 class FakeConfigInspector(ConfigInspector):
     """Existence check is real; summaries/descriptions are scripted.
 
@@ -774,12 +580,7 @@ def fixture_graph_registry() -> NodeRegistry:
 
 def build_services(
     *,
-    runs: RunRepository | None = None,
     events: RecordingEventBus | None = None,
-    gateway: TrainingGateway | None = None,
-    inspector: ConfigInspector | None = None,
-    artifacts: DirectoryRunArtifacts | None = None,
-    supervisor: RunSupervisor | None = None,
     clock: FakeClock | None = None,
     project_root: Path | None = None,
     runs_dir: Path | None = None,
@@ -801,8 +602,8 @@ def build_services(
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
-    The runs domain uses fakes (scriptable lifecycle); the config /
-    settings / assets / datasets domains default to the *real* adapters
+    The config / settings / assets / datasets / graph domains default to
+    the *real* adapters
     over temp locations -- they are cheap, and exercising the real TOML /
     SQLite / filesystem code paths is the point of these tests. The
     dataset *gateway* is fake by default: spawning a real child that
@@ -812,12 +613,9 @@ def build_services(
     memory releaser -- validation and execution run for real, the GPU
     never does.
     """
-    runs = runs if runs is not None else InMemoryRunRepository()
     events = events if events is not None else RecordingEventBus()
     publisher = EventPublisher(events=events)
     paths = ProjectPaths(root=project_root)
-    gateway = gateway if gateway is not None else FakeTrainingGateway()
-    inspector = inspector if inspector is not None else FakeConfigInspector()
     clock = clock if clock is not None else FakeClock()
     project_root = project_root if project_root is not None else Path(
         tempfile.mkdtemp(prefix="backend-project-")
@@ -832,8 +630,6 @@ def build_services(
     layout = WorkspaceLayout(
         project_root, runs_dir=runs_dir, settings_kv=settings_store.get
     )
-    if artifacts is None:
-        artifacts = DirectoryRunArtifacts(layout)
     if dataset_library is None:
         dataset_library = SqliteDatasetLibrary(layout)
     if dataset_tasks is None:
@@ -876,7 +672,6 @@ def build_services(
     execution_writer = ExecutionLifecycleWriter(
         repository=graph_executions, events=publisher
     )
-    run_writer = RunLifecycleWriter(repository=runs, events=publisher)
     if graph_supervisor is None:
         graph_supervisor = GraphExecutionSupervisor(
             executions=graph_executions,
@@ -885,49 +680,13 @@ def build_services(
             events=publisher,
             clock=clock,
         )
-    if supervisor is None:
-        supervisor = RunSupervisor(
-            runs=runs,
-            writer=run_writer,
-            events=publisher,
-            gateway=gateway,
-            progress=_Jsonl(),
-            artifacts=artifacts,
-            clock=clock,
-            poll_interval=poll_interval,
-        )
     return ApplicationServices(
-        list_runs=ListRuns(runs),
-        get_run=GetRun(runs),
-        delete_runs=DeleteRuns(runs, events=publisher),
-        get_active_run=GetActiveRun(runs),
-        start_training=StartTraining(
-            runs=runs,
-            writer=run_writer,
-            gateway=gateway,
-            inspector=inspector,
-            artifacts=artifacts,
-            watcher=supervisor,
-            clock=clock,
-            paths=paths,
-        ),
-        stop_training=StopTraining(
-            runs=runs, writer=run_writer, gateway=gateway, clock=clock
-        ),
-        get_run_log=GetRunLog(runs=runs, artifacts=artifacts),
-        reconcile_runs=ReconcileRuns(
-            runs=runs, writer=run_writer, gateway=gateway, clock=clock,
-            watcher=supervisor, artifacts=artifacts, progress=_Jsonl(),
-        ),
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
             update=UpdateConfig(files=config_files, paths=paths),
             read_raw=ReadConfigRaw(files=config_files, paths=paths),
             write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
-            start_options=GetStartOptions(
-                inspector=inspector, runs=runs, paths=paths
-            ),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),
@@ -1014,29 +773,6 @@ def build_services(
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 
-
-def seed_run(
-    repo: RunRepository,
-    clock: FakeClock,
-    *,
-    config_path: str = "configs/test.toml",
-    mode: str = "distillation",
-    total_steps: int = 100,
-    start: bool = False,
-    pid: int | None = 111,
-) -> Run:
-    """Create + persist a run; optionally transition it to ``running``."""
-    run = Run.create(
-        config_path=config_path,
-        mode=mode,
-        total_steps=total_steps,
-        created_at=clock.now(),
-    )
-    repo.add(run)
-    if start:
-        run.mark_started(pid=pid, at=clock.now())
-        repo.update(run)
-    return run
 
 
 # --------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""CoreConfigFiles -- ConfigFiles over core.config_io / core.config_model.
+"""CoreConfigFiles -- ConfigFiles over nodes.config_io / nodes.config_model.
 
 The adapter owns all knowledge of the config format; the application
 only ever sees plain dicts and the two config errors. Updates are
@@ -6,10 +6,15 @@ validate-then-write, so a rejected merge never touches the file, and the
 raw editor stores the user's own text (comments and unknown keys
 intact, docs 07 F-08) through a temp sibling + rename.
 
-Bridging note: ``core`` is imported lazily inside methods (same
-deliberate-bridge posture as ``CoreConfigInspector``) so importing
+Bridging note: the config modules are imported lazily inside methods
+(same deliberate-bridge posture as ``CoreConfigInspector``) so importing
 the backend never drags the training stack into a process that only
 serves HTTP.
+
+The class keeps its ``Core``-prefixed name. It is now a *naming* remnant
+rather than a description of anything -- the format is ``nodes``' own --
+but renaming an adapter class is churn with no behaviour behind it, and
+the ports it implements are what callers actually depend on.
 """
 
 from __future__ import annotations
@@ -22,9 +27,9 @@ from ..application.errors import ConfigInvalidError, ConfigNotFoundError
 from ..application.ports.config_files import ConfigFiles
 
 
-def _core_io():
+def _config_io():
     try:
-        from core import config_io, config_model  # repo bridge
+        from nodes import config_io, config_model
     except ImportError as exc:  # pragma: no cover - env breakage
         raise ConfigInvalidError(f"training config reader unavailable: {exc}") from exc
     return config_io, config_model
@@ -59,7 +64,7 @@ class CoreConfigFiles(ConfigFiles):
         if not overrides:
             return self.read(config_path)  # still validates; no write needed
         current = self._load(config_path)  # raises not-found/invalid first
-        config_io, config_model = _core_io()
+        config_io, config_model = _config_io()
         merged = _deep_merge(current.model_dump(mode="json"), overrides)
         try:
             config = config_model.TrainingConfig.model_validate(merged)
@@ -79,7 +84,7 @@ class CoreConfigFiles(ConfigFiles):
         validated by parsing it and then written verbatim through a temp
         sibling + rename: a failed write never truncates either.
         """
-        config_io, _ = _core_io()
+        config_io, _ = _config_io()
         try:
             config_io.config_from_toml_string(content)
         except Exception as exc:
@@ -108,7 +113,7 @@ class CoreConfigFiles(ConfigFiles):
     # -- shared --------------------------------------------------------
 
     def _load(self, config_path: Path):
-        config_io, _ = _core_io()
+        config_io, _ = _config_io()
         try:
             return config_io.read_config(config_path)
         except FileNotFoundError as exc:

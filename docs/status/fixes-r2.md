@@ -59,6 +59,15 @@ Phase 3: WP-20, WP-22 blocked; WP-19 and WP-21 done or declined.
   and the argv `-m core.cli` — code the `core/` removal will disturb. The
   PID-reuse guard fixed in `75e3fed` lives in the same module, which is
   an argument for not churning it.
+* **WP-20 is now unblocked.** `core/` moved to `archive/core/` on
+  2026-10-02 and the backend's support for it was removed, which took
+  `subprocess_gateway.py` -- the file that hardcoded
+  `cmdline_marker="core.cli"` -- with it. The `RunSupervisor` /
+  `GraphExecutionSupervisor` unification WP-20 was really after is
+  smaller than it looked: the run supervisor no longer exists. What
+  remains to compare is `GraphExecutionSupervisor` against
+  `DatasetTaskSweeper`, which is two classes rather than four, and one
+  of which has no events.
 * **WP-19 declined.** Every target is a test file or a schema module, and
   splitting them to hit a line count rather than to fix a comprehension
   problem adds indirection and a large reviewable diff for no measured

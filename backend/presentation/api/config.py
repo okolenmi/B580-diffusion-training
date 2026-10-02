@@ -17,7 +17,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from ...application.dto import StartOptionsResult
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
@@ -26,8 +25,6 @@ from ..schemas import (
     ConfigRawIn,
     ConfigRawOut,
     ConfigSavedOut,
-    StartOptionsOut,
-    start_options_out,
 )
 
 router = APIRouter(prefix="/api/v1/config", tags=["config"])
@@ -84,16 +81,3 @@ def get_config_options(
     return ConfigOptionsOut(options=services.config.options.execute())
 
 
-@router.get(
-    "/start-options",
-    response_model=StartOptionsOut,
-    responses={404: _ERROR_404, 422: _ERROR_422},
-)
-def get_start_options(
-    path: str = Query(""),
-    services: ApplicationServices = Depends(get_services),
-) -> StartOptionsOut:
-    """Continue-from picker: per-option availability, whether a run is
-    active, and the most recent finished run (or null)."""
-    result: StartOptionsResult = services.config.start_options.execute(path)
-    return start_options_out(result)

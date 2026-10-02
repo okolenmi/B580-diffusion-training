@@ -12,7 +12,7 @@ from threading import Lock, Thread
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.ports.event_bus import Sequenced
-from backend.domain.events import RunCompleted, RunsDeleted
+from backend.domain.events import GraphExecutionFinished, GraphExecutionsDeleted
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.tests.support import check, finish
 
@@ -23,18 +23,19 @@ def test_pubsub_lifecycle() -> None:
     received: list[Sequenced] = []
     subscription = bus.subscribe(received.append)
 
-    first = RunCompleted(run_id=1, done_steps=3)
+    first = GraphExecutionFinished(execution_id=1, nodes=3)
     bus.publish(first)
     check(
         [item.event for item in received] == [first],
         "subscriber receives the published event (same object)",
     )
     check(received[0].seq == 1, "first event is seq 1")
-    check(received[0].event_type == "run_completed", "the type is readable unwrapped")
+    check(received[0].event_type == "graph_execution_finished",
+          "the type is readable unwrapped")
 
     late: list[Sequenced] = []
     bus.subscribe(late.append)
-    second = RunCompleted(run_id=2, done_steps=4)
+    second = GraphExecutionFinished(execution_id=2, nodes=4)
     bus.publish(second)
     check(
         [item.event for item in received] == [first, second],
@@ -47,7 +48,7 @@ def test_pubsub_lifecycle() -> None:
     )
 
     subscription.close()
-    bus.publish(RunCompleted(run_id=3, done_steps=5))
+    bus.publish(GraphExecutionFinished(execution_id=3, nodes=5))
     check(len(received) == 2, "closed subscription stops receiving")
     subscription.close()  # idempotent
     check(len(late) == 2, "other subscribers unaffected by someone else's close")
@@ -63,7 +64,7 @@ def test_handler_failure_is_isolated() -> None:
 
     bus.subscribe(explode)
     bus.subscribe(good.append)
-    event = RunCompleted(run_id=1, done_steps=1)
+    event = GraphExecutionFinished(execution_id=1, nodes=1)
     try:
         bus.publish(event)
         check(
@@ -90,7 +91,7 @@ def test_thread_safety() -> None:
 
     def worker(worker_id: int) -> None:
         for index in range(threads_per_worker):
-            bus.publish(RunsDeleted(deleted=worker_id * 1000 + index))
+            bus.publish(GraphExecutionsDeleted(deleted=worker_id * 1000 + index))
 
     threads = [Thread(target=worker, args=(i,)) for i in range(4)]
     for thread in threads:

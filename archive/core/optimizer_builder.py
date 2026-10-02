@@ -3,7 +3,7 @@
 Accepts typed CommonSettings instead of argparse.Namespace.
 """
 
-from .config_model import CommonSettings
+from nodes.config_model import CommonSettings
 from .optimizers import CPUAdamW, ChunkedXPUAdafactor, FusedXPUAdafactor, ForeachXPUAdafactor, ChunkedXPUCAME
 
 

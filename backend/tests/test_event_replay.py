@@ -1,7 +1,7 @@
 """Unit tests -- event sequence numbers, the replay ring, and Last-Event-ID.
 
 The bug this exists for: `/api/v1/events` had no replay, so a browser tab
-that slept through `run_completed` came back still believing the run was
+that slept through `graph_execution_finished` came back still believing it was
 running. The frontend papered over it by refetching on every reconnect,
 which was racy and cost a full fetch per reconnect
 (`docs/design/backend/09-event-contract.md`).
@@ -22,10 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.application.event_delivery import is_lifecycle
 from backend.application.limits import EVENT_REPLAY_RING
 from backend.domain.events import (
+    GraphExecutionFinished,
     GraphExecutionProgressed,
-    RunCompleted,
-    RunProgressed,
-    RunStarted,
+    GraphExecutionQueued,
+    GraphExecutionStarted,
 )
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.tests.support import check, finish
@@ -37,20 +37,18 @@ NOW = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
 STREAM_TIMEOUT_SECONDS = 5.0
 
 
-def started(run_id: int = 1) -> RunStarted:
-    return RunStarted(run_id=run_id, pid=100 + run_id, occurred_at=NOW)
+def queued(execution_id: int = 1) -> GraphExecutionQueued:
+    return GraphExecutionQueued(execution_id=execution_id, node_count=4,
+                                occurred_at=NOW)
 
 
-def completed(run_id: int = 1, steps: int = 10) -> RunCompleted:
-    return RunCompleted(run_id=run_id, done_steps=steps, occurred_at=NOW)
+def started(execution_id: int = 1) -> GraphExecutionStarted:
+    return GraphExecutionStarted(execution_id=execution_id, occurred_at=NOW)
 
 
-def progressed(run_id: int = 1, step: int = 5) -> RunProgressed:
-    return RunProgressed(
-        run_id=run_id, step=step, total_steps=10, loss=0.5, avg_loss=0.5,
-        lr=1e-4, phase="training", cache_done=None, cache_total=None,
-        occurred_at=NOW,
-    )
+def completed(execution_id: int = 1, nodes: int = 4) -> GraphExecutionFinished:
+    return GraphExecutionFinished(execution_id=execution_id, nodes=nodes,
+                                  occurred_at=NOW)
 
 
 def node_progressed(node_id: str = "nA") -> GraphExecutionProgressed:
@@ -70,19 +68,20 @@ def test_sequence_numbers() -> None:
     bus.subscribe(seen.append)
 
     bus.publish(started())
-    bus.publish(progressed())
+    bus.publish(node_progressed())
     bus.publish(completed())
     bus.publish(node_progressed())
 
     check([item.seq for item in seen] == [1, 2, 3, 4],
           f"seqs are 1..4 in publish order (got {[i.seq for i in seen]})")
     check([item.event_type for item in seen] == [
-        "run_started", "run_progressed", "run_completed",
+        "graph_execution_started", "graph_execution_progressed",
+        "graph_execution_finished",
         "graph_execution_progressed",
     ], "the order the publisher used is preserved")
     check(bus.last_seq == 4, f"last_seq tracks it (got {bus.last_seq})")
     check(all(item.event is not None for item in seen), "each carries its event")
-    check(seen[2].event_type == "run_completed",
+    check(seen[2].event_type == "graph_execution_finished",
           "event_type is readable without unwrapping first")
 
 
@@ -90,14 +89,15 @@ def test_ring_holds_lifecycle_only() -> None:
     print("\n== bus: the ring keeps lifecycle events and nothing else ==")
     bus = CallbackEventBus()
     bus.publish(started())
-    bus.publish(progressed())
+    bus.publish(node_progressed())
     bus.publish(completed())
     bus.publish(node_progressed())
 
     replayed = [item.event_type for item in bus.replay_since(0).events]
-    check(replayed == ["run_started", "run_completed"],
+    check(replayed == ["graph_execution_started", "graph_execution_finished"],
           f"a state sample and a delta are not ringed (got {replayed})")
-    check(is_lifecycle("run_completed") and not is_lifecycle("run_progressed"),
+    check(is_lifecycle("graph_execution_finished")
+          and not is_lifecycle("graph_execution_progressed"),
           "and the exclusion is the delivery class, not a second list")
     check(
         all(item.seq <= 4 for item in bus.replay_since(0).events),
@@ -109,7 +109,7 @@ def test_replay_since_truth_table() -> None:
     print("\n== bus: the four answers replay_since can give ==")
     bus = CallbackEventBus()
     bus.publish(started())      # 1
-    bus.publish(progressed())   # 2
+    bus.publish(node_progressed())   # 2
     bus.publish(completed())    # 3
 
     up_to_date = bus.replay_since(3)
@@ -135,7 +135,7 @@ def test_ring_eviction_is_honest() -> None:
     print("\n== bus: past the ring, the answer is resync, not a short answer ==")
     bus = CallbackEventBus(replay_size=4)
     for index in range(10):
-        bus.publish(completed(run_id=index))
+        bus.publish(completed(execution_id=index))
 
     check(len(bus.replay_since(0).events) == 4, "the ring is bounded")
     stale = bus.replay_since(1)          # 2..6 were evicted
@@ -327,7 +327,9 @@ def test_first_connect_asks_for_a_resync() -> None:
     check(frames[0]["replayed_through"] is None,
           "and it has no position to report -- it was given nothing")
     check(
-        not any(item["type"] in ("run_completed", "run_started") for item in frames),
+        not any(item["type"] in ("graph_execution_finished",
+                                 "graph_execution_started")
+                for item in frames),
         "no history is replayed to a client that did not ask for it",
     )
     check(_ids(body) == [],
@@ -339,14 +341,14 @@ def test_replay_on_reconnect() -> None:
     print("\n== stream: Last-Event-ID asks for the gap, and gets it ==")
     bus = CallbackEventBus()
     bus.publish(started())      # 1
-    bus.publish(progressed())   # 2
+    bus.publish(node_progressed())   # 2
     bus.publish(completed())    # 3
     bus.publish(started(2))     # 4
 
     body = asyncio.run(_stream(
         _build_stream_app(bus),
         headers=[(b"last-event-id", b"2")],
-        stop_after=_saw("run_started"),
+        stop_after=_saw("graph_execution_started"),
     ))
     frames = _frames(body)
     check(frames[0]["type"] == "stream_opened", "the opening frame comes first")
@@ -358,7 +360,7 @@ def test_replay_on_reconnect() -> None:
           f"(got {frames[0]['replayed_through']!r} -- it sent 2, and the "
           f"replay below carries 3 and 4)")
     replayed = [f["type"] for f in frames[1:]]
-    check(replayed == ["run_completed", "run_started"],
+    check(replayed == ["graph_execution_finished", "graph_execution_started"],
           f"exactly the two missed events, in order (got {replayed})")
     check(_ids(body) == [3, 4],
           f"each replayed frame carries its SSE id: line (got {_ids(body)})")
@@ -367,9 +369,9 @@ def test_replay_on_reconnect() -> None:
         "and the same seq inside the payload, for readers that skip framing",
     )
     check(
-        not any(f["type"] == "run_progressed" for f in frames),
-        "the state sample at seq 2 is not replayed -- the client already "
-        "had it, and an old sample is worse than none",
+        not any(f["type"] == "graph_execution_progressed" for f in frames),
+        "the delta at seq 2 is not replayed -- the client already had it, "
+        "and a superseded node sample is worse than none",
     )
 
 
@@ -377,7 +379,7 @@ def test_reconnect_cannot_be_covered() -> None:
     print("\n== stream: an uncoverable gap says so instead of guessing ==")
     bus = CallbackEventBus(replay_size=2)
     bus.publish(started())
-    bus.publish(progressed())
+    bus.publish(node_progressed())
     bus.publish(completed())     # 3
     bus.publish(started(2))      # 4
 
@@ -439,16 +441,16 @@ def test_unusable_last_event_id_is_ignored() -> None:
 
 def test_subscribe_then_replay_race() -> None:
     print("\n== stream: an event published mid-replay arrives exactly once ==")
-    bus = _RacingBus(completed(run_id=7, steps=3))
+    bus = _RacingBus(completed(execution_id=7, nodes=3))
     bus.publish(started())  # 1 -- what the client already has
 
     body = asyncio.run(_stream(
         _build_stream_app(bus),
         headers=[(b"last-event-id", b"1")],
-        stop_after=_saw("run_completed"),
+        stop_after=_saw("graph_execution_finished"),
     ))
     frames = _frames(body)
-    delivered = [f["type"] for f in frames if f["type"] == "run_completed"]
+    delivered = [f for f in frames if f["type"] == "graph_execution_finished"]
     check(len(delivered) == 1,
           f"the raced event is not delivered twice (got {len(delivered)})")
     ids = _ids(body)

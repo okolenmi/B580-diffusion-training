@@ -1,4 +1,4 @@
-"""CoreConfigInspector -- ConfigInspector over core.config_io/core.config_model.
+"""CoreConfigInspector -- ConfigInspector over nodes.config_io.
 
 The adapter owns all knowledge of the config format; the application
 only ever sees the summary/description dataclasses and the two
@@ -86,7 +86,7 @@ class CoreConfigInspector(ConfigInspector):
 
     def _load(self, config_path: Path):
         try:
-            from core.config_io import read_config  # repo bridge
+            from nodes.config_io import read_config
         except ImportError as exc:  # pragma: no cover - env breakage
             raise ConfigInvalidError(
                 f"training config reader unavailable: {exc}"

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import sys
 import tempfile
-from datetime import datetime, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -24,10 +23,8 @@ from backend.application.errors import InvalidQueryError  # noqa: E402
 from backend.application.event_publisher import EventPublisher  # noqa: E402
 from backend.application.limits import (  # noqa: E402
     DEFAULT_EXECUTION_PAGE_SIZE,
-    DEFAULT_LOG_LINES,
-    DEFAULT_RUN_PAGE_SIZE,
+    DEFAULT_DATASET_ITEM_PAGE_SIZE,
     MAX_GRAPH_DESCRIPTION,
-    MAX_LOG_LINES,
     MAX_PAGE_SIZE,
 )
 from backend.application.project_paths import ProjectPaths  # noqa: E402
@@ -45,14 +42,7 @@ from backend.application.requests import (  # noqa: E402
 from backend.application.lifecycle_writer import LifecycleWriter  # noqa: E402
 from backend.application.ports.dataset_tasks import TaskKind, TaskStatus  # noqa: E402
 from backend.application.ports.graph_runtime import IssueSeverity  # noqa: E402
-from backend.application.ports.progress_source import ProgressSample  # noqa: E402
-from backend.domain.entities.run import Run  # noqa: E402
-from backend.domain.events import DomainEvent, RunStarted  # noqa: E402
-from backend.domain.exceptions import DomainError  # noqa: E402
-from backend.domain.value_objects import (  # noqa: E402
-    StartFrom,
-    TrainingMode,
-)
+from backend.domain.events import DomainEvent, GraphExecutionStarted  # noqa: E402
 from backend.tests.support import check, finish  # noqa: E402
 
 
@@ -126,7 +116,7 @@ def test_event_publisher() -> None:
     print("\n== EventPublisher: buffers drained once, telemetry emitted direct ==")
     bus = _Bus()
     publisher = EventPublisher(events=bus)
-    first = _Aggregate(RunStarted(run_id=1, pid=101), RunStarted(run_id=1, pid=101))
+    first = _Aggregate(GraphExecutionStarted(execution_id=1), GraphExecutionStarted(execution_id=1))
 
     published = publisher.publish(first)
     check(published == 2, "publish reports how many events went out")
@@ -134,13 +124,13 @@ def test_event_publisher() -> None:
     check(publisher.publish(first) == 0, "a drained buffer publishes nothing twice")
     check(len(bus.published) == 2, "and the bus stayed untouched on the second call")
 
-    publisher.emit(RunStarted(run_id=2, pid=202))
+    publisher.emit(GraphExecutionStarted(execution_id=2))
     check(len(bus.published) == 3, "emit() sends one unbuffered event")
 
-    second = _Aggregate(RunStarted(run_id=3, pid=303))
+    second = _Aggregate(GraphExecutionStarted(execution_id=3))
     total = publisher.publish_all(first, second)
     check(total == 1, "publish_all sums the buffers it drained")
-    check(bus.published[-1].run_id == 3, "in argument order")
+    check(bus.published[-1].execution_id == 3, "in argument order")
 
 
 # ---------------------------------------------------------------------------
@@ -152,36 +142,40 @@ def test_limits() -> None:
     print("\n== limits: the numbers API and clients agree on ==")
     check(MAX_PAGE_SIZE == 500, "one page ceiling for every list endpoint")
     check(
-        MAX_LOG_LINES == 500 and DEFAULT_LOG_LINES == 100,
-        "log tail bounds",
+        DEFAULT_DATASET_ITEM_PAGE_SIZE == 500,
+        "dataset item page size -- the one unbounded collection",
     )
-    check(DEFAULT_RUN_PAGE_SIZE == 50, "runs default page size")
     check(DEFAULT_EXECUTION_PAGE_SIZE == 50, "executions default page size")
     check(MAX_GRAPH_DESCRIPTION == 1000, "graph description ceiling")
 
     # The point of the module: the route's default *is* the use case's
     # default, not a second number that happens to match today.
-    from backend.application.use_cases.get_run_log import GetRunLog
-    from backend.application.use_cases.list_runs import ListRuns
+    from backend.application.use_cases import list_graph_executions as lge
+    from backend.application.use_cases.list_dataset_items import ListDatasetItems
 
     check(
-        ListRuns.MAX_LIMIT == MAX_PAGE_SIZE,
-        "ListRuns enforces the shared ceiling",
+        lge.MAX_LIMIT == MAX_PAGE_SIZE and lge.DEFAULT_LIMIT == DEFAULT_EXECUTION_PAGE_SIZE,
+        "ListGraphExecutions enforces the shared ceiling, and its own "
+        "default is the shared constant",
     )
     check(
-        GetRunLog.DEFAULT_LINES == DEFAULT_LOG_LINES
-        and GetRunLog.MAX_LINES == MAX_LOG_LINES,
-        "GetRunLog enforces the shared log bounds",
+        ListDatasetItems.MAX_LIMIT == MAX_PAGE_SIZE,
+        "ListDatasetItems enforces the same one",
     )
 
-    import backend.presentation.api.runs as runs_route
+    import backend.presentation.api.graphs as graphs_route
+    from backend.application.limits import DEFAULT_EXECUTION_PAGE_SIZE as SHARED
 
-    route_defaults = {
-        getattr(d, "default", d) for d in runs_route.list_runs.__defaults__ or ()
-    }
+    annotations = graphs_route.list_executions.__annotations__
     check(
-        DEFAULT_RUN_PAGE_SIZE in route_defaults,
-        "the runs route's default page size is the shared constant",
+        "limit" in annotations and graphs_route.list_executions.__defaults__,
+        "the executions route still takes a limit",
+    )
+    check(
+        any(getattr(d, "default", None) == SHARED
+            for d in graphs_route.list_executions.__defaults__),
+        "and its default is the shared constant rather than a second "
+        "number that happens to match today",
     )
 
 
@@ -308,14 +302,14 @@ def test_lifecycle_writer() -> None:
     bus = _Bus()
     writer = LifecycleWriter(repository=_Repo(wins=True), events=EventPublisher(events=bus))
 
-    first = _Aggregate(RunStarted(run_id=1, pid=1))
+    first = _Aggregate(GraphExecutionStarted(execution_id=1))
     check(writer.commit(first, expected="running") is True, "a won CAS reports success")
     check(len(bus.published) == 1, "and the buffered events are announced")
 
     loser = LifecycleWriter(
         repository=_Repo(wins=False), events=EventPublisher(events=bus)
     )
-    second = _Aggregate(RunStarted(run_id=2, pid=2))
+    second = _Aggregate(GraphExecutionStarted(execution_id=2))
     check(
         loser.commit(second, expected="running") is False,
         "a lost CAS reports failure",
@@ -328,7 +322,7 @@ def test_lifecycle_writer() -> None:
     bus2 = _Bus()
     repo = _Repo(wins=True)
     writer2 = LifecycleWriter(repository=repo, events=EventPublisher(events=bus2))
-    third = _Aggregate(RunStarted(run_id=3, pid=3))
+    third = _Aggregate(GraphExecutionStarted(execution_id=3))
     writer2.commit(third, expected="running")
     check(
         repo.calls == ["cas:running"] and len(bus2.published) == 1,
@@ -340,15 +334,15 @@ def test_lifecycle_writer() -> None:
     # created -> failed rather than failed -> created.
     bus3 = _Bus()
     writer3 = LifecycleWriter(repository=_Repo(), events=EventPublisher(events=bus3))
-    created = _Aggregate(RunStarted(run_id=4, pid=4))
-    failed = _Aggregate(RunStarted(run_id=4, pid=None))
+    created = _Aggregate(GraphExecutionStarted(execution_id=4))
+    failed = _Aggregate(GraphExecutionStarted(execution_id=4))
     writer3.commit(failed, expected="created", prior=(created,))
     check(
-        [e.run_id for e in bus3.published] == [4, 4],
+        [e.execution_id for e in bus3.published] == [4, 4],
         "prior buffers are announced before the aggregate's own",
     )
 
-    stored = writer3.insert(_Aggregate(RunStarted(run_id=5, pid=5)))
+    stored = writer3.insert(_Aggregate(GraphExecutionStarted(execution_id=5)))
     check(
         isinstance(stored, _Aggregate) and len(bus3.published) == 3,
         "insert persists and announces (nothing to race against)",
@@ -356,86 +350,27 @@ def test_lifecycle_writer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S-14: ProgressSample answers whether it is only a verdict
-# ---------------------------------------------------------------------------
 
 
-def test_progress_sample_terminal_only() -> None:
-    print("\n== ProgressSample.is_terminal_only (S-14) ==")
+    print("\n== TaskStatus: active and terminal derived (S-24) ==")
+    check(TaskStatus.PENDING.is_active and TaskStatus.RUNNING.is_active,
+          "pending/running are active")
     check(
-        ProgressSample(terminal="finished").is_terminal_only,
-        "a verdict with no telemetry is terminal-only",
-    )
-    check(
-        not ProgressSample(step=5).is_terminal_only,
-        "a plain progress record is not",
+        all(
+            not s.is_active and s.is_terminal
+            for s in (TaskStatus.FINISHED, TaskStatus.FAILED, TaskStatus.KILLED)
+        ),
+        "finished/failed/killed are terminal",
     )
     check(
-        not ProgressSample().is_terminal_only,
-        "an empty record is not (no verdict at all)",
+        all(not s.is_terminal for s in TaskStatus if s.is_active),
+        "an active status is never terminal",
     )
-    for field, value in (
-        ("step", 1),
-        ("total", 10),
-        ("loss", 0.5),
-        ("avg", 0.4),
-        ("lr", 1e-4),
-        ("phase", "training"),
-        ("cache_done", 3),
-        ("cache_total", 9),
-    ):
-        sample = ProgressSample(terminal="finished", **{field: value})
-        check(
-            not sample.is_terminal_only,
-            f"a verdict plus {field} is progress, not a pure verdict",
-        )
+    check(len(list(TaskStatus)) == 5, "the vocabulary is closed")
     check(
-        len(ProgressSample().has_telemetry) == 8,
-        "every telemetry field is accounted for",
+        [k.value for k in TaskKind] == ["ingest_lora", "generate_teacher"],
+        "two task kinds",
     )
-
-
-# ---------------------------------------------------------------------------
-# S-24: closed vocabularies are types, not strings that happen to match
-# ---------------------------------------------------------------------------
-
-
-def test_training_mode() -> None:
-    print("\n== TrainingMode: tuning.method is a vocabulary (S-24) ==")
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    run = Run.create(config_path="c.toml", mode="distillation", total_steps=10, created_at=now)
-    check(run.mode is TrainingMode.DISTILLATION, "the string is coerced to the enum")
-    check(run.mode == "distillation", "and still compares equal to the wire word")
-    check(
-        Run.create(config_path="c.toml", mode=TrainingMode.LORA, total_steps=1, created_at=now).mode
-        is TrainingMode.LORA,
-        "an enum member is accepted as-is",
-    )
-    _expect_error(
-        lambda: Run.create(config_path="c.toml", mode="typo", total_steps=1, created_at=now),
-        DomainError,
-        "unknown training mode",
-        "a mode outside the vocabulary is a domain error",
-    )
-    check(
-        [m.value for m in TrainingMode] == ["lora", "cyclic", "distillation", "full"],
-        "the four strategies core.config_model declares",
-    )
-
-
-def test_start_from() -> None:
-    print("\n== StartFrom: what a launch can start from ==")
-    check(
-        [s.value for s in StartFrom]
-        == ["teacher", "student", "resume", "lora_checkpoint"],
-        "the four launch sources",
-    )
-    check(StartFrom.TEACHER == "teacher", "str-valued, so the wire word is the value")
-    try:
-        StartFrom("from_scratch")
-        check(False, "an unknown launch source must not resolve")
-    except ValueError:
-        check(True, "an unknown launch source does not resolve")
 
 
 def test_task_status() -> None:
@@ -479,9 +414,6 @@ def main() -> None:
     test_item_selection()
     test_item_changes_request()
     test_lifecycle_writer()
-    test_progress_sample_terminal_only()
-    test_training_mode()
-    test_start_from()
     test_task_status()
     test_issue_severity()
     finish()

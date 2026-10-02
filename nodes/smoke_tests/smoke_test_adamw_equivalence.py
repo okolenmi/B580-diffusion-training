@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.optimizers import CPUAdamW
+from archive.core.optimizers import CPUAdamW
 from nodes.optimizer.algorithms.adamw import AdamWAlgorithm
 from nodes.optimizer.composed import ComposedOptimizerHandle
 from nodes.optimizer.strategy_registry import STRATEGIES as _STRATEGIES

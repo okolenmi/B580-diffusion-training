@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 
-from core.model_io import comfy_input_transform
-from core.noise_schedule import (eps_to_vpred, eps_to_x0, get_alpha_sigma,
+from archive.core.model_io import comfy_input_transform
+from archive.core.noise_schedule import (eps_to_vpred, eps_to_x0, get_alpha_sigma,
                                   vpred_to_eps, vpred_to_x0)
 from nodes.components.diffusion import (DiffusionProcess, DiscreteLinearNoiseSchedule,
                                          EpsParameterization, KarrasInputScaler,

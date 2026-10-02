@@ -17,13 +17,15 @@ from PIL import Image
 import numpy as np
 from safetensors.torch import load_file
 
-from core.clip_encode import SDXLClipEncoder
-from core.comfy_setup import xpu_empty_cache
-from core.model_io import comfy_input_transform, make_init_noise, raw_to_denoised, raw_to_target
-from core.noise_schedule import get_alpha_sigma, sample_timestep, eps_to_vpred
-from core.seed import derive_seed
-from core.unet_wrapper import ComfyUNetWrapper
-from core.vae_decode import VAEDecoder
+from nodes.model.clip_encoder import SDXLClipEncoder
+from nodes.components.device import DeviceContext
+from nodes.components.model_io import (comfy_input_transform, make_init_noise,
+                                   raw_to_denoised, raw_to_target)
+from nodes.components.noise_schedule import (eps_to_vpred, get_alpha_sigma,
+                                         sample_timestep)
+from nodes.components.seed import derive_seed
+from nodes.model.unet_wrapper import ComfyUNetWrapper
+from nodes.model.vae_decode import VAEDecoder
 from .db import (_connect, add_source, ensure_v2, get_trajectories,
                  update_task_progress, update_task_status)
 from .preview import PreviewGenerator
@@ -227,7 +229,7 @@ class DataTaskRunner:
                 ctx, y = encoder.encode_for_unet(txt, batch_size=1, height=px, width=px)
                 text_cache[txt] = (ctx.cpu().float().contiguous(), y.cpu().float().contiguous())
             
-            encoder.unload(); del encoder; xpu_empty_cache(); gc.collect()
+            encoder.unload(); del encoder; DeviceContext.for_device("xpu").empty_cache(); gc.collect()
 
             vae_sd = {k.replace("first_stage_model.", ""): v
                     for k, v in sd.items() if k.startswith("first_stage_model")}
@@ -235,7 +237,7 @@ class DataTaskRunner:
             teacher = ComfyUNetWrapper(sd, device=self.device, dtype=torch.bfloat16)
             teacher.eval()
             for p in teacher.parameters(): p.requires_grad_(False)
-            del sd; xpu_empty_cache(); gc.collect()
+            del sd; DeviceContext.for_device("xpu").empty_cache(); gc.collect()
 
             # Check for duplicate (prompt, seed) pairs already in the archive
             db_path = dataset_root / "metadata.db"
@@ -407,7 +409,7 @@ class DataTaskRunner:
                 print(f"  Generating {len(preview_tasks)} previews...")
                 for latent, preview_path in preview_tasks:
                     previewer.generate_preview(latent, preview_path)
-            previewer.free(); del teacher, text_cache, previewer; xpu_empty_cache(); gc.collect()
+            previewer.free(); del teacher, text_cache, previewer; DeviceContext.for_device("xpu").empty_cache(); gc.collect()
             self._finish(dataset_root, task_id, reporter)
 
         except Exception as e:
@@ -621,7 +623,7 @@ class DataTaskRunner:
                     for k, v in sd.items() if k.startswith("first_stage_model")}
             vae = VAEDecoder.from_vae_sd(vae_sd, device=self.device)
             previewer = PreviewGenerator(self.device, vae_sd)
-            del sd; xpu_empty_cache(); gc.collect()
+            del sd; DeviceContext.for_device("xpu").empty_cache(); gc.collect()
 
             px = latent_size * 8
 
@@ -710,7 +712,7 @@ class DataTaskRunner:
                     previewer.generate_preview(latent, preview_path)
 
             vae.free(); previewer.free(); del vae, previewer
-            xpu_empty_cache(); gc.collect()
+            DeviceContext.for_device("xpu").empty_cache(); gc.collect()
             self._finish(dataset_root, task_id, reporter)
 
         except Exception as e:

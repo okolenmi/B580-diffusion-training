@@ -9,7 +9,7 @@ import torch
 from .db import get_training_set_trajectories, get_training_set_by_name, ensure_v2
 from .storage import ShardLoader
 from .t_sampling import TrainTimeSampler
-from core.noise_schedule import eps_to_vpred, get_alpha_sigma
+from nodes.components.noise_schedule import eps_to_vpred, get_alpha_sigma
 
 
 class ManagedDatasetLoader:

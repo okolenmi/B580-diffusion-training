@@ -9,10 +9,7 @@
     "backend/infrastructure/graph/introspect.py|attr-defined": 6,
     "backend/infrastructure/graph/runtime.py|attr-defined": 2,
     "backend/infrastructure/graph/runtime.py|union-attr": 2,
-    "backend/infrastructure/jsonl_progress_source.py|arg-type": 1,
-    "backend/infrastructure/jsonl_progress_source.py|call-overload": 1,
     "backend/infrastructure/persistence/graph_execution_repository.py|arg-type": 1,
-    "backend/infrastructure/persistence/run_repository.py|arg-type": 1,
     "backend/presentation/errors.py|arg-type": 1,
     "backend/presentation/schemas.py|arg-type": 1
   },

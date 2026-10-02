@@ -39,8 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from backend.application.ports.progress_source import ProgressSample
-from backend.infrastructure.jsonl_progress_source import JsonlProgressSource
 from backend.json_safe import sanitize, strict_dumps
 from backend.presentation.security import host_name
 from backend.tests.support import check, finish
@@ -55,154 +53,6 @@ _SETTING = settings(
     deadline=None,           # the truncation loop does file I/O per example
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-
-
-# ==========================================================================
-# (a) the progress reader survives a torn line at any offset
-# ==========================================================================
-
-def _line(step: int) -> bytes:
-    """One trainer step record, in the shape the reader expects.
-
-    ``phase`` is a discriminator: without a recognised one the reader
-    returns None for the line, on the grounds that an unrecognised record
-    is not telemetry. The field names are ``total``/``avg``, not
-    ``total_steps``/``avg_loss`` -- ProgressSample uses the short forms.
-    """
-    payload = {
-        "phase": "step",
-        "step": step,
-        "total": 1000,
-        "loss": step / 1000.0,
-        "avg": step / 2000.0,
-        "lr": 1e-4,
-    }
-    return (json.dumps(payload) + "\n").encode("utf-8")
-
-
-def _read_all(path: Path) -> list[ProgressSample]:
-    """Every sample in a file, from a fresh source.
-
-    A fresh source has no remembered offset, so this is 'read the file
-    from the beginning' -- which is what the *expected* value means. The
-    torn-line property below deliberately does NOT use this: it needs one
-    source across two reads, because that is the situation being modelled
-    (a supervisor tailing a file a trainer is appending to).
-    """
-    return JsonlProgressSource().read_new(path)
-
-
-def _signature(samples: list[ProgressSample]) -> list[tuple]:
-    """Comparable identity for a sample: the fields a consumer acts on."""
-    return [
-        (s.step, s.total, s.loss, s.avg, s.lr, s.phase, s.cache_done,
-         s.cache_total, s.terminal)
-        for s in samples
-    ]
-
-
-def test_truncation_at_every_offset_loses_nothing() -> None:
-    """Write a prefix, read it, append the rest, read again: the two reads
-    together must equal one read of the whole file.
-
-    Exhaustive over every byte offset, not sampled. The reader keeps a byte
-    offset and only trusts up to the last newline, so an off-by-one in that
-    arithmetic shows up as a *duplicate* or a *skip* at one specific
-    boundary -- and a boundary is exactly what a random offset rarely hits.
-    """
-    print("\n== progress reader: a torn line at any byte offset ==")
-
-    body = b"".join(_line(step) for step in range(1, 13))
-    whole = SCRATCH / "whole.jsonl"
-    whole.write_bytes(body)
-    expected = _signature(_read_all(whole))
-    check(len(expected) == 12, f"the fixture has 12 samples (got {len(expected)})")
-
-    for cut in range(len(body) + 1):
-        path = SCRATCH / "torn.jsonl"
-        path.write_bytes(body[:cut])
-
-        # ONE reader for both reads, because the reader's memory is the
-        # thing under test. Two fresh readers would each read the whole
-        # file and every sample would appear twice -- which is exactly the
-        # bug this property exists to catch, so the fixture must not
-        # manufacture it.
-        source = JsonlProgressSource()
-        first = _signature(source.read_new(path))
-        # Whatever the prefix looked like, reading it must not raise and
-        # must not report a sample that is not in the final file.
-        missing = [s for s in first if s not in expected]
-        check(not missing,
-              f"prefix read at {cut} reported samples not in the file: {missing}")
-        check(len(first) == len(set(first)),
-              f"prefix read at {cut} duplicated a sample")
-
-        with path.open("ab") as fh:
-            fh.write(body[cut:])
-        second = _signature(source.read_new(path))
-
-        combined = first + second
-        check(combined == expected,
-              f"truncating at byte {cut} lost, duplicated or reordered samples: "
-              f"{len(combined)} read vs {len(expected)} expected"
-              + (f" (first {len(first)}, second {len(second)})" if combined != expected else ""))
-
-
-def test_a_partial_last_line_is_withheld_until_it_is_whole() -> None:
-    """The specific rule the offset arithmetic exists to implement: a line
-    with no terminating newline is not yet a record."""
-    print("\n== progress reader: a torn final line is withheld ==")
-    path = SCRATCH / "partial.jsonl"
-    path.write_bytes(_line(1) + _line(2) + b'{"phase": "step", "ste')
-
-    source = JsonlProgressSource()  # one reader across both reads
-    first = source.read_new(path)
-    check(len(first) == 2, f"only the two complete lines are read (got {len(first)})")
-
-    with path.open("ab") as fh:
-        fh.write(b'p": 3, "total": 1000}\n')
-    second = source.read_new(path)
-    check(len(second) == 1, f"the completed line arrives on the next read "
-                             f"(got {len(second)})")
-    check(second[0].step == 3, f"and it is the right one (got {second[0].step})")
-
-
-@given(
-    st.lists(
-        st.binary(min_size=0, max_size=64)
-        | st.text(max_size=64).map(str.encode),
-        min_size=1,
-        max_size=12,
-    )
-)
-@_SETTING
-def test_arbitrary_bytes_never_raise(lines: list[bytes]) -> None:
-    """Garbage in the tail file must not end the tail.
-
-    This reader is the supervisor's only view of a running trainer, so an
-    exception here is not a failed test -- it is a run that stops being
-    reported on and stays `running` forever (docs 07 F-01).
-    """
-    path = SCRATCH / "garbage.jsonl"
-    path.write_bytes(b"\n".join(lines) + b"\n")
-    try:
-        samples = _read_all(path)
-    except Exception as exc:  # noqa: BLE001 -- that is the property
-        check(False, f"read_new raised on {lines!r}: {type(exc).__name__}: {exc}")
-        return
-    check(all(isinstance(s, ProgressSample) for s in samples),
-          "every returned value is a sample")
-
-
-@given(st.text(max_size=40))
-@_SETTING
-def test_a_lone_garbage_line_never_raises(text: str) -> None:
-    path = SCRATCH / "one-line.jsonl"
-    path.write_bytes(text.encode("utf-8", errors="replace") + b"\n")
-    try:
-        _read_all(path)
-    except Exception as exc:  # noqa: BLE001 -- that is the property
-        check(False, f"read_new raised on {text!r}: {type(exc).__name__}: {exc}")
 
 
 # ==========================================================================
@@ -500,13 +350,7 @@ def main() -> int:
     check(sanitize({"loss": float("-inf")})["nonfinite"]["loss"] == "-inf",
           "-inf is named -inf")
 
-    # The truncation property is the reason this file exists: it is
-    # exhaustive, not sampled.
-    test_truncation_at_every_offset_loses_nothing()
-    test_a_partial_last_line_is_withheld_until_it_is_whole()
 
-    test_arbitrary_bytes_never_raise()
-    test_a_lone_garbage_line_never_raises()
     test_sanitized_output_is_always_strict_json()
     test_a_float_is_sanitized_by_whether_it_is_finite()
     test_host_name_never_raises()

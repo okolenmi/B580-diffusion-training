@@ -7,8 +7,13 @@ than in presentation) keeps the dependency direction honest: the web
 layer depends on application, never the other way around.
 
 Use cases are grouped by domain so the aggregate stays navigable as
-it grows: ``runs`` (the original flat fields, kept flat for
-continuity), ``config``, ``settings``, ``assets``, ``datasets``.
+it grows: ``config``, ``settings``, ``assets``, ``datasets``, ``graphs``.
+
+There is no ``runs`` group. Training is started from the graph route
+(``graphs``), which runs the ``nodes/`` pipeline in-process; the separate
+supervised-subprocess route -- which spawned ``python -m core.cli`` and
+owned the whole run/supervision/reconcile stack around it -- was removed
+with ``core/`` (``docs/design/11-core-removal.md``).
 """
 
 from __future__ import annotations
@@ -24,18 +29,13 @@ from .use_cases.create_dataset import CreateDataset
 from .use_cases.delete_dataset import DeleteDataset
 from .use_cases.delete_graph import DeleteGraph
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
-from .use_cases.delete_runs import DeleteRuns
 from .use_cases.discard_dataset_items import DiscardDatasetItems
-from .use_cases.get_active_run import GetActiveRun
 from .use_cases.get_config import GetConfig
 from .use_cases.get_config_options import GetConfigOptions
 from .use_cases.get_dataset import GetDataset
 from .use_cases.get_graph import GetGraph
 from .use_cases.get_graph_execution import GetGraphExecution
-from .use_cases.get_run import GetRun
-from .use_cases.get_run_log import GetRunLog
 from .use_cases.get_settings import GetSettings
-from .use_cases.get_start_options import GetStartOptions
 from .use_cases.inspect_asset import InspectAsset
 from .use_cases.list_assets import ListAssets
 from .use_cases.list_dataset_items import ListDatasetItems
@@ -45,7 +45,6 @@ from .use_cases.list_datasets import ListDatasets
 from .use_cases.list_graph_executions import ListGraphExecutions
 from .use_cases.list_graphs import ListGraphs
 from .use_cases.list_node_catalog import ListNodeCatalog
-from .use_cases.list_runs import ListRuns
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.read_config_raw import ReadConfigRaw
@@ -53,15 +52,12 @@ from .use_cases.read_dataset_file import ReadDatasetFile
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.subscribe_monitor import SubscribeMonitor
-from .use_cases.reconcile_runs import ReconcileRuns
 from .use_cases.save_graph import SaveGraph
 from .use_cases.set_dataset_preview import SetDatasetPreview
 from .use_cases.start_dataset_task import StartDatasetTask
 from .use_cases.start_graph_execution import StartGraphExecution
-from .use_cases.start_training import StartTraining
 from .use_cases.stop_dataset_task import StopDatasetTask
 from .use_cases.stop_graph_execution import StopGraphExecution
-from .use_cases.stop_training import StopTraining
 from .use_cases.update_config import UpdateConfig
 from .use_cases.update_dataset_item import UpdateDatasetItem
 from .use_cases.update_settings import UpdateSettings
@@ -79,7 +75,6 @@ class ConfigServices:
     read_raw: ReadConfigRaw
     write_raw: WriteConfigRaw
     options: GetConfigOptions
-    start_options: GetStartOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,15 +148,6 @@ class MonitorServices:
 
 @dataclass(frozen=True, slots=True)
 class ApplicationServices:
-    # runs domain (M1/M2)
-    list_runs: ListRuns
-    get_run: GetRun
-    delete_runs: DeleteRuns
-    get_active_run: GetActiveRun
-    start_training: StartTraining
-    stop_training: StopTraining
-    get_run_log: GetRunLog
-    reconcile_runs: ReconcileRuns
     # config / settings / assets domains (M3)
     config: ConfigServices
     settings: SettingsServices

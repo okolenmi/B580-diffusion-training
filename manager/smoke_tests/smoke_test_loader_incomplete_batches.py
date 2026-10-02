@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from core.noise_schedule import eps_to_x0, get_alpha_sigma
+from nodes.components.noise_schedule import eps_to_x0, get_alpha_sigma
 from manager.db import add_shard, add_source, init_local_db
 from manager.loader import ManagedDatasetLoader
 from manager.storage import ShardWriter

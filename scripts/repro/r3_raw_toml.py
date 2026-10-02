@@ -3,8 +3,8 @@ from pathlib import Path
 sys.path.insert(0,__import__("os").environ.get("REPO","."))
 from backend.tests.support import build_services, asgi_request
 from backend.presentation.app import create_app
-from core.config_io import write_config, read_config
-from core.config_model import TrainingConfig
+from nodes.config_io import write_config, read_config
+from nodes.config_model import TrainingConfig
 
 with tempfile.TemporaryDirectory() as tmp:
     tmp=Path(tmp); proj=tmp/"proj"; (proj/"configs").mkdir(parents=True)

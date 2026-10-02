@@ -47,7 +47,7 @@ nodes/smoke_tests/smoke_test_t_sampling.py.
 
 from __future__ import annotations
 
-from core.noise_schedule import T_MODES, sample_timestep
+from nodes.components.noise_schedule import T_MODES, sample_timestep
 
 # The modes this module interprets beyond core's five static
 # distributions -- mirrored (as a copy, for the reason above) by

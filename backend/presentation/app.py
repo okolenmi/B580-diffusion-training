@@ -23,7 +23,6 @@ from .api import (
     graphs,
     health,
     monitor,
-    runs,
     settings,
 )
 from .errors import register_error_handlers
@@ -51,7 +50,6 @@ def create_app(
     register_request_guard(app)
     register_error_handlers(app)
     app.include_router(health.router)
-    app.include_router(runs.router)
     app.include_router(config.router)
     app.include_router(settings.router)
     app.include_router(assets.router)

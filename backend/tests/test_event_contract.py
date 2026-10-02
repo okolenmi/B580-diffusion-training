@@ -52,13 +52,6 @@ from backend.domain.events import (  # noqa: E402  (path set up above)
     GraphExecutionStarted,
     GraphExecutionStopped,
     GraphExecutionsDeleted,
-    RunCancelled,
-    RunCompleted,
-    RunCreated,
-    RunFailed,
-    RunProgressed,
-    RunStarted,
-    RunsDeleted,
 )
 from backend.presentation.event_schema import (  # noqa: E402
     SYNTHETIC_TYPES,
@@ -79,10 +72,9 @@ NOW = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
 #: out of this list would silently vanish from the contract instead of
 #: failing.
 ALL_EVENT_CLASSES = [
-    RunCreated, RunStarted, RunCompleted, RunFailed, RunCancelled,
-    RunProgressed, RunsDeleted, GraphExecutionQueued, GraphExecutionStarted,
-    GraphExecutionProgressed, GraphExecutionFinished, GraphExecutionFailed,
-    GraphExecutionStopped, GraphExecutionsDeleted,
+    GraphExecutionQueued, GraphExecutionStarted, GraphExecutionProgressed,
+    GraphExecutionFinished, GraphExecutionFailed, GraphExecutionStopped,
+    GraphExecutionsDeleted,
 ]
 
 
@@ -117,9 +109,10 @@ def _instance(cls: type) -> Any:
 def test_schema_covers_every_event() -> None:
     print("\n== every event is in the generated contract ==")
     types = all_event_types()
-    check(len(ALL_EVENT_CLASSES) == 14,
-          f"the import list has all 14 event classes (got "
-          f"{len(ALL_EVENT_CLASSES)})")
+    check(len(ALL_EVENT_CLASSES) == 7,
+          f"the import list has all 7 event classes (got "
+          f"{len(ALL_EVENT_CLASSES)}) -- the 7 run events went with the "
+          f"supervised-subprocess route")
     for cls in ALL_EVENT_CLASSES:
         check(cls.wire_name() in types,
               f"{cls.__name__} -> {cls.wire_name()} is in the contract")
@@ -152,41 +145,40 @@ def test_real_frames_validate() -> None:
 def test_nullable_and_nonfinite() -> None:
     print("\n== nulls and non-finite floats are still valid frames ==")
     # None everywhere it is allowed.
-    nulls = RunCompleted(occurred_at=NOW, run_id=1, done_steps=0)
-    check(not validate(json.loads(serialize_event(nulls, seq=1)),
-                       schema_for("run_completed")),
-          "a minimal RunCompleted validates")
+    finished = GraphExecutionFinished(occurred_at=NOW, execution_id=1, nodes=0)
+    check(not validate(json.loads(serialize_event(finished, seq=1)),
+                       schema_for("graph_execution_finished")),
+          "a minimal GraphExecutionFinished validates")
 
-    failed = RunFailed(occurred_at=NOW, run_id=1, error=None, exit_code=None)
+    failed = GraphExecutionFailed(occurred_at=NOW, execution_id=1, error=None)
     check(not validate(json.loads(serialize_event(failed, seq=2)),
-                       schema_for("run_failed")),
-          "run_failed with two nulls validates -- the anyOf works")
+                       schema_for("graph_execution_failed")),
+          "graph_execution_failed with a null error validates -- the anyOf works")
 
     # The diverged-loss case is a real payload, not a hypothetical: a NaN
     # becomes null plus a `nonfinite` sibling, and the frontend reads that
     # sibling to render an error instead of a blank (docs 07 F-03).
-    diverged = RunProgressed(
-        occurred_at=NOW, run_id=1, step=1, total_steps=10,
-        loss=float("nan"), avg_loss=None, lr=1e-4, phase="training",
-        cache_done=None, cache_total=None,
+    diverged = GraphExecutionProgressed(
+        occurred_at=NOW, execution_id=1, node_id="nA", ok=True,
+        duration_ms=float("nan"),
     )
     payload = json.loads(serialize_event(diverged, seq=3))
-    check(payload["loss"] is None, "the NaN became null on the wire")
-    check(payload.get("nonfinite") == {"loss": "nan"},
+    check(payload["duration_ms"] is None, "the NaN became null on the wire")
+    check(payload.get("nonfinite") == {"duration_ms": "nan"},
           f"and it is named in `nonfinite` (got {payload.get('nonfinite')})")
-    check(not validate(payload, schema_for("run_progressed")),
+    check(not validate(payload, schema_for("graph_execution_progressed")),
           f"a diverged frame still validates (got "
-          f"{validate(payload, schema_for('run_progressed'))})")
+          f"{validate(payload, schema_for('graph_execution_progressed'))})")
 
     # The schema must also REJECT a wrong shape, or it is not a contract.
-    check(validate({**payload, "loss": "not a number"},
-                   schema_for("run_progressed")),
+    check(validate({**payload, "duration_ms": "not a number"},
+                   schema_for("graph_execution_progressed")),
           "a string where the schema says number is rejected")
-    check(validate({"type": "run_progressed"},
-                   schema_for("run_progressed")),
+    check(validate({"type": "graph_execution_progressed"},
+                   schema_for("graph_execution_progressed")),
           "a frame missing its required fields is rejected")
-    check(validate({**payload, "type": "run_completed"},
-                   schema_for("run_progressed")),
+    check(validate({**payload, "type": "graph_execution_finished"},
+                   schema_for("graph_execution_progressed")),
           "a frame whose type does not match its schema is rejected")
 
 
@@ -232,7 +224,7 @@ def test_validator_agrees_with_jsonschema() -> None:
             json.loads(serialize_event(event, seq=1)),
             json.loads(serialize_event(event, seq=1)),
             json.loads(serialize_event(event)),  # no seq, as a synthetic frame
-            {**json.loads(serialize_event(event, seq=1)), "loss": "x"},
+            {**json.loads(serialize_event(event, seq=1)), "duration_ms": "x"},
             {"type": name},
         ]
         for payload in cases:
@@ -291,9 +283,10 @@ def test_frontend_reads_only_declared_fields() -> None:
         for field in sorted(_field_reads(text, variables) - allowed):
             offenders.append(f"{rel}: {sorted(variables)}.{field}")
 
-    check(scanned_frames >= 3,
+    check(scanned_frames >= 2,
           f"{scanned_frames} files handle frames, so the scan has something "
-          f"to say (a scan that finds nothing may just be broken)")
+          f"to say (a scan that finds nothing may just be broken). This was 3 "
+          f"before the run dashboard went away.")
     check(not offenders,
           f"every field read on a frame is declared by the contract "
           f"(undeclared: {offenders})")
@@ -304,8 +297,8 @@ def test_the_scanner_can_actually_see_a_violation() -> None:
     wire_types = set(all_event_types())
     sample = '''
       function handleEvent(e) {
-        if (e.type === "run_completed") {
-          render(e.run_id, e.done_steps, e.definitely_not_a_field);
+        if (e.type === "graph_execution_finished") {
+          render(e.execution_id, e.nodes, e.definitely_not_a_field);
         }
       }
     '''

@@ -2,7 +2,7 @@
 
 import math
 
-from .config_model import CommonSettings
+from nodes.config_model import CommonSettings
 
 
 def make_cosine_lr(lr: float, total_steps: int):

@@ -2,6 +2,24 @@
 
 # 10. Prioritized backlog
 
+**New: first-run installer and dependency gate** --
+[`11-first-run-and-installer.md`](11-first-run-and-installer.md). A
+separate item rather than one on this list because it has a different
+shape: the work is a sequence that is only worth doing as a sequence
+(check -> gate -> download -> first-run state -> wizard -> multi-root
+model search), and the second half of it is a *design* item rather than a
+build item. The part that is pure friction-removal and can be taken
+independently is Phase B: make `run_server.sh` check its dependencies and
+say what is missing, instead of starting and letting the failure surface
+as a `ModuleNotFoundError` traceback. That is a small change with most of
+the user-visible benefit.
+
+Two things in that plan are worth noticing before anything is built: we
+would be installing into a venv the user did not create, and model lookup
+would become "read from several roots, write to one" rather than the
+single-root-with-override it is today. Both change what existing code has
+to assume.
+
 1. **Verify `NF4WeightStore`'s quality against a real training run**
    (3.3). The diffusion-specific quality question -- does NF4's real ~9%
    relative RMSE (see that module's own docstring) actually produce

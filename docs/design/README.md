@@ -17,6 +17,7 @@ docstrings now carry the "what"; these files carry the "why".
 | 8, 9 | [`08-validation-and-implementation-status.md`](08-validation-and-implementation-status.md) | What is implemented and — more usefully — the five pieces that are **built but unvalidated**, with the specific missing evidence for each. |
 | 10 | [`09-prioritized-backlog.md`](09-prioritized-backlog.md) | What is left, in order, with the reasoning for the order and the scope boundaries. |
 | 11 | [`10-node-surface-and-precision-control.md`](10-node-surface-and-precision-control.md) | Node surface and precision decisions, mostly landed: the three-orthogonal-axes decomposition, what a shared structure is worth after the same bug appeared three times, and one maintainer decision still owed. |
+| 12 | [`11-first-run-and-installer.md`](11-first-run-and-installer.md) | **Plan, not built.** Getting a new user to a working install: a dependency check before the server starts, a first-run installer, whether to install into the ComfyUI venv (and what must be guaranteed before we do), and looking for models in two places at once. Read before touching `paths.py` or the asset pickers -- the multi-root section is the part with design in it. |
 
 The seven design goals every choice here is checked against live in the
 root [`README.md`](../../README.md)'s Goals section.

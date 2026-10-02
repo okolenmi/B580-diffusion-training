@@ -1,0 +1,100 @@
+"""GraphTaskGateway port -- running a graph execution in a child process.
+
+Same shape as ``DatasetTaskGateway``, and for the same reason: the child
+needs a pid, and everything else about supervision (liveness, stop,
+escalation, pid-reuse safety) is the same problem twice.
+
+What is different from the dataset-task case is the reporting. A dataset
+task writes progress straight into ``backend.db``, which WAL makes safe
+for a second writer. A graph execution cannot: its results are domain
+objects built by the runtime and its live monitor reports are in-memory
+per process, so neither survives being reconstructed from a row. Hence
+the event file (``infrastructure/graph_event_stream.py``) -- the child
+appends, the parent tails.
+
+``is_alive`` is PID-reuse aware for the reason it is on the dataset-task
+port (docs 07 F-12, fixed in ``a1e0358``): ``kill(pid, 0)`` answers
+"does *a* process hold this number", and after a reboot it will happily
+answer yes about something else. The adapter therefore checks the child's
+cmdline against a marker, via the one implementation of that check in
+``infrastructure/process_identity.py``.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+
+from ...domain.graph import GraphDefinition
+from ...domain.value_objects import ExecutionId
+
+
+class GraphLaunchError(Exception):
+    """The child could not be started at all.
+
+    Distinct from "the child started and the graph failed": the caller can
+    repair the row itself in the first case, while the second is a normal
+    run outcome the child reports.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTaskLaunch:
+    """Everything the child needs, as paths.
+
+    The graph goes in a file rather than on argv for two reasons: it can
+    be large (a saved graph with many nodes approaches ``ARG_MAX``), and
+    passing one as a single argument means a graph containing a quote or
+    a newline is a shell-quoting problem rather than a JSON one.
+
+    ``event_path`` is the append-only report channel described in
+    ``graph_event_stream``; the parent creates the directory and the
+    child opens the file for append.
+    """
+
+    execution_id: ExecutionId
+    graph_path: Path
+    event_path: Path
+    log_path: Path
+
+
+class GraphTaskGateway(ABC):
+    @abstractmethod
+    def spawn(self, launch: GraphTaskLaunch) -> int:
+        """Start the child; returns its pid.
+
+        Raises ``GraphLaunchError`` when the process could not be started
+        at all, so the caller can fail the row itself.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def request_stop(self, pid: int) -> None:
+        """Ask the child to stop at its next step boundary.
+
+        Cooperative, and deliberately not the same thing as ``kill``: the
+        gateway's grace period exists so a stopping run can flush its event
+        file and let ``release_memory`` run. A hard kill loses the tail of
+        that file, which is exactly the torn line the reader is built to
+        tolerate -- but not to prefer.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def kill(self, pid: int) -> None:
+        """Force-kill the child's process group; fail-open on dead pids."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_alive(self, pid: int) -> bool:
+        """True only for a live process that is one of our graph children."""
+        raise NotImplementedError
+
+
+__all__ = [
+    "GraphDefinition",
+    "GraphLaunchError",
+    "GraphTaskGateway",
+    "GraphTaskLaunch",
+]

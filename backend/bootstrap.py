@@ -82,7 +82,7 @@ from .application.use_cases import (
     ValidateGraph,
     WriteConfigRaw,
 )
-from .config import Settings
+from .config import GRAPH_EXECUTION_CHILD, Settings
 from .infrastructure.clock import SystemClock
 from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
@@ -96,6 +96,12 @@ from .infrastructure.file_asset_store import FileSystemAssetStore
 from .infrastructure.graph.catalog import DiscoveredGraphCatalog
 from .infrastructure.graph.discovery import NodeRegistry
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
+from .infrastructure.graph_event_stream import ExecutionEventTail
+from .infrastructure.graph_task_gateway import (
+    InProcessGraphTaskGateway,
+    SubprocessGraphTaskGateway,
+)
+from .application.ports.graph_task_gateway import GraphTaskGateway
 from .application.ports.monitor_bus import MonitorBus
 from .infrastructure.monitor_bus import SharedMonitorBus
 from .infrastructure.persistence.graph_execution_repository import (
@@ -180,12 +186,31 @@ def build_container(settings: Settings) -> Container:
         clock=clock,
         repository=graph_executions, events=publisher
     )
+    # WP-22: the run happens somewhere other than here. Both gateways run
+    # the *same* producer (graph_task_worker.run_execution) and both report
+    # through the same event file, so choosing between them is a choice of
+    # where the interpreter state lives and nothing else. The child gets
+    # no registry -- it discovers its own, which costs a few seconds of
+    # node discovery once per run and buys an isolation boundary the
+    # server's already-warm registry cannot cross.
+    if settings.graph_execution_mode == GRAPH_EXECUTION_CHILD:
+        graph_gateway: GraphTaskGateway = SubprocessGraphTaskGateway(layout)
+    else:
+        graph_gateway = InProcessGraphTaskGateway(graph_registry)
+    # Supervision scratch, next to the database rather than in the runs
+    # dir: these are per-execution working files (the graph handed to the
+    # child, its event stream, its log), not run artifacts anyone collects.
+    graph_scratch = database.path.parent / "graph_executions"
+    graph_scratch.mkdir(parents=True, exist_ok=True)
     graph_supervisor = GraphExecutionSupervisor(
         executions=graph_executions,
         writer=execution_writer,
-        runtime=graph_runtime,
+        gateway=graph_gateway,
         events=publisher,
         clock=clock,
+        monitor_bus=monitor_bus,
+        scratch_dir=graph_scratch,
+        make_tail=ExecutionEventTail,
     )
 
     services = ApplicationServices(

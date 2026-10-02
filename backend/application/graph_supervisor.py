@@ -1,51 +1,51 @@
-"""GraphExecutionSupervisor -- background thread for one graph run.
+"""GraphExecutionSupervisor -- watches one graph run, wherever it runs.
 
-The application-side twin of ``RunSupervisor`` with a simpler job: the
-graph runs *in-process* (nodes build real objects in this interpreter),
-so watching means owning the thread and the cancellation event, not
-tail-ing a child.
+WP-22 moved graph execution out of this process. The run itself happens in
+a child (``SubprocessGraphTaskGateway``) or on a thread here
+(``InProcessGraphTaskGateway``); either way the supervisor's job is the
+same and is the same in one implementation:
 
-Concurrency posture (every write goes through the repository CAS, so
-races resolve deterministically):
+1. write the graph somewhere the child can read it, spawn, and record the
+   pid **before** starting the watcher -- so a stop arriving while the row
+   is still ``queued`` reaches a process that exists;
+2. watch the run by *tailing its event file*. Node records are
+   CAS-persisted and announced exactly as they were when the callback
+   fired in-process; monitor records go onto this server's own bus, which
+   is what keeps a dashboard opened mid-run able to see the history;
+3. finalise from the child's own ``outcome`` record -- so "the graph
+   failed" is distinguishable from "the child died", which without the
+   record is the difference between a message and a shrug;
+4. escalate a stop that the child ignored to a hard kill after the grace
+   period, then best-effort fail the row rather than leaving it
+   ``running`` (which blocks the single-active check until the next
+   restart). Startup reconciliation covers whatever even that misses.
 
-1. ``launch`` registers the execution's ``threading.Event`` *before*
-   starting the thread, so a stop arriving while the row is still
-   ``queued`` both sets the event and wins the CAS -- the thread then
-   fails its ``queued -> running`` claim and exits having run nothing.
-2. The thread claims the row (CAS), publishes ``Started``, and runs
-   ``GraphRuntime.execute`` with a per-node callback that CAS-persists
-   partial results and publishes ``Progressed``. Callback exceptions
-   are contained: losing progress reporting must never abort the run
-   (the final write carries the authoritative results anyway).
-3. Finalisation picks the terminal status -- ``error`` if the outcome
-   carries one, else ``stopped`` if the cancel event is set, else
-   ``finished`` -- and CASes ``running -> final``. A lost CAS means the
-   stop request already wrote ``stopped``; this thread publishes
-   nothing.
-4. The cancel event is always unregistered. Device memory is *not*
-   this class's business: ``GraphRuntime.execute`` releases it in its
-   own ``finally``, so the supervisor cannot forget it (docs 08 S-05).
+Everything durable goes through the repository CAS, so races resolve
+deterministically: a stop that wins the row first means this watcher
+finds the row already terminal and publishes nothing.
 
-A crashed supervisor thread best-effort fails its row instead of
-leaving ``running`` stuck (which would block the single-active check
-until the next restart); startup reconciliation covers whatever even
-that misses.
+Device memory is not this class's business. ``run_execution`` releases it
+in its own ``finally``, in whichever process ran the graph, so neither the
+supervisor nor the child can forget it (docs 08 S-05).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
+from pathlib import Path
 
 from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
+from .ports.graph_task_stream import EventKind
 from .event_publisher import EventPublisher
 from .lifecycle_writer import ExecutionLifecycleWriter
 from .ports.clock import Clock
 from .ports.execution_launcher import ExecutionLauncher
 from .ports.graph_execution_repository import GraphExecutionRepository
-from .ports.graph_runtime import GraphOutcome, GraphRuntime
+from .ports.graph_task_gateway import GraphTaskGateway, GraphTaskLaunch
 
 logger = logging.getLogger(__name__)
 
@@ -56,19 +56,41 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         *,
         executions: GraphExecutionRepository,
         writer: ExecutionLifecycleWriter,
-        runtime: GraphRuntime,
+        gateway: GraphTaskGateway,
         events: EventPublisher,
         clock: Clock,
+        monitor_bus=None,
+        scratch_dir: Path,
+        poll_interval: float = 0.1,
+        stop_grace: float = 15.0,
+        make_tail=None,
     ) -> None:
         self._executions = executions
         # CAS-then-announce lives in the writer; ``events`` is for
         # telemetry only.
         self._writer = writer
-        self._runtime = runtime
+        self._gateway = gateway
         self._events = events
         self._clock = clock
+        # Where the per-execution graph.json and events.jsonl live. Not
+        # the runs dir: these are supervision scratch, and a run row's
+        # artifacts are a different thing with a different lifetime.
+        self._scratch_dir = scratch_dir
+        self._poll_interval = poll_interval
+        # Long enough for a stopping run to flush its event file and let
+        # the runtime release device memory, short enough that a wedged
+        # run does not hold a card forever. The retired training route
+        # used the same figure for the same reason (docs 07 F-12).
+        self._stop_grace = stop_grace
+        self._monitor_bus = monitor_bus
+        # How to open a reader over a run's event file. Injected because
+        # "a file" is infrastructure and this is application: the class that
+        # reads JSONL off disk does not belong in a file that must not
+        # import infrastructure. The composition root passes the real one.
+        self._make_tail = make_tail
         self._lock = threading.Lock()
-        self._cancel_events: dict[ExecutionId, threading.Event] = {}
+        self._pids: dict[ExecutionId, int] = {}
+        self._stop_requested: set[ExecutionId] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -77,127 +99,299 @@ class GraphExecutionSupervisor(ExecutionLauncher):
     def launch(
         self, execution_id: ExecutionId, graph: GraphDefinition
     ) -> None:
-        """Register cancellation, then start the worker daemon thread."""
-        event = threading.Event()
+        """Spawn the run, record its pid, then start watching it.
+
+        The pid is registered *before* the watcher starts, and the watcher
+        before anything is claimed: a stop arriving while the row is still
+        ``queued`` has to find something to signal, and has to find it
+        before the child's first CAS -- otherwise the stop is delivered to
+        a process that does not exist yet and the run starts anyway.
+        """
+        paths = self._paths_for(execution_id)
+        paths["events"].parent.mkdir(parents=True, exist_ok=True)
+        paths["graph"].write_text(json.dumps(graph.as_dict()), encoding="utf-8")
+
+        try:
+            pid = self._gateway.spawn(
+                GraphTaskLaunch(
+                    execution_id=execution_id,
+                    graph_path=paths["graph"],
+                    event_path=paths["events"],
+                    log_path=paths["log"],
+                )
+            )
+        except Exception:
+            # The row was already inserted by the use case, and a row left
+            # queued blocks the single-active check until a restart. This
+            # is the one failure no watcher can see, because there is no
+            # watcher: repair it here, then let the caller see the error.
+            self._fail_leftover(execution_id)
+            raise
         with self._lock:
-            self._cancel_events[execution_id] = event
-        thread = threading.Thread(
-            target=self._guard,
-            args=(execution_id, graph, event),
-            name=f"backend-graph-{execution_id}",
-            daemon=True,
+            self._pids[execution_id] = pid
+        logger.info(
+            "graph execution %s running as pid %s (%s)", execution_id, pid, paths["events"],
         )
-        thread.start()
+        threading.Thread(
+            target=self._watch,
+            args=(execution_id, pid, self._make_tail(paths["events"])),
+            name=f"backend-graph-watch-{execution_id}",
+            daemon=True,
+        ).start()
+
+    def _paths_for(self, execution_id: ExecutionId) -> dict[str, Path]:
+        base = self._scratch_dir / f"execution_{execution_id}"
+        return {
+            "graph": base.with_suffix(".graph.json"),
+            "events": base.with_suffix(".events.jsonl"),
+            "log": base.with_suffix(".log"),
+        }
 
     def cancel(self, execution_id: ExecutionId) -> None:
-        """Set the execution's cancel event; no-op if not running here
-        (a queued row never launched, or the thread already finished) --
-        the stop use case's row CAS decides the outcome either way."""
+        """Ask the run to stop; no-op if it is not running here.
+
+        Whether the row actually stops is decided by the stop use case's
+        status CAS, not by this call.
+        """
         with self._lock:
-            event = self._cancel_events.get(execution_id)
-        if event is not None:
-            event.set()
+            pid = self._pids.get(execution_id)
+            if pid is not None:
+                # Remembered, because a cooperative stop makes the child
+                # return *normally*: by its exit status alone a stopped run
+                # and a finished one are the same event, and the row must
+                # not be labelled "finished" because the child was polite.
+                self._stop_requested.add(execution_id)
+        if pid is None:
+            return
+        self._gateway.request_stop(pid)
+        # The child's runtime notices at its next step boundary. If that
+        # never comes -- a node wedged in an uninterruptible kernel -- the
+        # grace period ends and the watcher escalates itself, so there is
+        # exactly one place that decides a run is not stopping.
+        threading.Thread(
+            target=self._escalate,
+            args=(execution_id, pid),
+            name=f"backend-graph-stop-{execution_id}",
+            daemon=True,
+        ).start()
+
+    def _escalate(self, execution_id: ExecutionId, pid: int) -> None:
+        """Hard-kill a run that ignored a cooperative stop."""
+        threading.Event().wait(self._stop_grace)
+        if not self._gateway.is_alive(pid):
+            return
+        logger.warning(
+            "graph execution %s (pid %s) ignored the stop for %.0fs; killing",
+            execution_id, pid, self._stop_grace,
+        )
+        self._gateway.kill(pid)
 
     # ------------------------------------------------------------------
-    # Worker
+    # The watcher
     # ------------------------------------------------------------------
 
-    def _guard(
-        self,
-        execution_id: ExecutionId,
-        graph: GraphDefinition,
-        event: threading.Event,
-    ) -> None:
-        try:
-            self._supervise(execution_id, graph, event)
-        except Exception:  # noqa: BLE001 -- thread must not die silently
-            logger.exception("supervisor for graph execution %s crashed", execution_id)
-            self._fail_leftover(execution_id)
-        finally:
-            with self._lock:
-                self._cancel_events.pop(execution_id, None)
+    def _claim(self, execution_id: ExecutionId) -> bool:
+        """``queued -> running``, or lose the race and do nothing.
 
-    def _supervise(
-        self,
-        execution_id: ExecutionId,
-        graph: GraphDefinition,
-        event: threading.Event,
-    ) -> None:
+        Same CAS the old in-process thread performed, at the same point in
+        the sequence, so the ordering the stop use case documents still
+        holds: it signals before it CASes, and if it wins the row from
+        ``queued`` the child is killed here rather than left building a
+        graph nobody is waiting for.
+        """
         execution = self._executions.get(execution_id)
         if execution is None or execution.status is not GraphStatus.QUEUED:
-            return  # stopped/reconciled before the claim; that writer won
+            return False  # stopped/reconciled before the claim; that writer won
         execution.mark_running(at=self._clock.now())
-        if not self._writer.commit(execution, expected=GraphStatus.QUEUED):
-            return  # lost the claim race (stop on a queued row, mostly)
+        return self._writer.commit(execution, expected=GraphStatus.QUEUED)
 
-        outcome = self._runtime.execute(
-            graph,
-            cancel_event=event,
-            on_node_done=lambda result: self._record_result(execution_id, result),
-        )
-        self._finalize(execution_id, event, outcome)
+    def _watch(self, execution_id: ExecutionId, pid: int, tail) -> None:
+        """Tail one run's event file until it ends, then finalise.
 
-    def _record_result(self, execution_id: ExecutionId, result: NodeResult) -> None:
-        """Per-node callback: persist partial results + publish progress.
+        The mirror image of the in-process callback loop this replaced,
+        with the same two properties: re-reads the row rather than
+        trusting its own memory (the authoritative status lives there),
+        and contains its own exceptions (losing progress reporting must
+        never lose the run -- the final write carries the results anyway).
+        """
+        outcome_error: str | None = None
+        saw_outcome = False
+        try:
+            if not self._claim(execution_id):
+                # A stop won the row while the child was still starting.
+                # It never wrote anything, and nothing is going to read
+                # its event file, so it goes now.
+                self._gateway.kill(pid)
+                return
+            while True:
+                for event in tail.poll():
+                    kind = event.kind
+                    if kind is EventKind.NODE:
+                        self._record_node(execution_id, event.payload)
+                    elif kind is EventKind.MONITOR:
+                        self._republish_monitor(event.payload)
+                    else:  # OUTCOME
+                        saw_outcome = True
+                        outcome_error = event.payload.get("error")
+                if not self._gateway.is_alive(pid):
+                    break
+                execution = self._executions.get(execution_id)
+                if execution is None or execution.status.is_terminal:
+                    # The stop path owns the outcome now; its writer said
+                    # how this run ended, and re-deciding would overwrite
+                    # a terminal row with a second, different ending.
+                    break
+                threading.Event().wait(self._poll_interval)
+        except Exception:  # noqa: BLE001 -- the thread must not die silently
+            logger.exception("watcher for graph execution %s crashed", execution_id)
+        finally:
+            self._finish(execution_id, pid, saw_outcome, outcome_error)
+
+    def _record_node(self, execution_id: ExecutionId, payload: dict) -> None:
+        """Persist a finished node's result and announce its progress.
 
         Re-fetches the row every time (the authoritative status lives
         there, not in this thread's memory) and never raises into the
-        executor.
+        watcher.
         """
+        node_id = str(payload.get("node_id", ""))
+        duration_ms = float(payload.get("duration_ms") or 0.0)
         try:
             execution = self._executions.get(execution_id)
             if execution is None or execution.status is not GraphStatus.RUNNING:
                 return  # stopped/deleted mid-run; drop this sample
-            execution.record_result(result, at=self._clock.now())
+            execution.record_result(
+                NodeResult(
+                    node_id=node_id,
+                    ok=bool(payload.get("ok")),
+                    outputs=dict(payload.get("outputs") or {}),
+                    error=payload.get("error"),
+                    duration_ms=duration_ms,
+                ),
+                at=self._clock.now(),
+            )
             if not self._writer.commit(execution, expected=GraphStatus.RUNNING):
                 return  # terminal writer won between get and update
             self._events.emit(
                 GraphExecutionProgressed(
                     execution_id=execution_id,
-                    node_id=result.node_id,
-                    ok=result.ok,
-                    duration_ms=result.duration_ms,
+                    node_id=node_id,
+                    ok=bool(payload.get("ok")),
+                    duration_ms=duration_ms,
                     occurred_at=self._clock.now(),
                 )
             )
         except Exception:  # noqa: BLE001 -- progress must not abort the run
             logger.exception(
                 "recording result for node %r (execution %s) failed",
-                result.node_id,
-                execution_id,
+                node_id, execution_id,
             )
 
-    def _finalize(
-        self, execution_id: ExecutionId, event: threading.Event, outcome: GraphOutcome
+    def _republish_monitor(self, payload: dict) -> None:
+        """Put a child's monitor report onto this server's own bus.
+
+        The child's bus is unreachable -- a per-process deque of asyncio
+        queues -- so this is the bridge that makes a dashboard opened
+        mid-run work, including its history, because the file the watcher
+        replays *is* the history.
+        """
+        if self._monitor_bus is None:
+            return
+        try:
+            self._monitor_bus.report(
+                str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
+            )
+        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
+            logger.exception("republishing a monitor report failed")
+
+    def _finish(
+        self,
+        execution_id: ExecutionId,
+        pid: int,
+        saw_outcome: bool,
+        outcome_error: str | None,
     ) -> None:
-        execution = self._executions.get(execution_id)
-        if execution is None or execution.status is not GraphStatus.RUNNING:
-            return  # stop request or reconcile beat us to the row
-        at = self._clock.now()
-        if outcome.error is not None:
-            execution.mark_failed(at=at, error=outcome.error)
-        elif event.is_set():
-            execution.stop(at=at, reason="stop requested")
-        else:
-            execution.mark_finished(at=at)
-        if not self._writer.commit(execution, expected=GraphStatus.RUNNING):
-            return  # lost the terminal CAS; the stop writer's result stands
+        """Terminal write for one watched run.
+
+        Three sources of truth about how it ended, in priority order, and
+        the order is the whole point:
+
+        * a row already terminal was written by a stop or a reconcile --
+          do nothing, its writer's result stands;
+        * the child's own ``outcome`` record says whether the graph
+          failed, and with what;
+        * no record at all means the process died, which is a different
+          answer from "the graph failed" and must not be reported as a
+          success just because nobody wrote down a problem.
+
+        Note that the record's *existence* is not the same as its
+        contents: a run that finished and a run whose graph failed both
+        wrote one, and only the error inside it separates them.
+        """
+        try:
+            execution = self._executions.get(execution_id)
+            if execution is None or execution.status is not GraphStatus.RUNNING:
+                return  # stop request or reconcile beat us to the row
+            at = self._clock.now()
+            with self._lock:
+                stopped = execution_id in self._stop_requested
+            if not saw_outcome:
+                execution.mark_failed(
+                    at=at,
+                    error="execution process exited without reporting an "
+                          "outcome (crashed, or a device fault killed it) -- "
+                          "see the execution log",
+                )
+                self._writer.commit(execution, expected=GraphStatus.RUNNING)
+            elif outcome_error is not None:
+                execution.mark_failed(at=at, error=outcome_error)
+                self._writer.commit(execution, expected=GraphStatus.RUNNING)
+            elif stopped:
+                # The child returned normally because it was asked to
+                # stop, and that is not a completed graph.
+                execution.stop(at=at, reason="stop requested")
+                self._writer.commit(execution, expected=GraphStatus.RUNNING)
+            else:
+                execution.mark_finished(at=at)
+                self._writer.commit(execution, expected=GraphStatus.RUNNING)
+        except Exception:  # noqa: BLE001 -- already at the end of the run
+            logger.exception("finalising graph execution %s failed", execution_id)
+        finally:
+            self._release(execution_id, pid)
+
+    def _release(self, execution_id: ExecutionId, pid: int) -> None:
+        """Forget a finished run: its pid and its stop marker.
+
+        The in-process gateway keeps a thread and a cancel event per
+        execution, so it needs telling; the subprocess one keeps a Popen
+        so a later ``is_alive`` reaps rather than falling through to
+        /proc. The scratch files are left on disk -- they are the run's
+        log and event history, which is what makes a failed run
+        diagnosable after the fact.
+        """
+        with self._lock:
+            self._pids.pop(execution_id, None)
+            self._stop_requested.discard(execution_id)
+        reap = getattr(self._gateway, "reap", None)
+        if reap is not None:
+            reap(pid)
 
     def _fail_leftover(self, execution_id: ExecutionId) -> None:
-        """Last-ditch row repair after a supervisor crash: never leave
-        the row active (it would block the next start until restart)."""
+        """Last-ditch row repair: never leave the row active.
+
+        A row stuck in ``queued`` blocks the single-active check, so every
+        next start fails until a restart reconciles it.
+        """
         try:
             execution = self._executions.get(execution_id)
             if execution is None:
                 return
             self._writer.fail_if_unfinished(
                 execution,
-                error="execution supervisor crashed (see server log)",
+                error="execution could not be started (see the server log)",
             )
-        except Exception:  # noqa: BLE001 -- already in the crash path
+        except Exception:  # noqa: BLE001 -- already in the failure path
             logger.exception(
-                "could not fail leftover execution %s after supervisor crash",
+                "could not fail leftover execution %s after a launch failure",
                 execution_id,
             )
-
-

@@ -108,6 +108,8 @@ from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph_event_stream import ExecutionEventTail
+from backend.infrastructure.graph_task_gateway import InProcessGraphTaskGateway
 from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -674,12 +676,22 @@ def build_services(
         repository=graph_executions, events=publisher
     )
     if graph_supervisor is None:
+        # The in-process gateway, so a test that supplies its own runtime
+        # (to count memory releases, or to swap the memory releaser) has
+        # that runtime be the one that runs. Same producer as the child
+        # gateway -- only where the interpreter state lives differs.
         graph_supervisor = GraphExecutionSupervisor(
             executions=graph_executions,
             writer=execution_writer,
-            runtime=graph_runtime,
+            gateway=InProcessGraphTaskGateway(
+                graph_registry,
+                runtime_factory=lambda _writer: graph_runtime,
+            ),
             events=publisher,
             clock=clock,
+            monitor_bus=monitor_bus,
+            scratch_dir=project_root / "test-graph-scratch",
+            make_tail=ExecutionEventTail,
         )
     return ApplicationServices(
         config=ConfigServices(

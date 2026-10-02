@@ -50,6 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..components.device import DeviceContext
 from .coordinator import ResourceCoordinator
 from .manager import MemoryManager
 

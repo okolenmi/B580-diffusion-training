@@ -455,14 +455,18 @@ class DataTaskRunner:
         same reason -- VAE downsampling), centered within its own
         segment the same way plain "fit" mode centers its single crop.
 
-        Verified (pure arithmetic, no image data needed to check this
-        part): in-bounds, /8-aligned, within-cap, and full-coverage
-        checks across 6 cases including the actual ~2.34x aspect ratio
-        from this investigation's own real data (500x1180) and both
-        tall/wide orientations -- see /tmp/test_crop_math.py from this
-        session (not shipped -- this project's own test convention is
-        nodes/smoke_tests/, this was this session's own pre-check)."""
-        import math
+        Because each box is snapped down independently, the seams do not
+        meet exactly: every boundary drops the remainder, up to **7 px**
+        per seam. That is a consequence of the /8 rule rather than a
+        choice -- exact tiling at arbitrary segment boundaries would mean
+        boxes that are not /8-aligned. So coverage of the long side is to
+        within 7 px per seam, not total. Pinned by
+        `nodes/smoke_tests/smoke_test_fit_crop_boxes.py`, which is pure
+        arithmetic and needs no image data: it checks in-bounds,
+        /8-alignment, the cap, seam width, and equal segment sizes
+        across nine shapes including the ~2.34x aspect ratio a 500x1180
+        source produces.
+        """
         scale = px / min(w, h)
         new_w, new_h = round(w * scale), round(h * scale)
         cap = round(max_aspect_ratio * px)

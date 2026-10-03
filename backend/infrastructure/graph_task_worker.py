@@ -121,6 +121,46 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Signals first, before anything that can take time -- which is the
+    # whole point, because a stop that arrives before this line lands on
+    # Python's default handler and kills the process instead of asking it.
+    # Measured at 37 ms of imports and argument parsing before the handlers
+    # used to be installed: small enough that nobody hits it by hand, and
+    # that is the only reason it survived. `cancel` and `signal` are
+    # stdlib and already imported at module scope, so this costs nothing
+    # and needs no project code.
+    cancel = threading.Event()
+
+    def _on_stop(_signum, _frame):
+        # The gateway sends SIGINT for a cooperative stop and escalates to
+        # SIGKILL after its grace period, so the only thing to do here is
+        # let the runtime notice between steps.
+        #
+        # SIGTERM gets the same treatment, and used to get none: nothing
+        # handled it, so the default disposition killed the child on
+        # arrival. Measured on a 60000-node graph, mid-run:
+        #
+        #   SIGINT   exit 0,  outcome record written, 200 node records
+        #   SIGTERM  exit -15, no outcome record,        86 node records
+        #
+        # A run stopped by SIGTERM is stopped *on purpose* -- `kill`,
+        # `docker stop` and systemd all send it -- and with no record the
+        # supervisor falls back to "execution process exited without
+        # reporting an outcome (crashed, or a device fault killed it)",
+        # which is false, sends the reader to a crash that did not happen,
+        # and loses the results the run had already produced.
+        #
+        # Making it cooperative does mean a SIGTERM no longer kills
+        # instantly: the stop is noticed at the next step boundary, so a
+        # container runtime that wanted it gone sooner still sends
+        # SIGKILL, and the project's own escalation is SIGINT -> SIGKILL
+        # either way. What it buys is the outcome record and a released
+        # device instead of an unexplained death.
+        cancel.set()
+
+    signal.signal(signal.SIGINT, _on_stop)
+    signal.signal(signal.SIGTERM, _on_stop)
+
     args = _build_parser().parse_args(argv)
 
     # Before anything imports torch: SYCL reads these at its own runtime
@@ -134,15 +174,6 @@ def main(argv: list[str] | None = None) -> int:
     from .graph_event_stream import ExecutionEventWriter
 
     writer = ExecutionEventWriter(Path(args.events))
-    cancel = threading.Event()
-
-    def _on_sigint(_signum, _frame):
-        # The gateway sends SIGINT for a cooperative stop and escalates to
-        # SIGKILL after its grace period, so the only thing to do here is
-        # let the runtime notice between steps.
-        cancel.set()
-
-    signal.signal(signal.SIGINT, _on_sigint)
 
     try:
         graph = GraphDefinition.from_dict(

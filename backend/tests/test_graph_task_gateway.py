@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 from dataclasses import replace
 import tempfile
@@ -263,6 +264,80 @@ def test_stopping_a_run_actually_stops_it() -> None:
     )
 
 
+def test_a_sigterm_stops_the_run_the_same_way_a_sigint_does() -> None:
+    print("\n== SIGTERM is a stop request, not a crash ==")
+    # Round-3 N3-08. The gateway sends SIGINT and escalates to SIGKILL, so
+    # the supervisor's own two signals were both handled correctly. SIGTERM
+    # -- which is what `kill`, `docker stop` and systemd send -- had no
+    # handler at all, so the default disposition killed the child on
+    # arrival. Measured mid-run on a 60000-node graph before the fix:
+    #
+    #   SIGINT   exit 0,   outcome record, 200 node records
+    #   SIGTERM  exit -15, no record,       86 node records lost
+    #
+    # With no record the supervisor falls back to "execution process exited
+    # without reporting an outcome (crashed, or a device fault killed it)".
+    # For a run somebody deliberately stopped that sentence is false, and
+    # the results already on disk are thrown away with it.
+    #
+    # Deliberately not a gateway verb. `request_stop` sends SIGINT and
+    # `kill` sends SIGKILL on purpose -- SIGKILL cannot be caught, and that
+    # is what makes it the escalation. The question here is what a signal
+    # from *outside* the supervisor does, so the test sends it itself.
+    #
+    # To the pid, not to the process group, and only after re-checking
+    # whose it is. The first version of this test did
+    # `os.killpg(os.getpgid(pid), SIGTERM)` and that was a way to kill the
+    # test runner: `_collect` returns as soon as the child is gone, so the
+    # pid it hands back may already be dead, and if the kernel has since
+    # given that number to anything in *our* process group then
+    # `os.getpgid` returns our own group and the killpg SIGTERMs every test
+    # in the file. It did exactly that once: every check printed, and then
+    # the process died with no traceback and a non-zero exit, which reads
+    # in the suite report as a file that failed having passed everything.
+    #
+    # The gateway guards the same hazard with a cmdline marker and refuses
+    # to signal when it does not match; the test uses that guard rather
+    # than hand-rolling a weaker one. Signalling a single pid also caps
+    # the damage if the check is simply wrong: one innocent process rather
+    # than this whole process group.
+    nodes = [_float_node(f"n{i}", float(i)) for i in range(4000)]
+    launch = _launch(5, nodes)
+    pid = GATEWAY.spawn(launch)
+    tail = ExecutionEventTail(launch.event_path)
+    events = _collect(tail, pid, until=lambda seen: any(map(_is_node, seen)))
+    check(any(map(_is_node, events)),
+          "the child got past startup and started building nodes")
+    check(
+        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker"),
+        f"and pid {pid} is still our graph child, so it is safe to signal",
+    )
+
+    os.kill(pid, signal.SIGTERM)
+    check(
+        wait_until(lambda: not GATEWAY.is_alive(pid), timeout=60.0),
+        "and a SIGTERM from the outside world stops it, rather than "
+        "killing it where it stands",
+    )
+    events += _collect(tail, pid)
+    node_records = [e for e in events if e.kind is EventKind.NODE]
+    check(
+        0 < len(node_records) < len(nodes),
+        f"having built some but not all: {len(node_records)} of "
+        f"{len(nodes)} nodes reported before it stopped",
+    )
+    outcomes = [e for e in events if e.kind is EventKind.OUTCOME]
+    check(
+        bool(outcomes),
+        f"and it wrote an outcome, so the row is not told the process "
+        f"crashed (got {[e.kind.name for e in events][-3:]})",
+    )
+    check(
+        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker") is False,
+        "the pid is gone, so it was a stop and not a signal to nothing",
+    )
+
+
 def test_signals_are_refused_for_a_pid_that_is_not_ours() -> None:
     print("\n== PID reuse: refusing to signal somebody else's process ==")
     # Our own test process. It is alive, its pid is a valid one, and its
@@ -327,6 +402,7 @@ def main() -> None:
         test_a_refused_graph_is_reported_by_the_child,
         test_a_killed_child_reports_no_outcome,
         test_stopping_a_run_actually_stops_it,
+        test_a_sigterm_stops_the_run_the_same_way_a_sigint_does,
         test_signals_are_refused_for_a_pid_that_is_not_ours,
         test_a_launch_failure_is_loud_and_typed,
     ]

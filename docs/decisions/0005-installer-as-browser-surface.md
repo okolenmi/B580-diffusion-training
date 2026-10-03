@@ -73,6 +73,27 @@ model files are read from**, on a request any browser page could make. So:
   default" has to mean the resolution policy still decides, or accepting
   every default would pin paths the user never chose.
 
+## Withdrawn in part
+
+**The install-order argument is wrong and this record is superseded on that
+point** by
+[`12-installer-and-comfy-decoupling.md`](../design/12-installer-and-comfy-decoupling.md).
+
+The principle survives: the installer is a web surface, not a shell prompt,
+and it is behind the same Host/Origin guard as everything else. The
+*consequence* does not. A wizard living inside the server can only do what
+the server can already do — and the first thing missing is usually the
+thing stopping the server from starting. So the version that ships cannot
+help the person who needs it most.
+
+What replaces it: a stdlib-only preflight, launched by `run_server.sh` only
+when the server's own imports fail, which prints a URL, opens a browser and
+installs four small packages into a temporary venv. Once the server runs,
+this wizard takes over and never mentions installation again.
+
+`run_server.sh` stays unchanged in the shipped version, so this record's
+stated cost — no preflight — is real until that lands.
+
 ## Consequences
 
 * **A path the user never chose is no longer invented.** Fixing this

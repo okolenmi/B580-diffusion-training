@@ -118,6 +118,36 @@ last poll returned nothing", which is also true while the child is
 mid-line. Closing it early would record node results the row already
 has.
 
+**Not adopted is not the same as failed.** A run that outlived the server
+has two distinguishable endings, and only one of them is a crash:
+
+* it **finished**, and said so — an outcome record on disk, plus every
+  node result it produced. The row is settled from that record.
+* it was **killed** — no outcome record. Then absence is all the evidence
+  there is, and the row fails with the reason that describes it.
+
+Asking what the run said, before drawing any conclusion from the absence of
+a process, is not a refinement. Without it, a run that completed while
+nobody was watching was reported as a crash and its results thrown away.
+Measured, on a 4000-node run with the server `SIGKILL`ed mid-flight: the
+run completed all 4000 nodes and wrote
+`{"kind": "outcome", "error": null, "results_count": 4000}`, and the
+startup sweep reported the row `error` with zero results. Recovering it is
+now verified end to end — verdict `finished`, all 4000 results back, in the
+order the run recorded them, outputs intact.
+
+This is round-2 finding N-03 ("a run that finished while the server was
+down is marked failed"), recorded as moot when the run route was removed.
+It was moot *for that route*; isolation carried the same assumption into
+newer code. The general form of it: **a row's terminal state is not
+implied by the absence of a process**, and where the work left a record,
+the record is the better witness.
+
+One limit worth stating: recovery reads the event file, so it costs a
+replay of that run's records — the same order of work adoption already
+does, and bounded by the same file. A run whose file was removed while the
+server was down is unrecoverable, and correctly reported as debris.
+
 ## Choosing the mode
 
 `BACKEND_GRAPH_EXECUTION=child|inprocess`, default **`child`**.

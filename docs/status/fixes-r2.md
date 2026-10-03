@@ -26,7 +26,7 @@ before being worked on.
 | WP-04 | N-06 run-detail page repeats fixed mistakes | fixed; partly moot | `frontend/tests/events.test.mjs` owns the shared client module. The run page itself is gone with the route. |
 | WP-05 | N-08 the monitor bus can raise into the caller's thread | fixed | `nodes/smoke_tests/smoke_test_monitor_bus.py` |
 | WP-06 | N-12 orphan shard files after a failed discard | fixed | `backend/tests/test_dataset_library.py` |
-| WP-07 | N-03 a run that finished while the server was down is marked failed | moot | The run domain was removed (`11-core-removal.md`). The equivalent rule for graph executions is `ReconcileGraphExecutions`. |
+| WP-07 | N-03 a run that finished while the server was down is marked failed | fixed twice over | Moot for the run domain, which was removed (`11-core-removal.md`). It came back in the graph-execution path: the startup sweep failed any row with no live process, so a run that completed unobserved was reported as an error with its results discarded. Now settled from the run's own outcome record. See below. |
 | WP-08 | N-07 liveness of an adopted pid is checked by number only | fixed, and outlived the route | `backend/tests/test_process_identity.py`. The guard is `infrastructure/process_identity.py`, now used by three gateways. |
 | WP-09 | N-09 garbled log note | moot | The string was in the removed run domain. |
 | WP-10 | N-01 a test needs a real ComfyUI directory | fixed | The case passes with the repository `.env` hidden, which is what used to make it fail. |
@@ -110,6 +110,31 @@ where before it killed the server too; and a run survives the server being
 killed underneath it. The cost is about two seconds of child startup per
 run. `BACKEND_GRAPH_EXECUTION=inprocess` is the rollback, and it gives up
 adoption along with isolation.
+
+### N-03 came back
+
+WP-07 above was closed as *moot* when the run domain was removed, which it
+was — for that route. Process isolation then introduced the same defect in
+newer code, one layer over: adoption was handled, but a run that finished
+while the server was down was still failed, because "there is no live
+process" was the only thing the startup sweep checked.
+
+The run's own outcome record was sitting on disk the whole time, with every
+node result in it. Measured on a 4000-node run, server `SIGKILL`ed while it
+was going: the run completed all 4000 nodes and wrote
+`{"kind": "outcome", "error": null}`, and the row was reported as `error`
+with zero results. The work was real and had succeeded.
+
+`ReconcileGraphExecutions` now asks what the run said before concluding
+anything from its absence, and settles the row from that record — verdict
+and results. Absence of a record is still the evidence it was before, so a
+genuinely killed run is still failed as debris; the two endings are now
+distinguishable instead of assumed. Details and limits in
+[`design/13-process-isolation.md`](../design/13-process-isolation.md).
+
+The general lesson, since this is the second time: *a row's terminal state
+is not implied by the absence of a process.* Where the work left a record,
+the record is the better witness.
 
 ## Working notes for this repository
 

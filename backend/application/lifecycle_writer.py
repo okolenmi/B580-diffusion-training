@@ -137,3 +137,39 @@ class ExecutionLifecycleWriter(LifecycleWriter[GraphExecution, GraphStatus]):
         expected = execution.status
         execution.mark_failed(at=self._clock.now(), error=error)
         return self.commit(execution, expected=expected)
+
+    def finalise_from_record(
+        self,
+        execution: GraphExecution,
+        *,
+        error: str | None,
+        results: tuple,
+    ) -> bool:
+        """Settle an unfinished execution using what the run itself recorded.
+
+        The same compare-and-swap-then-announce sequence as
+        ``fail_if_unfinished``, with two differences that are the whole
+        point of a separate method rather than a parameter:
+
+        * the verdict is the run's, not the caller's -- ``error is None``
+          means it finished, and a caller that could only ever write
+          "failed" would report a completed run as a crash;
+        * the node results are persisted on the way through, because a run
+          that completed unobserved produced them and the row is the only
+          place they will ever be readable.
+
+        ``results`` is a plain tuple rather than a ``NodeResult`` tuple so
+        this module does not have to name the domain graph types; the
+        entity's own validation still applies to each one.
+        """
+        if execution.status.is_terminal:
+            return False
+        expected = execution.status
+        now = self._clock.now()
+        for result in results:
+            execution.record_result(result, at=now)
+        if error is None:
+            execution.mark_finished(at=now)
+        else:
+            execution.mark_failed(at=now, error=error)
+        return self.commit(execution, expected=expected)

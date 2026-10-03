@@ -43,7 +43,7 @@ from .ports.graph_task_stream import EventKind
 from .event_publisher import EventPublisher
 from .lifecycle_writer import ExecutionLifecycleWriter
 from .ports.clock import Clock
-from .ports.execution_launcher import ExecutionLauncher
+from .ports.execution_launcher import ExecutionLauncher, RecordedOutcome
 from .ports.graph_execution_repository import GraphExecutionRepository
 from .ports.graph_task_gateway import GraphTaskGateway, GraphTaskLaunch
 
@@ -162,6 +162,53 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             "events": base.with_suffix(".events.jsonl"),
             "log": base.with_suffix(".log"),
         }
+
+    def recorded_outcome(self, execution_id: ExecutionId) -> RecordedOutcome | None:
+        """Replay this run's event file and report what it said happened.
+
+        Read from the top on purpose. This is not the watcher's
+        incremental tail -- nothing has been read from this file yet in
+        this server's lifetime -- and the offset starts at zero precisely
+        so the history is rebuilt.
+
+        Returns ``None`` unless the file carries an ``outcome`` record,
+        which is the run saying "this is how I ended". Everything before it
+        is node results, and they are returned *with* the verdict rather
+        than discarded: a run that completed while no server was watching
+        did real work, and reporting it as crashed throws that away.
+
+        A partially-written trailing line is not an error. The writer
+        appends one record per ``write(2)`` so a kill can tear a line but
+        not merge two, and a torn tail means the run was killed -- which
+        is the ``None`` case, decided by the missing outcome rather than by
+        the torn line.
+        """
+        tail = self._make_tail(self._paths_for(execution_id)["events"])
+        results: list[NodeResult] = []
+        error: str | None = None
+        said_how_it_ended = False
+        while True:
+            for event in tail.poll():
+                if event.kind is EventKind.NODE:
+                    payload = event.payload
+                    results.append(
+                        NodeResult(
+                            node_id=str(payload.get("node_id", "")),
+                            ok=bool(payload.get("ok")),
+                            outputs=dict(payload.get("outputs") or {}),
+                            error=payload.get("error"),
+                            duration_ms=float(payload.get("duration_ms") or 0.0),
+                        )
+                    )
+                elif event.kind is EventKind.OUTCOME:
+                    said_how_it_ended = True
+                    raw = event.payload.get("error")
+                    error = None if raw is None else str(raw)
+            if tail.caught_up:
+                break
+        if not said_how_it_ended:
+            return None
+        return RecordedOutcome(results=tuple(results), error=error)
 
     def cancel(self, execution_id: ExecutionId) -> None:
         """Ask the run to stop; no-op if it is not running here.

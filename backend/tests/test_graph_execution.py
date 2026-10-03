@@ -36,7 +36,10 @@ from backend.application.use_cases import ReconcileGraphExecutions
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.exceptions import DomainError, InvalidTransitionError
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec, NodeResult
-from backend.application.ports.execution_launcher import ExecutionLauncher
+from backend.application.ports.execution_launcher import (
+    ExecutionLauncher,
+    RecordedOutcome,
+)
 from backend.domain.value_objects import ExecutionId, GraphStatus
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.persistence.graph_execution_repository import (
@@ -91,6 +94,9 @@ class NothingToAdopt(ExecutionLauncher):
     needs a real child to be true.
     """
 
+    def __init__(self, recorded=None) -> None:
+        self.recorded = recorded or {}
+
     def launch(self, execution_id, graph) -> None:
         raise AssertionError("the reconcile tests never launch")
 
@@ -99,6 +105,9 @@ class NothingToAdopt(ExecutionLauncher):
 
     def adopt(self, execution_id):
         return None
+
+    def recorded_outcome(self, execution_id):
+        return self.recorded.get(execution_id)
 
 
 # ==========================================================================
@@ -456,6 +465,109 @@ check(
     "one failed event per swept row",
 )
 check(sweep.execute().cleaned == 0, "second sweep finds nothing")
+
+# Reconcile: a run that finished while nothing was watching it.
+#
+# Found live, not by reading: a 3000-node run was left going while the
+# server was SIGKILLed. It completed all 3000 nodes and wrote a clean
+# outcome record, and the startup sweep reported the row as `error` with
+# zero results -- because "there is no process" was the only thing it
+# checked. This is round-2 finding N-03 arriving again in newer code; it
+# was recorded as moot when the run route was removed, which it was, for
+# that route.
+print("-- reconcile: the run's own record wins over its absence --")
+
+recovered = [
+    # One per node of VALID, which has two: the entity refuses a result
+    # count the graph cannot have, and it should.
+    NodeResult(node_id=node_id, ok=True, outputs={"value": float(i)},
+               error=None, duration_ms=1.0)
+    for i, node_id in enumerate(("v", "s"))
+]
+recorded_db = SqliteDatabase(
+    Path(tempfile.mkdtemp(prefix="backend-graph-rec2-")) / "r.db"
+)
+recorded_db.initialize()
+recorded_repo = SqliteGraphExecutionRepository(recorded_db)
+finished_while_down = GraphExecution.create(graph=VALID, created_at=NOW)
+recorded_repo.add(finished_while_down)
+finished_while_down.mark_running(at=NOW)
+check(recorded_repo.update_if_status(finished_while_down, expected=GraphStatus.QUEUED),
+      "fixture: one row left running")
+
+also_failed = GraphExecution.create(graph=VALID, created_at=NOW)
+recorded_repo.add(also_failed)
+also_failed.mark_running(at=NOW)
+recorded_repo.update_if_status(also_failed, expected=GraphStatus.QUEUED)
+
+recorded_events = RecordingEventBus()
+sweep_recorded = ReconcileGraphExecutions(
+    executions=recorded_repo,
+    writer=ExecutionLifecycleWriter(
+        clock=reconcile_clock,
+        repository=recorded_repo,
+        events=EventPublisher(events=recorded_events),
+    ),
+    launcher=NothingToAdopt(recorded={
+        finished_while_down.id: RecordedOutcome(results=tuple(recovered), error=None),
+        also_failed.id: RecordedOutcome(results=(), error="node n2 raised ValueError"),
+    }),
+    clock=reconcile_clock,
+)
+result = sweep_recorded.execute()
+
+row = recorded_repo.get(finished_while_down.id)
+check(row.status is GraphStatus.FINISHED,
+      f"a run that finished while the server was down is finished, not "
+      f"failed (got {row.status.value}: {row.error})")
+check(row.error is None, "with no error recorded against it")
+check(len(row.results) == 2, f"and its node results recovered ({len(row.results)})")
+check([r.node_id for r in row.results] == ["v", "s"],
+      "in the order the run recorded them")
+check(row.results[0].outputs == {"value": 0.0},
+      f"with their outputs intact ({row.results[0].outputs})")
+
+row = recorded_repo.get(also_failed.id)
+check(row.status is GraphStatus.ERROR,
+      f"a run that recorded its own failure is failed (got {row.status.value})")
+check(row.error == "node n2 raised ValueError",
+      f"carrying the run's own error, not the sweep's wording ({row.error})")
+
+check(result.cleaned == 0,
+      f"neither row counted as cleaned debris (got {result.cleaned})")
+check(result.adopted == 0, "and neither was adopted")
+check(
+    codes(recorded_events.published).count("graph_execution_finished") == 1
+    and codes(recorded_events.published).count("graph_execution_failed") == 1,
+    f"announced as finished and failed respectively, not two failures "
+    f"(got {codes(recorded_events.published)})",
+)
+check(sweep_recorded.execute().cleaned == 0, "and a second sweep finds nothing")
+
+# And a row with no record at all is still debris -- the fix must not turn
+# absence into success.
+debris_db = SqliteDatabase(
+    Path(tempfile.mkdtemp(prefix="backend-graph-rec3-")) / "r.db"
+)
+debris_db.initialize()
+debris_repo = SqliteGraphExecutionRepository(debris_db)
+killed = GraphExecution.create(graph=VALID, created_at=NOW)
+debris_repo.add(killed)
+killed.mark_running(at=NOW)
+debris_repo.update_if_status(killed, expected=GraphStatus.QUEUED)
+debris_sweep = ReconcileGraphExecutions(
+    executions=debris_repo,
+    writer=ExecutionLifecycleWriter(
+        clock=reconcile_clock,
+        repository=debris_repo,
+        events=EventPublisher(events=RecordingEventBus()),
+    ),
+    launcher=NothingToAdopt(),
+    clock=reconcile_clock,
+)
+check(debris_sweep.execute().cleaned == 1
+      and debris_repo.get(killed.id).status is GraphStatus.ERROR,
+      "a killed run with no outcome record is still failed as debris")
 
 # ==========================================================================
 # Section D: library use cases (server-side saved graphs)

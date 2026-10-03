@@ -188,6 +188,9 @@ class RunningExecutions(ExecutionLauncher):
     def adopt(self, execution_id):
         return None
 
+    def recorded_outcome(self, execution_id):
+        return None
+
     def go_terminal(self, execution_id) -> None:
         self._terminal.add(execution_id)
 

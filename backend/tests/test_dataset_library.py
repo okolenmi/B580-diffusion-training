@@ -325,6 +325,34 @@ for bad in ("", "   ", "../evil", "a/b", "a\\b", ".", "..", ".hidden", " padded 
     expect(InvalidQueryError, lambda b=bad: library.get(b),
            f"invalid name {bad!r} refused")
 expect(DatasetNotFoundError, lambda: library.get("nope"), "get unknown -> not found")
+
+# A dataset name is one path component, and Linux caps one at 255 *bytes*.
+# Nothing refused an over-long name: mkdir() raised OSError(E36) partway
+# through create(), which reached the client as an unhandled 500. Found by
+# sweeping every operation for 5xx with a 100k-character name.
+#
+# Bytes, not characters, and that is the whole point of the case below: 100
+# emoji is a hundred characters and four hundred bytes, so a character
+# count would wave it through and the mkdir would still fail.
+for too_long, label in (
+    ("x" * 256, "256 ASCII bytes"),
+    ("\U0001F600" * 100, "100 emoji: 100 characters, 400 bytes"),
+    ("é" * 200, "200 e-acute: 200 characters, 400 bytes"),
+):
+    expect(InvalidQueryError, lambda n=too_long: library.create(n),
+           f"over-long dataset name refused: {label}")
+    expect(InvalidQueryError, lambda n=too_long: library.get(n),
+           f"and refused on read too: {label}")
+
+# The boundary itself must work, in both the character and byte reading.
+info = library.create("x" * 255)
+check(info.name == "x" * 255, "255 ASCII bytes is exactly the limit and is accepted")
+info = library.create("\U0001F600" * 63)  # 252 bytes, 63 characters
+check(info.name == "\U0001F600" * 63,
+      "63 emoji (252 bytes) is under the byte limit even though a "
+      "character limit of 255 would have said nothing about it")
+expect(InvalidQueryError, lambda: library.create("\U0001F600" * 64),
+       "64 emoji is 256 bytes: one over, refused")
 expect(DatasetNotFoundError, lambda: library.root("nope"), "root unknown -> not found")
 check(library.delete("nope") is False, "delete unknown -> False")
 

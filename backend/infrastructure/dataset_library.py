@@ -47,6 +47,21 @@ from .workspace import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 
+#: A dataset name becomes one path component, and Linux caps a component at
+#: 255 **bytes** (``NAME_MAX``). A longer name is not refused by anything --
+#: ``mkdir()`` raises ``OSError(E36)`` partway through ``create()``, which
+#: reaches the client as an unhandled 500. Found by sweeping every operation
+#: for 5xx with a 100k-character name.
+#:
+#: Bytes rather than characters, because that is what the limit is: a name
+#: of 100 emoji is one hundred characters and four hundred bytes, and passes
+#: any character count that is not also a byte count.
+#:
+#: Defined here rather than in ``application/limits.py`` because it is the
+#: filesystem's number, not an API budget, and nothing outside this adapter
+#: needs to agree on it.
+DATASET_NAME_MAX_BYTES = 255
+
 
 def _dt(epoch: float | None) -> datetime:
     if not epoch:
@@ -484,6 +499,11 @@ class SqliteDatasetLibrary(DatasetLibrary):
         if name != name.strip():
             raise InvalidQueryError(
                 f"dataset name must not have surrounding whitespace: {name!r}"
+            )
+        if len(name.encode("utf-8")) > DATASET_NAME_MAX_BYTES:
+            raise InvalidQueryError(
+                f"dataset name must be at most {DATASET_NAME_MAX_BYTES} bytes, "
+                f"got {len(name.encode('utf-8'))}"
             )
         if "/" in name or "\\" in name or "\x00" in name:
             raise InvalidQueryError(f"invalid dataset name: {name!r}")

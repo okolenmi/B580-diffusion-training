@@ -686,6 +686,17 @@ checked mechanically:
 | `SDXLClipModel` `state_dict` vs ComfyUI | **716 tensors, identical names and shapes** |
 | CLIP context and pooled, four token layouts | **bitwise identical** |
 
+**Every "bitwise identical" above is a CPU measurement**, and the
+distinction is not pedantry: the B580 is not bit-reproducible. Two
+identical forwards of the real UNet on the card differ by up to 6.5e-06
+against an output scale of 3.13 — a relative 2.1e-06 — and two identical
+backwards differ by up to 2.0e-08 in their gradients. That is the card's
+own run-to-run variation with no reimplementation involved, so a
+"bitwise identical on the B580" claim would be false and a test asserting
+one would be asserting something the hardware cannot deliver. The CPU
+comparisons above are still the stronger claim: on a reproducible device
+they say the arithmetic is not merely close but the same.
+
 And end to end on the B580, from a real 6.9 GB checkpoint, with no ComfyUI
 code in the process at all: CLIP produces a `(1, 77, 2048)` context and a
 `(1, 2816)` `y`, the UNet loads with 0 missing and returns the latent's
@@ -694,9 +705,44 @@ measured alone, because the UNet is 10.3 GB in float32 against an 11.93 GB
 card. That is `nodes/smoke_tests/gpu/smoke_test_reimplemented_stack.py`,
 and it runs in the gate.
 
+**A training step, on real weights, through the whole reimplemented
+stack** — `nodes/smoke_tests/gpu/smoke_test_real_training_step.py`, also
+in the gate. Nothing did this before: the CLIP test uses random weights,
+the UNet test has no backward, and the pipeline's arithmetic is proven
+against a `pred = p` stand-in. What it measures:
+
+* 564 injected LoRA layers, 11.70 M trainable parameters, and all 972
+  frozen base tensors untouched by an optimizer step.
+* **Activation checkpointing is numerically transparent**, in the only
+  sense this card allows: its contribution to the gradients is 1.4e-08,
+  inside the card's own run-to-run floor of 2.0e-08 (ceiling 8.0e-08 at
+  4x headroom). A first version of this test asserted the two gradient sets
+  were bitwise equal and failed — because the *uncheckpointed* run is not
+  bitwise equal to itself either, which is how the hardware's floor was
+  found.
+* **Exactly half the gradients are zero, correctly.** LoRA starts `B` at
+  zero, so the delta is zero and `dL/dA` is zero: 564 of the 1128
+  trainable tensors have a gradient of precisely zero, and zero is bitwise
+  equal to zero whatever else happens. That made "how many gradients
+  match" read as exactly half no matter what, so the comparison excludes
+  them and asserts that the zero-gradient set is precisely the `lora_A`
+  set.
+* The un-checkpointed backward at a 64x64 latent OOMs trying to allocate
+  58 MB with 6 MB free — which is the argument for `SDXL_CONFIG`
+  defaulting `use_checkpoint` to True, measured rather than assumed.
+
 **The remaining ComfyUI imports in the tree are all inside the
 characterisation tests**, which compare against it and skip when it is
 absent. There is none in the live code.
+
+**What the project needs is declared, and checked against the source.**
+`backend/tests/test_declared_dependencies.py` AST-walks the live tree and
+requires every third-party import to be in the requirements manifest or in
+an allowlist with a stated reason. It exists because two hard top-level
+imports were in neither: `tqdm` (from `manager/builder.py`, so without it
+the dataset builder does not load at all — and it predates this work) and
+`regex` (the CLIP tokenizer's word splitter, which needs `\p{L}` and
+therefore cannot be done with the standard library's `re`).
 
 That last one is the claim that matters, and `smoke_test_unet.py` re-runs it
 whenever a checkpoint is present, skipping rather than failing when it is

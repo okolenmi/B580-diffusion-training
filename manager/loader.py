@@ -58,8 +58,24 @@ class ManagedDatasetLoader:
         # must arrive before any DB access -- pinned by smoke tests), but
         # before any query: v2 queries reference columns v1 doesn't have, and
         # a migration-guidance error beats "no such column: neg_prompt".
-        if self.db_path.exists():
-            ensure_v2(self.db_path)
+        #
+        # A missing metadata.db means there is no dataset here, and saying so
+        # is the whole point: carrying on would let the next query's
+        # sqlite3.connect *create* an empty database in the directory, so
+        # the failure would surface a step later as "no such table:
+        # trajectories" -- naming a schema problem for what is a missing
+        # dataset, and leaving the directory it made behind. Found by
+        # passing a dataset name that does not exist: it created
+        # datasets/<name>/ and then reported a missing table.
+        #
+        # Same rule as the backend's own library, which already treats a
+        # directory without a metadata.db as not-a-dataset.
+        if not self.db_path.exists():
+            raise ValueError(
+                f"No dataset at '{dataset_root}': no {self.db_path.name} in it. "
+                f"Check the name against the datasets directory."
+            )
+        ensure_v2(self.db_path)
 
         if set_identifier is not None:
             # Resolve set ID: accept both integer ID and string name

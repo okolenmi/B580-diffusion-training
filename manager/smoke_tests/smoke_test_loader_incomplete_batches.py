@@ -16,7 +16,6 @@ than batch_size was never trained on -- silently (the only guard fired when
 
 import contextlib
 import io
-import json
 import sqlite3
 import sys
 import tempfile
@@ -125,6 +124,41 @@ def main():
             check("WARNING" not in _capture(lambda: list(loader)), kwargs)
             seen = _images_seen(loader, latents, epochs=3)
             check(all(s == set(range(8)) for s in seen), (kwargs, seen))
+        print("    PASS")
+
+        print("[a dataset that does not exist says so, and creates nothing]")
+        # Found by running scripts/hw_validate.py against a dataset name
+        # that is not there. The loader checked `if db_path.exists()` and
+        # then carried on regardless, so the next query's sqlite3.connect
+        # *created* an empty metadata.db in the directory -- and the failure
+        # arrived a step later as "no such table: trajectories", naming a
+        # schema problem for what is a missing dataset. The directory it
+        # made was left behind.
+        missing = Path(td) / "no-such-dataset"
+        try:
+            ManagedDatasetLoader(missing)
+            check(False, "a missing dataset must be refused")
+        except ValueError as exc:
+            message = str(exc)
+            check("no metadata.db" in message, message)
+            check("no-such-dataset" in message, message)
+        check(not missing.exists(),
+              f"and nothing was created on disk (found {list(missing.iterdir())})"
+              if missing.exists() else "and nothing was created on disk")
+
+        # An existing directory that is not a dataset -- no metadata.db --
+        # is the same case and gets the same answer, matching the backend's
+        # own library, which already treats it as not-a-dataset.
+        not_a_dataset = Path(td) / "just-images"
+        (not_a_dataset / "shards").mkdir(parents=True)
+        (not_a_dataset / "shards" / "s0.bin").write_bytes(b"\0" * 16)
+        try:
+            ManagedDatasetLoader(not_a_dataset)
+            check(False, "a directory without metadata.db must be refused")
+        except ValueError as exc:
+            check("no metadata.db" in str(exc), str(exc))
+        check(not (not_a_dataset / "metadata.db").exists(),
+              "and no metadata.db was conjured up inside it")
         print("    PASS")
     print("ALL PASS")
 

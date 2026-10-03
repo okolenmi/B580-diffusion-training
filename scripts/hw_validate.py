@@ -11,31 +11,31 @@ driven from the shell, e.g.:
     VENV_PYTHON=/path/to/venv/bin/python
 
     # main route, uniform dataset, attention checkpointing as shipped
-    python scripts/hw_validate.py main --label A_after --dataset 1024 --steps 40
+    python scripts/hw_validate.py main --label A_after --dataset "1024 aes" --steps 40
 
     # checkpointing sweep: how much of the shipped 100% attention
     # checkpointing is actually needed (floor/peak composition lands in
     # summary.json's floor_stages + steps.jsonl's component_footprints_mb)
-    python scripts/hw_validate.py main --label F_frac50 --dataset 1024 \
+    python scripts/hw_validate.py main --label F_frac50 --dataset "1024 aes" \
         --batch 2 --attn-ckpt-fraction 0.5
 
     # managed route: prewarm the prompt cache from the training batches
     # and unload the text encoder for the whole run (floor -1561MB,
     # peak -1602MB, +10% throughput vs the managed baseline)
     python scripts/hw_validate.py managed --label M_prewarm \
-        --dataset 1024 --batch 2 --steps 40 --prewarm-text-encoder
+        --dataset "1024 aes" --batch 2 --steps 40 --prewarm-text-encoder
 
     # same, but with enable_attention_block_checkpointing() neutered --
     # reproduces the pre-fix "checkpointing only reaches ResBlock" behavior
     HW_DISABLE_ATTENTION_CKPT=1 python scripts/hw_validate.py main \
-        --label A_before --dataset 1024 --steps 40
+        --label A_before --dataset "1024 aes" --steps 40
 
     # strict / under-pressure runs (pending-testing's control-handle entry)
-    python scripts/hw_validate.py main --label C_strict --dataset 1image \
+    python scripts/hw_validate.py main --label C_strict --dataset "non-square" \
         --steps 10 --budget 2500 --strict
 
     # managed (Resources Controller) route
-    python scripts/hw_validate.py managed --label D_managed --dataset 1024 \
+    python scripts/hw_validate.py managed --label D_managed --dataset "1024 aes" \
         --steps 40 --budget 11500
 
 Outputs land in runs/hw_validation/<label>/:
@@ -323,7 +323,13 @@ def main() -> None:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--label", required=True)
-    common.add_argument("--dataset", default="1024")
+    common.add_argument(
+        "--dataset", default="1024 aes",
+        help="dataset name *inside the datasets directory*, not a path to "
+             "it. It is sandboxed by paths.resolve_safe_dataset_path(), so "
+             "'datasets/1024 aes' resolves to datasets/datasets/1024 aes "
+             "and finds nothing. Run `ls datasets/` for the names that exist.",
+    )
     common.add_argument("--steps", type=int, default=40)
     common.add_argument("--batch", type=int, default=1)
     common.add_argument("--checkpoint", default="div_4.safetensors")

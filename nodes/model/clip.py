@@ -211,10 +211,11 @@ class CLIPEmbeddings(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
         self.position_embedding = nn.Embedding(num_positions, embed_dim)
 
-    def forward(self, input_tokens, dtype=torch.float32):
-        # The position embedding is cast rather than the module: the module's
-        # own dtype is fp16 and adding an fp16 position embedding to an fp32
-        # token embedding would promote the sum only by accident of ordering.
+    def forward(self, input_tokens, dtype=None):
+        dtype = dtype or self.token_embedding.weight.dtype
+        # Both halves are cast to the compute dtype rather than added as
+        # they are stored: with mixed storage the sum would promote by
+        # accident of which operand came first.
         return self.token_embedding(input_tokens).to(dtype) + \
             self.position_embedding.weight.to(dtype)
 
@@ -237,8 +238,15 @@ class CLIPTextModel_(nn.Module):
     def forward(self, embeds, input_tokens=None, attention_mask=None,
                 intermediate_output=None,
                 final_layer_norm_intermediate: bool = True,
-                dtype=torch.float32):
-        x = embeds + self.embeddings.position_embedding.weight.to(
+                dtype=None):
+        # `dtype=None` means "compute in whatever the parameters are stored
+        # as", which is the only self-consistent choice now that there is no
+        # per-module casting layer. ComfyUI's `operations.*` wrappers allow
+        # fp16 Linear weights alongside fp32 LayerNorm weights and cast on
+        # every call; reimplementing that dispatch is precisely the machinery
+        # this file is trying not to carry, so one dtype is used throughout.
+        dtype = dtype or self.final_layer_norm.weight.dtype
+        x = embeds.to(dtype) + self.embeddings.position_embedding.weight.to(
             embeds.device).to(dtype)
 
         length = x.shape[1]
@@ -295,7 +303,7 @@ class CLIPTextModel(nn.Module):
     def forward(self, embeds, input_tokens=None, attention_mask=None,
                 intermediate_output=None,
                 final_layer_norm_intermediate: bool = True,
-                dtype=torch.float32):
+                dtype=None):
         last, tapped, pooled = self.text_model(
             embeds, input_tokens=input_tokens,
             attention_mask=attention_mask,
@@ -361,18 +369,24 @@ class SDClipModel(nn.Module):
         # in that function for this caller, so it happens here.
         if not torch.is_tensor(tokens):
             tokens = torch.tensor(tokens, dtype=torch.long)
-        embeds = self.transformer.get_input_embeddings()(tokens).float()
+        # Onto the model's device. The tokenizer produces ids on CPU, and an
+        # embedding lookup needs the index and the weight on the same device --
+        # this only shows up off CPU, where it raises from inside
+        # torch.embedding rather than anywhere near the encoder.
+        tokens = tokens.to(self.transformer.get_input_embeddings().weight.device)
+        compute = self.transformer.text_model.final_layer_norm.weight.dtype
+        embeds = self.transformer.get_input_embeddings()(tokens).to(compute)
         intermediate_output = self.layer_idx if self.layer == "hidden" else None
         last, tapped, projected, _ = self.transformer(
             embeds, input_tokens=tokens, attention_mask=attention_mask,
             intermediate_output=intermediate_output,
             final_layer_norm_intermediate=self.layer_norm_hidden_state,
-            dtype=torch.float32)
-        z = (tapped if self.layer == "hidden" else last).float()
+            dtype=compute)
+        z = tapped if self.layer == "hidden" else last
 
         pooled = None
         if self.return_projected_pooled:
-            pooled = projected.float()
+            pooled = projected
         return z, pooled
 
     def encode(self, tokens):

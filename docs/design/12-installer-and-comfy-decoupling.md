@@ -570,13 +570,48 @@ whether the removal is independently observable.
   `attention.py`. Both give the right shape either way, so neither is
   catchable by a shape test; `smoke_test_vae.py` checks both by value and
   proves each check can fail.
-* **C — CLIP.** `sdxl_clip`, `clip_model`, `sd1_clip`, and the BPE
-  tokenizer. Removes one. Independent of A and B.
+* **C — CLIP. Done, in two parts.** C1 is `nodes/model/clip.py`: both text
+  towers, with the two text configs inlined as dicts rather than read from
+  ComfyUI's `sd1_clip_config.json` and `clip_config_bigg.json` — 1.1 KB of
+  published architecture description, and inlining it leaves no path into
+  ComfyUI's *tree* for the model half. C2 is `nodes/model/tokenizer.py`:
+  OpenAI's byte-level BPE and the sequence layout around it.
 
-**Heavy comparison tests come last, after all three.** Until then the
-numerical claim is only structural: shapes, parameter names, and module
-paths. That is deliberate and it is also the reason the port can go ahead
-without a reference oracle — see below.
+  C1: 716 tensors with identical names and shapes against ComfyUI, and the
+  context and pooled outputs bitwise identical on four token layouts.
+
+  C2 is the one piece whose contract is *data* rather than code, and it
+  agrees with ComfyUI's tokenizer token-for-token over a 25-prompt corpus —
+  empty string, single characters, mixed case, whitespace runs,
+  contractions, digits, accented Latin, CJK, Cyrillic, emoji, a
+  300-character word, and prompts long enough to span several sections.
+
+  **Three deliberate divergences**, all cases where ComfyUI has prompt
+  grammar this project does not have, or where HuggingFace has drifted from
+  CLIP. All three are pinned by `smoke_test_tokenizer.py`:
+
+  1. `(word)` is text, not a weight group. ComfyUI's `token_weights` runs
+     `parse_parentheses` and consumes a balanced `(...)` as a weighting
+     expression, so `"a (b) c"` reaches its tokenizer with the parentheses
+     gone. All 32 ASCII punctuation marks *between letters* do agree, which
+     is what says this is grammar rather than a bug in the alphabet.
+  2. A literal `<|startoftext|>` in the prompt is text. CLIP's split pattern
+     passes the special tokens through as ids, so a prompt containing them
+     gets a second BOS in the middle.
+  3. HTML entities are unescaped, twice — CLIP's `basic_clean`. The
+     installed `transformers` 5.12.1 has dropped that step, so ComfyUI now
+     tokenizes `&lt;` as four tokens where CLIP's own tokenizer gives one.
+     It also no longer calls `ftfy.fix_text`, which this project could not
+     do anyway: ftfy is not installed and not declared.
+
+  **The vocabulary's location is the one thing left open.** The merges and
+  ids are OpenAI's published CLIP BPE data, not ComfyUI's work, but the copy
+  on this machine lives in ComfyUI's tree. `default_vocabulary_dir()` reads
+  `$CLIP_TOKENIZER_DIR`, then `assets/clip_tokenizer/` in this repository,
+  then ComfyUI's tree — the last being a fallback so the tokenizer works
+  where it was developed, and a real dependency on someone else's *files*
+  until the middle one exists. It is 1.6 MB of published data and the
+  decision is a project's, not a technical one.
 
 #### What we do not port, and why
 
@@ -647,6 +682,21 @@ checked mechanically:
 | `AutoencoderKL` `state_dict` vs ComfyUI, SDXL's config | **248 tensors, identical names and shapes** |
 | VAE `encode` and `decode` vs ComfyUI, three configs | **bitwise identical** |
 | a real SDXL checkpoint into our `AutoencoderKL` | **0 missing, 0 unexpected** |
+| our tokenizer vs ComfyUI's, 25 prompts x 2 towers | **token-for-token identical** |
+| `SDXLClipModel` `state_dict` vs ComfyUI | **716 tensors, identical names and shapes** |
+| CLIP context and pooled, four token layouts | **bitwise identical** |
+
+And end to end on the B580, from a real 6.9 GB checkpoint, with no ComfyUI
+code in the process at all: CLIP produces a `(1, 77, 2048)` context and a
+`(1, 2816)` `y`, the UNet loads with 0 missing and returns the latent's
+shape, and the VAE decodes a 64x64 latent to a 512x512 image — each
+measured alone, because the UNet is 10.3 GB in float32 against an 11.93 GB
+card. That is `nodes/smoke_tests/gpu/smoke_test_reimplemented_stack.py`,
+and it runs in the gate.
+
+**The remaining ComfyUI imports in the tree are all inside the
+characterisation tests**, which compare against it and skip when it is
+absent. There is none in the live code.
 
 That last one is the claim that matters, and `smoke_test_unet.py` re-runs it
 whenever a checkpoint is present, skipping rather than failing when it is

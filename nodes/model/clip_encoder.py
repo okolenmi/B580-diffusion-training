@@ -36,7 +36,9 @@ from .clip_state_dict import (
     clip_text_transformers_convert,
     state_dict_prefix_replace,
 )
+from .clip import SDXLClipModel
 from .timestep_embedding import Timestep
+from .tokenizer import SDXLTokenizer
 
 
 def _extract_and_convert_clip_state_dict(state_dict: dict) -> dict:
@@ -75,8 +77,9 @@ class SDXLClipEncoder:
         self.out_dtype = torch.bfloat16  # Output matches UNet dtype
         self._embedder = None
 
-        # Build tokenizer and model
-        from comfy.sdxl_clip import SDXLClipModel, SDXLTokenizer
+        # The tokenizer and both CLIP towers are this project's
+        # (nodes/model/tokenizer.py and nodes/model/clip.py). They were
+        # comfy's sdxl_clip; see design doc 12 section 7.3.
         self.tokenizer = SDXLTokenizer()
         self.clip_model = SDXLClipModel(device="cpu", dtype=self.dtype)
         self.clip_model.eval()
@@ -120,23 +123,7 @@ class SDXLClipEncoder:
 
     def encode_prompt(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode a single prompt. Returns (ctx, pooled)."""
-        # The tokenizer still produces (id, weight) pairs, because it is
-        # ComfyUI's until section C2 lands. Every weight is 1.0 for plain
-        # text, and encode_token_ids() wants ids only -- so assert that here
-        # rather than dropping the weights silently. A prompt that did carry
-        # a weighted token would be a wildcard expansion, which this project
-        # has no syntax for.
-        tokens = self.tokenizer.tokenize_with_weights(prompt)
-        weights = [w for rows in tokens.values() for row in rows
-                   for _, w in row]
-        non_unit = [w for w in weights if w != 1.0]
-        if non_unit:
-            raise ValueError(
-                f"tokenizer produced {len(non_unit)} weighted token(s); "
-                f"weighted tokens exist for ComfyUI's wildcard syntax, which "
-                f"this project does not implement (first: {non_unit[0]})")
-        token_ids = {tower: [[int(t) for t, _ in row] for row in rows]
-                     for tower, rows in tokens.items()}
+        token_ids = self.tokenizer.tokenize(prompt)
         with torch.no_grad():
             ctx, pooled = self.clip_model.encode_token_ids(token_ids)
         return ctx, pooled

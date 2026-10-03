@@ -59,10 +59,15 @@ from backend.application.services import (
     MonitorServices,
     SettingsServices,
 )
+from backend.application.ports.comfy_environment import (
+    ComfyEnvironment,
+    ComfyEnvironmentInfo,
+)
 from backend.application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
     BulkUpdateDatasetItems,
+    CheckComfyConflicts,
     CheckRequirements,
     CommitDatasetItems,
     CreateDataset,
@@ -767,6 +772,33 @@ def fixture_graph_registry() -> NodeRegistry:
     return NodeRegistry(scan=lambda: (dict(FIXTURE_NODES), ()))
 
 
+class UnreadableComfyEnvironment(ComfyEnvironment):
+    """A ComfyUI environment that cannot be read, which refuses.
+
+    The default for every suite that calls `build_services` without caring
+    about the conflict check, and it is deliberately *not* a real read.
+
+    The alternative -- wiring `LocalComfyEnvironment` -- would make any test
+    that touched the endpoint a statement about the developer's own
+    ComfyUI: green on this machine, red or (worse) a different answer on
+    anyone else's. The same trap `path_tiers` has, for the same reason.
+
+    It refuses rather than reporting an empty environment, because "safe
+    with nothing pinned" is a *pass*. A default that can pass is a default
+    that lets a test assert the check works without having checked
+    anything.
+    """
+
+    def read(self, comfy_dir: str, venv_python: str | None = None) -> ComfyEnvironmentInfo:
+        return ComfyEnvironmentInfo(
+            comfy_dir=comfy_dir,
+            requirements_error=(
+                "no ComfyUI environment is wired in this test; pass a "
+                "stub port if the test is about the conflict check"
+            ),
+        )
+
+
 class FakeDeviceProbe(DeviceProbe):
     """A device that is always there, for tests that are not about it.
 
@@ -928,6 +960,14 @@ def build_services(
             ),
             apply=ApplyInstallation(settings=settings_store),
             manifest=DescribeRequirements(),
+            # No interpreter: these tests never ask for a conflict check, and
+            # wiring the real one would put a subprocess in every suite that
+            # happens to call build_services. The field is required rather
+            # than defaulted so that a new installer capability cannot be
+            # added without deciding what the tests should see of it -- which
+            # is how the four suites that construct InstallerServices by hand
+            # found out.
+            conflicts=CheckComfyConflicts(environment=UnreadableComfyEnvironment()),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

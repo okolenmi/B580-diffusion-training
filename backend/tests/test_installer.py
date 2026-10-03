@@ -376,4 +376,131 @@ check(after["stored"]["checkpoints_dir"] != str(comfy),
 status, _, body = asgi_request(app, "/api/v1/installer/nonsense")
 check(status == 404, f"an unknown installer path is 404 (got {status})")
 
+# ==========================================================================
+print("\n-- the conflicts endpoint: three outcomes over HTTP --")
+
+# A fake port, because a *conflict* on a real machine is a bug in someone's
+# environment and a test that waits for one is a test that never runs. The
+# classification itself is covered in test_comfy_conflicts.py, against both
+# a fake and the real checkout; this section is about the wire format and
+# about which arguments the route passes.
+from backend.application.ports.comfy_environment import (  # noqa: E402
+    ComfyEnvironment,
+    ComfyEnvironmentInfo,
+    Declaration,
+)
+from backend.application.use_cases.check_comfy_conflicts import (  # noqa: E402
+    CheckComfyConflicts,
+)
+
+
+def _with_conflicts(base, check):
+    """Rebuild container -> services -> installer with a replaced use case.
+
+    Three frozen dataclasses, so a test cannot just assign the field --
+    `FrozenInstanceError` is the first thing that happens otherwise.
+    `dataclasses.replace` is the intended way through, and rebuilding the
+    app from the new services means the route under test is reached through
+    the same wiring production uses.
+    """
+    import dataclasses
+
+    installer = dataclasses.replace(base.services.installer, conflicts=check)
+    services = dataclasses.replace(base.services, installer=installer)
+    return dataclasses.replace(base, services=services), create_app(services)
+
+
+class _StubComfyEnvironment(ComfyEnvironment):
+    def __init__(self, declarations=(), installed=()):
+        self.declarations = tuple(
+            d if isinstance(d, Declaration) else Declaration(*d) for d in declarations
+        )
+        self.installed = tuple(installed)
+        self.seen = []
+
+    def read(self, comfy_dir, venv_python=None):
+        self.seen.append((comfy_dir, venv_python))
+        return ComfyEnvironmentInfo(
+            comfy_dir=comfy_dir,
+            requirements_path="/stub/requirements.txt",
+            declarations=self.declarations,
+            installed=self.installed,
+            venv_python=venv_python,
+        )
+
+
+stub = _StubComfyEnvironment(
+    [("torch", ""), ("transformers", ">=4.50.3")],
+    [("torch", "2.12.1"), ("transformers", "4.44.0"), ("anyio", "4.14.0")],
+)
+container, app = _with_conflicts(container, CheckComfyConflicts(environment=stub))
+
+status, _, body = asgi_request(app, "/api/v1/installer/conflicts")
+check(status == 200, f"GET installer/conflicts 200 (got {status})")
+
+check(body["safe"] is False and body["checked"] is True,
+      f"a declared-and-violated package makes it unsafe but *checked* "
+      f"(safe={body['safe']}, checked={body['checked']})")
+check(body["refusal_reason"] and "transformers" in body["refusal_reason"],
+      f"and the refusal names the package and both versions, so the user "
+      f"can act on it ({body['refusal_reason']!r})")
+
+check(body["counts"] == {"total": 3, "safe": 1, "conflict": 1, "unknown": 1},
+      f"the three outcomes are counted separately, not folded into a "
+      f"boolean ({body['counts']})")
+
+outcomes = {row["name"]: row["outcome"] for row in body["findings"]}
+check(outcomes == {"transformers": "conflict", "anyio": "unknown", "torch": "safe"},
+      f"and each row carries its own outcome, so the client does not "
+      f"re-derive it ({outcomes})")
+
+check([r["name"] for r in body["findings"]][0] == "transformers",
+      f"conflicts lead, because a refusal must open with its reason "
+      f"({[r['name'] for r in body['findings']]})")
+
+check(body["constraints"] == ["anyio==4.14.0", "torch==2.12.1", "transformers==4.44.0"],
+      f"the exact pins are sent, so 'nothing already installed can change' "
+      f"is visible rather than asserted ({body['constraints']})")
+
+check(all({"name", "outcome", "description"} <= set(row) for row in body["findings"])
+      and all("description" in a for a in body["additions"]),
+      "every row carries a sentence, so the wizard does not write prose "
+      "that can drift from the rule")
+
+resolved_view = container.services.settings.read.execute().resolved
+asgi_request(app, "/api/v1/installer/conflicts")
+check(stub.seen[-1][1] == resolved_view.get("venv_python"),
+      f"the interpreter passed to the port is the one settings resolve, not "
+      f"one the route or the wiring guessed (got {stub.seen[-1][1]!r}, "
+      f"settings {resolved_view.get('venv_python')!r})")
+
+# comfy_dir is overridable per call, so the wizard can check a directory the
+# user has just typed. It must reach the port unchanged.
+asgi_request(app, "/api/v1/installer/conflicts?comfy_dir=/somewhere/typed")
+check(stub.seen[-1][0] == "/somewhere/typed",
+      f"comfy_dir from the query reaches the port "
+      f"({stub.seen[-1][0]})")
+
+# And with no query it comes from settings, not from the request.
+asgi_request(app, "/api/v1/installer/conflicts")
+configured_dir = container.services.settings.read.execute().resolved.get("comfy_dir")
+check(stub.seen[-1][0] == (configured_dir or ""),
+      f"with no query it uses the configured ComfyUI directory "
+      f"({stub.seen[-1][0]!r} vs {configured_dir!r})")
+
+# An unreadable source is 200 with safe=false -- not a 404, and not 500.
+stub2 = _StubComfyEnvironment()
+stub2.read = lambda comfy_dir, venv_python=None: ComfyEnvironmentInfo(
+    comfy_dir=comfy_dir, requirements_error="there is no requirements.txt",
+)
+container, app = _with_conflicts(container, CheckComfyConflicts(environment=stub2))
+status, _, body = asgi_request(app, "/api/v1/installer/conflicts")
+check(status == 200 and body["safe"] is False and body["checked"] is False,
+      f"an unreadable source is a 200 saying unchecked-and-unsafe, so the "
+      f"client can render the reason (status={status}, safe={body['safe']}, "
+      f"checked={body['checked']})")
+check(body["refusal_reason"] and "Cannot check" in body["refusal_reason"],
+      f"with a reason that says the check did not run "
+      f"({body['refusal_reason']!r})")
+
 finish()

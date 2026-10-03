@@ -8,6 +8,10 @@ from .apply_installation import (
 )
 from .browse_assets import BrowseAssets
 from .bulk_update_dataset_items import BulkUpdateDatasetItems
+from .check_comfy_conflicts import (
+    CheckComfyConflicts,
+    ConflictReport,
+)
 from .check_requirements import (
     CheckRequirements,
     DescribeRequirements,
@@ -62,6 +66,8 @@ from .write_config_raw import WriteConfigRaw
 __all__ = [
     "ApplyInstallation",
     "BrowseAssets",
+    "CheckComfyConflicts",
+    "ConflictReport",
     "CheckRequirements",
     "DescribeRequirements",
     "InstallationState",

@@ -63,10 +63,22 @@ check(all(
     for name in {n.split(".")[0] for n in imported if not n.startswith("_")}
 ), "and nothing sneaks in through a dotted name")
 
-# The four server packages, and what makes them the four.
-check(set(bootstrap.SERVER_PACKAGES)
-      == {"fastapi", "uvicorn", "python-multipart", "tomli_w"},
-      f"the list is requirements.txt exactly ({list(bootstrap.SERVER_PACKAGES)})")
+# The list is *read from* requirements.txt, so this asserts the invariant
+# that used to be a hardcoded second copy of the same list -- which is how
+# `packaging` was added to one and not the other until the conflict check
+# needed it.
+declared = tuple(sorted(
+    line.split("#")[0].strip()
+    for line in (HERE.parent.parent / "requirements.txt").read_text(
+        encoding="utf-8").splitlines()
+    if line.split("#")[0].strip() and not line.startswith("-")
+))
+check(bootstrap.SERVER_PACKAGES == declared,
+      f"the list is read from requirements.txt, not copied "
+      f"({bootstrap.SERVER_PACKAGES} vs {declared})")
+check("packaging" in bootstrap.SERVER_PACKAGES,
+      f"packaging is named: the ComfyUI conflict check compares versions, "
+      f"and PEP 440 is not worth hand-rolling ({bootstrap.SERVER_PACKAGES})")
 
 check(not any("torch" in p for p in bootstrap.SERVER_PACKAGES),
       "and torch is not in it: the training stack is a multi-gigabyte, "

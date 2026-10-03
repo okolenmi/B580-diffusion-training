@@ -119,9 +119,19 @@ def _collect(
         if time.monotonic() >= deadline:
             return events
         if not GATEWAY.is_alive(pid):
-            # One last read: the child writes its outcome before it exits,
-            # and that record can land in the same instant it goes.
-            events.extend(tail.poll())
+            # Settle, do not read once. The child writes its outcome and
+            # *then* exits, so "the process is gone" does not mean "the
+            # record is visible" -- there is a window between the two, and a
+            # single read landed in it about one gate run in three under
+            # load, reporting zero records for a child that had written one.
+            # Polls until something new arrives, or for half a second.
+            previous = len(events)
+            settle_until = time.monotonic() + 0.5
+            while time.monotonic() < settle_until:
+                events.extend(tail.poll())
+                if len(events) > previous:
+                    break
+                time.sleep(0.02)
             return events
         time.sleep(0.02)
 
@@ -231,11 +241,16 @@ def test_a_refused_graph_is_reported_by_the_child() -> None:
         "the child exited on its own",
     )
     outcome = next((e for e in events if e.kind is EventKind.OUTCOME), None)
-    check(outcome is not None, f"and left an outcome record (got {events})")
+    # _why_silent in the failure text, because "got []" is not a diagnosis.
+    # A silent child has usually written something to its log -- an import
+    # error, a device fault, a traceback -- and the run before this had a
+    # check report only the empty list while the real cause sat unread.
+    check(outcome is not None,
+          f"and left an outcome record (got {events}; {_why_silent(launch)})")
     check(
         outcome is not None and outcome.payload["error"],
         f"carrying the failure, which is what the row is failed with "
-        f"(got {outcome.payload if outcome else None})",
+        f"(got {outcome.payload if outcome else None}; {_why_silent(launch)})",
     )
     check(
         "FloatConstantNode" in str(outcome.payload["error"]),

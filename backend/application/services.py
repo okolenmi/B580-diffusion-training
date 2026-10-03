@@ -25,6 +25,7 @@ from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
+from .use_cases.check_comfy_conflicts import CheckComfyConflicts
 from .use_cases.check_requirements import (
     CheckRequirements,
     DescribeRequirements,
@@ -101,6 +102,11 @@ class InstallerServices:
     check: CheckRequirements
     apply: ApplyInstallation
     manifest: DescribeRequirements
+    #: Reads ComfyUI's own declarations and its venv, and refuses if they
+    #: disagree. Separate from `check` because it is asked only when the
+    #: user picks "reuse ComfyUI's venv", and it answers about a different
+    #: interpreter than the one running the server.
+    conflicts: CheckComfyConflicts
 
 
 @dataclass(frozen=True, slots=True)

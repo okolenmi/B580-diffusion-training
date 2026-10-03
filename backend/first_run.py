@@ -67,16 +67,35 @@ import time
 import webbrowser
 from pathlib import Path
 
-#: The packages the *server* needs -- exactly `requirements.txt`. Not the
-#: training stack: torch and the accelerator are a multi-gigabyte,
-#: device-specific decision (design doc §5) that belongs to the wizard, not
-#: to a bootstrap that runs before any of it can be asked.
-SERVER_PACKAGES: tuple[str, ...] = (
-    "fastapi",
-    "uvicorn",
-    "python-multipart",
-    "tomli_w",
-)
+#: The packages the *server* needs -- exactly `requirements.txt`, read from
+#: it rather than copied, because a hand-maintained second copy of a
+#: requirements file is one that disagrees with it. The test asserts the
+#: same invariant from the other side.
+#:
+#: `packaging` is in there for one reason: comparing versions is PEP 440,
+#: and the ComfyUI conflict check (design doc §3) cannot answer "does this
+#: installed version satisfy ComfyUI's declaration" without it. Hand-rolling
+#: that comparison is the kind of thing that is subtly wrong on `1.0rc1` and
+#: nobody notices until a conflict check passes that should have refused.
+#: Measured: 130 KB, pure Python, and not a transitive dependency of the
+#: other four -- so it has to be named.
+#:
+#: Not the training stack: torch and the accelerator are a
+#: multi-gigabyte, device-specific decision (design doc §5) that belongs to
+#: the wizard, not to a bootstrap that runs before any of it can be asked.
+def _server_packages() -> tuple[str, ...]:
+    text = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    names = []
+    for line in text.splitlines():
+        line = line.split("#")[0].strip()
+        if line and not line.startswith("-"):
+            names.append(line)
+    return tuple(sorted(names))
+
+
+SERVER_PACKAGES: tuple[str, ...] = _server_packages()
 
 #: Import name where pip and Python disagree. A missing-package check that
 #: imported `python_multipart` instead of `multipart` would report a

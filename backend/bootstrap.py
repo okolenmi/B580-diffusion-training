@@ -43,6 +43,7 @@ from .application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
     BulkUpdateDatasetItems,
+    CheckComfyConflicts,
     CheckRequirements,
     CommitDatasetItems,
     CreateDataset,
@@ -118,6 +119,7 @@ from .application.ports.environment import (
     MetadataPackageInventory,
     TorchDeviceProbe,
 )
+from .application.ports.comfy_environment import LocalComfyEnvironment
 from .infrastructure.settings_store import SqliteSettingsStore
 from .infrastructure.workspace import WorkspaceLayout
 
@@ -242,6 +244,12 @@ def build_container(settings: Settings) -> Container:
             ),
             apply=ApplyInstallation(settings=settings_store),
             manifest=DescribeRequirements(),
+            # No interpreter is fixed here. `venv_python` is a setting the
+            # wizard sets, so the route resolves it and passes it per call --
+            # a port that captured it at wiring time would report on
+            # whichever venv happened to be configured when the server
+            # started.
+            conflicts=CheckComfyConflicts(environment=LocalComfyEnvironment()),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

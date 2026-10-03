@@ -33,6 +33,12 @@ from ..application.ports.dataset_library import (
 from ..application.ports.dataset_tasks import DatasetTask, TaskKind
 from ..application.ports.settings_store import SettingsChanges, SettingsView
 from ..application.use_cases.apply_installation import InstallationState
+from ..application.use_cases.check_comfy_conflicts import (
+    CONFLICT,
+    SAFE,
+    UNKNOWN,
+    ConflictReport,
+)
 from ..application.use_cases.check_requirements import ReadinessReport
 from ..domain.value_objects import GraphStatus
 
@@ -169,6 +175,97 @@ class InstallerStateOut(BaseModel):
     resolved_checkpoints_dir: str | None
     resolved_loras_dir: str | None
     missing: list[str]
+
+
+class ConflictFindingOut(BaseModel):
+    """One package in ComfyUI's venv, and which of the three states it is in.
+
+    `outcome` is sent as the string rather than collapsed into a boolean,
+    because the three states get three different treatments and a boolean
+    would make the client re-derive the distinction from two fields.
+    """
+
+    name: str
+    installed_version: str | None
+    declared_specifier: str | None
+    outcome: str
+    description: str
+
+
+class AdditionFindingOut(BaseModel):
+    """One of our four packages, against ComfyUI's declarations."""
+
+    name: str
+    declared_specifier: str | None
+    blocked: bool
+    description: str
+
+
+class InstallerConflictsOut(BaseModel):
+    """May the four server packages go into ComfyUI's venv?
+
+    `checked` is separate from `safe` on purpose. "We could not check" and
+    "we checked and it is fine" must never render the same, and a client
+    that only received `safe` would have to guess which one it was.
+    """
+
+    comfy_dir: str
+    checked: bool
+    safe: bool
+    refusal_reason: str | None
+    requirements_path: str | None
+    venv_python: str | None
+    requirements_error: str | None
+    venv_error: str | None
+    counts: dict[str, int]
+    #: Every finding, ordered: conflicts first, because a refusal must lead
+    #: with the reason for it.
+    findings: list[ConflictFindingOut]
+    additions: list[AdditionFindingOut]
+    #: The exact pins an install would use. Sent so the wizard can show what
+    #: "nothing already installed can change" concretely means -- 185 lines
+    #: on this machine -- rather than asking for that on trust.
+    constraints: list[str]
+
+
+def conflicts_out(report: ConflictReport) -> InstallerConflictsOut:
+    order = {CONFLICT: 0, UNKNOWN: 1, SAFE: 2}
+    return InstallerConflictsOut(
+        comfy_dir=report.comfy_dir,
+        checked=report.checked,
+        safe=report.safe,
+        refusal_reason=report.refusal_reason(),
+        requirements_path=report.requirements_path,
+        venv_python=report.venv_python,
+        requirements_error=report.requirements_error,
+        venv_error=report.venv_error,
+        counts={
+            "total": len(report.findings),
+            "safe": len([f for f in report.findings if f.outcome == SAFE]),
+            "conflict": len(report.conflicts),
+            "unknown": len(report.unknowns),
+        },
+        findings=[
+            ConflictFindingOut(
+                name=f.name,
+                installed_version=f.installed_version,
+                declared_specifier=f.declared_specifier,
+                outcome=f.outcome,
+                description=f.describe(),
+            )
+            for f in sorted(report.findings, key=lambda f: (order[f.outcome], f.name))
+        ],
+        additions=[
+            AdditionFindingOut(
+                name=a.name,
+                declared_specifier=a.declared_specifier,
+                blocked=a.blocked,
+                description=a.describe(),
+            )
+            for a in report.additions
+        ],
+        constraints=list(report.constraints),
+    )
 
 
 class InstallerApplyIn(BaseModel):

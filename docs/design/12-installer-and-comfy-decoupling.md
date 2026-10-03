@@ -183,6 +183,41 @@ So the check reports three outcomes, not two: *safe*, *conflict* (declared
 and violated) and *unknown* (undeclared, so pinned strictly). Treating
 unknown as safe is how a soft install quietly becomes the hard one.
 
+**What it found, measured against the real checkout.** 185 packages in
+ComfyUI's venv, 0.16 s to read both sources. 35 are declared and satisfy
+their declaration. **150 are installed without being declared** — most of a
+real venv is transitive dependencies ComfyUI's file never mentions. **None
+conflict.** And all four of this project's server packages are *absent from
+ComfyUI's file entirely*, so none of them can break a declaration: adding
+them is clear by measurement, not by argument.
+
+That 150 is the number that justifies the pin. "Constrain what is declared"
+would leave four fifths of the venv free for pip to move as collateral.
+
+### What is built
+
+`backend/application/ports/comfy_environment.py` reads both sources;
+`check_comfy_conflicts.py` classifies them; `GET /api/v1/installer/conflicts`
+serves the report. Every row carries its outcome *and* a sentence, so the
+wizard does not write prose that can drift from the rule.
+
+Two decisions inside it that the outline above did not settle:
+
+* **`prereleases=True` when comparing.** This machine has numpy `2.5.0rc1`
+  against a declared `>=1.25.0`, and PEP 440 says a prerelease does not
+  satisfy a `>=` range. Reporting that as a conflict would refuse a correct
+  install and tell a user their ComfyUI is broken while it is running. The
+  rule exists to stop an installer *choosing* a prerelease, which is not what
+  this check does — it reads a version someone already chose.
+* **`venv_python` is a per-call argument, resolved from settings.** It is a
+  setting the wizard sets and the user can change. A port that captured it
+  at wiring time would report on whichever venv happened to be configured
+  when the server started, and would do so silently.
+
+An unreadable source is `200` with `checked: false, safe: false`, never a
+pass. A report that cannot tell "we could not check" from "we checked and
+it is fine" is the failure mode worth designing against.
+
 ### Screen 3 — the paths, as now
 
 ComfyUI directory and model locations, pre-filled from resolution. Smaller
@@ -366,6 +401,7 @@ rely on the user having read a document.
 | `never_install` on torch | **replace** — should be conflict-*detectable*, not forbidden; screen 2's conflict check is the escape hatch the flag lacks |
 | ADR 0005's install-order argument | **withdraw** — the conclusion was right, the ordering argument was wrong |
 | `run_server.sh` unchanged | **done** — the dispatch is `backend/first_run.py` (§2) |
+| the conflict check, three outcomes | **done** — `GET /api/v1/installer/conflicts` (§3) |
 
 `path_tiers` was fixed as part of the first build and is unrelated to any
 of this; it stays.

@@ -37,8 +37,10 @@ from ..deps import get_services
 from ..schemas import (
     InstallerApplyIn,
     InstallerApplyOut,
+    InstallerConflictsOut,
     InstallerReadinessOut,
     InstallerStateOut,
+    conflicts_out,
     readiness_out,
     state_out,
 )
@@ -99,6 +101,39 @@ def apply_installation(
         },
         state=state_out(services.installer.apply.execute()).model_dump(),
     )
+
+
+@router.get("/conflicts", response_model=InstallerConflictsOut)
+def get_conflicts(
+    comfy_dir: str | None = None,
+    services: ApplicationServices = Depends(get_services),
+) -> InstallerConflictsOut:
+    """May the four server packages go into ComfyUI's own virtualenv?
+
+    **A read, and it is allowed to be expensive.** It runs a subprocess in
+    ComfyUI's interpreter -- measured at 0.16 s on this machine for 185
+    packages -- so the wizard calls it when the user *selects* the reuse
+    option rather than on every page load. The alternative, checking on
+    every load, would mean a 185-line answer rendered before anyone has
+    decided whether they want to read it.
+
+    Both paths come from the settings store rather than from the request:
+    `venv_python` is what the machine is configured to use, and a port that
+    guessed at wiring time would report on whichever venv happened to be
+    configured when the server started. `comfy_dir` can be overridden per
+    call so the wizard can check a directory the user has just typed before
+    committing it.
+
+    Three outcomes, not two: an installed package that ComfyUI's file does
+    not mention is *unknown*, and unknown is pinned rather than trusted.
+    See the design doc §3.
+    """
+    resolved = services.settings.read.execute().resolved
+    report = services.installer.conflicts.execute(
+        comfy_dir=comfy_dir or resolved.get("comfy_dir") or "",
+        venv_python=resolved.get("venv_python"),
+    )
+    return conflicts_out(report)
 
 
 @router.get("/manifest", response_model=dict[str, Any])

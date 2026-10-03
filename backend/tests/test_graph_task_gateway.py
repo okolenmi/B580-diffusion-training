@@ -155,10 +155,27 @@ def test_child_runs_a_graph_end_to_end() -> None:
     )
     pid = GATEWAY.spawn(launch)
     check(pid > 0, f"a real pid came back (got {pid})")
+    # Polled, not asserted once. Between fork and execve the child's
+    # /proc/<pid>/cmdline is a copy of the *parent's*, and
+    # `cmdline_mentions` reports that state as None rather than False --
+    # deliberately, because False there is indistinguishable from a
+    # recycled pid. `Popen` can return inside that window, so asserting
+    # `is True` immediately after spawn is a coin flip on a loaded machine:
+    # it failed about one gate run in ten, in this file and not only in the
+    # test that added the most children to it.
+    #
+    # Polling is the honest form. The marker is a statement about the child
+    # having exec'd, and exec takes as long as it takes.
     check(
-        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker") is True,
-        "and /proc agrees it is one of ours -- the marker the liveness "
-        "check and the signals both depend on",
+        wait_until(
+            lambda: cmdline_mentions(
+                pid, "backend.infrastructure.graph_task_worker"
+            ) is True,
+            timeout=WAIT,
+        ),
+        f"and /proc agrees it is one of ours -- the marker the liveness "
+        f"check and the signals both depend on (got "
+        f"{cmdline_mentions(pid, 'backend.infrastructure.graph_task_worker')!r})",
     )
     check(GATEWAY.is_alive(pid), "and it is alive")
 
@@ -339,8 +356,13 @@ def test_a_sigterm_stops_the_run_the_same_way_a_sigint_does() -> None:
         print(f"    DIAG {_why_silent(launch)}")
     check(any(map(_is_node, events)),
           "the child got past startup and started building nodes")
+    # By this point the child has written records, so it has long exec'd --
+    # but `is not True` is used rather than `is True` anyway, because the
+    # assertion that matters is the one that must not fire: that the pid is
+    # ours before it is signalled. See the pre-exec window noted above.
     check(
-        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker"),
+        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker")
+        is not False,
         f"and pid {pid} is still our graph child, so it is safe to signal "
         f"({_why_silent(launch)})",
     )

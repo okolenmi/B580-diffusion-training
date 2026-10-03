@@ -56,7 +56,7 @@ Rules that keep it fast and expandable:
 | Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs (the M8b run detail shipped without one). |
 | `/runs/logs/clear` | **Drop**: superseded, then dropped with the route. `DELETE /executions` wipes execution history. |
 | `/files/{kind}` (settings file browser) | **Drop** (M8 decision): the config editor shipped with a path input + datalists and never needed a browser; revisit only if the settings tab's redesign asks for one. |
-| Dataset preview images (legacy: static mount `/datasets/{name}/{preview_path}`) | **Port** (M8c): served through `GET /api/v1/datasets/{name}/files/{path}` with containment enforced by the adapter (02 section 7). **Shipped in M8c.** |
+| Dataset preview images (legacy: static mount `/datasets/{name}/{preview_path}`) | **Port** (M8c): served through `GET /api/v1/datasets/{name}/files/{path}` with containment enforced by the adapter, and the preview allowlist on top. **Shipped in M8c.** See [02 §3](02-api-reference.md#what-a-client-named-path-may-point-at) for what each path-taking surface may point at. |
 | `/run/reset` | **Dropped** (table above). |
 
 ## 4. Monitor data path (pinned contract)

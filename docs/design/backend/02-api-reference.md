@@ -130,6 +130,35 @@ temp sibling + rename, so comments, key order, and keys the model does
 not declare all survive (docs 07 F-08). `PATCH /config` (the form
 editor) still rewrites through the model, by design.
 
+### What a client-named path may point at
+
+Three surfaces take a path from the client, and **they do not share a
+base**, so "is this contained?" has three different answers. Nothing in the
+schemas can say any of it, which is why it is here.
+
+| Surface | Base | Refused |
+|---|---|---|
+| `/config`, `/config/raw` | the **project root** | anything resolving outside it, by any route: `../`, an absolute path elsewhere, or a symlink inside the tree pointing out. Both verbs. |
+| `/datasets/{name}/files/{path}` | that dataset's directory | traversal out of it, and any file that is not a preview image (`.png`, `.jpg`, `.jpeg`, `.webp`) within `MAX_PREVIEW_BYTES` |
+| `/assets/{kind}` | the ComfyUI model directory for that kind | traversal out of it. Legitimately *outside* this project — that is where models live — so this surface is not confined to the project root and must not be. |
+
+The config routes are confined to the project because they are an editor
+for *this project's* configuration; there is nothing else they could
+sensibly edit. The asset routes are not, because a model directory is a
+different tree by design.
+
+A NUL byte in any of these is refused before any path arithmetic: it is
+not a path but the end of the string, and every filesystem call raises
+`ValueError` on one. Note the transport difference when testing this — in a
+query string `%00` decodes to a NUL, while in a JSON body it is three
+ordinary characters and a perfectly legal filename.
+
+This was a live arbitrary read *and write* until it was found by sweeping
+every operation for 5xx and then following the query-string dimension:
+`GET /config/raw?path=../../../../etc/passwd` returned the file, and the
+same value on `PUT` wrote it. `backend/tests/test_config.py` holds both
+verbs against both shapes.
+
 **Settings.** Validation is **pure** — it looks, it never acts (docs 07
 F-15), so a rejected update leaves the filesystem exactly as it was. A
 *configured* `venv_python` is used as-is: a stale value fails loudly at

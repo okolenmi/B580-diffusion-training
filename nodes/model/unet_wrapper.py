@@ -1,4 +1,8 @@
-"""ComfyUI UNet wrapper and random conditioning generation.
+"""SDXL UNet construction, and random conditioning generation.
+
+The model is `nodes/model/unet.py`, this project's own implementation of the
+published SDXL UNet (design doc 12, section 7.3, section A). It used to be
+`comfy.ldm.modules.diffusionmodules.openaimodel.UNetModel`.
 
 **Moved here from `core/unet_wrapper.py` on 2026-10-02.** Unchanged apart
 from its imports. `nodes/model/lora_injector.py:228` constructs this
@@ -26,7 +30,6 @@ import gc
 import torch
 
 from ..components.seed import derive_seed
-from .timestep_embedding import Timestep
 from .lora import (
     LoRAConfig,
     extract_lora_weights,
@@ -35,11 +38,31 @@ from .lora import (
     load_lora_into_model,
     merge_lora_into_unet,
 )
+from .timestep_embedding import Timestep
+from .unet import UNetModel
 
 
 class ComfyUNetWrapper:
-    """Wraps ComfyUI's UNetModel with SDXL config for distillation/LoRA training."""
+    """Builds the SDXL UNet for distillation/LoRA training.
 
+    The class name is ComfyUI-era and no longer accurate -- it wraps nothing
+    from ComfyUI any more. It is kept because `lora_injector.py` names it, and
+    renaming it is a mechanical follow-up rather than something to fold into
+    the change that makes the name true.
+    """
+
+    #: The published SDXL UNet configuration. Every key here is passed to
+    #: `nodes.model.unet.UNetModel`; the parameters that configuration used
+    #: to carry for ComfyUI's benefit and no longer exist are gone:
+    #:
+    #: * `legacy` -- only ever changed how `dim_head` was derived, and SDXL
+    #:   passes false, so there is nothing to reproduce.
+    #: * `use_temporal_attention`, `use_temporal_resblock` -- video. SDXL
+    #:   passes false for both.
+    #:
+    #: The LoRA block-weight paths this project's configs use are written in
+    #: terms of the module names this builds (`input_blocks.3.1....attn1.to_q`),
+    #: which is why the names, not just the shapes, are a contract.
     SDXL_CONFIG = {
         "image_size":                32,
         "in_channels":               4,
@@ -56,10 +79,7 @@ class ComfyUNetWrapper:
         "use_linear_in_transformer": True,
         "num_classes":               "sequential",
         "adm_in_channels":           2816,
-        "legacy":                    False,
         "use_checkpoint":            True,
-        "use_temporal_attention":    False,
-        "use_temporal_resblock":     False,
     }
 
     def __init__(self, unet_sd: dict, device: str, dtype: torch.dtype,
@@ -76,12 +96,10 @@ class ComfyUNetWrapper:
         self.lora_registry = None
 
         sd = {k.replace("model.diffusion_model.", ""): v for k, v in unet_sd.items()}
-        import comfy.ldm.modules.diffusionmodules.openaimodel as om
         cfg = dict(self.SDXL_CONFIG)
-        cfg["dtype"] = dtype
         cfg["use_checkpoint"] = use_checkpoint
         cfg["adm_in_channels"] = adm_in_channels
-        self.model = om.UNetModel(**cfg)
+        self.model = UNetModel(**cfg)
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
         if missing:

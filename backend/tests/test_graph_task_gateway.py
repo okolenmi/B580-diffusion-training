@@ -265,12 +265,19 @@ def test_a_refused_graph_is_reported_by_the_child() -> None:
 
 def test_a_killed_child_reports_no_outcome() -> None:
     print("\n== the headline: a child that dies does not look like a success ==")
-    # This is the WP-22 property with no in-process equivalent. The run is
-    # SIGKILLed during startup, before it can have written anything: the
-    # ~2s of torch import and node discovery is what makes this
-    # deterministic rather than a race with a two-node graph that would
-    # otherwise finish first.
-    launch = _launch(3, [_float_node("a", 1.0)])
+    # This is the WP-22 property with no in-process equivalent.
+    #
+    # The graph is large on purpose. The run has to still be in progress when
+    # the SIGKILL lands, and the only margin this test had was the ~2s of
+    # torch import and node discovery before it. That is not a margin, it is a
+    # hope: it failed once in a gate run, where the child ran its graph and
+    # wrote a clean outcome while the kill was still in flight, and the
+    # check then correctly reported an outcome record for a child that had
+    # not died at all. Four thousand nodes, as its sibling signal tests use,
+    # makes the child's work outlast any plausible scheduling delay instead
+    # of racing it.
+    nodes = [_float_node(f"n{i}", float(i)) for i in range(4000)]
+    launch = _launch(3, nodes)
     pid = GATEWAY.spawn(launch)
     GATEWAY.kill(pid)
     check(

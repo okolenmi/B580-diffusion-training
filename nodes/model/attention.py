@@ -179,6 +179,8 @@ class CrossAttention(nn.Module):
         context_dim = _or(context_dim, query_dim)
 
         self.heads = heads
+        self.query_dim = query_dim
+        self.context_dim = context_dim
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
@@ -186,8 +188,18 @@ class CrossAttention(nn.Module):
                                     nn.Dropout(dropout))
 
     def forward(self, x, context=None, value=None):
+        if context is None:
+            # Falling back to self-attention is only meaningful when the
+            # context and query widths agree. When they differ, substituting
+            # `x` produces a matmul error about shapes with no hint as to
+            # the cause -- which is what ComfyUI does here. Say it instead.
+            if self.context_dim != self.query_dim:
+                raise ValueError(
+                    f"no context given, but this is a cross-attention over "
+                    f"{self.context_dim} channels attending to "
+                    f"{self.query_dim}: it cannot attend to itself")
+            context = x
         q = self.to_q(x)
-        context = x if context is None else context
         k = self.to_k(context)
         v = self.to_v(context if value is None else value)
         return self.to_out(_attention(q, k, v, self.heads))

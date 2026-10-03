@@ -541,11 +541,13 @@ whether the removal is independently observable.
 
 **The split, in three sections, each removing an import on its own.**
 
-* **A — the diffusion path.** `CrossAttention`, `FeedForward`, `GEGLU`,
-  `BasicTransformerBlock`, `SpatialTransformer`, `AttentionBlock`,
-  `checkpoint()` + `CheckpointFunction`, then `UNetModel`,
+* **A — the diffusion path. Done.** `checkpoint()` + `CheckpointFunction`
+  (part 1), the attention stack (part 2), then `UNetModel`,
   `TimestepEmbedSequential`, `Upsample`, `Downsample`, `ResBlock`,
-  `TimestepBlock`. Removes three of the five imports.
+  `TimestepBlock` (part 3). Removes three of the five imports.
+  `AttentionBlock` turned out not to be needed: SDXL's UNet only uses
+  `SpatialTransformer`, and the `AttentionBlock` classes in ComfyUI belong to
+  the genmo and wan VAEs.
 * **B — the VAE.** `AutoencoderKL` and the `Encoder`/`Decoder`/`ResBlock`/
   `AttnBlock` it composes, which live in a *second* ComfyUI file
   (`ldm/modules/diffusionmodules/model.py`). Removes one. Independent of A.
@@ -574,15 +576,83 @@ are ComfyUI's dtype/device dispatch wrappers. This project passes device and
 dtype explicitly at construction and never through them, so ours are
 `nn.Linear` and friends.
 
-**A third ComfyUI bug, found while reading this and not copied.**
-`SpatialTransformer`'s `is_linear=True` branch builds
-`proj_in = Linear(in_channels, inner_dim)` and then
-`proj_out = Linear(in_channels, inner_dim)` — identical, with the in/out
-roles never swapped, so the branch cannot work. The conv path is correct
-(`Conv2d(in_channels, inner_dim)` in, `Conv2d(inner_dim, in_channels)`
-out). Dead for SDXL, which uses the conv path, so harmless in ComfyUI. Our
-version has no `is_linear` branch; if one is ever needed it will be written
-correctly and noted.
+#### Bugs and quirks found in ComfyUI while porting, none copied
+
+Five, all measured rather than inferred:
+
+1. **`CheckpointFunction` raises on frozen parameters**, and re-enters a
+   CUDA-only autocast in backward. Both fixed in `nodes/model/checkpoint.py`,
+   the second measured as a 4.581e-04 relative gradient error becoming 0.0.
+   Both reported upstream.
+2. **`SpatialTransformer`'s `is_linear=True` branch** builds `proj_out` as
+   `Linear(in_channels, inner_dim)` — identical to `proj_in`, roles never
+   swapped — so it cannot work where `inner_dim != in_channels`. Invisible
+   for SDXL only by coincidence: `dim_head = num_head_channels = 64` and
+   `num_heads = ch // 64` give `inner_dim == ch` at every level, so both
+   projections come out square. Measured on the real UNet: 11
+   SpatialTransformers, every one e.g. `Linear(640, 640)`. **And SDXL does
+   use this branch** (`use_linear_in_transformer: True`), so the coincidence
+   is load-bearing rather than incidental.
+3. **`BasicTransformerBlock.__init__` takes `inner_dim` as a parameter
+   defaulting to `None`**, and `ff_in` is `ff_in or inner_dim is not None`.
+   Recomputing `inner_dim = n_heads * d_head` instead looks equivalent and
+   is not — it makes `ff_in` permanently true and adds a `norm_in` and an
+   `ff_in` FeedForward whose weights are in no checkpoint. The real UNet
+   settles it: 70 blocks, none with `norm_in`.
+4. **`comfy.ops.Linear` leaves its weight uninitialised** (~3e29 when
+   constructed and read), because ComfyUI assumes a checkpoint always
+   overwrites it. Harmless there; it makes any naive comparison produce NaN
+   on both sides, where `nan == nan` passes everything.
+5. **`self.ff_in` is a bool before the branch and a `FeedForward` after it.**
+   One attribute, two meanings, which the forward's `if self.ff_in:`
+   happens to tolerate. Split into `has_ff_in` and `ff_in`.
+
+One quirk was inherited rather than fixed, because it is load-bearing:
+`label_emb` is wrapped in a redundant `nn.Sequential`, so its keys are
+`label_emb.0.0.*` and `label_emb.0.2.*`. Unwrapping renames all four
+tensors, and `load_state_dict(strict=False)` would report them missing and
+carry on.
+
+### What was verified, and how
+
+The contract is the checkpoint, so the claims are mechanical and were
+checked mechanically:
+
+| | result |
+|---|---|
+| `SpatialTransformer` `state_dict` vs ComfyUI, every SDXL level | identical keys and shapes, 46 / 206 / 206 params |
+| attention forwards vs ComfyUI, both projection branches | **bitwise identical** |
+| `UNetModel` `state_dict` vs ComfyUI, real SDXL config | **1680 tensors, identical names, identical shapes** |
+| UNet forward vs ComfyUI, small config with every SDXL feature | **bitwise identical** |
+| a real SDXL checkpoint into our `UNetModel` | **0 missing, 0 unexpected** |
+
+That last one is the claim that matters, and `smoke_test_unet.py` re-runs it
+whenever a checkpoint is present, skipping rather than failing when it is
+not.
+
+#### A misdiagnosis, recorded because it nearly became a change
+
+`test_a_killed_child_reports_no_outcome` failed once in a gate run: the child
+had run its graph and written a clean outcome while the SIGKILL was still in
+flight. I diagnosed it as the fork/execve window — between `fork` and
+`execve` a child's `/proc/<pid>/cmdline` is a copy of the parent's, which
+does not contain `CMDLINE_MARKER`, so `_signal` refuses to signal what is
+actually our own child. I wrote a fix to `graph_task_gateway.py` on that
+basis, and a measurement appeared to support it: 40 of 40 freshly spawned
+children read as `False`.
+
+Both the diagnosis and the measurement were wrong.
+`cmdline_mentions` *already* handles this: it compares the child's cmdline
+against the parent's own and returns `None` — "cannot judge identity yet" —
+which `_signal` treats as signal-me and only `False` refuses. And the 40 of
+40 were all **post**-exec, where `False` is the correct answer. The fix was
+reverted; nothing in `backend/` changed for it.
+
+The actual cause was the margin the test assumed rather than had: it killed a
+one-node graph, betting on the ~2 s of torch import before the child could
+do anything. Its sibling signal tests use 4,000 nodes and are not in that
+position. The graph is now 4,000 nodes, and disabling the kill makes the
+check fail, so it has teeth rather than merely passing.
 
 ### What would make it wrong
 

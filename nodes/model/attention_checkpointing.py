@@ -106,7 +106,8 @@ from __future__ import annotations
 import math
 
 
-def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
+def enable_attention_block_checkpointing(fraction: float = 1.0,
+                                        block_cls=None) -> None:
     """Idempotent per process (a sentinel on the class itself, same
     style as `gradient_checkpointing.enable_frozen_param_safe_checkpointing`'s
     own `_frozen_param_safe` flag) -- calling this more than once, even
@@ -136,9 +137,22 @@ def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
     Forward output is identical checkpointed or not -- the knob only
     trades recompute for activation residency.
     """
-    from comfy.ldm.modules import attention as comfy_attn
+    from .attention import BasicTransformerBlock
 
-    current = comfy_attn.BasicTransformerBlock
+    # This used to patch ComfyUI's class, because ComfyUI's is what ran.
+    # It is now ours (nodes/model/attention.py) and ours is what the UNet
+    # builds, so the patch target and the patched thing are finally in the
+    # same file -- which is the whole reason this gap existed at all: the
+    # block was somewhere else and the flag came from somewhere else again.
+    #
+    # `block_cls` exists so a test can patch a throwaway subclass. The patch
+    # sets a sentinel on the class it patches, so patching the real one in a
+    # test process would leak into every later check and be unreachable for
+    # a second one. Before this parameter existed, the only way to test the
+    # patch at all was to fabricate a fake `comfy.ldm.modules.attention`
+    # module -- which is why smoke_test_attention_checkpointing.py used to
+    # test a hand-written stand-in for the block rather than the block.
+    current = BasicTransformerBlock if block_cls is None else block_cls
     if getattr(current, "_attention_block_checkpointing_enabled", False):
         return
     if fraction <= 0.0:
@@ -150,7 +164,7 @@ def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
 
     original_forward = current.forward
 
-    def patched_forward(self, x, context=None, transformer_options={}):
+    def patched_forward(self, x, context=None, transformer_options=None):
         # This project's own checkpoint, imported per call so that whichever
         # implementation is *active* is the one that runs -- plain
         # frozen-param-safe, or block_profiler.py's instrumented one.

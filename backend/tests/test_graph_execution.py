@@ -979,4 +979,218 @@ check(never.files == 0 and not absent.exists(),
       f"do, and is not conjured into being ({never})")
 
 
+
+# ==========================================================================
+print("\n-- R4-02: a crashed run's evidence must survive the sweep --")
+# The first version of the sweep deleted all three files for every terminal
+# run. For a child that died without writing an outcome, the row said
+# "exited without reporting an outcome (crashed, or a device fault killed
+# it) -- see the execution log", and the next server start deleted the
+# execution log. The one place a user could look for the traceback was
+# removed by the code tidying up.
+
+crash_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-crash-"))
+crash_db = SqliteDatabase(crash_dir / "g.db")
+crash_db.initialize()
+crash_repo = SqliteGraphExecutionRepository(crash_db)
+
+
+def _write_scratch_into(directory: Path, run_id: int,
+                        log_body: bytes = b"child log\n") -> list[Path]:
+    out = []
+    for suffix, body in (
+        (".graph.json", b'{"format": 1, "nodes": [], "edges": []}'),
+        (".events.jsonl", b'{"kind": "node", "node_id": "a", "ok": true}\n'),
+        (".log", log_body),
+    ):
+        path = directory / f"execution_{run_id}{suffix}"
+        path.write_bytes(body)
+        out.append(path)
+    return out
+
+
+def _crash_scratch(run_id: int, log_body: bytes = b"child log\n") -> list[Path]:
+    out = []
+    for suffix, body in (
+        (".graph.json", b'{"format": 1, "nodes": [], "edges": []}'),
+        (".events.jsonl", b'{"kind": "node", "node_id": "a", "ok": true}\n'),
+        (".log", log_body),
+    ):
+        path = crash_dir / f"execution_{run_id}{suffix}"
+        path.write_bytes(body)
+        out.append(path)
+    return out
+
+
+crashed = GraphExecution.create(graph=VALID, created_at=NOW)
+crash_repo.add(crashed)
+crashed.mark_running(at=NOW)
+crash_repo.update_if_status(crashed, expected=GraphStatus.QUEUED)
+failed_files = _crash_scratch(1)
+failed_row = crash_repo.get(crashed.id)
+failed_row.mark_failed(at=NOW, error="exited without reporting an outcome")
+crash_repo.update_if_status(failed_row, expected=GraphStatus.RUNNING)
+
+sweep = SweepExecutionScratch(crash_repo, crash_dir).execute()
+graph_path, events_path, log_path = failed_files
+check(not graph_path.exists(),
+      "a failed run's graph.json is removed -- 38% of its bytes and read "
+      "by nobody once the row is terminal")
+check(not events_path.exists(),
+      "and so is its events.jsonl, which is the other 62%")
+check(log_path.exists(),
+      f"but its log survives a sweep ({log_path.name}) -- that log is the "
+      f"only place the traceback of a crash was")
+
+# The headline case: 25 failed runs, only the newest 20 logs remain. The
+# count is on purpose -- these logs are tens of bytes, so the bound that
+# matters is the number of directories, not the bytes.
+bulk_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-bulk-"))
+bulk_db = SqliteDatabase(bulk_dir / "g.db")
+bulk_db.initialize()
+bulk_repo = SqliteGraphExecutionRepository(bulk_db)
+bulk_logs = []
+for run_id in range(1, 26):
+    row = GraphExecution.create(graph=VALID, created_at=NOW)
+    bulk_repo.add(row)
+    row.mark_running(at=NOW)
+    bulk_repo.update_if_status(row, expected=GraphStatus.QUEUED)
+    row = bulk_repo.get(row.id)
+    row.mark_failed(at=NOW, error="boom")
+    bulk_repo.update_if_status(row, expected=GraphStatus.RUNNING)
+    bulk_logs.append(_write_scratch_into(bulk_dir, run_id))
+
+kept_bulk = SweepExecutionScratch(bulk_repo, bulk_dir, failed_log_keep=20).execute()
+surviving = [p for p in bulk_logs if p[2].exists()]
+check(len(surviving) == 20,
+      f"25 failed runs keep the newest 20 logs ({len(surviving)})")
+kept_ids = sorted(
+    int(p[2].stem.split("_")[1]) for p in surviving
+)
+check(kept_ids == list(range(6, 26)),
+      f"and they are runs 6..25 -- the newest twenty, not whichever sorted "
+      f"first ({kept_ids[:4]}...{kept_ids[-2:]})")
+check(not any(p[0].exists() or p[1].exists() for p in bulk_logs),
+      "every graph.json and events.jsonl is gone regardless")
+
+# A zero retention is honoured rather than treated as unlimited.
+all_gone = SweepExecutionScratch(
+    bulk_repo, bulk_dir, failed_log_keep=0).execute()
+check(not any(p[2].exists() for p in bulk_logs),
+      f"retention of 0 keeps nothing, rather than keeping all "
+      f"({sum(1 for p in bulk_logs if p[2].exists())} left)")
+
+# A log with invalid UTF-8 must not raise anywhere in this path.
+binary_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-binary-"))
+binary_db = SqliteDatabase(binary_dir / "g.db")
+binary_db.initialize()
+binary_repo = SqliteGraphExecutionRepository(binary_db)
+binary_row = GraphExecution.create(graph=VALID, created_at=NOW)
+binary_repo.add(binary_row)
+binary_row.mark_running(at=NOW)
+binary_repo.update_if_status(binary_row, expected=GraphStatus.QUEUED)
+binary_row = binary_repo.get(binary_row.id)
+binary_row.mark_failed(at=NOW, error="boom")
+binary_repo.update_if_status(binary_row, expected=GraphStatus.RUNNING)
+binary_log = binary_dir / "execution_1.log"
+binary_log.write_bytes(b"\xff\xfe not utf-8 at all \x80\x81\n")
+for suffix in (".graph.json", ".events.jsonl"):
+    (binary_dir / f"execution_1{suffix}").write_bytes(b"x\n")
+binary_sweep = SweepExecutionScratch(binary_repo, binary_dir).execute()
+check(binary_sweep.files == 2 and binary_log.exists(),
+      f"a log of invalid UTF-8 is kept and does not raise "
+      f"(removed {binary_sweep.files}, log kept {binary_log.exists()})")
+
+# A finished run still loses everything, immediately: it succeeded, so the
+# log says nothing the row does not.
+ok_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-ok-"))
+ok_db = SqliteDatabase(ok_dir / "g.db")
+ok_db.initialize()
+ok_repo = SqliteGraphExecutionRepository(ok_db)
+ok_row = GraphExecution.create(graph=VALID, created_at=NOW)
+ok_repo.add(ok_row)
+ok_row.mark_running(at=NOW)
+ok_repo.update_if_status(ok_row, expected=GraphStatus.QUEUED)
+ok_row = ok_repo.get(ok_row.id)
+ok_row.mark_finished(at=NOW)
+ok_repo.update_if_status(ok_row, expected=GraphStatus.RUNNING)
+ok_files = []
+for suffix, body in ((".graph.json", b"{}"), (".events.jsonl", b"\n"),
+                     (".log", b"all fine\n")):
+    path = ok_dir / f"execution_1{suffix}"
+    path.write_bytes(body)
+    ok_files.append(path)
+SweepExecutionScratch(ok_repo, ok_dir).execute()
+check(not any(p.exists() for p in ok_files),
+      f"a successful run loses all three, log included -- keeping it would "
+      f"be keeping nothing ({[p.name for p in ok_files if p.exists()]})")
+# ==========================================================================
+print("\n-- R4-02: a crashed run's log tail goes into the row --")
+# The sweep now keeps a failed run's log, but the row has to stand on its
+# own too: the log is a bounded set of the newest failures, and a row whose
+# log has aged out still has to say something useful.
+
+tail_dir = Path(tempfile.mkdtemp(prefix="backend-tail-"))
+tail_db = SqliteDatabase(tail_dir / "g.db")
+tail_db.initialize()
+tail_repo = SqliteGraphExecutionRepository(tail_db)
+from backend.infrastructure.events.callback_event_bus import (  # noqa: E402
+    CallbackEventBus,
+)
+tail_supervisor = GraphExecutionSupervisor(
+    executions=tail_repo, writer=tail_repo, gateway=None,
+    events=EventPublisher(events=CallbackEventBus()), clock=FakeClock(),
+    scratch_dir=tail_dir,
+)
+
+tail_row = GraphExecution.create(graph=VALID, created_at=NOW)
+tail_repo.add(tail_row)
+tail_row.mark_running(at=NOW)
+tail_repo.update_if_status(tail_row, expected=GraphStatus.QUEUED)
+tail_row = tail_repo.get(tail_row.id)
+tail_paths = tail_supervisor._paths_for(tail_row.id)
+tail_paths["log"].write_text(
+    "starting\n" + "noise line\n" * 5000
+    + "Traceback (most recent call last):\nRuntimeError: the card fell over\n",
+    encoding="utf-8",
+)
+
+tail = tail_supervisor._with_log_tail(tail_row.id, "exited without an outcome")
+check("the card fell over" in tail,
+      f"the traceback reaches the row ({tail[-60:]!r})")
+check("starting" not in tail,
+      f"the *beginning* of the log is dropped -- a row is not a log file, "
+      f"and the bound is what stops it becoming megabytes (tail is "
+      f"{len(tail)} chars from a "
+      f"{tail_paths['log'].stat().st_size if tail_paths['log'].exists() else 0}"
+      f"-byte log)")
+check("bytes of the execution log" in tail,
+      "and it says which log and how much of it, so a reader knows the row "
+      "has been truncated rather than complete")
+
+# Read from the end: a crash's traceback is at the bottom.
+check(tail.rstrip().endswith("RuntimeError: the card fell over"),
+      "the tail is the *end* of the log, not the beginning")
+
+# Missing and unreadable degrade to the plain message. This runs in the
+# `finally` of a run that has already failed, so a reader that raised would
+# replace a real error with an internal one.
+tail_paths["log"].unlink()
+check(tail_supervisor._with_log_tail(tail_row.id, "plain") == "plain",
+      "a log that is not there degrades to the plain error rather than raising")
+
+tail_paths["log"].write_bytes(b"\xff\xfe\x80 not utf-8 \x81\n")
+binary_tail = tail_supervisor._with_log_tail(tail_row.id, "plain")
+check(binary_tail != "plain",
+      "a log of invalid UTF-8 does not raise either -- a traceback from a "
+      "dying process can contain a partial line")
+
+# And the size bound is a real bound.
+tail_paths["log"].write_text("x" * (GraphExecutionSupervisor.LOG_TAIL_BYTES * 3),
+                             encoding="utf-8")
+big = tail_supervisor._with_log_tail(tail_row.id, "plain")
+check(len(big) <= GraphExecutionSupervisor.LOG_TAIL_BYTES + 400,
+      f"a large log is cut to the bound ({len(big)} chars for a "
+      f"{GraphExecutionSupervisor.LOG_TAIL_BYTES * 3}-byte log)")
+
 finish()

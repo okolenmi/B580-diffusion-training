@@ -143,3 +143,25 @@ than from the last probe of any kind. Measuring it from the probe made
 timestamp, so the first click after load was always rate limited, and that
 is the click a user is most likely to make.
 """
+
+
+GRAPH_FAILED_LOG_KEEP = 20
+"""How many *failed* runs keep their log after the startup sweep.
+
+Everything else about a finished run is deleted: the event file is 62% of
+what a run leaves on disk and the graph is 38%, and both are read by nobody
+once the row is terminal. The log is different. It is the full stderr of
+the child, and for a run that died without reporting an outcome it is the
+only place the traceback was -- the row gets a bounded tail of it, which is
+enough to see the error and not enough to keep the whole thing.
+
+Twenty because a user debugging something that fails repeatedly wants the
+recent history, and a hundred of them is a hundred directories to page
+through. It is a count and not a size because these logs are measured at
+tens of bytes for a clean run and a few kilobytes for a traceback, so
+twenty of them is nothing and the bound is on the number of *directories*,
+which is what actually accumulates.
+
+A `finished` run's log is still deleted immediately -- it succeeded, so
+there is nothing in it that the row does not already say.
+"""

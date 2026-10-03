@@ -40,6 +40,31 @@ to end-of-file in a single call, so replaying a large file parses all of it
 at once. Bounding that changes the hot path of every poll, and it is a
 memory bound rather than a growth problem -- the file is bounded by the run
 that is currently in flight. Recorded rather than fixed.
+
+**What is kept, and why.** The event file and the graph go for every
+terminal run, exactly as before. The *log* of a run that ended `error` or
+`stopped` stays, up to `GRAPH_FAILED_LOG_KEEP` of the most recent.
+
+That is a change from the first version of this file, which deleted all
+three unconditionally, and it was wrong: for a child that died without
+reporting an outcome the row says "exited without reporting an outcome
+(crashed, or a device fault killed it)" and points at the execution log --
+which the next server start then deleted. The only place a user could look
+for the traceback was destroyed by the tool that was tidying up, and the
+row said nothing more than "it died".
+
+Two mitigations rather than one, because either alone leaves a hole. The
+row now carries a bounded tail of the log (see
+`GraphExecutionSupervisor._with_log_tail`), so the evidence survives in the
+database; and the file survives on disk for the newest N, so a user can
+read a traceback in full rather than through a 4 KiB summary.
+
+A run whose row has *vanished* is not one of the N -- nothing claims it
+failed, and orphan logs would spend the slots on runs nobody can identify.
+A row that cannot be read is, because unreadable is not absent.
+
+A `finished` run's log is still removed immediately: it succeeded, so there
+is nothing in it that the row does not already say.
 """
 
 from __future__ import annotations
@@ -49,8 +74,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..limits import GRAPH_FAILED_LOG_KEEP
 from ..ports.graph_execution_repository import GraphExecutionRepository
-from ...domain.value_objects import ExecutionId
+from ...domain.value_objects import ExecutionId, GraphStatus
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +107,11 @@ class SweepExecutionScratch:
         self,
         executions: GraphExecutionRepository,
         scratch_dir: Path,
+        failed_log_keep: int = GRAPH_FAILED_LOG_KEEP,
     ) -> None:
         self._executions = executions
         self._scratch_dir = scratch_dir
+        self._failed_log_keep = max(0, failed_log_keep)
 
     @property
     def scratch_dir(self) -> Path:
@@ -101,10 +129,46 @@ class SweepExecutionScratch:
             return SweepExecutionScratchResult()
 
         removed_files = removed_bytes = removed_runs = kept = 0
+        # Which runs failed, and therefore which logs are worth keeping.
+        # Collected first because the retention cap is "the newest N", and
+        # deciding that while deleting in id order would keep whichever N
+        # happened to sort first.
+        failed = sorted(
+            run_id for run_id in self._by_run()
+            if self._ends_badly(run_id)
+        )
+        # `failed[-0:]` is `failed[0:]` -- the whole list. A retention of 0 would
+        # therefore keep everything, which is the opposite of what 0 means.
+        # Written as a positive slice for that reason, and tested: the check
+        # "retention of 0 keeps nothing" is what found it.
+        keep_logs = (
+            set(failed[-self._failed_log_keep:])
+            if failed and self._failed_log_keep > 0
+            else set()
+        )
+        dropped_logs = 0
+
         for run_id, paths in sorted(self._by_run().items()):
             if self._is_live(run_id):
                 kept += 1
                 continue
+            if run_id in keep_logs:
+                # Keep the log, take the rest. The event file is the 62% and
+                # the graph is the 38% of what a run leaves behind; both are
+                # read by nobody once the row is terminal.
+                log = self._paths_for(run_id).get("log")
+                files, freed = self._remove(
+                    [p for p in paths if p != log]
+                )
+                if files:
+                    removed_runs += 1
+                    removed_files += files
+                    removed_bytes += freed
+                continue
+            if run_id in failed:
+                # Failed, but outside the newest N. Counted so the number is
+                # visible rather than silently differing between runs.
+                dropped_logs += 1
             files, freed = self._remove(paths)
             if files:
                 removed_runs += 1
@@ -117,10 +181,48 @@ class SweepExecutionScratch:
                 "%d file(s), %.1f MB", removed_runs, removed_files,
                 removed_bytes / 1_000_000,
             )
+        if dropped_logs:
+            logger.info(
+                "removed %d old failed-run log(s) beyond the newest %d",
+                dropped_logs, self._failed_log_keep,
+            )
         return SweepExecutionScratchResult(
             runs=removed_runs, files=removed_files,
             bytes=removed_bytes, kept=kept,
         )
+
+    def _paths_for(self, run_id: int) -> dict[str, Path]:
+        base = self._scratch_dir / f"execution_{run_id}"
+        return {"graph": base.with_suffix(".graph.json"),
+                "events": base.with_suffix(".events.jsonl"),
+                "log": base.with_suffix(".log")}
+
+    def _ends_badly(self, run_id: int) -> bool:
+        """Whether this run's row says it failed or was stopped.
+
+        Only a row that *says so*. A row that has vanished is not treated as
+        a failure, and that is deliberate on both counts: nothing claims it
+        failed, and keeping orphan logs would spend the retention slots on
+        runs nobody can identify, in preference to named ones that a user is
+        actually debugging. An orphan's files are removed as before.
+
+        A row that cannot be *read* is a different question and is treated as
+        badly-ended: unreadable is not the same as absent, and deleting the
+        only copy of a log because the database hiccuped is worse than
+        keeping one extra.
+        """
+        try:
+            record = self._executions.get(ExecutionId(run_id))
+        except Exception:  # noqa: BLE001 -- unreadable is not absent
+            logger.debug("could not read execution %s for the sweep", run_id,
+                         exc_info=True)
+            return True
+        if record is None:
+            return False
+        # STOPPED, not CANCELLED: GraphStatus has no CANCELLED -- a
+        # stop-requested run ends STOPPED, and it is worth keeping the log
+        # of for the same reason a failure's is.
+        return record.status in (GraphStatus.ERROR, GraphStatus.STOPPED)
 
     def _by_run(self) -> dict[int, list[Path]]:
         """The scratch files we wrote, grouped by the run they belong to.

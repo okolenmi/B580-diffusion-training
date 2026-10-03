@@ -22,6 +22,8 @@ from pathlib import Path
 import torch
 from PIL import Image
 
+from .vae import AutoencoderKL
+
 
 class VAEDecoder:
     """Wrapper around ComfyUI's VAE for decoding latents to images."""
@@ -81,8 +83,6 @@ class VAEDecoder:
         return decoder
 
     def _load_vae(self, vae_sd):
-        from comfy.ldm.models.autoencoder import AutoencoderKL
-
         embed_dim = 4
         ddconfig = {
             "double_z": True,

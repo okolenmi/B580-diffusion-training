@@ -548,9 +548,28 @@ whether the removal is independently observable.
   `AttentionBlock` turned out not to be needed: SDXL's UNet only uses
   `SpatialTransformer`, and the `AttentionBlock` classes in ComfyUI belong to
   the genmo and wan VAEs.
-* **B — the VAE.** `AutoencoderKL` and the `Encoder`/`Decoder`/`ResBlock`/
-  `AttnBlock` it composes, which live in a *second* ComfyUI file
-  (`ldm/modules/diffusionmodules/model.py`). Removes one. Independent of A.
+* **B — the VAE. Done.** `AutoencoderKL`, `Encoder`, `Decoder`,
+  `ResnetBlock`, `AttnBlock`, `Upsample`, `Downsample`,
+  `DiagonalGaussianDistribution` — in `nodes/model/vae.py`. Removes one.
+  Independent of A, and it turned out to be: nothing in it touches the UNet.
+
+  ComfyUI splits this across two files, `ldm/models/autoencoder.py` and
+  `ldm/modules/diffusionmodules/model.py`. Most of the second is video —
+  `conv3d`, `CarriedConv3d`, `conv_carry_causal_3d`, `time_compress`, the
+  5-D branches — and none of it applies to an image VAE. `AttnBlock` turned
+  out to be needed after all, because `mid.attn_1` is built
+  unconditionally in both halves while SDXL configures
+  `attn_resolutions: []`: two attention blocks in a VAE whose config names
+  no attention.
+
+  Two things that are easy to get wrong and are reproduced deliberately.
+  `Downsample` pads *asymmetrically*, `(0, 1, 0, 1)`, which a symmetric
+  stride-2 convolution cannot express — same shape, half-pixel shift per
+  level, four levels of it. And `AttnBlock` treats **channels as features
+  and `H*W` as the sequence**, the reverse of the UNet's attention in
+  `attention.py`. Both give the right shape either way, so neither is
+  catchable by a shape test; `smoke_test_vae.py` checks both by value and
+  proves each check can fail.
 * **C — CLIP.** `sdxl_clip`, `clip_model`, `sd1_clip`, and the BPE
   tokenizer. Removes one. Independent of A and B.
 
@@ -625,6 +644,9 @@ checked mechanically:
 | `UNetModel` `state_dict` vs ComfyUI, real SDXL config | **1680 tensors, identical names, identical shapes** |
 | UNet forward vs ComfyUI, small config with every SDXL feature | **bitwise identical** |
 | a real SDXL checkpoint into our `UNetModel` | **0 missing, 0 unexpected** |
+| `AutoencoderKL` `state_dict` vs ComfyUI, SDXL's config | **248 tensors, identical names and shapes** |
+| VAE `encode` and `decode` vs ComfyUI, three configs | **bitwise identical** |
+| a real SDXL checkpoint into our `AutoencoderKL` | **0 missing, 0 unexpected** |
 
 That last one is the claim that matters, and `smoke_test_unet.py` re-runs it
 whenever a checkpoint is present, skipping rather than failing when it is

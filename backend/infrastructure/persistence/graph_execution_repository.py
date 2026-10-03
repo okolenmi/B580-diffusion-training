@@ -19,7 +19,7 @@ from ...domain.entities.graph_execution import GraphExecution
 from ...domain.exceptions import DomainError
 from ...domain.graph import GraphDefinition, NodeResult
 from ...domain.value_objects import ExecutionId, GraphStatus
-from .sqlite import SqliteDatabase
+from .sqlite import SqliteDatabase, fits_in_sqlite_int
 
 _COLUMNS = (
     "id, status, graph, results, error, created_at, updated_at, "
@@ -122,6 +122,12 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
         )
 
     def get(self, execution_id: ExecutionId) -> GraphExecution | None:
+        # A path segment can carry an integer no INTEGER column could hold.
+        # Binding it raises OverflowError inside the driver, which reaches
+        # the client as a 500; no row can have that id, so it is "not
+        # found". See ``fits_in_sqlite_int``.
+        if not fits_in_sqlite_int(execution_id):
+            return None
         with self._db.connection() as conn:
             row = conn.execute(
                 f"SELECT {_COLUMNS} FROM graph_executions WHERE id = ?",

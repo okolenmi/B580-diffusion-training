@@ -31,7 +31,7 @@ from ..application.ports.dataset_tasks import (
     TaskStatus,
 )
 from .persistence.cas import compare_and_swap_status
-from .persistence.sqlite import SqliteDatabase
+from .persistence.sqlite import SqliteDatabase, fits_in_sqlite_int
 
 # The active set is derived from the enum, so SQL cannot drift from what
 # ``TaskStatus.is_active`` says (docs 08 S-24). Kept as words as well as
@@ -130,6 +130,11 @@ class SqliteDatasetTasks(DatasetTasks):
         return task
 
     def get(self, task_id: int) -> DatasetTask | None:
+        # See ``fits_in_sqlite_int``: a path segment can carry an integer
+        # no INTEGER column could hold, and binding it is an OverflowError
+        # the client would see as a 500. No row can have that id.
+        if not fits_in_sqlite_int(task_id):
+            return None
         with self._db.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM dataset_tasks WHERE id = ?", (task_id,)

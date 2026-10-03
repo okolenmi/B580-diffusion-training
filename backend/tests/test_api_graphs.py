@@ -200,6 +200,32 @@ expect_error(status, body, 422, "invalid_query", "limit out of bounds")
 status, _, body = asgi_request(app, f"{GRAPH}/executions/999999")
 expect_error(status, body, 404, "graph_execution_not_found", "unknown execution")
 
+# An id a URL can carry but an INTEGER column cannot hold. Found by
+# fuzzing every operation for 5xx: SQLite's INTEGER is signed 64-bit and
+# the driver raises OverflowError rather than truncating, so binding
+# 2**63 reached the client as a 500. No row can have that id, so it is
+# "not found" -- the same answer as 999999 above, for a value that is
+# merely further out of range rather than merely unused.
+for too_big, label in (
+    (2 ** 63, "one past the signed 64-bit maximum"),
+    (2 ** 64, "one past the unsigned 64-bit maximum"),
+    (10 ** 30, "absurdly large"),
+):
+    status, _, body = asgi_request(app, f"{GRAPH}/executions/{too_big}")
+    expect_error(status, body, 404, "graph_execution_not_found",
+                 f"execution id past SQLite's range: {label}")
+    status, _, body = asgi_request(app, f"{GRAPH}/executions/{too_big}/stop",
+                                   method="POST")
+    expect_error(status, body, 404, "graph_execution_not_found",
+                 f"stopping an execution id past SQLite's range: {label}")
+
+# The boundary itself must still work: 2**63 - 1 is representable.
+status, _, body = asgi_request(app, f"{GRAPH}/executions/{2 ** 63 - 1}")
+expect_error(
+    status, body, 404, "graph_execution_not_found",
+    "the largest representable id is a normal lookup, not a range error",
+)
+
 # -- single-active + stop --------------------------------------------------
 status, _, body = asgi_request(
     app, f"{GRAPH}/run",

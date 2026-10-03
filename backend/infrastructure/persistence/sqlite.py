@@ -29,6 +29,24 @@ from contextlib import contextmanager
 from datetime import datetime, UTC
 from pathlib import Path
 
+#: SQLite's INTEGER holds a signed 64-bit value, and the driver raises
+#: ``OverflowError`` rather than truncating when handed a larger one. An id
+#: taken from a URL path segment is an arbitrary-length integer, so "it is an
+#: int" does not imply "it can be bound to a query" -- and an integer this
+#: large cannot name a row that exists, so it is *not found* rather than a
+#: server fault.
+#:
+#: Defined here rather than in each repository because the limit belongs to
+#: the database, not to any one table, and two repositories had the same
+#: missing guard.
+SQLITE_MIN_INT = -(2 ** 63)
+SQLITE_MAX_INT = 2 ** 63 - 1
+
+
+def fits_in_sqlite_int(value: int) -> bool:
+    """Whether ``value`` is bindable to an INTEGER column."""
+    return SQLITE_MIN_INT <= value <= SQLITE_MAX_INT
+
 
 class SqliteDatabase:
     def __init__(self, path: Path | str) -> None:

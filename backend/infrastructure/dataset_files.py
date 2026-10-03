@@ -49,6 +49,20 @@ class FsDatasetFiles(DatasetFiles):
         self._datasets_dir = datasets_dir
 
     def read(self, dataset: str, rel_path: str) -> DatasetFile:
+        # A NUL byte is not a path, it is the string's own terminator, and
+        # every filesystem call below raises ValueError on one rather than
+        # returning "no such file". Both halves of the URL reach the disk
+        # here, so both are checked before anything is resolved -- an
+        # unhandled ValueError from lstat() reaches the client as a 500,
+        # and a name that cannot exist deserves the same not-found answer
+        # as one that does not.
+        if "\x00" in dataset:
+            raise DatasetNotFoundError(f"dataset '{dataset}' not found")
+        if "\x00" in rel_path:
+            raise DatasetFileNotFoundError(
+                f"file '{rel_path}' does not exist in dataset '{dataset}'"
+            )
+
         root = (self._datasets_dir / dataset).resolve()
         if not root.is_relative_to(self._datasets_dir.resolve()):
             # name itself escapes (e.g. ".."): not a dataset of ours

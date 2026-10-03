@@ -103,6 +103,28 @@ status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/../../escape.
 expect_error(status, body, 404, "dataset_file_not_found", "traversal refused as not-found")
 check("SECRET" not in str(body), "escape file never read")
 
+# A NUL byte is not a path -- it is where the string ends. Found by
+# fuzzing every operation for 5xx: a NUL in either half of the URL reached
+# lstat(), which raises ValueError("embedded null character in path"), and
+# an unhandled ValueError reaches the client as a 500. The file-route
+# contract is that everything not served is 404, and a name that cannot
+# exist deserves the same answer as one that does not.
+status, _, body = asgi_request(app, "/api/v1/datasets/%00/files/previews/p1.png")
+expect_error(
+    status, body, 404, "dataset_not_found", "NUL in the dataset name"
+)
+status, _, body = asgi_request(app, "/api/v1/datasets/api-ds/files/%00")
+expect_error(
+    status, body, 404, "dataset_file_not_found", "NUL in the relative path"
+)
+status, _, body = asgi_request(
+    app, "/api/v1/datasets/api-ds/files/previews/a%00b.png"
+)
+expect_error(
+    status, body, 404, "dataset_file_not_found",
+    "NUL inside a filename that otherwise looks valid",
+)
+
 # --- the allowlist (docs 08 N-05) -------------------------------------
 # This route is the items grid's <img>. It used to serve every file in
 # the dataset directory, so metadata.db, whole .safetensors shards (read
@@ -473,6 +495,15 @@ status, _, body = asgi_request(
     app, f"/api/v1/datasets/flow/tasks/{task_id}/stop", method="POST"
 )
 expect_error(status, body, 409, "dataset_task_not_active", "stop of a killed task")
+
+# Same SQLite range as the execution id above, and the same fix: a task id
+# a URL can carry but an INTEGER column cannot hold is not found, not a
+# server fault.
+status, _, body = asgi_request(
+    app, f"/api/v1/datasets/flow/tasks/{2 ** 63}/stop", method="POST"
+)
+expect_error(status, body, 404, "dataset_task_not_found",
+             "stopping a task id past SQLite's range")
 
 # -- generate_teacher (M8e) ---------------------------------------------
 

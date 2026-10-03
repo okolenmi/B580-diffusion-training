@@ -64,6 +64,15 @@ several sections.
    (ftfy is not installed and not declared), so a prompt carrying mojibake
    repairs differently here.
 
+**One declared dependency, `regex`.** CLIP's splitting pattern is
+`\p{L}|\p{N}|[^\s\p{L}\p{N}]`, and the standard library's `re` has no `\p`
+at all -- it raises `bad escape` at compile time rather than compiling
+something approximate. An approximate version would be a silent divergence
+on exactly the scripts this corpus already covers (CJK, Cyrillic), so the
+dependency is taken rather than faked. It has no dependencies of its own.
+ComfyUI had it transitively, through `transformers`, which this tokenizer
+no longer needs -- so this is a net reduction, not a new weight.
+
 **Where the vocabulary comes from is still open.** The merges and ids are
 OpenAI's published CLIP BPE data, not ComfyUI's work, but the copy this
 development machine has lives in ComfyUI's source tree.
@@ -83,6 +92,19 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+
+try:
+    import regex
+except ImportError as _exc:  # pragma: no cover -- an installation problem
+    raise ImportError(
+        "nodes/model/tokenizer.py needs the 'regex' package: CLIP's token "
+        "splitting pattern uses \\p{L} and \\p{N}, which the standard "
+        "library's `re` does not have -- it raises 'bad escape' at compile "
+        "time rather than compiling loosely, so there is no stdlib fallback "
+        "that would work. `pip install regex`. It has no dependencies of "
+        "its own. (ComfyUI got this from HuggingFace's transformers, which "
+        "this tokenizer no longer needs.)"
+    ) from _exc
 
 __all__ = [
     "CLIP_BOS",
@@ -162,8 +184,6 @@ _SPLIT_PATTERN = (
 
 
 def _split_words(text: str):
-    import regex
-
     return regex.findall(_SPLIT_PATTERN, text, regex.IGNORECASE)
 
 

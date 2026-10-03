@@ -3,17 +3,24 @@
 `docs/design/11-first-run-and-installer.md` §1 asks for a
 machine-readable list, and the reason it matters is that the answer
 currently lives in three places that cannot see each other:
-`requirements.txt` (four lines, the server's own imports), the source
-(what the trainer imports, which is four *more* packages that appear in no
+`requirements.txt` (five lines, the server's own imports), the source
+(what the trainer imports, which is six *more* packages that appear in no
 requirements file at all), and `docs/setup.md` (which names neither set).
 
-Measured on this machine, by reading the source rather than by guessing:
+Measured on this machine, by reading the source rather than by guessing
+(an AST pass over the live tree, not a grep -- a grep finds the words
+"tqdm" and "comfy" in prose and docstrings too):
 
-    server   fastapi, uvicorn, python-multipart, tomli_w
-             (requirements.txt, exactly)
-    training torch, numpy, pillow, safetensors
+    server   fastapi, uvicorn, python-multipart, tomli_w, packaging
+             (requirements.txt, exactly -- five lines)
+    training torch, numpy, pillow, safetensors, tqdm, regex
              (imported by nodes/ and manager/; in NO requirements file,
              because they are expected to come from ComfyUI's venv)
+
+Two rows here were missing and are now present, which is the whole
+argument for measuring rather than reading the list: `tqdm` and `regex` are
+hard top-level imports of live modules, and neither appeared in any
+requirements file or in this manifest. `tqdm` predates this work.
 
 That gap is the thing the installer exists to close: a user who installs
 `requirements.txt` into a fresh venv gets a server that starts and a
@@ -128,6 +135,33 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 approx_mb=3, never_install=True),
     Requirement("pillow", TRAINING, "image loading for dataset items",
                 approx_mb=4, never_install=True),
+    # Two more, found by reading the source rather than by being told. Both
+    # are hard top-level imports, so their absence is an ImportError on one
+    # module rather than a degraded feature:
+    #
+    # * `tqdm` is `from tqdm import tqdm` at the top of manager/builder.py,
+    #   where it drives dataset ingest. Without it that module does not
+    #   import, so the whole dataset builder is unavailable -- not "the
+    #   progress bar is missing".
+    # * `regex` is the CLIP tokenizer's word splitter. CLIP's pattern is
+    #   \p{L}|\p{N}|[^\s\p{L}\p{N}], and the standard library's `re` has no
+    #   \p at all: it raises "bad escape" at compile time rather than
+    #   compiling an approximation, so there is no stdlib fallback that
+    #   would work. ComfyUI had it transitively via `transformers`, which
+    #   nodes/model/tokenizer.py no longer needs (design doc 12 section
+    #   7.3-C2), so this became ours to declare.
+    #
+    # `approx_mb` is None on both rather than 0: both wheels are well under
+    # a megabyte (0.08 and 0.27 measured against PyPI), and a row that says
+    # "0 MB" would be claiming a size neither package has. None renders as
+    # no size at all, which is the truth.
+    Requirement("tqdm", TRAINING,
+                "the dataset builder's ingest progress bar; a hard import, "
+                "so without it manager/builder.py does not load",
+                never_install=True),
+    Requirement("regex", TRAINING,
+                "CLIP's tokenizer word splitter -- \\p{L} and \\p{N}, which "
+                "the standard library's re does not have", never_install=True),
 )
 
 #: What a fresh venv for this project alone would have to install. The

@@ -109,30 +109,48 @@ class NeverProbe:
         )
 
 
-#: A machine that can serve the API and cannot train. The realistic shape
-#: of "someone installed requirements.txt and stopped".
+#: Versions for the stub inventory. Arbitrary but plausible, and pinned here
+#: so a fixture cannot quietly acquire a package with no version.
 #:
-#: `packaging` is in this list because requirements.txt lists it and the
-#: manifest now agrees -- and it was *missed* in both when the conflict
-#: check added it. That omission was silent in a nasty way: a package the
-#: server needs but the manifest does not know about is invisible to the
-#: wizard, so the install would have run pip without it.
-SERVER_ONLY = {
+#: The *contents* of the two inventories below are derived from the manifest
+#: rather than written out. They were hand-written, and a manifest that
+#: gained two training packages left them stale -- so `FULL` no longer
+#: described a machine that could train, and three checks below failed for
+#: that reason alone. Deriving them makes the fixture incapable of drifting
+#: from the thing it is a fixture for, and a new manifest row with no
+#: version here raises a KeyError instead of silently passing.
+VERSIONS = {
     "fastapi": "0.139.0",
     "uvicorn": "0.49.0",
     "python-multipart": "0.0.32",
     "tomli_w": "1.2.0",
+    # In this list because requirements.txt lists it and the manifest agrees
+    # -- and it was *missed* in both when the conflict check added it. That
+    # omission was silent in a nasty way: a package the server needs but the
+    # manifest does not know about is invisible to the wizard, so the install
+    # would have run pip without it.
     "packaging": "26.3",
-}
-
-#: The same machine with the training stack, and a card.
-FULL = {
-    **SERVER_ONLY,
     "torch": "2.12.1+xpu",
     "numpy": "2.5.0rc1",
     "safetensors": "0.8.0",
     "pillow": "12.2.0",
+    # Both sub-megabyte and both hard imports of live modules; see
+    # backend/tests/test_declared_dependencies.py, which is what found them.
+    "tqdm": "4.70.1",
+    "regex": "2026.9.29",
 }
+
+REQUIRED_NAMES = sorted(r.distribution for r in REQUIREMENTS
+                        if r.tier == "required")
+TRAINING_NAMES = sorted(r.distribution for r in REQUIREMENTS
+                        if r.tier == "training")
+
+#: A machine that can serve the API and cannot train. The realistic shape
+#: of "someone installed requirements.txt and stopped".
+SERVER_ONLY = {name: VERSIONS[name] for name in REQUIRED_NAMES}
+
+#: The same machine with the training stack, and a card.
+FULL = {name: VERSIONS[name] for name in REQUIRED_NAMES + TRAINING_NAMES}
 
 PRESENT_CARD = DeviceReport(
     present=True, backend="xpu",
@@ -149,9 +167,9 @@ report = CheckRequirements(StubInventory(SERVER_ONLY), never).execute()
 
 check(not report.ready,
       "a machine with no training stack is not ready, whatever else is true")
-check({row.name for row in report.blocking_missing}
-      == {"torch", "numpy", "safetensors", "pillow"},
-      f"and the four missing training packages are named "
+check({row.name for row in report.blocking_missing} == set(TRAINING_NAMES),
+      f"and every missing training package is named, which is the manifest's "
+      f"training tier rather than a list written here "
       f"(got {[r.name for r in report.blocking_missing]})")
 check(never.calls == 0,
       f"the device was never asked, because the answer was already no "
@@ -170,7 +188,7 @@ check(all(row.satisfied for row in report.packages
 
 ready = CheckRequirements(StubInventory(FULL), FakeDeviceProbe()).execute()
 check(ready.ready,
-      f"the same machine with torch, numpy, safetensors and pillow is ready "
+      f"the same machine with the whole declared training stack is ready "
       f"(missing {[r.name for r in ready.missing]})")
 check(ready.device_checked and ready.device_present,
       "and now the device *is* asked, and reported present")

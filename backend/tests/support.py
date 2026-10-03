@@ -712,7 +712,6 @@ def build_services(
     """
     events = events if events is not None else RecordingEventBus()
     publisher = EventPublisher(events=events)
-    paths = ProjectPaths(root=project_root)
     clock = clock if clock is not None else FakeClock()
     project_root = project_root if project_root is not None else Path(
         tempfile.mkdtemp(prefix="backend-project-")
@@ -720,6 +719,13 @@ def build_services(
     runs_dir = runs_dir if runs_dir is not None else Path(
         tempfile.mkdtemp(prefix="backend-runs-")
     )
+    # After the defaults above, not before: this used to be built from
+    # `project_root` while that was still None for every caller that did not
+    # pass one, so ProjectPaths.root was None and any relative path through
+    # it raised TypeError. Latent until ProjectPaths.config() started
+    # resolving its root, which turned the TypeError into an AttributeError
+    # -- but the wiring was wrong either way.
+    paths = ProjectPaths(root=project_root)
     if settings_store is None:
         database = SqliteDatabase(project_root / "test-settings.db")
         database.initialize()

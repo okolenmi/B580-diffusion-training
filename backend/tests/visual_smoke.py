@@ -478,8 +478,16 @@ def main():
         # ---------- D: config editor (loads read-only; the save step
         # writes a throwaway copy so repo config files stay untouched) ----
         repo_root = Path(__file__).resolve().parents[2]
-        smoke_cfg = OUT / "cfg_smoke.toml"
-        shutil.copy(repo_root / "runs/hw_validation/legacy_check.toml", smoke_cfg)
+        # Inside the project, not in OUT. The config routes confine a
+        # client-named path to the project root -- which is the fix for
+        # `GET /api/v1/config/raw?path=../../../../etc/passwd` returning the
+        # file -- so a throwaway config the test saves through the API has to
+        # live somewhere the route will accept. `runs/` is gitignored, so this
+        # is scratch space that cannot reach the repository.
+        smoke_cfg = Path("runs/smoke/cfg_smoke.toml")
+        (repo_root / smoke_cfg).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(repo_root / "runs/hw_validation/legacy_check.toml",
+                    repo_root / smoke_cfg)
 
         print("== D: config editor ==")
         ctx = browser.new_context(viewport={"width": 1600, "height": 1000})
@@ -527,8 +535,9 @@ def main():
         page.click("#tab-form")
         check(page.locator("#panel-raw").is_hidden(), "raw panel hidden on form tab")
 
-        # E2E save against a throwaway copy (absolute path) -- never the
-        # repo's own config files.
+        # E2E save against the throwaway copy under runs/ -- never the
+        # repo's own config files. Addressed by its project-relative path,
+        # which is what the route takes and what the editor is for.
         page.fill("#cfg-path", str(smoke_cfg))
         page.click("#btn-load")
         # loadConfig() ends with a console line AFTER it re-renders.

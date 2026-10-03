@@ -268,6 +268,99 @@ def main() -> None:
     )
     check(status == 200 and body["ok"] is True, "PUT raw creates config")
 
+    # -- the raw routes stay inside the project --------------------------
+    #
+    # Found by sweeping every operation for 5xx and then following the
+    # query-string dimension: ProjectPaths had no containment at all, only
+    # a non-empty check, so a client-named path was used as sent.
+    #
+    #   GET  /api/v1/config/raw?path=../../../../etc/passwd  -> 200 + file
+    #   PUT  ... the same path                                -> 200 + written
+    #
+    # Arbitrary read and arbitrary write, from a route meant to edit this
+    # project's configuration. Both verbs are checked, and the write case
+    # asserts nothing landed, because a 422 that still created the file
+    # would be no fix at all.
+    #
+    # A NUL needs spelling differently per transport: percent-encoded in a
+    # query string, where it decodes to one, and a real \x00 in a JSON body,
+    # where "%00" is three ordinary characters and makes a perfectly legal
+    # filename.
+    escapes = [
+        ("../../../../etc/passwd", "traversal out of the project"),
+        ("/etc/passwd", "an absolute path outside the project"),
+        ("cfg/../../escape.toml", "traversal that starts inside"),
+    ]
+    for escape, label in escapes:
+        status, _, body = asgi_request(app, f"/api/v1/config/raw?path={escape}")
+        check(status == 422 and body["error"]["code"] == "invalid_query",
+              f"GET raw refuses {label} ({status} {body.get('error', {}).get('code')})")
+        status, _, body = asgi_request(
+            app, "/api/v1/config/raw", method="PUT",
+            json_body={"path": escape, "content": "escaped = true\n"},
+        )
+        check(status == 422 and body["error"]["code"] == "invalid_query",
+              f"PUT raw refuses {label} ({status} {body.get('error', {}).get('code')})")
+
+    # Each transport needs its own spelling, and the mismatch is itself
+    # worth stating: in a query string "%00" decodes to a NUL, while in a
+    # JSON body it is three ordinary characters -- a perfectly legal
+    # filename, and one the route is right to accept. Only a real \x00 in
+    # the body is a NUL.
+    status, _, body = asgi_request(app, "/api/v1/config/raw?path=cfg/%00.toml")
+    check(status == 422 and body["error"]["code"] == "invalid_query",
+          f"GET raw refuses a percent-encoded NUL ({status})")
+
+    # Double-encoded is *not* a NUL: it decodes once to the three characters
+    # "%00", which is a legal filename, so the honest answer is the ordinary
+    # not-found for a file that is not there -- not the refusal above.
+    status, _, body = asgi_request(app, "/api/v1/config/raw?path=cfg/%2500.toml")
+    check(status == 404 and body["error"]["code"] == "config_not_found",
+          f"a double-encoded NUL is an ordinary missing filename ({status} "
+          f"{body.get('error', {}).get('code')})")
+
+    for body_nul, label in (("\x00", "a real NUL"),
+                            ("a%00b", "literal percent-zero-zero, a legal name")):
+        status, _, body = asgi_request(
+            app, "/api/v1/config/raw", method="PUT",
+            json_body={"path": f"cfg/{body_nul}.toml", "content": "x = 1\n"},
+        )
+        expect = 422 if body_nul == "\x00" else 200
+        check(status == expect,
+              f"PUT raw on {label}: {status}, wanted {expect}")
+
+    status, _, body = asgi_request(
+        app, "/api/v1/config/raw", method="PUT",
+        json_body={"path": "cfg/\x00.toml", "content": "x = 1\n"},
+    )
+    check(not (root / "cfg" / "\x00.toml").exists(),
+          "and a NUL-named file was not created")
+    check(not (root / "escape.toml").exists(),
+          "nor anything from the traversal cases")
+
+    # The two shapes that must keep working: a project-relative path, and an
+    # absolute path that lands inside the project -- callers legitimately
+    # hold one for a config they are about to write. Content is copied from
+    # a config already known to validate, because this is a test about paths
+    # and a rejected document would answer 422 for an unrelated reason.
+    valid = (root / "cfg" / "test.toml").read_text(encoding="utf-8")
+    status, _, body = asgi_request(app, "/api/v1/config/raw?path=cfg/test.toml")
+    check(status == 200, f"a project-relative path still reads ({status})")
+    status, _, body = asgi_request(
+        app, "/api/v1/config/raw", method="PUT",
+        json_body={"path": "cfg/relative-again.toml", "content": valid},
+    )
+    check(status == 200,
+          f"a project-relative path still writes ({status} "
+          f"{body.get('error', {}).get('code')})")
+    status, _, body = asgi_request(
+        app, "/api/v1/config/raw", method="PUT",
+        json_body={"path": str(root / "cfg" / "absolute.toml"), "content": valid},
+    )
+    check(status == 200,
+          f"an absolute path inside the project still writes ({status} "
+          f"{body.get('error', {}).get('code')})")
+
     status, _, body = asgi_request(app, "/api/v1/config/options")
     check(status == 200 and len(body["options"]) > 40, "GET options schema")
 

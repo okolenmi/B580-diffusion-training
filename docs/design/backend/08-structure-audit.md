@@ -1,35 +1,42 @@
 # 08 -- Structure audit: index, and what was deliberately left undone
 
 A strict-OOP pass over `backend/` itself, run after the 17 correctness
-findings in doc 07 were closed. It ran as six commits (`3269a35` ..
-`a159959`, 2026-10-01) and **finished nineteen of its twenty-six
-findings**; seven are still open and listed below with their reasons.
+findings in doc 07 were closed. It **finished nineteen of its
+twenty-six findings**; the seven still open are listed below with their
+reasons.
 
-Source comments cite these findings as `docs 08 S-NN`, so the ids are
-kept stable even though the audit's own write-up is gone: **each fix now
-lives in the docstring of the code it changed**, with the reasoning next
-to the mechanism. The table is the index, not a description.
+The audit's own write-up is gone, but **each fix's reasoning lives in the
+docstring of the code it changed**, next to the mechanism. This table is
+the index to those docstrings, not a description of them, and every
+pointer in it is verified against the current tree. Source comments cite
+the findings as `docs 08 S-NN`, which is why the ids are kept stable.
 
 | ID | Finding, in one clause | The reasoning now lives in |
 |---|---|---|
-| S-01 | supervisors injected as concrete classes | `application/ports/run_watcher.py`, `execution_launcher.py` |
-| S-02 | `ReconcileRuns` made adoption deps optional | `application/use_cases/reconcile_runs.py` |
-| S-03 | listing one dataset's tasks rewrote rows of others | `application/dataset_task_sweeper.py` |
-| S-04 | the monitor route reached past the use cases | `application/use_cases/subscribe_monitor.py` |
-| S-05 | the supervisor owned someone else's VRAM cleanup | `infrastructure/graph/runtime.py` |
-| S-06 | `_resolve()` duplicated in six use cases | `application/project_paths.py` |
-| S-07 | "publish the entity's events" duplicated nine times | `application/event_publisher.py` |
-| S-08 | bounds written twice, in two layers | `application/limits.py` |
-| S-09 | validation boilerplate across nine use cases | `application/requests.py` |
-| S-10 | error code -> status table kept in two layers | `application/errors.py`, `presentation/errors.py` |
-| S-11 | both entities were fully mutable | `domain/entities/run.py`, `graph_execution.py` |
-| S-12 | terminal states restated beside the table | `domain/value_objects.py` |
-| S-13 | two copies of the lifecycle guard, and of the writer | `domain/lifecycle.py`, `application/lifecycle_writer.py` |
-| S-14 | `ProgressSample` was reflected over by field name | `application/ports/progress_source.py` |
-| S-15 | `total_steps` monotonicity lived in a thread | `domain/entities/run.py` |
-| S-16 | rehydration had no sanctioned factory | `domain/entities/run.py` (`restore`) |
-| S-24 | closed vocabularies were bare strings | `domain/value_objects.py`, `application/ports/dataset_tasks.py` |
+| S-01 | supervisors injected as concrete classes | `backend/application/ports/execution_launcher.py` |
+| S-03 | listing one dataset's tasks rewrote rows of others | `backend/application/dataset_task_sweeper.py`, the three `*_dataset_tasks.py` use cases |
+| S-04 | the monitor route reached past the use cases | `backend/application/use_cases/subscribe_monitor.py` |
+| S-05 | the supervisor owned someone else's VRAM cleanup | `backend/application/ports/graph_runtime.py`, `backend/infrastructure/graph/runtime.py` |
+| S-06 | `_resolve()` duplicated in six use cases | `backend/application/project_paths.py` |
+| S-07 | "publish the entity's events" duplicated nine times | `backend/application/event_publisher.py` |
+| S-08 | bounds written twice, in two layers | `backend/application/limits.py` |
+| S-09 | validation boilerplate across nine use cases | `backend/application/requests.py` |
+| S-10 | error code -> status table kept in two layers | `backend/application/errors.py`, `backend/presentation/errors.py` |
+| S-11 | both entities were fully mutable | `backend/domain/entities/graph_execution.py` |
+| S-12 | terminal states restated beside the table | `backend/domain/value_objects.py` |
+| S-13 | two copies of the lifecycle guard, and of the writer | `backend/domain/lifecycle.py`, `backend/application/lifecycle_writer.py` |
+| S-14 | `ProgressSample` was reflected over by field name | `backend/tests/test_value_objects.py` |
+| S-16 | rehydration had no sanctioned factory | `backend/domain/entities/graph_execution.py` (`restore`), `backend/infrastructure/persistence/graph_execution_repository.py` |
+| S-19 | the `MonitorBus` port leaks asyncio and the wire format | `backend/application/use_cases/subscribe_monitor.py`, and its own section below |
+| S-24 | closed vocabularies were bare strings | `backend/domain/value_objects.py`, `backend/application/ports/dataset_tasks.py` |
 | S-25, S-26 | dead code, unresolvable annotations | removed; `scripts/full_gate.sh` now lints for the first |
+
+Two more were fixed and have since been deleted along with the code they
+described, so there is no docstring left to point at and nothing cites
+them any more: **S-02** (`ReconcileRuns` made its adoption dependencies
+optional) and **S-15** (`total_steps` monotonicity lived in a thread
+rather than in the entity). Both were real at the time; the run route
+took them with it. The graph-execution equivalents are in S-11 and S-16.
 
 Two test files came out of it: `backend/tests/test_value_objects.py` (the
 extracted rules) and `backend/tests/test_error_contract.py`, which

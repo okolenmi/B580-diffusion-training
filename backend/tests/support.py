@@ -89,6 +89,7 @@ from backend.application.use_cases import (
     StartDatasetTask,
     StartGraphExecution,
     StopDatasetTask,
+    SweepExecutionScratch,
     StopGraphExecution,
     UpdateConfig,
     UpdateDatasetItem,
@@ -852,6 +853,9 @@ def build_services(
         graphs_db.initialize()
         if graph_executions is None:
             graph_executions = SqliteGraphExecutionRepository(graphs_db)
+            # One directory for the supervisor and the sweep, so a test
+            # can assert that clearing the history cleared the disk too.
+            graph_scratch = project_root / "test-graph-scratch"
         if graph_library is None:
             graph_library = SqliteGraphLibrary(graphs_db)
     execution_writer = ExecutionLifecycleWriter(
@@ -873,7 +877,7 @@ def build_services(
             events=publisher,
             clock=clock,
             monitor_bus=monitor_bus,
-            scratch_dir=project_root / "test-graph-scratch",
+            scratch_dir=graph_scratch,
             make_tail=ExecutionEventTail,
         )
     return ApplicationServices(
@@ -952,7 +956,10 @@ def build_services(
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
-                executions=graph_executions, events=publisher
+                executions=graph_executions, events=publisher,
+                scratch=SweepExecutionScratch(
+                    executions=graph_executions, scratch_dir=graph_scratch,
+                ),
             ),
             reconcile_executions=ReconcileGraphExecutions(
                 executions=graph_executions,

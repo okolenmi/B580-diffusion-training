@@ -33,7 +33,10 @@ from backend.application.errors import (
     GraphNotFoundError,
     InvalidQueryError,
 )
-from backend.application.use_cases import ReconcileGraphExecutions
+from backend.application.use_cases import (
+    ReconcileGraphExecutions,
+    SweepExecutionScratch,
+)
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.exceptions import DomainError, InvalidTransitionError
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec, NodeResult
@@ -883,6 +886,97 @@ for _where, _what in (
     check(len(set(_ids)) == len(_ids),
           f"failure {_where} the swap: none stored twice "
           f"({len(_ids) - len(set(_ids))} duplicate(s))")
+
+
+# ==========================================================================
+# Section: the scratch sweep keeps what is live and takes what is not
+# ==========================================================================
+print("-- scratch sweep: terminal or orphaned, and nothing else --")
+
+# The safety half of round-3 N3-07, and the half that is easy to get
+# backwards. Deleting the scratch of a run that is *going* would leave a
+# watcher with nothing to drain and a restarted server with nothing to
+# adopt from, which is the failure the event file exists to prevent. The
+# API-level test covers the deletion; this covers the refusal.
+
+sweep_db = SqliteDatabase(
+    Path(tempfile.mkdtemp(prefix="backend-sweep-")) / "g.db"
+)
+sweep_db.initialize()
+sweep_repo = SqliteGraphExecutionRepository(sweep_db)
+sweep_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-scratch-"))
+
+
+def _write_scratch(run_id: int) -> list[Path]:
+    """The three files the supervisor writes for one execution."""
+    out = []
+    for suffix, body in (
+        (".graph.json", b'{"format": 1, "nodes": [], "edges": []}'),
+        (".events.jsonl", b'{"kind": "node", "node_id": "a", "ok": true}\n'),
+        (".log", b"child log\n"),
+    ):
+        path = sweep_dir / f"execution_{run_id}{suffix}"
+        path.write_bytes(body)
+        out.append(path)
+    return out
+
+
+# A running row keeps its scratch, even when the sweep is asked directly.
+live = GraphExecution.create(graph=VALID, created_at=NOW)
+sweep_repo.add(live)
+live.mark_running(at=NOW)
+sweep_repo.update_if_status(live, expected=GraphStatus.QUEUED)
+live_files = _write_scratch(1)
+
+kept_result = SweepExecutionScratch(sweep_repo, sweep_dir).execute()
+check(all(path.exists() for path in live_files),
+      f"a running execution keeps all three of its files "
+      f"(missing {[p.name for p in live_files if not p.exists()]})")
+check(kept_result.files == 0 and kept_result.runs == 0 and kept_result.kept == 1,
+      f"and the sweep reports having kept it rather than removed it "
+      f"({kept_result})")
+
+# Finished: the results and the outcome are in the row, so the files are
+# read by nobody.
+done = sweep_repo.get(live.id)
+done.mark_finished(at=NOW)
+sweep_repo.update_if_status(done, expected=GraphStatus.RUNNING)
+
+freed = SweepExecutionScratch(sweep_repo, sweep_dir).execute()
+check(all(not path.exists() for path in live_files),
+      f"a finished execution's files are all removed "
+      f"(left {[p.name for p in live_files if p.exists()]})")
+check(freed.runs == 1 and freed.files == 3 and freed.bytes > 0,
+      f"and the sweep says what it freed, in files and bytes ({freed})")
+
+# Orphaned: no row at all, which is what a replaced database leaves. These
+# have no way to be recognised as anything else, ever, by anyone.
+orphan_files = _write_scratch(2)
+orphan = SweepExecutionScratch(sweep_repo, sweep_dir).execute()
+check(all(not path.exists() for path in orphan_files),
+      "a file whose row no longer exists is removed too -- it is the case "
+      "that otherwise survives forever")
+check(orphan.files == 3, f"and counted ({orphan.files})")
+
+# Not ours. The sweep matches three names it writes itself; anything else in
+# the directory is somebody's, and a name that merely looks close is not a
+# reason to delete a file.
+stranger = sweep_dir / "execution_1.events.jsonl.bak"
+stranger.write_bytes(b"not ours\n")
+also_not_ours = sweep_dir / "notes.txt"
+also_not_ours.write_bytes(b"not ours\n")
+SweepExecutionScratch(sweep_repo, sweep_dir).execute()
+check(stranger.exists() and also_not_ours.exists(),
+      "files whose names are not one of the three the supervisor writes are "
+      "left alone")
+
+# And a directory that has never run anything is not an error, and does not
+# get created just to be swept.
+absent = Path(tempfile.mkdtemp(prefix="backend-sweep-none-")) / "never"
+never = SweepExecutionScratch(sweep_repo, absent).execute()
+check(never.files == 0 and not absent.exists(),
+      f"a scratch directory that does not exist is reported as nothing to "
+      f"do, and is not conjured into being ({never})")
 
 
 finish()

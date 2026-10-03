@@ -82,7 +82,8 @@ check(status == 200 and body == {"executions": [], "count": 0},
 # ==========================================================================
 # Section B: fixture services -- the full endpoint matrix
 # ==========================================================================
-app = create_app(build_services())
+services = build_services()
+app = create_app(services)
 
 # -- catalog ---------------------------------------------------------------
 status, _, body = asgi_request(app, f"{GRAPH}/nodes")
@@ -313,10 +314,41 @@ check(status == 200 and body["deleted"] is True, "delete removes the graph")
 status, _, body = asgi_request(app, f"{GRAPH}/library/future", method="DELETE")
 expect_error(status, body, 404, "graph_not_found", "deleting twice is 404")
 
-# -- history wipe ----------------------------------------------------------
+# -- history wipe, on the rows *and* on the disk ---------------------------
+# Round-3 N3-07. A row is not the whole of a run: each execution leaves a
+# graph.json, an events file and a log in the scratch directory, and
+# deleting the history used to remove only the rows. So the directory grew
+# by one run's worth forever while the UI reported the history as cleared.
+#
+# Measured for the sizes this test cares about: one 4000-node execution
+# leaves 845,756 bytes (62% events, 38% graph). What matters here is not
+# the size but that the files go when the rows do.
+scratch_dir = services.graphs.delete_executions.scratch_dir
+check(scratch_dir.is_dir(),
+      f"the scratch directory the supervisor writes into exists "
+      f"({scratch_dir})")
+
+status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
+                              json_body=valid_graph())
+check(status in (200, 201), f"a run to leave scratch behind ({status})")
+# The supervisor writes the graph and the event file before the child is
+# spawned, so they are there whether or not the run gets anywhere.
+started_files = sorted(p.name for p in scratch_dir.iterdir())
+check(any(name.endswith(".graph.json") for name in started_files)
+      and any(name.endswith(".events.jsonl") for name in started_files),
+      f"a run left its graph and event file behind ({started_files})")
+on_disk = sum(p.stat().st_size for p in scratch_dir.iterdir()
+              if p.is_file())
+check(on_disk > 0, f"and they are not empty ({on_disk} bytes)")
+
 status, _, body = asgi_request(app, f"{GRAPH}/executions", method="DELETE")
-check(status == 200 and body["deleted"] == 2,
-      f"delete wipes execution history ({body.get('deleted')})")
+check(status == 200 and body["deleted"] == 3,
+      f"delete wipes execution history, including the run just started "
+      f"above ({body.get('deleted')})")
+left = sorted(p.name for p in scratch_dir.iterdir())
+check(left == [],
+      f"and the scratch too, so clearing the history frees the disk "
+      f"rather than only the rows (left {left})")
 status, _, body = asgi_request(app, f"{GRAPH}/executions")
 check(body["count"] == 0, "history empty after wipe")
 

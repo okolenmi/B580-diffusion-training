@@ -31,6 +31,10 @@ from .read_config_raw import ReadConfigRaw
 from .read_dataset_file import ReadDatasetFile
 from .reconcile_dataset_tasks import ReconcileDatasetTasks
 from .reconcile_graph_executions import ReconcileGraphExecutions
+from .sweep_execution_scratch import (
+    SweepExecutionScratch,
+    SweepExecutionScratchResult,
+)
 from .save_graph import SaveGraph
 from .set_dataset_preview import SetDatasetPreview
 from .start_dataset_task import StartDatasetTask
@@ -76,6 +80,8 @@ __all__ = [
     "ReconcileDatasetTasks",
     "ReconcileGraphExecutions",
     "SaveGraph",
+    "SweepExecutionScratch",
+    "SweepExecutionScratchResult",
     "SetDatasetPreview",
     "StartDatasetTask",
     "StartGraphExecution",

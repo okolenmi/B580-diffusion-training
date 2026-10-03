@@ -68,6 +68,7 @@ from .application.use_cases import (
     ReadDatasetFile,
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
+    SweepExecutionScratch,
     SaveGraph,
     SetDatasetPreview,
     StartDatasetTask,
@@ -202,6 +203,11 @@ def build_container(settings: Settings) -> Container:
     # child, its event stream, its log), not run artifacts anyone collects.
     graph_scratch = database.path.parent / "graph_executions"
     graph_scratch.mkdir(parents=True, exist_ok=True)
+    # N3-07: nothing else ever removed these files, so the directory grew by
+    # one run's worth forever while the UI reported the history as cleared.
+    sweep_scratch = SweepExecutionScratch(
+        executions=graph_executions, scratch_dir=graph_scratch,
+    )
     graph_supervisor = GraphExecutionSupervisor(
         executions=graph_executions,
         writer=execution_writer,
@@ -293,7 +299,8 @@ def build_container(settings: Settings) -> Container:
                 clock=clock,
             ),
             delete_executions=DeleteGraphExecutions(
-                executions=graph_executions, events=publisher
+                executions=graph_executions, events=publisher,
+                scratch=sweep_scratch,
             ),
             reconcile_executions=ReconcileGraphExecutions(
                 executions=graph_executions,
@@ -325,6 +332,18 @@ def build_container(settings: Settings) -> Container:
         logger.info(
             "reconciled %d unfinished graph execution(s) at startup",
             graph_reconciled.cleaned,
+        )
+
+    # After the reconcile, not before: adopting an unfinished run reads its
+    # event file, so the sweep has to be able to see the difference between
+    # "finished" and "still going", and that is what the reconcile has just
+    # settled.
+    scratch_swept = sweep_scratch.execute()
+    if scratch_swept.files:
+        logger.info(
+            "removed scratch for %d finished graph execution(s) at startup: "
+            "%d file(s), %.1f MB", scratch_swept.runs, scratch_swept.files,
+            scratch_swept.bytes / 1_000_000,
         )
 
     return Container(

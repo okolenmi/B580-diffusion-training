@@ -33,6 +33,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from ...application.errors import InstallerNotAllowedError
+from ...application.ports.environment import CachedDeviceProbe
 from ...application.services import ApplicationServices
 from ...application.use_cases.install_packages import JobNotFound, InstallJobNotFound
 from ..deps import get_services
@@ -59,15 +60,28 @@ _ERROR_409 = {"description": "already configured, or an install is running"}
 
 @router.get("/readiness", response_model=InstallerReadinessOut)
 def get_readiness(
+    refresh: bool = False,
     services: ApplicationServices = Depends(get_services),
 ) -> InstallerReadinessOut:
     """Can this machine start a training run right now?
 
     Answers per package (with versions), the device, and one verdict.
-    Costs about a second: the device probe imports torch in a subprocess,
-    because the server must be able to report a *missing* torch without
-    having loaded one.
+    Costs about a second the first time and nothing for the next
+    `READINESS_CACHE_SECONDS`: the device probe imports torch in a
+    subprocess, because the server must be able to report a *missing* torch
+    without having loaded one -- and an unwrapped probe means one torch
+    import per request, reachable from any web page the user has open
+    because a plain GET is outside the Origin guard (ADR 0001).
+
+    `refresh=true` re-probes, still single-flight and still floored at one
+    real probe per `DEVICE_REFRESH_MIN_SECONDS`, so a "Re-check" button
+    cannot become the fan-out it was meant to replace. The response says
+    whether a probe actually ran via `device_checked`.
     """
+    if refresh:
+        probe = services.installer.device_probe
+        if isinstance(probe, CachedDeviceProbe):
+            probe.invalidate()
     return readiness_out(services.installer.check.execute())
 
 
@@ -111,6 +125,7 @@ def apply_installation(
 
 @router.get("/devices", response_model=InstallerDevicesOut)
 def get_devices(
+    refresh: bool = False,
     services: ApplicationServices = Depends(get_services),
 ) -> InstallerDevicesOut:
     """Every accelerator on this machine, for screen 2's choice.
@@ -124,8 +139,14 @@ def get_devices(
     `enumerated` distinguishes "looked and found none" from "could not
     look". Both send an empty list, and a wizard that renders both as "no
     graphics card" would be asserting a fact it does not have.
+
+    Cached and single-flight on the same terms as `readiness` -- it is the
+    same subprocess answering a different question about the same card, and
+    a cache on only one of the two endpoints would leave the other exposed.
     """
     probe = services.installer.device_probe
+    if refresh and isinstance(probe, CachedDeviceProbe):
+        probe.invalidate()
     rows, reason = probe.devices_with_reason()
     return InstallerDevicesOut(
         enumerated=bool(probe.enumerate_all) and reason is None,

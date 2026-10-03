@@ -105,3 +105,41 @@ Long enough for a checkpoint write to finish (which is the whole point
 of stopping rather than killing), short enough that a user does not
 think the button is broken.
 """
+
+READINESS_CACHE_SECONDS = 30.0
+"""How long a device probe's answer is reused before it is asked again.
+
+This exists because `GET /installer/readiness` answers a question that costs
+a torch import -- measured at 2.2 s on this machine -- and because a plain
+GET is deliberately *not* behind the Origin check (ADR 0001: only
+state-changing methods are). So any web page the user has open can trigger
+it with an `<img src=...>`, and before this, eight of those produced eight
+simultaneous torch-importing processes, each initialising the accelerator
+runtime. On a 12 GB card that competes for VRAM with whatever else is using
+the device -- a training run, or a game.
+
+Thirty seconds because that is shorter than any plausible gap between a user
+looking at the wizard twice, and longer than any page that renders more than
+once. `?refresh=true` bypasses it, still single-flight and still floored at
+one real probe per `DEVICE_REFRESH_MIN_SECONDS` -- a "Re-check" button that
+could start eight probes would not be a button.
+
+Not a correctness cache. The device does not change under a running server,
+but if it did, the worst case is a thirty-second-old answer about a graphics
+card, which is a fact nobody acts on to the second.
+"""
+
+DEVICE_REFRESH_MIN_SECONDS = 5.0
+"""Floor between two *granted* refreshes of the device probe.
+
+The cache answers "what did we last see"; this answers "how often may the
+user insist". Five seconds is longer than any honest need to re-probe and
+short enough that a button which appears stuck recovers on its own.
+
+Separate from `READINESS_CACHE_SECONDS` on purpose: they bound different
+things, and the floor is measured from the last *granted refresh* rather
+than from the last probe of any kind. Measuring it from the probe made
+"Re-check" dead on arrival -- populating the cache on page load sets that
+timestamp, so the first click after load was always rate limited, and that
+is the click a user is most likely to make.
+"""

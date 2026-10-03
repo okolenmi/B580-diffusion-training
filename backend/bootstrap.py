@@ -119,7 +119,12 @@ from .infrastructure.persistence.graph_execution_repository import (
 )
 from .infrastructure.persistence.graph_library import SqliteGraphLibrary
 from .infrastructure.persistence.sqlite import SqliteDatabase
+from .application.limits import (
+    DEVICE_REFRESH_MIN_SECONDS,
+    READINESS_CACHE_SECONDS,
+)
 from .application.ports.environment import (
+    CachedDeviceProbe,
     MetadataPackageInventory,
     TorchDeviceProbe,
 )
@@ -169,7 +174,6 @@ def build_container(settings: Settings) -> Container:
 
     # Shared by readiness and by the wizard's GPU choice: one probe, one
     # answer, one 1.8s import.
-    device_probe = TorchDeviceProbe(backend="xpu")
 
     # Shared between the installer services so a job can be polled.
     install_jobs: dict[str, InstallJob] = {}
@@ -204,6 +208,21 @@ def build_container(settings: Settings) -> Container:
     monitor_bus = SharedMonitorBus()
     graph_runtime = ReflectedGraphRuntime(graph_registry, monitor_bus=monitor_bus)
     graph_executions = SqliteGraphExecutionRepository(database)
+
+    # Wrapped, not bare: every device question in the server goes through
+    # here, and an unwrapped probe means one torch import per request --
+    # including from any web page the user has open, since a plain GET is
+    # deliberately outside the Origin guard (ADR 0001).
+    #
+    # `is_busy` asks the execution repository rather than a supervisor flag,
+    # because the repository is what already knows, and a second source of
+    # "is something running" is one that can disagree with the first.
+    device_probe = CachedDeviceProbe(
+        inner=TorchDeviceProbe(backend="xpu"),
+        ttl=READINESS_CACHE_SECONDS,
+        refresh_floor=DEVICE_REFRESH_MIN_SECONDS,
+        is_busy=lambda: graph_executions.find_active() is not None,
+    )
     graph_library = SqliteGraphLibrary(database)
     execution_writer = ExecutionLifecycleWriter(
         clock=clock,

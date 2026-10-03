@@ -135,6 +135,34 @@ class MetadataPackageInventory(PackageInventory):
             return None
 
 
+def _last_json_object(output: str) -> dict | None:
+    """The last line of `output` that parses as a JSON object, or None.
+
+    Shared by every probe child rather than written per-probe, because all
+    of them have the same problem and the same reason for it: on this
+    machine the XPU runtime prints a Rusticl/Mesa banner to stdout before
+    the answer, so a probe that parsed the whole stream would report a
+    working card as a broken probe. Scanning backwards finds the answer and
+    ignores the banner.
+
+    Returns None rather than raising, because "no answer" is a result every
+    caller has to handle anyway.
+    """
+    import json
+
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and "ok" in payload:
+            return payload
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceReport:
     """What the accelerator turned out to be.
@@ -164,6 +192,34 @@ class DeviceProbe(ABC):
     @abstractmethod
     def report(self) -> DeviceReport:
         raise NotImplementedError
+
+    def devices(self) -> tuple[DeviceReport, ...]:
+        """Every device, not just the current one.
+
+        Separate from `report()` because they are asked for different
+        reasons and at different costs. `report()` answers "can a run start
+        here", which is one boolean and is asked on every readiness render.
+        This answers "which card should the torch wheel be built for", which
+        is only meaningful on a machine with more than one, and which has to
+        enumerate before it can answer.
+
+        The base implementation returns the single current device, so a port
+        that only knows how to report one still works -- and a caller cannot
+        mistake the default for "this machine has exactly one card", because
+        `enumerate_all` says whether it actually looked.
+        """
+        single = self.report()
+        return (single,) if single.present else ()
+
+    @property
+    def enumerate_all(self) -> bool:
+        """Whether `devices()` really looked, rather than falling back.
+
+        Sent to the client so a one-card answer and an unchecked one do not
+        render identically. The distinction is the same one
+        `ReadinessReport.device_checked` exists for.
+        """
+        return False
 
 
 @dataclass(slots=True)
@@ -240,6 +296,155 @@ print(json.dumps(out))
         # Python whatever the backend string contains.
         return cls._CHILD_TEMPLATE.replace("__BACKEND__", repr(backend))
 
+    #: Runs in the child for `devices()`. Separate from `_CHILD_TEMPLATE`
+    #: because that one is built around `current_device()` and answers a
+    #: yes/no question; this one enumerates and answers which.
+    #:
+    #: A per-device failure becomes one row carrying `ok: False` rather than
+    #: an exception: a machine where device 1 answers and device 2 does not
+    #: is a real configuration, and abandoning the whole answer would leave
+    #: a user with no way to pick the card that works.
+    _LIST_CHILD_TEMPLATE = """
+import json
+try:
+    import torch
+except Exception as exc:
+    print(json.dumps({"ok": False, "reason": "torch is not importable in "
+                         "this interpreter (%s: %s)" % (type(exc).__name__, exc)}))
+    raise SystemExit(0)
+backend = __BACKEND__
+module = getattr(torch, backend, None)
+if module is None:
+    print(json.dumps({"ok": False, "reason": "this torch build has no %r "
+                         "backend" % backend}))
+    raise SystemExit(0)
+try:
+    count = int(module.device_count())
+except Exception as exc:
+    print(json.dumps({"ok": False, "reason": "%s.device_count() raised %s: %s"
+                         % (backend, type(exc).__name__, exc)}))
+    raise SystemExit(0)
+if count <= 0:
+    print(json.dumps({"ok": True, "devices": []}))
+    raise SystemExit(0)
+devices = []
+for index in range(count):
+    row = {"index": index, "ok": False}
+    try:
+        props = module.get_device_properties(index)
+        row["name"] = getattr(props, "name", None)
+        total = getattr(props, "total_memory", None)
+        if total:
+            row["total_memory_mb"] = round(total / (1024 ** 2))
+        # The visible line, and it was missing: `ok` starts False and the
+        # success path only ever filled in name and memory, so every device
+        # came back absent. `report()` said present=True for the same card
+        # at the same moment, which is what exposed it -- the two probes
+        # disagreeing about one device is not a state either of them can
+        # legitimately be in.
+        row["ok"] = True
+    except Exception as exc:
+        row["error"] = "%s: %s" % (type(exc).__name__, exc)
+    devices.append(row)
+print(json.dumps({"ok": True, "devices": devices, "count": count}))
+"""
+
+    @property
+    def enumerate_all(self) -> bool:
+        return True
+
+    def devices(self) -> tuple[DeviceReport, ...]:
+        """Every device, by enumeration rather than by asking which is current.
+
+        Returns an empty tuple with the reason attached to *nothing* -- so
+        the caller cannot tell "no devices" from "the probe failed". That is
+        why `devices_with_reason()` exists and why this one is the thin
+        wrapper over it.
+        """
+        rows, _reason = self.devices_with_reason()
+        return rows
+
+    def devices_with_reason(self) -> tuple[tuple[DeviceReport, ...], str | None]:
+        """The devices, and why there are none if there are none."""
+        if self._in_process:
+            return self._list_here()
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c",
+                 self._LIST_CHILD_TEMPLATE.replace("__BACKEND__", repr(self.backend))],
+                capture_output=True, text=True, timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return (), (
+                f"listing {self.backend} devices did not finish in "
+                f"{self.timeout:.0f}s"
+            )
+        except OSError as exc:
+            return (), f"the device list could not be started: {exc}"
+
+        payload = _last_json_object(result.stdout)
+        if payload is None:
+            if result.returncode != 0:
+                return (), (
+                    f"listing devices exited {result.returncode}: "
+                    f"{(result.stderr or '').strip()[-200:]}"
+                )
+            return (), "the device list produced no answer"
+        if not payload.get("ok"):
+            return (), payload.get("reason") or "no devices"
+
+        return tuple(
+            DeviceReport(
+                present=bool(row.get("ok")),
+                backend=self.backend,
+                name=row.get("name"),
+                total_memory_mb=row.get("total_memory_mb"),
+                reason=row.get("error"),
+            )
+            for row in payload.get("devices") or []
+        ), None
+
+    def _list_here(self) -> tuple[tuple[DeviceReport, ...], str | None]:
+        """Same question, same interpreter, stdout captured. For tests."""
+        import contextlib
+        import io
+
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                exec(  # noqa: S102 -- our own source
+                    compile(
+                        self._LIST_CHILD_TEMPLATE.replace(
+                            "__BACKEND__", repr(self.backend)
+                        ),
+                        "<device-list>", "exec",
+                    ),
+                    {"__name__": "__probe__"},
+                )
+        except SystemExit:
+            pass
+        except Exception as exc:  # noqa: BLE001 -- reported, not raised
+            return (), f"the device list raised: {type(exc).__name__}: {exc}"
+        return self._parse_list(buffer.getvalue())
+
+    def _parse_list(self, output: str) -> tuple[tuple[DeviceReport, ...], str | None]:
+        payload = _last_json_object(output)
+        if payload is None:
+            return (), f"the device list produced no answer: {output.strip()[-200:]}"
+        if not payload.get("ok"):
+            return (), payload.get("reason") or "no devices"
+        return tuple(
+            DeviceReport(
+                present=bool(row.get("ok")),
+                backend=self.backend,
+                name=row.get("name"),
+                total_memory_mb=row.get("total_memory_mb"),
+                reason=row.get("error"),
+            )
+            for row in payload.get("devices") or []
+        ), None
+
     def report(self) -> DeviceReport:
         if self._in_process:
             return self._report_here()
@@ -276,38 +481,28 @@ print(json.dumps(out))
         Scans backwards for a line that parses, because the XPU runtime
         prints a Rusticl/Mesa banner to stdout on this machine and a
         parser that expected the whole stream to be JSON would report a
-        working card as a broken probe. The banner is also why this is
-        shared by both paths rather than written twice.
+        working card as a broken probe. See `_last_json_object`, which is
+        the shared implementation of exactly that.
         """
-        import json
-
-        for line in reversed(output.splitlines()):
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                payload = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(payload, dict) or "ok" not in payload:
-                continue
-            if not payload["ok"]:
-                return DeviceReport(
-                    present=False,
-                    reason=payload.get("reason") or "no device",
-                    detail=payload.get("detail"),
-                )
+        payload = _last_json_object(output)
+        if payload is None:
             return DeviceReport(
-                present=True,
-                backend=payload.get("backend"),
-                name=payload.get("name"),
-                total_memory_mb=payload.get("total_memory_mb"),
+                present=False,
+                reason="the device probe produced no answer",
+                detail=output.strip()[-400:],
+            )
+        if not payload["ok"]:
+            return DeviceReport(
+                present=False,
+                reason=payload.get("reason") or "no device",
                 detail=payload.get("detail"),
             )
         return DeviceReport(
-            present=False,
-            reason="the device probe produced no answer",
-            detail=output.strip()[-400:],
+            present=True,
+            backend=payload.get("backend"),
+            name=payload.get("name"),
+            total_memory_mb=payload.get("total_memory_mb"),
+            detail=payload.get("detail"),
         )
 
     def _report_here(self) -> DeviceReport:

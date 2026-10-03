@@ -1193,4 +1193,57 @@ check(len(big) <= GraphExecutionSupervisor.LOG_TAIL_BYTES + 400,
       f"a large log is cut to the bound ({len(big)} chars for a "
       f"{GraphExecutionSupervisor.LOG_TAIL_BYTES * 3}-byte log)")
 
+
+# -- explicit delete removes the kept logs too ------------------------------
+# Worth its own check, and for a reason that is not obvious: the retention
+# that keeps failed logs must NOT survive an explicit delete, or "delete
+# this run" stops deleting. It works because `delete_all()` removes the row
+# first, so by the time the sweep runs the run is an orphan -- and an orphan
+# is not "badly ended", so everything goes.
+#
+# The chain is three links long and the middle one was a deliberate
+# decision made for a different reason (an orphan has no evidence it
+# failed). Without this check, someone tidying that decision would
+# silently break delete.
+from backend.application.event_publisher import EventPublisher  # noqa: E402
+from backend.application.use_cases.delete_graph_executions import (  # noqa: E402
+    DeleteGraphExecutions,
+)
+from backend.infrastructure.events.callback_event_bus import (  # noqa: E402
+    CallbackEventBus,
+)
+
+delete_dir = Path(tempfile.mkdtemp(prefix="backend-sweep-del-"))
+delete_db = SqliteDatabase(delete_dir / "g.db")
+delete_db.initialize()
+delete_repo = SqliteGraphExecutionRepository(delete_db)
+doomed = GraphExecution.create(graph=VALID, created_at=NOW)
+delete_repo.add(doomed)
+doomed.mark_running(at=NOW)
+delete_repo.update_if_status(doomed, expected=GraphStatus.QUEUED)
+doomed = delete_repo.get(doomed.id)
+doomed.mark_failed(at=NOW, error="boom")
+delete_repo.update_if_status(doomed, expected=GraphStatus.RUNNING)
+# The row's own id, not a literal: the sweep groups scratch by the number in
+# the filename, so files written for run 99 under a row with a generated id
+# are an orphan, and an orphan is removed. Getting this wrong is what the
+# precondition check below is there to catch.
+delete_files = _write_scratch_into(delete_dir, int(doomed.id))
+
+# Precondition: the log really is one the sweep would keep, or the rest of
+# this proves nothing.
+SweepExecutionScratch(delete_repo, delete_dir, failed_log_keep=20).execute()
+check(delete_files[2].exists() and not delete_files[1].exists(),
+      f"precondition: a plain sweep keeps that log and takes the events "
+      f"(log kept {delete_files[2].exists()})")
+
+DeleteGraphExecutions(
+    executions=delete_repo,
+    events=EventPublisher(events=CallbackEventBus()),
+    scratch=SweepExecutionScratch(delete_repo, delete_dir),
+).execute()
+check(not delete_files[2].exists(),
+      "and an explicit delete removes the log the sweep was keeping -- "
+      "'delete this run' must actually delete it")
+
 finish()

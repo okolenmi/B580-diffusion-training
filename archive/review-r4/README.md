@@ -8,7 +8,11 @@ through, kept for provenance rather than for use.
   considered still open.
 * `material/repro-scripts-round4.tar.gz` -- reproduction scripts. The two
   that exist are extracted to `scripts/repro/` as
-  `r17_readiness_fanout.py` and `r18_sweep_deletes_crash_log.py`.
+  `r17_readiness_fanout.py` and `r18_sweep_deletes_crash_log.py`. `r17` was
+  rewritten rather than just extracted: as shipped it built a bare
+  `TorchDeviceProbe`, which is precisely the uncached object the fix
+  replaced, so it kept reproducing the old behaviour after the fix. See
+  "Two corrections to the record" in `docs/status/fixes-r4.md`.
 * `material/README-round4.txt` -- the reviewer's index of the same.
 
 ## What was reproduced, and what was not

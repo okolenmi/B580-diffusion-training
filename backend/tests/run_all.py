@@ -21,7 +21,10 @@ calls:
   shared mess. It is also what makes the files independent, which is what
   makes parallelising them safe: without it, two files could pick the same
   path.
-* **The exit code**, and the two summary lines the gate greps for.
+* **The exit code**, and the summary lines the gate greps for. A third
+  property was added in round 4 and is easy to get wrong: a hermeticity
+  self-check runs afterwards, and its failure sets the exit code even when
+  every file passed. See `hermeticity_selfcheck()`.
 
 **Output order is preserved.** Results are collected in file order, not
 completion order, because a log that interleaves 26 files is unreadable
@@ -41,6 +44,134 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+#: The two files the hermeticity self-check runs. These are the two that
+#: *died* on a checkout with no ComfyUI configured -- "RuntimeError: Cannot
+#: find ComfyUI directory" during import, which kills the file rather than
+#: failing a check -- in rounds 3 and 4. Both resolve a ComfyUI path at
+#: import time, so a regression in the fixture takes them out at once.
+HERMETICITY_PROBES = ("test_config.py", "test_settings.py")
+
+#: A COMFY_DIR that cannot exist. See hermeticity_selfcheck().
+HERMETICITY_SENTINEL = "/nonexistent/hermeticity-probe/comfy"
+
+
+def hermeticity_selfcheck(scratch_root: str) -> list[str]:
+    """Run two files under ComfyUI settings a fresh clone cannot have.
+
+    Round-4 R4-03, second item: "run_all.py already scrubs the environment
+    per file; add a final self-check that runs two representative files
+    with no COMFY_DIR anywhere and fails the run if either errors."
+
+    Two variants are run, and the second is the one that actually bites.
+
+    **`COMFY_DIR` removed** is the review's wording and the weaker of the
+    two. `.env` is resolved relative to `paths.py`, not to the working
+    directory (`paths.py:32`), so on a checkout that has one the file still
+    finds a valid ComfyUI whether or not the import-time fixture ran.
+    Changing cwd cannot hide `.env`, and moving a developer's `.env` out of
+    the tree mid-run is not a thing a test should do to their checkout.
+
+    **`COMFY_DIR` pointing at a path that does not exist** makes the fixture
+    observable. Without it a file gets the temp ComfyUI that
+    `support.use_temporary_comfy_dir()` installs at import, and with it the
+    path resolves to a real directory; a file that somehow missed the
+    fixture would fall through to `get_comfy_dir()` and raise, which is
+    precisely the failure the fixture exists to prevent. Both halves of
+    that are measured, not assumed:
+
+        no fixture   -> RuntimeError: Cannot find ComfyUI directory
+        with fixture -> /tmp/backend-suite-comfy-XXXX, exists: True
+
+    So the second variant fails where the first cannot, and costs one extra
+    subprocess per file. `scripts/check_bare_checkout.sh` is the version
+    that gets it right outright, by running a `git archive` of HEAD with no
+    `.env` in it at all; that is the thorough check, and it is too slow for
+    every gate run, which is what this one is for.
+
+    Returns a list of failure descriptions -- empty means it passed. It
+    raises nothing: a self-check that crashes the run tells you less than
+    one that reports why it could not run.
+    """
+    failures: list[str] = []
+
+    if Path(HERMETICITY_SENTINEL).exists():
+        return [f"the sentinel path {HERMETICITY_SENTINEL} exists, so the "
+                f"variant that makes the fixture observable would pass "
+                f"vacuously -- pick another HERMETICITY_SENTINEL"]
+
+    variants = (
+        ("COMFY_DIR removed", None),
+        ("COMFY_DIR points at a path that does not exist",
+         HERMETICITY_SENTINEL),
+    )
+
+    for name in HERMETICITY_PROBES:
+        for label, value in variants:
+            env = {**os.environ, "TMPDIR": scratch_root}
+            env.pop("COMFY_DIR", None)
+            if value is not None:
+                env["COMFY_DIR"] = value
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(HERE / name)],
+                    capture_output=True, text=True, env=env, timeout=600,
+                    cwd=HERE.parent.parent,
+                )
+            except subprocess.TimeoutExpired:
+                failures.append(f"{name}, {label}: TIMED OUT after 600s")
+                continue
+
+            if result.returncode:
+                detail = ""
+                for line in (result.stdout or result.stderr or "").splitlines():
+                    if "ComfyUI" in line or "Error" in line:
+                        detail = line.strip()[:150]
+                        break
+                failures.append(
+                    f"{name}, {label}: exit {result.returncode}"
+                    + (f" -- {detail}" if detail else "")
+                )
+            else:
+                verdict = next(
+                    (line.strip() for line in result.stdout.splitlines()
+                     if line.startswith("SMOKE TEST:")), "")
+                print(f"  ok    {name:18} {label:52} {verdict}")
+
+    return failures
+
+
+def report(total: int, failed: list[str], unhermetic: list[str]) -> int:
+    """Print the summary the gate greps for. Returns the exit code.
+
+    Split out of main() so that adding the hermeticity self-check did not
+    push main() past the complexity limit -- the alternative was raising the
+    ruff baseline, and this project's rule is that the baseline never goes
+    up.
+    """
+    print("\n" + "=" * 60)
+    if unhermetic:
+        print(f"HERMETICITY SELF-CHECK: {len(unhermetic)} of "
+              f"{len(HERMETICITY_PROBES) * 2} check(s) failed")
+        for line in unhermetic:
+            print(f"  - {line}")
+        print("  These files pass on a configured machine. A failure here "
+              "means the suite only passes because of this checkout's .env; "
+              "see hermeticity_selfcheck() in this file, and "
+              "scripts/check_bare_checkout.sh for the thorough version.")
+
+    if failed:
+        print(f"BACKEND TESTS: {len(failed)}/{total} FILE(S) FAILED")
+        for name in failed:
+            print(f"  - {name}")
+    else:
+        print(f"BACKEND TESTS: ALL {total} FILE(S) PASSED")
+
+    # A hermeticity failure fails the run even when every file passed.
+    # Reporting "ALL PASSED" and exiting 0 above a red self-check would let
+    # the gate go green on a suite that does not work on a fresh clone,
+    # which is the whole thing the self-check exists to catch.
+    return 1 if (failed or unhermetic) else 0
 
 
 def run_one(job: tuple[str, str]) -> tuple[str, int, str]:
@@ -87,6 +218,7 @@ def main() -> int:
     scratch_root = tempfile.mkdtemp(prefix="backend-testrun-")
     jobs = [(p.name, scratch_root) for p in test_files]
     failed: list[str] = []
+    unhermetic: list[str] = []
     try:
         if args.jobs <= 1:
             results: list[tuple[str, int, str]] = []
@@ -106,17 +238,21 @@ def main() -> int:
                     print(output.rstrip())
                     if rc:
                         failed.append(name)
+
+        # The hermeticity self-check runs last, and separately from the
+        # files above, because it is a different question: not "do these
+        # files pass" but "would they pass on a machine that has never heard
+        # of the developer". A file can pass either way.
+        print("\n=== hermeticity self-check ===")
+        if args.only:
+            print("  skipped: --only was given, so these files were not "
+                  "under test")
+        else:
+            unhermetic = hermeticity_selfcheck(scratch_root)
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
-    print("\n" + "=" * 60)
-    if failed:
-        print(f"BACKEND TESTS: {len(failed)}/{len(test_files)} FILE(S) FAILED")
-        for name in failed:
-            print(f"  - {name}")
-        return 1
-    print(f"BACKEND TESTS: ALL {len(test_files)} FILE(S) PASSED")
-    return 0
+    return report(len(test_files), failed, unhermetic)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,44 @@ It was written against `82738e2`. R4-01 had in the meantime become *worse*
 rather than better, for a reason the review could not have known — see
 below, which is the most interesting thing in this round.
 
+## Two corrections to the record
+
+The archive commit for this round claimed that both of the reviewer's repro
+scripts "now print the fixed behaviour". One of them did not, and this file
+repeated the claim. Corrected here because a reader checking the fix would
+otherwise be sent to a script that does not show it.
+
+**`scripts/repro/r17_readiness_fanout.py` measured the wrong object.** As
+extracted it built a bare `TorchDeviceProbe` — exactly the uncached thing
+the fix replaced — so after the fix it kept reporting a peak of 8 and a 3.0 s
+wall clock, while the server was answering in 27 ms. It printed the peak and
+exited 0, so it was neither demonstrating the fix nor guarding it. It now
+takes the probe the container actually wires and runs the bare one beside it
+as a control:
+
+    wired probe           8 concurrent: 1.6s, peak torch processes 1
+    bare TorchDeviceProbe 8 concurrent: 3.0s, peak torch processes 8
+
+and exits non-zero if either inverts. The control matters as much as the
+assertion: a green run where the *control* also peaked at 1 would mean the
+script had stopped measuring the thing it exists to measure. The R4-01 row
+above — "Now 1 and 1" — was measured directly against the wired probe and
+was always correct; it was the attribution to `r17` that was wrong.
+
+**R4-03's second item was substituted, not done.** The review asked for a
+final self-check in `run_all.py` that runs two representative files with no
+`COMFY_DIR` anywhere and fails the run if either errors. This round added
+`scripts/check_bare_checkout.sh` instead and did not say so. That script is
+the thorough version — a `git archive` of HEAD, which is what a fresh clone
+looks like — but it is too slow for the gate, so nothing caught the
+regression in between. `run_all.py` now has the self-check too, and the
+variant it runs is stronger than the review's wording: `COMFY_DIR` *removed*
+is weak, because `.env` resolves relative to `paths.py` and not the working
+directory, so a configured checkout passes either way. Pointing `COMFY_DIR`
+at a path that does not exist makes the fixture observable — without it
+`get_comfy_dir()` raises, with it the path resolves to a real temp directory,
+and both halves of that are measured rather than assumed.
+
 ## Findings
 
 | ID | Severity | Outcome | What holds it now |

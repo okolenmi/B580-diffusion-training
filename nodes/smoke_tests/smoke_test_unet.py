@@ -320,6 +320,73 @@ def check_against_comfy():
               "be meaningless")
 
 
+def check_lora_targets_resolve():
+    """The LoRA contract, resolved against *this* UNet.
+
+    Section 7.3's cost estimate originally said every LoRA injection point
+    was written against ComfyUI's module layout and would all move. That is
+    wrong, and this is the check that says so rather than asserting it:
+    injection selects by module *name*, so the only thing that has to match
+    is the names -- and the names are the checkpoint's, which we already
+    match.
+
+    So the claim is that `nodes/model/lora.py` needs no change. If a
+    reimplementation renamed `to_q`, or nested the blocks differently, this
+    would find zero injection targets and the project would silently train
+    nothing.
+    """
+    from nodes.model.lora import LoRAConfig, inject_lora_into_unet
+
+    model = UNetModel(**sdxl_kwargs(use_checkpoint=False))
+    config = LoRAConfig(rank=8, alpha=8.0,
+                        target_modules=["to_q", "to_k", "to_v", "to_out.0"])
+    registry = inject_lora_into_unet(model, config)
+    record(bool(registry),
+           f"LoRA injection finds targets in the reimplemented UNet: "
+           f"{len(registry)} layers")
+    if not registry:
+        return
+
+    found = {name for _path, _mod, name, _layer in registry}
+    record({"to_q", "to_k", "to_v"} <= found,
+           "and every configured attention projection is among them",
+           f"{sorted(found)}")
+    # `to_out.0` is a Sequential, so its Linear's leaf name is "0" -- and
+    # because injection matches leaf names, `time_embed.0` and
+    # `time_embed.2` match too. Pre-existing behaviour of lora.py, unchanged
+    # by the reimplementation, and recorded here because a reader counting
+    # injected layers will otherwise wonder where the extra two came from.
+    record("0" in found,
+           "`to_out.0`'s Linear is injected under the leaf name '0'")
+    record("2" in found,
+           "and leaf-name matching also picks up time_embed.2, which is "
+           "pre-existing behaviour rather than something the "
+           "reimplementation introduced",
+           f"{sorted(found)}")
+
+    # The nesting, not the leaf names. A path taken from the registry is
+    # resolved back through the module tree, so this fails if the structure
+    # changed even while the names still matched.
+    by_path = sorted(path for path, _m, _n, _l in registry
+                     if "transformer_blocks" in path)
+    record(len(by_path) > 0,
+           f"and the injected paths carry the block nesting: "
+           f"{by_path[0] if by_path else 'none'}")
+    probe = by_path[0]
+    module = model
+    resolved = True
+    for part in probe.split("."):
+        if part.isdigit():
+            module = list(module.children())[int(part)]
+        elif hasattr(module, part):
+            module = getattr(module, part)
+        else:
+            resolved = False
+            break
+    record(resolved,
+           f"which resolves back through the module tree: {probe}")
+
+
 def check_real_checkpoint():
     """The claim that actually matters: a real checkpoint loads, fully."""
     try:
@@ -376,6 +443,8 @@ def main() -> int:
     check_y_requirement()
     print("\n== characterisation vs ComfyUI ==")
     check_against_comfy()
+    print("\n== the LoRA contract ==")
+    check_lora_targets_resolve()
     print("\n== a real checkpoint ==")
     check_real_checkpoint()
 

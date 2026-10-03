@@ -1,4 +1,4 @@
-"""The SDXL VAE, owned rather than imported from ComfyUI.
+"""The SDXL VAE, reimplemented rather than imported from ComfyUI.
 
 Design doc 12, section 7.3, section B. `Encoder`, `Decoder`, `ResnetBlock`,
 `AttnBlock`, `Upsample`, `Downsample`, `DiagonalGaussianDistribution` and

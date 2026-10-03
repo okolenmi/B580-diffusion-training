@@ -25,7 +25,7 @@ from smoke_test_gradient_checkpointing import _install_stub_comfy_checkpoint_mod
 
 # The real implementation. The stub above is still needed -- it is what
 # enable_attention_block_checkpointing()'s comfy import resolves against --
-# but the checkpointing under test is ours.
+# but the checkpointing under test is this project's own.
 from nodes.model.checkpoint import checkpoint, active_checkpoint_function
 
 from nodes.components.device import DeviceContext

@@ -1,4 +1,4 @@
-"""Checkpoint key translation for the SDXL text encoders -- owned here.
+"""Checkpoint key translation for the SDXL text encoders, reimplemented.
 
 Design doc 12, section 7.2. `clip_encoder.py` needs two helpers from
 ComfyUI's `utils` to rename the conditioner keys in a `.safetensors` state

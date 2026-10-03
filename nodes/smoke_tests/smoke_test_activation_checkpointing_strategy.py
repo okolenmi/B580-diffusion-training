@@ -106,7 +106,8 @@ def check_frozen_param_safe_delegates_correctly():
     # The stub is still installed, for the *other* leg of apply(): it also
     # calls enable_attention_block_checkpointing(), which patches ComfyUI's
     # BasicTransformerBlock and so still needs the module to exist. That is
-    # the remaining half of section A -- once BasicTransformerBlock is ours,
+    # the remaining half of section A -- once BasicTransformerBlock is
+    # reimplemented too,
     # the stub comes out of this test too.
     _install_stub_comfy_checkpoint_module()
     FrozenParamSafeCheckpointing().apply()

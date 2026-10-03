@@ -16,7 +16,7 @@ match) sitting next to the trainable lora_A/lora_B, so the very first
 frozen parameter in that list raises "One of the differentiated Tensors
 does not require grad" before backward can complete. In a full fine-tune
 this never comes up (every parameter requires grad), which is presumably
-why comfy's own implementation never needed to handle it.
+why ComfyUI's version never needed to handle it.
 
 **ComfyUI's implementation is not the reference for this file.** An
 earlier version of this docstring said the opposite -- that everything

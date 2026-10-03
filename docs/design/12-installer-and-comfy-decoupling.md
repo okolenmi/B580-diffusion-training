@@ -440,8 +440,8 @@ Both numbers were wrong, and the line 41 citation pointed into
 `forward_timestep_embed` rather than at the class. It is seven lines at
 line 360.
 
-**The second step is done too**: `nodes/model/timestep_embedding.py` owns
-the embedding and its seven-line wrapper, so neither call site reaches into
+**The second step is done too**: `nodes/model/timestep_embedding.py`
+reimplements the embedding and its seven-line wrapper, so neither call site reaches into
 `openaimodel` for this. The output is **bitwise identical** to the previous
 implementation for every dtype either call site uses — verified against
 ComfyUI's class directly, not just against the reference formula.
@@ -474,7 +474,7 @@ argues. The test records the difference if there is one and moves on, and
 skips rather than fails when ComfyUI is not installed — a test that failed
 for their absence would put the coupling straight back in.
 
-### 7.2 Own the two `utils` functions
+### 7.2 Reimplement the two `utils` functions
 
 **Done, and it was three functions rather than two.** `clip_encoder.py`
 used `state_dict_prefix_replace` and `clip_text_transformers_convert` from
@@ -505,7 +505,7 @@ are things a cleanup would break:
   (197 CLIP-L, 390 CLIP-G, zero unmatched), so nothing is dropped and the
   two settings coincide. Recorded at the call site.
 
-### 7.3 Own the SDXL model definitions
+### 7.3 Reimplement the SDXL model definitions
 
 This is the real work: `UNetModel`, `SpatialTransformer`,
 `BasicTransformerBlock`, `SDXLClipModel`, `AutoencoderKL` — implemented from

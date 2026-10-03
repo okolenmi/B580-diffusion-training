@@ -1,4 +1,4 @@
-"""The attention stack, owned rather than imported from ComfyUI.
+"""The attention stack, reimplemented rather than imported from ComfyUI.
 
 Design doc 12, section 7.3, section A. These are `CrossAttention`,
 `FeedForward`, `GEGLU`, `BasicTransformerBlock` and `SpatialTransformer` --
@@ -100,7 +100,7 @@ def group_norm_32(channels: int) -> nn.GroupNorm:
 
 
 def _attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-               heads: int) -> torch.Tensor:
+               heads: int, mask: torch.Tensor | None = None) -> torch.Tensor:
     """Scaled dot-product attention over `heads` heads, shapes unchanged.
 
     `q`, `k`, `v` are `[batch, seq, heads * dim_head]`; the head split takes
@@ -108,8 +108,12 @@ def _attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     checkpoint's projection weights were trained under and the one ComfyUI's
     `attention_pytorch` uses. Getting it wrong transposes nothing and
     changes nothing about the shapes -- so it is not detectable by a shape
-    test, which is why the characterisation test at the end of section A
-    compares numbers.
+    test, which is why the characterisation tests compare numbers.
+
+    `mask` is added for CLIP, whose text transformer is causal. It arrives as
+    `[seq, seq]` and is broadcast to `[batch, 1, seq, seq]` here, which is
+    the same broadcast ComfyUI performs on the way in; doing it in one place
+    keeps the head split in one place too.
 
     `scaled_dot_product_attention` rather than a hand-rolled softmax, so the
     backend picks its own fused kernel per device. On a 12 GB Intel card that
@@ -122,7 +126,11 @@ def _attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     def split(t):
         return t.view(*shape).transpose(1, 2)
 
-    out = F.scaled_dot_product_attention(split(q), split(k), split(v))
+    if mask is not None and mask.ndim == 2:
+        mask = mask.unsqueeze(0).unsqueeze(0)
+    out = F.scaled_dot_product_attention(split(q), split(k), split(v),
+                                         attn_mask=mask, dropout_p=0.0,
+                                         is_causal=False)
     return out.transpose(1, 2).reshape(batch, q_len, width)
 
 

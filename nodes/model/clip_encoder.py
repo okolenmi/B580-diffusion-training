@@ -120,9 +120,25 @@ class SDXLClipEncoder:
 
     def encode_prompt(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode a single prompt. Returns (ctx, pooled)."""
+        # The tokenizer still produces (id, weight) pairs, because it is
+        # ComfyUI's until section C2 lands. Every weight is 1.0 for plain
+        # text, and encode_token_ids() wants ids only -- so assert that here
+        # rather than dropping the weights silently. A prompt that did carry
+        # a weighted token would be a wildcard expansion, which this project
+        # has no syntax for.
         tokens = self.tokenizer.tokenize_with_weights(prompt)
+        weights = [w for rows in tokens.values() for row in rows
+                   for _, w in row]
+        non_unit = [w for w in weights if w != 1.0]
+        if non_unit:
+            raise ValueError(
+                f"tokenizer produced {len(non_unit)} weighted token(s); "
+                f"weighted tokens exist for ComfyUI's wildcard syntax, which "
+                f"this project does not implement (first: {non_unit[0]})")
+        token_ids = {tower: [[int(t) for t, _ in row] for row in rows]
+                     for tower, rows in tokens.items()}
         with torch.no_grad():
-            ctx, pooled = self.clip_model.encode_token_weights(tokens)
+            ctx, pooled = self.clip_model.encode_token_ids(token_ids)
         return ctx, pooled
 
     def encode_prompt_and_pool(self, prompt: str, batch_size: int = 1) -> tuple[torch.Tensor, torch.Tensor]:

@@ -1,4 +1,4 @@
-"""Activation checkpointing, owned rather than patched into ComfyUI.
+"""Activation checkpointing, reimplemented rather than patched into ComfyUI.
 
 Design doc 12, section 7.3, section A. This is the code that was
 `gradient_checkpointing.py`'s monkeypatch, lifted out and made the

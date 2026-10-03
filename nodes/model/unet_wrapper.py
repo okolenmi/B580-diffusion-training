@@ -1,6 +1,6 @@
 """SDXL UNet construction, and random conditioning generation.
 
-The model is `nodes/model/unet.py`, this project's own implementation of the
+The model is `nodes/model/unet.py`, this project's reimplementation of the
 published SDXL UNet (design doc 12, section 7.3, section A). It used to be
 `comfy.ldm.modules.diffusionmodules.openaimodel.UNetModel`.
 

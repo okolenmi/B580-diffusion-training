@@ -1,4 +1,4 @@
-"""Sinusoidal timestep embedding -- owned here rather than imported.
+"""Sinusoidal timestep embedding, reimplemented rather than imported.
 
 Design doc 12, section 7.1. Both call sites, `clip_encoder.py` and
 `unet_wrapper.py`, need one thing from ComfyUI's diffusion modules: a

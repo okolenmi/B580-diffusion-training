@@ -6,7 +6,8 @@ block.** The patch targeted ComfyUI's `BasicTransformerBlock`, which lives
 in another process's file, so the only way to test the patch in isolation was
 to fabricate a `comfy.ldm.modules.attention` module holding a fake class named
 `BasicTransformerBlock` with a `forward` that took a `transformer_options`
-dict. That fake is gone: `nodes/model/attention.py` is ours, the UNet builds
+dict. That fake is gone: `nodes/model/attention.py` is this project's, and
+the UNet builds
 it, and `enable_attention_block_checkpointing(block_cls=...)` lets a check
 patch a throwaway subclass of the real one.
 

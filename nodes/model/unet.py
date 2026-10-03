@@ -1,4 +1,4 @@
-"""The SDXL UNet, owned rather than imported from ComfyUI.
+"""The SDXL UNet, reimplemented rather than imported from ComfyUI.
 
 Design doc 12, section 7.3, section A. `TimestepBlock`,
 `TimestepEmbedSequential`, `Upsample`, `Downsample`, `ResBlock` and

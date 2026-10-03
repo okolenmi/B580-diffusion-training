@@ -1,14 +1,17 @@
 /* ---------------------------------------------------------------------------
    install.js -- the first-run installer (/setup).
 
-   Two screens, in the order the questions actually have to be answered:
+   Three screens, in the order the questions actually have to be answered:
 
-     1. Readiness -- can this machine start a training run? Eight packages,
-        the accelerator, one verdict. This screen is *informational*: it
-        installs nothing, because nothing here is installable yet (the
-        opt-in download is a later phase, and a screen that promises a
-        button which does not exist is worse than one that says "not yet").
-     2. Paths -- where is ComfyUI, and where do model files live? Defaults
+     1. Readiness -- can this machine start a training run? Nine packages,
+        the accelerator, one verdict. Informational: it installs nothing.
+     2. Where packages go, and which GPU -- two questions on one screen,
+        because asking about the virtualenv before the user knows what is
+        in it wastes their answer. The size is on this screen because the
+        choice is a *disk* decision and "~2.5 GB" is what makes it
+        informed. Selecting ComfyUI's venv runs the conflict check
+        immediately, before anything is written.
+     3. Paths -- where is ComfyUI, and where do model files live? Defaults
         pre-filled from ComfyUI's own layout, because the resolution policy
         in path_tiers already prefers it and a default that disagreed with
         that policy would surface later as "I set it to the default and it
@@ -68,7 +71,9 @@ function mount(root, ...children) {
 let state = null;       // GET /installer/state
 let readiness = null;   // GET /installer/readiness
 let manifest = null;    // GET /installer/manifest
-let step = 1;           // 1 = readiness, 2 = paths
+let devices = null;     // GET /installer/devices -- lazy, it costs ~1.8s
+let conflicts = null;   // GET /installer/conflicts -- only when reuse is picked
+let step = 1;           // 1 = readiness, 2 = install target, 3 = paths
 
 const TIER_LABEL = {
   required: "server",
@@ -76,6 +81,326 @@ const TIER_LABEL = {
   optional: "optional",
   comfy_provided: "from ComfyUI",
 };
+
+/* ---- step 2: install target and GPU ------------------------------------ */
+
+/* The two targets, with the numbers that make the choice informed.
+   `installable_only` is deliberate: a package this project would never
+   install into the chosen venv is not part of its size, and quoting the
+   full figure for "reuse ComfyUI's venv" would be a lie in the user's
+   favour by 2.5 GB. */
+function installOptions(root) {
+  // The two sizes come from two different places on purpose. The new-venv
+  // figure is the manifest's `full_install_approx_mb` -- what a from-scratch
+  // install costs, which is what that option actually promises. The reuse
+  // figure is the readiness report's `approx_download_mb`, which counts only
+  // installable absences -- torch is never installable, so quoting the full
+  // figure next to "reuse" would overstate that option by 2.5 GB in the
+  // wizard's favour.
+  const full = (manifest && manifest.full_install_approx_mb) || 0;
+  const additions = (readiness && readiness.approx_download_mb) || 0;
+  const picked = root.dataset.target || "new";
+
+  const size = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`);
+
+  const option = (id, title, blurb, meta) =>
+    h(
+      "label",
+      { class: `setup-option${picked === id ? " is-picked" : ""}`, for: `setup-target-${id}` },
+      h("input", {
+        type: "radio",
+        name: "setup-target",
+        id: `setup-target-${id}`,
+        value: id,
+        checked: picked === id,
+        onchange: () => {
+          root.dataset.target = id;
+          // Repaint immediately so the picked border and the swap of the
+          // size figure are instant, then fetch the conflict check *only*
+          // for the reuse option -- it is a subprocess in another
+          // interpreter, and nobody asked for it until this click.
+          renderInstallTarget(el("setup-root"));
+          if (id === "comfy") {
+            conflicts = null;
+            enterInstallTarget(el("setup-root"));
+          } else {
+            conflicts = null;
+          }
+        },
+      }),
+      h("span", { class: "setup-option-body" },
+        h("span", { class: "setup-option-title" }, title),
+        h("span", { class: "setup-option-blurb" }, blurb),
+        meta ? h("span", { class: "setup-option-meta" }, meta) : null),
+    );
+
+  return h(
+    "fieldset",
+    { class: "setup-options" },
+    h("legend", {}, "Where should this project's packages go?"),
+    option("new", "A new virtualenv for this project",
+      "Nothing else on this machine is touched. Delete the directory to undo it.",
+      size(full)),
+    option("comfy", "Reuse ComfyUI's virtualenv",
+      "Nothing to download for the training stack -- ComfyUI already has it. "
+        + "We check for conflicts first and will not change a version ComfyUI declares.",
+      size(additions)),
+  );
+}
+
+/* The conflict check's three outcomes, rendered as three things rather than
+   one verdict. The distinction is the point: "safe" and "unknown" both
+   permit the install and both *mean* something different, and "unknown"
+   is what a real venv is mostly made of -- 150 of 185 packages on this
+   machine. Collapsing them into a boolean would hide the number that most
+   justifies pinning everything. */
+function conflictPanel() {
+  if (!conflicts) return null;
+
+  if (!conflicts.checked) {
+    return h("div", { class: "setup-conflict is-refused" },
+      h("h3", {}, "Could not check"),
+      h("p", {}, conflicts.refusal_reason
+        || "ComfyUI's environment could not be read, so safety cannot be shown."),
+      h("p", { class: "text-dim" },
+        "Choose a separate environment above, or fix the path and check again."));
+  }
+
+  const c = conflicts.counts || {};
+  const rows = conflicts.findings.filter((f) => f.outcome !== "safe");
+  const sample = rows.slice(0, 6);
+  const rest = rows.length - sample.length;
+
+  return h("div", { class: `setup-conflict ${conflicts.safe ? "is-safe" : "is-refused"}` },
+    h("h3", {}, conflicts.safe
+      ? `No conflicts — ${c.total} packages checked`
+      : "ComfyUI's environment is inconsistent"),
+    h("p", { class: "text-dim" },
+      `${c.conflict} conflict${c.conflict === 1 ? "" : "s"}, `
+      + `${c.safe} declared and matching, ${c.unknown} installed but not declared.`),
+    conflicts.safe
+      ? h("p", { class: "text-dim" },
+        `All ${conflicts.constraints.length} packages are pinned to their exact `
+        + "installed version, so nothing already in that environment can change.")
+      : h("p", {}, conflicts.refusal_reason),
+    sample.length
+      ? h("ul", { class: "setup-conflict-list" },
+        ...sample.map((f) => h("li", { class: `is-${f.outcome}` }, f.description)),
+        rest > 0 ? h("li", { class: "text-dim" },
+          `…and ${rest} more. All ${conflicts.constraints.length} are pinned exactly.`)
+          : null)
+      : null,
+  );
+}
+
+/* CUDA is a *future* feature and is deliberately not a peer option. A
+   radio button next to XPU invites a user to pick it, and picking it
+   installs 3 GB of CUDA torch onto a card that will refuse to train --
+   failing at run time, hours later, with a stack trace rather than a
+   choice. So it sits below a rule, under its own heading, and says it is
+   not available (ADR 0004). */
+function futureBackends() {
+  return h("div", { class: "setup-future" },
+    h("hr", {}),
+    h("h3", {}, "Not supported yet"),
+    h("div", { class: "setup-option is-disabled" },
+      h("span", { class: "setup-option-body" },
+        h("span", { class: "setup-option-title" }, "NVIDIA CUDA"),
+        h("span", { class: "setup-option-blurb" },
+          "Not supported yet. This project targets Intel Arc, so a CUDA "
+          + "build of torch would install ~3 GB and then refuse to train."),
+        h("span", { class: "setup-option-meta" }, "~3 GB — unavailable"))),
+  );
+}
+
+function deviceChoice() {
+  if (!devices) {
+    return h("p", { class: "text-dim" }, "Looking for graphics cards…");
+  }
+  if (!devices.enumerated) {
+    return h("div", { class: "setup-conflict is-refused" },
+      h("p", {}, devices.reason
+        || "The graphics cards could not be listed."),
+      h("p", { class: "text-dim" },
+        "Screen 1 already reported whether a device is usable."));
+  }
+  if (!devices.devices.length) {
+    return h("div", { class: "setup-conflict is-refused" },
+      h("p", {}, "No supported graphics device was found."));
+  }
+  // One card is a fact, not a choice: rendering a radio for it would
+  // invite the reader to think the wheel depends on an answer, and any
+  // answer to that question is the same answer.
+  if (devices.devices.length === 1) {
+    const d = devices.devices[0];
+    return h("div", { class: "setup-device is-ok" },
+      h("span", { class: "setup-device-state", "aria-hidden": "true" }, "✓"),
+      h("span", {}, d.name || "Graphics card"),
+      d.total_memory_mb
+        ? h("span", { class: "text-dim" }, ` — ${d.total_memory_mb.toLocaleString()} MB VRAM`)
+        : null,
+      h("span", { class: "text-dim" }, " — the only one, so the choice is made."));
+  }
+  return h("fieldset", { class: "setup-options" },
+    h("legend", {}, `Which graphics card? (${devices.devices.length} found)`),
+    ...devices.devices.map((d, i) => h(
+      "label",
+      { class: `setup-option${i === 0 ? " is-picked" : ""}` },
+      h("input", { type: "radio", name: "setup-gpu", checked: i === 0 }),
+      h("span", { class: "setup-option-body" },
+        h("span", { class: "setup-option-title" }, d.name || `Device ${d.index}`),
+        h("span", { class: "setup-option-meta" },
+          d.total_memory_mb ? `${d.total_memory_mb.toLocaleString()} MB VRAM` : "size unknown")),
+    )));
+}
+
+function renderInstallTarget(root) {
+  // Read once, here, and pass it down: the radio's onchange re-enters this
+  // function, and a component that re-read `root.dataset.target` each time
+  // it asked is a component whose two views of the same value can disagree.
+  const comfy = comfyFieldValue(root);
+  const target = root.dataset.target || "new";
+  // Replace, not append. This is re-entered from three places -- showStep,
+  // the radio's onchange, and the two lazy fetches -- and only showStep
+  // cleared the root. So every repaint stacked another copy of the whole
+  // screen, which is how one click produced two screens and why the page
+  // read as duplicated with one of them stuck on the loading line.
+  root.replaceChildren();
+  mount(root,
+    h("h2", { class: "setup-step-title" }, "Where do packages go, and which GPU?"),
+    h("p", { class: "setup-note text-dim" },
+      "This choice decides how much disk the install needs and whether "
+        + "anything already on this machine can be affected."),
+
+    // ComfyUI's location comes before the virtualenv question, because the
+    // second question cannot be asked without the first. See
+    // comfyFieldValue() for why it cannot be read from settings.
+    h(
+      "label",
+      { class: "setup-field", for: "setup-comfy-dir" },
+      h("span", { class: "setup-field-label" }, "ComfyUI directory"),
+      h("input", {
+        class: "setup-input", type: "text", id: "setup-comfy-dir",
+        name: "setup-comfy-dir", value: comfy,
+        placeholder: "/path/to/ComfyUI",
+        onchange: () => {
+          rememberComfy(el("setup-root"));
+          // Re-check against what was typed, but only if the reuse option
+          // is the one being considered -- otherwise the check's answer
+          // would appear under an option the user did not pick.
+          if ((el("setup-root").dataset.target || "new") === "comfy") {
+            conflicts = null;
+            renderInstallTarget(el("setup-root"));
+            loadConflicts(el("setup-root"));
+          } else {
+            rememberComfy(el("setup-root"));
+          }
+        },
+      }),
+      h("span", { class: "setup-field-hint text-dim" },
+        "The folder containing ComfyUI's models/ directory. Needed to check "
+        + "whether its virtualenv can be reused; leave it empty to skip that "
+        + "option."),
+    ),
+    comfy
+      ? null
+      : h("p", { class: "setup-note text-dim" },
+        "Without a path here, reusing ComfyUI's environment cannot be checked "
+        + "— and an install that cannot be checked is one this project will "
+        + "not make."),
+
+    installOptions(root),
+    h("h3", { class: "setup-subtitle" }, "Graphics card"),
+    deviceChoice(),
+    futureBackends(),
+    target === "comfy" ? conflictPanel() : null,
+    h("p", { class: "setup-error", id: "setup-msg", hidden: true }),
+    h("div", { class: "setup-actions" },
+      h("button", { class: "btn", type: "button", onclick: () => showStep(1) }, "Back"),
+      h("button", { class: "btn btn-primary", type: "button", onclick: () => showStep(3) }, "Continue"),
+    ),
+  );
+}
+
+/* Two lazy fetches, and the reason for each being lazy:
+   - devices costs ~1.8s (it imports torch in a subprocess). Asked when
+     this screen is *shown*, not before, and not on every render.
+   - conflicts is asked only when the user picks ComfyUI's venv, because
+     the answer is 185 rows long and nobody asked for it yet. */
+async function enterInstallTarget(root) {
+  const wantConflicts = (root.dataset.target || "new") === "comfy";
+  const pending = devices
+    ? Promise.resolve()
+    : api("/installer/devices")
+        .then((d) => { devices = d; })
+        .catch((err) => {
+          devices = {
+            enumerated: false, backend: "xpu", devices: [], reason: errText(err),
+          };
+        });
+
+  if (!wantConflicts) {
+    conflicts = null;
+    // Re-render once the cards are known. Without this the screen kept
+    // saying "Looking for graphics cards…" for ever: the fetch resolved,
+    // `devices` was set, and nothing ever asked for a repaint. The
+    // placeholder was only ever replaced by navigating away and back.
+    await pending;
+    renderInstallTarget(el("setup-root"));
+    return;
+  }
+  await pending;
+  await loadConflicts(root);
+}
+
+/* The ComfyUI directory this screen checks, from the field on this screen
+   and not from settings.
+
+   Which is the whole reason the field is here. Configuring comfy_dir makes
+   the server report `configured: true`, and the wizard then refuses to
+   show at all ("Setup is already complete"). So a first-run machine --
+   the only machine that sees this screen -- cannot have comfy_dir in
+   settings, and asking about "ComfyUI's virtualenv" before its location is
+   known made the reuse option unselectable in practice. A browser check of
+   this screen is what found it: setting comfy_dir mid-test closed the
+   wizard out from under the test.
+
+   Asking here fixes the ordering the design intended -- "where is ComfyUI"
+   first, then "which virtualenv" -- and screen 3 keeps only the model
+   directories, which genuinely do follow from the answer. */
+function comfyFieldValue(root) {
+  const field = root.querySelector("#setup-comfy-dir");
+  const typed = field ? field.value.trim() : "";
+  const resolved = (state && state.resolved_comfy_dir) || "";
+  return typed || resolved || "";
+}
+
+/* Remember what the user typed, so screen 3 persists the same value.
+
+   Stored on the root rather than in a module variable because the root is
+   replaced on every step change, and a module-level value survives a
+   `boot()` that reset everything else. */
+function rememberComfy(root) {
+  const field = root.querySelector("#setup-comfy-dir");
+  if (field) root.dataset.comfy = field.value.trim();
+}
+
+async function loadConflicts(root) {
+  const comfy = comfyFieldValue(root);
+  const query = comfy ? `?comfy_dir=${encodeURIComponent(comfy)}` : "";
+  try {
+    conflicts = await api(`/installer/conflicts${query}`);
+  } catch (err) {
+    // A failed check is a refusal, not an absence: rendering this as
+    // "no conflicts" would be the one wrong answer available here.
+    conflicts = {
+      checked: false, safe: false, findings: [], additions: [],
+      constraints: [], counts: {},
+      refusal_reason: errText(err),
+    };
+  }
+  renderInstallTarget(el("setup-root"));
+}
 
 
 /* ---- step 1: readiness -------------------------------------------------- */
@@ -173,9 +498,8 @@ function renderReadiness(root) {
     h(
       "p",
       { class: "setup-note text-dim" },
-      "This page reports only. Installing packages is a separate, explicit " +
-        "step that does not exist yet -- nothing here has been downloaded or " +
-        "changed.",
+      "This screen reports only -- nothing has been downloaded or changed. " +
+        "The next screen is where you choose where packages should go.",
     ),
     deviceRow(),
     tierGroup("required"),
@@ -190,7 +514,7 @@ function renderReadiness(root) {
           "p",
           { class: "setup-note text-dim" },
           `${manifest.comfy_additions.length} server packages ` +
-            "(fastapi, uvicorn, python-multipart, tomli_w) are the only ones " +
+            `(${manifest.comfy_additions.join(", ")}) are the only ones ` +
             "safe to install into ComfyUI's own environment. torch and the " +
             "accelerator stack are what ComfyUI already has and pins, so " +
             "this project will not install them there.",
@@ -244,14 +568,11 @@ function renderPaths(root, { comfyDir = "" } = {}) {
       "p",
       { class: "setup-note text-dim" },
       "Defaults follow ComfyUI's own layout, which is what this project " +
-        "already resolves when nothing is configured.",
+        "already resolves when nothing is configured. The ComfyUI " +
+        "directory itself was given on the previous screen, because the " +
+        "install-target question cannot be asked without it.",
     ),
-    pathField(
-      "setup-comfy",
-      "ComfyUI directory",
-      comfyDir,
-      "The folder containing ComfyUI's models/ directory.",
-    ),
+    h("p", { class: "setup-note text-dim" }, `ComfyUI: ${comfyDir || "not set"}`),
     pathField(
       "setup-models",
       "Models directory (optional)",
@@ -267,7 +588,7 @@ function renderPaths(root, { comfyDir = "" } = {}) {
       { class: "setup-actions" },
       h(
         "button",
-        { class: "btn", type: "button", onclick: () => showStep(1) },
+        { class: "btn", type: "button", onclick: () => showStep(2) },
         "Back",
       ),
       h(
@@ -281,7 +602,11 @@ function renderPaths(root, { comfyDir = "" } = {}) {
 
 async function applyPaths() {
   const button = document.querySelector(".setup-actions .btn-primary");
-  const comfy = el("setup-comfy").value.trim();
+  // Collected on screen 2, not here: screen 2 needs it to check the reuse
+  // option, and a field that exists on the screen that needs it and is
+  // then asked for again on the next one can disagree. `dataset.comfy` is
+  // the single value both screens read.
+  const comfy = (el("setup-root").dataset.comfy || "").trim();
   const models = el("setup-models").value.trim();
 
   if (!comfy) {
@@ -320,11 +645,26 @@ function showStep(n) {
   step = n;
   const root = el("setup-root");
   root.replaceChildren();
-  if (n === 1) renderReadiness(root);
+  if (n === 1) {
+    renderReadiness(root);
+    return;
+  }
+  if (n === 2) {
+    // `dataset.target` is read by installOptions before anything is
+    // rendered, so it has to be initialised here rather than lazily inside
+    // the render -- the first version left it undefined, and the fallback
+    // to "new" silently overwrote a "comfy" the user had already chosen
+    // when they went Back and returned.
+    if (root.dataset.target !== "comfy") root.dataset.target = "new";
+    renderInstallTarget(root);
+    rememberComfy(root);
+    enterInstallTarget(root);
+    return;
+  }
   // What resolution found, if anything: a machine where ComfyUI was
   // auto-detected gets its own directory pre-filled rather than being
   // asked to type what the server just told it.
-  else renderPaths(root, { comfyDir: (state && state.resolved_comfy_dir) || "" });
+  renderPaths(root, { comfyDir: root.dataset.comfy || (state && state.resolved_comfy_dir) || "" });
 }
 
 async function refreshReadiness(root, { announce = false } = {}) {
@@ -365,18 +705,24 @@ async function boot() {
     return;
   }
 
-  const [, ready, man] = await Promise.all([
+  // Destructure in the same order as the array. This was
+  // `const [, ready, man] = await Promise.all([manifest, readiness, null])`
+  // followed by `manifest = ready` -- so the manifest variable was holding
+  // the *readiness* payload and `full_install_approx_mb` was permanently
+  // undefined. That is why the design doc recorded the install size as
+  // "unrendered": it was a wiring bug, not a missing feature, and screen 2
+  // cannot size a disk decision without it.
+  //
+  // Both are needed: readiness is what screen 1 renders and what sizes the
+  // "reuse" option, the manifest is what sizes the "new venv" option and
+  // names the packages safe to add to ComfyUI's environment.
+  const [man, ready] = await Promise.all([
     api("/installer/manifest"),
     api("/installer/readiness"),
-    Promise.resolve(null),
   ]);
-  manifest = ready;
+  manifest = man;
   readiness = ready;
-  void man;
 
-  // The manifest is fetched for the wording about the ComfyUI additions
-  // list; it is small and static, and failing to get it must not stop the
-  // screen that matters.
   showStep(step);
 }
 

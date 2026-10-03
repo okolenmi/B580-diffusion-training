@@ -469,11 +469,37 @@ becomes one option among several rather than the only cheap one.
 
 That the reimplementation diverges numerically from Comfy's, in a way the
 existing tests do not catch. Every test here is a shape, a count, or a
-memory number; none of them compares an output tensor against Comfy's. A
-first step for 7.3 is a numerical equivalence test against Comfy's
-implementation — run both, compare forward outputs on a fixed input, and
-refuse the fork if they disagree. That test is also what proves the
-separation is safe, and it does not exist yet.
+memory number; none of them compares an output tensor against Comfy's.
+
+**A characterisation test, not an equivalence gate.** The obvious thing to
+propose is: run both implementations on a fixed input, compare outputs,
+and *refuse the fork if they disagree*. That framing is wrong, and not
+hypothetically.
+
+ComfyUI's `CheckpointFunction` is wrong twice, independently, and this
+project has fixed both while ComfyUI has fixed neither:
+
+| | ComfyUI | This project |
+|---|---|---|
+| frozen parameters in a checkpointed block | raises `One of the differentiated Tensors does not require grad` | filtered; frozen params get `None` |
+| the backward's autocast context | re-enters `torch.cuda.amp.autocast`, which on an Intel card warns "Disabling autocast" and enters disabled — so an fp16 forward is recomputed in fp32 | re-enters the forward's own autocast, on the forward's device type |
+
+Both measured, not inferred. The autocast one shows as 4.6e-04 relative
+gradient error against a non-checkpointed reference on this B580, and 0.0
+after the fix. Neither has landed upstream: nothing tracks this project,
+so there is nothing to land it.
+
+So "disagrees with ComfyUI ⇒ refuse" would have **blocked the fix**. The
+test to write is a **characterisation** test — record what ComfyUI does,
+then decide independently whether that is correct. Divergence is a prompt
+to work out which side is wrong, not a failure condition. The same applies
+to the LoRA injection points: they are written against Comfy's module
+layout because that layout is what the checkpoints use, not because
+Comfy's behaviour is the target.
+
+It does not exist yet, and it is a prerequisite for 7.3 — not because it
+gates the fork, but because a reimplementation nobody has compared against
+anything is not a reimplementation, it is a second guess.
 
 ## 8. Open questions, not decided here
 

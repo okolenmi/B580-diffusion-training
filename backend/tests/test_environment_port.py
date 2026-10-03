@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.ports.environment import (  # noqa: E402
     IMPORT_NAMES,
+    DeviceProbe,
     DeviceReport,
     MetadataPackageInventory,
     TorchDeviceProbe,
@@ -200,5 +201,29 @@ check(fake.enumerate_all is False,
       "unchecked one")
 check(TorchDeviceProbe(backend="xpu", _in_process=True).enumerate_all is True,
       "and the real probe reports that it did enumerate")
+
+# devices_with_reason lives on the ABC, not only on the real probe, because
+# the route that renders the GPU choice calls it through the port -- and
+# with it defined only on TorchDeviceProbe, mypy correctly reported the
+# call as an AttributeError waiting to happen on any other implementation,
+# including the fake this section is using.
+check(hasattr(DeviceProbe, "devices_with_reason"),
+      "every probe can answer 'which devices, and why none'")
+check(callable(getattr(fake, "devices_with_reason", None)),
+      "including a fake, so the route cannot raise on a stub")
+
+rows, reason = fake.devices_with_reason()
+check(len(rows) == 1 and reason is None,
+      f"the fallback reports the current device and no reason "
+      f"({len(rows)}, {reason!r})")
+
+# And when there is nothing, the reason comes from report() rather than
+# being invented -- so "no card" and "could not look" stay distinct.
+absent_rows, absent_reason = FakeDeviceProbe(
+    DeviceReport(present=False, reason="torch reports no xpu device")
+).devices_with_reason()
+check(absent_rows == () and absent_reason == "torch reports no xpu device",
+      f"an absent device carries report()'s own reason "
+      f"({absent_reason!r})")
 
 finish()

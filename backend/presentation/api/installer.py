@@ -38,6 +38,8 @@ from ..schemas import (
     InstallerApplyIn,
     InstallerApplyOut,
     InstallerConflictsOut,
+    InstallerDeviceOut,
+    InstallerDevicesOut,
     InstallerReadinessOut,
     InstallerStateOut,
     conflicts_out,
@@ -103,6 +105,41 @@ def apply_installation(
     )
 
 
+@router.get("/devices", response_model=InstallerDevicesOut)
+def get_devices(
+    services: ApplicationServices = Depends(get_services),
+) -> InstallerDevicesOut:
+    """Every accelerator on this machine, for screen 2's choice.
+
+    **Costs about 1.8 s** -- it imports torch, in a subprocess, because the
+    question is which card a multi-gigabyte wheel should be built for and
+    that cannot be answered without torch. So the wizard calls this when
+    screen 2 is *shown*, not on every readiness render, and not before the
+    user has been told what the choice is for.
+
+    `enumerated` distinguishes "looked and found none" from "could not
+    look". Both send an empty list, and a wizard that renders both as "no
+    graphics card" would be asserting a fact it does not have.
+    """
+    probe = services.installer.device_probe
+    rows, reason = probe.devices_with_reason()
+    return InstallerDevicesOut(
+        enumerated=bool(probe.enumerate_all) and reason is None,
+        backend=getattr(probe, "backend", "xpu"),
+        devices=[
+            InstallerDeviceOut(
+                index=index,
+                present=row.present,
+                name=row.name,
+                total_memory_mb=row.total_memory_mb,
+                reason=row.reason,
+            )
+            for index, row in enumerate(rows)
+        ],
+        reason=reason,
+    )
+
+
 @router.get("/conflicts", response_model=InstallerConflictsOut)
 def get_conflicts(
     comfy_dir: str | None = None,
@@ -117,21 +154,32 @@ def get_conflicts(
     every load, would mean a 185-line answer rendered before anyone has
     decided whether they want to read it.
 
-    Both paths come from the settings store rather than from the request:
-    `venv_python` is what the machine is configured to use, and a port that
-    guessed at wiring time would report on whichever venv happened to be
-    configured when the server started. `comfy_dir` can be overridden per
-    call so the wizard can check a directory the user has just typed before
-    committing it.
+    Both paths come from the settings store rather than from the request.
+    `comfy_dir` can be overridden per call so the wizard can check a
+    directory the user has just typed before committing it.
+
+    **`stored` venv_python, not `resolved`.** This took a browser check to
+    find. `resolved` ends in a bare `"python"` when nothing is configured,
+    and that string is about *this project's* children -- which interpreter
+    a training subprocess should run under. Passing it here meant a
+    first-run machine checked its own 87-package interpreter instead of
+    ComfyUI's 185-package one, and reported the answer as though it were
+    about ComfyUI. The two questions share a key and not a meaning; this
+    endpoint is the second one, so it reads the second source and lets the
+    port derive a venv from the checkout when there is nothing to read.
 
     Three outcomes, not two: an installed package that ComfyUI's file does
     not mention is *unknown*, and unknown is pinned rather than trusted.
     See the design doc §3.
     """
-    resolved = services.settings.read.execute().resolved
+    view = services.settings.read.execute()
     report = services.installer.conflicts.execute(
-        comfy_dir=comfy_dir or resolved.get("comfy_dir") or "",
-        venv_python=resolved.get("venv_python"),
+        comfy_dir=comfy_dir or view.resolved.get("comfy_dir") or "",
+        # Stored, not resolved -- see the docstring. An unset venv_python
+        # is the normal state of a first-run machine, and the port finds
+        # ComfyUI's venv from its checkout instead of falling back to
+        # whatever this server happens to be running under.
+        venv_python=view.stored.get("venv_python") or None,
     )
     return conflicts_out(report)
 

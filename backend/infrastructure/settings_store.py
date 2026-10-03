@@ -47,17 +47,47 @@ class SqliteSettingsStore(SettingsStore):
 
     # -- SettingsStore -------------------------------------------------
 
+    def _resolve(self, resolve) -> str | None:
+        """One resolved value, or None when it does not resolve.
+
+        `path_tiers` raises when nothing identifies a ComfyUI install, and
+        that raise is correct: a *consumer* needing a path must not be handed
+        an invented one. But `read()` is not a consumer -- it is the report
+        the settings page and the wizard both render, and "this does not
+        resolve" is an answer it has to be able to give.
+
+        The bug this fixes: only `comfy_dir` was guarded. `checkpoints_dir`
+        and `loras_dir` derive from it through `_comfy_or_store`, so they
+        raised the same way, so `read()` raised, and on a machine with no
+        ComfyUI configured *every* settings-backed endpoint 500'd --
+        including the wizard whose first question is "where is ComfyUI?".
+        Found by starting a server against a scratch tree with no sibling
+        ComfyUI, which is the exact machine the wizard is for.
+
+        None rather than a fallback string, per the rule the rest of this
+        method already follows.
+        """
+        try:
+            return str(resolve())
+        except RuntimeError as exc:
+            logger.debug("path did not resolve: %s", exc)
+            return None
+
     def read(self) -> SettingsView:
         stored = {key: self.get(key, "") for key in SETTINGS_KEYS}
-        try:
-            comfy = str(path_tiers.comfy_dir(self._root, self.get))
-        except RuntimeError:
-            comfy = None  # nothing identifies a ComfyUI install
         resolved = {
-            "comfy_dir": comfy,
-            "venv_python": path_tiers.venv_python(self._root, self.get),
-            "checkpoints_dir": str(path_tiers.checkpoints_dir(self._root, self.get)),
-            "loras_dir": str(path_tiers.loras_dir(self._root, self.get)),
+            "comfy_dir": self._resolve(
+                lambda: path_tiers.comfy_dir(self._root, self.get)
+            ),
+            "venv_python": self._resolve(
+                lambda: path_tiers.venv_python(self._root, self.get)
+            ),
+            "checkpoints_dir": self._resolve(
+                lambda: path_tiers.checkpoints_dir(self._root, self.get)
+            ),
+            "loras_dir": self._resolve(
+                lambda: path_tiers.loras_dir(self._root, self.get)
+            ),
             # None, not a fabricated string: models_dir is unset unless
             # someone set it, and the two directories above are already
             # reported concretely. Reporting "the models root is None"

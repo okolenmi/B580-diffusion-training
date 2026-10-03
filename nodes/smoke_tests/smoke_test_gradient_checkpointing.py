@@ -181,6 +181,127 @@ def check_patched_version_matches_unchecked_reference():
     print("    PASS: frozen param's .grad stayed None -- no fabricated gradient for it")
 
 
+class _AutocastProbeBlock(nn.Module):
+    """Records the autocast state and dtype of every call to the block.
+
+    All-trainable on purpose: the frozen-param filter is covered elsewhere,
+    and a block with a frozen parameter makes the stock implementation
+    raise before the recompute is ever reached -- which would hide the
+    thing this probe is looking at.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(8, 4) / 8 ** 0.5)
+        self.seen = []
+
+    def forward(self, x):
+        out = torch.nn.functional.silu(x @ self.w)
+        self.seen.append({
+            "autocast": torch.is_autocast_enabled("cpu"),
+            "dtype": out.dtype,
+        })
+        return out
+
+
+def _autocast_states(util, block, x):
+    """One checkpointed pass: forward under autocast, backward *outside* it.
+
+    The shape matters and getting it wrong hides the bug. ComfyUI captures
+    the autocast state in ``forward`` precisely because it expects
+    ``backward`` to run later, after the surrounding context has exited --
+    so the recompute has to put the context back itself. A first version of
+    this check called ``backward`` inside the ``with`` block, and the
+    control then reported the recompute as correctly autocast, because the
+    outer context was still open and hiding a backward that re-enters
+    nothing.
+
+    So: forward inside, backward outside. The returned list is every state
+    the block saw, forward first and the recompute last.
+    """
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        out = util.checkpoint(block, (x,), tuple(block.parameters()), True)
+    out.backward(torch.ones_like(out))
+    return block.seen
+
+
+def check_recompute_reenters_the_forward_autocast():
+    """The recompute must run in the same autocast context as the forward.
+
+    This is the check that was missing, and its absence is why a
+    CUDA-only autocast call survived in an XPU-targeted project: every other
+    check here runs *without* autocast, where a forward and its recompute
+    agree no matter what the recompute re-enters.
+
+    The bug, on CPU so it needs no accelerator to demonstrate: comfyi's
+    backward re-enters `torch.cuda.amp.autocast`, which on a machine
+    without CUDA prints "Disabling autocast" and enters with
+    `enabled=False`. So a forward that ran in bfloat16 was recomputed in
+    float32.
+
+    Run on CPU deliberately. The same defect is present on the XPU card --
+    measured there at 4.6e-04 relative gradient error, against 0.0 for the
+    fixed version -- but asserting a tolerance on GPU autocast would be a
+    weaker and flakier test than asserting the context itself, and the
+    context is the thing that was wrong.
+    """
+    print("[recompute re-enters the forward's autocast context, not a CUDA one]")
+    import torch as _torch
+
+    # -- control: the stock stub really does drop the autocast ----------
+    util = _install_stub_comfy_checkpoint_module()
+    stock_block = _AutocastProbeBlock()
+    x = _torch.randn(4, 8, requires_grad=True)
+    stock_seen = _autocast_states(util, stock_block, x)
+    assert len(stock_seen) >= 2, f"expected a forward and a recompute, got {len(stock_seen)}"
+    assert stock_seen[0]["autocast"] is True, "the control's forward was not autocast"
+    assert stock_seen[-1]["autocast"] is False, (
+        "expected the stock implementation to drop autocast in the recompute; "
+        f"it did not, so this control proves nothing any more: {stock_seen}"
+    )
+    print(f"    PASS: control -- stock drops it: forward {stock_seen[0]} "
+          f"-> recompute {stock_seen[-1]}")
+
+    # -- and the patched version keeps it --------------------------------
+    util = _install_stub_comfy_checkpoint_module()
+    from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    enable_frozen_param_safe_checkpointing()
+    block = _AutocastProbeBlock()
+    x = _torch.randn(4, 8, requires_grad=True)
+    seen = _autocast_states(util, block, x)
+    assert len(seen) >= 2, f"expected a forward and a recompute, got {len(seen)}"
+    assert seen[0]["autocast"] is True, "the patched forward was not autocast"
+    assert seen[-1]["autocast"] is True, (
+        "the patched recompute dropped autocast -- it must re-enter the "
+        f"forward's context: {seen}"
+    )
+    print(f"    PASS: patched keeps it: forward {seen[0]} -> recompute {seen[-1]}")
+
+    # -- and the two passes agree numerically ---------------------------
+    # Written through the same helper rather than with an inline
+    # util.checkpoint(...) call. The context assertions above are the
+    # load-bearing ones; this adds a numeric check, and it is deliberately
+    # built on the one call shape already exercised twice above rather than
+    # a third spelling of it.
+    torch.manual_seed(0)
+    ckpt_block = _AutocastProbeBlock()
+    ref_block = _AutocastProbeBlock()
+    ref_block.load_state_dict(ckpt_block.state_dict())
+
+    probe = torch.randn(4, 8, requires_grad=True)
+    _autocast_states(util, ckpt_block, probe)
+    ckpt_grad = ckpt_block.w.grad.clone()
+
+    ref_block.zero_grad()
+    plain = probe.detach().clone().requires_grad_(True)
+    with _torch.autocast(device_type="cpu", dtype=_torch.bfloat16):
+        out = ref_block(plain)
+    out.backward(_torch.ones_like(out))
+
+    torch.testing.assert_close(ckpt_grad, ref_block.w.grad)
+    print("    PASS: and the checkpointed gradient matches a plain one under autocast")
+
+
 def check_idempotent():
     print("[idempotency: patching twice doesn't double-wrap]")
     util = _install_stub_comfy_checkpoint_module()
@@ -195,6 +316,7 @@ def check_idempotent():
 def main():
     check_stock_version_reproduces_the_documented_crash()
     check_patched_version_matches_unchecked_reference()
+    check_recompute_reenters_the_forward_autocast()
     check_idempotent()
     print()
     print("=" * 60)

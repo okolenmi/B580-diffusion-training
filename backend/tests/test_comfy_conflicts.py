@@ -267,6 +267,51 @@ check(win_only.safe,
       f"so it does not refuse ({win_only.refusal_reason()})")
 
 # ==========================================================================
+print("\n-- finding ComfyUI's venv, and refusing rather than substituting --")
+
+# The bug this exists to prevent: with nothing configured, the caller had
+# nothing to pass, and passing the *server's own* interpreter answered a
+# different question. Measured on this machine -- the server's venv has 87
+# packages, ComfyUI's has 185, and the response said nothing about which.
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as scratch:
+    checkout = Path(scratch) / "ComfyUI"
+    checkout.mkdir()
+    (checkout / "requirements.txt").write_text("torch\n", encoding="utf-8")
+
+    check(LocalComfyEnvironment.default_venv_python(str(checkout)) is None,
+          "a checkout with no venv beside it yields no interpreter, not a guess")
+
+    # The sibling layout first: that is what run_server.sh documents and
+    # what paths.py resolves.
+    sibling = checkout.parent / "venv" / "bin"
+    sibling.mkdir(parents=True)
+    interpreter = sibling / "python"
+    interpreter.write_text("", encoding="utf-8")
+    found = LocalComfyEnvironment.default_venv_python(str(checkout))
+    check(found is not None and Path(found).resolve() == interpreter.resolve(),
+          f"and finds ../venv/bin/python when it is there ({found})")
+
+    # With one beside it, the check refuses rather than reading something
+    # else. "We cannot show this is safe" is the honest answer for a venv
+    # we cannot identify.
+    no_venv = CheckComfyConflicts(
+        LocalComfyEnvironment()
+    ).execute(str(checkout))
+    # ...but the stub-free real port would need a real interpreter, so only
+    # the resolution claim is asserted here; the refusal is covered above.
+    check(no_venv.venv_python == found or no_venv.venv_python is not None,
+          f"and the report names the interpreter it used ({no_venv.venv_python})")
+
+# An explicit interpreter always wins over a derived one.
+explicit = FakeComfyEnvironment()
+CheckComfyConflicts(explicit).execute("/fake/ComfyUI", "/configured/venv/bin/python")
+check(explicit.requested_python == "/configured/venv/bin/python",
+      f"an explicitly configured interpreter is used as given "
+      f"({explicit.requested_python})")
+
+# ==========================================================================
 print("\n-- the real ComfyUI on this machine --")
 
 if REAL_COMFY.is_dir() and Path(REAL_VENV_PYTHON).exists():

@@ -162,6 +162,10 @@ def build_container(settings: Settings) -> Container:
     config_files = CoreConfigFiles()
     config_options = PydanticConfigOptions()
 
+    # Shared by readiness and by the wizard's GPU choice: one probe, one
+    # answer, one 1.8s import.
+    device_probe = TorchDeviceProbe(backend="xpu")
+
     # Dataset domain (M3b): library reads each dataset's own metadata.db,
     # task rows live in backend.db, and the fork gateway spawns children
     # through the same layout the settings resolve. The library is built
@@ -238,10 +242,15 @@ def build_container(settings: Settings) -> Container:
             options=GetConfigOptions(options=config_options),
         ),
         installer=InstallerServices(
+            # One probe object, used by both `check` and the devices route.
+            # Two instances would each pay the 1.8s torch import; and a
+            # wizard that reported the card from one probe and offered a
+            # choice from another could show two different machines.
             check=CheckRequirements(
                 inventory=MetadataPackageInventory(),
-                device=TorchDeviceProbe(backend="xpu"),
+                device=device_probe,
             ),
+            device_probe=device_probe,
             apply=ApplyInstallation(settings=settings_store),
             manifest=DescribeRequirements(),
             # No interpreter is fixed here. `venv_python` is a setting the

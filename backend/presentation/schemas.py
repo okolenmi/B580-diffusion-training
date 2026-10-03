@@ -201,6 +201,34 @@ class AdditionFindingOut(BaseModel):
     description: str
 
 
+class InstallerDeviceOut(BaseModel):
+    """One card. `index` is torch's device index, which is what a user
+    passes to `torch.xpu.set_device` and therefore what the choice has to
+    refer to -- not the position in this list."""
+
+    index: int
+    present: bool
+    name: str | None
+    total_memory_mb: float | None
+    reason: str | None
+
+
+class InstallerDevicesOut(BaseModel):
+    """Every card, and whether anybody looked.
+
+    `enumerated` is the same distinction as `ReadinessReport.device_checked`:
+    an empty list from a probe that ran and found nothing is not the same
+    answer as one from a probe that failed, and a wizard offering a GPU
+    choice needs to be able to tell them apart.
+    """
+
+    enumerated: bool
+    backend: str
+    devices: list[InstallerDeviceOut]
+    #: Why there are none, when there are none. None when there are some.
+    reason: str | None
+
+
 class InstallerConflictsOut(BaseModel):
     """May the four server packages go into ComfyUI's venv?
 

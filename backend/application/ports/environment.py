@@ -208,8 +208,26 @@ class DeviceProbe(ABC):
         mistake the default for "this machine has exactly one card", because
         `enumerate_all` says whether it actually looked.
         """
+        rows, _ = self.devices_with_reason()
+        return rows
+
+    def devices_with_reason(self) -> tuple[tuple[DeviceReport, ...], str | None]:
+        """The devices, *and* why there are none if there are none.
+
+        On the ABC rather than only on the real probe, because a caller
+        that cannot get both has to choose between inventing a reason and
+        guessing from an empty list -- and the caller here renders the two
+        differently ("no cards" versus "we could not look"). `TorchDeviceProbe`
+        overrides this with a real enumeration.
+
+        The default reports the current device, which is all a port that
+        does not enumerate can honestly claim, and carries `report()`'s own
+        reason when there is nothing.
+        """
         single = self.report()
-        return (single,) if single.present else ()
+        if single.present:
+            return (single,), None
+        return (), single.reason
 
     @property
     def enumerate_all(self) -> bool:
@@ -353,19 +371,8 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
     def enumerate_all(self) -> bool:
         return True
 
-    def devices(self) -> tuple[DeviceReport, ...]:
-        """Every device, by enumeration rather than by asking which is current.
-
-        Returns an empty tuple with the reason attached to *nothing* -- so
-        the caller cannot tell "no devices" from "the probe failed". That is
-        why `devices_with_reason()` exists and why this one is the thin
-        wrapper over it.
-        """
-        rows, _reason = self.devices_with_reason()
-        return rows
-
     def devices_with_reason(self) -> tuple[tuple[DeviceReport, ...], str | None]:
-        """The devices, and why there are none if there are none."""
+        """The devices, by enumeration rather than by asking which is current."""
         if self._in_process:
             return self._list_here()
 

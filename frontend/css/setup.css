@@ -245,3 +245,120 @@
 .setup-link:hover { text-decoration: underline; }
 
 .setup-root { min-height: 240px; }
+/* ---- 9. Screen 2: the install target and the GPU choice ----------------- */
+
+.setup-subtitle {
+    margin: 26px 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* A fieldset of radios. The border is removed because the legend carries
+   the question; what is left is the spacing between the options, which is
+   what makes two similar-looking cards read as alternatives. */
+.setup-options {
+    /* The top margin is load-bearing: this fieldset follows a form field
+       on screen 2, and without it the legend sits flush against the
+       field's hint text -- two labels with no space between them, which
+       reads as one control with two captions. */
+    margin: 20px 0 8px;
+    padding: 0;
+    border: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.setup-options legend {
+    padding: 0 0 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+}
+
+.setup-option {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+}
+.setup-option:hover:not(.is-disabled) {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+/* The picked state is a border, not a fill. A fill reads as "this one is
+   enabled and the others are not", which would be a claim about the others. */
+.setup-option.is-picked {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.setup-option.is-disabled {
+    cursor: default;
+    opacity: 0.72;
+}
+.setup-option input[type="radio"] { margin: 2px 0 0; flex: none; }
+
+.setup-option-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.setup-option-title { font-weight: 500; font-size: 13px; }
+.setup-option-blurb { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+/* The size is styled apart from the blurb because it is the reason the
+   screen exists -- "~2.5 GB" is what turns this from a preference into a
+   decision, so it must not read as another sentence of prose. */
+.setup-option-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+/* CUDA and anything else unsupported: below a rule, under its own
+   heading, never a radio. A disabled radio next to a live one is an
+   invitation, and the failure it invites is 3 GB of unusable torch
+   discovered hours later (ADR 0004). */
+.setup-future { margin-top: 22px; }
+.setup-future hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 0 0 14px;
+}
+.setup-future h3 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.setup-conflict {
+    margin: 20px 0 0;
+    padding: 13px 15px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface-alt);
+}
+.setup-conflict.is-safe {
+    border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+}
+.setup-conflict.is-refused {
+    border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+    background: color-mix(in srgb, var(--red) 8%, var(--surface-alt));
+}
+.setup-conflict h3 { margin: 0 0 5px; font-size: 13px; }
+.setup-conflict p { margin: 0 0 6px; font-size: 12px; line-height: 1.55; }
+.setup-conflict p:last-child { margin-bottom: 0; }
+
+.setup-conflict-list {
+    margin: 9px 0 0;
+    padding-left: 17px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-dim);
+}
+.setup-conflict-list li { margin-bottom: 4px; }
+.setup-conflict-list li.is-conflict { color: var(--text); }

@@ -18,14 +18,34 @@ does not require grad" before backward can complete. In a full fine-tune
 this never comes up (every parameter requires grad), which is presumably
 why comfy's own implementation never needed to handle it.
 
-The fix only changes which of ctx.input_params actually gets passed to
-torch.autograd.grad -- the frozen ones are filtered out before the call
-and re-inserted as None afterward, at the same positions, since autograd
-still needs one gradient slot per original forward() argument regardless
-of whether that argument required grad. Everything else (forward, the
-shallow-copy re-run under torch.enable_grad(), the autocast context) is
-copied unchanged from comfy's own implementation -- this is a filter on
-top of proven logic, not a reimplementation of it.
+**ComfyUI's implementation is not the reference for this file.** An
+earlier version of this docstring said the opposite -- that everything
+except the frozen-param filter was "copied unchanged from comfy's own
+implementation -- a filter on top of proven logic, not a
+reimplementation of it" -- and that turned out to be the wrong stance
+twice over.
+
+1. The frozen-param bug above: fixed here, and **still unfixed in
+   ComfyUI**. Nothing upstream depends on this project reporting it, so
+   nothing upstream has.
+2. The autocast re-entry, below: also a comfyi bug, inherited here by the
+   copy, and also still unfixed upstream. Fixed here too.
+
+Two for two is the argument. ComfyUI's model code is a source of *ideas*
+and of the SDXL structure; where it is wrong, this project does not match
+it, and a fix that has not landed upstream will not arrive here by
+updating. So the rule for this file is: each seam is judged on whether it
+is correct **for this project on its hardware**, and comfyi's version is
+one more input to that judgement rather than the thing being reproduced.
+
+The frozen-param fix changes which of ctx.input_params actually gets
+passed to torch.autograd.grad -- the frozen ones are filtered out before
+the call and re-inserted as None afterward, at the same positions, since
+autograd still needs one gradient slot per original forward() argument
+regardless of whether that argument required grad. The shallow-copy
+re-run under torch.enable_grad() is kept because it is correct (detach()'d
+tensors cannot be mutated in place). The autocast context was rewritten;
+see _autocast_state().
 
 ActivationCheckpointingStrategy makes the fix above composable: an
 object with an apply() method instead of a global, process-wide
@@ -95,6 +115,68 @@ class FrozenParamSafeCheckpointing(ActivationCheckpointingStrategy):
         enable_attention_block_checkpointing()
 
 
+def _autocast_state(inputs):
+    """``(device_type, kwargs)`` describing the *current* autocast context.
+
+    Returned rather than hardcoded because the original captured
+    ``torch.is_autocast_enabled()`` / ``torch.get_autocast_gpu_dtype()``
+    (both CUDA-flavoured) and re-entered it with
+    ``torch.cuda.amp.autocast``, and this project targets Intel Arc
+    (ADR 0004). On this machine that call does not fail -- it warns
+    "CUDA is not available or torch_xla is imported. Disabling autocast."
+    and enters with ``enabled=False``.
+
+    So the effect was: **a forward that ran under fp16 was recomputed in
+    fp32**, which is the one thing activation checkpointing must not do.
+    Measured, with all parameters trainable so the frozen-param filter is
+    not in play:
+
+        no autocast, xpu        relative gradient error  0.000e+00
+        autocast('xpu', fp16)   relative gradient error  4.581e-04
+
+    and by instrumenting the checkpointed block directly:
+
+        FORWARD    xpu_autocast=True   out.dtype=float32
+        RECOMPUTE  xpu_autocast=False  out.dtype=float32
+
+    **This is currently latent**: nothing in the training path enables
+    autocast (measured by grep over ``nodes/`` and ``manager/``), so both
+    directions run with ``enabled=False`` and the two passes agree. It
+    becomes a wrong-gradients bug the moment anyone turns on mixed
+    precision, which for a 12 GB card training SDXL is the obvious next
+    step -- so it is fixed now rather than then.
+
+    The device type comes from where the inputs actually are, which is more
+    reliable than asking torch what is current: there is no stable API for
+    "which device type is autocast currently enabled for", and the inputs'
+    device is the thing that has to match anyway.
+    """
+    import torch
+
+    device_type = "cuda"
+    for tensor in inputs:
+        device_type = tensor.device.type
+        break
+    try:
+        available = torch.amp.autocast_mode.is_autocast_available(device_type)
+    except Exception:  # noqa: BLE001 -- unknown device type, assume available
+        available = True
+    if not available:
+        return None, {}
+
+    # `get_autocast_dtype(device_type)` replaced `get_autocast_gpu_dtype`,
+    # which torch deprecates and which has no argument at all. The getattr
+    # keeps this working on the older torch a ComfyUI venv might pin.
+    getter = getattr(torch, "get_autocast_dtype", None)
+    if getter is None:
+        getter = lambda _dt: torch.get_autocast_gpu_dtype()  # noqa: E731
+    return device_type, {
+        "enabled": torch.is_autocast_enabled(device_type),
+        "dtype": getter(device_type),
+        "cache_enabled": torch.is_autocast_cache_enabled(),
+    }
+
+
 def enable_frozen_param_safe_checkpointing(recompute_wrapper=None) -> None:
     """Idempotent per (patched-at-all, recompute_wrapper identity) pair,
     not just "already patched at all" -- calling this twice with the
@@ -134,19 +216,32 @@ def enable_frozen_param_safe_checkpointing(recompute_wrapper=None) -> None:
             ctx.run_function = run_function
             ctx.input_tensors = list(args[:length])
             ctx.input_params = list(args[length:])
-            ctx.gpu_autocast_kwargs = {
-                "enabled": torch.is_autocast_enabled(),
-                "dtype": torch.get_autocast_gpu_dtype(),
-                "cache_enabled": torch.is_autocast_cache_enabled(),
-            }
+            # Device-agnostic, where comfyi's is CUDA-specific. See
+            # _autocast_state() for the measurement and why this is not a
+            # cosmetic difference.
+            ctx.autocast_device_type, ctx.autocast_kwargs = _autocast_state(
+                ctx.input_tensors
+            )
             with torch.no_grad():
                 return ctx.run_function(*ctx.input_tensors)
 
         @staticmethod
         def backward(ctx, *output_grads):
             ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
-            with torch.enable_grad(), \
-                    torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs):
+            # Re-enter the *forward's* autocast, on the forward's device
+            # type. comfyi's version re-enters torch.cuda.amp.autocast, which
+            # on this card silently disables itself -- see _autocast_state().
+            # nullcontext when there was no autocast or the device type has
+            # none, so the recompute is simply un-autocast as before.
+            import contextlib
+
+            autocast = (
+                torch.autocast(device_type=ctx.autocast_device_type,
+                                **ctx.autocast_kwargs)
+                if ctx.autocast_device_type
+                else contextlib.nullcontext()
+            )
+            with torch.enable_grad(), autocast:
                 # Same "first op mutates storage in place" guard as the
                 # original -- detach()'d tensors can't be mutated in place.
                 shallow_copies = [x.view_as(x) for x in ctx.input_tensors]

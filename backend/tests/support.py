@@ -945,6 +945,7 @@ def build_services(
             scratch_dir=graph_scratch,
             make_tail=ExecutionEventTail,
         )
+    shared_probe = device_probe or FakeDeviceProbe()
     return ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
@@ -956,8 +957,13 @@ def build_services(
         installer=InstallerServices(
             check=CheckRequirements(
                 inventory=MetadataPackageInventory(),
-                device=device_probe or FakeDeviceProbe(),
+                device=shared_probe,
             ),
+            # The same object `check` uses, so a test cannot be handed two
+            # views of the machine. FakeDeviceProbe falls back to the single
+            # current device and reports enumerate_all False, which is the
+            # honest answer for a stub.
+            device_probe=shared_probe,
             apply=ApplyInstallation(settings=settings_store),
             manifest=DescribeRequirements(),
             # No interpreter: these tests never ask for a conflict check, and

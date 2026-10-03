@@ -36,6 +36,7 @@ is a reason to refuse rather than a reason to guess.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from abc import ABC, abstractmethod
@@ -158,9 +159,51 @@ for dist in md.distributions():
 print(json.dumps({"ok": True, "packages": out}))
 """
 
+    #: Where a venv is looked for, relative to a ComfyUI checkout. The
+    #: sibling layout first, because that is what `run_server.sh` documents
+    #: and what `paths.py` resolves; the nested one second, because people
+    #: put it there too. Derived rather than configured, because on a
+    #: first-run machine there is nothing configured to derive from.
+    _VENV_CANDIDATES = ("../venv", "venv", "./.venv")
+
+    @classmethod
+    def default_venv_python(cls, comfy_dir: str) -> str | None:
+        """ComfyUI's venv interpreter, found from its checkout, or None.
+
+        **The alternative was wrong and silently so.** With no
+        `venv_python` setting -- which is the state of every first-run
+        machine, since that setting is what the wizard is asking for -- the
+        caller had nothing, and passing the *server's own* interpreter
+        answered a different question: "what is in this venv" instead of
+        "what is in ComfyUI's". On this machine that reported 87 packages
+        where the real answer is 185, with nothing in the response to say
+        whose venv had been read.
+
+        So the interpreter is *found*, and if it cannot be found the check
+        refuses. A refusal is right here: "we cannot show this is safe" is
+        the honest answer for a venv we cannot identify.
+        """
+        from pathlib import Path
+
+        try:
+            base = Path(comfy_dir).resolve()
+        except (OSError, TypeError, ValueError):
+            return None
+        suffix = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+        for relative in cls._VENV_CANDIDATES:
+            candidate = base / relative
+            for part in suffix:
+                candidate = candidate / part
+            if candidate.exists():
+                return str(candidate)
+        return None
+
     def read(self, comfy_dir: str, venv_python: str | None = None) -> ComfyEnvironmentInfo:
         declarations, path, req_error = self._read_requirements(comfy_dir)
-        installed, venv_error = self._read_venv(venv_python or self.venv_python)
+        chosen = venv_python or self.venv_python
+        if not chosen:
+            chosen = self.default_venv_python(comfy_dir)
+        installed, venv_error = self._read_venv(chosen)
         return ComfyEnvironmentInfo(
             comfy_dir=comfy_dir,
             requirements_path=path,
@@ -168,7 +211,7 @@ print(json.dumps({"ok": True, "packages": out}))
             installed=installed,
             requirements_error=req_error,
             venv_error=venv_error,
-            venv_python=venv_python or self.venv_python,
+            venv_python=chosen,
         )
 
     # -- source 1: the declaration file ---------------------------------
@@ -252,9 +295,10 @@ print(json.dumps({"ok": True, "packages": out}))
 
         if not interpreter:
             return (), (
-                "ComfyUI's virtualenv interpreter is not known -- set "
-                "VENV_PYTHON in .env, or on the settings page, so there is "
-                "something to check"
+                "ComfyUI's virtualenv could not be found. Set VENV_PYTHON "
+                "in .env or on the settings page, or put the venv beside "
+                "ComfyUI as ../venv -- an install cannot be shown to be "
+                "safe without knowing which environment it would go into."
             )
 
         try:

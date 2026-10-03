@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .event_publisher import EventPublisher
+from .ports.environment import DeviceProbe
 from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
@@ -107,6 +108,11 @@ class InstallerServices:
     #: user picks "reuse ComfyUI's venv", and it answers about a different
     #: interpreter than the one running the server.
     conflicts: CheckComfyConflicts
+    #: The probe itself, not a use case. Screen 2 needs the *list*, and the
+    #: list is a device question rather than an install question -- so it is
+    #: asked here rather than folded into `check`, which answers a yes/no
+    #: for readiness and must stay cheap.
+    device_probe: DeviceProbe
 
 
 @dataclass(frozen=True, slots=True)

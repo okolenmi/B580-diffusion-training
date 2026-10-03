@@ -467,12 +467,19 @@ check(all({"name", "outcome", "description"} <= set(row) for row in body["findin
       "every row carries a sentence, so the wizard does not write prose "
       "that can drift from the rule")
 
-resolved_view = container.services.settings.read.execute().resolved
+# The *stored* interpreter, not the resolved one. They differ exactly when
+# nothing is configured, which is every first-run machine: `resolved` then
+# ends in a bare "python" -- the right answer for a training subprocess,
+# and the wrong one here, because it is this server's interpreter and the
+# question is about ComfyUI's venv. Passing it read 87 packages where the
+# real answer is 185, with nothing in the response to say whose venv it was.
+view = container.services.settings.read.execute()
 asgi_request(app, "/api/v1/installer/conflicts")
-check(stub.seen[-1][1] == resolved_view.get("venv_python"),
-      f"the interpreter passed to the port is the one settings resolve, not "
-      f"one the route or the wiring guessed (got {stub.seen[-1][1]!r}, "
-      f"settings {resolved_view.get('venv_python')!r})")
+check(stub.seen[-1][1] == (view.stored.get("venv_python") or None),
+      f"the interpreter passed to the port is the configured one, and None "
+      f"when there is none so the port can derive it from the checkout "
+      f"(got {stub.seen[-1][1]!r}, stored {view.stored.get('venv_python')!r}, "
+      f"resolved {view.resolved.get('venv_python')!r})")
 
 # comfy_dir is overridable per call, so the wizard can check a directory the
 # user has just typed. It must reach the port unchanged.

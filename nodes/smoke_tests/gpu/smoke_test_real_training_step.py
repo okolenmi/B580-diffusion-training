@@ -267,7 +267,7 @@ def backward(wrapper, model, step) -> tuple[float, dict[str, torch.Tensor]]:
     model.zero_grad(set_to_none=True)
     loss = step.loss_of(step.forward(wrapper))
     loss.backward()
-    return float(loss), lora_grads(model)
+    return float(loss.detach()), lora_grads(model)
 
 
 def worst_difference(a: dict, b: dict) -> tuple[float, str, int]:

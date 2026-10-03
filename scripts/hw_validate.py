@@ -382,21 +382,22 @@ def main() -> None:
 
     args = p.parse_args()
 
-    import sys
-
     import torch
     from nodes.core import ExecutionContext
-    from paths import get_comfy_dir
 
-    # The node route's model/text-encoder construction imports comfy.*
-    # (ComfyUI's own packages). A standalone script has to put ComfyUI on
-    # sys.path itself; this used to be core.comfy_setup.setup_comfy(),
-    # which was only these three lines wrapped around paths.get_comfy_dir().
-    comfy_dir = get_comfy_dir()
-    if str(comfy_dir) not in sys.path:
-        sys.path.insert(0, str(comfy_dir))
-    if not (comfy_dir / "comfy").exists():
-        print(f"Warning: ComfyUI not found at {comfy_dir}")
+    # ComfyUI used to be put on sys.path here, with the comment "the node
+    # route's model/text-encoder construction imports comfy.*". That stopped
+    # being true when design doc 12 section 7.3 reimplemented the diffusion
+    # path, the VAE and both CLIP towers, and the insertion is gone.
+    #
+    # It is worth more than the dead code it was, though: with ComfyUI on
+    # sys.path, a run that *looked* like it was measuring this project's
+    # reimplementation could silently have imported ComfyUI's, and reported
+    # numbers for code nobody intended to measure. This is the project's
+    # real-hardware measurement harness, so its import graph being exactly
+    # what it appears to be is the whole point. The checkpoint files are
+    # read from ComfyUI's models directory -- that is data, resolved by
+    # `paths`, and stays.
 
     # Seeded before anything is constructed, because the dataset source
     # builds a shuffling sampler at construction time: seeding afterwards

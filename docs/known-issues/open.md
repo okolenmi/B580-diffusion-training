@@ -2,11 +2,14 @@
 
 # Open
 
-**Nothing outstanding at the moment of writing.** The one entry below is a
-measured question that was asked, answered on hardware and closed; it is
-kept here rather than in [`resolved.md`](resolved.md) because it is not a
-bug and there is nothing to fix. Check here first if something odd has
-happened — and its being empty is itself the finding.
+**Nothing outstanding at the moment of writing.** The one entry below was a
+measured question, asked and answered on hardware, including the part that
+was still open when it was first written: whether checkpointing's recompute
+penalty applies at this operating point. That is now answered too — the
+answer is that there is no un-checkpointed configuration there to measure it
+against. It is kept here rather than in [`resolved.md`](resolved.md)
+because it is not a bug and there is nothing to fix. Check here first if
+something odd has happened — and its being empty is itself the finding.
 
 ## Attention-checkpointing density and the memory-floor levers, at 1024 / batch 2
 
@@ -73,7 +76,65 @@ Recomputing these blocks is cheaper than carrying their activations.
 are the quantized and offload levers — nothing in these measurements
 rescues them, because they were never blocked on floor.
 
-**Still open, and it is the only thing here that is:** whether the ~25%
-recompute penalty figure measured elsewhere still applies at this operating
-point, where checkpointing's activation residency costs less than the
-compute it saves.
+**Was still open, and is now answered below:** whether the ~25% recompute
+penalty figure measured elsewhere still applies at this operating point,
+where checkpointing's activation residency costs less than the compute it
+saves.
+
+### Answered: the penalty cannot be measured here, because there is nothing to measure it against
+
+Re-run after design doc 12 section 7.3 reimplemented the diffusion path, the
+VAE and both CLIP towers — so these numbers are now measurements of *this*
+project's code, with `comfy` provably absent from the process (see the note
+on the harness below). Same operating point: `main`, batch 2, dataset
+`1024 aes`, 40 steps, rank 64 / alpha 32, seed 1234, `attn_ckpt_fraction`
+1.0, `div_4.safetensors`.
+
+**The baseline reproduces.** Floor at loop entry **7,529 MB allocated**,
+against the 7,529 MB recorded above — an exact match. Steady throughput
+**0.813 steps/sec** against 0.768 (+6%), and peak reserved **9,228 MB**
+against 9,268 (−40 MB, −0.4%). So the reimplementation did not move this
+operating point; both differences are within what this harness's own
+run-to-run spread covers.
+
+One component does differ, and it is recorded rather than explained: the
+`unet_lora_on_device` stage measures **5,254 MB allocated** against the
+4,897 MB in the breakdown above, while the text encoder's contribution
+matches closely (+1,571 MB against +1,561 MB) and the loop-entry *total*
+matches exactly. So the components shifted and the total did not. This file
+does not claim to know why; a breakdown that sums correctly is worth more
+than one whose components are individually tidy.
+
+**And the question closes negatively: `--no-checkpoint` OOMs on step 0.**
+
+    torch.OutOfMemoryError: XPU out of memory. Tried to allocate 34.00 MiB.
+    GPU 0 has a total capacity of 11.93 GiB of which 34.20 MiB is free. Of
+    the allocated memory 10.80 GiB is allocated by PyTorch.
+
+It dies in the UNet's first convolution, before step 1 completes. So at
+1024 / batch 2 there is **no un-checkpointed configuration to compare
+against**, and the ~25% recompute penalty is not a trade anyone can take at
+this operating point — it is the price of running at all. That is a stronger
+answer than a percentage would have been: the question asked whether
+checkpointing's residency was worth its compute here, and the measurement
+says the alternative does not exist.
+
+Whether the ~25% figure applies at a *smaller* operating point, where the
+alternative does exist, is a different question and is not answered here.
+Nothing in the measurements above moves it.
+
+### A note on the harness, because it is what makes the re-measurement mean anything
+
+`scripts/hw_validate.py` used to put ComfyUI on `sys.path` on the strength
+of a comment saying the node route's model construction imported `comfy.*`.
+That stopped being true when section 7.3 landed, and the insertion is gone.
+It was worth removing on its own terms rather than as dead code: with
+ComfyUI on `sys.path`, a run that *looked* like it was measuring this
+project's reimplementation could silently have imported ComfyUI's and
+reported numbers for code nobody intended to measure. The checkpoint files
+are still read from ComfyUI's `models/` directory — that is a path to a data
+file, resolved by `paths`, and it stays. `scripts/probe_lora_shapes.py` had
+the same insertion and the same removal.
+
+Verified rather than assumed: a full harness run with `sys.modules` inspected
+afterwards reports `comfy imported during a full run: False`.

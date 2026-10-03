@@ -25,7 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from paths import get_comfy_dir, set_comfy_dir  # noqa: E402
+from paths import get_comfy_dir  # noqa: E402
 
 
 def main():
@@ -48,9 +48,14 @@ def main():
               f"this script itself lives. Pass an absolute path if unsure.")
         sys.exit(1)
 
+    # ComfyUI was put on sys.path here for the same reason it was in
+    # scripts/hw_validate.py: the model construction used to import comfy.*.
+    # It no longer does (design doc 12 section 7.3), and leaving it there
+    # would let a probe report numbers about comfyi's code while appearing
+    # to report ours. `get_comfy_dir()` is still needed below, for a
+    # different reason: a relative `base_model` in a config is resolved
+    # against it. That is a path to a data file, not an import.
     comfy_dir = get_comfy_dir()
-    if str(comfy_dir) not in sys.path:
-        sys.path.append(str(comfy_dir))
 
     import torch
     from nodes.config_io import read_config

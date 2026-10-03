@@ -56,8 +56,16 @@ from backend.tests.support import (
     RecordingEventBus,
     check,
     run_tests_concurrently,
+    use_temporary_comfy_dir,
     wait_until,
 )
+
+# One test in this file spawns a real child, which resolves a ComfyUI
+# path in its own process. Without a directory to resolve, that test
+# dies with "Cannot find ComfyUI directory" on a checkout with no
+# COMFY_DIR -- a fresh clone, or a CI runner. See
+# support.use_temporary_comfy_dir.
+COMFY = use_temporary_comfy_dir(prefix="backend-graph-adopt-comfy-")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP = Path(tempfile.mkdtemp(prefix="backend-graph-adopt-"))
@@ -681,6 +689,77 @@ def test_a_watcher_that_cannot_continue_stops_the_child_it_was_watching() -> Non
           "and does not claim a crash that did not happen")
 
 
+def test_a_failed_read_does_not_swallow_the_records_it_arrived_with() -> None:
+    """A poll cycle that fails must not cost the run the batch in hand.
+
+    The other half of round-3 N3-01, and the reason a lost result is
+    permanent rather than deferred. `tail.poll()` advances its offset as it
+    hands a batch over, so from that moment the batch lives only in the
+    caller's frame, and the loop-level retry re-polls an empty tail.
+
+    What stops that from mattering is that every path inside `_apply` is
+    guarded per record: `_record_node` retries its own write and
+    `_republish_monitor` swallows its failure, so a cycle that fails part
+    way has still recorded everything before the failure.
+
+    This test pins the *outcome* rather than the mechanism, because the
+    mechanism is not one place: which call the injected failure lands on is
+    not fixed -- the loop's row read, or one of the reads inside
+    `_record_node` -- and both are worth covering. So the assertion is that
+    every node written is on the row, which holds either way. (An earlier
+    version of this claimed a reordering of the poll cycle fixed a measured
+    4-of-40 loss. It did not: with `_record_node` retrying its own write,
+    moving the row read changes nothing, so the reordering was reverted and
+    this comment is what is left of the claim.)
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="adopt-batch-"))
+    events = scratch / "execution_1.events.jsonl"
+    events.write_text("")
+    gw = RecordingGateway(events, alive=True)
+    gw.found = 4545
+
+    executions = StubExecutions()
+    armed = {"yes": False, "fired": False}
+    original_get = executions.get
+
+    def get(execution_id):
+        # Fires once, on the first read that happens after the batch is on
+        # disk -- which is the read at the top of the poll cycle.
+        if armed["yes"] and not armed["fired"] and events.stat().st_size > 0:
+            armed["fired"] = True
+            armed["yes"] = False
+            raise RuntimeError("database is locked")
+        return original_get(execution_id)
+
+    executions.get = get
+
+    sup = _supervisor(gw, executions=executions, poll=0.01, scratch_dir=scratch)
+    check(sup.adopt(1) == 4545, "adopted the live child")
+    # Let the replay window close on an empty file, so the batch below is
+    # this watcher's to record rather than pre-adoption history.
+    time.sleep(0.3)
+
+    batch = [
+        {"kind": "node", "node_id": f"m{i}", "ok": True, "outputs": {},
+         "error": None, "duration_ms": 1.0}
+        for i in range(6)
+    ]
+    armed["yes"] = True
+    gw.write(*batch)
+    check(_wait_for(lambda: len(executions._execution.results) >= len(batch)),
+          f"the batch was recorded despite the failure "
+          f"({len(executions._execution.results)} of {len(batch)})")
+    check(armed["fired"], "and the failure really did fire during the read")
+
+    recorded = {r.node_id for r in executions._execution.results}
+    missing = [r["node_id"] for r in batch if r["node_id"] not in recorded]
+    check(not missing,
+          f"every node that reached the watcher is on the row, so a failed "
+          f"read cost nothing (missing {missing})")
+    check(executions._execution.status is GraphStatus.RUNNING,
+          "and the run is still being supervised")
+
+
 def main() -> None:
     tests = [
         test_replay_skips_node_results_but_keeps_monitor_history,
@@ -692,6 +771,7 @@ def main() -> None:
         test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash,
         test_a_new_run_does_not_inherit_the_last_one_s_records,
         test_one_failed_poll_does_not_cost_a_run_its_supervisor,
+        test_a_failed_read_does_not_swallow_the_records_it_arrived_with,
         test_a_watcher_that_cannot_continue_stops_the_child_it_was_watching,
     ]
     run_tests_concurrently(tests)

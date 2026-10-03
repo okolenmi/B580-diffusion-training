@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -275,6 +276,66 @@ class _ThreadRoutedStdout:
     def flush(self) -> None:
         target = getattr(self._local, "buffer", None)
         (target if target is not None else self._real).flush()
+
+
+#: The model subdirectories `path_tiers` and `paths` resolve inside a
+#: ComfyUI tree. Only `checkpoints` and `loras` are reached by the backend's
+#: own resolution; the rest are here so a test that wanders further finds a
+#: directory rather than a FileNotFoundError, which is a much worse way to
+#: learn that a fixture was incomplete.
+_COMFY_MODEL_DIRS = (
+    "checkpoints", "loras", "diffusion_models", "vae", "clip", "unet",
+    "text_encoders", "upscale_models", "controlnet",
+)
+
+
+def use_temporary_comfy_dir(prefix: str = "backend-comfy-") -> Path:
+    """Point this process, and any child it spawns, at a throwaway ComfyUI.
+
+    Round-3 N3-05 found the suite was not hermetic. On a checkout with no
+    `COMFY_DIR` -- and therefore no `.env` either, since both are how a
+    developer points at their own ComfyUI -- two files died rather than
+    failed:
+
+        RuntimeError: Cannot find ComfyUI directory
+        -> GraphLaunchError
+
+    Reproduced on a `git archive` of HEAD, which is what a fresh clone looks
+    like: `test_graph_task_gateway` and `test_graph_adoption` both exit 1.
+    Both spawn a *real* child, and the child is the thing that needs the
+    directory. With `COMFY_DIR` set they pass, which is why this went
+    unnoticed: the developer's machine is configured.
+
+    (The review also named `test_process_identity`. It does not fail on a
+    bare checkout -- it spawns `/bin/sleep` and `/bin/true`, nothing that
+    resolves a ComfyUI path. Two of the three reproduce, not three.)
+
+    Both halves of the override are set, deliberately:
+
+    * `paths.set_comfy_dir` sets the explicit override, which
+      `get_comfy_dir()` consults *before* the environment, so nothing a
+      developer's `.env` says can win;
+    * `os.environ["COMFY_DIR"]` is set as well, because that is what a child
+      process inherits. `paths._load_dotenv` uses `setdefault`, so an
+      already-set variable is not overwritten -- but relying on import order
+      would be a race with the child's own startup.
+
+    Returns the directory, so a test that needs to write a fixture *into* it
+    (a checkpoint, say) has somewhere to put it that is not the developer's.
+    """
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    for name in _COMFY_MODEL_DIRS:
+        (root / "models" / name).mkdir(parents=True, exist_ok=True)
+    for name in ("custom_nodes", "input", "output", "temp"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+
+    os.environ["COMFY_DIR"] = str(root)
+    try:
+        import paths  # noqa: PLC0415 -- explicit repo bridge, as path_tiers does
+    except ImportError:  # pragma: no cover -- only if the repo is not importable
+        return root
+    paths.set_comfy_dir(root)
+    return root
 
 
 def run_tests_concurrently(tests) -> None:

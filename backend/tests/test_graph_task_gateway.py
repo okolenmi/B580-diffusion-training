@@ -44,7 +44,19 @@ from backend.infrastructure.graph_event_stream import (
 from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
 from backend.infrastructure.process_identity import cmdline_mentions
 from backend.infrastructure.workspace import WorkspaceLayout
-from backend.tests.support import check, run_tests_concurrently, wait_until
+from backend.tests.support import (
+    check,
+    run_tests_concurrently,
+    use_temporary_comfy_dir,
+    wait_until,
+)
+
+# Before anything resolves a ComfyUI path, and before this process
+# spawns a child that will resolve one itself. Without it this file
+# dies with "Cannot find ComfyUI directory" on a checkout that has no
+# COMFY_DIR -- which is what a fresh clone looks like, and what a CI
+# runner looks like. See support.use_temporary_comfy_dir.
+COMFY = use_temporary_comfy_dir(prefix="backend-graph-child-comfy-")
 
 TMP = Path(tempfile.mkdtemp(prefix="backend-graph-child-"))
 GATEWAY = SubprocessGraphTaskGateway(WorkspaceLayout(Path(__file__).resolve().parents[2]))
@@ -332,9 +344,18 @@ def test_a_sigterm_stops_the_run_the_same_way_a_sigint_does() -> None:
         f"and it wrote an outcome, so the row is not told the process "
         f"crashed (got {[e.kind.name for e in events][-3:]})",
     )
+    # `is not True`, not `is False`: `cmdline_mentions` has three answers,
+    # and for a process that no longer exists it returns None ("nothing is
+    # known about *this* process yet"), which is documented to err toward
+    # alive. Asserting `is False` here therefore failed on a bare checkout
+    # -- where the pid is reliably gone -- while passing on a developer
+    # machine, where the number had usually been recycled onto something
+    # whose cmdline reads as a definite no. What matters after a stop is
+    # that the pid is no longer identified as a live graph child.
     check(
-        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker") is False,
-        "the pid is gone, so it was a stop and not a signal to nothing",
+        cmdline_mentions(pid, "backend.infrastructure.graph_task_worker") is not True,
+        f"and pid {pid} is no longer a live graph child, so the stop "
+        f"reached the child rather than a recycled number",
     )
 
 

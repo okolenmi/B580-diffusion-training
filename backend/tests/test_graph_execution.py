@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.event_publisher import EventPublisher
+from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.lifecycle_writer import ExecutionLifecycleWriter
 from backend.application.errors import (
     GraphExecutionActiveError,
@@ -786,5 +787,93 @@ check(len(g.nodes) == 1,
 check(GraphDefinition.from_dict(VALID.as_dict()) == VALID,
       "a round trip through as_dict/from_dict is lossless, which is the "
       "contract that actually matters -- it is how saved graphs load")
+
+# ==========================================================================
+# Section: a retried write is neither lost nor doubled
+# ==========================================================================
+print("-- a failed write is retried, and the retry is idempotent --")
+
+# The supervisor retries a node result whose write failed, because a record
+# that fails to persist is gone rather than deferred: `tail.poll()` advances
+# its offset as it hands a batch over, so the record exists only in that
+# frame and the watcher cannot re-read it. Measured before the retry, one
+# transient "database is locked" cost the run that step's result silently,
+# and the row still finished normally.
+#
+# Retrying a write is only safe if a failed write changed nothing -- and
+# "the write failed" does not mean that here. `ExecutionLifecycleWriter.
+# commit` compare-and-swaps the row and *then* publishes, so a failure in
+# the second half leaves the first half done. A blind retry then re-reads
+# the row, finds the result already there, and appends a second copy.
+# Measured against this repository with one injected post-swap failure:
+# 12 nodes, 35 stored results, 12 distinct.
+#
+# Real SQLite and the real lifecycle writer, because the safety of the
+# retry depends on `get` being uncached -- a property of the repository,
+# not of the supervisor, and a double that cached would hide it.
+
+def _retry_case(where: str) -> list[str]:
+    """Store N results with one commit failure before or after the swap."""
+    case_db = SqliteDatabase(
+        Path(tempfile.mkdtemp(prefix=f"backend-retry-{where}-")) / "g.db"
+    )
+    case_db.initialize()
+    case_repo = SqliteGraphExecutionRepository(case_db)
+    clock = FakeClock()
+    writer = ExecutionLifecycleWriter(clock=clock, repository=case_repo,
+                                      events=RecordingEventBus())
+
+    graph = GraphDefinition(nodes=tuple(
+        GraphNodeSpec(id=f"n{i}", class_name="FloatConstantNode", params={})
+        for i in range(N_RETRY_NODES)
+    ))
+    row = GraphExecution.create(graph=graph, created_at=NOW)
+    case_repo.add(row)
+    row.mark_running(at=NOW)
+    case_repo.update_if_status(row, expected=GraphStatus.QUEUED)
+
+    real_commit = writer.commit
+    injected = {"done": False}
+
+    def commit(aggregate, *, expected, prior=()):
+        if where == "before" and not injected["done"]:
+            injected["done"] = True
+            raise RuntimeError("database is locked")
+        swapped = real_commit(aggregate, expected=expected, prior=prior)
+        if where == "after" and not injected["done"]:
+            injected["done"] = True
+            raise RuntimeError("publish failed after the row was written")
+        return swapped
+
+    writer.commit = commit
+    supervisor = GraphExecutionSupervisor(
+        executions=case_repo, writer=writer, gateway=None, events=None,
+        clock=clock,
+        scratch_dir=Path(tempfile.mkdtemp(prefix="backend-retry-scratch-")),
+    )
+    for i in range(N_RETRY_NODES):
+        supervisor._record_node(
+            row.id,
+            {"node_id": f"n{i}", "ok": True, "outputs": {}, "error": None,
+             "duration_ms": 1.0},
+        )
+
+    stored = case_repo.get(row.id)
+    return [r.node_id for r in stored.results]
+
+
+N_RETRY_NODES = 12
+for _where, _what in (
+    ("before", "the swap never happened"),
+    ("after", "the swap happened and publishing is what failed"),
+):
+    _ids = _retry_case(_where)
+    check(len(_ids) == N_RETRY_NODES,
+          f"failure {_where} the swap: all {N_RETRY_NODES} results stored "
+          f"({len(_ids)} stored)")
+    check(len(set(_ids)) == len(_ids),
+          f"failure {_where} the swap: none stored twice "
+          f"({len(_ids) - len(set(_ids))} duplicate(s))")
+
 
 finish()

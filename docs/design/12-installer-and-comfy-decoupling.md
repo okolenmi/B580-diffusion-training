@@ -440,18 +440,39 @@ Both numbers were wrong, and the line 41 citation pointed into
 `forward_timestep_embed` rather than at the class. It is seven lines at
 line 360.
 
-**The second step is the actual decoupling**: own `Timestep` and the
-`timestep_embedding` it calls — together about 25 lines, both published
-algorithms rather than ComfyUI's own, and neither carrying any architectural
-opinion worth inheriting. That removes one more edge to `openaimodel`, which
-`UNetModel` still needs, so the runtime win is small; the value is that the
-embedder stops being a question about someone else's file.
+**The second step is done too**: `nodes/model/timestep_embedding.py` owns
+the embedding and its seven-line wrapper, so neither call site reaches into
+`openaimodel` for this. The output is **bitwise identical** to the previous
+implementation for every dtype either call site uses — verified against
+ComfyUI's class directly, not just against the reference formula.
 
-It is worth doing under the characterisation discipline below rather than
-the equivalence gate this section used to propose: record what ComfyUI's
-`Timestep` produces, decide independently whether that is right, and treat
-a difference as a question about which side is wrong. A gate that forbade
-divergence would have blocked the fixes in the table under §7.
+It is written from the published definition (Ho et al.; the same closed
+form in guided-diffusion and diffusers), not copied, and two things were
+left out deliberately:
+
+* **ComfyUI's `repeat_only` branch.** It returns
+  `repeat(timesteps, 'b -> b d')` — not an embedding, the timestep numbers
+  tiled. Neither call site wants it, and a caller reaching for it is asking
+  for something its name does not describe. ComfyUI's own `UNetModel` does
+  use it, so this module is deliberately not a drop-in for `openaimodel`
+  and is not trying to be.
+* **ComfyUI's unvalidated `dim`.** `dim=1` divides by `dim // 2` with no
+  check and fails as a broadcast error between `(N, 1)` and `(1, 0)`. Here
+  it is a `ValueError` that says the minimum is 2.
+
+**Two claims this exposed, both now pinned by the test.** `Timestep` has no
+parameters and no buffers, so `.to(device=..., dtype=...)` on it does
+nothing at all — not even the device half. Both call sites wrote exactly
+that, implying a control they did not have; the output is float32 for every
+input dtype because that is the algorithm's precision, and the device comes
+from the input tensor. And `_EMBEDDER_CACHE` in `unet_wrapper.py` was a dict
+keyed by `(device, dtype)` "to save VRAM and time", holding a module with
+zero bytes to save. One module now.
+
+This is characterisation, not an equivalence gate, as the next section
+argues. The test records the difference if there is one and moves on, and
+skips rather than fails when ComfyUI is not installed — a test that failed
+for their absence would put the coupling straight back in.
 
 ### 7.2 Own the two `utils` functions
 

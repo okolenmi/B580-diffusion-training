@@ -26,6 +26,7 @@ import gc
 import torch
 
 from ..components.seed import derive_seed
+from .timestep_embedding import Timestep
 from .lora import (
     LoRAConfig,
     extract_lora_weights,
@@ -182,7 +183,20 @@ class ComfyUNetWrapper:
 # Random conditioning generation
 # ---------------------------------------------------------------------------
 
-_EMBEDDER_CACHE = {}
+#: One embedder for the process, built on first use. This was a dict keyed
+#: by (device, dtype) "to save VRAM and time", and it saved nothing:
+#: Timestep has no parameters and no buffers, so there was nothing to hold
+#: per device and nothing to reclaim. The device of the input tensor is
+#: what decides where the embedding is computed. Owned rather than imported
+#: -- see nodes/model/timestep_embedding.py.
+_EMBEDDER: Timestep | None = None
+
+
+def _embedder() -> Timestep:
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        _EMBEDDER = Timestep(256)
+    return _EMBEDDER
 
 def make_rand_cond(batch: int, device: str, dtype: torch.dtype,
                    base_seed: int, step: int, latent_size: int = 64):
@@ -201,23 +215,7 @@ def make_rand_cond(batch: int, device: str, dtype: torch.dtype,
     # Resolution embeddings (SDXL VAE has 8x downscale)
     px = (latent_size if latent_size > 0 else 64) * 8
 
-    # Reuse embedder to save VRAM and time
-    cache_key = (device, dtype)
-    if cache_key not in _EMBEDDER_CACHE:
-        from comfy.ldm.modules.diffusionmodules.openaimodel import Timestep
-        # ComfyUI defines Timestep in comfy.ldm.modules.diffusionmodules.openaimodel
-        # (line 360) and re-exports it from comfy.model_base. Importing it
-        # from the re-export is what this used to do, and it cost an extra 1.27 s
-        # and 901 modules per process on this machine -- measured as 4.32 s and
-        # 3323 modules through model_base, against 3.05 s and 2422 through
-        # openaimodel -- for a class that is seven lines long.
-        #
-        # A wrong import rather than a working one: comfyi's own model_base gets
-        # the symbol from openaimodel, so the definition lives there and only
-        # the alias is here.
-        _EMBEDDER_CACHE[cache_key] = Timestep(256).to(device=device, dtype=dtype)
-    
-    embedder = _EMBEDDER_CACHE[cache_key]
+    embedder = _embedder()
 
     # original_h, original_w, crop_h, crop_w, target_h, target_w
     vals = torch.tensor([px, px, 0, 0, px, px], device=device, dtype=dtype)
@@ -228,18 +226,16 @@ def make_rand_cond(batch: int, device: str, dtype: torch.dtype,
     return ctx, y
 
 def clear_embedder_cache():
-    """Move all cached Timestep embedders to CPU and clear the cache.
+    """Drop the process-wide Timestep embedder.
 
-    Call this between cyclic training cycles, after models have been moved to
-    CPU and before building the next cache.  The Timestep model is small but
-    it sits on the XPU/CUDA device and prevents full GPU memory reclamation
-    during the CLIP encoding phase.
+    Nothing on the device is reclaimed, and the previous version of this
+    docstring was wrong about that: it said the embedder "sits on the
+    XPU/CUDA device and prevents full GPU memory reclamation", and it does
+    not and never could. `Timestep` has no parameters and no buffers, so
+    `model.to("cpu")` moved zero bytes -- it was a no-op in a try/except
+    that existed to hide the no-op. What this does is drop the reference so
+    the next call rebuilds it, and collect.
     """
-    global _EMBEDDER_CACHE
-    for model in _EMBEDDER_CACHE.values():
-        try:
-            model.to("cpu")
-        except Exception:
-            pass
-    _EMBEDDER_CACHE.clear()
+    global _EMBEDDER
+    _EMBEDDER = None
     gc.collect()

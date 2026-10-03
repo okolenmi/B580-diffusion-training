@@ -32,6 +32,8 @@ methods rather than one.
 
 import torch
 
+from .timestep_embedding import Timestep
+
 
 def _extract_and_convert_clip_state_dict(state_dict: dict) -> dict:
     """Extract conditioner CLIP keys and convert to clip_l/clip_g prefix format."""
@@ -138,18 +140,16 @@ class SDXLClipEncoder:
 
     def _get_embedder(self):
         if self._embedder is None:
-            from comfy.ldm.modules.diffusionmodules.openaimodel import Timestep
-            # ComfyUI defines Timestep in comfy.ldm.modules.diffusionmodules.openaimodel
-            # (line 360) and re-exports it from comfy.model_base. Importing it
-            # from the re-export is what this used to do, and it cost an extra 1.27 s
-            # and 901 modules per process on this machine -- measured as 4.32 s and
-            # 3323 modules through model_base, against 3.05 s and 2422 through
-            # openaimodel -- for a class that is seven lines long.
-            #
-            # A wrong import rather than a working one: comfyi's own model_base gets
-            # the symbol from openaimodel, so the definition lives there and only
-            # the alias is here.
-            self._embedder = Timestep(256).to(device=self.device, dtype=self.out_dtype)
+            # Owned here rather than imported from ComfyUI; see
+            # nodes/model/timestep_embedding.py for the provenance and the
+            # measurements. It used to read
+            # `Timestep(256).to(device=self.device, dtype=self.out_dtype)`,
+            # which controlled nothing: Timestep has no parameters and no
+            # buffers, so `.to()` on it does not even move a device. The
+            # output is float32 whatever `out_dtype` says, and the device
+            # comes from the tensor handed in below. `torch.cat` promotes,
+            # so `y` comes out float32 either way -- as it does in ComfyUI.
+            self._embedder = Timestep(256)
         return self._embedder
 
     def resolution_embedding(self, height: int, width: int, batch_size: int = 1,

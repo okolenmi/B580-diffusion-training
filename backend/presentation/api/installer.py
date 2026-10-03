@@ -32,13 +32,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from ...application.errors import InstallerNotAllowedError
 from ...application.services import ApplicationServices
+from ...application.use_cases.install_packages import JobNotFound, InstallJobNotFound
 from ..deps import get_services
 from ..schemas import (
     InstallerApplyIn,
     InstallerApplyOut,
     InstallerConflictsOut,
     InstallerDeviceOut,
+    InstallerInstallIn,
+    InstallerInstallOut,
     InstallerDevicesOut,
     InstallerReadinessOut,
     InstallerStateOut,
@@ -138,6 +142,71 @@ def get_devices(
         ],
         reason=reason,
     )
+
+
+@router.post(
+    "/install",
+    response_model=InstallerInstallOut,
+    responses={409: _ERROR_409},
+)
+def start_install(
+    body: InstallerInstallIn,
+    services: ApplicationServices = Depends(get_services),
+) -> InstallerInstallOut:
+    """Begin installing into the target chosen on screen 2.
+
+    **Returns immediately with a job id.** A full install is a ~2.5 GB
+    download; holding the request open for ten minutes would time out the
+    browser or a proxy, and a pip that died halfway with no way to see how
+    far it got is the worst available outcome. The client polls
+    `GET /install/{id}`.
+
+    **Gated by the same rule as `apply`.** A configured machine is refused:
+    the wizard is a first-run surface, and an install is a bigger change
+    than setting a path. This runs *before* `apply`, because applying the
+    paths is what marks the machine configured and closes the wizard.
+
+    The pins in the request are the ones the conflict check produced. The
+    server does not recompute them: that check is a subprocess in another
+    interpreter, and two computations of a safety property is one too many.
+    """
+    state = services.installer.apply.execute()
+    if state.configured:
+        raise InstallerNotAllowedError(
+            "this installation is already configured; install packages "
+            "from a fresh setup, not from a working one"
+        )
+    job = services.installer.install.execute(
+        target=body.target,
+        packages=tuple(body.packages),
+        constraints=tuple(body.constraints),
+        comfy_venv_python=body.comfy_venv_python,
+    )
+    return InstallerInstallOut(**job.snapshot())
+
+
+@router.get("/install/{job_id}", response_model=InstallerInstallOut)
+def get_install(
+    job_id: str,
+    services: ApplicationServices = Depends(get_services),
+) -> InstallerInstallOut:
+    """One install's state. Cheap, and safe to poll.
+
+    A job id this process does not know about is **404, not a fabricated
+    success**. Jobs live in this process's memory, so a restart loses the
+    reporting -- and pip's own writes are durable regardless, which is why
+    the readiness report, not this endpoint, is the source of truth for
+    "is it installed".
+    """
+    try:
+        return InstallerInstallOut(**services.installer.install_status.execute(job_id))
+    except JobNotFound as exc:
+        # An ApplicationError rather than a bare HTTPException: this
+        # project's handler normalises a StarletteHTTPException's `detail`
+        # into the standard envelope, so a dict in `detail` arrives at the
+        # client as {"detail": {"code": ...}} -- one level too deep, and a
+        # client reading `error.code` finds nothing.
+        raise InstallJobNotFound(job_id) from exc
 
 
 @router.get("/conflicts", response_model=InstallerConflictsOut)

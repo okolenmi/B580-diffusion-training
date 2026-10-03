@@ -21,6 +21,7 @@ one-line change here and nowhere else.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 
 from .application.graph_supervisor import GraphExecutionSupervisor
@@ -44,6 +45,9 @@ from .application.use_cases import (
     BrowseAssets,
     BulkUpdateDatasetItems,
     CheckComfyConflicts,
+    GetInstall,
+    InstallJob,
+    StartInstall,
     CheckRequirements,
     CommitDatasetItems,
     CreateDataset,
@@ -120,6 +124,7 @@ from .application.ports.environment import (
     TorchDeviceProbe,
 )
 from .application.ports.comfy_environment import LocalComfyEnvironment
+from .application.ports.package_installer import PipInstaller
 from .infrastructure.settings_store import SqliteSettingsStore
 from .infrastructure.workspace import WorkspaceLayout
 
@@ -165,6 +170,9 @@ def build_container(settings: Settings) -> Container:
     # Shared by readiness and by the wizard's GPU choice: one probe, one
     # answer, one 1.8s import.
     device_probe = TorchDeviceProbe(backend="xpu")
+
+    # Shared between the installer services so a job can be polled.
+    install_jobs: dict[str, InstallJob] = {}
 
     # Dataset domain (M3b): library reads each dataset's own metadata.db,
     # task rows live in backend.db, and the fork gateway spawns children
@@ -259,6 +267,16 @@ def build_container(settings: Settings) -> Container:
             # whichever venv happened to be configured when the server
             # started.
             conflicts=CheckComfyConflicts(environment=LocalComfyEnvironment()),
+            # One job dict, shared: `install` writes it and `install_status`
+            # reads it. The base interpreter is the one running the server,
+            # which is the only interpreter known to work here.
+            install=StartInstall(
+                installer=PipInstaller(),
+                project_root=settings.project_root,
+                base_python=sys.executable,
+                jobs=install_jobs,
+            ),
+            install_status=GetInstall(jobs=install_jobs),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

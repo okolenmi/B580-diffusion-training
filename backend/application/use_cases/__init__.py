@@ -12,6 +12,13 @@ from .check_comfy_conflicts import (
     CheckComfyConflicts,
     ConflictReport,
 )
+from .install_packages import (
+    GetInstall,
+    InstallJob,
+    InstallJobNotFound,
+    JobNotFound,
+    StartInstall,
+)
 from .check_requirements import (
     CheckRequirements,
     DescribeRequirements,
@@ -67,6 +74,11 @@ __all__ = [
     "ApplyInstallation",
     "BrowseAssets",
     "CheckComfyConflicts",
+    "InstallJob",
+    "StartInstall",
+    "GetInstall",
+    "JobNotFound",
+    "InstallJobNotFound",
     "ConflictReport",
     "CheckRequirements",
     "DescribeRequirements",

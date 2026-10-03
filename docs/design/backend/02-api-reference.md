@@ -75,6 +75,8 @@ the other processes it talks to. That is this document.
   | `node_diagnostics_failed` | 400 | graphs |
   | `installer_not_allowed` | 409 | installer (a wizard write after this installation is configured) |
   | `installer_busy` | 409 | installer (an install is already running in this process) |
+  | `install_refused` | 400 | installer (a deliberate refusal: a `never_install` package aimed at a venv this project does not own, an unknown ComfyUI venv, an empty package list, or pip exiting non-zero. Nothing was changed — the message says which of those it was) |
+  | `install_job_not_found` | 404 | installer (a job id this process never issued, or one lost when the server restarted; the readiness report is the source of truth for whether the packages are installed) |
 
 ## 2. Two boundary contracts clients must honour
 

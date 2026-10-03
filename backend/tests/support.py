@@ -63,6 +63,14 @@ from backend.application.ports.comfy_environment import (
     ComfyEnvironment,
     ComfyEnvironmentInfo,
 )
+from backend.application.ports.package_installer import (
+    InstallError,
+    PackageInstaller,
+)
+from backend.application.use_cases.install_packages import (
+    GetInstall,
+    StartInstall,
+)
 from backend.application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
@@ -772,6 +780,30 @@ def fixture_graph_registry() -> NodeRegistry:
     return NodeRegistry(scan=lambda: (dict(FIXTURE_NODES), ()))
 
 
+class RefusingPackageInstaller(PackageInstaller):
+    """An installer that refuses, for suites that are not about installing.
+
+    Same reasoning as `UnreadableComfyEnvironment`, and the stakes are
+    higher: a default that *worked* would mean any test that reached the
+    install endpoint for an unrelated reason would run real pip against a
+    real interpreter. This one refuses, so a test that means to install has
+    to say so by passing its own.
+
+    It records the request, so a test that *wants* to assert what would
+    have been installed can still do that without anything running.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list = []
+
+    def install(self, request, on_line=None):
+        self.requests.append(request)
+        raise InstallError(
+            "no installer is wired in this test; pass a PackageInstaller if "
+            "the test is about installing"
+        )
+
+
 class UnreadableComfyEnvironment(ComfyEnvironment):
     """A ComfyUI environment that cannot be read, which refuses.
 
@@ -946,6 +978,10 @@ def build_services(
             make_tail=ExecutionEventTail,
         )
     shared_probe = device_probe or FakeDeviceProbe()
+    # One job dict, so a job created by a test can be polled through the
+    # same services object the route reads.
+    install_jobs: dict = {}
+    refusing_installer = RefusingPackageInstaller()
     return ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
@@ -974,6 +1010,17 @@ def build_services(
             # is how the four suites that construct InstallerServices by hand
             # found out.
             conflicts=CheckComfyConflicts(environment=UnreadableComfyEnvironment()),
+            # Both share `install_jobs`, so polling works. The installer
+            # refuses by default: a default that ran real pip would make any
+            # test that reached this endpoint for another reason capable of
+            # modifying a real environment.
+            install=StartInstall(
+                installer=refusing_installer,
+                project_root=project_root,
+                base_python=sys.executable,
+                jobs=install_jobs,
+            ),
+            install_status=GetInstall(jobs=install_jobs),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

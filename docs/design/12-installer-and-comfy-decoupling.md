@@ -513,6 +513,30 @@ anything is not a reimplementation, it is a second guess.
   the honest minimum; SSE is available and would be better. Either way this
   is the first stateful thing in the installer, and it is where the
   "no third path on failure" rule gets hardest to honour.
-* **Whether the GPU list is persisted.** A machine with two cards has a
-  genuine choice, and re-asking on every server start is worse than
-  remembering — but remembering makes a hardware change silent.
+* **Whether the GPU list is persisted.** *Answered: not the list, and the
+  choice is narrower than it looks.* Measured, `importlib.metadata` on this
+  machine: there is **one** distribution named `torch`, and the
+  accelerator is a local version tag — `2.12.1+xpu`. The backend lives in
+  the wheel, not in anything selectable at run time, and pip resolves by
+  distribution name, so installing the CUDA build **replaces** the XPU one
+  rather than sitting beside it.
+
+  So "which GPU" was the wrong question. Two consequences:
+
+  - **Architecture is not a choice.** It is decided by which wheel is
+    installed, once, and it is a platform decision rather than a per-device
+    one. CUDA remains a future feature for exactly the reason it always
+    was — it is a different index and a different wheel, not a different
+    selection on this machine.
+  - **Mixed-architecture machines cannot be offered this at all.** Within
+    one torch build every device is the same architecture, so a machine
+    with an Intel card *and* an NVIDIA card is not a machine with two
+    choices — it is two environments, and one of them would be a lie. The
+    wizard reports what torch actually has, which is one backend.
+
+  What remains is the **device index**: which card training runs on, offered
+  only when there are two or more. That is persisted, because re-asking on
+  every server start is worse than remembering, and a changed index is
+  visible on the settings page where the resolved value is shown — so the
+  "hardware change becomes silent" worry is answered by showing it, not by
+  re-asking.

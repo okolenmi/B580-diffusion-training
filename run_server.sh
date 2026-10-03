@@ -44,12 +44,23 @@ fi
 # tasks through the same rules), so the server itself and the trainer
 # it spawns are guaranteed to agree on which interpreter/venv to use:
 #   1. VENV_PYTHON env var (or .env), if set and it actually exists
-#   2. <parent-of-this-project>/venv/bin/python, if it exists (the
+#   2. <this-project>/venv/bin/python, if it exists -- this is where the
+#      first-run wizard creates one, so a machine set up through the
+#      browser needs no .env edit to find its own environment next start
+#   3. <parent-of-this-project>/venv/bin/python, if it exists (the
 #      project / ComfyUI / venv sibling-folder layout)
-#   3. Whatever "python" resolves to on PATH
+#   4. Whatever "python" resolves to on PATH
+#
+# Step 2 before step 3 on purpose: a wizard-created venv is a deliberate
+# choice by this install, so it outranks a folder that happens to be
+# sitting next to the project. Both still lose to an explicit VENV_PYTHON,
+# which is the documented override.
+PROJECT_VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 SIBLING_VENV_PYTHON="$SCRIPT_DIR/../venv/bin/python"
 if [ -n "${VENV_PYTHON:-}" ] && [ -x "$VENV_PYTHON" ]; then
     PYTHON="$VENV_PYTHON"
+elif [ -x "$PROJECT_VENV_PYTHON" ]; then
+    PYTHON="$PROJECT_VENV_PYTHON"
 elif [ -x "$SIBLING_VENV_PYTHON" ]; then
     PYTHON="$SIBLING_VENV_PYTHON"
 else

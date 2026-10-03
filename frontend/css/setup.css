@@ -362,3 +362,34 @@
 }
 .setup-conflict-list li { margin-bottom: 4px; }
 .setup-conflict-list li.is-conflict { color: var(--text); }
+
+/* ---- 10. The install progress ------------------------------------------- */
+
+.setup-log,
+.setup-cmd {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    max-height: 220px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-dim);
+}
+/* The command is the safety argument made readable: it is what makes
+   "nothing already installed can change" checkable rather than asserted. */
+.setup-cmd {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+/* A line that arrived since the last poll gets a left rule, so a long
+   install shows progress without the log jumping under the reader. */
+.setup-log.is-new {
+    border-left: 2px solid var(--accent);
+    padding-left: 14px;
+}

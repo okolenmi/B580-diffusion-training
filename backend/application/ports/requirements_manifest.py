@@ -76,8 +76,20 @@ class Requirement:
     tier: str
     why: str
     approx_mb: int | None = None
-    #: Set only for `comfy_provided`, and only where the package is *not*
-    #: safe to install into a venv this project does not own.
+    #: Do not install this into a venv this project does not own.
+    #:
+    #: Set on the `training` rows -- torch, numpy, safetensors, pillow --
+    #: and *not* on `comfy_provided`, which this field's docstring used to
+    #: claim and which no requirement actually uses. The flag is the
+    #: load-bearing one: it keeps the accelerator stack out of an install
+    #: aimed at ComfyUI's environment. It is per-row rather than per-tier
+    #: because a package can be ours to install in a venv we own and not
+    #: ours to install in one we do not.
+    #:
+    #: Reading it as a tier is how the wizard first came to offer to
+    #: install torch into ComfyUI's virtualenv: filtering on
+    #: `tier != "comfy_provided"` matched nothing, because that tier is
+    #: empty.
     never_install: bool = False
 
     @property
@@ -96,6 +108,16 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("python-multipart", REQUIRED,
                 "multipart body parsing, for the upload endpoints"),
     Requirement("tomli_w", REQUIRED, "writing training config TOML back out"),
+    # Added with the ComfyUI conflict check, and *missed* here when it was:
+    # requirements.txt gained a fifth line and the manifest kept saying
+    # four. The manifest is what the wizard renders and what the install
+    # acts on, so a package the server needs and the manifest does not know
+    # about is invisible to the only screen that can install it -- and the
+    # install would then run pip without it. A test asserts the two agree,
+    # because the disagreement is silent in both directions.
+    Requirement("packaging", REQUIRED,
+                "PEP 440 version comparison, for checking ComfyUI's "
+                "declarations against what is installed"),
     # -- training --------------------------------------------------------
     Requirement("torch", TRAINING,
                 "every training step runs through it; without it no run starts",

@@ -317,7 +317,7 @@ function renderInstallTarget(root) {
     h("p", { class: "setup-error", id: "setup-msg", hidden: true }),
     h("div", { class: "setup-actions" },
       h("button", { class: "btn", type: "button", onclick: () => showStep(1) }, "Back"),
-      h("button", { class: "btn btn-primary", type: "button", onclick: () => showStep(3) }, "Continue"),
+      h("button", { class: "btn btn-primary", type: "button", onclick: startInstall }, "Install"),
     ),
   );
 }
@@ -542,7 +542,165 @@ function renderReadiness(root) {
 }
 
 
-/* ---- step 2: paths ------------------------------------------------------ */
+/* ---- the install itself ------------------------------------------------- */
+
+/* What to install, and into which target.
+
+   The split is target-dependent and comes from the manifest, because the
+   two options are not the same operation:
+
+   - **A new venv**: this project owns it, so everything missing goes in --
+     including torch, which is most of the 2.5 GB.
+   - **ComfyUI's venv**: only what is safe there. `never_install` marks the
+     accelerator stack as ComfyUI's to pin, not ours to install, and torch
+     is what that flag exists to keep out.
+
+   A first version filtered on `tier !== "comfy_provided"` instead, and
+   that was wrong in the dangerous direction: no requirement actually uses
+   that tier, so the filter matched nothing and the wizard offered to
+   install torch into ComfyUI's virtualenv -- the one operation the whole
+   conflict check exists to prevent. The tier constant is a real
+   classification that the current manifest happens not to exercise; the
+   flag on each row is the one that is load-bearing.
+
+   `readiness.missing` is the authority on what is absent, so the two
+   lists cannot disagree about it. */
+function packagesToInstall(target) {
+  if (!manifest || !readiness) return [];
+  const missing = new Set(readiness.missing || []);
+  return manifest.requirements
+    .filter((r) => missing.has(r.name))
+    .filter((r) => target !== "comfy" || !r.never_install)
+    .map((r) => r.name);
+}
+
+async function startInstall() {
+  const root = el("setup-root");
+  const target = root.dataset.target || "new";
+  const packages = packagesToInstall(target);
+  const button = root.querySelector(".btn-primary");
+
+  if (!packages.length) {
+    showMessage("setup-msg",
+      "Everything this project needs is already installed.");
+    showStep(3);
+    return;
+  }
+
+  let body = { target, packages };
+
+  if (target === "comfy") {
+    // Installing into a venv we have not successfully checked is the one
+    // option here that could change a version ComfyUI declares, so it is
+    // refused rather than attempted without pins. The user is sent to a
+    // separate environment, which is the only other thing on this screen.
+    if (!conflicts || !conflicts.checked) {
+      showMessage("setup-msg",
+        "ComfyUI's environment has not been checked, so this install cannot "
+        + "be shown to be safe. Choose a separate virtualenv, or run the "
+        + "check first.");
+      return;
+    }
+    const settings = await api("/settings");
+    body.constraints = conflicts.constraints;
+    body.comfy_venv_python = settings.resolved.venv_python;
+  } else {
+    body.constraints = [];
+  }
+
+  button.disabled = true;
+  let job;
+  try {
+    job = await api("/installer/install", { method: "POST", body });
+    log(`installer: started job ${job.id} (${job.state})`);
+  } catch (err) {
+    showMessage("setup-msg", errText(err));
+    logError("installer: could not start the install", err);
+    button.disabled = false;
+    return;
+  }
+  await pollInstall(job.id);
+}
+
+/* Polling rather than a streaming endpoint: the job id survives a reload,
+   every state stays fetchable afterwards, and it is the shape the graph
+   execution endpoints in this app already use. */
+async function pollInstall(jobId) {
+  const root = el("setup-root");
+  let seen = 0;
+
+  for (;;) {
+    let job;
+    try {
+      job = await api(`/installer/install/${jobId}`);
+    } catch (err) {
+      // A job this server does not know was almost certainly lost to a
+      // restart. Not reported as a failure of the install -- the readiness
+      // report is the source of truth for whether the packages are there --
+      // and certainly not reported as success.
+      renderInstallStatus(root, {
+        state: "unknown",
+        packages: [],
+        constraints: [],
+        command: [],
+        log: [],
+        error: errText(err),
+      });
+      return;
+    }
+    renderInstallStatus(root, job, job.log.length - seen);
+    seen = job.log.length;
+
+    if (job.terminal) {
+      if (job.state === "succeeded") {
+        log(`installer: job ${jobId} succeeded`);
+        showStep(3);
+      } else {
+        logError("installer: job " + jobId + " ended " + job.state, job.error);
+      }
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+function renderInstallStatus(root, job, freshLines = 0) {
+  const done = job.state === "succeeded";
+  const bad = job.state === "failed" || job.state === "unknown";
+  mount(root,
+    h("h2", { class: "setup-step-title" },
+      done ? "Installed."
+        : bad ? "The install did not finish."
+        : job.state === "queued" ? "Waiting to start…"
+        : "Installing…"),
+    h("p", { class: "setup-note text-dim" },
+      `${(job.packages || []).length} packages into ${job.target_label || "the chosen environment"}`
+      + (job.constraints && job.constraints.length
+        ? `, with ${job.constraints.length} existing packages pinned to their exact version`
+        : "")
+      + "."),
+    bad && job.error ? h("p", { class: "setup-error" }, job.error) : null,
+    // The command, because "nothing already installed can change" is a claim
+    // about a specific pip invocation, and a claim is worth more when the
+    // invocation implementing it is readable.
+    job.command && job.command.length
+      ? h("pre", { class: "setup-cmd text-dim" }, job.command.join(" \\\n  "))
+      : null,
+    h("pre", { class: `setup-log${freshLines ? " is-new" : ""}` },
+      (job.log || []).slice(-200).join("\n")),
+    h("div", { class: "setup-actions" },
+      done || bad
+        ? h("button", { class: "btn", type: "button", onclick: () => showStep(2) }, "Back")
+        : null,
+      done
+        ? h("button", { class: "btn btn-primary", type: "button", onclick: () => showStep(3) }, "Continue")
+        : bad
+          ? h("button", { class: "btn btn-primary", type: "button", onclick: startInstall }, "Try again")
+          : null),
+  );
+}
+
+/* ---- step 3: paths ------------------------------------------------------ */
 
 function pathField(id, label, value, hint) {
   return h(

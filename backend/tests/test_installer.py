@@ -41,6 +41,7 @@ from backend.application.ports.environment import (
     DeviceReport,
     InstalledPackage,
 )
+from backend.application.ports.requirements_manifest import REQUIREMENTS
 from backend.application.ports.settings_store import SettingsChanges
 from backend.application.use_cases import (
     ApplyInstallation,
@@ -110,11 +111,18 @@ class NeverProbe:
 
 #: A machine that can serve the API and cannot train. The realistic shape
 #: of "someone installed requirements.txt and stopped".
+#:
+#: `packaging` is in this list because requirements.txt lists it and the
+#: manifest now agrees -- and it was *missed* in both when the conflict
+#: check added it. That omission was silent in a nasty way: a package the
+#: server needs but the manifest does not know about is invisible to the
+#: wizard, so the install would have run pip without it.
 SERVER_ONLY = {
     "fastapi": "0.139.0",
     "uvicorn": "0.49.0",
     "python-multipart": "0.0.32",
     "tomli_w": "1.2.0",
+    "packaging": "26.3",
 }
 
 #: The same machine with the training stack, and a card.
@@ -196,8 +204,17 @@ print("\n-- the manifest, and the split that makes an install safe --")
 
 manifest = DescribeRequirements().execute()
 names = {r["name"] for r in manifest["requirements"]}
-check({"fastapi", "uvicorn", "python-multipart", "tomli_w"} <= names,
-      f"the server's four requirements are in the manifest ({sorted(names)})")
+# Every package requirements.txt names, not a hand-copied four: the copy is
+# what let `packaging` be missed in both places at once.
+_req = sorted(
+    line.strip()
+    for line in (Path(__file__).resolve().parents[2] / "requirements.txt")
+    .read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith(("#", "-"))
+)
+check(set(_req) <= names,
+      f"every package requirements.txt names is in the manifest "
+      f"(file {_req}, missing {sorted(set(_req) - names)})")
 check({"torch", "numpy", "safetensors", "pillow"} <= names,
       "and so are the four the trainer imports, which appear in no "
       "requirements file at all -- the gap this surface exists to show")
@@ -341,9 +358,10 @@ check(body["configured"] is True,
       f"wizard is not offered (got {body})")
 
 status, _, body = asgi_request(app, "/api/v1/installer/manifest")
-check(status == 200 and len(body["requirements"]) == 8,
-      f"GET installer/manifest 200 with 8 rows (got {status}, "
-      f"{len(body.get('requirements', []))})")
+check(status == 200 and len(body["requirements"]) == len(REQUIREMENTS),
+      f"GET installer/manifest 200 with one row per manifest entry "
+      f"(got {status}, {len(body.get('requirements', []))} rows, "
+      f"{len(REQUIREMENTS)} expected)")
 
 status, _, body = asgi_request(app, "/api/v1/installer/readiness")
 check(status == 200 and "ready" in body,
@@ -389,8 +407,15 @@ from backend.application.ports.comfy_environment import (  # noqa: E402
     ComfyEnvironmentInfo,
     Declaration,
 )
+from backend.application.ports.package_installer import (  # noqa: E402
+    PackageInstaller,
+)
 from backend.application.use_cases.check_comfy_conflicts import (  # noqa: E402
     CheckComfyConflicts,
+)
+from backend.application.use_cases.install_packages import (  # noqa: E402
+    GetInstall,
+    StartInstall,
 )
 
 
@@ -406,6 +431,22 @@ def _with_conflicts(base, check):
     import dataclasses
 
     installer = dataclasses.replace(base.services.installer, conflicts=check)
+    services = dataclasses.replace(base.services, installer=installer)
+    return dataclasses.replace(base, services=services), create_app(services)
+
+
+def _with_install(base, start):
+    """Rebuild the installer services with a real StartInstall.
+
+    Same reason as _with_conflicts: three frozen dataclasses, and the
+    install services must share one job dict or a job cannot be polled.
+    """
+    import dataclasses
+
+    installer = dataclasses.replace(
+        base.services.installer, install=start,
+        install_status=GetInstall(jobs=start.jobs),
+    )
     services = dataclasses.replace(base.services, installer=installer)
     return dataclasses.replace(base, services=services), create_app(services)
 
@@ -509,5 +550,163 @@ check(status == 200 and body["safe"] is False and body["checked"] is False,
 check(body["refusal_reason"] and "Cannot check" in body["refusal_reason"],
       f"with a reason that says the check did not run "
       f"({body['refusal_reason']!r})")
+
+# ==========================================================================
+print("\n-- what may be installed into ComfyUI's venv --")
+
+# This is the split the whole conflict check exists to protect, and it is
+# per-row rather than per-tier. A first version of the wizard filtered on
+# `tier != "comfy_provided"` -- which no requirement actually uses, so the
+# filter matched nothing and the page offered to install torch into
+# ComfyUI's virtualenv. That is the single operation the whole design
+# refuses, so the invariant is asserted here rather than left to the JS.
+from backend.application.ports.requirements_manifest import (  # noqa: E402
+    COMFY_ADDITIONS,
+)
+
+# The manifest and requirements.txt must agree on the server's own
+# packages. They drifted: requirements.txt gained `packaging` for the
+# conflict check and the manifest kept saying four. The manifest is what
+# the wizard renders *and* what the install acts on, so a package the
+# server needs and the manifest does not know about is invisible to the
+# only screen that can install it.
+req_file = sorted(
+    line.strip()
+    for line in (Path(__file__).resolve().parents[2] / "requirements.txt")
+    .read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith(("#", "-"))
+)
+required_tier = sorted(r.distribution for r in REQUIREMENTS if r.tier == "required")
+check(req_file == required_tier,
+      f"requirements.txt and the manifest's required tier are the same list "
+      f"({req_file} vs {required_tier})")
+
+check("torch" not in COMFY_ADDITIONS and "numpy" not in COMFY_ADDITIONS,
+      f"the accelerator stack is never in what may go into ComfyUI's venv "
+      f"({list(COMFY_ADDITIONS)})")
+check(all(r.never_install for r in REQUIREMENTS if r.distribution
+          in ("torch", "numpy", "safetensors", "pillow")),
+      "and each of those rows says so on itself, per row")
+check(not any(r.tier == "comfy_provided" for r in REQUIREMENTS),
+      "no requirement uses the comfy_provided tier, which is why filtering "
+      "on the tier rather than the flag matched nothing")
+
+# A fresh, *unconfigured* container. The one above has already had its
+# paths applied by the first-run section, so it is `configured: true` and
+# the install gate refuses it -- correctly. Reusing it here would have
+# tested the gate twice and the install not at all.
+install_root = Path(tempfile.mkdtemp(prefix="backend-installer-unconf-"))
+install_container = build_container(
+    Settings(project_root=install_root, db_path=install_root / "backend.db")
+)
+
+# An empty project_root is not enough: `paths` is already imported by the
+# time this runs, and it resolves the *developer's* ComfyUI, so every
+# container in this process reports configured: true. That is the same trap
+# `test_path_tiers.py` works around, in the other direction, by copying
+# paths.py into a scratch tree.
+#
+# Forcing `get_comfy_dir` to raise is the honest way to get an unconfigured
+# machine in-process -- it is exactly the condition a fresh install has, and
+# it is restored below so nothing after this section sees it.
+import paths as _paths_module  # noqa: E402
+
+_saved_get_comfy_dir = _paths_module.get_comfy_dir
+
+
+def _no_comfyui(*_a, **_k):
+    raise RuntimeError("Cannot find ComfyUI directory.")
+
+
+_paths_module.get_comfy_dir = _no_comfyui
+check(install_container.services.installer.apply.execute().configured is False,
+      "a machine with no ComfyUI is unconfigured, which is the only state "
+      "the install gate allows")
+
+# The endpoint must not install into a venv it has not been told about.
+class _RecordingInstaller(PackageInstaller):
+    def install(self, request, on_line=None):
+        recorded["request"] = request
+        if on_line:
+            on_line("ok")
+
+
+recorded: dict = {}
+install_container, install_app = _with_install(
+    install_container,
+    StartInstall(installer=_RecordingInstaller(),
+                 project_root=install_root, base_python=sys.executable,
+                 jobs={}),
+)
+# torch is never-install, so this is refused on the package list alone --
+# *before* the venv is even considered. That ordering matters: the check is
+# about ComfyUI's environment, and it must not depend on the caller having
+# told us which interpreter that is.
+status, _, body = asgi_request(install_app, "/api/v1/installer/install",
+                               method="POST",
+                               json_body={"target": "comfy",
+                                          "packages": ["torch"],
+                                          "comfy_venv_python": sys.executable})
+check(status == 400,
+      f"a request to install torch into ComfyUI's venv is refused even with "
+      f"a valid interpreter (got {status})")
+message = str((body.get("error") or body.get("detail") or {}).get("message", ""))
+check("never-install" in message and "separate virtualenv" in message,
+      f"and says why, and what to do instead ({message!r})")
+
+# And with no interpreter either, it is still refused -- for the other reason.
+status, _, body = asgi_request(install_app, "/api/v1/installer/install",
+                               method="POST",
+                               json_body={"target": "comfy",
+                                          "packages": ["fastapi"]})
+check(status == 400 and "not known" in str(body),
+      f"an unknown ComfyUI venv is refused too, rather than guessing one "
+      f"(got {status}: {body})")
+
+# With one, it proceeds -- and installs exactly what it was told, so the
+# caller's list is never second-guessed into something else.
+recorded.clear()
+install_container, install_app = _with_install(
+    install_container,
+    StartInstall(installer=_RecordingInstaller(),
+                 project_root=install_root, base_python=sys.executable,
+                 jobs={}),
+)
+status, _, body = asgi_request(install_app, "/api/v1/installer/install",
+                               method="POST",
+                               json_body={"target": "comfy",
+                                          "packages": ["fastapi"],
+                                          "constraints": ["torch==2.12.1+xpu"],
+                                          "comfy_venv_python": sys.executable})
+check(status == 200, f"and proceeds when the venv is known (got {status})")
+check(recorded.get("request") is not None
+      and recorded["request"].packages == ("fastapi",),
+      f"installing exactly the packages it was sent, unaltered "
+      f"({recorded.get('request') and recorded['request'].packages})")
+check(recorded["request"].constraints == ("torch==2.12.1+xpu",),
+      f"with the pins intact ({recorded['request'].constraints})")
+check(recorded["request"].target_python == sys.executable,
+      f"into the interpreter it was told to, named absolutely "
+      f"({recorded['request'].target_python})")
+
+# An unknown job is a 404 with a code, never a fabricated success.
+status, _, body = asgi_request(install_app, "/api/v1/installer/install/never-existed")
+check(status == 404,
+      f"an unknown job id is 404, not a fabricated state (got {status})")
+check(body.get("error", {}).get("code") == "install_job_not_found",
+      f"with a documented code, so the client can tell it from a lost job "
+      f"({body.get('error', {}).get('code')!r})")
+
+# And an empty package list is refused rather than run as a no-op.
+status, _, body = asgi_request(install_app, "/api/v1/installer/install",
+                               method="POST",
+                               json_body={"target": "new", "packages": []})
+check(status == 400 and "nothing to install" in str(body).lower(),
+      f"an empty install is refused with a sentence (got {status}: {body})")
+
+_paths_module.get_comfy_dir = _saved_get_comfy_dir
+check(install_container.services.installer.apply.execute().configured is True,
+      "and the forced 'no ComfyUI' is restored, so nothing later in this "
+      "process is a statement about a fiction")
 
 finish()

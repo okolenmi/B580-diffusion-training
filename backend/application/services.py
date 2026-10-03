@@ -27,6 +27,7 @@ from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
 from .use_cases.check_comfy_conflicts import CheckComfyConflicts
+from .use_cases.install_packages import GetInstall, StartInstall
 from .use_cases.check_requirements import (
     CheckRequirements,
     DescribeRequirements,
@@ -113,6 +114,12 @@ class InstallerServices:
     #: asked here rather than folded into `check`, which answers a yes/no
     #: for readiness and must stay cheap.
     device_probe: DeviceProbe
+    #: The only writing use case in the installer. `install_status` reads
+    #: the *same* job dict -- two objects with two dicts would be an
+    #: install that cannot be polled, so they are wired together on purpose
+    #: and the sharing is visible here rather than happening by accident.
+    install: StartInstall
+    install_status: GetInstall
 
 
 @dataclass(frozen=True, slots=True)

@@ -229,6 +229,46 @@ class InstallerDevicesOut(BaseModel):
     reason: str | None
 
 
+class InstallerInstallIn(BaseModel):
+    """What to install, and where.
+
+    `constraints` is sent by the client rather than recomputed server-side
+    because the server must never be handed a weaker pin set than the one it
+    would build -- but the conflict check is a 0.16s subprocess in another
+    interpreter and re-running it here would double that and make the two
+    answers differ. So the pins are computed once, by the endpoint that can
+    be trusted to compute them, and this request says which target they
+    belong to.
+    """
+
+    target: str
+    packages: list[str]
+    constraints: list[str] = Field(default_factory=list)
+    #: Only for `target="comfy"`. Which interpreter to install into.
+    comfy_venv_python: str | None = None
+
+
+class InstallerInstallOut(BaseModel):
+    """The job, immediately. Never the result.
+
+    The response exists so the client has an id to poll, which is why it
+    carries the command and the pins: a user agreeing to an install that
+    writes into a virtualenv they did not create should be able to read
+    what will run before it runs.
+    """
+
+    id: str
+    state: str
+    target_label: str
+    packages: list[str]
+    constraints: list[str]
+    command: list[str]
+    log: list[str]
+    error: str | None
+    target_python: str | None
+    terminal: bool
+
+
 class InstallerConflictsOut(BaseModel):
     """May the four server packages go into ComfyUI's venv?
 

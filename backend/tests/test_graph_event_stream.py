@@ -224,6 +224,7 @@ def main() -> None:
     test_missing_and_shrinking_files()
     test_unopenable_writer_is_not_fatal()
     test_reset_replays_from_the_start()
+    test_two_writers_can_share_one_directory()
     finish()
 
 

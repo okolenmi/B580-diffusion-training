@@ -125,10 +125,14 @@ from backend.infrastructure.workspace import WorkspaceLayout
 from nodes.core import Node, NodePreset, Port
 
 FAILURES: list[str] = []
+#: Every message passed to `check`, in order. Counted so `finish` can refuse
+#: to report success for a file that ran nothing -- see there.
+CHECKED: list[str] = []
 
 
 def check(condition: bool, message: str) -> None:
     print(f"  {'PASS' if condition else 'FAIL'}: {message}")
+    CHECKED.append(message)
     if not condition:
         FAILURES.append(message)
 
@@ -192,14 +196,31 @@ def concrete_node_classes() -> set[str]:
 
 
 def finish() -> None:
+    """Report, and refuse to report success for a file that ran nothing.
+
+    Zero checks is a failure, not a pass. This is not hypothetical: two
+    test files in this repository once ran none of their tests and the
+    suite stayed green, because `finish` only ever looked at FAILURES. A
+    restructure that leaves the last call to `finish()` above the code --
+    or a `main()` that never calls the functions it defines -- produces
+    exactly that, and nothing downstream can tell it from a real pass.
+
+    `python -c "from backend.tests.support import finish; finish()"` used
+    to print ALL CHECKS PASSED and exit 0.
+    """
     print()
     print("=" * 60)
+    if not CHECKED:
+        print("SMOKE TEST: NO CHECKS RAN -- treating that as a failure")
+        print("  A test file that runs nothing passes vacuously, and this")
+        print("  repository has been bitten by that twice.")
+        sys.exit(1)
     if FAILURES:
-        print(f"SMOKE TEST: {len(FAILURES)} FAILURE(S)")
+        print(f"SMOKE TEST: {len(FAILURES)} of {len(CHECKED)} CHECK(S) FAILED")
         for failure in FAILURES:
             print(f"  - {failure}")
         sys.exit(1)
-    print("SMOKE TEST: ALL CHECKS PASSED")
+    print(f"SMOKE TEST: ALL {len(CHECKED)} CHECKS PASSED")
 
 
 def wait_until(predicate, *, timeout: float = 2.0, interval: float = 0.01) -> bool:

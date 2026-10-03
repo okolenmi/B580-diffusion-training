@@ -73,6 +73,14 @@ echo "== documentation links and citations =="
 # renders these docs, so nothing else would notice.
 "$GATE_PYTHON" scripts/check_doc_links.py --quiet
 
+echo "== tests that are defined but never run =="
+# A `def test_*` nothing calls is a comment shaped like a safety net.
+# The runtime guard in support.py catches a file that ran *nothing*; this
+# catches the file that runs most of its tests and silently orphans one.
+# Added after round-3 N3-03, and it immediately found a test of the
+# reviewer's own that had never executed.
+"$GATE_PYTHON" scripts/check_test_wiring.py
+
 # Branch coverage, as a report. No threshold and it cannot fail: a target
 # picked today would be a number chosen by assertion rather than by
 # evidence, and a threshold nobody believes is one that gets commented

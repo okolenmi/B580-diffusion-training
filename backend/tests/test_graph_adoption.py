@@ -196,7 +196,8 @@ class RunningExecutions(ExecutionLauncher):
 
 
 def _supervisor(gateway, monitor_bus=None, poll: float = 0.02,
-                writer=None, executions=None) -> GraphExecutionSupervisor:
+                writer=None, executions=None, scratch_dir=None,
+                stop_grace: float = 0.5) -> GraphExecutionSupervisor:
     return GraphExecutionSupervisor(
         executions=executions if executions is not None else StubExecutions(),
         writer=writer if writer is not None else RecordingWriter(),
@@ -204,10 +205,10 @@ def _supervisor(gateway, monitor_bus=None, poll: float = 0.02,
         events=EventPublisher(events=RecordingEventBus()),
         clock=FakeClock(),
         monitor_bus=monitor_bus,
-        scratch_dir=TMP,
+        scratch_dir=scratch_dir if scratch_dir is not None else TMP,
         make_tail=ExecutionEventTail,
         poll_interval=poll,
-        stop_grace=0.5,
+        stop_grace=stop_grace,
     )
 
 
@@ -578,6 +579,108 @@ def test_a_new_run_does_not_inherit_the_last_one_s_records() -> None:
     )
 
 
+def test_one_failed_poll_does_not_cost_a_run_its_supervisor() -> None:
+    """A transient poll failure must be ridden out, not fatal.
+
+    Round-3 finding N3-01. The watcher re-reads the row on every poll, and
+    that read was not guarded individually, so one "database is locked"
+    landed in the loop's outer handler -- which then finalised the row as a
+    dead process while the child carried on. Nothing stopped the child, and
+    a terminal row releases the single-active check, so the next start put
+    a second trainer on the same card.
+    """
+    # A private scratch dir, because the supervisor derives the event-file
+    # path from `scratch_dir` and not from the gateway: point it at the
+    # shared TMP and the watcher reads whatever another concurrently-running
+    # test left in `execution_1.events.jsonl`. Which is exactly what
+    # happened while writing this, and it produced a green run that was
+    # asserting nothing.
+    scratch = Path(tempfile.mkdtemp(prefix="adopt-transient-"))
+    events = scratch / "execution_1.events.jsonl"
+    events.write_text("")
+    gw = RecordingGateway(events, alive=True)
+    gw.found = 4242
+
+    executions = StubExecutions()
+    reads = {"n": 0}
+    original_get = executions.get
+
+    def flaky(execution_id):
+        reads["n"] += 1
+        if reads["n"] == 3:
+            raise RuntimeError("database is locked")   # once, then fine
+        return original_get(execution_id)
+
+    executions.get = flaky
+
+    sup = _supervisor(gw, executions=executions, poll=0.02, scratch_dir=scratch)
+    check(sup.adopt(1) == 4242, "adopted the live child")
+
+    # A node record arrives and must still be persisted: proof the watcher
+    # survived, rather than merely that the row has not moved yet.
+    gw.write({"kind": "node", "node_id": "a", "ok": True,
+              "outputs": {"value": 1.0}, "error": None, "duration_ms": 1.0})
+    check(_wait_for(lambda: len(executions._execution.results) == 1),
+          f"the node result was persisted across the failed poll "
+          f"(got {len(executions._execution.results)})")
+    check(executions._execution.status.value == "running",
+          f"and the row is still running, not written off "
+          f"(got {executions._execution.status.value})")
+    check(gw.stopped == [] and gw.killed == [],
+          f"nothing was signalled: a healthy run is not stopped "
+          f"(stop={gw.stopped}, kill={gw.killed})")
+
+
+def test_a_watcher_that_cannot_continue_stops_the_child_it_was_watching() -> None:
+    """...but a *persistent* failure must not leave a run unobserved.
+
+    The other half of N3-01, and the reason the retry is bounded rather
+    than infinite: when the watcher really cannot continue, the invariant
+    is that a row is never terminal while its child is alive. So it asks
+    the child to stop, escalates, and says what actually happened --
+    instead of reporting a crash that did not occur and leaving a process
+    holding the card with nobody able to stop it through the API.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="adopt-persistent-"))
+    events = scratch / "execution_1.events.jsonl"
+    events.write_text("")
+    gw = RecordingGateway(events, alive=True)
+    gw.found = 4343
+
+    executions = StubExecutions()
+
+    # The *liveness* check is what breaks, not the repository. That is the
+    # realistic shape: the watcher cannot tell whether its child is alive,
+    # so it must not assume either -- and the row is still writable, so it
+    # can be finalised honestly once the child has been stopped. (Making
+    # `executions.get` fail instead would leave the row unfinalisable, which
+    # is a different problem and not the one under test.)
+    def liveness_fails(pid):
+        raise RuntimeError("cannot read /proc")
+
+    gw.is_alive = liveness_fails
+
+    sup = _supervisor(gw, executions=executions, poll=0.01, stop_grace=0.05,
+                      scratch_dir=scratch)
+    sup._max_poll_failures = 2
+    check(sup.adopt(1) == 4343, "adopted the live child")
+
+    finalised = _wait_for(lambda: executions._execution.status.is_terminal)
+    check(finalised,
+          "the row was finalised rather than left blocking the next start "
+          f"(status {executions._execution.status.value})")
+    check(gw.stopped == [4343],
+          f"the child was asked to stop (stop={gw.stopped})")
+    check(gw.killed == [4343],
+          f"and killed when it did not (kill={gw.killed})")
+    error = executions._execution.error or ""
+    check("supervision of this run failed" in error,
+          f"the row says supervision failed, not that the process crashed "
+          f"(got {error!r})")
+    check("crashed, or a device fault" not in error,
+          "and does not claim a crash that did not happen")
+
+
 def main() -> None:
     tests = [
         test_replay_skips_node_results_but_keeps_monitor_history,
@@ -588,6 +691,8 @@ def main() -> None:
         test_the_default_is_the_child,
         test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash,
         test_a_new_run_does_not_inherit_the_last_one_s_records,
+        test_one_failed_poll_does_not_cost_a_run_its_supervisor,
+        test_a_watcher_that_cannot_continue_stops_the_child_it_was_watching,
     ]
     run_tests_concurrently(tests)
 

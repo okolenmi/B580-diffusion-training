@@ -64,6 +64,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         poll_interval: float = 0.1,
         stop_grace: float = 15.0,
         make_tail=None,
+        max_poll_failures: int = 5,
     ) -> None:
         self._executions = executions
         # CAS-then-announce lives in the writer; ``events`` is for
@@ -82,6 +83,12 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         # run does not hold a card forever. The retired training route
         # used the same figure for the same reason (docs 07 F-12).
         self._stop_grace = stop_grace
+        # How many consecutive poll failures the watcher rides out before it
+        # gives up on a run it is otherwise watching. One transient error --
+        # "database is locked" during another writer's transaction -- must
+        # not cost the run its supervisor; a persistent one must not cost
+        # the server a thread that retries forever.
+        self._max_poll_failures = max_poll_failures
         self._monitor_bus = monitor_bus
         # How to open a reader over a run's event file. Injected because
         # "a file" is infrastructure and this is application: the class that
@@ -344,6 +351,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         that span must not be recorded again.
         """
         outcomes: list[dict] = []
+        abandoned = False
+        consecutive_failures = 0
         try:
             if not catch_up and not self._claim(execution_id):
                 # A stop won the row while the child was still starting.
@@ -352,46 +361,147 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 self._gateway.kill(pid)
                 return
             while True:
-                outcomes += self._apply(execution_id, tail.poll(), catch_up)
-                if catch_up and tail.caught_up:
-                    # Exactly caught up, not "a poll came back empty": a
-                    # poll is also empty while the child is mid-line, and
-                    # treating that as caught-up would start recording node
-                    # results the row already has.
-                    catch_up = False
-                    with self._lock:
-                        self._replaying.discard(execution_id)
-                if not self._gateway.is_alive(pid):
-                    # A final drain, and this is a correctness fix rather
-                    # than tidiness. The child writes its outcome record
-                    # and *then* exits, so everything it ever said is on
-                    # disk by the time liveness says no. A watcher that
-                    # was mid-batch when that happened -- persisting one
-                    # node result per CAS is slow enough on a long graph
-                    # that a fast child finishes underneath it -- would
-                    # otherwise break without ever reading the outcome,
-                    # and report a successful run as
-                    # "exited without reporting an outcome". Observed live
-                    # on a 3000-node graph: the event file ended with a
-                    # clean outcome, and the row said the process crashed.
+                # The body is guarded per iteration rather than around the
+                # whole loop. A single failed poll used to end the
+                # supervision of a run that was perfectly healthy, and the
+                # `finally` then wrote it off as a dead process while the
+                # child carried on: no stop, no kill, a terminal row that
+                # released the single-active check, and two trainers on one
+                # card. Most poll failures are transient -- a locked
+                # database during someone else's transaction -- so they are
+                # ridden out; only a run of them means the watcher really
+                # cannot continue.
+                try:
                     outcomes += self._apply(execution_id, tail.poll(), catch_up)
-                    break
-                execution = self._executions.get(execution_id)
-                if execution is None or execution.status.is_terminal:
-                    # The stop path owns the outcome now; its writer said
-                    # how this run ended, and re-deciding would overwrite
-                    # a terminal row with a second, different ending.
-                    break
+                    if catch_up and tail.caught_up:
+                        # Exactly caught up, not "a poll came back empty": a
+                        # poll is also empty while the child is mid-line, and
+                        # treating that as caught-up would start recording
+                        # node results the row already has.
+                        catch_up = False
+                        with self._lock:
+                            self._replaying.discard(execution_id)
+                    if not self._gateway.is_alive(pid):
+                        # A final drain, and this is a correctness fix rather
+                        # than tidiness. The child writes its outcome record
+                        # and *then* exits, so everything it ever said is on
+                        # disk by the time liveness says no. A watcher that
+                        # was mid-batch when that happened -- persisting one
+                        # node result per CAS is slow enough on a long graph
+                        # that a fast child finishes underneath it -- would
+                        # otherwise break without ever reading the outcome,
+                        # and report a successful run as "exited without
+                        # reporting an outcome". Observed live on a
+                        # 3000-node graph: the event file ended with a clean
+                        # outcome, and the row said the process crashed.
+                        outcomes += self._apply(execution_id, tail.poll(), catch_up)
+                        break
+                    execution = self._executions.get(execution_id)
+                    if execution is None or execution.status.is_terminal:
+                        # The stop path owns the outcome now; its writer said
+                        # how this run ended, and re-deciding would overwrite
+                        # a terminal row with a second, different ending.
+                        break
+                    consecutive_failures = 0
+                except Exception:  # noqa: BLE001 -- one bad poll, not the run
+                    consecutive_failures += 1
+                    logger.warning(
+                        "polling graph execution %s failed (%d in a row)",
+                        execution_id, consecutive_failures, exc_info=True,
+                    )
+                    if consecutive_failures >= self._max_poll_failures:
+                        raise
                 threading.Event().wait(self._poll_interval)
         except Exception:  # noqa: BLE001 -- the thread must not die silently
-            logger.exception("watcher for graph execution %s crashed", execution_id)
+            logger.exception(
+                "watcher for graph execution %s can no longer continue",
+                execution_id,
+            )
+            abandoned = self._abandon(execution_id, pid)
+            if abandoned:
+                # The child may well have finished as it was being stopped,
+                # and its own record is better evidence than our failure to
+                # watch it -- the same reasoning as the drain above.
+                try:
+                    outcomes += self._apply(execution_id, tail.poll(), catch_up)
+                except Exception:  # noqa: BLE001 -- already giving up
+                    logger.exception(
+                        "final drain after abandoning execution %s failed",
+                        execution_id,
+                    )
         finally:
             self._finish(
                 execution_id,
                 pid,
                 bool(outcomes),
                 outcomes[-1].get("error") if outcomes else None,
+                abandoned=abandoned,
             )
+
+    def _abandon(self, execution_id: ExecutionId, pid: int) -> bool:
+        """Stop a run we have lost the ability to watch. True if it was live.
+
+        This exists for one invariant: **a row is never terminal while its
+        child is alive.** A terminal row releases the single-active check,
+        so writing one for a run that is still holding the card is how two
+        trainers end up on one 12 GB device -- and an unwatched run is also
+        a run the API can no longer stop, because ``cancel`` needs the pid
+        this watcher was holding.
+
+        So when the watcher gives up, it does not simply write the row off.
+        It asks the child to stop, escalates to a kill if that is ignored,
+        and only then lets the row be finalised -- with a note that says
+        supervision failed rather than claiming the process died.
+
+        Returns ``False`` when the child had already gone, which is the
+        ordinary case: a watcher that breaks because liveness said no has
+        nothing to abandon.
+        """
+        try:
+            if not self._gateway.is_alive(pid):
+                return False
+        except Exception:  # noqa: BLE001 -- liveness is what failed
+            # Assume the worst. The alternative is leaving a process that
+            # holds the card unaccounted for, on the strength of a check
+            # that did not answer.
+            logger.warning(
+                "could not determine whether pid %s is alive; treating it as "
+                "alive and stopping it", pid,
+            )
+
+        logger.error(
+            "graph execution %s can no longer be supervised; stopping its "
+            "child (pid %s) rather than leaving it running unobserved",
+            execution_id, pid,
+        )
+        try:
+            self._gateway.request_stop(pid)
+        except Exception:  # noqa: BLE001 -- escalate regardless
+            logger.exception("asking pid %s to stop failed", pid)
+        threading.Event().wait(self._stop_grace)
+        try:
+            still_running = self._gateway.is_alive(pid)
+        except Exception:  # noqa: BLE001 -- liveness is what failed
+            # Liveness has already failed once on this run, so a second
+            # failure here is expected rather than surprising. It must not
+            # be read as "so it probably stopped": not knowing is the one
+            # state in which the card is still held and the run is still
+            # unstoppable through the API. Unknown means alive.
+            logger.warning(
+                "cannot tell whether pid %s stopped; killing it rather than "
+                "leaving it unaccounted for", pid,
+            )
+            still_running = True
+        if still_running:
+            logger.warning(
+                "pid %s did not stop within %.0fs of supervision failing; "
+                "killing", pid, self._stop_grace,
+            )
+            try:
+                self._gateway.kill(pid)
+            except Exception:  # noqa: BLE001 -- nothing further to try
+                logger.exception("killing pid %s failed", pid)
+        return True
 
     def _apply(
         self, execution_id: ExecutionId, events, catch_up: bool
@@ -477,6 +587,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         pid: int,
         saw_outcome: bool,
         outcome_error: str | None,
+        abandoned: bool = False,
     ) -> None:
         """Terminal write for one watched run.
 
@@ -503,11 +614,23 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             with self._lock:
                 stopped = execution_id in self._stop_requested
             if not saw_outcome:
+                # Which of the two "no outcome" stories is true depends on
+                # whether the child was still there. Saying "crashed, or a
+                # device fault killed it" about a process we ourselves
+                # stopped -- and that was running perfectly well -- is the
+                # wrong answer twice over: it sends the reader to the
+                # execution log for a crash that never happened.
                 execution.mark_failed(
                     at=at,
-                    error="execution process exited without reporting an "
-                          "outcome (crashed, or a device fault killed it) -- "
-                          "see the execution log",
+                    error=(
+                        "supervision of this run failed, so it was stopped; "
+                        "it reported no outcome -- see the server log and "
+                        "the execution log"
+                        if abandoned else
+                        "execution process exited without reporting an "
+                        "outcome (crashed, or a device fault killed it) -- "
+                        "see the execution log"
+                    ),
                 )
                 self._writer.commit(execution, expected=GraphStatus.RUNNING)
             elif outcome_error is not None:

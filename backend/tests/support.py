@@ -361,6 +361,31 @@ def use_temporary_comfy_dir(prefix: str = "backend-comfy-") -> Path:
     return root
 
 
+#: The hermetic ComfyUI this process is pointed at, or None when the real
+#: one is in use. A test that needs the path asks for it; a test that needs
+#: the *real* one asserts this is None first, so that asking for the real
+#: thing is a visible decision rather than an accident.
+TEMP_COMFY_DIR: Path | None = None
+
+if os.environ.get("BACKEND_TESTS_REAL_COMFY") != "1":
+    # **At import time, and that is the whole point.** This used to be
+    # opt-in: two of thirty-one files called it, and every other file passed
+    # only because the developer's machine has a `.env` naming their
+    # ComfyUI. Round-4 R4-03 is that a test suite should not depend on the
+    # machine it runs on, and the cheapest way to get that is for there to
+    # be no way to forget.
+    #
+    # It is also what `test_config.py`, `test_installer.py` and
+    # `test_settings.py` were silently asserting: they passed here and
+    # failed on a fresh clone, which is the same class of bug as a test that
+    # passes on the author's box.
+    #
+    # `BACKEND_TESTS_REAL_COMFY=1` opts out, for the times a test genuinely
+    # needs the real thing -- and it has to be asked for by name, so it
+    # cannot happen by omission.
+    TEMP_COMFY_DIR = use_temporary_comfy_dir(prefix="backend-suite-comfy-")
+
+
 def run_tests_concurrently(tests) -> None:
     """Run ``tests`` concurrently and print each one's output in order.
 

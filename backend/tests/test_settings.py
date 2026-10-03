@@ -361,6 +361,42 @@ def main() -> None:
           f"a checkpoint present only in the new directory is accepted "
           f"({status} {detail[:90]})")
 
+    # -- the suite is hermetic, and that is checked rather than hoped ----
+    # Round-4 R4-03. `use_temporary_comfy_dir` used to be opt-in, called by
+    # two of thirty-one files. Every other file passed only because this
+    # checkout has a .env naming a real ComfyUI -- which means three of them
+    # failed on a fresh clone. Reproduced on a `git archive` of HEAD before
+    # the fix: test_config and test_settings raised "Cannot find ComfyUI
+    # directory", and test_installer failed 5 of 64.
+    #
+    # The fixture now runs at import time in support.py, so there is nothing
+    # to forget. These checks are what stop that being quietly undone.
+    import os as _os
+
+    from backend.tests import support as _support
+
+    if _os.environ.get("BACKEND_TESTS_REAL_COMFY") == "1":
+        check(_support.TEMP_COMFY_DIR is None,
+              "BACKEND_TESTS_REAL_COMFY=1 opts out, and the opt-out is "
+              "visible as TEMP_COMFY_DIR being None")
+    else:
+        check(_support.TEMP_COMFY_DIR is not None
+              and _support.TEMP_COMFY_DIR.is_dir(),
+              f"support points this process at a throwaway ComfyUI "
+              f"({_support.TEMP_COMFY_DIR})")
+        check(_os.environ.get("COMFY_DIR") == str(_support.TEMP_COMFY_DIR),
+              "and sets COMFY_DIR, so a spawned child inherits it too -- the "
+              "suites that spawn real children are the ones that broke")
+        check("models" in {q.name for q in _support.TEMP_COMFY_DIR.iterdir()},
+              "and creates the models/ tree, so a test writing a fixture into "
+              "it has somewhere that is not the developer's")
+
+        import paths as _paths
+
+        check(str(_paths.get_comfy_dir()) == str(_support.TEMP_COMFY_DIR),
+              f"and paths.get_comfy_dir() resolves to it rather than to a "
+              f"real install ({_paths.get_comfy_dir()})")
+
     finish()
 
 

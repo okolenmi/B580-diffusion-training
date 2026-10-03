@@ -1,17 +1,23 @@
-"""Verifies nodes/model/gradient_checkpointing.py's patch logic.
+"""Correctness checks for nodes/model/checkpoint.py -- the activation
+checkpointing this project owns.
 
-ComfyUI itself isn't installed in this sandbox (no `comfy` package, no
-COMFY_DIR) -- true for everything ComfyUI-dependent in this project. What this
-test CAN do, and does: register a stand-in module at the exact import
-path enable_frozen_param_safe_checkpointing() patches
-(comfy.ldm.modules.diffusionmodules.util), containing a faithful,
-verbatim reproduction of the real CheckpointFunction/checkpoint() (fetched
-directly from github.com/comfyanonymous/ComfyUI, not reconstructed from
-memory) -- then run the REAL patch function against it and check real
-gradients, not just "doesn't crash." This verifies the patch's actual
-logic exactly; it does not verify the import path itself still matches
-ComfyUI's current source layout, which needs confirming on a machine with
-ComfyUI installed.
+The implementation used to be a monkeypatch onto
+`comfy.ldm.modules.diffusionmodules.util` and these checks drove it through
+a stand-in module registered at that exact import path, holding a verbatim
+copy of ComfyUI's `CheckpointFunction`/`checkpoint()`. `checkpoint.py` is
+now the implementation (design doc 12 section 7.3, section A), so the real
+checks run against the real code and nothing here depends on the import
+path.
+
+The stand-in is still here, and still load-bearing, but only for the
+**control**: the first check runs ComfyUI's stock code and requires it to
+raise on a frozen+trainable block, and the autocast check requires the
+stock recompute to drop the autocast context. Those assertions are the
+evidence that the two upstream bugs were real and are still real -- without
+them the fixed version's passing would only show that our code agrees with
+itself. They are also self-defeating if upstream changes, deliberately: a
+control that stops failing tells you the control is no longer proving
+anything, rather than quietly passing.
 """
 
 import sys
@@ -133,8 +139,13 @@ class _FrozenPlusTrainableBlock(nn.Module):
     def _forward(self, x):
         return x * self.norm + x * self.adapter
 
-    def forward(self, x, use_checkpoint, util_module):
-        return util_module.checkpoint(self._forward, (x,), tuple(self.parameters()), use_checkpoint)
+    def forward(self, x, use_checkpoint, ckpt):
+        # `ckpt` is a callable, not a module: it used to be
+        # `util_module.checkpoint`, because the implementation *was* a
+        # monkeypatch onto comfy's util namespace. It is now this project's
+        # own (nodes/model/checkpoint.py), and the stock-Crash check below
+        # still passes the stub to show upstream really does fail.
+        return ckpt(self._forward, (x,), tuple(self.parameters()), use_checkpoint)
 
 
 def check_stock_version_reproduces_the_documented_crash():
@@ -142,7 +153,7 @@ def check_stock_version_reproduces_the_documented_crash():
     util = _install_stub_comfy_checkpoint_module()
     block = _FrozenPlusTrainableBlock()
     x = torch.randn(4, requires_grad=True)
-    out = block(x, True, util)
+    out = block(x, True, util.checkpoint)
     try:
         out.sum().backward()
         raise AssertionError("expected the stock implementation to raise")
@@ -153,8 +164,9 @@ def check_stock_version_reproduces_the_documented_crash():
 
 def check_patched_version_matches_unchecked_reference():
     print("[patched CheckpointFunction: real gradients, matching a non-checkpointed reference]")
-    util = _install_stub_comfy_checkpoint_module()
+    _install_stub_comfy_checkpoint_module()
     from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    from nodes.model.checkpoint import checkpoint
     enable_frozen_param_safe_checkpointing()
 
     torch.manual_seed(0)
@@ -162,7 +174,7 @@ def check_patched_version_matches_unchecked_reference():
     x = torch.randn(4, requires_grad=True)
 
     x_ckpt = x.detach().clone().requires_grad_(True)
-    out_ckpt = block(x_ckpt, True, util)
+    out_ckpt = block(x_ckpt, True, checkpoint)
     out_ckpt.sum().backward()
     adapter_grad_ckpt = block.adapter.grad.clone()
     assert block.norm.grad is None, "frozen param must not get a fabricated gradient"
@@ -204,7 +216,7 @@ class _AutocastProbeBlock(nn.Module):
         return out
 
 
-def _autocast_states(util, block, x):
+def _autocast_states(ckpt, block, x):
     """One checkpointed pass: forward under autocast, backward *outside* it.
 
     The shape matters and getting it wrong hides the bug. ComfyUI captures
@@ -220,7 +232,7 @@ def _autocast_states(util, block, x):
     the block saw, forward first and the recompute last.
     """
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-        out = util.checkpoint(block, (x,), tuple(block.parameters()), True)
+        out = ckpt(block, (x,), tuple(block.parameters()), True)
     out.backward(torch.ones_like(out))
     return block.seen
 
@@ -252,7 +264,7 @@ def check_recompute_reenters_the_forward_autocast():
     util = _install_stub_comfy_checkpoint_module()
     stock_block = _AutocastProbeBlock()
     x = _torch.randn(4, 8, requires_grad=True)
-    stock_seen = _autocast_states(util, stock_block, x)
+    stock_seen = _autocast_states(util.checkpoint, stock_block, x)
     assert len(stock_seen) >= 2, f"expected a forward and a recompute, got {len(stock_seen)}"
     assert stock_seen[0]["autocast"] is True, "the control's forward was not autocast"
     assert stock_seen[-1]["autocast"] is False, (
@@ -263,12 +275,13 @@ def check_recompute_reenters_the_forward_autocast():
           f"-> recompute {stock_seen[-1]}")
 
     # -- and the patched version keeps it --------------------------------
-    util = _install_stub_comfy_checkpoint_module()
+    _install_stub_comfy_checkpoint_module()
     from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    from nodes.model.checkpoint import checkpoint
     enable_frozen_param_safe_checkpointing()
     block = _AutocastProbeBlock()
     x = _torch.randn(4, 8, requires_grad=True)
-    seen = _autocast_states(util, block, x)
+    seen = _autocast_states(checkpoint, block, x)
     assert len(seen) >= 2, f"expected a forward and a recompute, got {len(seen)}"
     assert seen[0]["autocast"] is True, "the patched forward was not autocast"
     assert seen[-1]["autocast"] is True, (
@@ -279,7 +292,7 @@ def check_recompute_reenters_the_forward_autocast():
 
     # -- and the two passes agree numerically ---------------------------
     # Written through the same helper rather than with an inline
-    # util.checkpoint(...) call. The context assertions above are the
+    # checkpoint(...) call. The context assertions above are the
     # load-bearing ones; this adds a numeric check, and it is deliberately
     # built on the one call shape already exercised twice above rather than
     # a third spelling of it.
@@ -289,7 +302,7 @@ def check_recompute_reenters_the_forward_autocast():
     ref_block.load_state_dict(ckpt_block.state_dict())
 
     probe = torch.randn(4, 8, requires_grad=True)
-    _autocast_states(util, ckpt_block, probe)
+    _autocast_states(checkpoint, ckpt_block, probe)
     ckpt_grad = ckpt_block.w.grad.clone()
 
     ref_block.zero_grad()
@@ -304,12 +317,12 @@ def check_recompute_reenters_the_forward_autocast():
 
 def check_idempotent():
     print("[idempotency: patching twice doesn't double-wrap]")
-    util = _install_stub_comfy_checkpoint_module()
     from nodes.model.gradient_checkpointing import enable_frozen_param_safe_checkpointing
+    from nodes.model.checkpoint import active_checkpoint_function
     enable_frozen_param_safe_checkpointing()
-    first = util.CheckpointFunction
+    first = active_checkpoint_function()
     enable_frozen_param_safe_checkpointing()
-    assert util.CheckpointFunction is first
+    assert active_checkpoint_function() is first
     print("    PASS: second call is a no-op")
 
 
@@ -321,7 +334,8 @@ def main():
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED "
-          "(against a faithful stand-in for comfy's util module -- see module docstring)")
+          "(the control ran against a verbatim copy of comfy's "
+          "CheckpointFunction; the fixed paths ran against nodes/model/checkpoint.py)")
 
 
 if __name__ == "__main__":

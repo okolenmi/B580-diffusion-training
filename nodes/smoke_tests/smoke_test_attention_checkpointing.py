@@ -289,15 +289,20 @@ def check_fraction_knob():
     # across 4 fresh blocks (indices 0..3, selected 0 and 2).
     enable_attention_block_checkpointing(fraction=0.5)
     assert getattr(cls, "_attention_block_checkpointing_enabled", False)
-    import comfy.ldm.modules.diffusionmodules.util as util
-    real_checkpoint = util.checkpoint
+    # Count calls by wrapping *our* checkpoint. This used to monkeypatch
+    # `util.checkpoint`, which worked only because patched_forward imported
+    # comfy's per call; it now imports nodes.model/checkpoint.py's, so the
+    # counting has to happen there. Patching the old target would have
+    # counted zero calls and looked like a density bug.
+    import nodes.model.checkpoint as our_ckpt
+    real_checkpoint = our_ckpt.checkpoint
     calls = {"n": 0}
 
     def counting_checkpoint(*a, **k):
         calls["n"] += 1
         return real_checkpoint(*a, **k)
 
-    util.checkpoint = counting_checkpoint  # patched_forward imports it per call
+    our_ckpt.checkpoint = counting_checkpoint  # patched_forward imports it per call
     try:
         blocks = [cls() for _ in range(4)]
         for blk in blocks:
@@ -305,7 +310,7 @@ def check_fraction_knob():
                       transformer_options={})
             out.sum().backward()
     finally:
-        util.checkpoint = real_checkpoint
+        our_ckpt.checkpoint = real_checkpoint
     assert [blk._ac_seq_idx for blk in blocks] == [0, 1, 2, 3]
     assert calls["n"] == 2, f"density 0.5 must checkpoint exactly 2 of 4, got {calls['n']}"
     assert blocks[0].lora.grad is not None and blocks[1].lora.grad is not None, \
@@ -319,14 +324,14 @@ def check_fraction_knob():
     enable_attention_block_checkpointing(fraction=0.75)
     assert getattr(cls, "_attention_block_checkpointing_enabled", False)
     calls["n"] = 0
-    util.checkpoint = counting_checkpoint
+    our_ckpt.checkpoint = counting_checkpoint
     try:
         blocks = [cls() for _ in range(8)]
         for blk in blocks:
             blk(torch.randn(4, requires_grad=True), context=None,
                 transformer_options={})
     finally:
-        util.checkpoint = real_checkpoint
+        our_ckpt.checkpoint = real_checkpoint
     assert calls["n"] == 6, f"density 0.75 must checkpoint 6 of 8, got {calls['n']}"
     print("    PASS: fraction=0 unpatched + sentinel-free; density 0.5 ckpted "
           "idx 0,2 and density 0.75 ckpted 6/8; gradients real for all 4 blocks")

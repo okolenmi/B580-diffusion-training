@@ -72,6 +72,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from .checkpoint import (
+    make_checkpoint_function,
+    set_active_checkpoint_function,
+)
+
 
 class ActivationCheckpointingStrategy(ABC):
 
@@ -115,157 +120,31 @@ class FrozenParamSafeCheckpointing(ActivationCheckpointingStrategy):
         enable_attention_block_checkpointing()
 
 
-def _autocast_state(inputs):
-    """``(device_type, kwargs)`` describing the *current* autocast context.
-
-    Returned rather than hardcoded because the original captured
-    ``torch.is_autocast_enabled()`` / ``torch.get_autocast_gpu_dtype()``
-    (both CUDA-flavoured) and re-entered it with
-    ``torch.cuda.amp.autocast``, and this project targets Intel Arc
-    (ADR 0004). On this machine that call does not fail -- it warns
-    "CUDA is not available or torch_xla is imported. Disabling autocast."
-    and enters with ``enabled=False``.
-
-    So the effect was: **a forward that ran under fp16 was recomputed in
-    fp32**, which is the one thing activation checkpointing must not do.
-    Measured, with all parameters trainable so the frozen-param filter is
-    not in play:
-
-        no autocast, xpu        relative gradient error  0.000e+00
-        autocast('xpu', fp16)   relative gradient error  4.581e-04
-
-    and by instrumenting the checkpointed block directly:
-
-        FORWARD    xpu_autocast=True   out.dtype=float32
-        RECOMPUTE  xpu_autocast=False  out.dtype=float32
-
-    **This is currently latent**: nothing in the training path enables
-    autocast (measured by grep over ``nodes/`` and ``manager/``), so both
-    directions run with ``enabled=False`` and the two passes agree. It
-    becomes a wrong-gradients bug the moment anyone turns on mixed
-    precision, which for a 12 GB card training SDXL is the obvious next
-    step -- so it is fixed now rather than then.
-
-    The device type comes from where the inputs actually are, which is more
-    reliable than asking torch what is current: there is no stable API for
-    "which device type is autocast currently enabled for", and the inputs'
-    device is the thing that has to match anyway.
-    """
-    import torch
-
-    device_type = "cuda"
-    for tensor in inputs:
-        device_type = tensor.device.type
-        break
-    try:
-        available = torch.amp.autocast_mode.is_autocast_available(device_type)
-    except Exception:  # noqa: BLE001 -- unknown device type, assume available
-        available = True
-    if not available:
-        return None, {}
-
-    # `get_autocast_dtype(device_type)` replaced `get_autocast_gpu_dtype`,
-    # which torch deprecates and which has no argument at all. The getattr
-    # keeps this working on the older torch a ComfyUI venv might pin.
-    getter = getattr(torch, "get_autocast_dtype", None)
-    if getter is None:
-        getter = lambda _dt: torch.get_autocast_gpu_dtype()  # noqa: E731
-    return device_type, {
-        "enabled": torch.is_autocast_enabled(device_type),
-        "dtype": getter(device_type),
-        "cache_enabled": torch.is_autocast_cache_enabled(),
-    }
-
-
 def enable_frozen_param_safe_checkpointing(recompute_wrapper=None) -> None:
-    """Idempotent per (patched-at-all, recompute_wrapper identity) pair,
-    not just "already patched at all" -- calling this twice with the
-    same recompute_wrapper (None counts as its own identity) is a
-    no-op, matching the original unparameterized behavior exactly when
-    recompute_wrapper=None every time (FrozenParamSafeCheckpointing's
-    own call site never passes one). Calling it with a *different*
-    recompute_wrapper (e.g. switching from FrozenParamSafeCheckpointing
-    to nodes/model/block_profiler.py's ProfilingCheckpointing, or back,
-    within one process) re-installs the patch with the new wrapper --
-    a real, narrow need: ComfyUNetLoRANode.build() calls
-    checkpointing_strategy.apply() fresh on every graph run, not once
-    per process, so two different runs in the same server process can
-    legitimately want different instrumentation.
+    """Make `checkpoint()` dispatch to the frozen-param-safe function.
+
+    Idempotent per (patched-at-all, recompute_wrapper identity) pair, not
+    just "already patched at all": calling this twice with the same
+    recompute_wrapper (None counts as its own identity) is a no-op, so
+    repeated application costs nothing. Calling it with a *different*
+    recompute_wrapper -- switching from FrozenParamSafeCheckpointing to
+    block_profiler.py's ProfilingCheckpointing, or back, within one process
+    -- installs the new one, which is a real need: ComfyUNetLoRANode.build()
+    calls checkpointing_strategy.apply() fresh on every graph run rather than
+    once per process, so two runs in the same server process can legitimately
+    want different instrumentation.
 
     recompute_wrapper: optional `(run_function, args) -> output_tensors`,
     called in place of `ctx.run_function(*args)` during backward's own
-    recompute -- None (the default) costs nothing extra and is exactly
-    the original call. See block_profiler.py's module docstring for why
-    this is the one correct place to measure a checkpointed block's real
-    recompute time/activation memory: it's the actual, real recompute a
-    non-profiled run already pays for, not a separate profiling-only
-    forward pass.
+    recompute -- None (the default) costs nothing extra and is exactly the
+    original call. See block_profiler.py's module docstring for why this is
+    the one correct place to measure a checkpointed block's real recompute
+    time/activation memory: it's the actual, real recompute a non-profiled
+    run already pays for, not a separate profiling-only forward pass.
+
+    The class itself lives in `checkpoint.py`. It used to be built here and
+    assigned onto `comfy.ldm.modules.diffusionmodules.util`, which made this
+    a patch of someone else's module; it is now our implementation, and this
+    function only chooses which one is active.
     """
-    import torch
-    from comfy.ldm.modules.diffusionmodules import util as comfy_ckpt_util
-
-    current = comfy_ckpt_util.CheckpointFunction
-    if (getattr(current, "_frozen_param_safe", False)
-            and getattr(current, "_recompute_wrapper_identity", None) is recompute_wrapper):
-        return
-
-    class FrozenParamSafeCheckpointFunction(torch.autograd.Function):
-
-        @staticmethod
-        def forward(ctx, run_function, length, *args):
-            ctx.run_function = run_function
-            ctx.input_tensors = list(args[:length])
-            ctx.input_params = list(args[length:])
-            # Device-agnostic, where comfyi's is CUDA-specific. See
-            # _autocast_state() for the measurement and why this is not a
-            # cosmetic difference.
-            ctx.autocast_device_type, ctx.autocast_kwargs = _autocast_state(
-                ctx.input_tensors
-            )
-            with torch.no_grad():
-                return ctx.run_function(*ctx.input_tensors)
-
-        @staticmethod
-        def backward(ctx, *output_grads):
-            ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
-            # Re-enter the *forward's* autocast, on the forward's device
-            # type. comfyi's version re-enters torch.cuda.amp.autocast, which
-            # on this card silently disables itself -- see _autocast_state().
-            # nullcontext when there was no autocast or the device type has
-            # none, so the recompute is simply un-autocast as before.
-            import contextlib
-
-            autocast = (
-                torch.autocast(device_type=ctx.autocast_device_type,
-                                **ctx.autocast_kwargs)
-                if ctx.autocast_device_type
-                else contextlib.nullcontext()
-            )
-            with torch.enable_grad(), autocast:
-                # Same "first op mutates storage in place" guard as the
-                # original -- detach()'d tensors can't be mutated in place.
-                shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
-                if recompute_wrapper is not None:
-                    output_tensors = recompute_wrapper(ctx.run_function, shallow_copies)
-                else:
-                    output_tensors = ctx.run_function(*shallow_copies)
-
-            trainable_params = [p for p in ctx.input_params if p.requires_grad]
-            grad_targets = ctx.input_tensors + trainable_params
-            computed = torch.autograd.grad(output_tensors, grad_targets, output_grads,
-                                            allow_unused=True)
-
-            tensor_grads = computed[:len(ctx.input_tensors)]
-            trainable_grads = iter(computed[len(ctx.input_tensors):])
-            # One slot per original param, in order -- None for the frozen
-            # ones, since autograd matches returned grads to forward()'s
-            # *args positionally, not by name.
-            param_grads = tuple(next(trainable_grads) if p.requires_grad else None
-                                 for p in ctx.input_params)
-
-            del ctx.input_tensors, ctx.input_params, output_tensors
-            return (None, None) + tuple(tensor_grads) + param_grads
-
-    FrozenParamSafeCheckpointFunction._frozen_param_safe = True
-    FrozenParamSafeCheckpointFunction._recompute_wrapper_identity = recompute_wrapper
-    comfy_ckpt_util.CheckpointFunction = FrozenParamSafeCheckpointFunction
+    set_active_checkpoint_function(make_checkpoint_function(recompute_wrapper))

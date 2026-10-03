@@ -92,31 +92,49 @@ def check_no_checkpointing_is_a_true_no_op():
 
 def check_frozen_param_safe_delegates_correctly():
     print("\n=== FrozenParamSafeCheckpointing.apply() delegates to the real patch ===")
+    from nodes.model.checkpoint import active_checkpoint_function
     from nodes.model.gradient_checkpointing import (FrozenParamSafeCheckpointing,
                                                       enable_frozen_param_safe_checkpointing)
-    util = _install_stub_comfy_checkpoint_module()
-    original = util.CheckpointFunction
 
+    # This used to assert against a stubbed `comfy.ldm...util` namespace,
+    # because the function patched ComfyUI's CheckpointFunction in place.
+    # It no longer patches anything: `checkpoint.py` *is* the implementation
+    # (design doc 12 section 7.3, section A), so what apply() installs is the
+    # class this project's own `checkpoint()` dispatches to. Asserting against
+    # a stub here would now be asserting against a module nothing writes to.
+    #
+    # The stub is still installed, for the *other* leg of apply(): it also
+    # calls enable_attention_block_checkpointing(), which patches ComfyUI's
+    # BasicTransformerBlock and so still needs the module to exist. That is
+    # the remaining half of section A -- once BasicTransformerBlock is ours,
+    # the stub comes out of this test too.
+    _install_stub_comfy_checkpoint_module()
     FrozenParamSafeCheckpointing().apply()
-    patched_via_class = util.CheckpointFunction
-    record(patched_via_class is not original,
-           "apply() actually installs the patched CheckpointFunction")
+    patched_via_class = active_checkpoint_function()
+    # Not "apply() switched to a new class": the fixed class is already the
+    # *default* in checkpoint.py, because it is a strict superset of the
+    # original's gradients (checked in smoke_test_checkpoint.py), so the
+    # first apply() is legitimately already in place. The claim is about the
+    # state, not the transition.
     record(getattr(patched_via_class, "_frozen_param_safe", False),
-           "installed class carries the _frozen_param_safe idempotency marker")
+           "after apply(), checkpoint() dispatches to a frozen-param-safe class")
+    record(getattr(patched_via_class, "_recompute_wrapper_identity", "unset") is None,
+           "with no recompute wrapper, which is what apply() asks for")
 
-    # A second instance's apply() must be a no-op (same guard the free
-    # function always had -- shared module-global state, not per-instance).
+    # A second instance's apply() must be a no-op (shared module-global
+    # state, not per-instance).
     FrozenParamSafeCheckpointing().apply()
-    record(util.CheckpointFunction is patched_via_class,
+    record(active_checkpoint_function() is patched_via_class,
            "a second FrozenParamSafeCheckpointing().apply() doesn't re-wrap")
 
-    # Cross-check against calling the free function directly on a fresh
-    # stub -- both paths must install bit-for-bit the same kind of object.
-    util2 = _install_stub_comfy_checkpoint_module()
-    enable_frozen_param_safe_checkpointing()
-    record(util2.CheckpointFunction.__name__ == patched_via_class.__name__,
-           "class path and free-function path install the same patched class",
-           detail=f"{util2.CheckpointFunction.__name__} vs {patched_via_class.__name__}")
+    # A different wrapper is a real change, in both entry paths.
+    before_free = active_checkpoint_function()
+    enable_frozen_param_safe_checkpointing(recompute_wrapper=lambda f, a: f(*a))
+    record(active_checkpoint_function() is not before_free,
+           "the free function with a new wrapper does switch the class")
+    FrozenParamSafeCheckpointing().apply()
+    record(active_checkpoint_function() is not before_free,
+           "and apply() switches it back, since it passes no wrapper")
 
 
 def check_strategy_contract():

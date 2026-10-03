@@ -1,11 +1,12 @@
 """Correctness check for nodes/model/block_profiler.py.
 
-Reuses smoke_test_gradient_checkpointing.py's stub comfy module (a real,
-verbatim copy of ComfyUI's CheckpointFunction/checkpoint(), not
-reconstructed from memory) rather than a second copy of it -- this test
-cares whether ProfilingCheckpointing's instrumentation is correct
-*without breaking* the underlying gradient fix, so it needs the same
-real stub, not a simplified one.
+The checkpointing this instruments is this project's own
+(`nodes/model/checkpoint.py`), so the checks call it directly. It still
+installs smoke_test_gradient_checkpointing.py's stub comfy module at each
+entry point, but no longer to get ComfyUI's `checkpoint` -- that is for
+`enable_attention_block_checkpointing()`, which patches
+`comfy.ldm.modules.attention.BasicTransformerBlock` and so needs the
+module to exist until section 7.3 section A finishes.
 
 Run this directly: `python nodes/smoke_tests/smoke_test_block_profiler.py`
 """
@@ -21,6 +22,11 @@ import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smoke_test_gradient_checkpointing import _install_stub_comfy_checkpoint_module
+
+# The real implementation. The stub above is still needed -- it is what
+# enable_attention_block_checkpointing()'s comfy import resolves against --
+# but the checkpointing under test is ours.
+from nodes.model.checkpoint import checkpoint, active_checkpoint_function
 
 from nodes.components.device import DeviceContext
 from nodes.model.block_profiler import BlockProfileCollector, ProfilingCheckpointing
@@ -61,8 +67,12 @@ class _SlowFrozenPlusTrainableBlock(nn.Module):
         scratch.fill_(1.0)
         return x * self.norm + x * self.adapter + scratch.sum() * 0
 
-    def forward(self, x, use_checkpoint, util_module):
-        return util_module.checkpoint(self._forward, (x,), tuple(self.parameters()), use_checkpoint)
+    def forward(self, x, use_checkpoint, ckpt):
+        # A callable, not a module: it used to be `util_module.checkpoint`,
+        # because enable_frozen_param_safe_checkpointing() installed into
+        # comfy's util namespace. ProfilingCheckpointing now installs into
+        # nodes/model/checkpoint.py, so these checks call ours.
+        return ckpt(self._forward, (x,), tuple(self.parameters()), use_checkpoint)
 
 
 def check_gradients_still_correct_through_the_wrapper():
@@ -74,7 +84,7 @@ def check_gradients_still_correct_through_the_wrapper():
 
     block = _SlowFrozenPlusTrainableBlock(sleep_ms=0)
     x = torch.randn(4, requires_grad=True)
-    out = block(x, True, util)
+    out = block(x, True, checkpoint)
     out.sum().backward()
 
     reference_block = _SlowFrozenPlusTrainableBlock(sleep_ms=0)
@@ -101,7 +111,7 @@ def check_recompute_ms_reflects_real_wall_time():
 
     block = _SlowFrozenPlusTrainableBlock(sleep_ms=20.0)
     x = torch.randn(4, requires_grad=True)
-    block(x, True, util).sum().backward()
+    block(x, True, checkpoint).sum().backward()
 
     costs = collector.block_costs()
     record(len(costs) == 1, "exactly one distinct block recorded", detail=str(costs))
@@ -125,9 +135,9 @@ def check_two_distinct_instances_get_two_distinct_stable_labels():
     block_b = _SlowFrozenPlusTrainableBlock(sleep_ms=0)
     x = torch.randn(4, requires_grad=True)
 
-    block_a(x, True, util).sum().backward()
-    block_b(x.detach().requires_grad_(True), True, util).sum().backward()
-    block_a(x.detach().requires_grad_(True), True, util).sum().backward()  # a again
+    block_a(x, True, checkpoint).sum().backward()
+    block_b(x.detach().requires_grad_(True), True, checkpoint).sum().backward()
+    block_a(x.detach().requires_grad_(True), True, checkpoint).sum().backward()  # a again
 
     costs = collector.block_costs()
     record(len(costs) == 2, "two distinct instances -> two distinct labels", detail=str(costs))
@@ -149,13 +159,13 @@ def check_reset_clears_stats_but_keeps_labels():
 
     block = _SlowFrozenPlusTrainableBlock(sleep_ms=0)
     x = torch.randn(4, requires_grad=True)
-    block(x, True, util).sum().backward()
+    block(x, True, checkpoint).sum().backward()
     record(len(collector.block_costs()) == 1, "one block recorded before reset")
 
     collector.reset()
     record(len(collector.block_costs()) == 0, "block_costs() is empty right after reset()")
 
-    block(x.detach().requires_grad_(True), True, util).sum().backward()
+    block(x.detach().requires_grad_(True), True, checkpoint).sum().backward()
     costs_after = collector.block_costs()
     record(list(costs_after.keys()) == ["_SlowFrozenPlusTrainableBlock#0"],
            "same instance gets the exact same label again after reset()",
@@ -169,25 +179,30 @@ def check_switching_wrappers_actually_reinstalls():
     device_ctx = DeviceContext.for_device("cpu")
 
     enable_frozen_param_safe_checkpointing()  # plain, no wrapper
-    installed_plain = util.CheckpointFunction
+    # Read from *our* module, not util.CheckpointFunction: the install
+    # target moved from comfy's namespace to nodes/model/checkpoint.py when
+    # the implementation stopped being a monkeypatch (design doc 12 section
+    # 7.3, section A). `util` is still stubbed because apply() also reaches
+    # for comfy's BasicTransformerBlock.
+    installed_plain = active_checkpoint_function()
     enable_frozen_param_safe_checkpointing()  # same (None) again
-    record(util.CheckpointFunction is installed_plain,
+    record(active_checkpoint_function() is installed_plain,
            "calling with the same (None) recompute_wrapper twice does not reinstall")
 
     collector = BlockProfileCollector()
     ProfilingCheckpointing(device_ctx, collector).apply()
-    installed_profiling = util.CheckpointFunction
+    installed_profiling = active_checkpoint_function()
     record(installed_profiling is not installed_plain,
            "switching to a real recompute_wrapper installs a different class")
 
     block = _SlowFrozenPlusTrainableBlock(sleep_ms=0)
     x = torch.randn(4, requires_grad=True)
-    block(x, True, util).sum().backward()
+    block(x, True, checkpoint).sum().backward()
     record(len(collector.block_costs()) == 1,
            "the newly-installed profiling wrapper is actually the one that ran")
 
     enable_frozen_param_safe_checkpointing()  # switch back to no wrapper
-    record(util.CheckpointFunction is not installed_profiling,
+    record(active_checkpoint_function() is not installed_profiling,
            "switching back to no wrapper reinstalls again, doesn't get stuck on profiling")
 
 

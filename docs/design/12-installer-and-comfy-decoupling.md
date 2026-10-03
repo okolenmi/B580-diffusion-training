@@ -508,33 +508,81 @@ are things a cleanup would break:
 ### 7.3 Own the SDXL model definitions
 
 This is the real work: `UNetModel`, `SpatialTransformer`,
-`BasicTransformerBlock`, `SDXLClipModel`, `AutoencoderKL` — the 2,964
-lines measured in §4, implemented from the published SDXL specification.
+`BasicTransformerBlock`, `SDXLClipModel`, `AutoencoderKL` — implemented from
+the published SDXL specification.
 
-**What is already done, which is most of the hard part.** The architecture
-is written down in this repository today: `SDXL_CONFIG` in
-`unet_wrapper.py` is the published UNet configuration, not a transcription
-of ComfyUI's. The checkpoint contract is likewise already fixed — the
-project loads `.safetensors` state dicts and needs a key-to-shape mapping
-that the published config plus the checkpoint's own keys fully determine.
+**The remaining surface is five imports, measured rather than estimated.**
 
-So this is *not* reverse-engineering. It is implementing a published
-architecture against a known data contract, with an existing
-Apache-2.0 reference implementation available for the shapes.
+| Call site | Imports | Module |
+|---|---|---|
+| `unet_wrapper.py:79` | `openaimodel.UNetModel` | 927 lines |
+| `attention_checkpointing.py:139` | `attention.BasicTransformerBlock` | 1,335 lines |
+| `attention_checkpointing.py:154` | `util.checkpoint` | 306 lines |
+| `gradient_checkpointing.py:205` | `util.CheckpointFunction` | (same file) |
+| `clip_encoder.py:79` | `sdxl_clip.SDXLClipModel`, `SDXLTokenizer` | 95 lines |
+| `vae_decode.py:84` | `autoencoder.AutoencoderKL` | 280 lines |
 
-**What it would cost.** Six modules, plus the test surface for them: every
-existing LoRA injection point is written against Comfy's module layout, so
-`lora.py`, `adapter_injection.py` and the phase-splitting code all move at
-once. The VRAM measurements in `docs/known-issues/` were taken with
-Comfy's implementation resident and would need re-taking — a reimplementation
-that allocates one extra tensor mid-forward would change the floors those
-documents assert.
+Import *cost* does not discriminate — all five cost 2.8–3.8 s and ~2,200
+modules because they share the same base. What splits them is dependency and
+whether the removal is independently observable.
 
-**Sequencing.** 7.1 and 7.2 are small and independent; 8.3 is not, and
-starting it before the installer is finished would put the two hardest
-pieces of work in flight at once. The installer's conflict check also gets
-*easier* the moment ComfyUI is optional, because "use ComfyUI's venv"
-becomes one option among several rather than the only cheap one.
+**Two costs this section overestimated, both now measured.**
+
+* *"Every existing LoRA injection point is written against Comfy's module
+  layout, so `lora.py`, `adapter_injection.py` and the phase-splitting code
+  all move at once."* They do not. Nothing in the LoRA stack imports
+  `comfy` at all: `LoRALinear` is our own `nn.Module`, and injection
+  selects targets by **module name** (`to_q`, `to_k`, `to_v`, `to_out.0`).
+  So the contract is the published SDXL layout plus the checkpoint's own
+  keys — which we already have to honour — and not ComfyUI's class
+  identities. The LoRA code does not move.
+* *2,964 lines.* That counts whole ComfyUI files. What is actually
+  reachable is smaller, and much of it is not SDXL at all.
+
+**The split, in three sections, each removing an import on its own.**
+
+* **A — the diffusion path.** `CrossAttention`, `FeedForward`, `GEGLU`,
+  `BasicTransformerBlock`, `SpatialTransformer`, `AttentionBlock`,
+  `checkpoint()` + `CheckpointFunction`, then `UNetModel`,
+  `TimestepEmbedSequential`, `Upsample`, `Downsample`, `ResBlock`,
+  `TimestepBlock`. Removes three of the five imports.
+* **B — the VAE.** `AutoencoderKL` and the `Encoder`/`Decoder`/`ResBlock`/
+  `AttnBlock` it composes, which live in a *second* ComfyUI file
+  (`ldm/modules/diffusionmodules/model.py`). Removes one. Independent of A.
+* **C — CLIP.** `sdxl_clip`, `clip_model`, `sd1_clip`, and the BPE
+  tokenizer. Removes one. Independent of A and B.
+
+**Heavy comparison tests come last, after all three.** Until then the
+numerical claim is only structural: shapes, parameter names, and module
+paths. That is deliberate and it is also the reason the port can go ahead
+without a reference oracle — see below.
+
+#### What we do not port, and why
+
+ComfyUI's `BasicTransformerBlock.forward` is ~90 lines, of which about 15
+are transformer arithmetic. The rest is a model-patching framework —
+`transformer_patches`, `transformer_patches_replace`, `attn1_patch`,
+`attn2_patch`, `middle_patch`, `attn1_output_patch`, `block`, `block_index`,
+`extra_options`, `switch_temporal_ca_to_sa`, `disable_temporal_crossattention`
+— which exists so one class can serve Flux, SD3, Hunyuan and SDXL from
+ComfyUI's own checkpoint format. SDXL uses none of it. Our version is the
+arithmetic, and `attention_checkpointing.py`'s patch becomes correspondingly
+smaller because it patches a small function rather than a dispatch table.
+
+Likewise `operations.Linear` / `operations.GroupNorm` / `operations.Conv2d`
+are ComfyUI's dtype/device dispatch wrappers. This project passes device and
+dtype explicitly at construction and never through them, so ours are
+`nn.Linear` and friends.
+
+**A third ComfyUI bug, found while reading this and not copied.**
+`SpatialTransformer`'s `is_linear=True` branch builds
+`proj_in = Linear(in_channels, inner_dim)` and then
+`proj_out = Linear(in_channels, inner_dim)` — identical, with the in/out
+roles never swapped, so the branch cannot work. The conv path is correct
+(`Conv2d(in_channels, inner_dim)` in, `Conv2d(inner_dim, in_channels)`
+out). Dead for SDXL, which uses the conv path, so harmless in ComfyUI. Our
+version has no `is_linear` branch; if one is ever needed it will be written
+correctly and noted.
 
 ### What would make it wrong
 

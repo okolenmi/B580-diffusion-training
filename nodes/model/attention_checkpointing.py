@@ -151,7 +151,20 @@ def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
     original_forward = current.forward
 
     def patched_forward(self, x, context=None, transformer_options={}):
-        from comfy.ldm.modules.diffusionmodules.util import checkpoint as comfy_checkpoint
+        # This project's own checkpoint, imported per call so that whichever
+        # implementation is *active* is the one that runs -- plain
+        # frozen-param-safe, or block_profiler.py's instrumented one.
+        #
+        # It used to import comfy's `checkpoint` here, which worked only
+        # because enable_frozen_param_safe_checkpointing() monkeypatched
+        # CheckpointFunction into comfy's module namespace: the per-call
+        # import then picked up the patched class. Taking the patch away made
+        # that composition disappear, and this forward started calling
+        # ComfyUI's *stock* CheckpointFunction -- which raises "One of the
+        # differentiated Tensors does not require grad" on any block with
+        # frozen parameters, i.e. every LoRA-injected one.
+        # smoke_test_attention_checkpointing.py caught exactly that.
+        from .checkpoint import checkpoint
 
         idx = getattr(self, "_ac_seq_idx", None)
         if idx is None:
@@ -193,7 +206,7 @@ def enable_attention_block_checkpointing(fraction: float = 1.0) -> None:
         # needs it added.
         run.__self__ = self
 
-        return comfy_checkpoint(run, inputs, tuple(self.parameters()), True)
+        return checkpoint(run, inputs, tuple(self.parameters()), True)
 
     patched_forward._seq_counter = 0  # first-forward block indices, see docstring
     current.forward = patched_forward

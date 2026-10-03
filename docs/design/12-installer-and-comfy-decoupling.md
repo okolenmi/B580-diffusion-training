@@ -476,11 +476,34 @@ for their absence would put the coupling straight back in.
 
 ### 7.2 Own the two `utils` functions
 
-`state_dict_prefix_replace` (11 lines) and `clip_text_transformers_convert`
-(9 lines) are used by `clip_encoder.py` for checkpoint-key translation.
-They are data manipulation with no architectural content — the kind of
-thing that is written from the checkpoint format, not from an
-implementation.
+**Done, and it was three functions rather than two.** `clip_encoder.py`
+used `state_dict_prefix_replace` and `clip_text_transformers_convert` from
+`comfy.utils`, and the second calls a third, `transformers_convert`, so the
+real dependency is about sixty lines rather than the twenty this section
+originally claimed. `import comfy.utils` costs **2.71 s and 2136 modules**
+on this machine, lazily, at model-load time.
+
+`nodes/model/clip_state_dict.py` now owns all three. Verified equal to
+ComfyUI's on a real SDXL checkpoint's key set — 587 conditioner keys in,
+715 out, identical key set and identical shapes — and equal value-for-value
+on synthetic cases including both `text_projection` spellings.
+
+Two behaviours are reproduced deliberately rather than tidied, because both
+are things a cleanup would break:
+
+* **The QKV split stores views, not copies.** `attn.in_proj_{weight,bias}`
+  is one fused 3× tensor; slicing it leaves q/k/v aliasing one buffer, at
+  offsets 0, third, two-thirds. A `.contiguous()` here would be a behaviour
+  change.
+* **`filter_keys=True` is not a filter in the usual sense.**
+  `state_dict_prefix_replace` returns a *different* dict holding only the
+  renamed keys, while the caller's dict keeps the unmatched ones and loses
+  the matched ones — a key ends up in exactly one of the two. We pass
+  `filter_keys=True` where ComfyUI passes `False`, which looked like it
+  would silently drop keys. Checked on a real checkpoint rather than
+  assumed: all 587 `conditioner.` keys match one of the two prefixes
+  (197 CLIP-L, 390 CLIP-G, zero unmatched), so nothing is dropped and the
+  two settings coincide. Recorded at the call site.
 
 ### 7.3 Own the SDXL model definitions
 

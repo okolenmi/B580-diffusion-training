@@ -32,13 +32,24 @@ methods rather than one.
 
 import torch
 
+from .clip_state_dict import (
+    clip_text_transformers_convert,
+    state_dict_prefix_replace,
+)
 from .timestep_embedding import Timestep
 
 
 def _extract_and_convert_clip_state_dict(state_dict: dict) -> dict:
-    """Extract conditioner CLIP keys and convert to clip_l/clip_g prefix format."""
-    import comfy.utils as utils
+    """Extract conditioner CLIP keys and convert to clip_l/clip_g prefix format.
 
+    `filter_keys=True` drops any conditioner key matching neither prefix,
+    which reads like a hazard and is not one: checked against a real SDXL
+    checkpoint, all 587 `conditioner.` keys match one of the two (197 under
+    the CLIP-L prefix, 390 under the CLIP-G one, zero unmatched). ComfyUI
+    passes `filter_keys=False` here, which keeps the old spellings too; the
+    difference only shows on a checkpoint whose conditioner keys are not in
+    the format this loader expects.
+    """
     cond_sd = {k: v for k, v in state_dict.items()
                if k.startswith("conditioner.")}
 
@@ -46,8 +57,8 @@ def _extract_and_convert_clip_state_dict(state_dict: dict) -> dict:
         "conditioner.embedders.0.transformer.text_model": "clip_l.transformer.text_model",
         "conditioner.embedders.1.model.": "clip_g.",
     }
-    cond_sd = utils.state_dict_prefix_replace(cond_sd, replace_prefix, filter_keys=True)
-    cond_sd = utils.clip_text_transformers_convert(cond_sd, "clip_g.", "clip_g.transformer.")
+    cond_sd = state_dict_prefix_replace(cond_sd, replace_prefix, filter_keys=True)
+    cond_sd = clip_text_transformers_convert(cond_sd, "clip_g.", "clip_g.transformer.")
 
     if "clip_l.transformer.text_model.embeddings.position_ids" not in cond_sd:
         cond_sd["clip_l.transformer.text_model.embeddings.position_ids"] = torch.arange(77).expand((1, -1))

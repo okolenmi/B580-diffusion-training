@@ -624,6 +624,19 @@ def test_one_failed_poll_does_not_cost_a_run_its_supervisor() -> None:
     sup = _supervisor(gw, executions=executions, poll=0.02, scratch_dir=scratch)
     check(sup.adopt(1) == 4242, "adopted the live child")
 
+    # Let the watcher's first poll happen on an *empty* file, so the replay
+    # window closes before the record below is written.
+    #
+    # Without this the test is a coin flip on a loaded machine, and it lost
+    # one gate run in ten. Adoption deliberately skips node records already
+    # in the file when it first sees them -- on a restart those were
+    # persisted by the previous process, and re-recording them would
+    # double-count. So a record written before that first poll is treated as
+    # pre-adoption history and correctly discarded, and this test, which is
+    # about riding out a transient error rather than about adoption, saw
+    # "0 results" and called it a lost write.
+    time.sleep(0.3)
+
     # A node record arrives and must still be persisted: proof the watcher
     # survived, rather than merely that the row has not moved yet.
     gw.write({"kind": "node", "node_id": "a", "ok": True,

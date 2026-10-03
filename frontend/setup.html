@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>First-run setup</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/setup.css">
+</head>
+<!--
+  No `has-rail` here, and deliberately: this page is reachable before the
+  installation is configured, which is the state in which the rail's other
+  destinations would all render nulls. The floating console is still
+  mounted by the shell, because a user who cannot get past this page needs
+  somewhere to see why -- which is the whole reason the wizard logs what it
+  does.
+-->
+<body class="layout-fixed setup-body">
+    <main class="content-area setup-main">
+        <header class="page-topbar">
+            <h1>First-run setup</h1>
+            <span class="page-sub">Checking this machine, then one question about paths</span>
+        </header>
+
+        <div class="page-body setup-body-inner">
+            <div id="setup-root" class="setup-root">
+                <!-- Replaced by views/install.js. The text is a real
+                     loading state rather than a spinner: the readiness
+                     call imports torch in a subprocess and takes about a
+                     second, and a blank page for a second reads as broken. -->
+                <p class="setup-note text-dim">Checking what is installed…</p>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+    <script type="module" src="/ui/js/views/install.js"></script>
+</body>
+</html>

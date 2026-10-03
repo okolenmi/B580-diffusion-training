@@ -2,10 +2,37 @@
 
 *[← design index](README.md)*
 
-**Status: plan, not built.** Nothing in this document exists yet. It is
-written down because the flow has decisions in it that are much cheaper to
-make now than to debug later — particularly the one about installing into
-a venv the user did not create.
+**Status: partly built, and one phase deliberately re-shaped.**
+
+Built, as a browser surface — see
+[ADR 0005](../decisions/0005-installer-as-browser-surface.md):
+
+* **Phase A** — the machine-readable requirement list
+  (`application/ports/requirements_manifest.py`), with the four tiers.
+* **Phase D** — first-run detection. `GET /api/v1/installer/state`, and
+  `POST /apply` is refused once configured.
+* **Phase E/G, read-only half** — the wizard at `/setup`, rendering the
+  readiness report and collecting the paths.
+
+**Phase B is not built as written.** This document proposed gating
+`run_server.sh` on the dependency check so the server refuses to start and
+explains. ADR 0005 records why that was re-shaped into a browser surface:
+the server starts in every state, and the same answer arrives where the
+user is already looking, with versions, the device, and a verdict.
+
+**Phase C (the opt-in download) is not built**, and the page says so rather
+than offering a button. It needs the venv decision this document keeps
+deferring: whether we may install into a venv the user did not create,
+under a constraints file that makes breaking their ComfyUI unreachable.
+
+**Phase F (two model roots) is untouched** and is independent of the wizard.
+
+Building Phase A surfaced a real bug in the resolution the wizard depends
+on: `checkpoints_dir` and `loras_dir` never consulted the settings store,
+so on a fresh checkout the model directories resolved to
+`<project_root>/checkpoints` while `comfy_dir` resolved correctly. The
+settings page and the training path disagreed about one machine. Fixed, and
+resolution now raises rather than inventing a directory nobody chose.
 
 ## The problem
 

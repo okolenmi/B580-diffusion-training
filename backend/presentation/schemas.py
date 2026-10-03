@@ -32,6 +32,8 @@ from ..application.ports.dataset_library import (
 )
 from ..application.ports.dataset_tasks import DatasetTask, TaskKind
 from ..application.ports.settings_store import SettingsChanges, SettingsView
+from ..application.use_cases.apply_installation import InstallationState
+from ..application.use_cases.check_requirements import ReadinessReport
 from ..domain.value_objects import GraphStatus
 
 
@@ -119,6 +121,121 @@ class SettingsIn(BaseModel):
 
 def settings_out(view: SettingsView) -> SettingsViewOut:
     return SettingsViewOut(stored=dict(view.stored), resolved=dict(view.resolved))
+
+
+# --------------------------------------------------------------------------
+# Installer (first run)
+# --------------------------------------------------------------------------
+
+
+class InstallerPackageOut(BaseModel):
+    """One manifest row and whether this machine has it.
+
+    `why` is on the row rather than in the wizard, so the sentence a user
+    reads about a missing package is written next to the requirement it
+    describes and cannot drift from it.
+    """
+
+    name: str
+    tier: str
+    why: str
+    installed: bool
+    installed_version: str | None
+    blocking: bool
+    approx_mb: int | None
+    never_install: bool
+
+
+class InstallerReadinessOut(BaseModel):
+    ready: bool
+    packages: list[InstallerPackageOut]
+    missing: list[str]
+    #: False when the package check already answered the question and the
+    #: device was never asked. A client must not render "no device" for a
+    #: machine nobody asked.
+    device_checked: bool
+    device_present: bool
+    device_name: str | None
+    device_total_memory_mb: float | None
+    device_reason: str | None
+    device_detail: str | None
+    #: What a full install would fetch, counting only installable absences.
+    approx_download_mb: int
+
+
+class InstallerStateOut(BaseModel):
+    configured: bool
+    resolved_comfy_dir: str | None
+    resolved_checkpoints_dir: str | None
+    resolved_loras_dir: str | None
+    missing: list[str]
+
+
+class InstallerApplyIn(BaseModel):
+    """The paths the wizard collected. All optional -- an absent key is
+    left alone, so a user who accepts every default sends none of them."""
+
+    comfy_dir: str | None = None
+    checkpoints_dir: str | None = None
+    loras_dir: str | None = None
+    models_dir: str | None = None
+
+    def to_changes(self) -> SettingsChanges:
+        return SettingsChanges(
+            comfy_dir=self.comfy_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            loras_dir=self.loras_dir,
+            models_dir=self.models_dir,
+        )
+
+
+class InstallerApplyOut(BaseModel):
+    """The fresh settings view plus the new state, in one response.
+
+    Both, because "did that finish the wizard" is the question the client
+    asks next and answering it from the server's own post-write read is
+    what stops the wizard guessing.
+    """
+
+    settings: dict[str, Any]
+    state: dict[str, Any]
+
+
+def readiness_out(report: ReadinessReport) -> InstallerReadinessOut:
+    return InstallerReadinessOut(
+        ready=report.ready,
+        packages=[
+            InstallerPackageOut(
+                name=row.name,
+                tier=row.requirement.tier,
+                why=row.requirement.why,
+                installed=row.satisfied,
+                installed_version=row.installed_version,
+                blocking=row.blocking,
+                approx_mb=row.requirement.approx_mb,
+                never_install=row.requirement.never_install,
+            )
+            for row in report.packages
+        ],
+        missing=[row.name for row in report.missing],
+        device_checked=report.device_checked,
+        device_present=report.device_present,
+        device_name=report.device_name,
+        device_total_memory_mb=report.device_total_memory_mb,
+        device_reason=report.device_reason,
+        device_detail=report.device_detail,
+        approx_download_mb=report.approx_download_mb,
+    )
+
+
+def state_out(state: InstallationState) -> InstallerStateOut:
+    return InstallerStateOut(
+        configured=state.configured,
+        resolved_comfy_dir=state.resolved_comfy_dir,
+        resolved_checkpoints_dir=state.resolved_checkpoints_dir,
+        resolved_loras_dir=state.resolved_loras_dir,
+        missing=list(state.missing),
+    )
 
 
 # --------------------------------------------------------------------------

@@ -30,6 +30,11 @@ from backend.application.ports.config_inspector import (
     ConfigSummary,
     StartOption,
 )
+from backend.application.ports.environment import (
+    DeviceProbe,
+    DeviceReport,
+    MetadataPackageInventory,
+)
 from backend.application.ports.graph_execution_repository import (
     GraphExecutionRepository,
 )
@@ -45,23 +50,26 @@ from backend.application.lifecycle_writer import (
     ExecutionLifecycleWriter,
 )
 from backend.application.services import (
-    MonitorServices,
     ApplicationServices,
     AssetServices,
     ConfigServices,
     DatasetServices,
     GraphServices,
+    InstallerServices,
+    MonitorServices,
     SettingsServices,
 )
 from backend.application.use_cases import (
-    SubscribeMonitor,
+    ApplyInstallation,
     BrowseAssets,
     BulkUpdateDatasetItems,
+    CheckRequirements,
     CommitDatasetItems,
     CreateDataset,
     DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
+    DescribeRequirements,
     DiscardDatasetItems,
     GetConfig,
     GetConfigOptions,
@@ -89,8 +97,9 @@ from backend.application.use_cases import (
     StartDatasetTask,
     StartGraphExecution,
     StopDatasetTask,
-    SweepExecutionScratch,
     StopGraphExecution,
+    SubscribeMonitor,
+    SweepExecutionScratch,
     UpdateConfig,
     UpdateDatasetItem,
     UpdateSettings,
@@ -758,6 +767,29 @@ def fixture_graph_registry() -> NodeRegistry:
     return NodeRegistry(scan=lambda: (dict(FIXTURE_NODES), ()))
 
 
+class FakeDeviceProbe(DeviceProbe):
+    """A device that is always there, for tests that are not about it.
+
+    The real probe spawns a subprocess that imports torch: correct, and
+    about 1.7 s per call on this machine. No unit test should pay that, and
+    a test suite that did would be reporting on how loaded the box is. The
+    "device present" default matches this project's only supported card
+    (ADR 0004), so a test that forgets to stub it is not reporting a
+    surprise.
+    """
+
+    def __init__(self, report: DeviceReport | None = None) -> None:
+        self._report = report or DeviceReport(
+            present=True, backend="xpu", name="Intel(R) Arc(TM) B580 Graphics",
+            total_memory_mb=12216,
+        )
+        self.calls = 0
+
+    def report(self) -> DeviceReport:
+        self.calls += 1
+        return self._report
+
+
 def build_services(
     *,
     events: RecordingEventBus | None = None,
@@ -779,6 +811,7 @@ def build_services(
     graph_library: GraphLibrary | None = None,
     graph_supervisor: GraphExecutionSupervisor | None = None,
     monitor_bus: MonitorBusPort | None = None,
+    device_probe: DeviceProbe | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
@@ -887,6 +920,14 @@ def build_services(
             read_raw=ReadConfigRaw(files=config_files, paths=paths),
             write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
+        ),
+        installer=InstallerServices(
+            check=CheckRequirements(
+                inventory=MetadataPackageInventory(),
+                device=device_probe or FakeDeviceProbe(),
+            ),
+            apply=ApplyInstallation(settings=settings_store),
+            manifest=DescribeRequirements(),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

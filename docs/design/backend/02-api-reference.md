@@ -73,6 +73,8 @@ the other processes it talks to. That is this document.
   | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found` | 404 | graphs |
   | `graph_execution_active`, `graph_execution_not_active` | 409 | graphs |
   | `node_diagnostics_failed` | 400 | graphs |
+  | `installer_not_allowed` | 409 | installer (a wizard write after this installation is configured) |
+  | `installer_busy` | 409 | installer (an install is already running in this process) |
 
 ## 2. Two boundary contracts clients must honour
 

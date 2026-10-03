@@ -1,0 +1,247 @@
+/* ---------------------------------------------------------------------------
+   setup.css -- first-run installer (/setup).
+
+   The one page that exists before the application is configured, so it
+   does not use the page chrome the rest of the UI assumes: no fixed
+   topbar offset beyond what is here, and a narrower measure, because
+   this screen is prose and rows rather than a workspace.
+
+   Sections:
+   1. layout      -- measure, spacing
+   2. verdict     -- the ready / not-ready banner
+   3. tiers       -- grouped package rows
+   4. package row -- state glyph, name, version, reason, size
+   5. device      -- the accelerator row, including "not checked"
+   6. fields      -- path inputs
+   7. actions     -- buttons
+   8. states      -- message box, links
+
+   Colours are tokens only. `is-missing` / `is-optional-missing` are
+   distinct on purpose: "missing and this stops you" and "missing and
+   something else degrades" are different facts, and a wizard that paints
+   them the same has thrown away the distinction it exists to draw.
+--------------------------------------------------------------------------- */
+
+.setup-body {
+    /* No rail on this page; nothing to offset. */
+    --setup-measure: 780px;
+}
+
+.setup-main {
+    background:
+        radial-gradient(1100px 520px at 50% -180px, var(--accent-soft), transparent 70%),
+        var(--bg);
+    min-height: 100vh;
+}
+
+.setup-body-inner {
+    max-width: var(--setup-measure);
+    margin: 0 auto;
+    padding: 8px 24px 96px;
+}
+
+.setup-step-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 28px 0 6px;
+}
+
+.setup-note {
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 8px 0;
+    max-width: 68ch;
+}
+
+/* ---- 2. Verdict ---------------------------------------------------------- */
+
+.setup-verdict {
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin: 14px 0 20px;
+    font-size: 14px;
+    background: var(--surface);
+}
+.setup-verdict.is-ok {
+    border-left-color: var(--green);
+}
+.setup-verdict.is-warn {
+    border-left-color: var(--amber, #f59e0b);
+}
+
+/* ---- 3. Tiers ------------------------------------------------------------ */
+
+.setup-tier {
+    margin: 22px 0 0;
+}
+.setup-tier-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 0 0 8px;
+}
+
+/* ---- 4. Package row ------------------------------------------------------ */
+
+.setup-pkg {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-areas:
+        "state name"
+        "state why"
+        "state size";
+    align-items: baseline;
+    column-gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    margin-bottom: 6px;
+}
+
+.setup-pkg-state {
+    grid-area: state;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.setup-pkg.is-ok .setup-pkg-state { color: var(--green); }
+.setup-pkg.is-missing { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.setup-pkg.is-missing .setup-pkg-state { color: var(--red); }
+/* Degraded, not broken: amber rather than red, and dimmed. */
+.setup-pkg.is-optional-missing { opacity: 0.72; }
+.setup-pkg.is-optional-missing .setup-pkg-state { color: var(--text-dim); }
+
+.setup-pkg-name {
+    grid-area: name;
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+.setup-pkg-version { font-size: 11px; }
+.setup-pkg-why {
+    grid-area: why;
+    font-size: 12px;
+    line-height: 1.45;
+}
+.setup-pkg-size {
+    grid-area: size;
+    font-size: 11px;
+    font-family: var(--font-mono);
+}
+
+/* ---- 5. Device ----------------------------------------------------------- */
+
+.setup-device {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    margin: 16px 0 4px;
+    font-size: 13px;
+}
+.setup-device-state {
+    width: 18px;
+    text-align: center;
+    font-weight: 600;
+}
+.setup-device.is-ok .setup-device-state { color: var(--green); }
+.setup-device.is-missing .setup-device-state { color: var(--red); }
+/* "Not asked" is not "absent": deliberately neutral, and it says so in
+   words rather than relying on the colour. */
+.setup-device.is-unknown { border-style: dashed; }
+.setup-device.is-unknown .setup-device-state { color: var(--text-dim); }
+.setup-device-detail {
+    display: block;
+    font-size: 11px;
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    word-break: break-word;
+}
+
+/* ---- 6. Fields ----------------------------------------------------------- */
+
+.setup-field {
+    display: block;
+    margin: 16px 0 0;
+}
+.setup-field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+.setup-field-hint {
+    display: block;
+    font-size: 11px;
+    margin-top: 4px;
+}
+.setup-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.setup-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---- 7. Actions ---------------------------------------------------------- */
+
+.setup-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 28px;
+}
+.setup-actions .btn {
+    padding: 9px 18px;
+    font-size: 13px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface-alt);
+    color: var(--text);
+    cursor: pointer;
+}
+.setup-actions .btn:hover:not(:disabled) { border-color: var(--accent); }
+.setup-actions .btn:disabled { opacity: 0.5; cursor: default; }
+.setup-actions .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 500;
+}
+
+/* ---- 8. States ----------------------------------------------------------- */
+
+.setup-error {
+    margin: 14px 0 0;
+    padding: 9px 12px;
+    font-size: 12px;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+    color: var(--text);
+    font-family: var(--font-mono);
+    word-break: break-word;
+}
+
+.setup-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+.setup-link:hover { text-decoration: underline; }
+
+.setup-root { min-height: 240px; }

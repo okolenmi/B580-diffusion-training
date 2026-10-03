@@ -23,6 +23,7 @@ distance the reader happens to look.
 | [0002](0002-graph-training-in-process.md) | Graph training runs in the API process | A device fault takes the server with it |
 | [0003](0003-adopt-surviving-trainers.md) | Adopting trainers that outlived a restart | The supervisor watches a pid it did not spawn |
 | [0004](0004-b580-only.md) | Intel Arc B580 only; `xpu` hardcoded | Nothing runs on another accelerator |
+| [0005](0005-installer-as-browser-surface.md) | First-run installer is a browser surface, not a shell gate | No preflight before start; a missing package surfaces in the UI instead |
 
 Numbers these documents assert are checked by `scripts/check_docs.py`
 against the code, so they cannot drift silently.

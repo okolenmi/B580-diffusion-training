@@ -35,17 +35,21 @@ from .application.services import (
     ConfigServices,
     DatasetServices,
     GraphServices,
+    InstallerServices,
     MonitorServices,
     SettingsServices,
 )
 from .application.use_cases import (
+    ApplyInstallation,
     BrowseAssets,
     BulkUpdateDatasetItems,
+    CheckRequirements,
     CommitDatasetItems,
     CreateDataset,
     DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
+    DescribeRequirements,
     DiscardDatasetItems,
     GetConfig,
     GetConfigOptions,
@@ -110,6 +114,10 @@ from .infrastructure.persistence.graph_execution_repository import (
 )
 from .infrastructure.persistence.graph_library import SqliteGraphLibrary
 from .infrastructure.persistence.sqlite import SqliteDatabase
+from .application.ports.environment import (
+    MetadataPackageInventory,
+    TorchDeviceProbe,
+)
 from .infrastructure.settings_store import SqliteSettingsStore
 from .infrastructure.workspace import WorkspaceLayout
 
@@ -226,6 +234,14 @@ def build_container(settings: Settings) -> Container:
             read_raw=ReadConfigRaw(files=config_files, paths=paths),
             write_raw=WriteConfigRaw(files=config_files, paths=paths),
             options=GetConfigOptions(options=config_options),
+        ),
+        installer=InstallerServices(
+            check=CheckRequirements(
+                inventory=MetadataPackageInventory(),
+                device=TorchDeviceProbe(backend="xpu"),
+            ),
+            apply=ApplyInstallation(settings=settings_store),
+            manifest=DescribeRequirements(),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from .apply_installation import (
+    ApplyInstallation,
+    InstallationState,
+)
 from .browse_assets import BrowseAssets
 from .bulk_update_dataset_items import BulkUpdateDatasetItems
+from .check_requirements import (
+    CheckRequirements,
+    DescribeRequirements,
+    ReadinessReport,
+    RequirementStatus,
+)
 from .commit_dataset_items import CommitDatasetItems
 from .create_dataset import CreateDataset
 from .delete_dataset import DeleteDataset
@@ -50,7 +60,13 @@ from .validate_graph import ValidateGraph
 from .write_config_raw import WriteConfigRaw
 
 __all__ = [
+    "ApplyInstallation",
     "BrowseAssets",
+    "CheckRequirements",
+    "DescribeRequirements",
+    "InstallationState",
+    "ReadinessReport",
+    "RequirementStatus",
     "BulkUpdateDatasetItems",
     "CommitDatasetItems",
     "CreateDataset",

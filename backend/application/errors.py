@@ -288,3 +288,36 @@ class GraphNotFoundError(ApplicationError):
 
     code = "graph_not_found"
     status_code = 404
+
+class InstallerNotAllowedError(ApplicationError):
+    """An installer write arrived while this installation is configured.
+
+    The installer is a local surface with a real capability -- it writes
+    settings and would run package installs -- so it is behind the same
+    Host/Origin guard as everything else (ADR 0001) and it is only
+    *reachable* while the installation is unconfigured. Once the settings
+    say the paths are chosen, an installer write is refused rather than
+    silently applied: a configured machine has a user who did not ask to
+    be re-configured by a browser tab that happened to load the wizard.
+
+    409, not 403: nothing about the request was malformed or forbidden in
+    the transport sense -- it named a legitimate operation, at a moment
+    when that operation does not apply. That is a conflict with current
+    state, which is what 409 means.
+    """
+
+    code = "installer_not_allowed"
+    status_code = 409
+
+
+class InstallerBusyError(ApplicationError):
+    """An install is already running in this server process.
+
+    Two concurrent installs into one interpreter would race on the same
+    site-packages and produce a half-installed environment that satisfies
+    neither. 409 for the same reason as `installer_not_allowed`: the
+    request is well-formed and the state does not allow it now.
+    """
+
+    code = "installer_busy"
+    status_code = 409

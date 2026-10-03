@@ -115,4 +115,17 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     def settings_page() -> FileResponse:
         return FileResponse(static_dir / "settings.html", headers=_NO_CACHE)
 
+    @app.get("/setup", include_in_schema=False)
+    def setup_page() -> FileResponse:
+        """The first-run installer.
+
+        Served unconditionally rather than only when unconfigured: the
+        page itself checks `/installer/state` and steps aside with a link to
+        Settings if setup is already done. Redirecting here instead would
+        make the *page* unreachable after first run, which is a worse
+        answer than a page that says so -- and this way the address is
+        something a user can always come back to and read.
+        """
+        return FileResponse(static_dir / "setup.html", headers=_NO_CACHE)
+
     app.mount("/ui", _UiStaticFiles(directory=static_dir), name="ui")

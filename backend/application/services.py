@@ -22,8 +22,13 @@ from dataclasses import dataclass
 
 from .event_publisher import EventPublisher
 from .ports.event_bus import EventBus
+from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
 from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
+from .use_cases.check_requirements import (
+    CheckRequirements,
+    DescribeRequirements,
+)
 from .use_cases.commit_dataset_items import CommitDatasetItems
 from .use_cases.create_dataset import CreateDataset
 from .use_cases.delete_dataset import DeleteDataset
@@ -81,6 +86,21 @@ class ConfigServices:
 class SettingsServices:
     read: GetSettings
     update: UpdateSettings
+
+
+@dataclass(frozen=True, slots=True)
+class InstallerServices:
+    """First-run: what this machine can do, and writing the paths once.
+
+    A separate group from Settings because it is a *different capability*,
+    not a different route over the same one: `check` runs a device probe
+    that imports torch in a subprocess, and `apply` is refused once the
+    installation is configured. Neither belongs behind the settings keys.
+    """
+
+    check: CheckRequirements
+    apply: ApplyInstallation
+    manifest: DescribeRequirements
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +171,7 @@ class ApplicationServices:
     # config / settings / assets domains (M3)
     config: ConfigServices
     settings: SettingsServices
+    installer: InstallerServices
     assets: AssetServices
     # dataset domain (M3b)
     datasets: DatasetServices

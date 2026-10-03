@@ -22,6 +22,7 @@ from .api import (
     events,
     graphs,
     health,
+    installer,
     monitor,
     settings,
 )
@@ -52,6 +53,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(config.router)
     app.include_router(settings.router)
+    app.include_router(installer.router)
     app.include_router(assets.router)
     app.include_router(datasets.router)
     app.include_router(graphs.router)

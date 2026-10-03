@@ -59,6 +59,43 @@ def comfy_dir(project_root: Path, get_setting: GetSetting) -> Path:
         raise
 
 
+def _comfy_or_store(project_root: Path, get_setting: GetSetting) -> Path:
+    """The ComfyUI directory, from `paths` or failing over to the store.
+
+    `paths.get_comfy_dir()` knows the environment, `.env` and the workspace
+    conventions, and raises when none of them answer. It cannot know about
+    the settings *store*, because it is not part of this backend's wiring --
+    so the store has to be consulted here, and every resolver that derives
+    a path from ComfyUI's layout has to come through this function to do it.
+
+    That last clause is the bug this exists to fix. `checkpoints_dir` and
+    `loras_dir` used to call `paths.get_checkpoints_dir()` directly, which
+    resolves `<comfy>/models/checkpoints` and then falls back to
+    `<project_root>/checkpoints` -- a fallback that fires precisely when
+    ComfyUI is unresolvable, and never consults the store. So on a fresh
+    checkout, where the only ComfyUI that exists is the one the user just
+    told us about through Settings, the model directories pointed at the
+    *project root* while `comfy_dir` correctly pointed at the real thing.
+
+    Measured on an isolated fresh-checkout tree (no `.env`, so nothing but
+    the store to go on):
+
+        comfy_dir       -> <scratch>/ComfyUI          correct
+        checkpoints_dir -> <scratch>/checkpoints       wrong
+        loras_dir       -> <scratch>/loras             wrong
+
+    Two screens disagreed about the same machine, which is the failure this
+    project treats as a blocker: the settings page showed one directory and
+    training read another.
+    """
+    try:
+        return comfy_dir(project_root, get_setting)
+    except RuntimeError:
+        # Already raised once and already tried the store; re-raising keeps
+        # the original message rather than inventing a second one here.
+        raise
+
+
 def venv_python(project_root: Path, get_setting: GetSetting) -> str:
     import_paths(project_root)  # load repo .env before reading env
     # A *configured* interpreter is used as-is, never silently
@@ -115,7 +152,12 @@ def checkpoints_dir(project_root: Path, get_setting: GetSetting) -> Path:
     models = models_dir(project_root, get_setting)
     if models is not None:
         return models / "checkpoints"
-    return import_paths(project_root).get_checkpoints_dir()
+    # ComfyUI's own layout, resolved through the store-aware comfy_dir
+    # rather than through paths directly -- see _comfy_or_store. With no
+    # ComfyUI resolvable at all, this raises instead of inventing
+    # <project_root>/checkpoints: a directory the user never chose, which
+    # reads as configured when nothing is.
+    return _comfy_or_store(project_root, get_setting) / "models" / "checkpoints"
 
 
 def loras_dir(project_root: Path, get_setting: GetSetting) -> Path:
@@ -125,7 +167,7 @@ def loras_dir(project_root: Path, get_setting: GetSetting) -> Path:
     models = models_dir(project_root, get_setting)
     if models is not None:
         return models / "loras"
-    return import_paths(project_root).get_loras_dir()
+    return _comfy_or_store(project_root, get_setting) / "models" / "loras"
 
 
 def datasets_dir(project_root: Path) -> Path:

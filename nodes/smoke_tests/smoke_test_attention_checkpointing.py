@@ -294,15 +294,15 @@ def check_fraction_knob():
     # comfy's per call; it now imports nodes.model/checkpoint.py's, so the
     # counting has to happen there. Patching the old target would have
     # counted zero calls and looked like a density bug.
-    import nodes.model.checkpoint as our_ckpt
-    real_checkpoint = our_ckpt.checkpoint
+    import nodes.model.checkpoint as ckpt_module
+    real_checkpoint = ckpt_module.checkpoint
     calls = {"n": 0}
 
     def counting_checkpoint(*a, **k):
         calls["n"] += 1
         return real_checkpoint(*a, **k)
 
-    our_ckpt.checkpoint = counting_checkpoint  # patched_forward imports it per call
+    ckpt_module.checkpoint = counting_checkpoint  # patched_forward imports it per call
     try:
         blocks = [cls() for _ in range(4)]
         for blk in blocks:
@@ -310,7 +310,7 @@ def check_fraction_knob():
                       transformer_options={})
             out.sum().backward()
     finally:
-        our_ckpt.checkpoint = real_checkpoint
+        ckpt_module.checkpoint = real_checkpoint
     assert [blk._ac_seq_idx for blk in blocks] == [0, 1, 2, 3]
     assert calls["n"] == 2, f"density 0.5 must checkpoint exactly 2 of 4, got {calls['n']}"
     assert blocks[0].lora.grad is not None and blocks[1].lora.grad is not None, \
@@ -324,14 +324,14 @@ def check_fraction_knob():
     enable_attention_block_checkpointing(fraction=0.75)
     assert getattr(cls, "_attention_block_checkpointing_enabled", False)
     calls["n"] = 0
-    our_ckpt.checkpoint = counting_checkpoint
+    ckpt_module.checkpoint = counting_checkpoint
     try:
         blocks = [cls() for _ in range(8)]
         for blk in blocks:
             blk(torch.randn(4, requires_grad=True), context=None,
                 transformer_options={})
     finally:
-        our_ckpt.checkpoint = real_checkpoint
+        ckpt_module.checkpoint = real_checkpoint
     assert calls["n"] == 6, f"density 0.75 must checkpoint 6 of 8, got {calls['n']}"
     print("    PASS: fraction=0 unpatched + sentinel-free; density 0.5 ckpted "
           "idx 0,2 and density 0.75 ckpted 6/8; gradients real for all 4 blocks")

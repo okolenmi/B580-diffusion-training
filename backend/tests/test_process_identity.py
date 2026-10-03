@@ -28,7 +28,7 @@ from backend.infrastructure.process_identity import (
     _read_cmdline,
     cmdline_mentions,
 )
-from backend.tests.support import check, finish
+from backend.tests.support import check, finish, wait_until
 
 #: Not a substring of anything a test process is invoked with.
 ABSENT = "zzz-marker-that-is-in-no-cmdline-zzz"
@@ -99,6 +99,22 @@ def test_genuinely_foreign_process_is_still_false() -> None:
         check(cmdline_mentions(sleeper.pid, ABSENT) is False,
               "a real mismatch is still False -- the guard that refuses to "
               "signal a stranger must not be softened")
+        # Poll, do not read once. `cmdline_mentions` returns None when the
+        # kernel has a pid but /proc/<pid>/cmdline is not yet readable,
+        # which is the window between fork and execve. Reading once turned
+        # that window into "a real match is still True" failing about one
+        # gate run in six under load -- the assertion was about the guard's
+        # behaviour and was reporting the *scheduler's*.
+        #
+        # The same shape as `_collect` in test_graph_task_gateway, which
+        # read an event file once where it had to poll for the same reason.
+        matched = wait_until(
+            lambda: cmdline_mentions(sleeper.pid, "sleep") is not None,
+            timeout=5.0,
+        )
+        check(matched,
+              "and /proc/<pid>/cmdline becomes readable, rather than being "
+              "read during the fork window and reported as None")
         check(cmdline_mentions(sleeper.pid, "sleep") is True,
               "and a real match is still True")
     finally:

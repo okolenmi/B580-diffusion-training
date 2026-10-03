@@ -167,6 +167,26 @@ It prints one line per check and exits non-zero on any failure. What it
 does *not* cover is listed in
 `docs/design/backend/06-visual-smoke.md`.
 
+### The bare-checkout check
+
+`backend/tests/run_all.py` ends with a self-check that runs two
+representative files under ComfyUI settings this machine does not have —
+`COMFY_DIR` removed, and pointing at a path that does not exist — and fails
+the run if either errors. That catches the suite depending on this
+checkout's `.env`, but it is a probe rather than a proof: `.env` resolves
+relative to `paths.py`, so only the second variant can actually fail.
+
+The proof is a `git archive` of HEAD, which is what a fresh clone looks
+like, extracted somewhere with nothing of yours in it:
+
+```bash
+scripts/check_bare_checkout.sh
+```
+
+It is slow, so it is not in `full_gate.sh` — run it when touching
+`backend/tests/support.py`, `paths.py`, or anything that resolves a
+ComfyUI path. `run_all.py`'s self-check is the cheap guard in between.
+
 ### Backend environment variables
 
 | Variable | Effect |

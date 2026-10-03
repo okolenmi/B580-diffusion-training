@@ -15,20 +15,25 @@ stating:
 * the ring holds **lifecycle** events only. Deltas are coalesced per
   client anyway, and the value of an old progress sample is negative --
   so buffering them would cost memory for nothing.
-* sequence numbers are **process-local**. They start at 1 and there is no
-  attempt to make them comparable across a restart; a client asking for
-  an id from a previous process is told `complete=False` and refetches.
+* sequence numbers are **process-local**. They start at 1 in every
+  process, so they are not comparable across a restart on their own.
+  What travels to a client is therefore an `EventCursor` -- the number
+  paired with this process's epoch -- and a cursor whose epoch is not ours
+  is recognised immediately, rather than only while it happens to be ahead
+  of everything we have published.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections import deque
 
 from ...application.limits import EVENT_REPLAY_RING
 from ...application.ports.event_bus import (
     EventBus,
+    EventCursor,
     EventHandler,
     Replay,
     Sequenced,
@@ -61,6 +66,15 @@ class CallbackEventBus(EventBus):
         self._handlers: list[EventHandler] = []
         self._replay: deque[Sequenced] = deque(maxlen=replay_size)
         self._next_seq = 1
+        # Minted per bus, so two processes never share one and a restart
+        # always changes it. Not derived from the clock: a machine that
+        # restarts twice inside the same second would repeat it, and the
+        # whole point is that this value cannot repeat.
+        self._epoch = uuid.uuid4().hex[:12]
+
+    @property
+    def epoch(self) -> str:
+        return self._epoch
 
     # -- publish ---------------------------------------------------------
 
@@ -92,13 +106,27 @@ class CallbackEventBus(EventBus):
 
     # -- replay ----------------------------------------------------------
 
-    def replay_since(self, last_seq: int) -> Replay:
-        """Buffered lifecycle events after ``last_seq``.
+    def replay_since(self, cursor: EventCursor | None) -> Replay:
+        """Buffered lifecycle events after ``cursor``.
 
         Subscribe first, then ask: events published in between are
         delivered live, so a caller has to drop anything the replay
         already covered (`presentation/sse.py` does, by seq).
+
+        A cursor from another process is refused outright. Before the
+        cursor existed, the only way to spot one was to notice that its
+        number was ahead of anything published here -- which stops being
+        true the moment this process publishes past it, and from then on a
+        client's id from a dead process is served as if it were current.
         """
+        if cursor is None:
+            # Nothing usable was sent. Whatever the ring holds, it cannot
+            # be promised to cover a gap the client never quantified.
+            return Replay(events=(), complete=False)
+        if cursor.epoch != self._epoch:
+            return Replay(events=(), complete=False)
+
+        last_seq = cursor.seq
         with self._lock:
             newest = self._next_seq - 1
             ring = tuple(self._replay)

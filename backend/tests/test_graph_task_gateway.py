@@ -126,6 +126,23 @@ def _collect(
         time.sleep(0.02)
 
 
+def _why_silent(launch: GraphTaskLaunch) -> str:
+    """What the child said, for a check that found it silent.
+
+    A child that writes no records has usually written *something* to its
+    log -- an import error, a device fault, a traceback -- and a test that
+    reports only "no records" throws that away. This fires about one suite
+    run in five, on a loaded machine, so "it did not start" is not a
+    diagnosis.
+    """
+    if not launch.log_path.exists():
+        return "the child wrote no log at all"
+    text = launch.log_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return "the child's log is empty"
+    return "the child's log says: " + " | ".join(text.splitlines()[-3:])
+
+
 def _is_node(event) -> bool:
     return event.kind is EventKind.NODE
 
@@ -318,11 +335,14 @@ def test_a_sigterm_stops_the_run_the_same_way_a_sigint_does() -> None:
     pid = GATEWAY.spawn(launch)
     tail = ExecutionEventTail(launch.event_path)
     events = _collect(tail, pid, until=lambda seen: any(map(_is_node, seen)))
+    if not any(map(_is_node, events)):
+        print(f"    DIAG {_why_silent(launch)}")
     check(any(map(_is_node, events)),
           "the child got past startup and started building nodes")
     check(
         cmdline_mentions(pid, "backend.infrastructure.graph_task_worker"),
-        f"and pid {pid} is still our graph child, so it is safe to signal",
+        f"and pid {pid} is still our graph child, so it is safe to signal "
+        f"({_why_silent(launch)})",
     )
 
     os.kill(pid, signal.SIGTERM)

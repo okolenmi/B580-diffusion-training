@@ -25,9 +25,9 @@ and the subscription is lost.
 reconnection — **but only if the server emitted an SSE `id:` field** for
 the frames it wants tracked. This server did not, so nothing was ever
 sent. The feature therefore requires the server to opt in: every bus
-event is written as an `id: <seq>` line followed by its `data:` line
-(`_frame` in `presentation/sse.py`). Without that line the header is
-absent and this note describes a browser that does not exist.
+event is written as an `id: <cursor>` line followed by its `data:`
+line (`_frame` in `presentation/sse.py`). Without that line the header
+is absent and this note describes a browser that does not exist.
 
 The sequence is *also* inside the JSON payload. Redundant on purpose: it
 costs ~12 bytes and it means a reader that only consumes `data` — the
@@ -54,6 +54,39 @@ answered with a partial replay from the new one. It gets
 without this feature. The alternative — pretending the numbers are
 comparable — would hand a client a plausible-looking wrong replay.
 
+**Which is why the id on the wire is a cursor, not a number.** See §1a.
+
+### 1a. The epoch: what makes "a previous process" detectable
+
+A bare `seq` cannot say which process issued it, and the only way to spot
+a foreign one was to notice that its number was *ahead* of everything this
+process had published. That test works right up until the moment this
+process publishes past it — and a client reconnecting late after a restart
+is exactly that case. Measured on the round-3 reproduction: with 60 events
+published, `replay_since(40)` returned `complete=True` and events 41..60,
+so a tab was told its history was continuous when it was not, and skipped
+the refetch that would have corrected it.
+
+So the bus mints an **epoch** per process — `uuid4().hex[:12]`, never
+derived from the clock, because a machine that restarts twice in one
+second would repeat a timestamp — and the id on the wire is
+`"{epoch}:{seq}"`. A cursor whose epoch is not ours is refused outright,
+whatever its number. That is the whole fix, and it costs the client
+nothing: `EventSource` hands the header back verbatim and never parses it,
+so the epoch is opaque to the browser and the frontend never sees it.
+
+The bare `seq` is still in the JSON payload, for a reader that only
+consumes `data`. Only the framed id is used for reconnection, and only the
+bus reads it. A header that is absent, malformed, or a bare number — a
+client predating this — is treated as no header at all, because a number
+alone cannot be acted on.
+
+One consequence worth naming: `replayed_through`, the watermark the live
+path drops up to, falls back to the client's own cursor **only when the
+epoch matches**. A foreign cursor says nothing about how far into *this*
+stream the client has read, so defaulting to its number would make the
+live path discard the new stream's opening events.
+
 ### 2. A bounded replay ring for lifecycle events only
 
 The last `REPLAY_RING` **lifecycle** events, in a deque, on the bus.
@@ -70,10 +103,12 @@ reasoning across a reconnect instead of within one connection.
 | Client sends | Answer |
 |---|---|
 | nothing (first connect) | stream live, as today |
-| `seq` still in the ring | replay everything after it, then go live |
-| `seq` older than the ring, or from a previous process | `resync_required`, then go live |
+| a cursor for this epoch, `seq` still in the ring | replay everything after it, then go live |
+| a cursor for this epoch, `seq` older than the ring | `resync_required`, then go live |
+| a cursor for another epoch, at any `seq` | `resync_required`, then go live |
+| something unparsable, including a bare number | treated as nothing |
 
-The third case is not an error. The client cannot be given a complete
+The last three cases are not an error. The client cannot be given a complete
 replay, and telling it so is the only honest answer — the alternative is
 a stream that starts mid-history and looks complete.
 

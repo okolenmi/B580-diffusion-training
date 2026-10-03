@@ -53,7 +53,7 @@ from datetime import datetime, UTC
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
-from ..application.ports.event_bus import EventBus, Replay, Sequenced
+from ..application.ports.event_bus import EventBus, EventCursor, Sequenced
 from ..domain.events import DomainEvent
 from ..application.event_delivery import delivery_class, is_coalescible
 from ..application.limits import SSE_HEARTBEAT_SECONDS, SSE_QUEUE_MAX
@@ -237,30 +237,33 @@ class ClientBuffer:
         return seq, payload
 
 
-def _last_event_id(request: Request) -> int | None:
+def _last_event_id(request: Request) -> EventCursor | None:
     """The client's ``Last-Event-ID``, if it is one we can use.
 
     `EventSource` sends it automatically on every automatic reconnect, so
     this is not a client-side change -- it is what the browser already
-    does, finally being read. A header that is absent, unparsable, or
-    not a positive integer is treated as *absent*: the client then gets
-    live events and ``resync_required`` if the bus cannot say more, which
-    is the same place it would have started without this feature.
+    does, finally being read.
+
+    What comes back is an ``EventCursor``: ``"{epoch}:{seq}"``, opaque to
+    the client, which never parses it and cannot be asked to. A header that
+    is absent, or is a bare number from a client that predates the epoch,
+    is treated as *absent* -- the client then gets live events and
+    ``resync_required``, which is the same place it would have started
+    without this feature. That is not a graceful degradation to shrug at:
+    it is the honest answer, because a bare number cannot say which
+    process issued it.
     """
     raw = request.headers.get("last-event-id")
     if raw is None:
         return None
-    try:
-        value = int(raw.strip())
-    except (TypeError, ValueError):
-        logger.info("ignoring unparsable Last-Event-ID %r", raw)
+    cursor = EventCursor.parse(raw)
+    if cursor is None:
+        logger.info("ignoring unusable Last-Event-ID %r", raw)
         return None
-    if value <= 0:
-        return None
-    return value
+    return cursor
 
 
-def _frame(payload: str, seq: int | None) -> str:
+def _frame(payload: str, seq: int | None, epoch: str | None) -> str:
     """One SSE frame: an ``id:`` line, then the ``data:`` line.
 
     The ``id:`` line is the load-bearing half. `EventSource` tracks the
@@ -270,14 +273,24 @@ def _frame(payload: str, seq: int | None) -> str:
     track the sequence itself, which is the client-side change the design
     note says is not needed.
 
-    The sequence is *also* inside the JSON payload, which is redundant on
-    purpose: it costs 12 bytes and it means a client that consumes
-    `data` without touching the SSE framing (the tests, and any
-    hand-written reader) still has the id it needs to reconnect.
+    The id is the epoch and the sequence together, ``"{epoch}:{seq}"``,
+    because a bare sequence cannot be acted on: every process numbers its
+    events from 1, so a number from a previous process is only
+    distinguishable while it happens to be ahead of everything published
+    here. Once the new process has published past it -- which is exactly
+    what happens when a client reconnects late after a restart -- the
+    number looks valid and the client is told its history is continuous
+    when it is not. Pairing them removes the question.
+
+    The bare sequence is *also* inside the JSON payload, which is
+    redundant on purpose: it costs 12 bytes and it means a client that
+    consumes `data` without touching the SSE framing (the tests, and any
+    hand-written reader) still has the position it needs to reason about.
+    Only the framed id is used for reconnection, and only the bus reads it.
     """
-    if seq is None:
+    if seq is None or epoch is None:
         return f"data: {payload}\n\n"
-    return f"id: {seq}\ndata: {payload}\n\n"
+    return f"id: {epoch}:{seq}\ndata: {payload}\n\n"
 
 
 async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
@@ -301,14 +314,29 @@ async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
         )
 
     subscription = bus.subscribe(on_event)
-    replay = (
-        bus.replay_since(last_seen) if last_seen is not None
-        else Replay(events=(), complete=True)
-    )
+    # Asked unconditionally, including for a first connect: the bus knows
+    # that a client which sent nothing cannot be told its history is
+    # complete, and saying so here as well meant two places to keep in
+    # step. `last_seen is None` reaching it is a normal answer, not an
+    # error case.
+    replay = bus.replay_since(last_seen)
     # Nothing published while we were subscribing is above the replay's
     # reach, so this is the watermark the live path must skip back to.
+    #
+    # The fallback is the client's own cursor, but only when the cursor is
+    # from *this* process: the watermark means "how far into this stream
+    # the client has read", and a cursor from a previous process says
+    # nothing about that. Defaulting it to that number would make the live
+    # path discard the new stream's first events -- the client's old seq 40
+    # would suppress everything up to 40 here, which it has never seen.
+    known = (
+        last_seen
+        if last_seen is not None and last_seen.epoch == bus.epoch
+        else None
+    )
     replayed_through = max(
-        (item.seq for item in replay.events), default=last_seen or 0
+        (item.seq for item in replay.events),
+        default=known.seq if known is not None else 0,
     )
 
     async def generate():
@@ -336,7 +364,8 @@ async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
             yield f"data: {strict_dumps(opened)}\n\n"
             for missed in replay.events:
                 yield _frame(
-                    serialize_event(missed.event, missed.seq), missed.seq
+                    serialize_event(missed.event, missed.seq), missed.seq,
+                    bus.epoch,
                 )
             while True:
                 if await request.is_disconnected():
@@ -347,7 +376,7 @@ async def event_stream(bus: EventBus, request: Request) -> StreamingResponse:
                     continue
                 if seq is not None and seq <= replayed_through:
                     continue  # already delivered by the replay above
-                yield _frame(payload, seq)
+                yield _frame(payload, seq, bus.epoch)
         finally:
             subscription.close()
         logger.info(

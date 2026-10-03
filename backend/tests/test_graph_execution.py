@@ -820,8 +820,16 @@ def _retry_case(where: str) -> list[str]:
     case_db.initialize()
     case_repo = SqliteGraphExecutionRepository(case_db)
     clock = FakeClock()
-    writer = ExecutionLifecycleWriter(clock=clock, repository=case_repo,
-                                      events=RecordingEventBus())
+    # A real publisher: the supervisor announces each node's progress after
+    # storing it, and a None there would be logged as an exception on every
+    # single call -- burying the output this section exists to produce.
+    from backend.application.event_publisher import EventPublisher
+    from backend.infrastructure.events.callback_event_bus import CallbackEventBus
+
+    writer = ExecutionLifecycleWriter(
+        clock=clock, repository=case_repo,
+        events=EventPublisher(events=CallbackEventBus()),
+    )
 
     graph = GraphDefinition(nodes=tuple(
         GraphNodeSpec(id=f"n{i}", class_name="FloatConstantNode", params={})
@@ -847,7 +855,8 @@ def _retry_case(where: str) -> list[str]:
 
     writer.commit = commit
     supervisor = GraphExecutionSupervisor(
-        executions=case_repo, writer=writer, gateway=None, events=None,
+        executions=case_repo, writer=writer, gateway=None,
+        events=EventPublisher(events=CallbackEventBus()),
         clock=clock,
         scratch_dir=Path(tempfile.mkdtemp(prefix="backend-retry-scratch-")),
     )

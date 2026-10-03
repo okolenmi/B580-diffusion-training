@@ -27,6 +27,7 @@ from backend.domain.events import (
     GraphExecutionQueued,
     GraphExecutionStarted,
 )
+from backend.application.ports.event_bus import EventCursor
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.tests.support import check, finish
 
@@ -85,6 +86,20 @@ def test_sequence_numbers() -> None:
           "event_type is readable without unwrapping first")
 
 
+def _cursor(bus, seq: int) -> EventCursor:
+    """The cursor a client of *this* bus would hold after seeing ``seq``."""
+    return EventCursor(bus.epoch, seq)
+
+
+def _dead_cursor(seq: int) -> EventCursor:
+    """A cursor of the same shape, issued by a process that no longer runs.
+
+    Not a random string: a fixed one so a reader can see that nothing
+    depends on its value, only on its being different.
+    """
+    return EventCursor("0000deadbeef", seq)
+
+
 def test_ring_holds_lifecycle_only() -> None:
     print("\n== bus: the ring keeps lifecycle events and nothing else ==")
     bus = CallbackEventBus()
@@ -93,14 +108,14 @@ def test_ring_holds_lifecycle_only() -> None:
     bus.publish(completed())
     bus.publish(node_progressed())
 
-    replayed = [item.event_type for item in bus.replay_since(0).events]
+    replayed = [item.event_type for item in bus.replay_since(_cursor(bus, 0)).events]
     check(replayed == ["graph_execution_started", "graph_execution_finished"],
           f"a state sample and a delta are not ringed (got {replayed})")
     check(is_lifecycle("graph_execution_finished")
           and not is_lifecycle("graph_execution_progressed"),
           "and the exclusion is the delivery class, not a second list")
     check(
-        all(item.seq <= 4 for item in bus.replay_since(0).events),
+        all(item.seq <= 4 for item in bus.replay_since(_cursor(bus, 0)).events),
         "ringed items keep the numbers they were published with",
     )
 
@@ -112,23 +127,30 @@ def test_replay_since_truth_table() -> None:
     bus.publish(node_progressed())   # 2
     bus.publish(completed())    # 3
 
-    up_to_date = bus.replay_since(3)
+    up_to_date = bus.replay_since(_cursor(bus, 3))
     check(up_to_date.events == () and up_to_date.complete,
           "a client that saw everything gets nothing, and is told so")
 
-    behind = bus.replay_since(1)
+    behind = bus.replay_since(_cursor(bus, 1))
     check([item.seq for item in behind.events] == [3],
           f"a client behind gets exactly what it missed (got {behind.events})")
     check(behind.complete, "and that replay is complete")
 
-    other_process = bus.replay_since(99)
+    other_process = bus.replay_since(_dead_cursor(2))
     check(other_process.events == () and not other_process.complete,
-          "an id from a previous process gets NO plausible-looking replay")
+          f"a cursor from a previous process gets NO plausible-looking "
+          f"replay, even at seq 2 which this process has also reached "
+          f"(got complete={other_process.complete}, "
+          f"{[i.seq for i in other_process.events]})")
 
-    never = bus.replay_since(0)
+    never = bus.replay_since(_cursor(bus, 0))
     check([item.seq for item in never.events] == [1, 3],
           "seq 0 asks for everything still ringed")
     check(never.complete, "seq 0 is adjacent to the oldest ring entry")
+
+    nothing = bus.replay_since(None)
+    check(nothing.events == () and not nothing.complete,
+          "and a client that sent nothing usable gets the same honest no")
 
 
 def test_ring_eviction_is_honest() -> None:
@@ -137,8 +159,8 @@ def test_ring_eviction_is_honest() -> None:
     for index in range(10):
         bus.publish(completed(execution_id=index))
 
-    check(len(bus.replay_since(0).events) == 4, "the ring is bounded")
-    stale = bus.replay_since(1)          # 2..6 were evicted
+    check(len(bus.replay_since(_cursor(bus, 0)).events) == 4, "the ring is bounded")
+    stale = bus.replay_since(_cursor(bus, 1))          # 2..6 were evicted
     check(not stale.complete,
           "a client id older than the ring is told the replay has a hole")
     check(
@@ -146,7 +168,7 @@ def test_ring_eviction_is_honest() -> None:
         "it still gets what IS there -- silently returning nothing would "
         "read as 'nothing happened'",
     )
-    recent = bus.replay_since(7)
+    recent = bus.replay_since(_cursor(bus, 7))
     check(recent.complete and [i.seq for i in recent.events] == [8, 9, 10],
           "a client inside the window gets a complete answer")
 
@@ -157,13 +179,13 @@ def test_ring_eviction_is_honest() -> None:
 def test_empty_bus_never_claims_completeness() -> None:
     print("\n== bus: no history means no promise ==")
     bus = CallbackEventBus()
-    empty = bus.replay_since(1)
+    empty = bus.replay_since(_cursor(bus, 1))
     check(empty.events == () and not empty.complete,
           "a bus that never ringed anything cannot promise a complete replay")
 
     bus.publish(started())
     bus.publish(completed())
-    check(bus.replay_since(1).complete,
+    check(bus.replay_since(_cursor(bus, 1)).complete,
           "but once something is ringed, the client's position is known")
 
 
@@ -187,11 +209,11 @@ class _RacingBus(CallbackEventBus):
         self._racing = event
         self.raced = False
 
-    def replay_since(self, last_seq: int):
+    def replay_since(self, cursor):
         if not self.raced:
             self.raced = True
             self.publish(self._racing)
-        return super().replay_since(last_seq)
+        return super().replay_since(cursor)
 
 
 async def _stream(app, *, headers=(), stop_after) -> bytes:
@@ -252,12 +274,28 @@ def _frames(body: bytes) -> list[dict]:
 
 
 def _ids(body: bytes) -> list[int]:
-    """Every SSE `id:` field, in order -- what EventSource would track."""
+    """The sequence number of every SSE `id:`, in order.
+
+    The wire form is ``"{epoch}:{seq}"`` -- what EventSource would track
+    and hand back verbatim -- and these are the numbers inside it. Which
+    epoch it was is checked separately by `_epochs`, because "the frames
+    are numbered 3, 4" and "the frames came from the process this client
+    is talking to" are different claims.
+    """
     out = []
     for line in body.decode().splitlines():
         if line.startswith("id: "):
-            out.append(int(line[4:]))
+            out.append(int(line[4:].partition(":")[2]))
     return out
+
+
+def _wire_ids(body: bytes) -> list[str]:
+    """Every framed id verbatim, so a test can compare the whole cursor."""
+    return [
+        line[4:]
+        for line in body.decode().splitlines()
+        if line.startswith("id: ")
+    ]
 
 
 def _build_stream_app(bus):
@@ -347,7 +385,7 @@ def test_replay_on_reconnect() -> None:
 
     body = asyncio.run(_stream(
         _build_stream_app(bus),
-        headers=[(b"last-event-id", b"2")],
+        headers=[(b"last-event-id", _cursor(bus, 2).wire().encode())],
         stop_after=_saw("graph_execution_started"),
     ))
     frames = _frames(body)
@@ -355,6 +393,10 @@ def test_replay_on_reconnect() -> None:
     check(frames[0]["resync_required"] is False,
           f"the gap was covered, so no refetch is needed (got "
           f"{frames[0]['resync_required']!r})")
+    check(all(w.startswith(f"{bus.epoch}:") for w in _wire_ids(body)),
+          f"every framed id carries this process's epoch, so the browser "
+          f"hands back something this server can check (got "
+          f"{_wire_ids(body)})")
     check(frames[0]["replayed_through"] == 4,
           f"the frame says where the client ends up, not where it started "
           f"(got {frames[0]['replayed_through']!r} -- it sent 2, and the "
@@ -392,21 +434,33 @@ def test_reconnect_cannot_be_covered() -> None:
         ))
         return _frames(body), body
 
-    # An id this process never issued. Replaying anything would be a lie:
-    # seq 4 here is a different event from seq 4 over there.
-    previous, previous_body = connect(b"9999", expected=1)  # opening only
+    # A cursor from a process that no longer runs. Replaying anything would
+    # be a lie: seq 4 here is a different event from seq 4 over there.
+    #
+    # The number is deliberately one this process *has* reached. That is
+    # the case that used to be missed: before the cursor carried an epoch,
+    # a foreign id was only recognisable while it was ahead of everything
+    # published here, so once this process passed it the id looked
+    # current. Asking for 2 on a bus holding 4 events was served as a
+    # normal "give me 3 and 4" -- complete, and wrong.
+    previous, previous_body = connect(_dead_cursor(2).wire().encode(),
+                                      expected=1)  # opening only
     check(previous[0]["resync_required"] is True,
-          f"an id from a previous process -> resync_required (got "
+          f"a cursor from a previous process -> resync_required even when "
+          f"its number is inside this process's range (got "
           f"{previous[0]['resync_required']!r})")
     check(_ids(previous_body) == [],
           f"and nothing is replayed: its seqs describe a different stream "
           f"(got ids {_ids(previous_body)})")
+    check(previous[0]["replayed_through"] is None,
+          "and no high-water mark is claimed, because nothing was replayed")
 
     # An id older than the ring: the hole is real, so it is flagged -- and
     # the tail the ring *does* hold is still sent, because the flag rides
     # in the frame above it and a client that honours it refetches anyway.
     # Sending nothing would throw away information for no gain.
-    stale, stale_body = connect(b"1", expected=3)     # opening + 2 replayed
+    stale, stale_body = connect(_cursor(bus, 1).wire().encode(),
+                              expected=3)     # opening + 2 replayed
     check(stale[0]["resync_required"] is True,
           f"an id older than the ring -> resync_required (got "
           f"{stale[0]['resync_required']!r})")
@@ -427,7 +481,14 @@ def test_unusable_last_event_id_is_ignored() -> None:
     bus = CallbackEventBus()
     bus.publish(started())
     bus.publish(completed())
-    for junk in (b"", b"abc", b"-1", b"0", b"1.5", b"9e9", b"  ", b"\xff"):
+    # A bare number is in this list on purpose. It was a valid id until the
+    # cursor gained an epoch, and it is now indistinguishable from a client
+    # guessing -- which is the truth: a number cannot say which process
+    # issued it, so it is treated as no header at all rather than trusted.
+    for junk in (b"", b"abc", b"-1", b"0", b"1.5", b"9e9", b"  ", b"\xff",
+                 b"2", b"9999", f"{bus.epoch}".encode(),
+                 f"{bus.epoch}:".encode(), f"{bus.epoch}:0".encode(),
+                 f"{bus.epoch}:-1".encode(), f"{bus.epoch}:x".encode()):
         body = asyncio.run(_stream(
             _build_stream_app(bus),
             headers=[(b"last-event-id", junk)],
@@ -446,7 +507,7 @@ def test_subscribe_then_replay_race() -> None:
 
     body = asyncio.run(_stream(
         _build_stream_app(bus),
-        headers=[(b"last-event-id", b"1")],
+        headers=[(b"last-event-id", _cursor(bus, 1).wire().encode())],
         stop_after=_saw("graph_execution_finished"),
     ))
     frames = _frames(body)

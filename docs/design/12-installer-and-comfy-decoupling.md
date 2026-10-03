@@ -408,10 +408,23 @@ of this; it stays.
 
 ---
 
-## 7. Separating this project from ComfyUI (next, not now)
+## 7. Separating this project from ComfyUI
 
 The conclusion in §4 is a deferral, so this says what ending it would take.
 Three steps, in dependency order, each independently useful.
+
+**All three are now done.** There is no `import comfy` anywhere in the live
+tree; what remains is inside the characterisation tests, which compare
+against ComfyUI and skip when it is absent. §4's deferral was about the
+model code, and the model code is the only thing §7 was scoped to.
+
+One file dependency survives, and it is not code: the CLIP BPE vocabulary
+(§7.3-C2) is OpenAI's published data which this development machine has as a
+copy inside ComfyUI's tree. `default_vocabulary_dir()` reads
+`$CLIP_TOKENIZER_DIR`, then `assets/clip_tokenizer/` in this repository,
+then ComfyUI's — the last being a fallback so the tokenizer works where it
+was developed and verified. Putting the middle one in place is a one-file
+decision, and it is called out in §8.
 
 ### 7.1 Stop importing `Timestep` from `model_base`
 
@@ -810,6 +823,27 @@ anything is not a reimplementation, it is a second guess.
 
 ## 8. Open questions, not decided here
 
+* **Where the CLIP BPE vocabulary lives.** *The only thing section 7 left
+  open, and it is a project's call rather than a technical one.* The merges
+  and ids are OpenAI's published CLIP data, not ComfyUI's work, but the copy
+  on this machine lives in `comfy/sd1_tokenizer/` — 1.6 MB across
+  `vocab.json` and `merges.txt`. §7.3-C2 reimplemented the *algorithm*;
+  nothing about it needed ComfyUI. Three arrangements, in the order
+  `default_vocabulary_dir()` tries them:
+
+  1. `$CLIP_TOKENIZER_DIR` — already works, and already overrides everything.
+  2. `assets/clip_tokenizer/` in this repository — **not created.** Vendoring
+     1.6 MB of published data makes this project self-sufficient, and is the
+     only option where a checkout works on a machine with no ComfyUI at all.
+  3. ComfyUI's tree — the current fallback, so the tokenizer works where it
+     was developed and where the characterisation comparisons run.
+
+  What argues against (2) is only size and provenance-of-record: 1.6 MB in
+  git, and a file whose canonical home is a model release rather than a
+  source tree. What argues for it is that every other option leaves a
+  dependency, and §7 exists to remove dependencies. It is not urgent,
+  because (3) works and is tested; it is *incomplete*, which is a different
+  thing and worth saying plainly rather than leaving to be discovered.
 * **Whether the conflict check reads ComfyUI's `requirements.txt` or asks
   its venv.** *Answered in §3: both, because they answer different
   questions.* The file is what ComfyUI needs, the venv is what is there,

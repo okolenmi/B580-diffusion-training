@@ -7,6 +7,21 @@ a summary, not a second source of truth (see
 [`review_notes.md`](review_notes.md) for the general caveat about
 docs drifting from code).
 
+## Python 3.14 or newer
+
+Both quality tools are configured for it -- `pyproject.toml` sets ruff's
+`target-version` and mypy's `python_version` to `3.14` -- and the code
+depends on it at runtime: `backend/presentation/event_schema.py` decides
+"is this annotation `X | None`" with `get_origin(annotation) is Union`,
+an identity that only holds from 3.14.
+
+The floor is stated once, in
+[`backend/python_floor.py`](../backend/python_floor.py), and both process
+entry points (`python -m backend.cli` and the graph execution child) check
+it before doing anything else. An older interpreter therefore gets one
+readable line instead of a wrong schema, or a `TypeError` from somewhere
+deep in start-up.
+
 ## Expected folder layout
 
 The default, zero-config assumption is that this project, a ComfyUI

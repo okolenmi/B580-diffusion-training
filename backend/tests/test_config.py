@@ -29,6 +29,12 @@ from backend.infrastructure.core_config_files import CoreConfigFiles
 from backend.infrastructure.core_config_inspector import CoreConfigInspector
 from backend.infrastructure.workspace import WorkspaceLayout
 from backend.presentation.app import create_app
+from backend.python_floor import (
+    MESSAGE,
+    MIN_PYTHON,
+    require_python,
+    require_python_at_least,
+)
 from backend.tests.support import (
     build_services,
     check,
@@ -401,6 +407,35 @@ def main() -> None:
           "and when the fused flavour is chosen")
     check("adamw" not in shown_for,
           f"but not for AdamW, which has no scale parameter (got {shown_for})")
+
+    # -- the interpreter floor is stated, not assumed -----------------------
+    # Both quality tools were already configured for 3.14, which tells the
+    # tools and not the person. A checkout on an older interpreter passed
+    # both gates and then failed somewhere else entirely -- and the one
+    # runtime dependency on the version, `get_origin(x) is Union` in
+    # event_schema.py, fails *silently* there, producing a wrong schema
+    # rather than an error. The floor is therefore stated once and checked
+    # at both process entry points.
+    check(sys.version_info >= MIN_PYTHON,
+          f"this interpreter satisfies the declared floor {MIN_PYTHON} "
+          f"(running {'.'.join(str(p) for p in sys.version_info[:3])})")
+    check("3.14" in MESSAGE and "get_origin" in MESSAGE,
+          "and the refusal names the version and the reason, so a developer "
+          "is not left to work out which interpreter to install")
+
+    require_python()   # and does not refuse this one
+
+    # And the check itself refuses an old interpreter, rather than being a
+    # comparison nobody has ever seen return the other way.
+    raised = None
+    try:
+        require_python_at_least((99, 0))
+    except SystemExit as exc:
+        raised = str(exc)
+    check(raised is not None and "99.0" in raised,
+          f"an impossible floor is refused with a message naming it "
+          f"(got {raised!r})")
+
 
     finish()
 

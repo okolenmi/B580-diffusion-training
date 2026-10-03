@@ -19,6 +19,7 @@ from pathlib import Path
 from .bootstrap import build_container
 from .config import Settings
 from .presentation.app import create_app
+from .python_floor import require_python
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before argument parsing and before anything imports torch: an
+    # interpreter that is too old should say so in one line, rather than
+    # reaching the schema layer and producing a wrong answer there.
+    require_python()
+
     args = build_parser().parse_args(argv)
 
     # Logging first, before anything that logs during start-up. Placed

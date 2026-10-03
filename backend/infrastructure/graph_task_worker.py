@@ -37,6 +37,8 @@ import threading
 import traceback
 from pathlib import Path
 
+from ..python_floor import require_python
+
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -121,6 +123,10 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The floor first, before the signal handlers: a child that cannot run
+    # should say why on stderr, where the supervisor's log will keep it.
+    require_python()
+
     # Signals first, before anything that can take time -- which is the
     # whole point, because a stop that arrives before this line lands on
     # Python's default handler and kills the process instead of asking it.

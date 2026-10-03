@@ -840,7 +840,7 @@ def build_services(
                 library=dataset_library,
                 tasks=dataset_tasks,
                 gateway=dataset_gateway,
-                checkpoints_dir=layout.checkpoints_dir,
+                checkpoints_dir=lambda: layout.checkpoints_dir,
                 sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(tasks=dataset_tasks, gateway=dataset_gateway),

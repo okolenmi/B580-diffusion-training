@@ -259,7 +259,9 @@ def build_container(settings: Settings) -> Container:
                 library=dataset_library,
                 tasks=dataset_tasks,
                 gateway=dataset_gateway,
-                checkpoints_dir=layout.checkpoints_dir,
+                # A callable, so a checkpoints_dir changed in Settings is
+                # used without a restart -- see StartDatasetTask.
+                checkpoints_dir=lambda: layout.checkpoints_dir,
                 sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(

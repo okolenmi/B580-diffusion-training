@@ -19,7 +19,13 @@ from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
 from backend.infrastructure.workspace import WorkspaceLayout
 from backend.presentation.app import create_app
-from backend.tests.support import asgi_request, build_services, check, finish
+from backend.tests.support import (
+    asgi_request,
+    build_services,
+    check,
+    finish,
+    make_v2_dataset,
+)
 
 
 def _store(root: Path) -> SqliteSettingsStore:
@@ -300,6 +306,60 @@ def main() -> None:
     check(partial.loras_dir == elsewhere / "l", "the named directory is used")
     check(partial.checkpoints_dir != elsewhere / "l",
           "and the unnamed ones still resolve normally")
+
+    # -- a changed setting is used, not just reported ------------------------
+    #
+    # `bootstrap` used to hand `StartDatasetTask` `layout.checkpoints_dir`,
+    # a property read once at wiring time. So changing checkpoints_dir was
+    # reported by the settings API and not used until the server restarted --
+    # and the refusal named the directory it was really looking in, pointing
+    # the user straight at the setting they had just changed.
+    #
+    # Found while fixing the same class of problem in a test that had been
+    # writing its fixture into the real model directory.
+    live_root = Path(tempfile.mkdtemp(prefix="settings-live-"))
+    live_services = build_services(project_root=live_root)
+    live_app = create_app(live_services)
+    start_task = live_services.datasets.start_task
+
+    # Read it once *before* the change, the way the wiring did. A test that
+    # only reads afterwards cannot tell a live setting from a frozen one,
+    # because the freeze is invisible until something reads twice.
+    before = start_task._checkpoints()
+
+    elsewhere = Path(tempfile.mkdtemp(prefix="settings-elsewhere-"))
+    (elsewhere / "m.safetensors").write_bytes(b"st")
+    status, _, body = asgi_request(
+        live_app, "/api/v1/settings", method="POST",
+        json_body={"checkpoints_dir": str(elsewhere)},
+    )
+    check(status == 200, f"checkpoints_dir changed ({status})")
+    _, _, view = asgi_request(live_app, "/api/v1/settings")
+    check(view["resolved"]["checkpoints_dir"] == str(elsewhere),
+          "and the API reports the new one")
+    after = start_task._checkpoints()
+    check(after == elsewhere and after != before,
+          f"and the task path resolves the new one too, without a restart "
+          f"(before {before}, after {after})")
+
+    # The unambiguous version: a checkpoint that exists *only* in the new
+    # directory must be found, and one that exists only in the old one must
+    # not be. Before the fix this was a 422 naming the old directory, which
+    # is the worst version of the answer -- it pointed the user at the
+    # setting they had just changed.
+    make_v2_dataset(live_root, "live-ds", items=1)
+    status, _, body = asgi_request(
+        live_app, "/api/v1/datasets/live-ds/tasks", method="POST",
+        json_body={"kind": "ingest_lora", "image_dir": str(live_root),
+                   "model": "m.safetensors"},
+    )
+    # `body.get("error", {})` is the trap here: the row carries an "error"
+    # key whose value is None on success, so the default never applies and
+    # the next .get() is called on None. Hence `or {}` inside.
+    detail = (body.get("error") or {}).get("message", "") if isinstance(body, dict) else str(body)
+    check(status == 201,
+          f"a checkpoint present only in the new directory is accepted "
+          f"({status} {detail[:90]})")
 
     finish()
 

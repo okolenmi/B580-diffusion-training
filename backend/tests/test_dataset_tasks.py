@@ -103,7 +103,8 @@ for i in range(3):
 make_v2_dataset(root, "work")
 
 start = StartDatasetTask(
-    library=library, tasks=repo, gateway=gateway, checkpoints_dir=ckpt
+    library=library, tasks=repo, gateway=gateway,
+    checkpoints_dir=lambda: ckpt
 )
 stop = StopDatasetTask(tasks=repo, gateway=gateway)
 command = StartDatasetTaskCommand(

@@ -433,9 +433,30 @@ check(body["count"] == 2, "committed filter after commit")
 
 # -- tasks -----------------------------------------------------------------
 
+# The dataset task below needs a checkpoint to exist, and it takes the
+# path from the *resolved* settings -- which, by default, is the developer's
+# real ComfyUI model folder. Writing the fixture there put `m.safetensors`
+# (2 bytes) into the actual models directory on every run of this file, and
+# a real checkpoint of that name would have been overwritten by them.
+#
+# So the base is overridden first, through the same API this test then reads
+# it back through: the resolution code still runs, and still decides, but it
+# decides about a directory this test owns. Measured across a full suite run
+# after the fix, nothing outside a temp directory changes.
+owned_checkpoints = Path(tempfile.mkdtemp(prefix="backend-ds-models-"))
+status, _, body = asgi_request(
+    app, "/api/v1/settings", method="POST",
+    json_body={"checkpoints_dir": str(owned_checkpoints)},
+)
+check(status == 200 and body["stored"]["checkpoints_dir"] == str(owned_checkpoints),
+      f"checkpoints dir overridden to a directory this test owns ({status})")
+
 status, _, body = asgi_request(app, "/api/v1/settings")
 check(status == 200, "settings read for the checkpoints dir")
 checkpoints = Path(body["resolved"]["checkpoints_dir"])
+check(checkpoints == owned_checkpoints,
+      f"and resolution honours the override, not the machine's "
+      f"(got {checkpoints}, wanted {owned_checkpoints})")
 checkpoints.mkdir(parents=True, exist_ok=True)
 (checkpoints / "m.safetensors").write_bytes(b"st")
 imgs = root_b / "imgs"

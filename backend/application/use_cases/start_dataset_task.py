@@ -26,6 +26,7 @@ compute ``total`` honestly, then insert + spawn:
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from ..dataset_task_sweeper import DatasetTaskSweeper
@@ -73,18 +74,32 @@ class StartDatasetTask:
         library: DatasetLibrary,
         tasks: DatasetTasks,
         gateway: DatasetTaskGateway,
-        checkpoints_dir: Path,
+        checkpoints_dir: Callable[[], Path],
         sweeper: DatasetTaskSweeper | None = None,
     ) -> None:
         self._library = library
         self._tasks = tasks
         self._gateway = gateway
-        self._checkpoints = checkpoints_dir
+        # A callable, not a Path, and deliberately. The composition root
+        # used to pass ``layout.checkpoints_dir``, which is a property read
+        # once at wiring time -- so a ``checkpoints_dir`` changed in Settings
+        # was reported by the settings API and not used here until the
+        # server restarted. Worse, the refusal named the directory it was
+        # really looking in, so the message pointed the user at the setting
+        # they had just changed.
+        #
+        # Resolving per use costs a dict lookup and keeps the setting live
+        # everywhere it is read. A callable rather than the layout itself
+        # because ``application`` does not import ``infrastructure``.
+        self._checkpoints_dir = checkpoints_dir
         # Optional because only the *liveness* judgement needs it, and
         # the composition root always passes it; a container without one
         # simply keeps a dead predecessor's row until startup.
         self._sweeper = sweeper
         self._lock = threading.Lock()
+
+    def _checkpoints(self) -> Path:
+        return self._checkpoints_dir()
 
     def execute(self, command: StartDatasetTaskCommand) -> DatasetTask:
         with self._lock:
@@ -227,13 +242,13 @@ class StartDatasetTask:
         if not resolved.is_file():
             raise InvalidQueryError(
                 f"no such checkpoint: {raw!r} (looked in "
-                f"{self._checkpoints})"
+                f"{self._checkpoints()})"
             )
         return raw
 
     def _model_path(self, raw: str) -> Path:
         """Untrusted relative checkpoint path -> path inside the dir."""
-        base = self._checkpoints.resolve()
+        base = self._checkpoints().resolve()
         candidate = Path(raw)
         if candidate.is_absolute():
             raise InvalidQueryError(f"model must be a relative path: {raw!r}")

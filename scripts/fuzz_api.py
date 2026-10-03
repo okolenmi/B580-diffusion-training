@@ -106,10 +106,10 @@ def call(method: str, path: str, body=None, raw: bytes | None = None):
         return None, f"{type(exc).__name__}: {exc}".encode()
 
 
-def operations() -> list[tuple[str, str]]:
+def operations() -> list[tuple[str, str, dict]]:
     spec = json.load(urllib.request.urlopen(BASE + "/openapi.json", timeout=15))
     return [
-        (method.upper(), path)
+        (method.upper(), path, item[method])
         for path, item in spec["paths"].items()
         for method in item
         if method in {"get", "post", "put", "patch", "delete"}
@@ -135,6 +135,30 @@ def probes_for(path: str) -> list[str]:
     return out
 
 
+def query_probes(spec_item: dict, concrete_path: str) -> list[str]:
+    """One URL per declared query parameter per hostile value.
+
+    Query strings are a separate parsing path from both the path and the
+    body, and this API leans on them: paging (`limit`/`offset`), filtering
+    (`committed`, `class_name`, `search`), and format flags. A value that
+    reaches a SQL LIMIT, an int() call or a str comparison without being
+    validated shows up here and nowhere else in this sweep.
+    """
+    names = [
+        p["name"]
+        for p in spec_item.get("parameters", [])
+        if p.get("in") == "query" and "{" not in p["name"]
+    ]
+    out = []
+    for name in names:
+        for value in NASTY:
+            try:
+                out.append(f"{concrete_path}?{name}={quote(value, safe='')}")
+            except UnicodeEncodeError:
+                continue
+    return out
+
+
 #: Endpoints whose success is an open response, so "send hostile input and
 #: expect a status" has no answer for them -- they would time out rather
 #: than answer, which reads as a failure and is not one. Their error paths
@@ -146,47 +170,83 @@ def is_stream(path: str) -> bool:
     return path.endswith("/stream") or path in STREAM_PATHS
 
 
+class Tally:
+    """What the sweep saw. Kept as one object so the probing loops stay
+    about probing."""
+
+    def __init__(self) -> None:
+        self.server_errors: list[tuple[str, str, object, int]] = []
+        self.transport: list[tuple[str, str, object, bytes]] = []
+        self.counts: dict[object, int] = {}
+
+    def record(self, method: str, probe: str, payload, status, response: bytes) -> None:
+        self.counts[status] = self.counts.get(status, 0) + 1
+        if status is None:
+            self.transport.append((method, probe, payload, response[:120]))
+        elif status >= 500:
+            self.server_errors.append((method, probe, payload, status))
+
+    def send(self, method: str, probe: str, payload=None, *, raw: bytes | None = None) -> None:
+        status, response = (
+            call(method, probe, raw=raw) if raw is not None
+            else call(method, probe, body=payload))
+        self.record(method, probe, raw if raw is not None else payload,
+                    status, response)
+
+
+def sweep_query_strings(method: str, path: str, op: dict, tally: Tally) -> None:
+    """Hostile values in each declared query parameter.
+
+    A query string is a third parsing path, after the path and the body,
+    and this API leans on it: paging (`limit`/`offset`), filtering
+    (`committed`, `class_name`, `search`) and format flags. A value that
+    reaches a SQL LIMIT, an ``int()`` or a string comparison unvalidated
+    shows up here and nowhere else in this sweep.
+
+    Run against the *unsubstituted* path: a query value is parsed
+    independently of the path, so mixing the two dimensions would only make
+    each failure harder to read.
+    """
+    for probe in query_probes(op, path):
+        tally.send(method, probe)
+
+
+def sweep_bodies(method: str, path: str, tally: Tally) -> None:
+    """Hostile values in the path, then hostile bodies against each."""
+    for probe in probes_for(path):
+        if method in METHODS_WITH_BODY:
+            for body in JSON_BODIES:
+                tally.send(method, probe, body)
+            for raw in RAW_BODIES:
+                tally.send(method, probe, raw=raw)
+        else:
+            tally.send(method, probe)
+
+
 def main() -> int:
     ops = operations()
     print(f"sweeping {len(ops)} operations at {BASE}\n")
 
-    server_errors: list[tuple[str, str, object, int]] = []
-    transport: list[tuple[str, str, object, bytes]] = []
-    counts: dict[object, int] = {}
+    tally = Tally()
 
-    for method, path in ops:
+    for method, path, op in ops:
         if is_stream(path):
             print(f"  (skipping {method} {path}: long-lived by design)")
             continue
-        for probe in probes_for(path):
-            bodies: list[tuple[str, object]] = [
-                ("json", b)
-                for b in (JSON_BODIES if method in METHODS_WITH_BODY else [None])
-            ]
-            if method in METHODS_WITH_BODY:
-                bodies += [("raw", r) for r in RAW_BODIES]
-
-            for kind, payload in bodies:
-                status, response = (
-                    call(method, probe, raw=payload) if kind == "raw"
-                    else call(method, probe, body=payload))
-                counts[status] = counts.get(status, 0) + 1
-                if status is None:
-                    transport.append((method, probe, payload, response[:120]))
-                elif status >= 500:
-                    server_errors.append((method, probe, payload, status))
+        sweep_query_strings(method, path, op, tally)
+        sweep_bodies(method, path, tally)
 
     print("\nstatus distribution:")
-    for code in sorted(counts, key=lambda c: (c is None, c)):
-        print(f"  {code}: {counts[code]}")
+    for code in sorted(tally.counts, key=lambda c: (c is None, c)):
+        print(f"  {code}: {tally.counts[code]}")
 
-    print(f"\n5xx responses: {len(server_errors)}")
-    for (method, shape), probe in sorted(_collapse(server_errors).items()):
+    print(f"\n5xx responses: {len(tally.server_errors)}")
+    for (method, shape), probe in sorted(_collapse(tally.server_errors).items()):
         print(f"  {method} {shape}")
         print(f"      e.g. {probe[:100]}")
 
-    print(f"\ntransport-level failures (no HTTP response): {len(transport)}")
-    for method, path, body, response in transport[:10]:
+    print(f"\ntransport-level failures (no HTTP response): {len(tally.transport)}")
+    for method, path, body, response in tally.transport[:10]:
         print(f"  {method} {path} body={body!r} -> {response}")
 
     print(
@@ -194,7 +254,7 @@ def main() -> int:
         "traceback is the finding. Re-run with the guard's test removed to\n"
         "confirm a fix, the way the two that were fixed were confirmed."
     )
-    return 1 if server_errors or transport else 0
+    return 1 if tally.server_errors or tally.transport else 0
 
 
 def _collapse(entries):

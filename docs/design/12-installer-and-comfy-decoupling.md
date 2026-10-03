@@ -131,6 +131,29 @@ correctly.** The constraints file makes it unreachable for pip to
 downgrade anything already present, so the only possible outcome is refusal
 and a message. There is no third path and no resolver.
 
+**Both sources are consulted, because they answer different questions.**
+ComfyUI's `requirements.txt` says what ComfyUI *needs*; its venv says what
+is *actually there*. Those diverge — a user upgrades one and not the other,
+patches a file, or installs something by hand — and the divergence is the
+interesting case rather than an edge case. So:
+
+| Installed | In `requirements.txt` | Treatment |
+|---|---|---|
+| matches | yes | known-safe; proceed |
+| differs | yes | a **conflict**: ComfyUI's own declaration is broken. Name it, refuse. |
+| any | **no** | **unknown**: installed but undeclared, so nothing vouches for it. |
+
+The third row is where the user's point lands. An undeclared dependency is
+not evidence of a working setup — it is the absence of evidence, and the
+safe reading is to require an exact version match rather than a range. A
+declared requirement is a contract ComfyUI publishes; an installed package
+is just a fact about the machine, and the two do not deserve the same
+confidence.
+
+So the check reports three outcomes, not two: *safe*, *conflict* (declared
+and violated) and *unknown* (undeclared, so pinned strictly). Treating
+unknown as safe is how a soft install quietly becomes the hard one.
+
 ### Screen 3 — the paths, as now
 
 ComfyUI directory and model locations, pre-filled from resolution. Smaller
@@ -139,7 +162,7 @@ mostly confirming a value the server already knows.
 
 ---
 
-## 4. ComfyUI: required, not optional
+## 4. ComfyUI: required today, on maintenance grounds
 
 Asked during the first build, answered by reading the source.
 
@@ -204,28 +227,52 @@ Third-party surface the fork inherits: torch, numpy, einops, PIL,
 safetensors, tqdm, and `comfy_aimdo`. **Every one except `comfy_aimdo` is
 already in this project's training four.**
 
-### Why a fork is not worth it
+### Why a fork is not worth it — but a clean implementation might be
 
-1. **Licence.** ComfyUI is GPL-3.0. Vendoring its model definitions into
-   this project makes that code GPL-3.0 here. There is currently no
-   licence file at this repository's root, so the interaction is undefined
-   rather than merely permissive.
-2. **The maintenance cost is the real cost.** These files track ComfyUI's
-   releases. A fork is 2,964 lines to keep in sync with an upstream that
-   moves weekly, and the divergence would be silent — a ComfyUI upgrade
-   that adds a LoRA-compatible layer would leave the fork behind, with no
-   error anywhere.
-3. **A directory dependency is the cheaper dependency.** ComfyUI already
-   has to exist for anyone using it for its actual purpose. Making it
-   required adds no work for that user and removes a class of divergence
+1. **Licence, correctly stated.** ComfyUI is GPL-3.0, so *copying its
+   source* into this project carries that licence with it. That is the
+   narrow claim, and it is the only one about copying.
+
+   **It is not a claim about the architecture.** SDXL is published — there
+   is a paper, a public checkpoint, and an Apache-2.0 reference
+   implementation — so its structure can be implemented from the
+   specification without touching ComfyUI at all. And this project already
+   demonstrates the point: `unet_wrapper.py:42` carries `SDXL_CONFIG`,
+   the published architecture (320 model channels, `channel_mult [1,2,4]`,
+   `adm_in_channels 2816`, …), written down in this repository's own words
+   before ComfyUI is imported on the next line.
+
+   So the real question is not "fork or vendor". It is whether writing
+   SDXL's UNet and text encoder from the spec is worth it — a maintenance
+   question, not a licensing one. What this project needs from a
+   checkpoint is a **key-to-shape mapping**, and that is data: the
+   published config plus the `.safetensors` file's own keys. Nothing about
+   it requires Comfy's code to be the code that reads it.
+
+   Recorded here because the first version of this document got it wrong in
+   the direction of "GPL therefore impossible", which conflates copying an
+   implementation with implementing a published architecture.
+
+2. **The fork's cost, which stands regardless.** These files track ComfyUI's
+   releases, weekly. A fork is 2,964 lines to keep in sync with an upstream
+   that moves often, and the divergence would be silent — a ComfyUI release
+   adding a LoRA-compatible layer leaves the fork behind, with no error
+   anywhere.
+3. **A directory dependency is the cheapest dependency today.** ComfyUI
+   already has to exist for anyone using it for its actual purpose. Making
+   it required adds no work for that user and removes a class of divergence
    bug for everyone.
 
-**Conclusion: ComfyUI stays required.** It is a directory dependency, not a
-pip dependency, because `comfy` is a checkout that must be on `sys.path` —
-`comfyui` is absent from the venv's distribution list even on a machine
-where ComfyUI is fully set up. So it cannot be installed into any venv by
-any means, and the wizard's first question has to be "where is it", not "do
-you have it".
+**Conclusion: ComfyUI stays required *for now*, on maintenance grounds.**
+The honest framing is that this is a deferral, not a proof. It is a
+directory dependency rather than a pip dependency either way, because
+`comfy` is a checkout that must be on `sys.path` — `comfyui` is absent from
+the venv's distribution list even on a machine where ComfyUI is fully set
+up — so it cannot be installed into any venv by any means. That is why the
+wizard's first question is "where is it", not "do you have it".
+
+Separating this project from ComfyUI is the next piece of work after the
+installer, and §7 below says what it would take.
 
 One genuine finding: `clip_encoder.py:141` and `unet_wrapper.py:207` import
 `Timestep` from `comfy.model_base`, but ComfyUI itself imports it from
@@ -294,7 +341,76 @@ rely on the user having read a document.
 `path_tiers` was fixed as part of the first build and is unrelated to any
 of this; it stays.
 
-## 7. Open questions, not decided here
+---
+
+## 7. Separating this project from ComfyUI (next, not now)
+
+The conclusion in §4 is a deferral, so this says what ending it would take.
+Three steps, in dependency order, each independently useful.
+
+### 7.1 Stop importing `Timestep` from `model_base`
+
+A genuine bug in the current code, not a design question:
+`clip_encoder.py:141` and `unet_wrapper.py:207` import `Timestep` from
+`comfy.model_base`, but ComfyUI itself imports it from
+`comfy.ldm.modules.diffusionmodules.openaimodel` (defined at line 41, 41
+lines). Our path is wrong *and* it drags in `model_base`, which is one of
+the largest modules in the tree.
+
+Copying 41 lines of a published embedding class is the one vendoring
+candidate worth taking. It removes a wrong import and a heavy transitive
+edge at the cost of a small, attributable file.
+
+### 7.2 Own the two `utils` functions
+
+`state_dict_prefix_replace` (11 lines) and `clip_text_transformers_convert`
+(9 lines) are used by `clip_encoder.py` for checkpoint-key translation.
+They are data manipulation with no architectural content — the kind of
+thing that is written from the checkpoint format, not from an
+implementation.
+
+### 7.3 Own the SDXL model definitions
+
+This is the real work: `UNetModel`, `SpatialTransformer`,
+`BasicTransformerBlock`, `SDXLClipModel`, `AutoencoderKL` — the 2,964
+lines measured in §4, implemented from the published SDXL specification.
+
+**What is already done, which is most of the hard part.** The architecture
+is written down in this repository today: `SDXL_CONFIG` in
+`unet_wrapper.py` is the published UNet configuration, not a transcription
+of ComfyUI's. The checkpoint contract is likewise already fixed — the
+project loads `.safetensors` state dicts and needs a key-to-shape mapping
+that the published config plus the checkpoint's own keys fully determine.
+
+So this is *not* reverse-engineering. It is implementing a published
+architecture against a known data contract, with an existing
+Apache-2.0 reference implementation available for the shapes.
+
+**What it would cost.** Six modules, plus the test surface for them: every
+existing LoRA injection point is written against Comfy's module layout, so
+`lora.py`, `adapter_injection.py` and the phase-splitting code all move at
+once. The VRAM measurements in `docs/known-issues/` were taken with
+Comfy's implementation resident and would need re-taking — a reimplementation
+that allocates one extra tensor mid-forward would change the floors those
+documents assert.
+
+**Sequencing.** 7.1 and 7.2 are small and independent; 8.3 is not, and
+starting it before the installer is finished would put the two hardest
+pieces of work in flight at once. The installer's conflict check also gets
+*easier* the moment ComfyUI is optional, because "use ComfyUI's venv"
+becomes one option among several rather than the only cheap one.
+
+### What would make it wrong
+
+That the reimplementation diverges numerically from Comfy's, in a way the
+existing tests do not catch. Every test here is a shape, a count, or a
+memory number; none of them compares an output tensor against Comfy's. A
+first step for 7.3 is a numerical equivalence test against Comfy's
+implementation — run both, compare forward outputs on a fixed input, and
+refuse the fork if they disagree. That test is also what proves the
+separation is safe, and it does not exist yet.
+
+## 8. Open questions, not decided here
 
 * **Where the preflight's page lives** if the server never starts on any
   port — a separate static bundle, or the same `frontend/` tree served by

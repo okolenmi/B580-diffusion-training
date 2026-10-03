@@ -45,11 +45,15 @@ Three consequences worth stating:
   answer "is torch installed" on a machine that does not have it. The
   device probe imports torch in a subprocess, and is skipped entirely when
   the package check has already answered the question.
-* **The shell gate is not built.** `run_server.sh` still starts the server
-  whatever is missing. The honest version of the original instinct is the
-  readiness screen, not a preflight, because the failure it prevents is a
-  `ModuleNotFoundError` deep in a node build — and by then the user has
-  been told nothing.
+* **The shell gate is *not* the fix, but there now is a preflight.**
+  `run_server.sh` still starts the server whatever is missing — there is no
+  gate that refuses to boot. What it gained is
+  `backend/first_run.py`, which installs only the *four server packages*
+  into a temporary venv and re-execs. The boundary from this record still
+  holds: it fixes the one failure the server cannot report about itself
+  (it cannot start), and it installs nothing that a *run* needs. Everything
+  else — the venv decision, the training stack, the device — is still the
+  readiness screen's job, because those are questions, not imports.
 
 ## The write is gated, and that is the security decision
 
@@ -110,5 +114,9 @@ stated cost — no preflight — is real until that lands.
   "does not exist yet" rather than offering a button.
 * **Two model roots is Phase F and is untouched.** Independent of the
   wizard, and worth doing on its own merit; it is not a wizard question.
-* **`run_server.sh` is unchanged**, so a user who wants a preflight still
-  has nothing. That is the accepted cost of this shape.
+* **`run_server.sh` calls one module before launching**, and a user who
+  wants no preflight still has one: `DISTILLATION_NO_BROWSER=1` stops it
+  opening a tab, which matters because it otherwise reaches for the user's
+  browser unattended. Its presence is otherwise silent — one subprocess
+  that exits 0 and prints nothing when the packages are there, which is
+  every start after the first.

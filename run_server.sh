@@ -64,4 +64,26 @@ fi
 # the old server did; --host/--port passed after this win (argparse
 # keeps the last value).
 cd "$SCRIPT_DIR"
+
+# Bootstrap: if the server's own packages are missing, install them into a
+# temporary environment and come back through here with VENV_PYTHON set.
+#
+# Asked for before launching rather than inside the server, because the
+# server is what those packages are for -- asking it to report its own
+# missing dependencies is asking the thing that cannot start. This is a
+# no-op (exit 0, no output) whenever they are present, which is every
+# start after the first, so the cost on a working install is one subprocess.
+#
+# Two things about it are deliberate:
+#   - It installs ONLY the four packages in requirements.txt. The training
+#     stack and the GPU choice are the wizard's, because they are questions
+#     and not imports, and this runs before anyone can be asked.
+#   - It uses a venv under the system temp directory, named with the pid.
+#     Nothing here can break an environment the user already has.
+#
+# `python -m backend.first_run --check` reports what is missing and exits
+# without installing. Set DISTILLATION_NO_BROWSER=1 to stop it opening a
+# browser; the install link is printed either way.
+"$PYTHON" -m backend.first_run "$@" || exit $?
+
 exec "$PYTHON" -m backend.cli --host 0.0.0.0 "$@"

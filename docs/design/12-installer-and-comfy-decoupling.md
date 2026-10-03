@@ -2,10 +2,14 @@
 
 *[← design index](README.md)*
 
-**Status: design, not built.** This is the reasoning behind a proposed
+**Status: §2 is built; §3 onward is design.** This is the reasoning behind a
 rebuild of the first-run installer, plus a measured answer to a question
 that came up while building the first version: *could this project drop its
 dependency on ComfyUI?* The answer is below, with numbers.
+
+The §2 preflight exists as `backend/first_run.py`, called by
+`run_server.sh`; §3's third screen does not. The ComfyUI separation
+(§7) has not been started.
 
 Supersedes the phasing in
 [`11-first-run-and-installer.md`](11-first-run-and-installer.md) for
@@ -55,32 +59,57 @@ The four server packages are the whole of "make the server start". So:
 
 ```
 run_server.sh
-  ├─ python -c "import fastapi, uvicorn, multipart, tomli_w"   # fast, no deps
-  │    └─ fails →
-  │        └─ python -m backend.preflight        # one file, stdlib only
-  │             ├─ prints the URL, opens the browser
-  │             ├─ serves ONE page on 8767 (never 8766)
-  │             └─ installs the four into a temporary venv, then says
-  │                "restart run_server.sh"
-  └─ succeeds → the real server starts, and /setup takes over
+  └─ python -m backend.first_run          # stdlib only, ~4s of work
+       ├─ imports the four?  yes → exit 0, print nothing
+       ├─ creates <tempdir>/distillation-bootstrap-<pid>/
+       ├─ pip installs the four into it
+       ├─ prints the URL, tries to open a browser
+       └─ execve run_server.sh, with VENV_PYTHON = that interpreter
+  └─ exec python -m backend.cli --host 0.0.0.0 "$@"
 ```
 
-**The preflight gets its own port and is never reachable once the server
-runs.** It is a bootstrap, not a second interface, and having two servers
-answering on loopback at once would be a worse problem than the one it
-solves. It exits with a distinct code so `run_server.sh` can say something
-better than a traceback.
+**Measured, not estimated:** `python -m venv` 2.1 s, the four packages
+5.1 s, 32 MB total. `scripts/test_bootstrap_install.sh` runs the whole
+thing end to end in a venv with no site-packages and asserts the server
+answers afterwards.
 
-**The temporary venv is disposable by construction.** It holds four small
-packages and nothing else; it is created under the system temp directory,
-named with the pid, and removed on preflight exit. It is not where the
-project lives, it is not on any `sys.path` the server uses afterwards, and
-"did it get left behind" is answerable by looking in one place. The user's
-instruction that it be separable and removable is satisfied by construction
-rather than by a cleanup path someone has to remember.
+### What changed from the first draft, and why
 
-This also settles the console-message question honestly: there genuinely is
-a terminal moment, and it is exactly the moment the server cannot start.
+The version above replaced a plan for a **preflight web server** on port
+8767 with **no server at all**. The page it would have served had one job
+— say "installing" — and the terminal already says that, with pip's real
+output attached. A second HTTP server on loopback would also have been a
+new thing to bind, to secure, and to get wrong on a machine whose only
+working server is the one that cannot start yet. So the shape is now the
+simplest one that works: install, print, re-exec.
+
+Three consequences, stated because they are the non-obvious parts:
+
+* **The re-exec replaces the process, so `run_server.sh` runs twice.**
+  That is fine and is the point: the second pass finds the packages present
+  and returns 0 immediately, so `.env`, the interpreter precedence and the
+  user's arguments are applied by the one script that owns them rather than
+  reimplemented in Python. Ctrl-C reaches the server directly, because there
+  is no parent left to intercept it.
+* **`--host` and `--port` must be forwarded from the original `argv`**, not
+  from `parse_known_args`'s unrecognised remainder. They are known to the
+  bootstrap — it needs them to print a link — so the remainder is empty and
+  the server came up on the default port while the printed link named the
+  requested one. Found by the install test, because the unit test called
+  `main()` with an explicit list and never went near the path `__main__`
+  takes. Both that and a second one (forwarding `argv` before resolving
+  `None`, which unpacked a `TypeError`) are now covered by
+  `backend/tests/test_bootstrap.py`, and both mutations were checked to
+  turn it red.
+* **`DISTILLATION_NO_BROWSER=1` suppresses the tab**, and the reason is
+  not politeness: the install test drove this path repeatedly and opened a
+  real tab on the desktop every run. A bootstrap that reaches for the
+  user's browser unattended is doing something surprising whether or not the
+  install was wanted.
+
+`--check` reports what is missing and installs nothing. It exists because
+there was otherwise no way to ask the question without starting the answer,
+which is also what made the first version of the install test hang.
 
 ---
 
@@ -336,7 +365,7 @@ rely on the user having read a document.
 | `/setup` wizard, two screens | **extend** to three, insert the venv/GPU screen between them |
 | `never_install` on torch | **replace** — should be conflict-*detectable*, not forbidden; screen 2's conflict check is the escape hatch the flag lacks |
 | ADR 0005's install-order argument | **withdraw** — the conclusion was right, the ordering argument was wrong |
-| `run_server.sh` unchanged | **replace** with the preflight dispatch |
+| `run_server.sh` unchanged | **done** — the dispatch is `backend/first_run.py` (§2) |
 
 `path_tiers` was fixed as part of the first build and is unrelated to any
 of this; it stays.
@@ -412,14 +441,12 @@ separation is safe, and it does not exist yet.
 
 ## 8. Open questions, not decided here
 
-* **Where the preflight's page lives** if the server never starts on any
-  port — a separate static bundle, or the same `frontend/` tree served by
-  the preflight. The first is smaller and cannot drift from the app; the
-  second is one codebase and needs the server's own assets to load.
 * **Whether the conflict check reads ComfyUI's `requirements.txt` or asks
-  its venv.** The file is simpler and is what a user reads; the venv is what
-  is actually installed. They can disagree — a user edits one and not the
-  other — and that disagreement is the interesting case.
+  its venv.** *Answered in §3: both, because they answer different
+  questions.* The file is what ComfyUI needs, the venv is what is there,
+  and a divergence is the interesting case rather than an edge case — three
+  outcomes, not two, because installed-and-undeclared is neither safe nor a
+  conflict but *unknown*, and unknown gets a strict pin.
 * **Progress reporting for a 2.5 GB download.** A job id plus polling is
   the honest minimum; SSE is available and would be better. Either way this
   is the first stateful thing in the installer, and it is where the

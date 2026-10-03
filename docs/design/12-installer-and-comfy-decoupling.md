@@ -415,16 +415,43 @@ Three steps, in dependency order, each independently useful.
 
 ### 7.1 Stop importing `Timestep` from `model_base`
 
-A genuine bug in the current code, not a design question:
-`clip_encoder.py:141` and `unet_wrapper.py:207` import `Timestep` from
-`comfy.model_base`, but ComfyUI itself imports it from
-`comfy.ldm.modules.diffusionmodules.openaimodel` (defined at line 41, 41
-lines). Our path is wrong *and* it drags in `model_base`, which is one of
-the largest modules in the tree.
+**Two steps, and the first is done.** `clip_encoder.py` and
+`unet_wrapper.py` imported `Timestep` from `comfy.model_base`. ComfyUI
+defines it in `comfy.ldm.modules.diffusionmodules.openaimodel` and
+*re-exports* it from `model_base`, so the definition is in one place and the
+alias in the other — and `model_base.Timestep is openaimodel.Timestep`
+measures `True`. The import was therefore never wrong in what it returned.
 
-Copying 41 lines of a published embedding class is the one vendoring
-candidate worth taking. It removes a wrong import and a heavy transitive
-edge at the cost of a small, attributable file.
+It was wrong in what it cost, and that is measurable:
+
+| | time | modules loaded |
+|---|---:|---:|
+| `from comfy.model_base import Timestep` | 4.32 s | 3323 |
+| `from ...openaimodel import Timestep` | 3.05 s | 2422 |
+
+**1.27 s and 901 modules per process**, for a class that is seven lines
+long, in an import that runs lazily on the first forward pass rather than
+at module load — so it is also a latency spike at a point where a training
+step is already waiting on the device. Both call sites now import from
+`openaimodel`.
+
+This section previously said the class was "41 lines, defined at line 41".
+Both numbers were wrong, and the line 41 citation pointed into
+`forward_timestep_embed` rather than at the class. It is seven lines at
+line 360.
+
+**The second step is the actual decoupling**: own `Timestep` and the
+`timestep_embedding` it calls — together about 25 lines, both published
+algorithms rather than ComfyUI's own, and neither carrying any architectural
+opinion worth inheriting. That removes one more edge to `openaimodel`, which
+`UNetModel` still needs, so the runtime win is small; the value is that the
+embedder stops being a question about someone else's file.
+
+It is worth doing under the characterisation discipline below rather than
+the equivalence gate this section used to propose: record what ComfyUI's
+`Timestep` produces, decide independently whether that is right, and treat
+a difference as a question about which side is wrong. A gate that forbade
+divergence would have blocked the fixes in the table under §7.
 
 ### 7.2 Own the two `utils` functions
 

@@ -153,8 +153,8 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
 
     # -- adoption ---------------------------------------------------------
 
-    def find_running(self, execution_id) -> int | None:
-        """Find the child for this execution by what it says it is.
+    def find_running_all(self, execution_id) -> list[int]:
+        """Live children claiming this execution, discovered by their argv.
 
         Discovered rather than stored, and that is the point. A pid kept
         in a row is a claim about the past: read it after a reboot and it
@@ -163,12 +163,22 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         child's own argv says which execution it is serving, so this asks
         the live system instead of trusting a record.
 
+        Every match, deliberately -- see the port's note on why this and
+        `find_running` are different questions.
+        """
+        return find_by_argv(CMDLINE_MARKER, "--execution", str(execution_id))
+
+    def find_running(self, execution_id) -> int | None:
+        """The one child for this execution, or `None`.
+
         Returns ``None`` on a second match as well as on none. Two
         children claiming one execution is not a situation to guess about
         -- adopting one of them would replay one run's history into a row
-        the other is still writing.
+        the other is still writing. Both are *still running*, which is why
+        `find_running_all` exists alongside this: refusing to adopt is not
+        the same as nothing being alive.
         """
-        matches = find_by_argv(CMDLINE_MARKER, "--execution", str(execution_id))
+        matches = self.find_running_all(execution_id)
         if len(matches) != 1:
             if matches:
                 logger.error(
@@ -269,6 +279,16 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
         with self._lock:
             thread = self._threads.get(pid)
         return thread is not None and thread.is_alive()
+
+    def find_running_all(self, _execution_id) -> list[int]:
+        """Always empty, for the reason `find_running` is always `None`.
+
+        A thread cannot outlive the process it is in, so there is never a
+        second one to find. ``[]`` rather than a one-element list is the
+        honest answer to "is anything still running", and it is what makes
+        the caller leave such a row alone only when something really is.
+        """
+        return []
 
     def find_running(self, _execution_id) -> int | None:
         """Always ``None``: a thread cannot outlive the process it is in.

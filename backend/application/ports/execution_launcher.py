@@ -64,6 +64,32 @@ class ExecutionLauncher(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def has_running_child(self, execution_id: ExecutionId) -> bool:
+        """True when something of this execution is *still running*.
+
+        Not the same question as ``adopt``, and the difference is the whole
+        point of this method. ``adopt`` answers "can this new server watch
+        it", which is ``False`` for three different situations: nothing is
+        running, a live child's event file is gone so its output has no
+        reader, or two children claim one execution id. Only the first of
+        those means dead.
+
+        A caller that reads ``adopt() is None`` as "it is gone" fails a row
+        whose child is still holding the card -- and a terminal row is what
+        releases the single-active check, so the failure is not a label, it
+        is the second run being allowed to start beside the first. This is
+        how a caller asks the other half of the question, and why the
+        supervisor does *not* answer it by killing: it is not the owner of a
+        process it did not start
+        (``test_a_run_with_no_event_file_is_not_adopted``), so the honest
+        repair is to leave the row alone and say so loudly.
+
+        ``False`` from a launcher whose runs are threads, which cannot
+        outlive the server and so have nothing left to find.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def recorded_outcome(self, execution_id: ExecutionId) -> RecordedOutcome | None:
         """What this run's own record says, or ``None`` if it never said.
 

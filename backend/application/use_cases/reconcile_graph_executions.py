@@ -26,6 +26,18 @@ two distinguishable endings, and only the first one is a crash:
   describes it ("server stopped before the execution started" /
   "server restarted while the execution was in flight").
 
+With one exception, and it is the one this sweep's own opening paragraph
+warns about. "Not adopted" does not mean "gone": a live child whose event
+file is missing, or two children claiming one id, are both refused for
+adoption and both still running. Failing such a row is not a label -- a
+terminal row is what releases the single-active check, so failing it is the
+moment a second run becomes startable beside a first that never stopped.
+So before failing anything, this asks the launcher whether a child is still
+alive, and if one is it leaves the row where it is and says so loudly. It
+does not kill the process: the supervisor is not its owner and this is not
+the place to change that. The row settles on the next sweep, by which time
+the child is gone, so this is a pause and not a permanent orphan.
+
 Reading the record first is what makes the difference. Measured: a
 3000-node run killed the server after it started, finished all 3000 nodes
 and wrote a clean `{"kind": "outcome", "error": null}` -- and was reported
@@ -75,6 +87,7 @@ class ReconcileGraphExecutions:
         adopted = 0
         cleaned = 0
         recorded = 0
+        still_running = 0
         for execution in self._executions.list_unfinished():
             execution_id = execution.require_id()
             if self._launcher.adopt(execution_id) is not None:
@@ -107,6 +120,32 @@ class ReconcileGraphExecutions:
                 )
                 continue
 
+            # `adopt` said no and the run left no record, and the tempting
+            # reading is "it died". Two of the three ways of getting here
+            # say something else: a live child whose event file is missing,
+            # or two children claiming one id. Both are still holding the
+            # card, and failing the row is not a neutral label here -- it
+            # is what releases the single-active check, so this is the
+            # exact point at which a second run becomes startable next to
+            # a first one that never stopped.
+            #
+            # Leaving the row running is the repair that costs nothing and
+            # invents nothing: the process is not ours to kill, and the row
+            # staying unfinished is *true*. It settles on the next sweep,
+            # once the child is gone.
+            if self._launcher.has_running_child(execution_id):
+                still_running += 1
+                logger.error(
+                    "reconcile: execution %s has a child that is still "
+                    "running but cannot be adopted; leaving the row "
+                    "%s rather than failing it, so the single-active check "
+                    "keeps refusing a second run. Kill the process (it is "
+                    "visible in `ps`) and re-run the sweep, or restart the "
+                    "server once it is gone.",
+                    execution.id, execution.status.value,
+                )
+                continue
+
             if execution.status is GraphStatus.QUEUED:
                 error = "server stopped before the execution started"
             else:
@@ -131,4 +170,15 @@ class ReconcileGraphExecutions:
                 "settled %d execution(s) from the record their run left behind",
                 recorded,
             )
-        return ReconcileResult(cleaned=cleaned, adopted=adopted)
+        if still_running:
+            # Counted, not hidden: a row that stayed `running` because a
+            # child is alive is neither cleaned nor adopted, and folding it
+            # into either count would say work was thrown away or is being
+            # watched when neither is true.
+            logger.warning(
+                "%d execution(s) left running on a child nobody could adopt",
+                still_running,
+            )
+        return ReconcileResult(
+            cleaned=cleaned, adopted=adopted, still_running=still_running,
+        )

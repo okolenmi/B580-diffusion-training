@@ -410,6 +410,18 @@ def build_container(settings: Settings) -> Container:
             "reconciled %d unfinished graph execution(s) at startup",
             graph_reconciled.cleaned,
         )
+    if graph_reconciled.still_running:
+        # At warning rather than info, and here rather than only in the
+        # use case's own log: this is the one startup state that is not
+        # settled, and an operator who does not see it will find out by
+        # trying to start a run and being told one is already active.
+        logger.warning(
+            "%d graph execution(s) left running at startup on a child that "
+            "could not be adopted; their rows stay active on purpose, so the "
+            "single-active check keeps refusing a second run. Each process "
+            "is visible in `ps`.",
+            graph_reconciled.still_running,
+        )
 
     # After the reconcile, not before: adopting an unfinished run reads its
     # event file, so the sweep has to be able to see the difference between

@@ -93,6 +93,19 @@ class GraphTaskGateway(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def find_running_all(self, execution_id: ExecutionId) -> list[int]:
+        """Every live child claiming ``execution_id``, ascending by pid.
+
+        ``find_running`` deliberately collapses "two children claim it" to
+        ``None`` rather than guessing which to adopt, and that is right for
+        adopting. It is wrong for asking whether anything is still running,
+        because the processes it collapsed are still running: answering
+        ``None`` there lets a caller conclude the row is debris and fail it
+        while two trainers hold the card. Ascending order, so a caller that
+        does act on the list gets a deterministic answer.
+        """
+        raise NotImplementedError
+
     def find_running(self, execution_id: ExecutionId) -> int | None:
         """The pid of a still-running child for ``execution_id``, if any.
 

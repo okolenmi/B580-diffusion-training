@@ -113,6 +113,43 @@ class NothingToAdopt(ExecutionLauncher):
     def recorded_outcome(self, execution_id):
         return self.recorded.get(execution_id)
 
+    def has_running_child(self, execution_id) -> bool:
+        # No runs of its own means nothing of one is alive. `OrphanStillRunning`
+        # below is the launcher for when something is, which is what makes
+        # this the honest default rather than a convenient one.
+        return False
+
+
+class OrphanStillRunning(ExecutionLauncher):
+    """A run that is not adoptable but is very much alive.
+
+    The shape this covers is real and reachable: ``adopt`` returns ``None``
+    for a live child whose event file is missing (the scratch was cleaned
+    out from under it), and for two children claiming one execution id.
+    ``NothingToAdopt`` cannot express either, because in both of those the
+    child is the whole problem and it is still there afterwards.
+    """
+
+    def __init__(self, live: bool = True) -> None:
+        self.live = live
+        self.asked: list = []
+
+    def launch(self, execution_id, graph) -> None:
+        raise AssertionError("the reconcile tests never launch")
+
+    def cancel(self, execution_id) -> None:
+        raise AssertionError("the reconcile tests never cancel")
+
+    def adopt(self, execution_id):
+        return None
+
+    def recorded_outcome(self, execution_id):
+        return None
+
+    def has_running_child(self, execution_id) -> bool:
+        self.asked.append(execution_id)
+        return self.live
+
 
 # ==========================================================================
 # Section A: the entity owns its lifecycle
@@ -469,6 +506,74 @@ check(
     "one failed event per swept row",
 )
 check(sweep.execute().cleaned == 0, "second sweep finds nothing")
+
+# Reconcile: a child that is alive but cannot be adopted.
+#
+# The hazard is named in this module's own docstring -- "leave a process
+# nobody is watching ... holding the card, unstoppable through the API" --
+# and then not closed, because `adopt()` returning None means two quite
+# different things and the reconciler reads it as one:
+#
+#   * no child at all               -> failing the row is right
+#   * a live child we will not kill -> failing the row is what CREATES the
+#     hazard, because a terminal row releases the single-active check
+#
+# Not killing it is a deliberate position, asserted by
+# test_a_run_with_no_event_file_is_not_adopted: the supervisor is not the
+# owner of a process it did not start. That position is kept here. What
+# cannot be kept is failing the row while it holds the card -- that is the
+# state where a second run is allowed to start next to it.
+print("-- reconcile: a live child keeps its row --")
+
+orphan_db = SqliteDatabase(
+    Path(tempfile.mkdtemp(prefix="backend-graph-orphan-")) / "o.db"
+)
+orphan_db.initialize()
+orphan_repo = SqliteGraphExecutionRepository(orphan_db)
+orphan = GraphExecution.create(graph=VALID, created_at=NOW)
+orphan_repo.add(orphan)
+orphan.mark_running(at=NOW)
+check(orphan_repo.update_if_status(orphan, expected=GraphStatus.QUEUED),
+      "fixture: one row left running with a child nobody can adopt")
+
+orphan_launcher = OrphanStillRunning(live=True)
+orphan_sweep = ReconcileGraphExecutions(
+    executions=orphan_repo,
+    writer=ExecutionLifecycleWriter(
+        clock=FakeClock(), repository=orphan_repo,
+        events=EventPublisher(events=RecordingEventBus()),
+    ),
+    launcher=orphan_launcher,
+    clock=FakeClock(),
+)
+orphan_result = orphan_sweep.execute()
+check(
+    orphan_repo.get(orphan.id).status is GraphStatus.RUNNING,
+    "a row whose child is still alive is left running, so the "
+    f"single-active check still refuses a second run (got "
+    f"{orphan_repo.get(orphan.id).status.value})",
+)
+check(orphan_result.cleaned == 0 and orphan_result.still_running == 1,
+      f"and counted separately rather than as cleaned (got cleaned="
+      f"{orphan_result.cleaned} still_running={orphan_result.still_running})")
+
+# The same row, with the child finally gone, settles on the next sweep --
+# otherwise "leave it running" would be a permanent orphan rather than a
+# pause.
+orphan_launcher.live = False
+orphan_sweep2 = ReconcileGraphExecutions(
+    executions=orphan_repo,
+    writer=ExecutionLifecycleWriter(
+        clock=FakeClock(), repository=orphan_repo,
+        events=EventPublisher(events=RecordingEventBus()),
+    ),
+    launcher=orphan_launcher,
+    clock=FakeClock(),
+)
+after = orphan_sweep2.execute()
+check(after.cleaned == 1 and after.still_running == 0,
+      f"once the child is gone the next sweep settles it (got cleaned="
+      f"{after.cleaned} still_running={after.still_running})")
 
 # Reconcile: a run that finished while nothing was watching it.
 #

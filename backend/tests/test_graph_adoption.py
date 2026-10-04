@@ -95,6 +95,10 @@ class RecordingGateway(GraphTaskGateway):
         self.stopped: list[int] = []
         self.killed: list[int] = []
         self.found: int | None = None
+        #: Two children claiming one execution id. `find_running`
+        #: refuses to pick between them; both are still running, which
+        #: is what `find_running_all` is for.
+        self.found_many: list[int] = []
 
     def spawn(self, launch: GraphTaskLaunch) -> int:
         raise AssertionError("adoption tests never spawn")
@@ -108,8 +112,16 @@ class RecordingGateway(GraphTaskGateway):
     def is_alive(self, pid: int) -> bool:
         return self.alive
 
+    def find_running_all(self, execution_id: ExecutionId) -> list[int]:
+        # What the test declared: `found` is the one child, `found_many`
+        # the "two children claim it" case that `find_running` collapses.
+        if self.found_many:
+            return list(self.found_many)
+        return [self.found] if self.found is not None else []
+
     def find_running(self, execution_id: ExecutionId) -> int | None:
-        return self.found
+        matches = self.find_running_all(execution_id)
+        return matches[0] if len(matches) == 1 else None
 
     def write(self, *records: dict) -> None:
         """Append records as the fake child would.
@@ -198,6 +210,12 @@ class RunningExecutions(ExecutionLauncher):
 
     def recorded_outcome(self, execution_id):
         return None
+
+    def has_running_child(self, execution_id) -> bool:
+        # This launcher is a stand-in for the supervisor's watcher, not a
+        # process table, so it has no children to find -- the runs it
+        # represents live in a thread here and cannot outlive the server.
+        return False
 
     def go_terminal(self, execution_id) -> None:
         self._terminal.add(execution_id)
@@ -358,6 +376,67 @@ def test_a_live_child_is_found_by_argv_not_by_a_stored_pid() -> None:
 
     check(gateway.find_running(ExecutionId(77)) is None,
           "once it is gone there is nothing to adopt")
+
+
+def test_a_real_child_that_cannot_be_adopted_is_still_reported_running() -> None:
+    print("\n== adoption: refusing to adopt is not the same as being gone ==")
+    # Spawned for real, and the event file removed underneath it, which is
+    # the reachable way to get here: a sweep that cleans scratch, or a
+    # layout change between the run and the restart, leaves a live child
+    # whose output has no reader.
+    #
+    # This is the check that separates two questions the code was answering
+    # with one. `adopt` answers "can the new server watch it" -> no, and
+    # refuses to kill it, deliberately (the test above). `has_running_child`
+    # answers "is it still there" -> yes. Before it existed, a caller read
+    # the first answer as the second, failed the row, and released the
+    # single-active check while a real process held the card.
+    scratch = TMP / "orphan_scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    graph = scratch / "orphan_graph.json"
+    graph.write_text(
+        '{"format": 1, "nodes": [{"id": "a", "class_name": "FloatConstantNode",'
+        ' "params": {"value": 1.0}}], "edges": []}',
+        encoding="utf-8",
+    )
+    gateway = SubprocessGraphTaskGateway(WorkspaceLayout(REPO_ROOT))
+    pid = gateway.spawn(
+        GraphTaskLaunch(
+            execution_id=ExecutionId(88),
+            graph_path=graph,
+            # The name `_paths_for` will look for, so the deletion below is
+            # the real thing and not a mismatch that passes for one.
+            event_path=scratch / "88.events.jsonl",
+            log_path=scratch / "88.log",
+        )
+    )
+    try:
+        supervisor = _supervisor(gateway, scratch_dir=scratch)
+        check(supervisor.has_running_child(ExecutionId(88)),
+              "a real spawned child is reported as still running")
+
+        (scratch / "88.events.jsonl").unlink(missing_ok=True)
+        check(gateway.is_alive(pid),
+              "fixture: it is alive with its output deleted")
+        check(supervisor.adopt(ExecutionId(88)) is None,
+              "and still not adoptable -- nothing would read its records")
+        check(
+            supervisor.has_running_child(ExecutionId(88)),
+            "but still reported as running, which is the whole point: "
+            "'I will not adopt it' and 'it is gone' are different answers "
+            "and the reconciler needs the second one to avoid failing the "
+            "row and releasing the single-active check",
+        )
+        check(not supervisor.has_running_child(ExecutionId(89)),
+              "and a different execution id finds nothing, so this is the "
+              "child's own argv rather than 'anything of ours is alive'")
+    finally:
+        gateway.kill(pid)
+        wait_until(lambda: not gateway.is_alive(pid), timeout=30.0)
+
+    check(not supervisor.has_running_child(ExecutionId(88)),
+          "once it is gone, it is reported gone -- so leaving a row alone is "
+          "a pause that the next sweep settles, not a permanent orphan")
 
 
 def test_a_run_with_no_event_file_is_not_adopted() -> None:
@@ -777,6 +856,7 @@ def main() -> None:
     tests = [
         test_replay_skips_node_results_but_keeps_monitor_history,
         test_a_live_child_is_found_by_argv_not_by_a_stored_pid,
+        test_a_real_child_that_cannot_be_adopted_is_still_reported_running,
         test_a_run_with_no_event_file_is_not_adopted,
         test_an_in_process_run_is_never_adoptable,
         test_adoption_counts_are_reported_separately,

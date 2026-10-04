@@ -40,10 +40,20 @@ class ReconcileResult:
 
     ``cleaned`` is the count that failed; ``adopted`` is the count that
     was re-attached to and is still running.
+
+    ``still_running`` is the count that was left alone *because* something
+    of it is alive and cannot be adopted -- a child whose event file is
+    gone, or two children claiming one id. It is neither of the other two:
+    the row did not leave an unfinished state (``cleaned``) and nobody is
+    watching the process (``adopted``). Counting it as either would report
+    discarded work or supervised work, and both would be false, which is
+    why it is reported rather than folded in. It is 0 for a reconciler
+    whose runs are threads, which cannot outlive the server.
     """
 
     cleaned: int
     adopted: int = 0
+    still_running: int = 0
 
 
 @dataclass(frozen=True, slots=True)

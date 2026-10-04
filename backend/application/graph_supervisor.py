@@ -308,6 +308,26 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         ).start()
         return pid
 
+    def has_running_child(self, execution_id: ExecutionId) -> bool:
+        """Whether anything of this execution is alive but unwatchable.
+
+        Deliberately **not** answered by killing it. The supervisor is not
+        the owner of a process it did not start, and a user can still find
+        one in ``ps`` -- a position the tests take deliberately
+        (``test_a_run_with_no_event_file_is_not_adopted``). What it must
+        not do is let "I will not adopt it" be read as "it is gone": a
+        caller that concludes the row is debris and fails it releases the
+        single-active check while the child still holds the card, which is
+        the two-trainers-on-one-card outcome this class spends its
+        comments on avoiding.
+
+        So the answer is a fact, and the caller decides. The reconciler
+        uses it to leave the row running and say so; the row then settles
+        on a later sweep, once the process is actually gone.
+        """
+        pids = self._gateway.find_running_all(execution_id)
+        return bool(pids)
+
     def _escalate(self, execution_id: ExecutionId, pid: int) -> None:
         """Hard-kill a run that ignored a cooperative stop."""
         threading.Event().wait(self._stop_grace)

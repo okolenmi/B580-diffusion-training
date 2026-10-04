@@ -117,6 +117,29 @@ missing is a real run:**
   `.dora_scale` magnitude + alpha) is real now for the common, unsplit
   case -- see 9.1/9.2 -- so this item is validation-only, same as the
   others in this list.
+- **Why the monitor's VRAM graph lists CLIP while the text encoder is
+  released** — asked 2026-10-04, not yet answered. CLIP appears as a
+  resident series in the monitor window; the intuition is that it should
+  not, because CLIP is not resident during a training step. Two things
+  measured so far, and neither settles it:
+  - In `gpu/smoke_test_real_training_step.py`, CLIP is genuinely gone
+    between phases: **0 MB allocated and 2 MB reserved** after
+    `del encoder` + `empty_cache()`, measured. But that is the *test*
+    choosing to free it — its own docstring says "CLIP alone, then off the
+    card, so the UNet has room" — so it says nothing about production.
+  - The production path deliberately does the opposite:
+    `AdaptiveResidencyController` treats `text_encoder` as one of its two
+    release candidates (with the optimizer), and `EncodeConditioningPhase`
+    calls `ensure_loaded("text_encoder")`. So a run where the controller
+    chooses to keep it is behaving as designed.
+
+  The question is therefore whether the *monitor's* series reflects
+  residency or something coarser — a model that was loaded during the run,
+  or a budget share rather than measured bytes. That is answerable by
+  reading what feeds `MonitoringPhase`'s `per_resident_mb`, and it should
+  be, because a VRAM graph that lists a released model as resident is
+  worse than no graph at all.
+
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,
   what is missing is a *file*. `default_vocabulary_dir()` still falls back

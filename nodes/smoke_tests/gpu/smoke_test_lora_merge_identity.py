@@ -51,6 +51,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import torch  # noqa: E402
 
+from nodes.smoke_tests.fast_construction import (  # noqa: E402
+    assert_fully_covered,
+    find_a_checkpoint,
+    read_state_dicts,
+    skipped_parameter_init,
+)
+
 failures: list[str] = []
 skipped: list[str] = []
 
@@ -91,30 +98,17 @@ def free(device: str) -> None:
 
 
 def load_unet_sd():
-    try:
-        import paths as project_paths
-        root = project_paths.get_comfy_dir()
-    except Exception as exc:  # noqa: BLE001
-        skip("a real checkpoint", f"no ComfyUI directory ({type(exc).__name__})")
-        return None
-    try:
-        from safetensors import safe_open
-    except ImportError:
-        skip("a real checkpoint", "safetensors is not installed")
-        return None
+    """The real checkpoint's UNet tensors, or None.
 
-    checkpoints = sorted((root / "models" / "checkpoints").glob("*.safetensors"),
-                         key=lambda q: q.stat().st_size, reverse=True)
-    if not checkpoints:
-        skip("a real checkpoint", f"none under {root / 'models' / 'checkpoints'}")
+    The shared reader rather than a third copy of this: it strips
+    `model.diffusion_model.` from the UNet keys, which is what the model's own
+    names are, so the coverage check below compares like with like.
+    """
+    path = find_a_checkpoint()
+    if path is None:
+        skip("a real checkpoint", "none found under ComfyUI's checkpoints")
         return None
-    path = next((c for c in checkpoints if c.stat().st_size > 1_000_000_000),
-                checkpoints[0])
-    unet = {}
-    with safe_open(path, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith("model.diffusion_model."):
-                unet[key] = f.get_tensor(key)
+    unet, _clip, _vae = read_state_dicts(path)
     print(f"  using {path.name}: {len(unet)} unet tensors")
     return unet
 
@@ -152,27 +146,29 @@ def main() -> int:
     from nodes.model.unet_wrapper import ComfyUNetWrapper
 
     # Conditioning first, off the card, so the UNet has room for its 10.3 GB.
-    from safetensors import safe_open
-    clip_sd = {}
-    root = Path(__import__("paths").get_comfy_dir())
-    biggest = sorted((root / "models" / "checkpoints").glob("*.safetensors"),
-                     key=lambda q: q.stat().st_size, reverse=True)[0]
-    with safe_open(biggest, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith("conditioner."):
-                clip_sd[key] = f.get_tensor(key)
+    # `unet_sd` was already read from this file above; only the conditioner
+    # half is still needed, and reading the whole thing again to get it is
+    # what this used to do.
+    _u, clip_sd, _v = read_state_dicts(find_a_checkpoint())
     encoder = SDXLClipEncoder(clip_sd, device=device)
     context, _pooled = encoder.encode_prompt(PROMPT)
     context = context.to(torch.float32).to(device)
     del encoder, clip_sd
     free(device)
 
-    wrapper = ComfyUNetWrapper(
-        unet_sd, device=device, dtype=torch.float32, use_checkpoint=False,
-        adm_in_channels=2816,
-        lora_config=LoRAConfig(rank=8, alpha=8.0,
-                               target_modules=["to_q", "to_k", "to_v",
-                                               "to_out.0"]))
+    # Base weights are replaced by the checkpoint's; skip initialising them
+    # first. `lora_B` still starts at exactly zero -- `LoRALinear` uses
+    # explicit `zeros_`, not `reset_parameters` -- and this file's whole
+    # premise is that a *trained* adapter differs from that starting point,
+    # so it asserts the adapters moved before relying on any comparison.
+    with skipped_parameter_init():
+        wrapper = ComfyUNetWrapper(
+            unet_sd, device=device, dtype=torch.float32, use_checkpoint=False,
+            adm_in_channels=2816,
+            lora_config=LoRAConfig(rank=8, alpha=8.0,
+                                   target_modules=["to_q", "to_k", "to_v",
+                                                   "to_out.0"]))
+    assert_fully_covered(wrapper.model, unet_sd, name="UNet")
     model = wrapper.model
 
     process = DiffusionProcess(DiscreteLinearNoiseSchedule(),
@@ -230,6 +226,7 @@ def main() -> int:
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "round_trip.safetensors"
+        from safetensors import safe_open
         from safetensors.torch import save_file
         save_file({k: v.contiguous() for k, v in exported.items()}, str(path))
         with safe_open(str(path), framework="pt") as f:

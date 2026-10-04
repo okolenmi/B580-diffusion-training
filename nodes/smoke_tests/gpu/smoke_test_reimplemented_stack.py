@@ -30,6 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import torch  # noqa: E402
 
+from nodes.smoke_tests.fast_construction import (  # noqa: E402
+    assert_fully_covered,
+    find_a_checkpoint,
+    read_state_dicts,
+    skipped_parameter_init,
+)
+
 failures: list[str] = []
 skipped: list[str] = []
 
@@ -55,35 +62,16 @@ def free(device: str) -> None:
 
 
 def load_checkpoint():
-    """A real SDXL checkpoint, split into the three state dicts."""
-    try:
-        import paths as project_paths
-        root = project_paths.get_comfy_dir()
-    except Exception as exc:  # noqa: BLE001
-        skip("a checkpoint", f"no ComfyUI directory ({type(exc).__name__})")
-        return None
-    candidates = sorted((root / "models" / "checkpoints").glob("*.safetensors"),
-                        key=lambda p: p.stat().st_size, reverse=True)
-    if not candidates:
-        skip("a checkpoint", f"none under {root / 'models' / 'checkpoints'}")
-        return None
-    try:
-        from safetensors import safe_open
-    except ImportError:
-        skip("a checkpoint", "safetensors is not installed")
-        return None
+    """A real SDXL checkpoint, split into the three state dicts.
 
-    path = next((c for c in candidates if c.stat().st_size > 1_000_000_000),
-                candidates[0])
-    unet, clip, vae = {}, {}, {}
-    with safe_open(path, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith("model.diffusion_model."):
-                unet[key[len("model.diffusion_model."):]] = f.get_tensor(key)
-            elif key.startswith("conditioner."):
-                clip[key] = f.get_tensor(key)
-            elif key.startswith("first_stage_model."):
-                vae[key[len("first_stage_model."):]] = f.get_tensor(key)
+    The shared reader, so all three GPU tests agree on which file and on what
+    the keys are called.
+    """
+    path = find_a_checkpoint()
+    if path is None:
+        skip("a checkpoint", "none found under ComfyUI's checkpoints")
+        return None
+    unet, clip, vae = read_state_dicts(path)
     print(f"  using {path.name}: {len(unet)} unet, {len(clip)} clip, "
           f"{len(vae)} vae tensors")
     return unet, clip, vae
@@ -119,7 +107,12 @@ def check_unet(device, context, adm, state):
     config = dict(ComfyUNetWrapper.SDXL_CONFIG)
     config["use_checkpoint"] = True
     config["adm_in_channels"] = 2816
-    unet = UNetModel(**config)
+    # Every one of the 1680 parameters is about to be replaced by the
+    # file's, and initialising 2.57 B values first costs 10.3 s. The
+    # coverage check is what makes that safe rather than merely fast.
+    with skipped_parameter_init():
+        unet = UNetModel(**config)
+    assert_fully_covered(unet, unet_sd, name="UNet")
     missing, unexpected = unet.load_state_dict(unet_sd, strict=False)
     record(not missing and not unexpected,
            "the UNet loads a real checkpoint with nothing missing or "
@@ -147,10 +140,14 @@ def check_unet(device, context, adm, state):
 def check_vae(device, state):
     from nodes.model.vae import AutoencoderKL
     _, _, vae_sd = state
-    vae = AutoencoderKL(embed_dim=4, ddconfig={
-        "double_z": True, "z_channels": 4, "resolution": 256,
-        "in_channels": 3, "out_ch": 3, "ch": 128, "ch_mult": [1, 2, 4, 4],
-        "num_res_blocks": 2, "attn_resolutions": [], "dropout": 0.0})
+    # 248 of 248 VAE tensors are covered by the checkpoint, measured.
+    with skipped_parameter_init():
+        vae = AutoencoderKL(embed_dim=4, ddconfig={
+            "double_z": True, "z_channels": 4, "resolution": 256,
+            "in_channels": 3, "out_ch": 3, "ch": 128,
+            "ch_mult": [1, 2, 4, 4], "num_res_blocks": 2,
+            "attn_resolutions": [], "dropout": 0.0})
+    assert_fully_covered(vae, vae_sd, name="VAE")
     missing, unexpected = vae.load_state_dict(vae_sd, strict=False)
     record(not missing and not unexpected,
            "the VAE loads a real checkpoint with nothing missing or "

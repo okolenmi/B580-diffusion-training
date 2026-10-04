@@ -49,6 +49,10 @@ from nodes.model.unet import (  # noqa: E402
     Upsample,
 )
 from nodes.model.unet_wrapper import ComfyUNetWrapper  # noqa: E402
+from nodes.smoke_tests.fast_construction import (  # noqa: E402
+    assert_fully_covered,
+    skipped_parameter_init,
+)
 
 failures: list[str] = []
 skipped: list[str] = []
@@ -172,11 +176,16 @@ def check_config_is_not_mutated():
     """
     cfg = dict(ComfyUNetWrapper.SDXL_CONFIG)
     before = dict(cfg)
-    UNetModel(**sdxl_kwargs())
-    record(cfg == before,
-           "building the real SDXL UNet leaves SDXL_CONFIG untouched",
-           f"changed: {[k for k in cfg if cfg[k] != before.get(k)]}")
-    UNetModel(**sdxl_kwargs())   # would raise if the config had been eaten
+    # 2.57 B parameters of initialisation, twice, for a check that only reads
+    # the config dict and would raise if the kwargs had been eaten. Shapes and
+    # names do not depend on the values, so the init is pure cost here --
+    # 10.3 s each, measured.
+    with skipped_parameter_init():
+        UNetModel(**sdxl_kwargs())
+        record(cfg == before,
+               "building the real SDXL UNet leaves SDXL_CONFIG untouched",
+               f"changed: {[k for k in cfg if cfg[k] != before.get(k)]}")
+        UNetModel(**sdxl_kwargs())   # would raise if the config had been eaten
     record(True, "and a second build in the same process works")
 
 
@@ -274,7 +283,11 @@ def check_against_comfy():
     torch.manual_seed(0)
     theirs = ComfyUNet(**{**sdxl_kwargs(), "legacy": False,
                           "dtype": torch.float32})
-    ours = UNetModel(**sdxl_kwargs())
+    # Only names and shapes are compared below, and `state_dict()` produces
+    # both without reading any value -- so the 10.3 s of initialisation would
+    # be thrown away unexamined.
+    with skipped_parameter_init():
+        ours = UNetModel(**sdxl_kwargs())
     their_keys, our_keys = set(theirs.state_dict()), set(ours.state_dict())
     record(their_keys == our_keys,
            "the real SDXL UNet builds an identical set of tensor names",
@@ -337,7 +350,10 @@ def check_lora_targets_resolve():
     """
     from nodes.model.lora import LoRAConfig, inject_lora_into_unet
 
-    model = UNetModel(**sdxl_kwargs(use_checkpoint=False))
+    # Only the module *names* matter here -- which modules get wrapped -- and
+    # no forward runs, so the initialised values are never read.
+    with skipped_parameter_init():
+        model = UNetModel(**sdxl_kwargs(use_checkpoint=False))
     config = LoRAConfig(rank=8, alpha=8.0,
                         target_modules=["to_q", "to_k", "to_v", "to_out.0"])
     registry = inject_lora_into_unet(model, config)
@@ -424,7 +440,13 @@ def check_real_checkpoint():
 
     record(len(state) == 1680,
            f"{path.name} holds 1680 UNet tensors", f"{len(state)}")
-    model = UNetModel(**sdxl_kwargs())
+    # Every parameter is about to be replaced by the file's, so skip the
+    # initialisation that `load_state_dict` would immediately overwrite --
+    # and check that claim rather than trusting it, because an uncovered
+    # tensor would still be holding uninitialised memory.
+    with skipped_parameter_init():
+        model = UNetModel(**sdxl_kwargs())
+    assert_fully_covered(model, state, name=path.name)
     missing, unexpected = model.load_state_dict(state, strict=False)
     record(not missing, "nothing missing", f"{missing[:4]}")
     record(not unexpected, "nothing unexpected", f"{unexpected[:4]}")

@@ -61,6 +61,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import torch  # noqa: E402
 
+from nodes.smoke_tests.fast_construction import (  # noqa: E402
+    assert_fully_covered,
+    find_a_checkpoint,
+    read_state_dicts,
+    skipped_parameter_init,
+)
+
 failures: list[str] = []
 skipped: list[str] = []
 
@@ -123,33 +130,19 @@ def reset_peak(device: str) -> None:
 
 
 def load_state_dicts():
-    try:
-        import paths as project_paths
-        root = project_paths.get_comfy_dir()
-    except Exception as exc:  # noqa: BLE001
-        skip("a real checkpoint", f"no ComfyUI directory ({type(exc).__name__})")
-        return None
-    try:
-        from safetensors import safe_open
-    except ImportError:
-        skip("a real checkpoint", "safetensors is not installed")
-        return None
+    """``(unet, clip)`` from a real checkpoint, or None.
 
-    checkpoints = sorted((root / "models" / "checkpoints").glob("*.safetensors"),
-                         key=lambda q: q.stat().st_size, reverse=True)
-    if not checkpoints:
-        skip("a real checkpoint", f"none under {root / 'models' / 'checkpoints'}")
+    The shared reader, because two copies of this function had already
+    drifted: one stripped `model.diffusion_model.` from the UNet keys and one
+    did not, and the difference only showed up as a coverage assertion
+    reporting 972 tensors missing that were present under the other
+    convention.
+    """
+    path = find_a_checkpoint()
+    if path is None:
+        skip("a real checkpoint", "none found under ComfyUI's checkpoints")
         return None
-    path = next((c for c in checkpoints if c.stat().st_size > 1_000_000_000),
-                checkpoints[0])
-
-    unet, clip = {}, {}
-    with safe_open(path, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith("model.diffusion_model."):
-                unet[key] = f.get_tensor(key)
-            elif key.startswith("conditioner."):
-                clip[key] = f.get_tensor(key)
+    unet, clip, _vae = read_state_dicts(path)
     print(f"  using {path.name}: {len(unet)} unet, {len(clip)} clip tensors")
     return unet, clip
 
@@ -184,9 +177,30 @@ def build_wrapper(unet_sd, device, use_checkpoint):
 
     config = LoRAConfig(rank=8, alpha=8.0,
                         target_modules=["to_q", "to_k", "to_v", "to_out.0"])
-    return ComfyUNetWrapper(unet_sd, device=device, dtype=torch.float32,
-                            use_checkpoint=use_checkpoint,
-                            adm_in_channels=2816, lora_config=config)
+    # The base weights are all replaced by the checkpoint's below, so skip
+    # initialising 2.57 B of them first (10.3 s). The LoRA adapters are not
+    # affected: `LoRALinear` initialises `lora_A` and `lora_B` with explicit
+    # `kaiming_uniform_`/`zeros_` calls rather than through `reset_parameters`,
+    # so `lora_B` still starts at exactly zero -- which is what the gradient
+    # checks below depend on.
+    with skipped_parameter_init():
+        wrapper = ComfyUNetWrapper(unet_sd, device=device, dtype=torch.float32,
+                                   use_checkpoint=use_checkpoint,
+                                   adm_in_channels=2816, lora_config=config)
+    adapters = assert_fully_covered(wrapper.model, unet_sd, name="UNet")
+    # `assert_fully_covered` accepts the adapters' own tensors as covered,
+    # because LoRALinear initialises them itself rather than through
+    # `reset_parameters`. That is a claim, so it is checked here rather than
+    # assumed: lora_B must start at exactly zero, which is what makes this
+    # test's "exactly half the gradients are zero" observation true.
+    parameters = dict(wrapper.model.named_parameters())
+    lora_b = [parameters[a] for a in adapters if a.endswith("lora_B")]
+    if not all(bool((p == 0).all()) for p in lora_b):
+        raise AssertionError(
+            f"skipped_parameter_init disturbed the adapters: "
+            f"{sum(0 if bool((p == 0).all()) else 1 for p in lora_b)} of "
+            f"{len(lora_b)} lora_B tensors are not exactly zero")
+    return wrapper
 
 
 def set_checkpointing(model, flag: bool) -> int:
@@ -399,13 +413,27 @@ def main() -> int:
            None)
 
     loss_effect = abs(loss_a - loss_c)
-    loss_ceiling = max(abs(loss_a - loss_b), abs(loss_c - loss_d)) * NOISE_HEADROOM
+    # The gradient ceiling above is `max(observed floors) * headroom`, and the
+    # gradient floors are reliably non-zero -- measured between 5.7e-09 and
+    # 2.0e-08 across many runs. The loss's are not: both pairs of runs often
+    # come back *bitwise* identical, so both floors are 0.0, the ceiling is
+    # 0.0, and any difference at all fails. That is what the gate caught on
+    # 2026-10-04, with the loss differing by 2.98e-08 -- about 0.6 ulp of a
+    # float32 near 0.44.
+    #
+    # So the loss gets a floor of its own, from the representation rather than
+    # from the hardware: a float32 scalar of this magnitude cannot agree with
+    # itself to better than its own ulp, so demanding that is asking for
+    # something the format does not offer. Four ulps is generous for a
+    # reduction over 128k elements and still orders of magnitude below the
+    # 1e+00 a genuinely dropped gradient term would produce.
+    loss_floor = max(abs(loss_a - loss_b), abs(loss_c - loss_d))
+    loss_ceiling = max(loss_floor * NOISE_HEADROOM,
+                       4.0 * torch.finfo(torch.float32).eps * abs(loss_a))
     record(loss_effect <= loss_ceiling,
-           f"and the loss likewise, against a ceiling built the same way from "
-           f"the loss's own run-to-run variation: {loss_effect:.3e} against "
-           f"{loss_ceiling:.3e} "
-           f"(floor {abs(loss_a - loss_b):.3e} uncheckpointed, "
-           f"{abs(loss_c - loss_d):.3e} checkpointed)",
+           f"and the loss likewise, against a ceiling of {loss_ceiling:.3e} "
+           f"built from its run-to-run variation ({loss_floor:.3e}) and from "
+           f"float32's own resolution at this magnitude: {loss_effect:.3e}",
            None)
 
     record(peak_on <= peak_off,

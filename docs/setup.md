@@ -131,6 +131,15 @@ python run_tests.py
 # Filter by filename substring, e.g. only memory-related tests
 python run_tests.py memory
 
+# The CPU-bound files run in parallel; the ones under
+# nodes/smoke_tests/gpu/ stay one at a time, because there is one card
+# and two of them at once OOM each other rather than merely running
+# slower. Measured on this six-core box: 368 s serial, 168 s as shipped.
+
+python run_tests.py --jobs 6      # more workers (default: cores - 1, max 4)
+python run_tests.py --serial      # one file at a time, as this always was
+python run_tests.py --no-gpu      # skip the accelerator tests entirely
+
 # Per-suite runners still work on their own:
 python nodes/smoke_tests/run_all.py          # nodes/ only
 python manager/smoke_tests/smoke_test_lora_raw_dataset.py

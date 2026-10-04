@@ -255,17 +255,57 @@ missing is a real run:**
     **not** a Port: raising it does not make warming a million captions a
     good idea, it only moves the failure later.
 
-  **The design answer, from the user and not yet built: a windowed warm.**
-  Prewarm the next N steps' keys rather than all of them, refilling as
-  training goes — and the enabling fact is that the next N keys *are*
-  knowable: the loader's clump-then-shuffle is deterministic given its
-  seed, so the order of future batches is determined. Better still, refill
-  window N+1 *while* N trains, so there is no pause at all. Two open
-  questions before that is buildable, and both are the user's to settle:
-  whether a step's keys must be resident before the step begins (they must,
-  or the first access is a miss that reloads 1.5 GB of CLIP mid-step) and
-  what the window size should be relative to how fast the shuffle reorders
-  relative to how fast CLIP encodes.
+  **Correction to the framing below, from measurement after the user
+  proposed an on-demand alternative.** The user proposed dropping the
+  up-front warm for a per-step loop: check the cache, miss, load CLIP,
+  encode, evict CLIP, check again -- with eviction of other residents to
+  RAM if there is no room. Measured, that loop is the *most* expensive
+  option, not the cheapest, because the churn dwarfs the work:
+
+  | | cost |
+  |---|---|
+  | CLIP load RAM->XPU | **364 ms** |
+  | CLIP evict XPU->RAM | **396 ms** |
+  | encode one prompt (resident) | **30 ms** |
+  | **an on-demand miss, room available** | **790 ms** -- 96% churn |
+  | UNet evict XPU->RAM / reload | **1,449 / 1,145 ms** |
+  | **an on-demand miss, no room** (evict UNet too) | **3,384 ms = 139% of a 2.43 s step** |
+
+  Eviction *is* cheap next to a whole step, which is the intuition behind
+  it -- but the comparison that decides anything is against the 30 ms
+  encode, and load+evict is **25x** that. So on-demand is the right
+  *fallback* and the wrong *primary*: prewarm pays 30 ms once per distinct
+  prompt and never again, where on-demand pays 790 ms (or 3,384 ms on a
+  tight card) per miss, and misses are per distinct prompt. It is also
+  already what happens -- `CachingTextEncoder` self-loads on a miss, so the
+  user's loop describes the existing degradation path accurately, and it is
+  what makes a miss *correct* rather than wrong. It just must not be the
+  plan.
+
+  **So the windowed warm stands, and it is the answer for the regime the
+  RAM limit creates (>50k distinct prompts on 32 GB).** What the exchange
+  did settle is *why* it needs order-knowability rather than a bigger
+  budget: because on-demand is not a cheaper alternative to fall back on,
+  so past the RAM limit the choices are a window, a second GPU, or
+  accepting a per-prompt 790 ms.
+
+  **The one thing that looks wasteful right now, and is.** For all three
+  real datasets there is **1 distinct prompt**, so the warm pass costs
+  30 ms while `discover_dataset_keys` costs **1.24 ms per sample** -- at
+  1M samples that is 21 minutes of discovery to warm one prompt. The
+  discovery pass is ~99.99% of prewarm's cost on these datasets and 100% of
+  it is avoidable when the prompt count is tiny. A cheap bound exists that
+  needs no order-knowability: stop discovering once N consecutive batches
+  have introduced no new *prompt* (new *resolution* keys are nearly free --
+  1.6 ms each, and `non-square` has 43 of them against 1 prompt). Heuristic,
+  and the failure is a miss rather than a wrong answer, so it is safe in
+  the same way `MAX_DISCOVERY_BATCHES` is.
+
+  **The strongest of the user's three proposals is the second GPU.** A spare
+  card preparing prompts ahead removes the limit outright, because encoding
+  stops being on the critical path and the host-RAM ceiling stops being the
+  binding constraint. Larger than a windowed warm and it is the only option
+  here that does not need to predict the shuffle.
 
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,

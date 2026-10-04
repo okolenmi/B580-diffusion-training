@@ -43,6 +43,15 @@ from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
 from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.errors import ConfigNotFoundError
+from backend.application.memory_admission import (
+    LedgerProvider,
+    release,
+    task_owner,
+)
+from backend.application.memory_ledger import (
+    DEFAULT_FOREIGN_RESERVE_MB,
+    DEFAULT_PROCESS_OVERHEAD_MB,
+)
 from backend.application.project_paths import ProjectPaths
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.event_publisher import EventPublisher
@@ -470,14 +479,31 @@ class RecordingEventBus(CallbackEventBus):
 class FakeDatasetTaskGateway(DatasetTaskGateway):
     """Scriptable fork gateway: spawn registers a fake pid as alive;
     tests kill it by discarding from ``alive``; ``spawn_error`` fails
-    the launch (mirrors FakeTrainingGateway's posture)."""
+    the launch (mirrors FakeTrainingGateway's posture).
 
-    def __init__(self) -> None:
+    ``on_exit`` is the same hook the real gateway's reaper thread calls
+    when the child is gone (it hands the admission claim back). Two
+    ways a fake child dies, both faithful to the real gateway:
+
+    * ``kill()`` -- the real gateway SIGKILLs the whole group, so the
+      child is gone when kill returns and the waiter fires then;
+    * ``child_exited(task_id)`` -- a *natural* end (the real child
+      finalises its own row and the reaper notices the exit); a fake
+      child has no thread, so a test that ends a task this way fires
+      it explicitly.
+
+    Never fired automatically on row finalisation: "the child is still
+    running" is exactly what most task tests are asserting.
+    """
+
+    def __init__(self, on_exit=None) -> None:
         self.spawned: list[DatasetTaskLaunch] = []
         self.killed: list[int] = []
         self.alive: set[int] = set()
         self.spawn_error: Exception | None = None
         self.next_pid = 7777
+        self._on_exit = on_exit
+        self._pid_to_task: dict[int, int] = {}
 
     def spawn(self, launch: DatasetTaskLaunch) -> int:
         if self.spawn_error is not None:
@@ -486,14 +512,27 @@ class FakeDatasetTaskGateway(DatasetTaskGateway):
         pid = self.next_pid
         self.next_pid += 1
         self.alive.add(pid)
+        self._pid_to_task[pid] = launch.task_id
         return pid
 
     def kill(self, pid: int) -> None:
         self.killed.append(pid)
         self.alive.discard(pid)
+        # SIGKILL is immediate: the real reaper fires when the child is
+        # gone, and here the child is gone now. A kill that skipped the
+        # waiter would hold a dead task's claim and refuse the next
+        # start against a card that is actually free.
+        task_id = self._pid_to_task.pop(pid, None)
+        if task_id is not None and self._on_exit is not None:
+            self._on_exit(task_id)
 
     def is_alive(self, pid: int) -> bool:
         return pid in self.alive
+
+    def child_exited(self, task_id: int) -> None:
+        """Simulate the child leaving: fire the exit hook if wired."""
+        if self._on_exit is not None:
+            self._on_exit(task_id)
 class FakeConfigInspector(ConfigInspector):
     """Existence check is real; summaries/descriptions are scripted.
 
@@ -944,11 +983,6 @@ def build_services(
         tasks_db = SqliteDatabase(project_root / "test-dataset-tasks.db")
         tasks_db.initialize()
         dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
-    if dataset_gateway is None:
-        dataset_gateway = FakeDatasetTaskGateway()
-        task_sweeper = DatasetTaskSweeper(
-            tasks=dataset_tasks, gateway=dataset_gateway, clock=clock
-        )
     if dataset_previews is None:
         previews_db = SqliteDatabase(project_root / "test-dataset-previews.db")
         previews_db.initialize()
@@ -983,6 +1017,35 @@ def build_services(
             graph_executions = SqliteGraphExecutionRepository(graphs_db)
         if graph_library is None:
             graph_library = SqliteGraphLibrary(graphs_db)
+    shared_probe = device_probe or FakeDeviceProbe()
+    # The test twin of bootstrap's ledger wiring (MEM-03): the fake
+    # probe always reports 12,216 MB, so with the ADR defaults capacity
+    # is 12,216 - 1,024 foreign = 11,192 MB. Built on first use, same
+    # as production; first use in a test is normally the first start,
+    # which also rebuilds it from unfinished rows.
+    memory_ledger = LedgerProvider(
+        probe=shared_probe,
+        graph_executions=graph_executions,
+        dataset_tasks=dataset_tasks,
+        foreign_reserve_mb=DEFAULT_FOREIGN_RESERVE_MB,
+        process_overhead_mb=DEFAULT_PROCESS_OVERHEAD_MB,
+    )
+    # Unconditional, like ``graph_scratch``: a caller that passes only
+    # ``dataset_gateway`` still needs ``task_sweeper`` bound (the old
+    # nested assignment left it unbound and its first use raised
+    # NameError). A fake child has no waiter thread of its own, so
+    # tests end tasks by calling ``child_exited`` -- the same thing the
+    # real gateway's reaper does on child exit.
+    if dataset_gateway is None:
+        dataset_gateway = FakeDatasetTaskGateway(
+            on_exit=lambda task_id: release(memory_ledger, task_owner(task_id)),
+        )
+    task_sweeper = DatasetTaskSweeper(
+        tasks=dataset_tasks,
+        gateway=dataset_gateway,
+        clock=clock,
+        memory_ledger=memory_ledger,
+    )
     execution_writer = ExecutionLifecycleWriter(
         clock=clock,
         repository=graph_executions, events=publisher
@@ -1001,11 +1064,11 @@ def build_services(
             ),
             events=publisher,
             clock=clock,
+            memory_ledger=memory_ledger,
             monitor_bus=monitor_bus,
             scratch_dir=graph_scratch,
             make_tail=ExecutionEventTail,
         )
-    shared_probe = device_probe or FakeDeviceProbe()
     # One job dict, so a job created by a test can be polled through the
     # same services object the route reads.
     install_jobs: dict = {}
@@ -1022,6 +1085,7 @@ def build_services(
             check=CheckRequirements(
                 inventory=MetadataPackageInventory(),
                 device=shared_probe,
+                memory_ledger=memory_ledger,
             ),
             # The same object `check` uses, so a test cannot be handed two
             # views of the machine. FakeDeviceProbe falls back to the single
@@ -1089,6 +1153,7 @@ def build_services(
                 tasks=dataset_tasks,
                 gateway=dataset_gateway,
                 checkpoints_dir=lambda: layout.checkpoints_dir,
+                memory_ledger=memory_ledger,
                 sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(tasks=dataset_tasks, gateway=dataset_gateway),
@@ -1108,7 +1173,7 @@ def build_services(
                 runtime=graph_runtime,
                 launcher=graph_supervisor,
                 clock=clock,
-                device_probe=shared_probe,
+                memory_ledger=memory_ledger,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
@@ -1123,12 +1188,14 @@ def build_services(
                 scratch=SweepExecutionScratch(
                     executions=graph_executions, scratch_dir=graph_scratch,
                 ),
+                memory_ledger=memory_ledger,
             ),
             reconcile_executions=ReconcileGraphExecutions(
                 executions=graph_executions,
                 writer=execution_writer,
                 launcher=graph_supervisor,
                 clock=clock,
+                memory_ledger=memory_ledger,
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),
@@ -1137,6 +1204,7 @@ def build_services(
         ),
         events=publisher,
         event_bus=events,
+        memory_ledger=memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 

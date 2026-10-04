@@ -522,7 +522,8 @@ check(
 )
 
 # No overrides: the graph's defaults, and an unknown demand claims the
-# capacity the cached probe reports (FakeDeviceProbe: 12216 MB).
+# capacity the ledger reports (FakeDeviceProbe: 12216 MB, minus the
+# 1024 MB foreign reserve -- the usable capacity the claim can size).
 plain = graphs.start_execution.execute(VALID)
 plain_finished = wait_until(
     lambda: (
@@ -532,11 +533,14 @@ plain_finished = wait_until(
 )
 check(plain_finished, "the plain run reaches a terminal state")
 plain_stored = start_repo.get(plain.execution_id)
+plain_ledger = services.memory_ledger()
 check(
     plain_stored.memory is not None
-    and plain_stored.memory.demand_mb == 12216.0
+    and plain_ledger is not None
+    and plain_stored.memory.demand_mb == plain_ledger.capacity_mb
     and plain_stored.memory.demand_source == "unknown",
-    "no overrides: unknown demand claims the probe's reported capacity",
+    "no overrides: unknown demand claims the ledger's usable capacity "
+    f"(got {plain_stored.memory and plain_stored.memory.demand_mb})",
 )
 
 # Reconcile: both non-terminal shapes are dead-process debris.

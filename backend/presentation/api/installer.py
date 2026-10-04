@@ -29,10 +29,12 @@ error envelope on failure, no `200 {"error": ...}`.
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends
 
 from ...application.errors import InstallerNotAllowedError
+from ...application.memory_admission import admit
 from ...application.ports.environment import CachedDeviceProbe
 from ...application.services import ApplicationServices
 from ...application.use_cases.install_packages import JobNotFound, InstallJobNotFound
@@ -147,7 +149,28 @@ def get_devices(
     probe = services.installer.device_probe
     if refresh and isinstance(probe, CachedDeviceProbe):
         probe.invalidate()
-    rows, reason = probe.devices_with_reason()
+    ledger = services.memory_ledger()
+    if ledger is None:
+        rows, reason = probe.devices_with_reason()
+    else:
+        # Enumerating the card runs the same subprocess the readiness
+        # probe does, so it is admitted on the same terms (MEM-03:
+        # "and the probe"). A refusal is a 409 `memory_unavailable`
+        # carrying the breakdown -- an API caller can be told exactly
+        # who holds the device, where the wizard degrades to
+        # "not checked" instead.
+        owner = f"probe:{uuid4().hex}"
+        try:
+            admit(
+                ledger,
+                owner,
+                ledger.process_overhead_mb,
+                exploratory=False,
+                what="device enumeration",
+            )
+            rows, reason = probe.devices_with_reason()
+        finally:
+            ledger.release(owner)
     return InstallerDevicesOut(
         enumerated=bool(probe.enumerate_all) and reason is None,
         backend=getattr(probe, "backend", "xpu"),

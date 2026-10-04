@@ -186,6 +186,29 @@ class MemoryLedger:
             self._holders[owner] = _Holder(owner=owner, mb=demand_mb)
             return Grant(owner=owner, mb=demand_mb)
 
+    def rename(self, old_owner: str, new_owner: str) -> None:
+        """Re-key a claim in place, atomically.
+
+        A claim has to be taken *before* the row it belongs to exists
+        (a refusal must not leave a row behind), but the row's id is
+        only known after the insert -- so the claim starts under a
+        provisional owner and is renamed to the row-derived one while
+        still inside the start lock. Release paths derive owners from
+        rows, so the rename is what makes ``graph:<id>`` / ``task:<id>``
+        the one naming convention.
+
+        Idempotent: renaming an owner that holds nothing does nothing
+        (the same posture as `release`). If `new_owner` already holds a
+        claim that is a bug in the caller -- ids are unique -- and the
+        newer claim wins, so the ledger never over-counts; it may
+        momentarily under-count a claim that should not have collided.
+        """
+        with self._lock:
+            holder = self._holders.pop(old_owner, None)
+            if holder is not None:
+                holder.owner = new_owner
+                self._holders[new_owner] = holder
+
     def release(self, owner: str) -> None:
         """Drop a holder's claim. Idempotent, so a failed start can clean up."""
         with self._lock:

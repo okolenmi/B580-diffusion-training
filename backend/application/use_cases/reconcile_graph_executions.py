@@ -60,6 +60,7 @@ from __future__ import annotations
 import logging
 
 from ..dto import ReconcileResult
+from ..memory_admission import LedgerSource, graph_owner, release
 from ..ports.clock import Clock
 from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.execution_launcher import ExecutionLauncher
@@ -77,11 +78,27 @@ class ReconcileGraphExecutions:
         writer: ExecutionLifecycleWriter,
         launcher: ExecutionLauncher,
         clock: Clock,
+        memory_ledger: LedgerSource | None = None,
     ) -> None:
         self._executions = executions
         self._writer = writer
         self._launcher = launcher
         self._clock = clock
+        # Where claims are handed back for rows this sweep settles.
+        # None only where the container has no ledger -- and then no
+        # claim exists for these rows either (a start without a ledger
+        # refuses before it reserves), so skipping is not an unchecked
+        # admit, it is nothing at all. The composition roots pass one.
+        self._memory_ledger = memory_ledger
+
+    def _release_claim(self, execution_id) -> None:
+        """Hand the admission claim back for a row that is now terminal.
+
+        Idempotent: the row may have been finalised by another writer
+        that already released, and a claim that never existed (a row
+        from before the column) is a no-op.
+        """
+        release(self._memory_ledger, graph_owner(execution_id))
 
     def execute(self) -> ReconcileResult:
         adopted = 0
@@ -109,6 +126,7 @@ class ReconcileGraphExecutions:
                         "reconcile: execution %s was finalised by another writer",
                         execution.id,
                     )
+                    self._release_claim(execution_id)
                     continue
                 recorded += 1
                 logger.info(
@@ -118,6 +136,7 @@ class ReconcileGraphExecutions:
                     execution.status.value,
                     len(outcome.results),
                 )
+                self._release_claim(execution_id)
                 continue
 
             # `adopt` said no and the run left no record, and the tempting
@@ -156,6 +175,7 @@ class ReconcileGraphExecutions:
                     "reconcile: execution %s was finalised by another writer",
                     execution.id,
                 )
+                self._release_claim(execution_id)
                 continue
             cleaned += 1
             logger.info(
@@ -163,6 +183,7 @@ class ReconcileGraphExecutions:
                 execution.id,
                 execution.status.value,
             )
+            self._release_claim(execution_id)
         if adopted:
             logger.info("adopted %d still-running graph execution(s)", adopted)
         if recorded:

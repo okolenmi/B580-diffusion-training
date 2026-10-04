@@ -1,9 +1,10 @@
 """StartDatasetTask -- validate, persist, spawn one dataset child.
 
 Check-then-act under a lock (one process, two concurrent starts must
-not both pass the active-task check); the row is added *before* the
-spawn so a crash between the two leaves something for startup
-reconciliation to sweep. A spawn failure fails the row here and
+not both pass the active-task check); the admission claim and the row
+are both taken inside that lock, the row *before* the spawn, so a crash
+between any of the steps leaves something for startup reconciliation to
+sweep. A spawn failure fails the row here, hands the claim back, and
 re-raises as ``DatasetTaskLaunchError`` -- there is nothing to reap.
 
 Two kinds, both following the same shape: validate everything first,
@@ -37,6 +38,7 @@ from ..errors import (
     InvalidQueryError,
 )
 from ..ports.dataset_library import DatasetLibrary
+from ..memory_admission import LedgerSource, admit, pending_owner, task_owner
 from ..ports.dataset_task_gateway import DatasetTaskGateway, DatasetTaskLaunch
 from ..ports.dataset_tasks import (
     DatasetTask,
@@ -64,6 +66,16 @@ def _task_kind(raw: str) -> TaskKind:
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 _RESIZE_MODES: tuple[str, ...] = ("fit", "center_crop", "pad", "resize")
 
+#: Stated device demands per task kind, in allocator MB. Deliberately
+#: empty: the spec calls for "stated per task type with a *measured*
+#: default (add to the hardware protocol)", and there is no measurement
+#: of either kind on this machine yet. A kind with no number here is
+#: **unknown**, and unknown is never a zero claim (task rule 2): it goes
+#: down the exploratory-exclusive path -- admitted only when nothing
+#: else holds the card, refused with a breakdown otherwise. The numbers
+#: land with the hardware protocol (MEM-08); one map edit wires them in.
+TASK_DEMAND_MB: dict[TaskKind, float] = {}
+
 
 class StartDatasetTask:
     """The only place a dataset task is born (single-active per dataset)."""
@@ -75,6 +87,7 @@ class StartDatasetTask:
         tasks: DatasetTasks,
         gateway: DatasetTaskGateway,
         checkpoints_dir: Callable[[], Path],
+        memory_ledger: LedgerSource,
         sweeper: DatasetTaskSweeper | None = None,
     ) -> None:
         self._library = library
@@ -92,6 +105,11 @@ class StartDatasetTask:
         # everywhere it is read. A callable rather than the layout itself
         # because ``application`` does not import ``infrastructure``.
         self._checkpoints_dir = checkpoints_dir
+        # Required, never defaulted: every container that starts tasks
+        # must say where admission lives. The provider may answer None
+        # (device total unknown) -- then every start is refused
+        # explicitly rather than admitted unchecked.
+        self._memory_ledger = memory_ledger
         # Optional because only the *liveness* judgement needs it, and
         # the composition root always passes it; a container without one
         # simply keeps a dead predecessor's row until startup.
@@ -141,31 +159,82 @@ class StartDatasetTask:
                     },
                 )
 
-            task = self._tasks.add(
-                dataset=command.dataset,
-                kind=kind,
-                total=total,
-                params=params,
+            # Admission, still under the start lock and still before the
+            # row: a refusal writes nothing and holds nothing. A kind
+            # with no measured default has an unknown demand, which the
+            # ledger treats as an exploratory exclusive claim (see
+            # TASK_DEMAND_MB) -- a dataset task blocks a graph that does
+            # not fit with it, and vice versa, because they share the
+            # one ledger.
+            ledger = self._memory_ledger()
+            stated = TASK_DEMAND_MB.get(kind)
+            exploratory = stated is None
+            if ledger is None:
+                # admit() refuses with device-total-unknown before it
+                # looks at the demand (rule 2).
+                device_demand = 0.0
+            elif stated is None:
+                device_demand = ledger.capacity_mb
+            else:
+                # Stated is allocator MB; a grant is device MB (rule 4).
+                device_demand = stated + ledger.process_overhead_mb
+            provisional = pending_owner("task")
+            grant = admit(
+                ledger,
+                provisional,
+                device_demand,
+                exploratory=exploratory,
+                what=f"a '{kind.value}' task",
             )
+
+            task: DatasetTask | None = None
             try:
-                pid = self._gateway.spawn(
-                    DatasetTaskLaunch(
-                        task_id=task.id,
-                        dataset_root=root,
-                        kind=kind,
-                        params=dict(params, model=str(self._model_path(command.model))),
+                task = self._tasks.add(
+                    dataset=command.dataset,
+                    kind=kind,
+                    total=total,
+                    params=params,
+                    reserved_mb=grant.mb,
+                )
+                if ledger is not None:
+                    ledger.rename(provisional, task_owner(task.id))
+                try:
+                    pid = self._gateway.spawn(
+                        DatasetTaskLaunch(
+                            task_id=task.id,
+                            dataset_root=root,
+                            kind=kind,
+                            params=dict(
+                                params, model=str(self._model_path(command.model))
+                            ),
+                        )
                     )
-                )
-            except DatasetTaskLaunchError as exc:
-                self._tasks.finalize_if_active(
-                    task.id, TaskStatus.FAILED, error=str(exc)
-                )
+                except DatasetTaskLaunchError as exc:
+                    self._tasks.finalize_if_active(
+                        task.id, TaskStatus.FAILED, error=str(exc)
+                    )
+                    raise
+            except BaseException:
+                # Failed between the claim and the child (or at the
+                # spawn itself): nothing stays held. Both owner forms
+                # go, because release is idempotent and the rename may
+                # or may not have happened. A hard crash cannot run
+                # this -- there, the row's claim is rebuilt at startup
+                # and released by the sweeper when the row turns out
+                # to have no live child.
+                if ledger is not None:
+                    if task is not None:
+                        ledger.release(task_owner(task.id))
+                    ledger.release(provisional)
                 raise
             # Record the pid immediately: stop() must be able to kill the
             # child during the seconds it spends importing torch before
             # its first progress tick, and reconciliation must recognise
             # it after a crash in this window. The child's own first
             # progress write repeats the same pid (self-identifying).
+            # Deliberately outside the claim-guarded try: once the child
+            # exists, its claim belongs to the child, and this write
+            # failing must not hand the capacity back while it runs.
             self._tasks.update_progress(task.id, 0, pid)
             return self._tasks.get(task.id) or task
 

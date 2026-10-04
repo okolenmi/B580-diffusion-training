@@ -23,8 +23,8 @@ from ...domain.value_objects import ExecutionId, GraphStatus
 from .sqlite import SqliteDatabase, fits_in_sqlite_int
 
 _COLUMNS = (
-    "id, status, graph, results, error, memory_json, created_at, "
-    "updated_at, started_at, finished_at"
+    "id, status, graph, results, error, memory_json, reserved_mb, "
+    "created_at, updated_at, started_at, finished_at"
 )
 
 # id is generated; graph is immutable (the submission snapshot).
@@ -62,6 +62,9 @@ def _row_to_execution(row) -> GraphExecution:
             EffectiveMemory.from_dict(json.loads(memory_raw))
             if memory_raw else None
         ),
+        reserved_mb=(
+            float(row["reserved_mb"]) if row["reserved_mb"] is not None else None
+        ),
         created_at=_parse_dt(row["created_at"]),  # NOT NULL in schema
         updated_at=_parse_dt(row["updated_at"]),  # NOT NULL in schema
         started_at=_parse_dt(row["started_at"]),
@@ -79,9 +82,9 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
         with self._db.connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO graph_executions "
-                "(status, graph, results, error, memory_json, created_at, "
-                " updated_at, started_at, finished_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(status, graph, results, error, memory_json, reserved_mb, "
+                " created_at, updated_at, started_at, finished_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._insert_values(execution),
             )
             execution.assign_id(ExecutionId(cursor.lastrowid))
@@ -100,6 +103,7 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
                 json.dumps(execution.memory.as_dict())
                 if execution.memory is not None else None
             ),
+            execution.reserved_mb,
             execution.created_at.isoformat(),
             execution.updated_at.isoformat(),
             execution.started_at.isoformat() if execution.started_at else None,

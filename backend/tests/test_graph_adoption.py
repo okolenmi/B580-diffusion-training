@@ -507,6 +507,41 @@ def test_the_default_is_the_child() -> None:
     )
 
 
+def test_memory_mb_settings_from_env() -> None:
+    print("\n== memory MB settings (ADR 0005 constants) ==")
+    from backend.application.memory_ledger import (
+        DEFAULT_FOREIGN_RESERVE_MB,
+        DEFAULT_PROCESS_OVERHEAD_MB,
+    )
+    from backend.config import Settings
+
+    plain = Settings.load({})
+    check(
+        plain.memory_foreign_reserve_mb == DEFAULT_FOREIGN_RESERVE_MB
+        and plain.memory_process_overhead_mb == DEFAULT_PROCESS_OVERHEAD_MB,
+        "unset environment gets the measured ADR defaults",
+    )
+    pinned = Settings.load({
+        "BACKEND_MEMORY_FOREIGN_RESERVE_MB": "2048",
+        "BACKEND_MEMORY_PROCESS_OVERHEAD_MB": "768.5",
+    })
+    check(
+        pinned.memory_foreign_reserve_mb == 2048.0
+        and pinned.memory_process_overhead_mb == 768.5,
+        "and both constants pin from the environment",
+    )
+    garbage = Settings.load({"BACKEND_MEMORY_FOREIGN_RESERVE_MB": "lots"})
+    check(
+        garbage.memory_foreign_reserve_mb == DEFAULT_FOREIGN_RESERVE_MB,
+        "garbage falls back to the default, not to a crash",
+    )
+    negative = Settings.load({"BACKEND_MEMORY_FOREIGN_RESERVE_MB": "-1"})
+    check(
+        negative.memory_foreign_reserve_mb == DEFAULT_FOREIGN_RESERVE_MB,
+        "a negative reserve falls back -- it would admit past the card",
+    )
+
+
 def test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash() -> None:
     print("\n== the outcome arrives after the last poll, not before it ==")
     # Found live, not thought of: a 3000-node graph whose child finished
@@ -861,6 +896,7 @@ def main() -> None:
         test_an_in_process_run_is_never_adoptable,
         test_adoption_counts_are_reported_separately,
         test_the_default_is_the_child,
+        test_memory_mb_settings_from_env,
         test_a_run_that_finishes_while_the_watcher_is_busy_is_not_a_crash,
         test_a_new_run_does_not_inherit_the_last_one_s_records,
         test_one_failed_poll_does_not_cost_a_run_its_supervisor,

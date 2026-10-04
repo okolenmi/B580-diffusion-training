@@ -31,6 +31,7 @@ import os
 import signal
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from ..application.errors import DatasetTaskLaunchError
@@ -53,10 +54,18 @@ class SubprocessDatasetTaskGateway(DatasetTaskGateway):
         db_path: Path,
         *,
         cmdline_marker: str = CMDLINE_MARKER,
+        on_exit: Callable[[int], None] | None = None,
     ) -> None:
         self._layout = layout
         self._db_path = db_path
         self._marker = cmdline_marker
+        # Called with the task id once the child is actually gone. This
+        # is how the server-side admission claim (MEM-03) comes back on
+        # the *success* path: the child finalises its own row through
+        # the WAL, so nothing server-side observes the task ending, and
+        # without this waiter a finished task would hold its device MB
+        # until the next restart.
+        self._on_exit = on_exit
         self._procs: dict[int, subprocess.Popen] = {}
         self._lock = threading.Lock()
 
@@ -84,7 +93,33 @@ class SubprocessDatasetTaskGateway(DatasetTaskGateway):
             ) from exc
         with self._lock:
             self._procs[proc.pid] = proc
+        if self._on_exit is not None:
+            threading.Thread(
+                target=self._reap_and_notify,
+                args=(launch.task_id, proc),
+                daemon=True,
+                name=f"dataset-task-{launch.task_id}-reaper",
+            ).start()
         return proc.pid
+
+    def _reap_and_notify(self, task_id: int, proc: subprocess.Popen) -> None:
+        """Wait for the child to leave, then hand its claim back.
+
+        A daemon thread per spawned child: it must not keep the server
+        alive on shutdown (the claim dies with the ledger's process
+        anyway, and startup rebuild re-derives it from rows).
+        """
+        try:
+            proc.wait()
+        except Exception:  # noqa: BLE001 -- a waiter must not kill the server
+            logger.exception("waiting for dataset task %d failed", task_id)
+            return
+        if self._on_exit is None:
+            return
+        try:
+            self._on_exit(task_id)
+        except Exception:  # noqa: BLE001 -- release is idempotent; log and move on
+            logger.exception("exit callback for dataset task %d failed", task_id)
 
     def _build_command(self, launch: DatasetTaskLaunch) -> list[str]:
         return [

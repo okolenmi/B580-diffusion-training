@@ -81,6 +81,12 @@ class DatasetTask:
     params: dict = field(default_factory=dict)
     created_at: datetime = datetime.min
     updated_at: datetime = datetime.min
+    #: The device-MB claim the admission ledger held when this row was
+    #: admitted (MEM-03, ADR 0005). Written once with the row; read back
+    #: on startup to rebuild the ledger. None means *no claim exists*
+    #: (a row from before the column, or a container that could not
+    #: build a ledger) -- never "claimed, size unknown".
+    reserved_mb: float | None = None
 
 
 class DatasetTasks(ABC):
@@ -88,9 +94,15 @@ class DatasetTasks(ABC):
 
     @abstractmethod
     def add(
-        self, *, dataset: str, kind: str, total: int, params: dict
+        self, *, dataset: str, kind: str, total: int, params: dict,
+        reserved_mb: float | None = None,
     ) -> DatasetTask:
-        """Insert a ``pending`` task; binds its id."""
+        """Insert a ``pending`` task; binds its id.
+
+        ``reserved_mb`` travels with the row: the admission claim taken
+        before the insert (a refusal writes no row). None only when no
+        claim exists.
+        """
         raise NotImplementedError
 
     @abstractmethod

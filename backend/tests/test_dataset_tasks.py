@@ -22,6 +22,8 @@ from backend.application.errors import (
     DatasetTaskNotFoundError,
     InvalidQueryError,
 )
+from backend.application.memory_admission import task_owner
+from backend.application.memory_ledger import MemoryLedger
 from backend.application.ports.dataset_tasks import TaskKind, TaskStatus
 from backend.application.use_cases import (
     ListDatasetTasks,
@@ -49,7 +51,17 @@ database = SqliteDatabase(root / "backend.db")
 database.initialize()
 clock = FakeClock()
 repo = SqliteDatasetTasks(database, clock)
-gateway = FakeDatasetTaskGateway()
+# The container's ledger, as the composition roots wire it: a plain
+# callable so StartDatasetTask's claim survives across calls. Fake
+# device totals, same arithmetic as everywhere (12216 - 1024 foreign).
+ledger = MemoryLedger(total_mb=12216.0)
+gateway = FakeDatasetTaskGateway(
+    # What the real gateway's exit-waiter does when the child is gone:
+    # hand the admission claim back. A fake child has no thread, so
+    # tests fire it explicitly with child_exited -- never automatically,
+    # because "the child still runs" is what most of these assert.
+    on_exit=lambda task_id: ledger.release(task_owner(task_id)),
+)
 
 
 def expect(exc_type, fn, label):
@@ -104,7 +116,8 @@ make_v2_dataset(root, "work")
 
 start = StartDatasetTask(
     library=library, tasks=repo, gateway=gateway,
-    checkpoints_dir=lambda: ckpt
+    checkpoints_dir=lambda: ckpt,
+    memory_ledger=lambda: ledger,
 )
 stop = StopDatasetTask(tasks=repo, gateway=gateway)
 command = StartDatasetTaskCommand(
@@ -129,6 +142,16 @@ expect(DatasetTaskActiveError, lambda: start.execute(command),
 ended = stop.execute(first.id)
 check(ended.status == "killed", "stop flips row to killed")
 check(gateway.killed == [first.pid], "stop signals the recorded pid")
+# The child died from the kill: fire the exit hook, which is what
+# hands the claim back (the real gateway's reaper does this itself).
+# Without it the exploratory claim would still hold the card and the
+# next start below would be refused -- correctly, but not what this
+# file is testing.
+gateway.child_exited(first.id)
+check(
+    ledger.free_mb() == ledger.capacity_mb,
+    "the exited child's claim is back",
+)
 
 expect(DatasetTaskNotActiveError, lambda: stop.execute(first.id),
        "stop of a terminal task refused")

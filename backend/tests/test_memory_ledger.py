@@ -102,6 +102,45 @@ def test_release_frees_capacity():
     assert ledger.free_mb() == ledger.capacity_mb
 
 
+def test_rename_moves_the_claim():
+    """rename re-keys a claim without changing what it holds.
+
+    The start path takes the claim before the row exists (a refusal
+    must not persist a row) and renames it to the row-derived owner
+    once the id is bound -- size and bookkeeping must survive that.
+    """
+    ledger = _ledger()
+    grant = ledger.reserve("graph:pending:abc", 4096.0)
+    assert isinstance(grant, Grant)
+    ledger.rename("graph:pending:abc", "graph:7")
+    assert ledger.held_by("graph:pending:abc") == 0.0
+    assert ledger.held_by("graph:7") == 4096.0
+    assert ledger.held_mb() == 4096.0
+    assert "graph:7" in ledger.snapshot()["holders"]
+
+
+def test_rename_keeps_exploratory_flag():
+    """An exclusive claim stays exclusive across the rename."""
+    ledger = _ledger()
+    grant = ledger.reserve("task:pending:xyz", 0.0, exploratory=True)
+    assert isinstance(grant, Grant) and grant.exploratory
+    ledger.rename("task:pending:xyz", "task:3")
+    holders = ledger.snapshot()["holders"]
+    assert holders["task:3"]["exploratory"] is True
+    refused = ledger.reserve("graph:1", 1.0)
+    assert isinstance(refused, Refusal)
+
+
+def test_rename_unknown_owner_is_a_noop():
+    """Renaming a claim that was never taken changes nothing."""
+    ledger = _ledger()
+    ledger.reserve("a", 100.0)
+    ledger.rename("nobody", "graph:1")
+    assert ledger.held_mb() == 100.0
+    assert ledger.held_by("graph:1") == 0.0
+    assert ledger.held_by("a") == 100.0
+
+
 # -- held / free ------------------------------------------------------------
 
 
@@ -277,6 +316,9 @@ def main() -> None:
         test_reserve_explosive_refused_when_occupied,
         test_release_idempotent,
         test_release_frees_capacity,
+        test_rename_moves_the_claim,
+        test_rename_keeps_exploratory_flag,
+        test_rename_unknown_owner_is_a_noop,
         test_held_mb_sums_holders,
         test_held_by_unknown_is_zero,
         test_free_mb_is_capacity_minus_held,

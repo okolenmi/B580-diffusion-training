@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.lifecycle_writer import ExecutionLifecycleWriter
+from .application.memory_admission import LedgerProvider, release, task_owner
 from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
 from .application.dataset_task_sweeper import DatasetTaskSweeper
@@ -188,10 +189,6 @@ def build_container(settings: Settings) -> Container:
     # Card preview pointer: backend.db row + first-item fallback read
     # through the library (M8f) -- server view state, never dataset files.
     dataset_previews = SqliteDatasetPreviews(database, dataset_library)
-    dataset_gateway = SubprocessDatasetTaskGateway(layout, database.path)
-    task_sweeper = DatasetTaskSweeper(
-        tasks=dataset_tasks, gateway=dataset_gateway, clock=clock
-    )
     dataset_files = FsDatasetFiles(layout.datasets_dir)
     assets = FileSystemAssetStore(layout, datasets=dataset_library)
 
@@ -222,6 +219,34 @@ def build_container(settings: Settings) -> Container:
         ttl=READINESS_CACHE_SECONDS,
         refresh_floor=DEVICE_REFRESH_MIN_SECONDS,
         is_busy=lambda: graph_executions.find_active() is not None,
+    )
+    # One ledger per container, built on first use (MEM-03): the total
+    # comes from the cached probe, which may only be able to answer
+    # after the installer has run -- probing here would tax every
+    # start-up and, worse, freeze "unknown" forever on a fresh machine.
+    # Construction rebuilds it from the unfinished rows that carry a
+    # claim, so a restart reproduces the same held total; the startup
+    # reconcile below then releases the rows that turn out to be debris.
+    memory_ledger = LedgerProvider(
+        probe=device_probe,
+        graph_executions=graph_executions,
+        dataset_tasks=dataset_tasks,
+        foreign_reserve_mb=settings.memory_foreign_reserve_mb,
+        process_overhead_mb=settings.memory_process_overhead_mb,
+    )
+    # The task child finalises its own row through the WAL, so nothing
+    # server-side would ever notice it ending: this waiter is what
+    # hands the admission claim back when the child is actually gone.
+    dataset_gateway = SubprocessDatasetTaskGateway(
+        layout,
+        database.path,
+        on_exit=lambda task_id: release(memory_ledger, task_owner(task_id)),
+    )
+    task_sweeper = DatasetTaskSweeper(
+        tasks=dataset_tasks,
+        gateway=dataset_gateway,
+        clock=clock,
+        memory_ledger=memory_ledger,
     )
     graph_library = SqliteGraphLibrary(database)
     execution_writer = ExecutionLifecycleWriter(
@@ -255,6 +280,7 @@ def build_container(settings: Settings) -> Container:
         gateway=graph_gateway,
         events=publisher,
         clock=clock,
+        memory_ledger=memory_ledger,
         monitor_bus=monitor_bus,
         scratch_dir=graph_scratch,
         make_tail=ExecutionEventTail,
@@ -276,6 +302,7 @@ def build_container(settings: Settings) -> Container:
             check=CheckRequirements(
                 inventory=MetadataPackageInventory(),
                 device=device_probe,
+                memory_ledger=memory_ledger,
             ),
             device_probe=device_probe,
             apply=ApplyInstallation(settings=settings_store),
@@ -345,6 +372,7 @@ def build_container(settings: Settings) -> Container:
                 # A callable, so a checkpoints_dir changed in Settings is
                 # used without a restart -- see StartDatasetTask.
                 checkpoints_dir=lambda: layout.checkpoints_dir,
+                memory_ledger=memory_ledger,
                 sweeper=task_sweeper,
             ),
             stop_task=StopDatasetTask(
@@ -366,7 +394,7 @@ def build_container(settings: Settings) -> Container:
                 runtime=graph_runtime,
                 launcher=graph_supervisor,
                 clock=clock,
-                device_probe=device_probe,
+                memory_ledger=memory_ledger,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
@@ -379,12 +407,14 @@ def build_container(settings: Settings) -> Container:
             delete_executions=DeleteGraphExecutions(
                 executions=graph_executions, events=publisher,
                 scratch=sweep_scratch,
+                memory_ledger=memory_ledger,
             ),
             reconcile_executions=ReconcileGraphExecutions(
                 executions=graph_executions,
                 writer=execution_writer,
                 launcher=graph_supervisor,
                 clock=clock,
+                memory_ledger=memory_ledger,
             ),
             save_graph=SaveGraph(library=graph_library),
             get_graph=GetGraph(library=graph_library),
@@ -394,6 +424,7 @@ def build_container(settings: Settings) -> Container:
         # shared
         events=publisher,
         event_bus=event_bus,
+        memory_ledger=memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 

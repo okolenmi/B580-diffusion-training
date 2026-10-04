@@ -89,6 +89,19 @@ class RunAlreadyActiveError(ApplicationError):
     status_code = 409
 
 
+class MemoryUnavailableError(ApplicationError):
+    """The device cannot admit this start; the breakdown says who holds it.
+
+    ``details`` carries the ledger refusal's full breakdown (rule 6):
+    capacity, foreign reserve, every holder and its size, what is free,
+    what was asked -- or ``reason: device_total_unknown`` when the
+    container could not size a claim at all.
+    """
+
+    code = "memory_unavailable"
+    status_code = 409
+
+
 class RunNotRunningError(ApplicationError):
     """The action needs a running run, but this one is not running."""
 

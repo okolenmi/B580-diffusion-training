@@ -52,6 +52,7 @@ class GraphExecution:
         results: tuple[NodeResult, ...] = (),
         error: str | None = None,
         memory: EffectiveMemory | None = None,
+        reserved_mb: float | None = None,
         updated_at: datetime | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -69,6 +70,7 @@ class GraphExecution:
         self._results: tuple[NodeResult, ...] = tuple(results)
         self._error = error
         self._memory = memory
+        self._reserved_mb = reserved_mb
         self._created_at = created_at
         self._updated_at = updated_at if updated_at is not None else created_at
         self._started_at = started_at
@@ -85,6 +87,7 @@ class GraphExecution:
         graph: GraphDefinition,
         created_at: datetime,
         memory: EffectiveMemory | None = None,
+        reserved_mb: float | None = None,
     ) -> GraphExecution:
         """Register a new execution in ``queued`` state (no id yet)."""
         return cls(
@@ -92,6 +95,7 @@ class GraphExecution:
             graph=graph,
             created_at=created_at,
             memory=memory,
+            reserved_mb=reserved_mb,
         )
 
     @classmethod
@@ -140,6 +144,14 @@ class GraphExecution:
         admitted (``memory_json``), or ``None`` for a row written before
         that column existed."""
         return self._memory
+
+    @property
+    def reserved_mb(self) -> float | None:
+        """The device-MB claim the admission ledger held for this row
+        (``reserved_mb``), or ``None`` when no claim exists -- a row
+        from before the column, or a container with no ledger. Never
+        "claimed, size unknown": that shape is what rule 2 forbids."""
+        return self._reserved_mb
 
     @property
     def results(self) -> tuple[NodeResult, ...]:

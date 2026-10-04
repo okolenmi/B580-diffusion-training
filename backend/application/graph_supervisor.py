@@ -24,9 +24,12 @@ Everything durable goes through the repository CAS, so races resolve
 deterministically: a stop that wins the row first means this watcher
 finds the row already terminal and publishes nothing.
 
-Device memory is not this class's business. ``run_execution`` releases it
-in its own ``finally``, in whichever process ran the graph, so neither the
-supervisor nor the child can forget it (docs 08 S-05).
+Allocator memory is not this class's business -- ``run_execution``
+releases it in its own ``finally``, in whichever process ran the graph
+(docs 08 S-05). The *server-side* admission claim (MEM-03's ledger,
+``reserved_mb``) is: every watcher path funnels through ``_finish`` and
+``_release``, so the claim goes back exactly when the child actually
+stops, under whatever owner it was renamed to.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from pathlib import Path
 from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
+from .memory_admission import LedgerSource, graph_owner, release
 from .ports.graph_task_stream import EventKind
 from .event_publisher import EventPublisher
 from .lifecycle_writer import ExecutionLifecycleWriter
@@ -59,6 +63,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         gateway: GraphTaskGateway,
         events: EventPublisher,
         clock: Clock,
+        memory_ledger: LedgerSource | None = None,
         monitor_bus=None,
         scratch_dir: Path,
         poll_interval: float = 0.1,
@@ -74,6 +79,11 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         self._gateway = gateway
         self._events = events
         self._clock = clock
+        # Where claims are handed back (``_release``). None only where
+        # the container has no ledger at all -- and then no claim can
+        # exist either, because a start without a ledger refuses before
+        # it reserves. Both composition roots always pass one.
+        self._memory_ledger = memory_ledger
         # Where the per-execution graph.json and events.jsonl live. Not
         # the runs dir: these are supervision scratch, and a run row's
         # artifacts are a different thing with a different lifetime.
@@ -719,6 +729,15 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             at = self._clock.now()
             with self._lock:
                 stopped = execution_id in self._stop_requested
+            # Hand the claim back *before* the row can read terminal, so
+            # the invariant an observer sees is strict: this run's row
+            # only reaches a terminal status once the capacity is free.
+            # Not at the top of `_finish`: `_release` clears
+            # `_stop_requested`, and `stopped` must be read first. The
+            # finally below releases again (idempotent) and covers the
+            # early-return path, where a stop or reconcile already
+            # wrote the row before this watcher got here.
+            release(self._memory_ledger, graph_owner(execution_id))
             if not saw_outcome:
                 # Which of the two "no outcome" stories is true depends on
                 # whether the child was still there. Saying "crashed, or a
@@ -804,7 +823,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         )
 
     def _release(self, execution_id: ExecutionId, pid: int) -> None:
-        """Forget a finished run: its pid and its stop marker.
+        """Forget a finished run: its pid, its stop marker, its claim.
 
         The in-process gateway keeps a thread and a cancel event per
         execution, so it needs telling; the subprocess one keeps a Popen
@@ -812,7 +831,13 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         /proc. The scratch files are left on disk -- they are the run's
         log and event history, which is what makes a failed run
         diagnosable after the fact.
+
+        The ledger claim goes back here too: every watcher path funnels
+        through ``_finish``'s ``finally``, and the release is
+        idempotent, so a row finalised twice (watcher racing a stop)
+        still releases exactly the one claim.
         """
+        release(self._memory_ledger, graph_owner(execution_id))
         with self._lock:
             self._pids.pop(execution_id, None)
             self._stop_requested.discard(execution_id)

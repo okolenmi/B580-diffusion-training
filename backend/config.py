@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Mapping
 
+from .application.memory_ledger import (
+    DEFAULT_FOREIGN_RESERVE_MB,
+    DEFAULT_PROCESS_OVERHEAD_MB,
+)
+
 logger = logging.getLogger(__name__)
 
 # Pure path arithmetic (no I/O, no mutation) -- allowed at import.
@@ -61,20 +66,33 @@ class Settings:
     #: because it must be readable before anything is wired, so a failed
     #: rollout is one variable away from being undone.
     graph_execution_mode: str = DEFAULT_GRAPH_EXECUTION_MODE
+    #: Device-MB accounting constants (ADR 0005): capacity is
+    #: ``total - foreign`` (the desktop and other applications sharing
+    #: the card), and a grant in device MB is allocator MB + the
+    #: per-process overhead. Settings because the ADR fixes them as
+    #: settings; defaults are the ledger's measured values so the two
+    #: can never drift apart.
+    memory_foreign_reserve_mb: float = DEFAULT_FOREIGN_RESERVE_MB
+    memory_process_overhead_mb: float = DEFAULT_PROCESS_OVERHEAD_MB
 
     @classmethod
     def load(cls, env: Mapping[str, str] | None = None) -> Settings:
         """Build settings from environment variables (defaults win).
 
         Recognised variables: ``BACKEND_HOST``, ``BACKEND_PORT``,
-        ``BACKEND_DB_PATH``, ``BACKEND_GRAPH_EXECUTION``. The CLI layer
+        ``BACKEND_DB_PATH``, ``BACKEND_GRAPH_EXECUTION``,
+        ``BACKEND_MEMORY_FOREIGN_RESERVE_MB``,
+        ``BACKEND_MEMORY_PROCESS_OVERHEAD_MB``. The CLI layer
         may override individual fields on top of this via
         ``dataclasses.replace``.
 
         An unrecognised ``BACKEND_GRAPH_EXECUTION`` falls back to
         ``DEFAULT_GRAPH_EXECUTION_MODE`` instead of raising: this is read
         during start-up, and a typo in a convenience variable should not
-        stop a server that is otherwise fine from starting.
+        stop a server that is otherwise fine from starting. The two
+        memory settings fall back the same way -- and a *negative* value
+        falls back too, because a negative foreign reserve would raise
+        the ledger's capacity above the physical card and admit past it.
         """
         env = os.environ if env is None else env
         db_path = env.get("BACKEND_DB_PATH")
@@ -91,4 +109,28 @@ class Settings:
             port=int(env.get("BACKEND_PORT", str(_DEFAULT_PORT))),
             db_path=Path(db_path) if db_path else _DEFAULT_DB_PATH,
             graph_execution_mode=mode,
+            memory_foreign_reserve_mb=_mb_setting(
+                env, "BACKEND_MEMORY_FOREIGN_RESERVE_MB", DEFAULT_FOREIGN_RESERVE_MB
+            ),
+            memory_process_overhead_mb=_mb_setting(
+                env, "BACKEND_MEMORY_PROCESS_OVERHEAD_MB", DEFAULT_PROCESS_OVERHEAD_MB
+            ),
         )
+
+
+def _mb_setting(env: Mapping[str, str], name: str, default: float) -> float:
+    """One MB-valued env setting: absent -> default; garbage or
+    negative -> the default with a warning, never a silent pass-through
+    (a negative reserve would let the ledger over-admit the card)."""
+    raw = env.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("ignoring %s=%r; expected a number of MB", name, raw)
+        return default
+    if value < 0:
+        logger.warning("ignoring %s=%r; MB settings cannot be negative", name, raw)
+        return default
+    return value

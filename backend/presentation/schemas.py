@@ -52,6 +52,10 @@ from ..domain.value_objects import GraphStatus
 class HealthOut(BaseModel):
     status: str
     version: str
+    #: The admission ledger's snapshot (MEM-03): capacity, holders and
+    #: their sizes, what is free. None while the device total is
+    #: unknown and no ledger exists.
+    memory: dict | None = None
 
 # --------------------------------------------------------------------------
 # Config

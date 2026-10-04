@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .event_publisher import EventPublisher
+from .memory_admission import LedgerSource
 from .ports.environment import DeviceProbe
 from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
@@ -203,3 +204,10 @@ class ApplicationServices:
     # bridge -- a transport concern, not a use case one.
     events: EventPublisher
     event_bus: EventBus
+    # The container's admission ledger source (MEM-03): called, not
+    # held, so the ledger can be built on first use (the device total
+    # may only become known after the installer has run). Answers None
+    # while the total is unknown -- and then every start refuses
+    # explicitly. Exposed on the aggregate so `/health` can show the
+    # snapshot (holders, free) without reaching into a use case.
+    memory_ledger: LedgerSource

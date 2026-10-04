@@ -1,14 +1,16 @@
-"""StartGraphExecution -- validate, persist, launch one graph run.
+"""StartGraphExecution -- validate, admit, persist, launch one graph run.
 
 Check-then-act under a lock (two concurrent starts must not both pass
-the active-execution check); the row is added *before* the thread
-starts so a crash between the two leaves something for startup
-reconciliation to sweep.
+the active-execution check); the admission claim and the row are both
+taken inside that lock, *before* the thread starts, so a crash between
+any of the steps leaves something for startup reconciliation to sweep.
 
 Order of refusal mirrors ``StartDatasetTask``: the caller's own mistakes
 first (validation errors -> 422 ``graph_invalid`` with the full issue
 list), then the conflict (another execution lives -> 409
-``graph_execution_active``). Single-active is a deliberate divergence
+``graph_execution_active``), then admission (the device cannot fit it
+-> 409 ``memory_unavailable`` with the breakdown; a refusal writes no
+row and holds nothing). Single-active is a deliberate divergence
 from the legacy endpoint's parallel runs -- one B580, and graph nodes
 can build real training loops in-process (see doc 05 section 5).
 """
@@ -19,8 +21,8 @@ import threading
 
 from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
+from ..memory_admission import LedgerSource, admit, graph_owner, pending_owner
 from ..ports.clock import Clock
-from ..ports.environment import DeviceProbe
 from ..ports.execution_launcher import ExecutionLauncher
 from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
@@ -41,14 +43,19 @@ class StartGraphExecution:
         runtime: GraphRuntime,
         launcher: ExecutionLauncher,
         clock: Clock,
-        device_probe: DeviceProbe,
+        memory_ledger: LedgerSource,
     ) -> None:
         self._executions = executions
         self._writer = writer
         self._runtime = runtime
         self._launcher = launcher
         self._clock = clock
-        self._device_probe = device_probe
+        # Required, never defaulted: a container that starts executions
+        # must say where admission lives (a lambda is enough). The
+        # provider may still answer None -- the device total unknown --
+        # and then every start is refused explicitly rather than
+        # admitted unchecked.
+        self._memory_ledger = memory_ledger
         self._lock = threading.Lock()
 
     def execute(
@@ -60,14 +67,15 @@ class StartGraphExecution:
         """Admit and launch one run.
 
         ``memory_overrides`` is the execution request's own copy of the
-        graph's memory settings (MEM-02 #2): the effective values --
-        overrides applied, demand resolved against the device capacity
-        the cached probe reports -- are computed here, once, and stored
-        on the row, so a restart reproduces the same held total.
-        ``peak_record`` and ``fingerprint_key`` are wired with the
-        admission ledger (MEM-03); until then the demand is stated or
-        unknown, never observed.
+        graph's memory settings (MEM-02 #2): the effective values are
+        computed here, once, against the ledger's capacity, and stored
+        on the row; the ledger's claim (``reserved_mb``) is stored with
+        them, so a restart reproduces the same held total from the
+        rows. ``peak_record`` and ``fingerprint_key`` stay None until
+        the peak writer and the fingerprint adapter exist (MEM-04 #2);
+        until then the demand is stated or unknown, never observed.
         """
+        ledger = self._memory_ledger()
         with self._lock:
             issues = self._runtime.validate(graph)
             errors = [issue for issue in issues if IssueSeverity(issue.severity).blocks]
@@ -92,14 +100,59 @@ class StartGraphExecution:
                 memory_overrides,
                 peak_record=None,
                 fingerprint_key=None,
-                capacity_mb=self._device_probe.report().total_memory_mb,
+                capacity_mb=ledger.capacity_mb if ledger is not None else None,
+            )
+            exploratory = memory.demand_source == "unknown"
+            if ledger is None:
+                # No ledger: admit() refuses with device-total-unknown
+                # before it looks at the demand (rule 2).
+                device_demand = 0.0
+            elif exploratory or memory.demand_mb is None:
+                # Unknown demand claims all free capacity as an
+                # exploratory exclusive run; a None demand cannot
+                # happen while a ledger exists (its capacity is what
+                # `unknown` falls back to) and never becomes a zero
+                # claim here either.
+                device_demand = (
+                    memory.demand_mb
+                    if memory.demand_mb is not None
+                    else ledger.capacity_mb
+                )
+            else:
+                # Stated/observed are allocator MB; a grant is device MB
+                # (task rule 4: + the per-process overhead).
+                device_demand = memory.demand_mb + ledger.process_overhead_mb
+
+            provisional = pending_owner("graph")
+            grant = admit(
+                ledger,
+                provisional,
+                device_demand,
+                exploratory=exploratory,
+                what="this graph execution",
             )
             execution = GraphExecution.create(
                 graph=graph,
                 created_at=self._clock.now(),
                 memory=memory,
+                reserved_mb=grant.mb,
             )
-            self._writer.insert(execution)  # binds id, buffers Queued, announces
-            self._launcher.launch(execution.require_id(), graph)
+            try:
+                self._writer.insert(execution)  # binds id, buffers Queued, announces
+                if ledger is not None:
+                    ledger.rename(provisional, graph_owner(execution.require_id()))
+                self._launcher.launch(execution.require_id(), graph)
+            except BaseException:
+                # Failed between the claim and the child: nothing stays
+                # held. Both owner forms go, because release is
+                # idempotent and the rename may or may not have happened.
+                # A hard crash cannot run this -- there, the queued row's
+                # claim is rebuilt at startup and released by reconcile
+                # when the row turns out to have no child.
+                if ledger is not None:
+                    if execution.id is not None:
+                        ledger.release(graph_owner(execution.id))
+                    ledger.release(provisional)
+                raise
             return to_execution_summary_dto(execution)
 

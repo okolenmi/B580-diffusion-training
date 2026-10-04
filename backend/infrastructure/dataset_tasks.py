@@ -97,6 +97,9 @@ def _row_to_task(row) -> DatasetTask:
         params=params,
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
+        reserved_mb=(
+            float(row["reserved_mb"]) if row["reserved_mb"] is not None else None
+        ),
     )
 
 
@@ -106,20 +109,23 @@ class SqliteDatasetTasks(DatasetTasks):
         self._clock = clock
 
     def add(
-        self, *, dataset: str, kind: TaskKind | str, total: int, params: dict
+        self, *, dataset: str, kind: TaskKind | str, total: int, params: dict,
+        reserved_mb: float | None = None,
     ) -> DatasetTask:
         now = self._clock.now().isoformat()
         with self._db.connection() as conn:
             cur = conn.execute(
                 "INSERT INTO dataset_tasks "
-                "(dataset, kind, status, total_val, params, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(dataset, kind, status, total_val, params, reserved_mb, "
+                " created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     dataset,
                     TaskKind(kind).value,
                     TaskStatus.PENDING.value,
                     total,
                     json.dumps(params),
+                    reserved_mb,
                     now,
                     now,
                 ),

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 
+from .memory_admission import LedgerSource, release, task_owner
 from .ports.clock import Clock
 from .ports.dataset_task_gateway import DatasetTaskGateway
 from .ports.dataset_tasks import DatasetTasks, DatasetTask, TaskStatus
@@ -42,10 +43,16 @@ class DatasetTaskSweeper:
         tasks: DatasetTasks,
         gateway: DatasetTaskGateway,
         clock: Clock,
+        memory_ledger: LedgerSource | None = None,
     ) -> None:
         self._tasks = tasks
         self._gateway = gateway
         self._clock = clock
+        # Where claims are handed back for the rows this sweep fails.
+        # None only where the container has no ledger -- and then no
+        # claim exists for these rows either. The composition roots
+        # pass one.
+        self._memory_ledger = memory_ledger
 
     def sweep(
         self,
@@ -78,6 +85,11 @@ class DatasetTaskSweeper:
                 task.id, TaskStatus.FAILED, error=note
             ):
                 swept += 1
+                # Terminal row -> its claim goes back. Idempotent: the
+                # gateway's exit-waiter may already have released it
+                # (dead child, waiter fired first), and a row with no
+                # claim (no ledger) is a no-op.
+                release(self._memory_ledger, task_owner(task.id))
         return swept
 
     def _why_dead(

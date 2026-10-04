@@ -25,7 +25,10 @@ render the list rather than a verdict.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 
+from ..errors import MemoryUnavailableError
+from ..memory_admission import LedgerSource, admit
 from ..ports.environment import DeviceProbe, PackageInventory
 from ..ports.requirements_manifest import (
     COMFY_ADDITIONS,
@@ -167,9 +170,17 @@ class CheckRequirements:
         self,
         inventory: PackageInventory,
         device: DeviceProbe,
+        memory_ledger: LedgerSource | None = None,
     ) -> None:
         self._inventory = inventory
         self._device = device
+        # None only where the container has no ledger at all (the
+        # composition roots pass one). While no ledger exists no server
+        # child exists either -- a start without one refuses before it
+        # reserves -- so the probe runs with nothing of ours to disturb
+        # *and records no claim*, which is the rule-2 shape: a claim is
+        # never recorded unchecked.
+        self._memory_ledger = memory_ledger
 
     def execute(self) -> ReadinessReport:
         rows = tuple(
@@ -212,7 +223,45 @@ class CheckRequirements:
                 device_checked=False,
             )
 
-        report = self._device.report()
+        ledger = (
+            self._memory_ledger() if self._memory_ledger is not None else None
+        )
+        if ledger is None:
+            report = self._device.report()
+        else:
+            # The probe's subprocess imports torch and touches the
+            # device, so it is admitted like any other child (MEM-03:
+            # "and the probe"). Stated demand: the per-process overhead
+            # the ledger is configured with -- an idle torch import is
+            # exactly that cost.
+            owner = f"probe:{uuid4().hex}"
+            try:
+                admit(
+                    ledger,
+                    owner,
+                    ledger.process_overhead_mb,
+                    exploratory=False,
+                    what="the device probe",
+                )
+            except MemoryUnavailableError as exc:
+                # Refused -> the probe is NOT asked. device_checked=False
+                # keeps "not known" separate from "known absent"
+                # (device_reason stays None: a memory refusal is not a
+                # fact about the device), and device_detail -- a note
+                # *about the probe* -- carries the breakdown.
+                return ReadinessReport(
+                    packages=rows,
+                    device_present=False,
+                    device_name=None,
+                    device_total_memory_mb=None,
+                    device_reason=None,
+                    device_detail=f"probe not run: {exc}",
+                    device_checked=False,
+                )
+            try:
+                report = self._device.report()
+            finally:
+                ledger.release(owner)
         return ReadinessReport(
             packages=rows,
             device_present=report.present,

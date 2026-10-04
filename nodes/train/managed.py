@@ -1300,8 +1300,9 @@ class ManagedLoRATrainerNode(TrainerNode):
                 prompt_capacity,
                 warm_and_unload,
             )
-            prewarm_keys = discover_dataset_keys(
+            prewarm = discover_dataset_keys(
                 batches, max_batches=MAX_DISCOVERY_BATCHES)
+            prewarm_keys = prewarm.keys
             if isinstance(text_encoder, CachingTextEncoder):
                 # LoRATrainingConfigNode's cache_text_encoder wrap already in place
                 # -- keep it (its max_entries applies), late-bind the handle it
@@ -1387,7 +1388,7 @@ class ManagedLoRATrainerNode(TrainerNode):
             # resident here: reload skipped, just _make_room()'s measure),
             # fill the cache and unload for good. Imported at the top of the
             # prewarm block above, where prompt_capacity() came from too.
-            warm_and_unload(text_encoder, prewarm_keys)
+            warm_and_unload(text_encoder, prewarm)
 
         if save_every_n_steps > 0:
             from ..model.lora_saver import save_trained_weights

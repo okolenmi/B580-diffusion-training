@@ -441,17 +441,51 @@ missing is a real run:**
   the B580 at both 12 GB (where it should never trigger) and a constrained
   budget (where it must).
 
-  **The one thing that looks wasteful right now, and is.** For all three
-  real datasets there is **1 distinct prompt**, so the warm pass costs
-  30 ms while `discover_dataset_keys` costs **1.24 ms per sample** -- at
-  1M samples that is 21 minutes of discovery to warm one prompt. The
-  discovery pass is ~99.99% of prewarm's cost on these datasets and 100% of
-  it is avoidable when the prompt count is tiny. A cheap bound exists that
-  needs no order-knowability: stop discovering once N consecutive batches
-  have introduced no new *prompt* (new *resolution* keys are nearly free --
-  1.6 ms each, and `non-square` has 43 of them against 1 prompt). Heuristic,
-  and the failure is a miss rather than a wrong answer, so it is safe in
-  the same way `MAX_DISCOVERY_BATCHES` is.
+  **Built 2026-10-04: the discovery pass is bounded, and reports that it
+  stopped.** `discover_dataset_keys()` returns a `Discovery` (keys, batches
+  seen, prompts found, and a `StopReason`) rather than a bare set, because
+  "found every key" and "stopped looking" are the same value with completely
+  different consequences. 17 checks in `smoke_test_discovery_bound.py`.
+
+  Measured on all three real datasets, bounded against unbounded:
+
+  | dataset | batches | bounded | keys found | keys missed |
+  |---|---|---|---|---|
+  | `1024 aes` | 100 | **65** (`no_new_prompts`) | 1/1 | **0** |
+  | `test2` | 102 | **65** (`no_new_prompts`) | 1/1 | **0** |
+  | `non-square` | 121 | 121 (`completed`) | 44/44 | **0** |
+
+  So 35-36% less disk on the single-shape datasets and none lost, and
+  `non-square` correctly declines to stop because its 44 resolutions keep
+  appearing. At 1M samples the same rule turns a 21-minute pass into 65
+  batches.
+
+  **Two things measurement caught that reasoning did not.**
+
+  *A fixed threshold is wrong, and it fails in the direction that looks
+  safe.* With 200 prompts shuffled into 1,000 batches, a threshold of 64
+  *does* trip -- late in the pass the gap between consecutive new prompts
+  grows like a coupon collector's, and 64 stale batches is ordinary by then.
+  It misses nothing that was left to miss, so it is not incorrect, only
+  premature about stopping. The threshold now scales with what has been seen
+  (`STALE_BATCHES_PER_PROMPT_SEEN = 8`, floored at 64): one prompt trips at
+  64 batches, 200 prompts would need 1,600. Measured on 200 shuffled prompts
+  and on a *clustered* (unshuffled, sorted-by-caption) source, both now
+  complete and find everything -- which removed the clustering failure mode I
+  had documented as expected.
+
+  **Cheap to warm is not cheap to miss.** The first version counted only new
+  *prompts*, on the reasoning that a resolution key is cheap (1.6 ms against
+  a prompt's 30 ms) so a new one is not worth more disk. Measured on the real
+  data that is wrong: `non-square` has 44 resolutions over 121 batches, so
+  stopping on prompts alone at batch 65 missed **43 of them**, and a missed
+  key costs ~790 ms because the miss self-loads CLIP. Warming one costs
+  1.6 ms; missing one costs 790 ms. Those are different properties and only
+  the first was true. The counter is now on whole keys.
+
+  That second one is the shape worth keeping: a number that was measured for
+  one purpose (what does warming cost) was quietly reused for a different
+  question (what does missing cost), and the two differ by 500x here.
 
   **The strongest of the user's three proposals is the second GPU.** A spare
   card preparing prompts ahead removes the limit outright, because encoding

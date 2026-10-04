@@ -291,7 +291,11 @@ def run_managed_route(args, ctx) -> str:
         calibration_steps=args.calibration_steps,
         residency_safety_margin=args.safety_margin,
         empty_cache_every_n_steps=args.empty_cache_every,
-        prewarm_text_encoder=args.prewarm_text_encoder)
+        prewarm_text_encoder=args.prewarm_text_encoder,
+        probe_every_n_steps=getattr(args, "probe_every_n_steps", 0),
+        probe_items=getattr(args, "probe_items", 2),
+        probe_points_per_bucket=getattr(args, "probe_points_per_bucket", 2),
+        probe_grad_alignment=getattr(args, "probe_grad_alignment", False))
     return load_stats
 
 
@@ -385,6 +389,20 @@ def main() -> None:
                              "then unload the encoder for the whole run")
 
     managed = sub.add_parser("managed", parents=[common])
+    managed.add_argument("--probe-every-n-steps", type=int, default=0,
+                        help="run the training-diagnostics probe every N "
+                             "optimizer steps, and once as soon as the probe "
+                             "images are captured. 0 = off. The probe's step-1 "
+                             "record is what says rel ~ 1.000 and drift ~ 0 on "
+                             "a real LoRA, because that is the only point at "
+                             "which B is still exactly zero")
+    managed.add_argument("--probe-items", type=int, default=2)
+    managed.add_argument("--probe-points-per-bucket", type=int, default=2)
+    managed.add_argument("--probe-grad-alignment", action="store_true",
+                        help="also measure per-bucket gradient norms and "
+                             "cosines; needs a backward per probe point, so "
+                             "this is the flag whose VRAM peak has to be "
+                             "compared against the training step's")
     managed.add_argument("--calibration-steps", type=int, default=3)
     managed.add_argument("--safety-margin", type=float, default=0.1)
     managed.add_argument("--empty-cache-every", type=int, default=1)

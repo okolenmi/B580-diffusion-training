@@ -15,6 +15,107 @@ torch 2.12.1+xpu, through `scripts/hw_validate.py` and
 `scripts/hw_validation_batch.sh`; the ones without it were found and fixed
 by inspection.
 
+- **[2026-10-04, confirmed on hardware] `keep_incomplete_batches` and the training diagnostics: the counts were right, and the probe turns out to cost wall time and no memory at all.**
+
+- **[2026-09-30] Loader silently drops images whose (caption, size) group
+  is smaller than `batch_size` (shuffle on).** `ManagedDatasetLoader` now
+  prints a one-time warning with exact counts, and
+  `ManagedDatasetSourceNode` has a new `keep_incomplete_batches` Port
+  (default False = old behavior) that keeps those samples as smaller
+  batches. Covered by `manager/smoke_tests/smoke_test_loader_incomplete_
+  batches.py` (real sqlite + shard).
+
+  **Both open questions answered on hardware, 2026-10-04.**
+
+  *The warning's counts are correct on every real dataset.* Verified by
+  recomputing the grouping independently from the loader's own buckets --
+  `never` (samples in groups smaller than a batch) and `partial` (the
+  remainder `len(group) % batch_size`) -- and comparing all four printed
+  numbers (`never`, `total`, `partial`, and the derived "only N of M are
+  used") plus the number of samples actually yielded:
+
+  | dataset | bs | samples | never | partial | usable | yielded | match |
+  |---|---|---|---|---|---|---|---|
+  | `1024 aes` | 2 | 201 | 0 | 1 | 200 | 200 | yes |
+  | `1024 aes` | 4 | 201 | 0 | 1 | 200 | 200 | yes |
+  | `non-square` | 2 | 273 | 19 | 12 | 242 | 242 | yes |
+  | `non-square` | 3 | 273 | 49 | 20 | 204 | 204 | yes |
+  | `non-square` | 4 | 273 | 70 | 19 | 184 | 184 | yes |
+
+  `1024 aes` and `test2` are a single `(prompt, size)` group each, so only
+  the remainder is ever lost. **`non-square` is the one that matters**: 63
+  groups, and at batch 4 **89 of its 273 samples (33%) are never trained
+  on** without the flag. With `keep_incomplete_batches=True` all 273 are
+  used, at both batch sizes.
+
+  *But it costs throughput, and the warning does not say so.* Measured with
+  `scripts/hw_validate.py main --dataset "non-square"`, 30 steps:
+
+  | bs | shapes off | shapes on | steps/sec off | steps/sec on | change |
+  |---|---|---|---|---|---|
+  | 2 | 44 | 75 | 0.412 | 0.467 | +13% |
+  | 4 | 22 | 73 | 0.412 | 0.288 | **-30%** |
+
+  So the flag trades throughput for coverage, and at batch 4 on a
+  many-shaped dataset it is a 30% throughput cost to train on 33% more
+  images -- worth taking deliberately, not by default. `scripts/hw_validate.py`
+  grew `--keep-incomplete-batches` for these measurements.
+
+- **[2026-09-30] Fixed-probe / gradient-alignment diagnostics**
+  (`probe_every_n_steps` etc. on `ManagedLoRATrainerNode`; see
+  [`../training-diagnostics.md`](../training-diagnostics.md)). **Run on a
+  real SDXL UNet and the B580, 2026-10-04.** `scripts/hw_validate.py` grew
+  `--probe-every-n-steps`, `--probe-items`, `--probe-points-per-bucket` and
+  `--probe-grad-alignment` for the measurements.
+
+  *Step 1 reads as documented.* A LoRA's `B` is zero at step 1, so the
+  adapter is the identity and `rel` must be 1 and `drift` 0:
+
+      [probe step 1]  t_low: rel=0.999 drift=0.0000  t_mid: rel=0.999 drift=0.0000
+                      t_high: rel=1.000 drift=0.0000  worst_rel=1.000
+
+  Same under `--weight-store nf4` (rel 0.999 / 0.999 / 1.000, drift 0.0000,
+  peak reserved 9,054 MB against 9,234 MB for bf16).
+
+  *Cost, measured per step rather than per run.* Ordinary step 1.30 s.
+
+  | | probe step | vs ordinary | peak allocated |
+  |---|---|---|---|
+  | forward-only | 4.22-4.24 s | **+226%** | 8,820 MB — **unchanged** |
+  | `--probe-grad-alignment` | 18.68 s | **+1337%** | 8,820 MB — **unchanged** |
+
+  The forward-only probe costs **no VRAM at all**, because it runs under
+  `no_grad` and so retains no activations. Its cost is entirely wall time on
+  the steps it fires, so the amortised price is set by `probe_every_n_steps`
+  and nothing else.
+
+  *`probe_grad_alignment`'s backward fits, and does not even raise the
+  peak.* Byte-identical 8,820 MB against a plain training step, at batch 2,
+  1024, on a run whose total peak reserved was 9,234 MB. It costs 14x wall on
+  the step it fires on and nothing in memory. The numbers it produces are
+  usable, and the doc's noise-floor warning is borne out at the defaults
+  (`probe_items=2`, `probe_points_per_bucket=2`):
+
+      align_t_low=0.970  align_t_mid=0.597  align_t_high=0.171
+      self_t_low=0.021   self_t_mid=-0.072  self_t_high=0.248
+
+  `self_t_high=0.248` is a split-half self-cosine of a quarter, i.e. the
+  high-t bucket's own gradient estimate is mostly noise at the default sample
+  count — which is exactly what `training-diagnostics.md` says to check
+  before reading the cross-bucket numbers against it.
+
+  **DoRA cannot be covered, and that is a wiring gap rather than a
+  measurement.** The probe ports are on `ManagedLoRATrainerNode`, and
+  `nodes/train/managed.py` has **no `adapter_strategy` input at all** — so
+  the managed route cannot train DoRA at all. DoRA is reachable only from
+  the main route, through `ComfyUNetLoRANode`'s `adapter_strategy` port
+  (`nodes/model/lora_injector.py:297`), which the probe does not attach to.
+  Covering it means threading `adapter_strategy` through
+  `LoRATrainingConfigNode` into `ManagedLoRATrainerNode`. Small, and left
+  for the same reason DoRA's real-run validation is still open in
+  `docs/design/09-prioritized-backlog.md`: it changes what the managed route
+  can do, which is a project's call.
+
 - **[2026-09-29] A cold `CachingTextEncoder.encode()` called
   `ensure_loaded()` twice (once per cache half), and the test that
   caught it was edited to expect two instead of fixing the encoder.**

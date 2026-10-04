@@ -97,12 +97,17 @@ def _relative(a, b) -> float:
     return (a - b).abs().max().item() / max(scale, 1e-12)
 
 
-def build_inner() -> SDXLClipEncoder:
-    """A real CLIP, float32, on whatever device is available.
+def build_inner() -> tuple[SDXLClipEncoder, dict]:
+    """A real CLIP in float32, plus the state dict it came from.
 
     Float32 because that is the only precision in which batching agrees with
     the serial path; a float16 inner here would make the equivalence check
     fail for the documented reason rather than a real one.
+
+    The raw dict comes back too, because the fallback checks below need a
+    float16 encoder and re-reading the checkpoint to make one would print a
+    714-key warning that looks like a real failure and is an artefact of how
+    the second encoder was built.
     """
     from nodes.smoke_tests.fast_construction import find_a_checkpoint, read_state_dicts
 
@@ -110,7 +115,7 @@ def build_inner() -> SDXLClipEncoder:
     device = "xpu" if torch.xpu.is_available() else "cpu"
     inner = SDXLClipEncoder(clip_sd, device=device)
     inner.clip_model.float()
-    return inner
+    return inner, clip_sd
 
 
 PROMPTS = [
@@ -124,7 +129,7 @@ PROMPTS = [
 
 
 def main() -> None:
-    inner = build_inner()
+    inner, clip_sd = build_inner()
     sync = (lambda: torch.xpu.synchronize()) if torch.xpu.is_available() else (lambda: None)
 
     print("[warm_prompts: stores a batch, and a batch of one is the same "
@@ -214,6 +219,30 @@ def main() -> None:
         check("one (ctx, pooled) pair per prompt" in str(exc),
               f"a short encode_prompts result raises rather than silently "
               f"leaving those prompts uncached (got {str(exc)[:60]!r})")
+
+    print("\n[production is float16, so the fallback is what actually runs]")
+    # The thing that was silently wrong: `SDXLClipEncoder` loads float16
+    # ("CLIP runs in fp16"), and batching in float16 diverges from the
+    # serial path by 19%. So the batched path must refuse, not quietly run
+    # and disagree with the cache-miss path.
+    fp16_inner = SDXLClipEncoder(clip_sd, device="cpu")
+    check(not fp16_inner.batching_available(),
+          "a float16 encoder reports batching unavailable rather than "
+          "batching anyway")
+    fp16_cached = CachingTextEncoder(SDXLTextEncoder(fp16_inner), max_entries=8)
+    check(not fp16_cached.batching_available(),
+          "and the cache reports it from the encoder rather than guessing")
+    check(fp16_cached.warm_prompts(["fallback prompt"]) == 1,
+          "the float16 fallback still warms correctly")
+    served16 = fp16_cached.encode_prompt_only("fallback prompt", 1)
+    solo16 = fp16_inner.encode_prompt_and_pool("fallback prompt", 1)
+    check(_relative(served16[0], solo16[0]) < 1e-3,
+          "and a fallback-warmed prompt matches the miss path exactly, which "
+          "is the property the refusal exists to preserve")
+    check(tuple(fp16_inner.encode_prompts(["x"])[0][0].shape)
+          == tuple(fp16_inner.encode_prompt_and_pool("x", 1)[0].shape),
+          "encode_prompts and encode_prompt_and_pool agree on shape whether "
+          "batched or not")
 
     print("\n[both cache entry points agree on what an insert does]")
     check(hasattr(CachingTextEncoder, "_insert_prompt"),

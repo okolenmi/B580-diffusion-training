@@ -99,6 +99,16 @@ class CachingTextEncoder(TextEncoder):
         # own load -- they're public interface with no one else to check.
         self._ensured_for_encode = False
 
+    def batching_available(self) -> bool:
+        """Whether `warm_prompts` will really batch, or fall back per-prompt.
+
+        Delegated rather than assumed: the answer belongs to the encoder, and
+        a cache that reported "yes" for an encoder that quietly cannot batch
+        would make a slow warm unexplainable. An encoder with no such method
+        predates the bulk path and warms one at a time.
+        """
+        return bool(getattr(self._inner, "batching_available", lambda: False)())
+
     def warm_prompts(self, prompts, batch_size: int = 1) -> int:
         """Encode a batch of prompts into the cache. Returns how many.
 

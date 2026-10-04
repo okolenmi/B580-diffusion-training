@@ -257,6 +257,18 @@ def warm_and_unload(cached: CachingTextEncoder, keys: set) -> int:
           + f") and {len(resolution_keys)} resolution key(s) in "
           f"{resolution_time:.2f}s, holding {cached_bytes / 2 ** 20:.1f} MB of "
           f"host RAM. CLIP is off the card for the rest of the run.")
+    if others > 0 and not getattr(cached, "batching_available", lambda: True)():
+        # Said out loud, because the alternative is a warm pass that is 3x
+        # slower than it could be with no visible reason why.
+        print(
+            f"  [prewarm] NOTE: prompt encoding was one-at-a-time, not "
+            f"batched -- the encoder is not in float32, and batching in "
+            f"float16 would disagree with the per-prompt cache-miss path by "
+            f"19% (nodes/model/clip_encoder.py's encode_prompts has the "
+            f"measurement). Correct and slower; load CLIP in float32 to get "
+            f"the batched path.",
+            flush=True,
+        )
     if skipped:
         print(
             f"  [prewarm] WARNING: {skipped} of {len(prompt_keys)} distinct "

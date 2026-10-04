@@ -152,6 +152,23 @@ class SDXLClipEncoder:
         pooled = pooled.repeat(batch_size, 1)
         return ctx, pooled
 
+    def batching_available(self) -> bool:
+        """True when `encode_prompts` will actually batch.
+
+        Float32 towers, and only then -- see `encode_prompts`'s docstring for
+        the measurement and for why casting here instead would be worse than
+        not batching.
+
+        A *query* rather than a constant, because the answer depends on how
+        this encoder was constructed and a module-level flag would be a lie
+        the moment someone builds one with a different dtype.
+        """
+        try:
+            dtype = next(self.clip_model.parameters()).dtype
+        except StopIteration:  # pragma: no cover -- an empty tower is broken
+            return False
+        return dtype == torch.float32
+
     def encode_prompts(self, prompts, batch_size: int = 1):
         """Encode N independent prompts, one per row: [(ctx, pooled), ...].
 
@@ -170,9 +187,31 @@ class SDXLClipEncoder:
         caller cannot tell which path produced them. A one-prompt call is a
         batch of one, not a special case -- that is what keeps the two paths
         from disagreeing, and it is why this is not "loop and concatenate".
+
+        **Refuses to batch unless the towers are float32, and falls back to
+        the per-prompt loop when they are not.** `self.dtype` is float16
+        (line above: "CLIP runs in fp16"), so *this is the production path*
+        and the fallback is what actually runs today -- the batching is
+        dormant until something loads CLIP in float32. That is deliberate
+        and it is the only safe option:
+
+        * casting to float32 inside this method would make a warmed prompt
+          differ from a missed one by the float16-vs-float32 gap, which is
+          the incoherence the whole design exists to avoid -- a run's
+          conditioning would depend on whether its cache was warm;
+        * loading CLIP in float32 unconditionally would fix that at 2x the
+          resident footprint (about 3.1 GB) for a speedup that, at a
+          5,000-entry budget, saves 2.7 min of a run that takes an hour.
+
+        So the batched path is opt-in by dtype rather than wrong by default,
+        and `batching_available()` below is what the warm pass reports so a
+        slow warm is explicable rather than mysterious.
         """
         if not prompts:
             return []
+        if not self.batching_available():
+            return [self.encode_prompt_and_pool(prompt, batch_size)
+                    for prompt in prompts]
         # The model's input shape is one dict holding one row per prompt per
         # tower -- `{"l": [ids, ...], "g": [ids, ...]}` -- the same
         # `encode_token_ids` takes. Kept identical on purpose: a second

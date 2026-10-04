@@ -213,6 +213,60 @@ missing is a real run:**
   pins a default stops measuring it, and reports the old number with total
   confidence.
 
+- **Prewarm does not scale to a million objects, and now says so with
+  numbers** — raised by the user for 1M+ object datasets. The measurements
+  are in; the *design* answer (a windowed warm) is not built, and this is
+  where to take it from.
+
+  **What already scales, which corrects half the premise.** The dataset
+  side is fine: `ShardLoader.load()` memory-maps each shard and reads
+  tensors on demand ("Tensors are NOT loaded into RAM"), so 1M images
+  never sit in host RAM at once. Loading is ~800 samples/s measured, so
+  ~21 min per epoch of pure I/O for 1M — bounded by the disk, as it should
+  be. The metadata index is 1.6 KB/sample, so **1.6 GB of host RAM for
+  1M** — worth knowing, but not the cliff.
+
+  **The cliff is prewarm, and both of its costs are linear in *distinct
+  prompts*** (measured, XPU, 1024, batch 2):
+
+  | | per distinct prompt | 10,000 | 100,000 | 1,000,000 |
+  |---|---|---|---|---|
+  | warm time | **30.6 ms** (1,505 ms on CPU) | 5.1 min | 51 min | 8.5 h |
+  | host RAM | **621 KB** | 6.1 GB | 60.6 GB | **606 GB** |
+
+  Plus the discovery pass, **1.24 ms per dataset sample** (201 samples in
+  0.25 s), because it reads every latent off disk to read `x_t.shape`. For
+  1M that is 21 minutes before step 0 regardless of how few prompts there
+  are. So a 1M-object dataset with 1M distinct captions wants ~9 hours and
+  606 GB today: infeasible on both axes, and the RAM axis binds first, at
+  roughly 50k distinct prompts on a 32 GB machine.
+
+  **Done now: the limits are observable, so "too much" is a number.**
+  - `CachingTextEncoder.cache_bytes()` sums the tensors actually stored.
+    `footprint_bytes()` answers a *device* question and correctly reports
+    0 for these caches, which is useless for the question that decides
+    whether warming is affordable.
+  - The warm pass prints what it cost — key count, distinct-prompt split,
+    one-time setup separated from the marginal per-prompt rate, and the
+    resulting host RAM. It prints rather than logs, because nothing here
+    configures logging and a measurement nobody can see is not one.
+  - `PREWARM_HOST_RAM_BUDGET_BYTES` (8 GiB ≈ 13,000 distinct prompts) emits
+    a warning naming the marginal cost and the alternative. Deliberately
+    **not** a Port: raising it does not make warming a million captions a
+    good idea, it only moves the failure later.
+
+  **The design answer, from the user and not yet built: a windowed warm.**
+  Prewarm the next N steps' keys rather than all of them, refilling as
+  training goes — and the enabling fact is that the next N keys *are*
+  knowable: the loader's clump-then-shuffle is deterministic given its
+  seed, so the order of future batches is determined. Better still, refill
+  window N+1 *while* N trains, so there is no pause at all. Two open
+  questions before that is buildable, and both are the user's to settle:
+  whether a step's keys must be resident before the step begins (they must,
+  or the first access is a miss that reloads 1.5 GB of CLIP mid-step) and
+  what the window size should be relative to how fast the shuffle reorders
+  relative to how fast CLIP encodes.
+
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,
   what is missing is a *file*. `default_vocabulary_dir()` still falls back

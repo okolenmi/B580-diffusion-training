@@ -49,6 +49,7 @@ to be usually relied on, but not a hard failure mode either.
 from __future__ import annotations
 
 import logging
+import time
 from typing import ClassVar
 
 from ..core import Port
@@ -64,6 +65,28 @@ logger = logging.getLogger(__name__)
 #: a budget. See `discover_dataset_keys`'s docstring for why truncating
 #: costs time rather than correctness.
 MAX_DISCOVERY_BATCHES = 100_000
+
+#: Host-RAM budget the warm pass is measured against, in bytes. 8 GiB.
+#:
+#: This exists to answer "is this dataset too big to warm all at once",
+#: with the arithmetic rather than with an opinion. Warming is O(distinct
+#: prompts) in both time and RAM, and both are measured: 30.6 ms and
+#: 621 KB per distinct prompt on the B580's XPU (1,505 ms on CPU), plus
+#: 1.24 ms per dataset sample for the discovery pass itself, which reads
+#: every latent off disk to read its shape.
+#:
+#: So 8 GiB is about **13,000 distinct prompts** -- 6.6 minutes of warm
+#: pass. Past that the numbers say the current design is the wrong one, and
+#: they say it while it is still cheap to find out rather than after the
+#: allocation. A windowed design (prewarm the next N steps' keys, whose
+#: order is knowable from the loader's seeded shuffle, instead of all of
+#: them) is the answer this threshold exists to flag the need for.
+#:
+#: Deliberately not a Port. It is a diagnostic, not a control: passing a
+#: larger budget does not make warming a million captions a good idea, it
+#: just moves the machine's failure later. Raise it deliberately in this
+#: file once a windowed prewarm exists and this stops being the guard.
+PREWARM_HOST_RAM_BUDGET_BYTES = 8 * 1024 ** 3
 
 
 def discover_dataset_keys(dataset: TrainingBatchSource,
@@ -121,10 +144,64 @@ def warm_and_unload(cached: CachingTextEncoder, keys: set) -> int:
     only does the warm + unload. Keys outside `keys` later (dataset
     changed between warm and training) miss this cache -- correct but
     slow, see this module's docstring's degradation note.
+
+    **Reports what warming cost, because that cost is what decides whether
+    warming all of it is the right thing to do.** Both terms are linear in
+    the number of *distinct prompts* and neither is visible from outside:
+    time (30.6 ms each on XPU, 1,505 ms on CPU -- measured on the B580)
+    and host RAM (621 KB each, summed exactly by
+    `CachingTextEncoder.cache_bytes()`). At 100,000 distinct captions that
+    is 51 minutes and 60.6 GB, so a dataset large enough to need a
+    *windowed* prewarm announces itself here, while finding out is still
+    cheap, rather than by exhausting the machine. See
+    `PREWARM_HOST_RAM_BUDGET_BYTES`.
     """
-    for prompt, batch_size, height, width in keys:
-        cached.encode(prompt, batch_size, height, width)
+    # Sorted so "the first key" is the same key every run: timing a set's
+    # first element otherwise measures whichever key the hash order
+    # happened to produce, which is not a measurement.
+    ordered = sorted(keys)
+    started = time.monotonic()
+    cached.encode(*ordered[0])
+    setup = time.monotonic() - started
+    started = time.monotonic()
+    for key in ordered[1:]:
+        cached.encode(*key)
+    rest = time.monotonic() - started
+    elapsed = setup + rest
+    cached_bytes = getattr(cached, "cache_bytes", lambda: 0)()
     cached.unload()
+    prompt_keys = {(p, bs) for p, bs, _, _ in keys}
+    others = len(prompt_keys) - 1
+    # Reported separately because they are not the same thing and averaging
+    # them lies: a dataset with one prompt would otherwise report its whole
+    # one-time setup as a per-prompt rate. The marginal figure is the one
+    # that scales, and the setup is the one that does not.
+    marginal = 1000 * rest / others if others > 0 else 0.0
+    # print, not logging: these are the numbers an operator is meant to see
+    # and decide by, and this project's convention for that is stdout (the
+    # loader's own one-time warning, and EncodeConditioningPhase's residency
+    # lines, both print). A logging call at INFO is invisible unless
+    # something configured logging, which nothing here does -- a
+    # measurement nobody can see is not a measurement.
+    print(f"  [prewarm] {len(keys)} key(s): {len(prompt_keys)} distinct prompt(s), "
+          f"{len(keys) - len(prompt_keys)} resolution -- {elapsed:.2f}s total "
+          f"({setup:.2f}s one-time setup"
+          + (f", {marginal:.1f} ms per further prompt" if others > 0 else "")
+          + f"), holding {cached_bytes / 2 ** 20:.1f} MB of host RAM. "
+          f"CLIP is off the card for the rest of the run.")
+    if cached_bytes > PREWARM_HOST_RAM_BUDGET_BYTES:
+        print(
+            f"  [prewarm] WARNING: the warm cache is "
+            f"{cached_bytes / 1024 ** 3:.1f} GB of host RAM, over the "
+            f"{PREWARM_HOST_RAM_BUDGET_BYTES / 1024 ** 3:.0f} GB budget this "
+            f"module measures against ({len(prompt_keys)} distinct prompts at "
+            f"621 KB each). Warming every key at once does not scale past "
+            f"this point -- it costs ~30.6 ms and 621 KB per distinct prompt, "
+            f"so a dataset an order of magnitude past this needs a windowed "
+            f"warm (the loader's seeded shuffle makes the next N steps' keys "
+            f"knowable) rather than a bigger budget.",
+            flush=True,
+        )
     return len(keys)
 
 

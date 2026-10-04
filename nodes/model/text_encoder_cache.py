@@ -61,6 +61,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import ClassVar
 
+import torch
+
 from ..core import Port
 from ..memory.control_handle import ResourceControlHandle
 from .text_encoder import TextEncoder, TextEncoderNode
@@ -173,6 +175,31 @@ class CachingTextEncoder(TextEncoder):
         # Both caches hold only CPU tensors -- doesn't count toward device
         # footprint at all, so this is exactly self._inner's own.
         return self._inner.footprint_bytes()
+
+    def cache_bytes(self) -> int:
+        """Host RAM the two caches currently occupy. 0 device bytes.
+
+        `footprint_bytes()` deliberately answers a *device* question and so
+        reports 0 for both caches, which is right and useless for the one
+        question that decides whether prewarm is affordable: how big does
+        warming this dataset get?
+
+        Summed from the tensors actually stored rather than estimated,
+        because the estimate is what has to be checked. Measured per entry
+        on the B580: **621 KB per prompt key** (a (1, 77, 2048) float32
+        context plus ~0.3 KB pooled) and ~0.3 KB per resolution key. So a
+        dataset with 100,000 distinct captions costs 60.6 GB of host RAM
+        to prewarm, and 1,000,000 costs 606 GB -- which is why the
+        prewarm path reports this number rather than leaving it to be
+        discovered by the machine running out.
+        """
+        total = 0
+        for cache in (self._prompt_cache, self._resolution_cache):
+            for entry in cache.values():
+                for tensor in entry:
+                    if torch.is_tensor(tensor):
+                        total += tensor.numel() * tensor.element_size()
+        return total
 
     def offload(self) -> None:
         self._inner.offload()

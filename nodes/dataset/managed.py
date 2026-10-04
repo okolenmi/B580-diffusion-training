@@ -36,6 +36,14 @@ class ManagedDatasetBatchSource(TrainingBatchSource):
 class ManagedDatasetSourceNode(DataSourceNode):
     """Streams batches from a manager-managed dataset (safetensors shards + sqlite index)."""
 
+    #: Fields that change the peak VRAM this node's run will reach. Declarative
+    #: data (not code) so the server can compute a graph fingerprint without
+    #: importing torch or instantiating anything. See
+    #: backend/application/memory_fingerprint.py.
+    memory_fields: ClassVar[tuple[str, ...]] = (
+        "batch_size",
+    )
+
     INPUTS: ClassVar[dict[str, Port]] = {
         "dataset_root": Port(name="dataset_root", type=Path, required=True, path_kind="dataset",
                               doc="Dataset name from the library. Absolute paths and '..' are rejected -- "

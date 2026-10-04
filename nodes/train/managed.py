@@ -1029,6 +1029,14 @@ class ManagedLoRATrainerNode(TrainerNode):
     trade for their own run.
     """
 
+    #: Fields that change the peak VRAM this node's run will reach. Declarative
+    #: data (not code) so the server can compute a graph fingerprint without
+    #: importing torch or instantiating anything. See
+    #: backend/application/memory_fingerprint.py.
+    memory_fields: ClassVar[tuple[str, ...]] = (
+        "model", "batch_size", "rank", "checkpointing", "optimizer",
+    )
+
     INPUTS: ClassVar[dict[str, Port]] = {
         **{k: v for k, v in TrainerNode.COMMON_INPUTS.items() if k not in ("model", "text_encoder")},
         "trainer": Port(

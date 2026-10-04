@@ -266,6 +266,14 @@ def build_lora_injected_unet(
 
 class ComfyUNetLoRANode(LoRAInjectorNode):
 
+    #: Fields that change the peak VRAM this node's run will reach. Declarative
+    #: data (not code) so the server can compute a graph fingerprint without
+    #: importing torch or instantiating anything. See
+    #: backend/application/memory_fingerprint.py.
+    memory_fields: ClassVar[tuple[str, ...]] = (
+        "model", "rank", "checkpointing",
+    )
+
     INPUTS: ClassVar[dict[str, Port]] = {
         **LoRAInjectorNode.COMMON_INPUTS,
         "device": Port(name="device", type=str, required=False, default="xpu"),

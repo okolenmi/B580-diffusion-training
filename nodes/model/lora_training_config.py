@@ -97,6 +97,14 @@ class LoRATrainingConfigNode(Node):
     attention_checkpointing.py` does about it.
     """
 
+    #: Fields that change the peak VRAM this node's run will reach. Declarative
+    #: data (not code) so the server can compute a graph fingerprint without
+    #: importing torch or instantiating anything. See
+    #: backend/application/memory_fingerprint.py.
+    memory_fields: ClassVar[tuple[str, ...]] = (
+        "rank", "checkpointing",
+    )
+
     INPUTS: ClassVar[dict[str, Port]] = {
         "resources": Port(
             name="resources", type=LoRATrainingResources, required=True,

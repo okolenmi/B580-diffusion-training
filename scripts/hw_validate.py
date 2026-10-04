@@ -284,6 +284,15 @@ def run_managed_route(args, ctx) -> str:
         "optimizer": getattr(optimizer, "footprint_bytes", None),
     })
 
+    # Only passed when the flag was actually given. Passing it
+    # unconditionally would pin the harness to whatever this script's
+    # argparse default is and silently stop exercising the node's own --
+    # which is how `prewarm_text_encoder` measured as off-by-default in
+    # this harness after the node had been flipped, and how a default
+    # change goes unnoticed by the thing that exists to measure it.
+    prewarm_kwarg = (
+        {} if args.prewarm_text_encoder is None
+        else {"prewarm_text_encoder": args.prewarm_text_encoder})
     ManagedLoRATrainerNode(ctx).build(
         trainer=trainer, batches=batches, optimizer=optimizer,
         lr_schedule=schedule, steps=args.steps, resource_control=control,
@@ -291,7 +300,7 @@ def run_managed_route(args, ctx) -> str:
         calibration_steps=args.calibration_steps,
         residency_safety_margin=args.safety_margin,
         empty_cache_every_n_steps=args.empty_cache_every,
-        prewarm_text_encoder=args.prewarm_text_encoder,
+        **prewarm_kwarg,
         probe_every_n_steps=getattr(args, "probe_every_n_steps", 0),
         probe_items=getattr(args, "probe_items", 2),
         probe_points_per_bucket=getattr(args, "probe_points_per_bucket", 2),
@@ -383,10 +392,17 @@ def main() -> None:
                              "22 to 73 and recovers 89 of 273 samples that are "
                              "otherwise never trained on")
     common.add_argument("--cache-text-encoder", action="store_true")
-    common.add_argument("--prewarm-text-encoder", action="store_true",
+    # default=None rather than store_true's False: unset means "say
+    # nothing and let the node's own default decide", so this harness
+    # measures the shipped default instead of pinning its own.
+    common.add_argument("--prewarm-text-encoder", action=argparse.BooleanOptionalAction,
+                        default=None,
                         help="managed route only: warm every (prompt, bs, h, w) key "
                              "from the training batches into a cache around trainer.clip, "
-                             "then unload the encoder for the whole run")
+                             "then unload the encoder for the whole run. On by default "
+                             "on the node since 2026-10-04; pass "
+                             "--no-prewarm-text-encoder to measure the old behaviour "
+                             "(CLIP resident for the run, 1,562 MB more peak)")
 
     managed = sub.add_parser("managed", parents=[common])
     managed.add_argument("--probe-every-n-steps", type=int, default=0,

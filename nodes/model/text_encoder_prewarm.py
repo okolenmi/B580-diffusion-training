@@ -48,6 +48,7 @@ to be usually relied on, but not a hard failure mode either.
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar
 
 from ..core import Port
@@ -55,8 +56,18 @@ from ..dataset.handle import TrainingBatchSource
 from .text_encoder import TextEncoder, TextEncoderNode
 from .text_encoder_cache import CachingTextEncoder
 
+logger = logging.getLogger(__name__)
 
-def discover_dataset_keys(dataset: TrainingBatchSource) -> set:
+#: How many batches `discover_dataset_keys` will pull before giving up on
+#: the source being finite. Far above any real dataset -- the largest here
+#: is 152 batches -- so this is a backstop against an endless source, not
+#: a budget. See `discover_dataset_keys`'s docstring for why truncating
+#: costs time rather than correctness.
+MAX_DISCOVERY_BATCHES = 100_000
+
+
+def discover_dataset_keys(dataset: TrainingBatchSource,
+                          max_batches: int | None = None) -> set:
     """One real pass over `dataset` collecting every (prompt,
     batch_size, height, width) key training will request -- derived
     exactly the way nodes/train/step_pipeline.py's
@@ -69,9 +80,29 @@ def discover_dataset_keys(dataset: TrainingBatchSource) -> set:
     own FetchBatchPhase starts a fresh `iter()` for the next one).
     Order doesn't matter: it's a set over the whole source, so a
     per-epoch shuffle can't hide a key.
+
+    **`max_batches` bounds that assumption instead of trusting it**, which
+    matters now that prewarm is on by default: a source that does *not*
+    end would otherwise hang the trainer at startup with no output and no
+    error, which is the worst way for a default to fail. On reaching the
+    bound it stops and returns what it found, with a warning naming what
+    that costs. Truncation is benign rather than wrong: the keys missed
+    are cache misses, and a miss self-loads the encoder and returns the
+    right answer. So the failure mode is "slower and CLIP back on the
+    card for the keys nobody warmed", never a wrong training step.
     """
     unique_keys = set()
-    for batch in dataset:
+    for seen, batch in enumerate(dataset, start=1):
+        if max_batches is not None and seen > max_batches:
+            logger.warning(
+                "discover_dataset_keys: stopped after %d batches without the "
+                "source ending; warming %d key(s) found so far. Any key past "
+                "that point will be a cache miss -- correct but slow, and it "
+                "re-loads CLIP. Wire a source that is finite per iteration "
+                "(ManagedDatasetLoader-backed ones are) to get the full "
+                "prewarm.", max_batches, len(unique_keys),
+            )
+            break
         height = batch["x_t"].shape[2] * 8
         width = batch["x_t"].shape[3] * 8
         unique_keys.add((batch["prompt"], batch["x_t"].shape[0], height, width))
@@ -120,7 +151,7 @@ class PrewarmedTextEncoderNode(TextEncoderNode):
         encoder: TextEncoder = inputs["encoder"]
         dataset: TrainingBatchSource = inputs["dataset"]
 
-        keys = discover_dataset_keys(dataset)
+        keys = discover_dataset_keys(dataset, max_batches=MAX_DISCOVERY_BATCHES)
         cached = CachingTextEncoder(encoder, max_entries=max(len(keys), 1))
         warm_and_unload(cached, keys)
 

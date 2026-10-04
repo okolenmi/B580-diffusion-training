@@ -382,8 +382,33 @@ class _Batches:
 
 
 class _Encoder:
+    """A minimal but *complete* TextEncoder double.
+
+    The two granular halves, not just `encode`, because that is what the
+    ABC actually declares (`encode_prompt_only` and `resolution_embedding`
+    are the two abstract methods; `encode` is concrete and combines them).
+    Implementing only `encode` happened to work while the trainer's
+    `prewarm_text_encoder` defaulted to off -- nothing wrapped this in a
+    CachingTextEncoder, so nothing ever called the halves. With prewarm on
+    by default the trainer *does* wrap it, and the cache calls
+    `encode_prompt_only` directly, so a double with only `encode` fails
+    with an AttributeError from inside the cache. Deriving the halves from
+    `encode` here is the honest fix rather than switching the test's
+    trainer back to prewarm-off, which would leave this test exercising a
+    configuration no default run uses any more.
+    """
+
+    def encode_prompt_only(self, prompt, batch_size):
+        return torch.zeros(batch_size, 3, 4), torch.zeros(batch_size, 4)
+
+    def resolution_embedding(self, height, width, batch_size):
+        return torch.zeros(batch_size, 4)
+
     def encode(self, prompt, batch_size, height, width):
         return torch.zeros(batch_size, 3, 4), torch.zeros(batch_size, 4)
+
+    def unload(self):
+        pass
 
     def footprint_bytes(self):
         return 0

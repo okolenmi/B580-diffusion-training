@@ -1098,8 +1098,11 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "original, un-margined comparison.",
         ),
         "prewarm_text_encoder": Port(
-            name="prewarm_text_encoder", type=bool, required=False, default=False,
-            doc="Off by default. One pass over the *same* `batches` object training "
+            name="prewarm_text_encoder", type=bool, required=False, default=True,
+            doc="**On by default since 2026-10-04**, which is a deliberate "
+                "reversal -- measured on the B580, this is 1,562 MB of peak "
+                "device memory for ~3.5 s of startup and ~6 MB of host RAM. "
+                "One pass over the *same* `batches` object training "
                 "will consume to discover every (prompt, batch_size, height, width) "
                 "key, encode them all into a CachingTextEncoder wrapped around "
                 "trainer.clip, then unload the encoder entirely -- CLIP's ~1.5GB "
@@ -1124,7 +1127,12 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "encoder has 0 footprint, so AdaptiveResidencyController just stops "
                 "considering it (nothing left to release). Requires `batches` to be "
                 "finite per iteration (one pass = one epoch, same as "
-                "ManagedDatasetSourceNode's own output).",
+                "ManagedDatasetSourceNode's own output) -- and that assumption is "
+                "now bounded rather than trusted, because a default cannot be "
+                "allowed to hang: the discovery pass stops at "
+                "`MAX_DISCOVERY_BATCHES` (100,000, far above any real dataset) and "
+                "warns. Truncation costs time, not correctness, since the keys past "
+                "it are misses and a miss is correct.",
         ),
         "grad_accum": Port(
             name="grad_accum", type=int, required=False, default=1,
@@ -1266,8 +1274,12 @@ class ManagedLoRATrainerNode(TrainerNode):
         prewarm_keys = None
         if prewarm_text_encoder:
             from ..model.text_encoder_cache import CachingTextEncoder
-            from ..model.text_encoder_prewarm import discover_dataset_keys
-            prewarm_keys = discover_dataset_keys(batches)
+            from ..model.text_encoder_prewarm import (
+                MAX_DISCOVERY_BATCHES,
+                discover_dataset_keys,
+            )
+            prewarm_keys = discover_dataset_keys(
+                batches, max_batches=MAX_DISCOVERY_BATCHES)
             if isinstance(text_encoder, CachingTextEncoder):
                 # LoRATrainingConfigNode's cache_text_encoder wrap already in place
                 # -- keep it (its max_entries applies), late-bind the handle it

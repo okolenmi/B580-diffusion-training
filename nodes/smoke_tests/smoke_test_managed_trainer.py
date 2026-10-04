@@ -246,7 +246,25 @@ class _FiniteEpoch:
                "t": torch.tensor([500, 500]), "prompt": "b"}
 
 
-def _run(optimizer, events) -> dict:
+def _run(optimizer, events, *, prewarm: bool = False) -> dict:
+    """Run two steps against fakes and return the recorded event list.
+
+    `prewarm` defaults to False *on purpose*, and the callers that pass
+    nothing are the residency-fallback checks below. Their question is
+    "when calibration has nothing to measure against, does the controller
+    fall back to staying resident?" -- and that question only has a subject
+    when there is a resident text encoder to stay resident. Prewarmed, the
+    encoder has 0 footprint, `AdaptiveResidencyController` stops
+    considering it entirely, and the fallback is vacuous rather than
+    answered.
+
+    So those checks pin the shape explicitly instead of inheriting a
+    default, and the prewarmed default's own step sequence is asserted
+    separately. Leaving these to follow the node's default would mean they
+    silently stopped testing the thing they are named for the day the
+    default moved -- which is exactly what happened when
+    `prewarm_text_encoder` was flipped on 2026-10-04.
+    """
     node = ManagedLoRATrainerNode()
     node.context = ExecutionContext()
     model = _FakeModel(events)
@@ -256,6 +274,7 @@ def _run(optimizer, events) -> dict:
         trainer=trainer, batches=_FiniteBatches(), optimizer=optimizer,
         lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
         steps=2, resource_control=resource_control,
+        prewarm_text_encoder=prewarm,
     )
     check(result["model"] is model, "must return the exact unet instance")
     return events
@@ -310,6 +329,47 @@ def check_ensure_loaded_always_fires_but_release_does_not_when_calibration_canno
             "forward", "ensure_loaded:optimizer", "optimizer_step",
         ], step_events)
     print("    PASS")
+
+
+def check_prewarmed_default_never_touches_the_encoder():
+    """The default shape: a warm cache, and the encoder never comes back.
+
+    `prewarm_text_encoder` defaults to True since 2026-10-04, so this is
+    the sequence every default run takes, and it is worth asserting
+    directly rather than only as the absence of something. Two things have
+    to hold, and the second is the one that saves the memory:
+
+      * no `ensure_loaded:text_encoder` -- re-uploading the encoder the
+        warm pass just unloaded would re-reside it for the whole run;
+      * no inner-encoder call at all -- every step's encode is a cache
+        hit, so CLIP is not merely offloaded but never needed.
+
+    That is 1,562 MB of peak on the B580 (9,228 -> 7,666 MB measured),
+    which is why this is a check and not a comment.
+    """
+    print("[prewarmed default: the encoder is not loaded, and not called, "
+          "on any step]")
+    events: list = []
+    _run(_FakeOptimizer(events), events, prewarm=True)
+
+    step_boundaries = [i for i, e in enumerate(events) if e.startswith("before_step:")]
+    check(len(step_boundaries) == 2, events)
+    for start, end in zip(step_boundaries, step_boundaries[1:] + [len(events)]):
+        step_events = events[start:end]
+        check("ensure_loaded:text_encoder" not in step_events,
+              f"the encoder must not be re-loaded mid-run (got {step_events})")
+        inner = [e for e in step_events
+                 if e in ("encode_prompt_only", "resolution_embedding")]
+        check(not inner,
+              f"and must not be called at all: every step is a cache hit "
+              f"(got {inner})")
+    warm = [i for i, e in enumerate(events)
+            if e in ("encode_prompt_only", "resolution_embedding")]
+    check(warm and max(warm) < step_boundaries[0],
+          f"the warm pass happened, and before step 0 (got {events})")
+    check(len([e for e in events if e == "forward"]) == 2,
+          "and both steps still train -- a cache that skipped the work "
+          "entirely would also pass the two checks above")
 
 
 def check_fused_optimizer_same_fallback_never_calls_step_either_way():
@@ -976,6 +1036,7 @@ def main():
     check_model_is_registered_non_offloadable_and_never_released()
     check_ensure_loaded_always_fires_but_release_does_not_when_calibration_cannot_resolve()
     check_fused_optimizer_same_fallback_never_calls_step_either_way()
+    check_prewarmed_default_never_touches_the_encoder()
     check_phases_actually_call_release_when_the_controller_decides_to()
     check_real_optimizer_via_trainer_parameters_node_actually_updates_the_trained_parameter()
     check_profile_prints_residency_lines_at_the_right_moments()

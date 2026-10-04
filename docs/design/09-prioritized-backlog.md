@@ -157,15 +157,61 @@ missing is a real run:**
   now sitting in host RAM instead") and a test for both routes. The
   `resolved.md` entry has it.
 
-  **Still open, and it is the interesting part: should
-  `prewarm_text_encoder` default to on?** It is off today, so a default run
-  carries 1.5 GB of CLIP that nothing reads after the first pass over the
-  prompts. The reason it is off is in the Port's own docstring and is not
-  about this: it costs one full pass over the dataset before training
-  starts, and it assumes the cache was warmed over the *same* batches
-  training will consume. That is a real precondition. But 1.5 GB of peak on
-  a 12 GB card is 13%, which is several times what a larger batch would
-  cost, so the default looks wrong to me and this is the project's call.
+  **Resolved 2026-10-04: `prewarm_text_encoder` now defaults to on**, the
+  project's call. The trade, all measured on the B580 at batch 2 / rank 64 /
+  `1024 aes`:
+
+  | | cost |
+  |---|---|
+  | warm pass | **3.5-3.8 s**, once (2 keys on `1024 aes`, 75 on `non-square`) |
+  | host RAM for the cache | **+6.1 MB**, by RSS delta |
+  | extra dataset iteration | one pass; batch materialisation is ~0.2 s |
+
+  The cache is negligible next to what it replaces, which was the open
+  question: **6.1 MB of host RAM against 1,561 MB of device memory.** It
+  scales at ~0.6 MB per distinct `(prompt, batch_size)` -- 77x2048 fp32 --
+  so a 512-prompt dataset would hold ~310 MB, still under a fifth of CLIP,
+  and `max_entries` caps it regardless. `non-square` adds 0.0 MB on top
+  because its 75 keys are 2 prompt keys and 73 resolution keys, and the
+  resolution half is three orders of magnitude smaller.
+
+  **Peak: 9,228 MB -> 7,666 MB, at rank 64 as well as the default rank.**
+  Throughput unchanged across every combination run (0.671-0.760
+  steps/sec), which is this card's own spread.
+
+  **What it buys against real cards.** An 8 GB card is ~7,634 MB usable:
+
+  | | peak | fits 8 GB? |
+  |---|---|---|
+  | batch 2, 1024, rank 64 | 7,666 MB | **no -- 32 MB over, 0.4%** |
+  | batch 1, 1024, rank 64 | 7,230 MB | yes, ~400 MB spare |
+
+  So 8 GB becomes *nearly* viable at batch 2 and comfortably viable at batch
+  1, where before the flip neither was. Batch 2 costs only 436 MB more than
+  batch 1, because the UNet (4,897 MB) and optimizer (714 MB) dominate and
+  do not scale with batch -- with gradient checkpointing on, which is the
+  default, activations are a small share of the total.
+
+  **One assumption could not be left to trust, so it is bounded.** Prewarm
+  needs `batches` finite per iteration, and a source that never ends would
+  hang the trainer at startup with no output and no error -- the worst way
+  for a default to fail. `discover_dataset_keys` takes `max_batches` now,
+  called with `MAX_DISCOVERY_BATCHES` (100,000, far above any real dataset:
+  the largest here is 152 batches). On reaching it, discovery stops and
+  warns. Truncation costs time and not correctness, because the keys past
+  the bound are cache misses, and a miss self-loads and returns the right
+  answer.
+
+  **A harness bug this exposed, worth keeping.** `hw_validate.py` passed
+  `prewarm_text_encoder=args.prewarm_text_encoder` unconditionally, pinning
+  the measurement harness to its own argparse default (`store_true`, so
+  False) rather than the node's. The first run after the flip still measured
+  9,228 MB and looked like the flip had not worked. The flag is now
+  `BooleanOptionalAction` with `default=None`, and the kwarg is only passed
+  when set -- so unset means "let the node decide" and the harness measures
+  the shipped default instead of silently pinning its own. A harness that
+  pins a default stops measuring it, and reports the old number with total
+  confidence.
 
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,

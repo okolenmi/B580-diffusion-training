@@ -117,6 +117,26 @@ missing is a real run:**
   `.dora_scale` magnitude + alpha) is real now for the common, unsplit
   case -- see 9.1/9.2 -- so this item is validation-only, same as the
   others in this list.
+- **The CLIP vocabulary, actually vendored** — the one item design doc 12
+  §7 left open, and *not* a validation task: the code is done and tested,
+  what is missing is a *file*. `default_vocabulary_dir()` still falls back
+  to ComfyUI's `sd1_tokenizer/`, so a checkout on a machine with no ComfyUI
+  cannot tokenize.
+
+  **The technical objection is gone; only the licence decision is left.**
+  Checked 2026-10-04 against `openai/clip-vit-large-patch14`: `merges.txt` is
+  byte-identical, and `vocab.json` is semantically identical — 49,408 entries
+  both sides, identical key sets, same id for every entry — differing only in
+  whether the writer used `indent=2`. There is **no ComfyUI-authored content
+  in these files at all**, so this is regenerating a published artifact
+  rather than vendoring a third party's, and the bytes can be re-derived and
+  diffed instead of trusted. 1.49 MB compact, and the whole tokenizer test
+  passes against the published copy. Full numbers, the derivation, and the
+  `pip download clip` name collision that makes this awkward to repeat are in
+  [`12-installer-and-comfy-decoupling.md`](12-installer-and-comfy-decoupling.md)
+  §8. Deliberately last on this list: it is the project's call, not a
+  finding, and nothing is blocked until it is taken.
+
 - ~~**A tiny-parameter (`< 10,000` element) `ExecutionStrategy` for
   Adafactor's cross-parameter batching case** (11.1)~~ -- **closed
   2026-10-02 by retiring the wrapper instead of building it.**

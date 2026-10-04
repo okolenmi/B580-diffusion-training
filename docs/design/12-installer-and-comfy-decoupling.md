@@ -892,24 +892,59 @@ anything is not a reimplementation, it is a second guess.
 * **Where the CLIP BPE vocabulary lives.** *The only thing section 7 left
   open, and it is a project's call rather than a technical one.* The merges
   and ids are OpenAI's published CLIP data, not ComfyUI's work, but the copy
-  on this machine lives in `comfy/sd1_tokenizer/` — 1.6 MB across
+  on this machine lives in `comfy/sd1_tokenizer/` — 1.58 MB across
   `vocab.json` and `merges.txt`. §7.3-C2 reimplemented the *algorithm*;
   nothing about it needed ComfyUI. Three arrangements, in the order
   `default_vocabulary_dir()` tries them:
 
   1. `$CLIP_TOKENIZER_DIR` — already works, and already overrides everything.
   2. `assets/clip_tokenizer/` in this repository — **not created.** Vendoring
-     1.6 MB of published data makes this project self-sufficient, and is the
-     only option where a checkout works on a machine with no ComfyUI at all.
+     the data makes this project self-sufficient, and is the only option
+     where a checkout works on a machine with no ComfyUI at all.
   3. ComfyUI's tree — the current fallback, so the tokenizer works where it
      was developed and where the characterisation comparisons run.
 
-  What argues against (2) is only size and provenance-of-record: 1.6 MB in
-  git, and a file whose canonical home is a model release rather than a
-  source tree. What argues for it is that every other option leaves a
-  dependency, and §7 exists to remove dependencies. It is not urgent,
-  because (3) works and is tested; it is *incomplete*, which is a different
-  thing and worth saying plainly rather than leaving to be discovered.
+  It is not urgent, because (3) works and is tested; it is *incomplete*,
+  which is a different thing and worth saying plainly rather than leaving to
+  be discovered.
+
+  **The provenance objection to (2) turned out to be unfounded — checked
+  2026-10-04 against `openai/clip-vit-large-patch14` on the HF hub.** There is
+  no ComfyUI-authored content in these files at all:
+
+  | | ComfyUI's copy | OpenAI's published copy | verdict |
+  |---|---|---|---|
+  | `merges.txt` | 524,619 B | 524,619 B | **byte-identical** |
+  | `vocab.json` | 1,059,962 B | 961,143 B | **semantically identical** |
+
+  `vocab.json`'s size gap is whitespace and nothing else: 49,408 entries
+  both sides, identical key sets, **the same id for every one of them**,
+  zero keys on either side alone. ComfyUI writes it with `indent=2`; the
+  published copy is compact, and re-serialising either one the same way
+  yields 951,508 characters from each. So the files are OpenAI's data, and
+  option (2) is not "copying a third party's file" but **regenerating a
+  published artifact** — which can be re-derived and diffed on demand rather
+  than trusted because it arrived alongside a checkout.
+
+  Verified end to end, not by sampling: `load_vocabulary()` returns an equal
+  encoder and equal merges from the two directories; 27 adversarial strings
+  (empty, whitespace-only, `<|startoftext|>`, CJK, Cyrillic, combining
+  accents, quotes both ways, `<`/`>`) tokenise to identical ids; and the
+  whole of `smoke_test_tokenizer.py` passes with `CLIP_TOKENIZER_DIR` pointed
+  at the published copy instead of ComfyUI's.
+
+  **What is left is the licence, and that is the decision, not the
+  engineering.** Vendoring costs 1.49 MB of compact JSON rather than 1.58 MB.
+  A middle arrangement is to vendor the bytes *and* ship the derivation
+  script, so the provenance is checkable offline rather than asserted in a
+  comment; pulling from the hub at build time instead would trade the
+  dependency for a network one, which is a downgrade.
+
+  **A trap for anyone repeating this check.** `pip download clip` does not
+  fetch OpenAI's CLIP. It fetches an unrelated 2012 package of the same name
+  by Adam McKerlie, with no vocabulary in it at all. The unambiguous source
+  is the `openai/clip-vit-large-patch14` hub repository.
+
 * **Whether the conflict check reads ComfyUI's `requirements.txt` or asks
   its venv.** *Answered in §3: both, because they answer different
   questions.* The file is what ComfyUI needs, the venv is what is there,

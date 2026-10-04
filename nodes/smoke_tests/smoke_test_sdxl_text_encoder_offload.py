@@ -39,6 +39,27 @@ class _StubLegacyEncoder:
         raise AssertionError("offload() must not call unload() -- see its own docstring")
 
 
+class _UnloadableStub(_StubLegacyEncoder):
+    """A stub whose unload() does what the real one does.
+
+    `SDXLClipEncoder.unload()` moves clip_model and the embedder to CPU,
+    sets `device = "cpu"`, and collects -- so it genuinely frees the
+    device. This reproduces the two parts `footprint_bytes()` could
+    possibly disagree about, and nothing else.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.device = "xpu"
+        self.unload_calls = 0
+
+    def unload(self):
+        self.unload_calls += 1
+        self.clip_model = self.clip_model.cpu()
+        self._embedder = self._embedder.cpu()
+        self.device = "cpu"
+
+
 def check_offload_moves_to_cpu_without_calling_unload_or_gc_or_empty_cache():
     print("[offload(): moves clip_model/_embedder to CPU directly, no unload(), "
           "no gc.collect()/empty_cache() of its own]")
@@ -96,10 +117,51 @@ def check_footprint_bytes_is_zero_while_offloaded():
     print("    PASS")
 
 
+def check_footprint_bytes_is_zero_while_unloaded_too():
+    """The other route to "not on the card" has to count as well.
+
+    `unload()` and `offload()` are different methods reaching the same
+    state by different routes: `offload()` remembers the device and moves
+    the tensors itself, `unload()` delegates to `SDXLClipEncoder.unload()`,
+    which moves them and sets `device = "cpu"`. `footprint_bytes()`
+    consulted only the first route's flag.
+
+    Not a reporting detail. `ManagedLoRATrainerNode`'s
+    `prewarm_text_encoder` Port warms the cache and then calls `unload()`,
+    so with prewarm on -- the setting that frees CLIP's ~1.5 GB and never
+    brings it back -- every consumer of the footprint was told 1,561 MB
+    that was not on the card. Measured on the B580: peak reserved 7,666 MB
+    with prewarm on against 9,228 MB with it off, a drop of 1,562 MB,
+    while the residents line kept reading `text_encoder=1561MB` on both. A
+    VRAM graph that lists a model which is entirely in host RAM is worse
+    than no graph, because it gets believed.
+    """
+    print("[footprint_bytes() reports 0 while unloaded, not just while offloaded]")
+    stub = _UnloadableStub()
+    encoder = SDXLTextEncoder(stub)
+    before = encoder.footprint_bytes()
+    check(before > 0, "sanity: a real nn.Linear must report nonzero footprint")
+
+    encoder.unload()
+    check(stub.unload_calls == 1, "sanity: the test exercised unload() itself")
+    check(stub.device == "cpu", "sanity: unload() did put the encoder on the host")
+
+    after = encoder.footprint_bytes()
+    check(
+        after == 0,
+        f"must report 0 while unloaded, not its full size: the port's "
+        f"contract is device-memory usage and says so in as many words -- "
+        f"0 while offloaded, not the byte count of whatever is sitting in "
+        f"host RAM instead (got {after} of {before})",
+    )
+    print("    PASS")
+
+
 def main():
     check_offload_moves_to_cpu_without_calling_unload_or_gc_or_empty_cache()
     check_reload_restores_the_remembered_device()
     check_footprint_bytes_is_zero_while_offloaded()
+    check_footprint_bytes_is_zero_while_unloaded_too()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

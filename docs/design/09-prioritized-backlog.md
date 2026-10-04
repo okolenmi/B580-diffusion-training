@@ -118,39 +118,54 @@ missing is a real run:**
   case -- see 9.1/9.2 -- so this item is validation-only, same as the
   others in this list.
 - ~~**Why the monitor's VRAM graph lists CLIP while the text encoder is
-  released**~~ -- **answered 2026-10-04: it is released by *not* being
-  released, and the monitor was right.** CLIP is genuinely resident for
-  the whole run, and that is the controller working:
+  released**~~ -- **answered and partly fixed, 2026-10-04.** CLIP is
+  legitimately resident when the residency controller decides to keep it,
+  and *illegitimately reported as resident* when prewarm had already put
+  it in host RAM. Two distinct things, and the second was a bug.
+
+  **Resident, on purpose.** Peak 9,226 MB against a 9,889 MB usable budget,
+  so the controller's decision set is empty, so
+  `should_release("text_encoder")` is False, so
+  `EncodeConditioningPhase` never offloads it:
 
       [residency] measured peak=9226MB over 3 calibration step(s),
-                  usable budget=9889MB ... -- nothing -- staying fully resident
+                  usable budget=9889MB -- nothing -- staying fully resident
       [step 0] residents: model=4897MB optimizer=714MB text_encoder=1561MB
-      [step 1] residents: model=4897MB optimizer=714MB text_encoder=1561MB
 
-  Peak 9,226 MB against a 9,889 MB budget, so the controller's decision set
-  is empty, so `should_release("text_encoder")` is False, so
-  `EncodeConditioningPhase` never offloads it, so CLIP's 1,561 MB is really
-  on the card and `per_resident_footprint_bytes` reports it truthfully.
-  Nothing is leaking.
+  **And not resident, while still being reported as 1,561 MB of it.** A/B on
+  the B580, batch 2 / `1024 aes`, `--profile`:
 
-  **What was actually wrong was the documentation, and it was wrong in the
-  way that hid this.** `MonitoringPhase`'s docstring claimed
-  `per_resident_mb` "will correctly show optimizer/text_encoder near 0
-  every step regardless of whether release() actually did anything". The
-  second clause is true -- this phase runs too late to show a peak -- and
-  it was used to dismiss the first, which is only true when a release
-  happens. At an operating point with headroom none does, so the series
-  reads CLIP's real bytes. Calling the number uninformative is why a real
-  1.5 GB sat in the VRAM graph unexamined. Corrected in place, with the
-  measurement.
+  | | peak reserved | residents |
+  |---|---|---|
+  | `prewarm_text_encoder` off | 9,228 MB | model 4,897 / optimizer 714 / **text_encoder 1,561** |
+  | `prewarm_text_encoder` on | **7,666 MB** | model 4,897 / optimizer 714 / **text_encoder 0** |
 
-  Two things a reader should still know, neither of which this answers:
-  the residents line is *current* footprints, so it is the wrong place to
-  look for a peak (the two phases' own `profile=True` lines are the right
-  one); and whether CLIP *should* stay resident at 1,561 MB when releasing
-  it would buy that much headroom is a policy question the controller
-  answers on peak-versus-budget alone. Not answered here -- the numbers
-  above are what it currently does.
+  `prewarm_text_encoder` is the port that does exactly what it should:
+  warm the cache over every key training will ask for, then `unload()` the
+  encoder for the rest of the run. Every step's encode is then a cache hit
+  that never touches the model. **1,562 MB of peak for free** -- and
+  throughput unchanged (0.703-0.760 steps/sec across runs, which is this
+  card's own run-to-run noise, so this is a VRAM win and not a speed one).
+
+  It reported 1,561 MB because `unload()` frees the device inside
+  `SDXLClipEncoder.unload()` without setting the `_device_before_offload`
+  flag that `footprint_bytes()` consults, so under exactly the setting
+  that frees CLIP, every consumer of the footprint -- the monitor's VRAM
+  graph first among them -- was told about memory that was not there.
+  Fixed by having `unload()` record the device too, with the port's own
+  contract quoted ("0 while offloaded, not the byte count of whatever's
+  now sitting in host RAM instead") and a test for both routes. The
+  `resolved.md` entry has it.
+
+  **Still open, and it is the interesting part: should
+  `prewarm_text_encoder` default to on?** It is off today, so a default run
+  carries 1.5 GB of CLIP that nothing reads after the first pass over the
+  prompts. The reason it is off is in the Port's own docstring and is not
+  about this: it costs one full pass over the dataset before training
+  starts, and it assumes the cache was warmed over the *same* batches
+  training will consume. That is a real precondition. But 1.5 GB of peak on
+  a 12 GB card is 13%, which is several times what a larger batch would
+  cost, so the default looks wrong to me and this is the project's call.
 
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,

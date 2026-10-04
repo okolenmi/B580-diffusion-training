@@ -80,6 +80,31 @@ class SDXLTextEncoder(TextEncoder):
         return self._encoder.resolution_embedding(height, width, batch_size)
 
     def unload(self) -> None:
+        """Record the device before delegating, or the footprint lies.
+
+        `unload()` and `offload()` are two routes to the same state --
+        CLIP in host RAM, nothing on the device -- and they reach it
+        differently: `offload()` records the device itself and moves the
+        tensors, `unload()` delegates to `SDXLClipEncoder.unload()`, which
+        moves them and sets its own `device = "cpu"`. `footprint_bytes()`
+        consulted only `offload()`'s record, so a `unload()` left it
+        reporting CLIP's full size for a CLIP that was entirely on the
+        host.
+
+        That is not cosmetic. `ManagedLoRATrainerNode`'s
+        `prewarm_text_encoder` Port warms the cache and then calls this,
+        and that Port is the one that frees CLIP's ~1.5 GB for the rest of
+        a run -- so under exactly the setting where CLIP is *not* on the
+        card, the monitor's VRAM graph reported 1,561 MB of it. Measured
+        on the B580: peak reserved 7,666 MB with prewarm on against
+        9,228 MB with it off, while the residents line read
+        `text_encoder=1561MB` on both.
+
+        Guarded rather than assigned so an `offload()` first is not
+        overwritten with the CPU device `unload()` has already moved to.
+        """
+        if self._device_before_offload is None:
+            self._device_before_offload = self._encoder.device
         self._encoder.unload()
 
     def footprint_bytes(self) -> int:
@@ -92,7 +117,16 @@ class SDXLTextEncoder(TextEncoder):
         offload()'s own device-memory usage is 0 by definition, and
         numel()*element_size() alone can't tell CPU-resident from
         device-resident, so this has to be checked explicitly rather
-        than left to the summing loop below to get right by accident."""
+        than left to the summing loop below to get right by accident.
+
+        The flag is set by **both** routes that free the device --
+        `offload()` and `unload()` -- and that is load-bearing rather than
+        tidiness: `unload()` frees the memory inside
+        `SDXLClipEncoder` without touching this flag, so a check that
+        only knew about `offload()` reported CLIP's full 1,561 MB for a
+        CLIP sitting in host RAM. See `unload()`'s own docstring and
+        nodes/smoke_tests/smoke_test_sdxl_text_encoder_offload.py, which
+        checks both routes."""
         if self._encoder is None:
             return 0
         if self._device_before_offload is not None:

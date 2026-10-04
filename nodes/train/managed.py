@@ -812,7 +812,21 @@ class MonitoringPhase(ManagedStepPhase):
 
     Read the residents line as *what is on the card right now*, and expect
     a release candidate to be at its full size whenever the controller
-    decided it could stay.
+    decided it could stay -- or at 0 when `prewarm_text_encoder` put it in
+    host RAM instead. Those are the two real states, and both report
+    themselves correctly as of the `footprint_bytes()` fix (see
+    `nodes/model/text_encoder.py`'s `unload()`), which used to report
+    CLIP's full 1,561 MB after a prewarm had freed exactly that much:
+
+        prewarm off   peak 9,228 MB   residents: model=4897MB optimizer=714MB text_encoder=1561MB
+        prewarm on    peak 7,666 MB   residents: model=4897MB optimizer=714MB text_encoder=0MB
+
+    With the residents line correct, the gap between it and
+    `vram_reserved_mb` is the same 2,05x MB either way -- activations,
+    optimizer workspace and fragmentation -- which is the check that the
+    line is now accounting for the difference rather than hiding it. The
+    port worth reaching for is `prewarm_text_encoder`, which is off by
+    default and is what buys that 1.5 GB.
 
     grad_accum: runs after every micro-step (it's last in the phase
     list), but *emits* only on the boundary micro-step -- one report /

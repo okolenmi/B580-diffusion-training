@@ -158,6 +158,59 @@ by inspection.
   dequantised tensor, and DoRA not honouring `NF4WeightStore` (QDoRA).
 
 
+- **[2026-10-04, confirmed on hardware] `footprint_bytes()` reported CLIP's
+  full 1,561 MB while CLIP was in host RAM — and the setting that frees it
+  is off by default.** Found by asking why CLIP appeared in the monitor's
+  VRAM graph at all, which turned out to be two different things.
+
+  *Resident on purpose:* peak 9,226 MB against a 9,889 MB usable budget, so
+  `AdaptiveResidencyController` decides "nothing", so
+  `should_release("text_encoder")` is False and `EncodeConditioningPhase`
+  never offloads it. The monitor reporting 1,561 MB there is correct.
+
+  *Resident by accident:* `ManagedLoRATrainerNode`'s
+  `prewarm_text_encoder` Port warms the prompt cache and then calls
+  `TextEncoder.unload()`. `unload()` frees the device inside
+  `SDXLClipEncoder.unload()` — which moves `clip_model` and the embedder to
+  CPU and sets `device = "cpu"` — but never set `_device_before_offload`,
+  which is the *only* thing `footprint_bytes()` consults. So the one
+  setting that takes CLIP off the card for a whole run was the one setting
+  that still reported CLIP's full size. A/B on the B580, batch 2 /
+  `1024 aes`:
+
+  | | peak reserved | residents |
+  |---|---|---|
+  | prewarm off | 9,228 MB | model 4,897 / optimizer 714 / **text_encoder 1,561** |
+  | prewarm on | **7,666 MB** | model 4,897 / optimizer 714 / **text_encoder 0** |
+
+  1,562 MB of peak, free, with throughput unchanged (0.703–0.760
+  steps/sec across runs — this card's own run-to-run spread, so a VRAM win
+  and not a speed one). The cross-check that the fix is real rather than
+  cosmetic: `vram_reserved` minus the residents line is 2,056 MB with
+  prewarm off and 2,055 MB with it on. The non-resident overhead is
+  identical, so the residents line accounts for the whole difference
+  instead of hiding it.
+
+  `TextEncoder.unload()` now records the device before delegating
+  (guarded, so a preceding `offload()` is not overwritten with the CPU
+  device `unload()` has already moved to), and `footprint_bytes()`'s
+  docstring says both routes are load-bearing. Test added for the `unload`
+  route beside the existing `offload` one — it failed with `got 48 of 48`
+  before the fix. The port's contract already said it, in as many words:
+  *"0 while offloaded, not the byte count of whatever's now sitting in host
+  RAM instead"*.
+
+  **Left open deliberately: whether `prewarm_text_encoder` should default to
+  on.** It is off today, so a default run carries 1.5 GB of CLIP that
+  nothing reads after the first pass over the prompts — 13% of a 12 GB card,
+  several times what a larger batch would cost. The Port's docstring gives
+  the reason it is off and it is not this one: a full pass over the dataset
+  before training, and the assumption that the cache was warmed over the
+  same batches training will consume. Real preconditions, and a project's
+  call rather than a finding. Recorded in
+  `docs/design/09-prioritized-backlog.md`.
+
+
 - **[2026-09-29] A cold `CachingTextEncoder.encode()` called
   `ensure_loaded()` twice (once per cache half), and the test that
   caught it was edited to expect two instead of fixing the encoder.**

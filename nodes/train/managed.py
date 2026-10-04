@@ -777,21 +777,42 @@ class ProbePhase(ManagedStepPhase):
 class MonitoringPhase(ManagedStepPhase):
     """Runs last in the step -- after EncodeConditioningPhase and
     BackwardAndOptimizerStepPhase have already released everything
-    they each manage, so per_resident_mb below will correctly show
+    they each manage.
+
+    **A correction to what this number used to be documented as.** It
+    said here that ``per_resident_mb`` "will correctly show
     optimizer/text_encoder near 0 every step regardless of whether
-    release() actually did anything: this phase runs too late to ever
-    show their real peak. That's not this phase's job -- see those two
-    phases' own profile=True lines (printed inline, right when loaded/
-    released actually happen) for the number that's actually
-    informative. What's still meaningful here: model's own footprint
-    (steady, since it stays resident throughout) and one end-of-step
-    summary line (loss/lr/vram_reserved_mb). Deliberately leaner than
-    the main route's own MonitoringPhase (nodes/train/step_pipeline.py)
-    beyond that -- not the main route's fuller set (per-phase timing,
-    baseline deltas, a tracked-footprint cross-check against
-    ResourceProfile). Someone wanting that level of detail can still
-    build it the same way that file did; duplicating all of it here
-    wasn't this file's job.
+    release() actually did anything", on the grounds that this phase runs
+    too late to show their real peak. The first half is false and the
+    second half is why nobody looked. These are *current* footprints
+    (`ResourceCoordinator.per_resident_footprint_bytes`), not peaks, so
+    they read near 0 only when something was actually released -- and at
+    an operating point with headroom, nothing is. Measured on the B580 at
+    batch 2 / 1024, where the controller measured peak 9,226 MB against a
+    9,889 MB usable budget and logged "nothing -- staying fully resident":
+    every step reported ``model=4897MB optimizer=714MB
+    text_encoder=1561MB``. So CLIP's full 1,561 MB sits in the monitor's
+    VRAM graph for the whole run, which is correct and not a leak --
+    `AdaptiveResidencyController.should_release("text_encoder")` is False,
+    so `EncodeConditioningPhase` never offloads it, so it is genuinely
+    resident. Documenting the series as necessarily-uninformative is what
+    let a real 1.5 GB go unexamined.
+
+    The peak is still not this phase's job, and the two phases' own
+    ``profile=True`` lines -- printed inline, when loading and releasing
+    actually happen -- remain the informative place for it. Also
+    meaningful here: the model's own footprint (steady, since it is never
+    a release candidate) and one end-of-step summary line
+    (loss/lr/vram_reserved_mb). Deliberately leaner than the main route's
+    own MonitoringPhase (nodes/train/step_pipeline.py) beyond that -- not
+    the main route's fuller set (per-phase timing, baseline deltas, a
+    tracked-footprint cross-check against ResourceProfile). Someone wanting
+    that level of detail can still build it the same way that file did;
+    duplicating all of it here wasn't this file's job.
+
+    Read the residents line as *what is on the card right now*, and expect
+    a release candidate to be at its full size whenever the controller
+    decided it could stay.
 
     grad_accum: runs after every micro-step (it's last in the phase
     list), but *emits* only on the boundary micro-step -- one report /

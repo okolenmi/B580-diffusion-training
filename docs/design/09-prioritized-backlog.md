@@ -117,28 +117,40 @@ missing is a real run:**
   `.dora_scale` magnitude + alpha) is real now for the common, unsplit
   case -- see 9.1/9.2 -- so this item is validation-only, same as the
   others in this list.
-- **Why the monitor's VRAM graph lists CLIP while the text encoder is
-  released** — asked 2026-10-04, not yet answered. CLIP appears as a
-  resident series in the monitor window; the intuition is that it should
-  not, because CLIP is not resident during a training step. Two things
-  measured so far, and neither settles it:
-  - In `gpu/smoke_test_real_training_step.py`, CLIP is genuinely gone
-    between phases: **0 MB allocated and 2 MB reserved** after
-    `del encoder` + `empty_cache()`, measured. But that is the *test*
-    choosing to free it — its own docstring says "CLIP alone, then off the
-    card, so the UNet has room" — so it says nothing about production.
-  - The production path deliberately does the opposite:
-    `AdaptiveResidencyController` treats `text_encoder` as one of its two
-    release candidates (with the optimizer), and `EncodeConditioningPhase`
-    calls `ensure_loaded("text_encoder")`. So a run where the controller
-    chooses to keep it is behaving as designed.
+- ~~**Why the monitor's VRAM graph lists CLIP while the text encoder is
+  released**~~ -- **answered 2026-10-04: it is released by *not* being
+  released, and the monitor was right.** CLIP is genuinely resident for
+  the whole run, and that is the controller working:
 
-  The question is therefore whether the *monitor's* series reflects
-  residency or something coarser — a model that was loaded during the run,
-  or a budget share rather than measured bytes. That is answerable by
-  reading what feeds `MonitoringPhase`'s `per_resident_mb`, and it should
-  be, because a VRAM graph that lists a released model as resident is
-  worse than no graph at all.
+      [residency] measured peak=9226MB over 3 calibration step(s),
+                  usable budget=9889MB ... -- nothing -- staying fully resident
+      [step 0] residents: model=4897MB optimizer=714MB text_encoder=1561MB
+      [step 1] residents: model=4897MB optimizer=714MB text_encoder=1561MB
+
+  Peak 9,226 MB against a 9,889 MB budget, so the controller's decision set
+  is empty, so `should_release("text_encoder")` is False, so
+  `EncodeConditioningPhase` never offloads it, so CLIP's 1,561 MB is really
+  on the card and `per_resident_footprint_bytes` reports it truthfully.
+  Nothing is leaking.
+
+  **What was actually wrong was the documentation, and it was wrong in the
+  way that hid this.** `MonitoringPhase`'s docstring claimed
+  `per_resident_mb` "will correctly show optimizer/text_encoder near 0
+  every step regardless of whether release() actually did anything". The
+  second clause is true -- this phase runs too late to show a peak -- and
+  it was used to dismiss the first, which is only true when a release
+  happens. At an operating point with headroom none does, so the series
+  reads CLIP's real bytes. Calling the number uninformative is why a real
+  1.5 GB sat in the VRAM graph unexamined. Corrected in place, with the
+  measurement.
+
+  Two things a reader should still know, neither of which this answers:
+  the residents line is *current* footprints, so it is the wrong place to
+  look for a peak (the two phases' own `profile=True` lines are the right
+  one); and whether CLIP *should* stay resident at 1,561 MB when releasing
+  it would buy that much headroom is a policy question the controller
+  answers on peak-versus-budget alone. Not answered here -- the numbers
+  above are what it currently does.
 
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,

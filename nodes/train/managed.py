@@ -1277,6 +1277,8 @@ class ManagedLoRATrainerNode(TrainerNode):
             from ..model.text_encoder_prewarm import (
                 MAX_DISCOVERY_BATCHES,
                 discover_dataset_keys,
+                prompt_capacity,
+                warm_and_unload,
             )
             prewarm_keys = discover_dataset_keys(
                 batches, max_batches=MAX_DISCOVERY_BATCHES)
@@ -1286,8 +1288,14 @@ class ManagedLoRATrainerNode(TrainerNode):
                 # couldn't have been given at config time.
                 text_encoder.bind_resource_control(resource_control)
             else:
+                # Capacity from the host-RAM budget, not from the dataset's
+                # key count. Sizing it to the dataset made host RAM a
+                # function of dataset size -- a 1M-caption dataset wanted
+                # 606 GB, which is the coupling that stops this scaling at
+                # all -- and warm_and_unload() now warms only what fits, so
+                # the two decisions cannot disagree.
                 text_encoder = CachingTextEncoder(
-                    text_encoder, max_entries=max(len(prewarm_keys), 1),
+                    text_encoder, max_entries=max(prompt_capacity(), 1),
                     resource_control=resource_control)
                 trainer.clip = text_encoder
 
@@ -1349,8 +1357,8 @@ class ManagedLoRATrainerNode(TrainerNode):
             # Prewarm step 2/2 -- now that registration is in place (a warm-up
             # miss's ensure_loaded("text_encoder") finds the encoder already
             # resident here: reload skipped, just _make_room()'s measure),
-            # fill the cache and unload for good.
-            from ..model.text_encoder_prewarm import warm_and_unload
+            # fill the cache and unload for good. Imported at the top of the
+            # prewarm block above, where prompt_capacity() came from too.
             warm_and_unload(text_encoder, prewarm_keys)
 
         if save_every_n_steps > 0:

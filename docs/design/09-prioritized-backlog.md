@@ -255,6 +255,25 @@ missing is a real run:**
     **not** a Port: raising it does not make warming a million captions a
     good idea, it only moves the failure later.
 
+  **Done 2026-10-04: capacity now comes from a RAM budget, not from the
+  dataset.** `PREWARM_HOST_RAM_BUDGET_BYTES` (8 GiB) /
+  `PREWARM_BYTES_PER_PROMPT_ENTRY` (621 KB, measured) =
+  **13,508 prompt entries**, and `max_entries` takes that instead of
+  `len(prewarm_keys)`. This was the actual coupling: sizing the cache to the
+  dataset made host RAM a function of dataset size, which is what made
+  prewarm look unscalable at all. It had a second, quieter failure too --
+  with capacity below the distinct-prompt count, the warm pass's tail
+  encodes, inserts, and is LRU-evicted on the very next insert, so it warms
+  *nothing* for those prompts and they every one miss later. So capping the
+  cache required capping what gets warmed, in the same change:
+  `warm_and_unload` filters prompt keys to capacity and **reports how many
+  it skipped and what a skip costs** (~790 ms, measured). Resolution keys are
+  ~0.3 KB each so they are not filtered -- `non-square` warms all 44 of them
+  in 0.07 s.
+
+  Verified by cutting the budget ~4096x: capacity drops to 3, a 10-prompt
+  fake warms 3, warns with the real numbers, and the cache holds exactly 3.
+
   **Correction to the framing below, from measurement after the user
   proposed an on-demand alternative.** The user proposed dropping the
   up-front warm for a per-step loop: check the cache, miss, load CLIP,

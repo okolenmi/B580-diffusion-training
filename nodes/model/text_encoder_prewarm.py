@@ -88,6 +88,24 @@ MAX_DISCOVERY_BATCHES = 100_000
 #: file once a windowed prewarm exists and this stops being the guard.
 PREWARM_HOST_RAM_BUDGET_BYTES = 8 * 1024 ** 3
 
+#: Bytes one prompt entry actually occupies, measured on the B580 by
+#: summing the stored tensors (a (1, 77, 2048) float32 context plus ~0.3 KB
+#: pooled): 621 KB. Used to turn the RAM budget above into an entry count.
+#: Deliberately a measured constant rather than a guess from tensor shapes,
+#: because the whole point of the budget is to be right about a number that
+#: is otherwise invisible until the machine runs out.
+PREWARM_BYTES_PER_PROMPT_ENTRY = 621 * 1024
+
+#: How many prompt entries that budget buys -- ~13,200 at 8 GiB.
+PREWARM_MAX_PROMPT_ENTRIES = (
+    PREWARM_HOST_RAM_BUDGET_BYTES // PREWARM_BYTES_PER_PROMPT_ENTRY
+)
+
+
+def prompt_capacity() -> int:
+    """Prompt entries the host-RAM budget allows, floor 1."""
+    return max(1, PREWARM_MAX_PROMPT_ENTRIES)
+
 
 def discover_dataset_keys(dataset: TrainingBatchSource,
                           max_batches: int | None = None) -> set:
@@ -133,73 +151,86 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
 
 
 def warm_and_unload(cached: CachingTextEncoder, keys: set) -> int:
-    """Encode every discovered key into `cached`, then `cached.unload()`
-    the underlying encoder entirely. Returns the number of keys warmed.
+    """Encode as many discovered keys into `cached` as its budget allows,
+    then `cached.unload()` the underlying encoder entirely. Returns the
+    number of keys the dataset had.
 
     Shared by this module's own node (main route) and
-    ManagedLoRATrainerNode's `prewarm_text_encoder` Port (Resources
-    Controller route) -- both callers wrap in CachingTextEncoder first
-    (this node sizing max_entries to len(keys) so the warm pass can't
-    evict itself; a caller-supplied cache keeps its own capacity), this
-    only does the warm + unload. Keys outside `keys` later (dataset
-    changed between warm and training) miss this cache -- correct but
-    slow, see this module's docstring's degradation note.
+    `ManagedLoRATrainerNode`'s `prewarm_text_encoder` Port (Resources
+    Controller route). Keys outside `keys` later (dataset changed between
+    warm and training) miss this cache -- correct but slow, see this
+    module's docstring's degradation note.
 
-    **Reports what warming cost, because that cost is what decides whether
-    warming all of it is the right thing to do.** Both terms are linear in
-    the number of *distinct prompts* and neither is visible from outside:
-    time (30.6 ms each on XPU, 1,505 ms on CPU -- measured on the B580)
-    and host RAM (621 KB each, summed exactly by
-    `CachingTextEncoder.cache_bytes()`). At 100,000 distinct captions that
-    is 51 minutes and 60.6 GB, so a dataset large enough to need a
-    *windowed* prewarm announces itself here, while finding out is still
-    cheap, rather than by exhausting the machine. See
-    `PREWARM_HOST_RAM_BUDGET_BYTES`.
+    **Capacity comes from the host-RAM budget, not from `len(keys)`.** That
+    inversion is the whole change: sizing the cache to the dataset made host
+    RAM a function of dataset size, which is the coupling that stops prewarm
+    scaling (a 1M-caption dataset wanted 606 GB). It also had a quieter
+    failure -- with capacity below the distinct-prompt count, the warm pass's
+    tail encodes, inserts, and is LRU-evicted on the very next insert, so it
+    warms *nothing* for those prompts and they every one miss later. Capping
+    the cache therefore has to come with capping what gets warmed, which is
+    what the prompt filter below does. Nothing else does this for it:
+    `CachingTextEncoder` has no way to know a warm pass is coming.
+
+    Resolution keys are ~0.3 KB against a prompt entry's 621 KB, so they are
+    deliberately not filtered on the same budget -- `non-square` alone has 43
+    of them against 1 prompt, at 1.6 ms each. All of them are warmed.
+
+    **What warming costs, reported, because the cost decides this.** Both
+    terms are linear in distinct prompts and neither is visible from outside:
+    time (30.6 ms each on XPU, 1,505 ms on CPU -- measured on the B580) and
+    host RAM (621 KB each, summed exactly by `cache_bytes()`).
     """
-    # Sorted so "the first key" is the same key every run: timing a set's
-    # first element otherwise measures whichever key the hash order
-    # happened to produce, which is not a measurement.
-    ordered = sorted(keys)
+    prompt_keys = sorted({(p, bs) for p, bs, _, _ in keys})
+    resolution_keys = sorted({(h, w, bs) for _, bs, h, w in keys})
+    capacity = prompt_capacity()
+    warmable = prompt_keys[:capacity]
+    skipped = len(prompt_keys) - len(warmable)
+    # Prompt half first, so a truncated warm still fills the cache rather
+    # than spending its budget on resolution keys. (Both halves are cached
+    # separately, so warming the prompt half needs no resolution at all.)
     started = time.monotonic()
-    cached.encode(*ordered[0])
+    cached.encode(warmable[0][0], warmable[0][1],
+                  resolution_keys[0][0], resolution_keys[0][1])
     setup = time.monotonic() - started
     started = time.monotonic()
-    for key in ordered[1:]:
-        cached.encode(*key)
-    rest = time.monotonic() - started
-    elapsed = setup + rest
+    for prompt, batch_size in warmable[1:]:
+        cached.encode(prompt, batch_size,
+                      resolution_keys[0][0], resolution_keys[0][1])
+    prompt_time = time.monotonic() - started
+    started = time.monotonic()
+    for height, width, batch_size in resolution_keys:
+        cached.encode(warmable[0][0], warmable[0][1], height, width)
+    resolution_time = time.monotonic() - started
     cached_bytes = getattr(cached, "cache_bytes", lambda: 0)()
     cached.unload()
-    prompt_keys = {(p, bs) for p, bs, _, _ in keys}
-    others = len(prompt_keys) - 1
-    # Reported separately because they are not the same thing and averaging
-    # them lies: a dataset with one prompt would otherwise report its whole
-    # one-time setup as a per-prompt rate. The marginal figure is the one
-    # that scales, and the setup is the one that does not.
-    marginal = 1000 * rest / others if others > 0 else 0.0
+
+    others = len(warmable) - 1
+    marginal = 1000 * prompt_time / others if others > 0 else 0.0
     # print, not logging: these are the numbers an operator is meant to see
     # and decide by, and this project's convention for that is stdout (the
     # loader's own one-time warning, and EncodeConditioningPhase's residency
     # lines, both print). A logging call at INFO is invisible unless
     # something configured logging, which nothing here does -- a
     # measurement nobody can see is not a measurement.
-    print(f"  [prewarm] {len(keys)} key(s): {len(prompt_keys)} distinct prompt(s), "
-          f"{len(keys) - len(prompt_keys)} resolution -- {elapsed:.2f}s total "
+    print(f"  [prewarm] {len(keys)} key(s) in the dataset: {len(prompt_keys)} "
+          f"distinct prompt(s), {len(resolution_keys)} resolution. Warmed "
+          f"{len(warmable)} prompt(s) in {setup + prompt_time:.2f}s "
           f"({setup:.2f}s one-time setup"
           + (f", {marginal:.1f} ms per further prompt" if others > 0 else "")
-          + f"), holding {cached_bytes / 2 ** 20:.1f} MB of host RAM. "
-          f"CLIP is off the card for the rest of the run.")
-    if cached_bytes > PREWARM_HOST_RAM_BUDGET_BYTES:
+          + f") and {len(resolution_keys)} resolution key(s) in "
+          f"{resolution_time:.2f}s, holding {cached_bytes / 2 ** 20:.1f} MB of "
+          f"host RAM. CLIP is off the card for the rest of the run.")
+    if skipped:
         print(
-            f"  [prewarm] WARNING: the warm cache is "
-            f"{cached_bytes / 1024 ** 3:.1f} GB of host RAM, over the "
-            f"{PREWARM_HOST_RAM_BUDGET_BYTES / 1024 ** 3:.0f} GB budget this "
-            f"module measures against ({len(prompt_keys)} distinct prompts at "
-            f"621 KB each). Warming every key at once does not scale past "
-            f"this point -- it costs ~30.6 ms and 621 KB per distinct prompt, "
-            f"so a dataset an order of magnitude past this needs a windowed "
-            f"warm (the loader's seeded shuffle makes the next N steps' keys "
-            f"knowable) rather than a bigger budget.",
+            f"  [prewarm] WARNING: {skipped} of {len(prompt_keys)} distinct "
+            f"prompt(s) did NOT fit the {PREWARM_HOST_RAM_BUDGET_BYTES / 1024 ** 3:.0f} GB "
+            f"host-RAM budget ({capacity:,} entries at "
+            f"{PREWARM_BYTES_PER_PROMPT_ENTRY // 1024} KB each) and were not "
+            f"warmed. They will be cache misses on first use: correct, and it "
+            f"re-loads CLIP at ~790 ms each (364 load + 30 encode + 396 evict, "
+            f"measured) rather than the {marginal:.0f} ms a warm one costs. "
+            f"Raise the budget deliberately if this dataset is worth it.",
             flush=True,
         )
     return len(keys)

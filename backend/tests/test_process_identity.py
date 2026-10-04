@@ -71,7 +71,24 @@ def test_pre_exec_child_is_cannot_tell() -> None:
     print("\n== a child that has not exec'd yet: cannot tell, not no ==")
     pid, release_fd = _forked_child()
     try:
-        inherited = _read_cmdline(pid)
+        # Wait for the fork window to close before reading. Between fork and
+        # execve the kernel has a pid for the child but /proc/<pid>/cmdline
+        # is not yet readable, so `_read_cmdline` returns None and
+        # `cmdline_mentions` returns None -- "not yet know", which is the
+        # same answer it gives for a live stranger's missing marker.
+        #
+        # Reading once, which is what this used to do, made an assertion
+        # about the *guard's* behaviour report the *scheduler's*. It failed
+        # about one gate run in six under load -- and the gate proved it
+        # again on 2026-10-04, after a 50-run stress at 4-way parallelism
+        # had found nothing. So 50 clean runs is not evidence that it is
+        # fixed, and the fix has to remove the timing assumption rather than
+        # widen the margin.
+        #
+        # The child is held by `release_fd` and never execs, so its cmdline
+        # becomes the parent's and stays there. That is what makes this wait
+        # terminate.
+        inherited = _wait_for_readable_cmdline(pid)
         check(inherited is not None and inherited == _read_cmdline(os.getpid()),
               f"the forked child's cmdline is still its parent's "
               f"(got {inherited!r})")
@@ -82,6 +99,11 @@ def test_pre_exec_child_is_cannot_tell() -> None:
               f"not 'not ours' (got {verdict!r}) -- the old answer was "
               f"False, which reports a live trainer as finished")
 
+        became_readable = wait_until(
+            lambda: cmdline_mentions(pid, PRESENT) is not None, timeout=5.0)
+        check(became_readable,
+              "and a marker it does contain becomes readable, rather than "
+              "being read inside the fork window and reported as None")
         check(cmdline_mentions(pid, PRESENT) is True,
               "a marker it does contain is still a match -- the parent's "
               "command line genuinely says it")
@@ -115,8 +137,17 @@ def test_genuinely_foreign_process_is_still_false() -> None:
         check(matched,
               "and /proc/<pid>/cmdline becomes readable, rather than being "
               "read during the fork window and reported as None")
-        check(cmdline_mentions(sleeper.pid, "sleep") is True,
-              "and a real match is still True")
+        # Poll for the value being asserted, not for "not None" and then read
+        # once more. Those are two different conditions with a gap between
+        # them, so a value that changes across that gap fails a check whose
+        # wait has already been shown to succeed -- and the old form carried
+        # no detail, so a failure said only that True was expected.
+        still_true = wait_until(
+            lambda: cmdline_mentions(sleeper.pid, "sleep") is True, timeout=5.0)
+        verdict_now = cmdline_mentions(sleeper.pid, "sleep")
+        check(still_true and verdict_now is True,
+              f"and a real match is still True (got {verdict_now!r}, cmdline "
+              f"{_read_cmdline(sleeper.pid)!r})")
     finally:
         sleeper.kill()
         sleeper.wait()
@@ -174,6 +205,27 @@ def _wait_until(predicate, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.005)
     return False
+
+
+def _wait_for_readable_cmdline(pid: int, timeout: float = 5.0) -> str | None:
+    """Poll until the pid's cmdline is readable at all.
+
+    The counterpart to `_wait_for_cmdline`, which waits for a cmdline to
+    become the child's *own*. This one waits for the fork/exec window to
+    close on a child that has not exec'd and is being held, so its cmdline
+    settles on the parent's and stays there.
+
+    Returns None if it never becomes readable, so a caller asserting on the
+    value reports that rather than raising.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        current = _read_cmdline(pid)
+        if current is not None:
+            return current
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.005)
 
 
 def _wait_for_cmdline(pid: int, timeout: float = 5.0) -> str | None:

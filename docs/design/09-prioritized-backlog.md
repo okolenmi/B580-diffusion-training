@@ -562,6 +562,65 @@ missing is a real run:**
   every graph containing any node that has not implemented an estimator is
   un-runnable, on day one, which is most of them.
 
+  **Built 2026-10-04, optional and off by default: two files, and the two
+  modes turned out to be one mechanism.**
+  `nodes/memory/device_reservations.py` (the registry, per *device* -- the
+  device is the resource being divided) and `nodes/memory/peak_record.py`
+  (what previous runs actually peaked at, on disk). 22 + 14 checks.
+
+      card 12,216 MB (that is 11.93 GiB in MB)
+      1. first ever run of a configuration    REFUSED -- nothing known
+      2. after a prior 7,666 MB measurement   admitted, holds 7,816 MB
+      3. a different configuration, unmeasured  REFUSED -- nothing known
+      4. ...at a stated 4,400 MB              admitted, holds 4,400 MB
+      held 12,216 of 12,216 MB; free 0 MB
+
+  **A misreading of the design, corrected by the user and by a demonstration
+  run.** I first built observed mode as a *within-run* ratchet -- the peak so
+  far, plus a pillow -- which means the reservation is only as good as the
+  steps already done, so a run that grows past it dies **mid-flight**. The
+  user's correction is the sharper one: the risk in the first steps is not a
+  big deal *because they are first steps*; the thing to fear is a failure
+  arriving halfway through a long run. So the peak has to be a **persistent
+  record**: written after each step, read *at admission*. Then step 0 is
+  covered, nothing fails mid-run, and a run that exceeds its remembered peak
+  is not a resource problem but a changed configuration -- worth reporting as
+  exactly that.
+
+  **Which collapses the two modes into one.** Observed mode is not a separate
+  policy; it is this mechanism with the number read from `PeakRecord` instead
+  of typed by a person. Both are checked identically, because the entire value
+  of observing is that the observation happened *before* this run. So
+  `admit()` now **requires** a number and refuses when there is none.
+
+  **That last change came from the demonstration run, and it closed a hole in
+  my own code.** `admit(..., stated_mb=None)` used to mean "observed mode,
+  nothing to check yet" and admit unconditionally -- so the first ever run of a
+  configuration was admitted holding a 0 MB claim, which is precisely what the
+  unknown rule exists to prevent. It is now a refusal, and the test asserts it
+  holds nothing afterwards. Worth noting as a shape of mistake rather than an
+  instance: an `Optional` parameter on a safety check is a silent "no check
+  performed", and `None or 0.0` in the caller turned that into a silent
+  "check passed".
+
+  **Load-bearing properties, all tested:** a peak **never ratchets down** (a
+  later smaller step is not evidence that less is needed, and lowering it would
+  admit the next run on a number this one already exceeded); a **stated**
+  claim is never lowered by a measurement below it; a refused run holds **no**
+  claim, so a retry after choosing a smaller number is not blocked by the
+  attempt; a corrupt record reads as **unknown** rather than refusing to run,
+  because a measurement cache must not become a dependency; and re-claiming
+  replaces rather than accumulates, so a graph's own corrections cannot inflate
+  the device total.
+
+  **Not wired into any trainer.** The registry has no opinions and the wiring
+  has several -- which node claims, with what fingerprint, and what a user
+  setting maps onto. `Fingerprint` deliberately carries only what changes the
+  peak (model, batch, latent h/w, rank, checkpointing, optimizer), because
+  residents are constant at 5,611 MB and the varying part is workspace; a
+  fingerprint that hashed the whole graph would mean re-measuring for every
+  dataset shuffle.
+
   **First slice, when picked up** -- ordered so each step is checkable
   against something already measured:
 

@@ -116,6 +116,48 @@ by inspection.
   `docs/design/09-prioritized-backlog.md`: it changes what the managed route
   can do, which is a project's call.
 
+- **[2026-10-04, confirmed on hardware] NF4 weight storage costs 0.10% of
+  loss and 16% of throughput, and saves 180 MB — a bad trade at batch 2 /
+  1024.** Measured as a *matched pair* on the B580: managed route, batch 2,
+  dataset `1024 aes`, 40 steps, seed 1234, rank 64, identical in every
+  respect except `--weight-store`.
+
+  | | bf16 | nf4 | change |
+  |---|---|---|---|
+  | loss at step 0 | 0.176599 | 0.176780 | **+0.102%** |
+  | mean relative loss difference, 40 steps | — | — | **0.147%** (max 0.747%) |
+  | loss change over the run | -39.9% | -39.8% | same |
+  | throughput | 0.707 steps/sec | 0.593 steps/sec | **-16%** |
+  | peak reserved | 9,228 MB | 9,048 MB | **-180 MB** (-2%) |
+
+  **The quality question is answered, and it is not close to a problem.**
+  `NF4WeightStore`'s documented ~9% relative RMSE is in *weight* space; at
+  step 0, before any update, it moves the loss by 0.10%, and the two loss
+  curves stay within 0.147% on average for 40 steps while descending by the
+  same 39.9%. So the quantisation error is three orders of magnitude smaller
+  in function space than in weight space, and LoRA training on this UNet is
+  unaffected. That is the diffusion-specific question
+  `docs/design/09-prioritized-backlog.md` item 1 asked to be measured rather
+  than assumed from QLoRA's LLM benchmarks.
+
+  **The trade is the surprise.** 16% of throughput for 180 MB — 2% of a
+  9.2 GB peak — when the floor leaves roughly 2.8 GB of headroom. It is a
+  poor deal *at this operating point*, and it is a good deal only where
+  memory is the binding constraint. Note this is a **smaller** saving than
+  the 1,361 MB `docs/known-issues/open.md` records for the same lever, which
+  was measured at a different operating point; the two should be read
+  together rather than as one contradicting the other.
+
+  **The limit of this measurement, stated plainly:** 40 steps at batch 2 on a
+  201-image dataset is about 0.4 epochs. This shows NF4 does not *break*
+  training over a short run. It does not show output quality over a full
+  fine-tune, and reading it that way would be reading more than it says.
+
+  Two parts of that backlog item remain open and are untouched by this:
+  `NF4WeightStore`'s `MemoryManager`-backed scratch buffer for the
+  dequantised tensor, and DoRA not honouring `NF4WeightStore` (QDoRA).
+
+
 - **[2026-09-29] A cold `CachingTextEncoder.encode()` called
   `ensure_loaded()` twice (once per cache half), and the test that
   caught it was edited to expect two instead of fixing the encoder.**

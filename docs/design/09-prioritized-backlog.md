@@ -22,11 +22,23 @@ holds, so nothing already installed can move. And model lookup would
 become main-then-reserve rather than the single-root-with-override it is
 today, which changes what existing code has to assume in five places.
 
-1. **Verify `NF4WeightStore`'s quality against a real training run**
-   (3.3). The diffusion-specific quality question -- does NF4's real ~9%
-   relative RMSE (see that module's own docstring) actually produce
-   usable LoRA training results on this project's real UNet -- still
-   needs checking directly, not assumed from QLoRA's own LLM benchmarks.
+1. ~~**Verify `NF4WeightStore`'s quality against a real training run**~~
+   (3.3) -- **the quality half is measured, 2026-10-04.** A matched pair
+   on the B580 (managed, batch 2, `1024 aes`, 40 steps, seed 1234, only
+   `--weight-store` differing) puts NF4's documented ~9% weight-space RMSE
+   at **0.102% of loss at step 0** and **0.147% mean across 40 steps**,
+   with both curves descending by the same 39.9% -- three orders of
+   magnitude smaller in function space than in weight space, and no effect
+   on training. What it *does* cost is **16% of throughput** (0.707 ->
+   0.593 steps/sec) to save **180 MB** of peak, so at this operating point
+   it is a bad trade. Numbers and the limit of the measurement (40 steps is
+   ~0.4 epochs, so this is "does not break training", not "identical
+   quality over a full fine-tune") are in
+   [`../known-issues/resolved.md`](../known-issues/resolved.md).
+   *Still open on this item:* the `MemoryManager`-backed scratch buffer for
+   the dequantised tensor (real, separate optimization, not blocking
+   correctness) -- see `nf4_lora_layer.py`'s own docstring -- and
+   `DoRAAdapter` not honoring `NF4WeightStore` (`QDoRA`).
    A `MemoryManager`-backed scratch buffer for the dequantized tensor
    (real, separate optimization, not blocking correctness) is the other
    remaining piece -- see `nf4_lora_layer.py`'s own docstring.

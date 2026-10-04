@@ -83,6 +83,63 @@ def _autocast_state(inputs) -> tuple[str | None, dict]:
     }
 
 
+def _rng_device_module(device_type: str):
+    """`torch.<device_type>`, if it has RNG state worth preserving.
+
+    `None` for CPU (whose state is the global one `torch.get_rng_state`
+    handles) and for any device type without the two functions.
+    """
+    module = getattr(torch, device_type, None)
+    if module is None or device_type == "cpu":
+        return None
+    if not (hasattr(module, "get_rng_state")
+            and hasattr(module, "set_rng_state")):
+        return None
+    return module
+
+
+def _capture_device_rng(tensors) -> tuple[list, list, str | None]:
+    """The accelerator RNG states these tensors depend on, and their indices.
+
+    Gated on the *tensors* rather than on `device_module._initialized`,
+    which is what `torch.utils.checkpoint` gates on. An input tensor that
+    lives on an accelerator is itself proof that accelerator's context is
+    already initialised, so this gate is both weaker and safer: it cannot
+    skip a device whose `_initialized` flag has not caught up — measured as
+    `False` on this machine's `torch.xpu` before the first allocation — and
+    it cannot initialise a context that was never going to be used.
+
+    This matters here because on-device randomness is drawn from that
+    device's generator and not the CPU one: with `torch.xpu.manual_seed_all`
+    set, an XPU dropout is reproducible and is *unchanged* by a CPU seed.
+    So preserving only the CPU state would silently leave every accelerator
+    block's masks wrong — the same bug, one level down.
+
+    Returns `([], [], None)` when there is nothing to preserve.
+    """
+    for tensor in tensors:
+        if not torch.is_tensor(tensor):
+            continue
+        device_type = tensor.device.type
+        module = _rng_device_module(device_type)
+        if module is None:
+            continue
+        devices: list = []
+        states: list = []
+        for other in tensors:
+            if not torch.is_tensor(other) or other.device.type != device_type:
+                continue
+            index = other.device.index
+            if index is None:
+                index = getattr(module, "current_device", lambda: 0)()
+            if index in devices:
+                continue
+            devices.append(index)
+            states.append(module.get_rng_state(index))
+        return devices, states, device_type
+    return [], [], None
+
+
 def make_checkpoint_function(recompute_wrapper=None):
     """Build a `CheckpointFunction` with the frozen-param and autocast fixes.
 
@@ -107,6 +164,14 @@ def make_checkpoint_function(recompute_wrapper=None):
             ctx.autocast_device_type, ctx.autocast_kwargs = _autocast_state(
                 ctx.input_tensors
             )
+            # RNG state as it was *before* this block ran. The block runs
+            # below exactly as it would uncheckpointed, so the state after
+            # this forward is already the right one -- nothing is restored
+            # here, and that is what keeps a seeded run reproducible. This is
+            # only a snapshot for backward to replay.
+            ctx.rng_cpu_state = torch.get_rng_state()
+            (ctx.rng_devices, ctx.rng_device_states,
+             ctx.rng_device_type) = _capture_device_rng(ctx.input_tensors)
             with torch.no_grad():
                 return ctx.run_function(*ctx.input_tensors)
 
@@ -126,15 +191,41 @@ def make_checkpoint_function(recompute_wrapper=None):
                 if ctx.autocast_device_type
                 else contextlib.nullcontext()
             )
-            with torch.enable_grad(), autocast:
-                # Same "first op mutates storage in place" guard as the
-                # original -- detach()'d tensors can't be mutated in place.
-                shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
-                if recompute_wrapper is not None:
-                    output_tensors = recompute_wrapper(ctx.run_function,
-                                                       shallow_copies)
-                else:
-                    output_tensors = ctx.run_function(*shallow_copies)
+            # Replay the forward's randomness. Without this the block draws a
+            # *different* dropout mask here than it did in forward, so the
+            # upstream gradient belongs to mask A and the recomputed Jacobian
+            # to mask B -- and the result is a plausible, finite, entirely
+            # wrong gradient. Measured against an uncheckpointed reference:
+            # 4.343e-01 relative error at p=0.1 and 9.337e-01 at p=0.5,
+            # against 0.0 for `torch.utils.checkpoint`.
+            #
+            # `fork_rng` wraps *only* the recompute, never the
+            # `torch.autograd.grad` call below. That is deliberate: the grad
+            # call runs the backward kernels, which do not draw random
+            # numbers, and pinning the generator across them would make the
+            # caller's post-backward RNG state depend on autograd internals.
+            # Setting the saved states inside the fork is what makes the
+            # recompute use the forward's masks; the fork restoring on exit
+            # is what leaves the caller's generator where it was.
+            with torch.random.fork_rng(
+                    devices=ctx.rng_devices,
+                    device_type=ctx.rng_device_type or "cpu"):
+                torch.set_rng_state(ctx.rng_cpu_state)
+                if ctx.rng_devices:
+                    device_module = _rng_device_module(ctx.rng_device_type)
+                    for index, state in zip(ctx.rng_devices,
+                                            ctx.rng_device_states):
+                        device_module.set_rng_state(state, index)
+                with torch.enable_grad(), autocast:
+                    # Same "first op mutates storage in place" guard as the
+                    # original -- detach()'d tensors can't be mutated in
+                    # place.
+                    shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+                    if recompute_wrapper is not None:
+                        output_tensors = recompute_wrapper(ctx.run_function,
+                                                           shallow_copies)
+                    else:
+                        output_tensors = ctx.run_function(*shallow_copies)
 
             trainable_params = [p for p in ctx.input_params if p.requires_grad]
             grad_targets = ctx.input_tensors + trainable_params

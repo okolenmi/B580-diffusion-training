@@ -645,12 +645,78 @@ dtype explicitly at construction and never through them, so ours are
 
 #### Bugs and quirks found in ComfyUI while porting, none copied
 
-Five, all measured rather than inferred:
+Five in ComfyUI's own code, plus one of ours found later — all measured
+rather than inferred:
 
 1. **`CheckpointFunction` raises on frozen parameters**, and re-enters a
    CUDA-only autocast in backward. Both fixed in `nodes/model/checkpoint.py`,
    the second measured as a 4.581e-04 relative gradient error becoming 0.0.
-   Both reported upstream.
+   Both reported upstream. **A third bug in the same function was ours, not
+   ComfyUI's**, found by round-5 review after the reimplementation had
+   landed — see "the third checkpointing bug" below.
+
+#### The third checkpointing bug: the recompute drew a different dropout mask
+
+Found by round-5 review (R5-01), *after* this reimplementation had landed,
+and against `nodes/model/checkpoint.py` rather than ComfyUI's original. It
+is in its own section rather than in the list above because it is the one
+bug in this file that belongs to this project.
+
+`forward` ran the block under `no_grad`; `backward` re-ran it under
+`enable_grad`. Nothing saved or restored the RNG state, so anything random
+inside the block drew a **different mask** in the recompute than in the
+forward. The upstream gradient belongs to mask A and the recomputed Jacobian
+to mask B. Measured against an uncheckpointed reference, same inputs and
+seed, relative gradient error:
+
+    dropout   ours before the fix   torch.utils.checkpoint
+    0.0        0.000e+00            0.000e+00
+    0.1        4.343e-01            0.000e+00
+    0.5        9.337e-01            0.000e+00
+
+**It was live, not latent.** `tuning.dropout` is a user-facing config key
+("LoRA Dropout" in the settings UI, `config.example.toml:74`), and
+`LoRALinear` builds `nn.Dropout` from it above zero. `use_checkpoint` is on
+by default in `SDXL_CONFIG`, because it is what makes 1024 / batch 2 fit on
+a 12 GB card. So "LoRA dropout above zero with checkpointing on" was a
+supported configuration producing wrong gradients.
+
+Three things the fix had to get right, and each was measured:
+
+* **The accelerator has its own generator.** Preserving only the CPU RNG
+  state would have left every on-device block's masks wrong — the same bug
+  one level down. Verified: with `torch.xpu.manual_seed_all` set, an XPU
+  dropout is reproducible and is *unchanged* by a CPU seed. The card's
+  figures were 3.839e-01 at p=0.1 and 9.740e-01 at p=0.5, distinct from the
+  CPU ones — which is how the separate generator shows up.
+* **The gate is the input tensors, not `device_module._initialized`**, which
+  is what `torch.utils.checkpoint` gates on and is weaker: measured `False`
+  for `torch.xpu` on this machine before the first allocation. An input
+  tensor that lives on an accelerator is itself proof that accelerator's
+  context is initialised, so gating on the tensors is both safer and more
+  direct. It is load-bearing for correctness, not only for speed:
+  `torch.xpu.set_rng_state` indexes `torch.xpu.default_generators`, which
+  is a tuple only once initialised.
+* **The fork wraps only the recompute**, never the `torch.autograd.grad`
+  call. Pinning the generator across the backward kernels would make the
+  caller's post-step RNG position depend on autograd internals.
+
+Cost, measured rather than asserted: `torch.get_rng_state()` 0.88 µs,
+`torch.xpu.get_rng_state(0)` 1.54 µs, `torch.xpu.set_rng_state` 1.44 µs.
+The whole replay adds **22.39 µs per checkpointed call** — the difference
+between the fixed function and a control without it, same autograd
+machinery either way — and one SDXL forward visits **17** checkpointed call
+sites. At 1024 / batch 2, where a step measures 1,230 ms, that is **0.06%
+of a step**.
+
+`nodes/smoke_tests/smoke_test_checkpoint_rng.py` and
+`scripts/repro/r21_checkpoint_rng.py` between them cover the arithmetic,
+the control that proves the test can fail, the generator's end state, a
+block with no randomness, and the composition with the autocast re-entry.
+The repro runs on the card and skips without one; the smoke test is CPU
+only, so the **XPU RNG restore path is measured on the B580** rather than
+inferred.
+
 2. **`SpatialTransformer`'s `is_linear=True` branch** builds `proj_out` as
    `Linear(in_channels, inner_dim)` — identical to `proj_in`, roles never
    swapped — so it cannot work where `inner_dim != in_channels`. Invisible

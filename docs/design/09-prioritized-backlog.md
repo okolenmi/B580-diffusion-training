@@ -416,6 +416,54 @@ missing is a real run:**
   binding constraint. Larger than a windowed warm and it is the only option
   here that does not need to predict the shuffle.
 
+- **Memory admission belongs to the graph, not to a node and not to each
+  trainer** — the user's architectural call, 2026-10-04, recorded not built.
+
+  **How unloading works today, so the proposal has a baseline.** There *is*
+  a shared mechanism — `ResourceControlHandle._make_room()`, reached through
+  `before_step()` and `ensure_loaded(name)`. It offloads eligible,
+  currently-loaded residents in **registration order**, skipping exclusions,
+  when measured `reserved_mb` exceeds the budget, and `release()` does the
+  same deterministically right after a phase ends. Two shapes exist:
+  pressure-triggered (what `CachingTextEncoder` uses) and
+  declared-upfront (a resident whose idle windows are known). Its own
+  docstring says which residents get which treatment "is each trainer's own,
+  disclosed choice; this module provides both mechanisms, not a
+  one-size-fits-all policy".
+
+  **So the gap is real and is precisely where the user says it is.** There is
+  no way for an arbitrary node to say "I need N MB now" and have anything
+  arbitrate. A node that needs a big transient either knows about
+  `ResourceControlHandle` and the registration order, or it does not
+  participate — and `VRAMBudgetControllerNode` has to be *wired into a
+  particular trainer's* `resource_control` input, so it is scoped to one
+  trainer rather than to the graph.
+
+  **The proposal, in the user's terms.** One controller, callable by any node
+  on the graph, taking a required VRAM number, deciding what to unload. Not a
+  node — the existing budget node is the wrong altitude — but something one
+  level above, carrying per-nodegraph settings so different graphs can hold
+  different policies. `VRAMBudgetControllerNode`'s own docstring already
+  anticipates part of this shape ("add the ABC split if and when a second one
+  genuinely shows up"), which is the same instinct applied one layer down.
+
+  **Why it is the right altitude, which is the argument worth keeping.**
+  Memory admission is a *whole-graph* property because the scarce resource is
+  shared by everything on it. Two trainers on one card is the failure the
+  supervisor's own comments keep returning to, and today each trainer
+  independently believes it is the only thing on the card — each has its own
+  budget, its own coordinator, and its own registration order. A per-trainer
+  controller cannot see the conflict; a per-graph one is the only thing that
+  can.
+
+  **Not designed, and these are the open questions rather than answers:**
+  whether "required VRAM" is a number or a reservation (a number lets two
+  nodes each believe there is room), what happens when the sum of demands
+  exceeds the card (refuse, or evict and retry — refusing is the only answer
+  that cannot deadlock), and whether the graph-level setting is a budget, a
+  policy, or both. The second one matters most: a controller that can only
+  fail is useless, and one that can preempt has to be able to.
+
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,
   what is missing is a *file*. `default_vocabulary_dir()` still falls back

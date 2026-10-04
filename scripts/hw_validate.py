@@ -202,7 +202,9 @@ def build_common(ctx, args, probe: MemProbe):
     weights = SafetensorsCheckpointNode(ctx).build(path=args.checkpoint)["weights"]
     args._floor_stages = {"weights_host": probe.snapshot()}
     batches = ManagedDatasetSourceNode(ctx).build(
-        dataset_root=args.dataset, batch_size=args.batch, shuffle=True)["batches"]
+        dataset_root=args.dataset, batch_size=args.batch, shuffle=True,
+        keep_incomplete_batches=getattr(args, "keep_incomplete_batches", False),
+    )["batches"]
     schedule = CosineLRScheduleNode(ctx).build(
         lr=args.lr, total_steps=args.steps)["schedule"]
     control = VRAMBudgetControllerNode(ctx).build(
@@ -368,6 +370,14 @@ def main() -> None:
                              "behavior), 0.5=every 2nd, 0.0=none (ResBlock checkpointing "
                              "unaffected either way)")
     common.add_argument("--weight-store", default="bf16", choices=["bf16", "nf4"])
+    common.add_argument("--keep-incomplete-batches", action="store_true",
+                        help="keep samples in (prompt, size) groups smaller than a "
+                             "batch, as smaller batches, instead of dropping them. "
+                             "Costs extra distinct batch shapes, so this is the "
+                             "measurement of whether that stalls the device: on the "
+                             "non-square dataset at batch 4 it takes the shapes from "
+                             "22 to 73 and recovers 89 of 273 samples that are "
+                             "otherwise never trained on")
     common.add_argument("--cache-text-encoder", action="store_true")
     common.add_argument("--prewarm-text-encoder", action="store_true",
                         help="managed route only: warm every (prompt, bs, h, w) key "

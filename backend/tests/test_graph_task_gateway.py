@@ -310,8 +310,15 @@ def test_stopping_a_run_actually_stops_it() -> None:
     pid = GATEWAY.spawn(launch)
     tail = ExecutionEventTail(launch.event_path)
     events = _collect(tail, pid, until=lambda seen: any(map(_is_node, seen)))
+    # `_why_silent` because this fires about one suite run in five on a
+    # loaded machine, and a child that reached no node record has usually
+    # said why in its log. A bare "got 0" is not a diagnosis -- and it is
+    # how the 2026-10-04 gate run reported this one, in a file that already
+    # had the helper for exactly this and simply was not calling it here.
     check(any(map(_is_node, events)),
-          "the child got past startup and started building nodes")
+          f"the child got past startup and started building nodes "
+          f"(got {len([e for e in events if _is_node(e)])} node records; "
+          f"{_why_silent(launch)})")
 
     GATEWAY.request_stop(pid)
     check(
@@ -323,7 +330,7 @@ def test_stopping_a_run_actually_stops_it() -> None:
     check(
         0 < len(node_records) < len(nodes),
         f"having built some but not all: {len(node_records)} of {len(nodes)} "
-        f"nodes reported before it stopped",
+        f"nodes reported before it stopped ({_why_silent(launch)})",
     )
     check(
         any(e.kind is EventKind.OUTCOME for e in events),
@@ -376,8 +383,15 @@ def test_a_sigterm_stops_the_run_the_same_way_a_sigint_does() -> None:
     events = _collect(tail, pid, until=lambda seen: any(map(_is_node, seen)))
     if not any(map(_is_node, events)):
         print(f"    DIAG {_why_silent(launch)}")
+    # `_why_silent` because this fires about one suite run in five on a
+    # loaded machine, and a child that reached no node record has usually
+    # said why in its log. A bare "got 0" is not a diagnosis -- and it is
+    # how the 2026-10-04 gate run reported this one, in a file that already
+    # had the helper for exactly this and simply was not calling it here.
     check(any(map(_is_node, events)),
-          "the child got past startup and started building nodes")
+          f"the child got past startup and started building nodes "
+          f"(got {len([e for e in events if _is_node(e)])} node records; "
+          f"{_why_silent(launch)})")
     # By this point the child has written records, so it has long exec'd --
     # but `is not True` is used rather than `is True` anyway, because the
     # assertion that matters is the one that must not fire: that the pid is

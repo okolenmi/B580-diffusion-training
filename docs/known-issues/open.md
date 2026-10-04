@@ -2,14 +2,70 @@
 
 # Open
 
-**Nothing outstanding at the moment of writing.** The one entry below was a
-measured question, asked and answered on hardware, including the part that
-was still open when it was first written: whether checkpointing's recompute
-penalty applies at this operating point. That is now answered too — the
-answer is that there is no un-checkpointed configuration there to measure it
-against. It is kept here rather than in [`resolved.md`](resolved.md)
-because it is not a bug and there is nothing to fix. Check here first if
-something odd has happened — and its being empty is itself the finding.
+**Nothing outstanding at the moment of writing.** The two entries below were
+measured questions, asked and answered on hardware, including the parts
+that were still open when they were first written. They are kept here rather
+than in [`resolved.md`](resolved.md) because neither is a bug — they are
+measurements with consequences. Check here first if something odd has
+happened — and its being empty is itself the finding.
+
+## 44 distinct latent resolutions cost a measured 2x, and it is not the loader's fault
+
+**Found 2026-10-04, while closing the `keep_incomplete_batches` pending
+entry.** Asked as a performance question -- `non-square` trains at half the
+throughput of `1024 aes` -- and the answer is not where it was expected.
+
+| dataset | distinct latent shapes | mean same-shape run | steps/sec |
+|---|---|---|---|
+| `1024 aes` | 1 | 100.0 | **0.813** |
+| `non-square` | **44** | 2.12 | **0.412** |
+
+**1.97x for 44 shapes against 1.** `non-square` contains essentially every
+integer resolution in range — H from 48 to 95, W from 48 to 93, 44 distinct
+pairs. Every one is a separate kernel specialisation on the device, and with
+a mean same-shape run of 2.12 the device re-specialises roughly every other
+step. That is the sawtooth: a GPU oscillating 0% to 90% while the "CPU"
+line sits high because the threads are *blocked in native calls waiting for
+the device*, not computing.
+
+**The loader's "clumps" mitigation is working as designed and cannot
+overcome this.** It groups same-shape batches into runs of 4 before
+shuffling, and the measured mean run is 2.12 — because with 44 shapes over
+121 batches most groups only *have* 2 or 3 batches, so a clump of 4 cannot
+be filled. The mechanism is right; the data gives it nothing to work with.
+
+**What was ruled out first, by measurement rather than by argument:**
+
+- *The dataset iterator.* Materialising every batch for an epoch costs
+  **0.22 s** for `non-square` and **0.20 s** for `1024 aes` — the same, and
+  9% of a *single* 2.43 s step. It is not the bottleneck, and it is not
+  "calculating new shapes as new ones arrive".
+- *A hidden CPU hotspot.* Profiled over the step loop only (a whole-run
+  profile is misleading here: `uniform_` at 24% is model *construction*,
+  which profiling `build()` alone removes). 73% of the step is
+  `run_backward` (49.5%) plus `conv2d` (23.4%) — both native calls blocking
+  on the device. The largest genuinely-Python entry is `lora.py:230`, which
+  is `F.linear(x, self.base_weight, ...)`: the base model, not the adapter.
+- *`keep_incomplete_batches`.* It makes this *worse* at batch 4 (44 -> 73
+  shapes, -30% throughput), which is the trade documented in
+  [`pending-testing.md`](pending-testing.md), not the cause.
+
+**The fix is in the data, not the code: bucket to a small set of canonical
+resolutions and pad.** Measured on this dataset:
+
+| policy | shapes | mean extra latent elements |
+|---|---|---|
+| as-is | 44 | — |
+| round each side up to a multiple of 32 | **3** | **+15%** |
+| round each side up to a multiple of 64 | 3 | +37% |
+| round each side up to a multiple of 128 | 1 | +271% |
+
+A multiple of 32 collapses 44 kernels to 3 for a 15% compute increase,
+against a measured shape penalty of 2x. That is the trade worth taking, and
+it is not a small change: padding changes what the loss is computed over, so
+the true size has to survive into the loss and into any preview or VAE
+decode. It is recorded here rather than done, because it changes training
+semantics and that is a project's call.
 
 ## Attention-checkpointing density and the memory-floor levers, at 1024 / batch 2
 

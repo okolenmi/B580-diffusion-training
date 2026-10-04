@@ -392,27 +392,13 @@ class SDClipModel(nn.Module):
     def encode(self, tokens):
         return self(tokens)
 
-    def encode_token_ids(self, token_id_rows):
-        """Encode one or more rows of token ids.
+    def _validated_rows(self, token_id_rows):
+        """Rows as plain lists, proven stackable, or a specific error.
 
-        Rows are stacked into a single batch, so they must be the same length
-        as each other and the same length as the position embedding.
-
-        **No token weights.** ComfyUI's `encode_token_weights` takes `(id,
-        weight)` pairs and, when any weight is not 1.0, encodes an extra
-        blank row and blends each weighted output between the weighted and
-        blanked results:
-
-            out = blank + (weighted - blank) * weight
-
-        That exists for ComfyUI's `<w:...>` wildcard syntax, where several
-        expansions share a prefix that must not be encoded once per expansion.
-        This project has no wildcard syntax, so every weight is 1.0 and the
-        mechanism cannot arise -- it would be roughly twenty lines and a
-        second forward pass carried for a case that does not exist here. It is
-        not reimplemented: a non-1.0 weight is a different interface, and the
-        right way to say so is at the boundary rather than by silently doing
-        the wrong thing.
+        Shared by `encode_token_ids` and `encode_token_rows` so the two
+        entry points cannot drift on what they accept -- they differ only
+        in what they do with the rows afterwards, and a caller that gets
+        one past validation has got a usable stack.
         """
         rows = [list(row) for row in token_id_rows]
         positions = self.transformer.text_model.embeddings \
@@ -435,6 +421,31 @@ class SDClipModel(nn.Module):
                 f"token rows must be {positions} long to match the position "
                 f"embedding, got {sorted(lengths)}; the tokenizer is what "
                 f"pads to {positions}, so this means a hand-built row")
+        return rows
+
+    def encode_token_ids(self, token_id_rows):
+        """Encode one or more rows of token ids.
+
+        Rows are stacked into a single batch, so they must be the same length
+        as each other and the same length as the position embedding.
+
+        **No token weights.** ComfyUI's `encode_token_weights` takes `(id,
+        weight)` pairs and, when any weight is not 1.0, encodes an extra
+        blank row and blends each weighted output between the weighted and
+        blanked results:
+
+            out = blank + (weighted - blank) * weight
+
+        That exists for ComfyUI's `<w:...>` wildcard syntax, where several
+        expansions share a prefix that must not be encoded once per expansion.
+        This project has no wildcard syntax, so every weight is 1.0 and the
+        mechanism cannot arise -- it would be roughly twenty lines and a
+        second forward pass carried for a case that does not exist here. It is
+        not reimplemented: a non-1.0 weight is a different interface, and the
+        right way to say so is at the boundary rather than by silently doing
+        the wrong thing.
+        """
+        rows = self._validated_rows(token_id_rows)
 
         out, pooled = self.encode(rows)
         # The batch comes back stacked, and the sections are rejoined along
@@ -472,6 +483,62 @@ class SDXLClipModel(nn.Module):
             device=device, layer_norm_hidden_state=False,
             special_tokens={"start": 49406, "end": 49407, "pad": 49407})
         self.clip_g = SDXLClipG(dtype=dtype, device=device)
+
+    def encode_token_rows(self, token_id_pairs):
+        """Encode N *independent* prompts, one per batch row.
+
+        The batch-axis sibling of `encode_token_ids`, and the difference is
+        the whole point of it. `encode_token_ids` takes several rows as
+        prompt **sections** of one prompt and rejoins them along the
+        sequence axis, because that is what a multi-section prompt is and
+        what makes its truncation to a common length meaningful. This takes
+        them as N unrelated prompts and leaves them stacked: `(N, 77, 2048)`
+        context and `(N, 1280)` pooled.
+
+        Same input shape (`{"l": [ids], "g": [ids]}`, one row per prompt),
+        same validation, and the towers are reached through `encode` rather
+        than `encode_token_ids` -- `forward` already preserves the batch
+        axis, so the joining is the only thing being declined.
+
+        **Only valid in float32.** Measured on the B580, batching in the
+        float16 the towers normally load in diverges from encoding the same
+        prompts one at a time by **19% of the mean activation magnitude** --
+        large enough to matter, because the warm pass and the per-prompt
+        cache-miss path must agree or the same prompt gets two different
+        conditionings depending on whether it was warmed. In float32 the
+        same comparison gives **0.17% on that measure and 1.5e-6 relative to
+        the largest activation** (context max magnitude 132), which is fp32
+        rounding rather than a semantic difference; after the bfloat16 output
+        cast any residual is ~6e-5 relative, sixteen times below one bfloat16
+        ulp. So it is float16 accumulation across 32 layers, not kernel
+        selection -- the float32 comparison is what separates those, and it
+        is the part that would have been easy to assume.
+
+        Single-row `encode_token_ids` and `encode_token_rows` also agree to
+        1.2e-7 relative, so a batch of one is the same computation either
+        way. That is the property the warm pass depends on: it must not
+        matter whether a prompt was warmed in a batch or missed and encoded
+        alone.
+
+        Float32 costs roughly what float16 costs, in memory: the towers
+        double to about 3.1 GB while resident.
+
+        Speed, for context on when this is worth reaching for (B580, both
+        towers, batch 64): **10.99 ms/prompt** in float32 against 32.2 ms
+        encoding serially in float16, and 2.53 ms batched in float16 (which
+        is not usable, per above). At a 5,000-entry warm budget that is 55 s
+        against 2.7 min -- real, but neither is a bottleneck, because 5,000
+        prompts is roughly an hour of training to consume. It pays for
+        itself when the budget is raised, or for a dataset whose prompt count
+        is large.
+        """
+        g_rows = self.clip_g._validated_rows(token_id_pairs["g"])
+        l_rows = self.clip_l._validated_rows(token_id_pairs["l"])
+        g_out, g_pooled = self.clip_g.encode(g_rows)
+        l_out, _ = self.clip_l.encode(l_rows)
+        length = min(l_out.shape[1], g_out.shape[1])
+        context = torch.cat([l_out[:, :length], g_out[:, :length]], dim=-1)
+        return context, g_pooled
 
     def encode_token_ids(self, token_id_pairs):
         """Encode both towers and join them into the 2048-wide context.

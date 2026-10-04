@@ -99,6 +99,63 @@ class CachingTextEncoder(TextEncoder):
         # own load -- they're public interface with no one else to check.
         self._ensured_for_encode = False
 
+    def warm_prompts(self, prompts, batch_size: int = 1) -> int:
+        """Encode a batch of prompts into the cache. Returns how many.
+
+        The bulk counterpart of the per-prompt miss path, and it shares that
+        path's *result*, not merely its bookkeeping: every entry lands
+        through the same `_insert_prompt` the miss path uses, including the
+        `max_entries` eviction. A warm pass therefore cannot leave the cache
+        in a state the miss path could not produce, which is the property
+        that makes "warmed" and "missed" interchangeable to a caller.
+
+        Prompts already cached are skipped *before* the encode, not after.
+        An encoder call whose result is thrown away is exactly the waste a
+        warm pass exists to avoid, and `warm_and_unload` can legitimately
+        be handed a set overlapping what is already there.
+
+        Batching is the wrapped encoder's business rather than this class's:
+        it asks for `encode_prompts` and stores what comes back. That is why
+        `TextEncoder` defines that method as a loop -- an encoder with no
+        batched path still warms correctly, just slower.
+        """
+        fresh = []
+        for prompt in prompts:
+            key = (prompt, batch_size)
+            if key in self._prompt_cache:
+                self._prompt_cache.move_to_end(key)
+            else:
+                fresh.append(prompt)
+        if not fresh:
+            return 0
+        encoded = self._inner.encode_prompts(fresh, batch_size)
+        if len(encoded) != len(fresh):
+            # A subclass overriding `encode_prompts` must return one pair
+            # per prompt. Catching it here beats a `zip` that silently drops
+            # the tail and leaves those prompts uncached -- which would look
+            # exactly like a miss later, with no trace of why.
+            raise ValueError(
+                f"encode_prompts returned {len(encoded)} result(s) for "
+                f"{len(fresh)} prompt(s); it must return one (ctx, pooled) "
+                f"pair per prompt, in order")
+        for prompt, (ctx, pooled) in zip(fresh, encoded):
+            # Keyed on the batch_size the caller asked for, not a default:
+            # this cache keys on (prompt, batch_size), so warming at 1 while
+            # training asks at 2 stores every entry under a key nothing will
+            # read, and every step misses. That was a real bug here, and it
+            # was invisible on the project's own datasets because they have
+            # exactly one distinct prompt each -- the first prompt goes
+            # through `encode`, which is always right.
+            self._insert_prompt((prompt, batch_size), ctx, pooled)
+        return len(fresh)
+
+    def _insert_prompt(self, key, ctx, pooled) -> None:
+        """The one cache insert, shared by the miss path and the bulk warm."""
+        self._prompt_cache[key] = (ctx.detach().cpu(), pooled.detach().cpu())
+        if len(self._prompt_cache) > self._max_entries:
+            self._prompt_cache.popitem(last=False)
+
+
     def encode_prompt_only(self, prompt: str, batch_size: int):
         """The base class's own encode() (nodes/model/text_encoder.py)
         calls this + resolution_embedding() below and combines them --
@@ -115,11 +172,8 @@ class CachingTextEncoder(TextEncoder):
             # once for this encode (see encode()'s both-keys check).
             self._resource_control.ensure_loaded(self._resource_name)
         ctx, pooled = self._inner.encode_prompt_only(prompt, batch_size)
-        entry = (ctx.detach().cpu(), pooled.detach().cpu())
-        self._prompt_cache[key] = entry
-        if len(self._prompt_cache) > self._max_entries:
-            self._prompt_cache.popitem(last=False)
-        return entry
+        self._insert_prompt(key, ctx, pooled)
+        return self._prompt_cache[key]
 
     def resolution_embedding(self, height: int, width: int, batch_size: int):
         key = (height, width, batch_size)

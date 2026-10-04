@@ -51,6 +51,24 @@ class TextEncoder(DeviceResident, ABC):
     def unload(self) -> None:
         ...
 
+    def encode_prompts(self, prompts, batch_size: int = 1):
+        """Bulk sibling of `encode_prompt_only`; returns a list of pairs.
+
+        Concrete here as *a loop*, deliberately, and that is the honest
+        default rather than a placeholder: it is correct for every
+        `TextEncoder`, and a subclass that has a batched path overrides it
+        to go faster. The contract that matters is that both paths return
+        the same values for the same prompt -- a warm pass filling the
+        cache through one and a cache miss serving through the other must
+        not disagree, or a run's conditioning would depend on its own cache
+        state. `SDXLClipEncoder.encode_prompts` is the batched
+        implementation, and its docstring has the measured difference
+        (19% in float16, 0.17% in float32) that is why it is not simply
+        faster.
+        """
+        return [self.encode_prompt_only(prompt, batch_size)
+                for prompt in prompts]
+
 
 class TextEncoderNode(Node):
 
@@ -75,6 +93,16 @@ class SDXLTextEncoder(TextEncoder):
 
     def encode_prompt_only(self, prompt: str, batch_size: int):
         return self._encoder.encode_prompt_and_pool(prompt, batch_size)
+
+    def encode_prompts(self, prompts, batch_size: int = 1):
+        """Delegates to the wrapped encoder's bulk path.
+
+        Not the ABC's loop: `SDXLClipEncoder` has a real batched
+        implementation, and using the loop here would quietly throw away a
+        3x speedup whenever a caller warms through the wrapper -- which is
+        the only way the trainer ever reaches it.
+        """
+        return self._encoder.encode_prompts(prompts, batch_size)
 
     def resolution_embedding(self, height: int, width: int, batch_size: int):
         return self._encoder.resolution_embedding(height, width, batch_size)

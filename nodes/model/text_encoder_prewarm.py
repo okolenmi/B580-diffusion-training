@@ -211,13 +211,28 @@ def warm_and_unload(cached: CachingTextEncoder, keys: set) -> int:
     # than spending its budget on resolution keys. (Both halves are cached
     # separately, so warming the prompt half needs no resolution at all.)
     started = time.monotonic()
+    # The prompt half first, so a truncated warm still fills the cache rather
+    # than spending its budget on resolution keys. (Both halves are cached
+    # separately, so the prompt half needs no resolution at all.)
+    #
+    # The first prompt goes through `encode` because it pays the one-time
+    # device setup, and it is what makes the resolution loop below legal --
+    # the cache's `encode` needs both halves' arguments even when only one
+    # of them misses. The rest go through `warm_prompts`, which batches.
     cached.encode(warmable[0][0], warmable[0][1],
                   resolution_keys[0][0], resolution_keys[0][1])
     setup = time.monotonic() - started
     started = time.monotonic()
+    # Grouped by batch_size because that is part of the cache key, so one
+    # bulk call has to be homogeneous to stay a bulk call. In practice every
+    # key shares a batch_size -- they come from one dataset at one batch_size
+    # -- so this is one group, and the grouping exists so that a caller
+    # passing mixed keys gets correct keys rather than a fast wrong answer.
+    by_batch: dict[int, list[str]] = {}
     for prompt, batch_size in warmable[1:]:
-        cached.encode(prompt, batch_size,
-                      resolution_keys[0][0], resolution_keys[0][1])
+        by_batch.setdefault(batch_size, []).append(prompt)
+    for batch_size, group in by_batch.items():
+        cached.warm_prompts(group, batch_size)
     prompt_time = time.monotonic() - started
     started = time.monotonic()
     for height, width, batch_size in resolution_keys:

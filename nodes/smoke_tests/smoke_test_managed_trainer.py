@@ -160,6 +160,16 @@ class _FakeTextEncoder:
         self.prompt_encodes += 1
         return torch.zeros(batch_size, 1, 4), torch.zeros(batch_size, 4)
 
+    def encode_prompts(self, prompts, batch_size=1):
+        # The bulk warm path. Not optional for this double: it duck-types
+        # TextEncoder rather than subclassing it, so it does not inherit the
+        # ABC's loop-based `encode_prompts`, and `warm_and_unload` calls that
+        # for every prompt after the first. Implemented as the loop the ABC
+        # itself specifies, so this double exercises the same contract a real
+        # encoder without one would.
+        self._events.append("encode_prompts")
+        return [self.encode_prompt_only(p, batch_size) for p in prompts]
+
     def resolution_embedding(self, height, width, batch_size):
         self._events.append("resolution_embedding")
         return torch.zeros(batch_size, 2)

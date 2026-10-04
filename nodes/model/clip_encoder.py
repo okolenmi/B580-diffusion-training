@@ -152,6 +152,55 @@ class SDXLClipEncoder:
         pooled = pooled.repeat(batch_size, 1)
         return ctx, pooled
 
+    def encode_prompts(self, prompts, batch_size: int = 1):
+        """Encode N independent prompts, one per row: [(ctx, pooled), ...].
+
+        The bulk sibling of `encode_prompt_and_pool`, and the reason it is
+        not just a loop over that: one prompt per forward is 32.2 ms on the
+        B580 where 64 at a time is 2.53 ms in float16 -- but float16
+        batching diverges 19% from serial float16 and float32 diverges
+        0.17% (`SDXLClipModel.encode_token_rows`'s own docstring has the
+        numbers and what they are normalised by). So this goes through the
+        float32 path, at 10.99 ms/prompt, which is the only batching that
+        agrees with the per-prompt path closely enough for a warm cache and
+        a cache miss to be interchangeable.
+
+        Per-prompt results, each shaped exactly as
+        `encode_prompt_and_pool(prompt, batch_size)` would return it, so a
+        caller cannot tell which path produced them. A one-prompt call is a
+        batch of one, not a special case -- that is what keeps the two paths
+        from disagreeing, and it is why this is not "loop and concatenate".
+        """
+        if not prompts:
+            return []
+        # The model's input shape is one dict holding one row per prompt per
+        # tower -- `{"l": [ids, ...], "g": [ids, ...]}` -- the same
+        # `encode_token_ids` takes. Kept identical on purpose: a second
+        # convention for "several prompts" would be a second thing to get
+        # right, and the rows-per-tower form is already what the towers
+        # validate and stack.
+        l_rows, g_rows = [], []
+        for prompt in prompts:
+            token_ids = self.tokenizer.tokenize(prompt)
+            l_rows.append(list(token_ids["l"][0]))
+            g_rows.append(list(token_ids["g"][0]))
+        context, pooled = self.clip_model.encode_token_rows(
+            {"l": l_rows, "g": g_rows})
+        results = []
+        for row_ctx, row_pooled in zip(context, pooled):
+            if row_ctx.shape[0] < 77:
+                padding = torch.zeros(
+                    (row_ctx.shape[0], 77 - row_ctx.shape[1], row_ctx.shape[2]),
+                    device=row_ctx.device, dtype=row_ctx.dtype)
+                row_ctx = torch.cat([row_ctx, padding], dim=1)
+            ctx = row_ctx.unsqueeze(0).to(device=self.device, dtype=self.out_dtype)
+            y = row_pooled.unsqueeze(0).to(device=self.device, dtype=self.out_dtype)
+            results.append((
+                ctx.repeat(batch_size, 1, 1) if batch_size > 1 else ctx,
+                y.repeat(batch_size, 1) if batch_size > 1 else y,
+            ))
+        return results
+
     def _get_embedder(self):
         if self._embedder is None:
             # Owned here rather than imported from ComfyUI; see

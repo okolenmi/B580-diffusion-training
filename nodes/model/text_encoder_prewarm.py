@@ -96,14 +96,35 @@ PREWARM_HOST_RAM_BUDGET_BYTES = 8 * 1024 ** 3
 #: is otherwise invisible until the machine runs out.
 PREWARM_BYTES_PER_PROMPT_ENTRY = 621 * 1024
 
-#: How many prompt entries that budget buys -- ~13,200 at 8 GiB.
-PREWARM_MAX_PROMPT_ENTRIES = (
-    PREWARM_HOST_RAM_BUDGET_BYTES // PREWARM_BYTES_PER_PROMPT_ENTRY
-)
+#: How many prompt entries to warm at most. **5,000**, the project's
+#: starting figure (2026-10-04), which is also about what the host-RAM
+#: budget above allows on its own terms: 5,000 x 621 KB = 3.0 GiB of the
+#: 8 GiB, so the count is the one that binds and the byte budget is the
+#: cross-check that it is sane.
+#:
+#: Both terms of warming are measured, and at this size neither is a
+#: problem: 5,000 prompts is 12.7 s batched (55 s in fp32, see
+#: `docs/design/09-prioritized-backlog.md`) against roughly an hour of
+#: training to *use* those 5,000 prompts at batch 2. So this limit is not
+#: about time. It is about the resident 3.0 GiB, and about what a miss
+#: costs if the dataset has more prompts than this: ~790 ms measured.
+#:
+#: Raise it deliberately. It is not a Port because passing a bigger number
+#: here does not make a larger cache a good idea on a machine with finite
+#: RAM; it just decides where the ceiling is rather than what happens at it.
+PREWARM_MAX_PROMPT_ENTRIES = 5_000
 
 
 def prompt_capacity() -> int:
-    """Prompt entries the host-RAM budget allows, floor 1."""
+    """Prompt entries to warm at most: the count cap, floored at 1.
+
+    Deliberately *not* derived from `PREWARM_HOST_RAM_BUDGET_BYTES` alone
+    any more. At 8 GiB / 621 KB that would be 13,508 entries, and the
+    project's figure is 5,000 -- a count is the limit someone chose rather
+    than one an arithmetic fallback produced, and the two only agreed to
+    within a factor of 2.7 by luck. The byte budget stays as the check
+    that the chosen count is affordable.
+    """
     return max(1, PREWARM_MAX_PROMPT_ENTRIES)
 
 

@@ -308,6 +308,96 @@ missing is a real run:**
   so past the RAM limit the choices are a window, a second GPU, or
   accepting a per-prompt 790 ms.
 
+  **Plan of record: the user's per-step design, and what it costs.** Not
+  built. Written here because it is a real change to step ordering, not a
+  tuning knob, and the trade-offs belong next to the numbers.
+
+  *The design.* Per step: (1) the trainer needs an encoded prompt, and this
+  is checked **before** the major objects go into VRAM; (2) on a miss the
+  prewarm starts; (3) if there is not enough memory for CLIP, evict other
+  residents to RAM -- acceptable, because that is quick next to a whole
+  step; (4) CLIP encodes and then self-evicts to RAM; (5) the cache is
+  checked again and the prompt is there; (6) model/optimizer/etc. load from
+  RAM; (7) the step trains; (8) repeat. Each part does its own work without
+  depending on what the others are doing.
+
+  **What exists today, stated as a diff.** The model is put on the device
+  at build time (`managed.py` ~1302), so step (1) cannot precede it.
+  Prewarm runs once at startup (~1356), not per step; the only per-step
+  behaviour is `CachingTextEncoder`'s existing self-load on a miss, which
+  is steps (2)-(4) *without* the ordering, and it reloads CLIP rather than
+  treating it as a one-shot job. Step (6) does not happen: model and
+  optimizer stay resident for the run, which is what
+  `AdaptiveResidencyController` is for.
+
+  **The trade that decides it: step (6).** Making conditioning precede the
+  model's VRAM load means evicting and reloading the model *per step*, and
+  that is measured at **1,449 ms down + 1,145 ms up = 2,594 ms**, against
+  a 2,430 ms step. So the design as literally stated is a **~2.1x slowdown**
+  -- evicting 4,897 MB of UNet to save a 30 ms encode, 86 times over.
+
+  *Positive.* Conditioning genuinely should not need the card, and the
+  per-step loop makes the cache self-healing with no planner and no
+  prediction of the loader's shuffle. It is also the only variant that
+  works unchanged at any prompt count -- no window, no second GPU, no
+  discovery pass.
+
+  *Negative.* The model round trip is not a detail, it is the whole cost,
+  and it is paid every step rather than once. On this card the UNet round
+  trip alone (2,594 ms) is more than the entire encode of every prompt in
+  a 5,000-prompt warm (55 s / 5,000 steps' worth).
+
+  **The resolution, which keeps the design and drops the expensive part.**
+  Split the two reasons the model is resident. Residency exists so a step
+  is not dominated by host-device traffic -- true, and worth 2,594 ms when
+  a step is 2,430 ms. It does *not* have to be unconditional. So:
+
+  1. Keep the model resident by default. Unchanged, and the common case
+     stays 7,666 MB peak.
+  2. On a conditioning **miss** with the model resident, do *not* evict it.
+     Encode with CLIP brought alongside, at the measured cost of the
+     transient peak (1,561 MB on top of 4,897 + 714 = 7,172 MB resident,
+     which is what the 7,666 MB peak already proves fits). Self-evict CLIP
+     immediately after. This is steps (2)-(5) with no round trip, because
+     on this card there is no need for one.
+  3. Evict the model to make room **only when there genuinely is not
+     room** -- a smaller card, or a larger batch. That path costs 3,384 ms
+     per miss (measured) and should be reached rarely, which the 5,000-entry
+     cache guarantees in steady state.
+  4. Reorder within the step so the cache check happens before the model's
+     forward regardless, so the miss is discovered while there is still
+     time to act on it rather than after the expensive part is done.
+
+  That is the user's design with the per-step model round trip made
+  conditional instead of mandatory, which is the only part of it that
+  costs more than it saves.
+
+  **Prompt encoding is not a constraint -- measured, both dtypes.** The
+  model already batches: `SDClipModel.encode(rows)` returns `(N, 77, D)`
+  with the batch axis intact. `encode_token_ids` above it deliberately
+  *joins* rows along the sequence axis instead, because that is how CLIP
+  prompt sections work, so a batched path needs the lower-level call.
+
+  | | ms/prompt | 5,000 prompts | vs serial |
+  |---|---|---|---|
+  | serial fp16 (today) | 32.2 | 2.7 min | -- |
+  | batched fp16, batch 64 | 2.53 | 12.7 s | 12.7x, **19% different output** |
+  | batched fp32, batch 64 | 10.99 | 55 s | 2.9x, 0.17% different |
+
+  So batching must be **fp32**: fp16 batched diverges 19% from fp16 serial
+  (relative to activation magnitude), fp32 batched only 0.17%, so it is
+  fp16 accumulation over 32 layers and not the kernel. Neither path is a
+  bottleneck either way -- 5,000 prompts is ~2,500 training steps, about an
+  hour, so serial encoding is already only ~4% of the time spent using the
+  result. **The limit that matters is the 3.0 GiB resident, not the encode
+  time**, which is why 5,000 is a memory number.
+
+  **Sequencing.** (4) and the `encode(rows)` batched path are independent
+  and small; the cache limit of 5,000 is done. The conditional-eviction
+  change in (3) is the one that alters step behaviour and wants measuring on
+  the B580 at both 12 GB (where it should never trigger) and a constrained
+  budget (where it must).
+
   **The one thing that looks wasteful right now, and is.** For all three
   real datasets there is **1 distinct prompt**, so the warm pass costs
   30 ms while `discover_dataset_keys` costs **1.24 ms per sample** -- at

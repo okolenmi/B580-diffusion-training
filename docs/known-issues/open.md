@@ -2,12 +2,44 @@
 
 # Open
 
-**Nothing outstanding at the moment of writing.** The two entries below were
+**Nothing outstanding at the moment of writing.** The three entries below were
 measured questions, asked and answered on hardware, including the parts
 that were still open when they were first written. They are kept here rather
-than in [`resolved.md`](resolved.md) because neither is a bug — they are
+than in [`resolved.md`](resolved.md) because none is a bug — they are
 measurements with consequences. Check here first if something odd has
 happened — and its being empty is itself the finding.
+
+## Two fp32 GPU tests need ~10.7 GB of a 12.2 GB card, so their OOMs are classified, not crashed on
+
+**Found 2026-10-04, when `nodes/smoke_tests/gpu/smoke_test_real_training_step.py`
+and `nodes/smoke_tests/gpu/smoke_test_lora_merge_identity.py` began failing the
+gate intermittently — and each passed standalone on the same code that had just
+failed it.**
+
+**Why they are that heavy, measured.** Both load the real SDXL UNet in
+float32 — because their claims are float32 tolerances (a 1e-5 merge
+identity, gradient floors at ~6e-09) that bfloat16's rounding would
+drown — and 2.57 B fp32 weights are 9,804 MB by themselves. A latent-32
+backward adds ~250–450 MB: the test's own printed `peak allocated: off
+10669 MB, on 10616 MB`. Checkpointing is *not* the lever at this size —
+53 MB, because at a 256×256 latent the frozen weights are the whole
+peak, which the test's own line says. (The 8,954 MB production peak at
+batch 4 is a different configuration: bf16, checkpointed, 1024 px.)
+
+**Why it flips.** 12,216 MB total − 1,100–1,500 MB foreign/desktop usage
+− a further 173 MB of non-PyTorch device growth across one test's
+conditioning phase leaves start-of-run free between 10,967 and 11,110
+MB. One OOM had 10 MB of slack; another started at 11,110 MB free and
+still ran out because ~390 MB vanished during the run.
+
+**What happens now.** `fast_construction.oom_outcome` classifies a device
+OOM by the peak the process reached: at or below the measured footprint
+(10,669 MB) + 300 MB it is contention — printed as a SKIP with peak,
+footprint, device-free and the OOM's own line, exit 0; above that the
+test grew, and the exception is re-raised as the regression it is;
+already-recorded failures are never downgraded. Every branch, including
+the exit codes in real child processes, is checked by
+`nodes/smoke_tests/smoke_test_oom_contention.py`.
 
 ## 44 distinct latent resolutions cost a measured 2x, and it is not the loader's fault
 

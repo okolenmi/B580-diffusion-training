@@ -48,7 +48,11 @@ the *uncheckpointed* backward at 64x64 OOMs trying to allocate 58 MB with
 
 Skipped rather than failed with no accelerator or no checkpoint: both are
 legitimate states, and neither is a reason to report a green run that never
-ran.
+ran. An out-of-memory *inside* this test's measured 10,669 MB footprint is a
+third: the card ran out on foreign usage, not on anything this test does
+differently, and `fast_construction.oom_outcome` prints peak, footprint and
+device-free before skipping. An out-of-memory above that footprint is the
+test having grown, and is re-raised as the regression it is.
 
 Run: `python nodes/smoke_tests/gpu/smoke_test_real_training_step.py`
 """
@@ -64,6 +68,7 @@ import torch  # noqa: E402
 from nodes.smoke_tests.fast_construction import (  # noqa: E402
     assert_fully_covered,
     find_a_checkpoint,
+    oom_outcome,
     read_state_dicts,
     skipped_parameter_init,
 )
@@ -83,6 +88,16 @@ LR = 1e-4
 #: leaves orders of magnitude between "noise" and "wrong arithmetic" -- a
 #: dropped gradient term shows up at 1e+00 here, not at 1e-08.
 NOISE_HEADROOM = 4.0
+
+#: The measured footprint of this test: its own `peak allocated: off
+#: 10669 MB` line, of which 9,804 MB is the fp32 UNet and the rest a
+#: latent-32 backward. The highest allocation ever seen at an OOM was
+#: 10,687 MB (the optimizer section holds the adapter grads too) -- 18 MB
+#: over, which is exactly what OOM_FOOTPRINT_TOLERANCE_MB is for. An
+#: out-of-memory at or below footprint+tolerance means foreign usage
+#: held the rest of the card -- contention, skipped with the numbers
+#: printed; see `oom_outcome`.
+FOOTPRINT_MB = 10_669.0
 
 
 def record(ok: bool, name: str, detail: str | None = "") -> None:
@@ -498,4 +513,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except torch.OutOfMemoryError as exc:
+        outcome = oom_outcome(
+            exc, footprint_mb=FOOTPRINT_MB, failures=failures,
+            name="a training step through the reimplemented SDXL stack")
+        if outcome is None:
+            raise
+        raise SystemExit(outcome)

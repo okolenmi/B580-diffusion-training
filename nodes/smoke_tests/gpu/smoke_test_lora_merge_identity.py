@@ -40,6 +40,11 @@ zero, so the delta is zero and *every* comparison here would pass trivially.
 The test trains the adapters for a few steps against a real loss first, and
 asserts the delta is non-trivial before relying on any of it.
 
+A device out-of-memory *inside* this test's measured 10,669 MB footprint is
+foreign usage, not this test: `fast_construction.oom_outcome` prints peak,
+footprint and device-free, then skips. One above that footprint is the test
+having grown, and is re-raised as the regression it is.
+
 Run: `python nodes/smoke_tests/gpu/smoke_test_lora_merge_identity.py`
 """
 
@@ -54,6 +59,7 @@ import torch  # noqa: E402
 from nodes.smoke_tests.fast_construction import (  # noqa: E402
     assert_fully_covered,
     find_a_checkpoint,
+    oom_outcome,
     read_state_dicts,
     skipped_parameter_init,
 )
@@ -71,6 +77,16 @@ TI = 500
 #: computing the same function should agree to rounding, and a transposed
 #: factor or a missed `alpha` would miss this by orders of magnitude.
 TOLERANCE = 1e-5
+
+#: The measured footprint of this test: the same fp32 UNet and the same
+#: latent-32 backward as `smoke_test_real_training_step`, whose own peak
+#: print is 10,669 MB (9,804 MB of weights). Its comparison forwards run
+#: under `no_grad`, which stores no graph, and `merge_lora` folds in
+#: place, so nothing here adds a second copy of the model. An
+#: out-of-memory at or below this (plus `OOM_FOOTPRINT_TOLERANCE_MB`) is
+#: foreign usage holding the rest of the card -- skipped with the
+#: numbers printed; see `oom_outcome`.
+FOOTPRINT_MB = 10_669.0
 
 #: ComfyUI's LoRA key prefix, from `comfy/lora.py:model_lora_keys_unet`:
 #: `"lora_unet_{}".format(key_lora)` where `key_lora` is the module path with
@@ -419,4 +435,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except torch.OutOfMemoryError as exc:
+        outcome = oom_outcome(
+            exc, footprint_mb=FOOTPRINT_MB, failures=failures,
+            name="the LoRA merge identity")
+        if outcome is None:
+            raise
+        raise SystemExit(outcome)

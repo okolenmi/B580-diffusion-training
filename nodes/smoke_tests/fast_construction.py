@@ -204,3 +204,119 @@ def read_state_dicts(path: Path) -> tuple[dict, dict, dict]:
             elif key.startswith("first_stage_model."):
                 vae[key[len("first_stage_model."):]] = handle.get_tensor(key)
     return unet, clip, vae
+
+
+#: How far above its measured peak footprint a GPU smoke test's own
+#: allocation may climb before an out-of-memory stops being read as
+#: contention and is reported as growth instead. 300 MB, not 0: the
+#: failing allocation reads under the last successful one (the card
+#: refused 16-20 MB against a 10,669 MB peak), and device-free dropped
+#: 173 MB across one test's conditioning phase even after its cache was
+#: emptied -- driver-level or desktop usage that max_memory_allocated
+#: never sees.
+OOM_FOOTPRINT_TOLERANCE_MB = 300.0
+
+
+def _device_memory_mb() -> tuple[float, float, float]:
+    """`(peak allocated, free, total)` in MB for the device in use.
+
+    Zeros when there is no device to ask: this runs inside an
+    out-of-memory handler, where replacing the failure with a second
+    exception would lose the classification the caller asked for.
+    """
+    import torch
+
+    try:
+        if torch.xpu.is_available():
+            free_b, total_b = torch.xpu.mem_get_info()
+            peak_b = torch.xpu.max_memory_allocated()
+        elif torch.cuda.is_available():
+            free_b, total_b = torch.cuda.mem_get_info()
+            peak_b = torch.cuda.max_memory_allocated()
+        else:
+            return 0.0, 0.0, 0.0
+    except Exception as exc:  # noqa: BLE001 -- a broken reading must not
+        # replace the out-of-memory being classified. Zeros still
+        # classify (peak 0 is inside any real footprint) and are printed
+        # as zeros, so they cannot be mistaken for a measurement.
+        print(f"  (device memory readings unavailable: {exc})")
+        return 0.0, 0.0, 0.0
+    return peak_b / 1_048_576, free_b / 1_048_576, total_b / 1_048_576
+
+
+def oom_outcome(exc: BaseException, *, footprint_mb: float,
+                failures: list[str], name: str,
+                peak_mb: float | None = None,
+                free_mb: float | None = None,
+                total_mb: float | None = None) -> int | None:
+    """Classify a device out-of-memory: contention gets an exit code,
+    growth gets `None` so the caller re-raises.
+
+    The two tests that load the real SDXL UNet in float32 -- float32
+    because their claims are float32 tolerances (a 1e-5 merge identity,
+    1e-8 gradient floors) that bfloat16 rounding would drown -- measure a
+    peak of 10,669 MB allocated on this 12,216 MB card (9,804 MB of
+    weights plus a latent-32 backward). Foreign usage was measured at
+    1,100-1,500 MB, and a further ~173 MB of non-PyTorch device usage
+    appeared across one test's conditioning phase, so how they fit
+    depends on a margin they do not own: the same code passed and failed
+    on the same day, once with 10 MB of slack.
+
+    An out-of-memory on its own therefore says nothing about whether the
+    test changed. What it was holding says more:
+
+    * `peak_mb` at or below `footprint_mb + OOM_FOOTPRINT_TOLERANCE_MB`
+      -- the test held what it has always held and foreign usage held
+      the rest. Printed as a SKIP carrying every number (peak vs
+      footprint, device free, and the out-of-memory's own free/allocated
+      line), exit code 0: the posture a run with no accelerator already
+      has, and no check is claimed to have passed.
+    * Above that -- the test's own allocation grew past its measurement:
+      a regression. Printed as such and `None` returned, so the caller
+      re-raises and the gate fails.
+    * `failures` already recorded are never downgraded by the card
+      running out: they print and 1 returns. What failed is still the
+      reason the run fails.
+
+    Pass `peak_mb`/`free_mb`/`total_mb` together or leave all three as
+    None: the former for a test of this classification that has no card
+    to exhaust, the latter in a real handler, which measures.
+    """
+    if peak_mb is None or free_mb is None or total_mb is None:
+        peak_mb, free_mb, total_mb = _device_memory_mb()
+
+    headline = str(exc).strip().splitlines()[0]
+    ceiling = footprint_mb + OOM_FOOTPRINT_TOLERANCE_MB
+    print("\n" + "=" * 60)
+
+    if failures:
+        print(f"SMOKE TEST: {len(failures)} FAILURE(S) -- the device OOM "
+              f"below is context, not a replacement")
+        for failure in failures:
+            print(f"  - {failure}")
+        print(f"  peak {peak_mb:,.0f} MB against a {footprint_mb:,.0f} MB "
+              f"measured footprint; device free {free_mb:,.0f} MB of "
+              f"{total_mb:,.0f} MB")
+        print(f"  {headline}")
+        return 1
+
+    if peak_mb <= ceiling:
+        print(f"  SKIP: {name}: the card ran out inside this test's own "
+              f"measured footprint -- VRAM contention from foreign "
+              f"usage, not a change in the test")
+        print(f"    peak allocated {peak_mb:,.0f} MB against the measured "
+              f"footprint of {footprint_mb:,.0f} MB "
+              f"(+{OOM_FOOTPRINT_TOLERANCE_MB:,.0f} MB tolerance)")
+        print(f"    device free {free_mb:,.0f} MB of {total_mb:,.0f} MB")
+        print(f"    {headline}")
+        print("SMOKE TEST: SKIPPED (VRAM contention; nothing verified)")
+        return 0
+
+    print(f"SMOKE TEST: device OOM at {peak_mb:,.0f} MB allocated -- above "
+          f"this test's measured footprint of {footprint_mb:,.0f} MB "
+          f"(+{OOM_FOOTPRINT_TOLERANCE_MB:,.0f} MB tolerance)")
+    print(f"  {name} grew past its own measurement: the test changing, "
+          f"not contention, so the exception is re-raised")
+    print(f"    device free {free_mb:,.0f} MB of {total_mb:,.0f} MB")
+    print(f"    {headline}")
+    return None

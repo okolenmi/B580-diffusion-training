@@ -20,12 +20,14 @@ import threading
 from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
 from ..ports.clock import Clock
+from ..ports.environment import DeviceProbe
 from ..ports.execution_launcher import ExecutionLauncher
 from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import GraphRuntime, IssueSeverity, issue_to_dict
 from ...domain.entities.graph_execution import GraphExecution
 from ...domain.graph import GraphDefinition
+from ...domain.memory_settings import effective_memory
 
 
 class StartGraphExecution:
@@ -39,15 +41,33 @@ class StartGraphExecution:
         runtime: GraphRuntime,
         launcher: ExecutionLauncher,
         clock: Clock,
+        device_probe: DeviceProbe,
     ) -> None:
         self._executions = executions
         self._writer = writer
         self._runtime = runtime
         self._launcher = launcher
         self._clock = clock
+        self._device_probe = device_probe
         self._lock = threading.Lock()
 
-    def execute(self, graph: GraphDefinition) -> GraphExecutionSummaryDTO:
+    def execute(
+        self,
+        graph: GraphDefinition,
+        *,
+        memory_overrides: dict | None = None,
+    ) -> GraphExecutionSummaryDTO:
+        """Admit and launch one run.
+
+        ``memory_overrides`` is the execution request's own copy of the
+        graph's memory settings (MEM-02 #2): the effective values --
+        overrides applied, demand resolved against the device capacity
+        the cached probe reports -- are computed here, once, and stored
+        on the row, so a restart reproduces the same held total.
+        ``peak_record`` and ``fingerprint_key`` are wired with the
+        admission ledger (MEM-03); until then the demand is stated or
+        unknown, never observed.
+        """
         with self._lock:
             issues = self._runtime.validate(graph)
             errors = [issue for issue in issues if IssueSeverity(issue.severity).blocks]
@@ -67,8 +87,17 @@ class StartGraphExecution:
                     },
                 )
 
+            memory = effective_memory(
+                graph.memory,
+                memory_overrides,
+                peak_record=None,
+                fingerprint_key=None,
+                capacity_mb=self._device_probe.report().total_memory_mb,
+            )
             execution = GraphExecution.create(
-                graph=graph, created_at=self._clock.now()
+                graph=graph,
+                created_at=self._clock.now(),
+                memory=memory,
             )
             self._writer.insert(execution)  # binds id, buffers Queued, announces
             self._launcher.launch(execution.require_id(), graph)

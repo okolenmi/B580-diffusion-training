@@ -78,6 +78,35 @@ class EffectiveMemory:
     #: is unknown.
     demand_source: str  # "stated" | "observed" | "unknown"
 
+    def as_dict(self) -> dict:
+        """Storage shape -- the execution row's ``memory_json`` column."""
+        return {
+            "vram_min_mb": self.vram_min_mb,
+            "vram_max_mb": self.vram_max_mb,
+            "strict": self.strict,
+            "policy": self.policy,
+            "ram_max_mb": self.ram_max_mb,
+            "demand_mb": self.demand_mb,
+            "demand_source": self.demand_source,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> EffectiveMemory:
+        """Parse a stored ``memory_json`` payload back, round-tripping
+        `as_dict` exactly -- including a null demand."""
+        return cls(
+            vram_min_mb=float(raw["vram_min_mb"]),
+            vram_max_mb=raw["vram_max_mb"],
+            strict=bool(raw["strict"]),
+            policy=str(raw["policy"]),
+            ram_max_mb=raw["ram_max_mb"],
+            demand_mb=(
+                None if raw.get("demand_mb") is None
+                else float(raw["demand_mb"])
+            ),
+            demand_source=str(raw["demand_source"]),
+        )
+
 
 def _with_overrides(
     settings: MemorySettings, overrides: dict | None
@@ -106,7 +135,7 @@ def effective_memory(
     request_overrides: dict | None,
     peak_record: dict[str, float] | None,
     fingerprint_key: str | None,
-    capacity_mb: float,
+    capacity_mb: float | None,
     *,
     pillow_mb: float = 150.0,
 ) -> EffectiveMemory:
@@ -122,7 +151,9 @@ def effective_memory(
 
     `peak_record` is the peak store's current contents (fingerprint key ->
     peak MB). `fingerprint_key` is this graph's fingerprint key. If the
-    fingerprint is unknown or not in the record, the demand is unknown.
+    fingerprint is unknown or not in the record, the demand is unknown;
+    with no `capacity_mb` either (no probe reading), an unknown demand
+    stays ``None`` -- unknown is never a zero claim.
     """
     # -- apply request overrides ---------------------------------------------
     effective = _with_overrides(graph_settings, request_overrides)
@@ -154,7 +185,10 @@ def effective_memory(
         demand_mb = observed_mb
         demand_source = "observed"
 
-    # If demand is unknown, use capacity as an exploratory exclusive claim
+    # If demand is unknown, use capacity as an exploratory exclusive
+    # claim. A None capacity (no probe reading) leaves the demand None
+    # too: unknown, never zero -- nothing was measured, so nothing is
+    # claimed.
     if demand_mb is None:
         demand_mb = capacity_mb
         demand_source = "unknown"

@@ -900,12 +900,48 @@ class MemorySettingsIn(BaseModel):
         )
 
 
+class MemoryOverridesIn(BaseModel):
+    """Per-execution overrides of the graph's memory settings.
+
+    All-optional: anything not named keeps the graph's value. Unknown
+    keys are rejected (``extra="forbid"``) with the offending key in
+    the 422 -- a typo in an override must not silently become "use the
+    graph's default", because the caller asked to change exactly that
+    value.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vram_min_mb: float | None = None
+    vram_max_mb: float | str | None = None
+    strict: bool | None = None
+    policy: str | None = None
+    ram_max_mb: float | str | None = None
+
+    @field_validator("vram_max_mb", "ram_max_mb")
+    @classmethod
+    def _number_or_auto(cls, value: Any) -> Any:
+        if isinstance(value, str) and value != AUTO:
+            raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+        return value
+
+    def as_overrides(self) -> dict:
+        """Only the keys that were named -- absent means "keep the
+        graph's value", and a present key carries its override value."""
+        return {
+            key: value
+            for key, value in self.model_dump().items()
+            if value is not None
+        }
+
+
 class GraphRunIn(BaseModel):
     """Submission body for ``/validate`` and ``/run``."""
 
     nodes: list[GraphNodeIn]
     edges: list[GraphEdgeIn] = Field(default_factory=list)
     memory: MemorySettingsIn | None = None
+    memory_overrides: MemoryOverridesIn | None = None
 
     def to_definition(self) -> GraphDefinition:
         return GraphDefinition(

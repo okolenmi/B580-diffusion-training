@@ -366,6 +366,7 @@ def build_container(settings: Settings) -> Container:
                 runtime=graph_runtime,
                 launcher=graph_supervisor,
                 clock=clock,
+                device_probe=device_probe,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

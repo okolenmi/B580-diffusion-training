@@ -290,6 +290,65 @@ def test_effective_memory_fingerprint_not_in_record():
     assert result.demand_source == "unknown"
 
 
+def test_effective_memory_unknown_without_capacity_is_none():
+    """No probe reading, unknown demand -> demand stays None, not zero.
+
+    Unknown is never a zero claim: nothing was measured, so nothing is
+    claimed. Admission (MEM-03) needs a real number, and a missing
+    capacity reading is not one.
+    """
+    result = effective_memory(MemorySettings(), None, None, None, None)
+    assert result.demand_mb is None
+    assert result.demand_source == "unknown"
+
+
+def test_effective_memory_round_trips_storage():
+    """as_dict -> from_dict reproduces the admitted values exactly.
+
+    What a restart reads back from ``memory_json`` must equal what was
+    stored, including a null demand.
+    """
+    admitted = effective_memory(
+        MemorySettings(vram_max_mb=6000.0), {"strict": False}, None, None, 12216.0
+    )
+    assert EffectiveMemory.from_dict(admitted.as_dict()) == admitted
+    unknown = effective_memory(MemorySettings(), None, None, None, None)
+    raw = unknown.as_dict()
+    assert raw["demand_mb"] is None
+    assert EffectiveMemory.from_dict(raw) == unknown
+
+
+def test_run_in_overrides_keep_only_the_named_keys():
+    """Partial overrides: absent keys mean 'keep the graph's value'."""
+    from backend.presentation.schemas import GraphRunIn
+
+    body = GraphRunIn(
+        nodes=[], memory_overrides={"vram_max_mb": 4096.0, "strict": False}
+    )
+    assert body.memory_overrides is not None
+    assert body.memory_overrides.as_overrides() == {
+        "vram_max_mb": 4096.0,
+        "strict": False,
+    }
+    auto = GraphRunIn(nodes=[], memory_overrides={"ram_max_mb": AUTO})
+    assert auto.memory_overrides is not None
+    assert auto.memory_overrides.as_overrides() == {"ram_max_mb": AUTO}
+    # No memory_overrides at all -> the request overrides nothing.
+    assert GraphRunIn(nodes=[]).memory_overrides is None
+
+
+def test_run_in_rejects_unknown_override_key():
+    """A typo in an override is refused, not silently 'keep the default'."""
+    from backend.presentation.schemas import GraphRunIn
+
+    try:
+        GraphRunIn(nodes=[], memory_overrides={"vram_max": 4096.0})
+    except Exception as exc:  # the rejection must name the offending key
+        assert "vram_max" in str(exc), str(exc)
+    else:
+        raise AssertionError("an unknown memory override key was accepted")
+
+
 
 def main() -> None:
     """Run every test in this file, listed by name.
@@ -322,6 +381,10 @@ def main() -> None:
         test_effective_memory_no_overrides,
         test_effective_memory_pillow_added_to_observed,
         test_effective_memory_fingerprint_not_in_record,
+        test_effective_memory_unknown_without_capacity_is_none,
+        test_effective_memory_round_trips_storage,
+        test_run_in_overrides_keep_only_the_named_keys,
+        test_run_in_rejects_unknown_override_key,
     ]
     for test in tests:
         test()

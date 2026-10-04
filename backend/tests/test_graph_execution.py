@@ -40,6 +40,7 @@ from backend.application.use_cases import (
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.exceptions import DomainError, InvalidTransitionError
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec, NodeResult
+from backend.domain.memory_settings import MemorySettings, effective_memory
 from backend.application.ports.execution_launcher import (
     ExecutionLauncher,
     RecordedOutcome,
@@ -296,6 +297,36 @@ repo.add(third)
 check(repo.delete_all() == 3, "delete_all wipes every row (counted)")
 check(repo.get(row.id) is None, "rows are gone after delete_all")
 
+# memory_json round-trips, and a row with no admitted values restores
+# memory=None (MEM-02 #2: the effective values are stored on the row).
+mem_db = SqliteDatabase(Path(tempfile.mkdtemp(prefix="backend-graph-mem-")) / "m.db")
+mem_db.initialize()
+mem_repo = SqliteGraphExecutionRepository(mem_db)
+admitted = effective_memory(
+    MemorySettings(vram_max_mb=8000.0), {"strict": False}, None, None, 12216.0
+)
+with_memory = GraphExecution.create(graph=VALID, created_at=NOW, memory=admitted)
+mem_repo.add(with_memory)
+check(
+    mem_repo.get(with_memory.id).memory == admitted,
+    "effective memory round-trips through memory_json",
+)
+# The migration comment promises "written once at INSERT, never
+# updated": a status update through the same row must leave the
+# admitted values alone, or a restart would re-derive a drifted total.
+with_memory.mark_running(at=NOW)
+check(
+    mem_repo.update(with_memory)
+    and mem_repo.get(with_memory.id).memory == admitted,
+    "a status update leaves memory_json untouched",
+)
+plain_row = GraphExecution.create(graph=VALID, created_at=NOW)
+mem_repo.add(plain_row)
+check(
+    mem_repo.get(plain_row.id).memory is None,
+    "a row with no memory_json restores memory=None",
+)
+
 # ==========================================================================
 # Section C: use cases + supervisor end to end
 # ==========================================================================
@@ -307,7 +338,12 @@ runtime = ReflectedGraphRuntime(fixture_graph_registry(),
                                 memory_releaser=lambda: releases.__setitem__(
                                     "n", releases["n"] + 1
                                 ))
-services = build_services(events=events, graph_runtime=runtime)
+start_db = SqliteDatabase(Path(tempfile.mkdtemp(prefix="backend-graph-start-")) / "s.db")
+start_db.initialize()
+start_repo = SqliteGraphExecutionRepository(start_db)
+services = build_services(
+    events=events, graph_runtime=runtime, graph_executions=start_repo
+)
 graphs = services.graphs
 
 # Validation (same authority the run endpoint uses).
@@ -458,6 +494,49 @@ for bad_limit in (0, -1, 501):
 check(
     graphs.list_executions.execute(limit=500).count >= 3,
     "limit=500 accepted; history listed newest-first",
+)
+
+# MEM-02 #2: the execution request's overrides land on the row as the
+# effective values (stated demand beats the probe's capacity claim).
+over = graphs.start_execution.execute(
+    VALID, memory_overrides={"vram_max_mb": 4096.0, "strict": False}
+)
+over_finished = wait_until(
+    lambda: (
+        graphs.get_execution.execute(over.execution_id).status.is_terminal
+    ),
+    timeout=5.0,
+)
+check(over_finished, "the override run reaches a terminal state")
+stored = start_repo.get(over.execution_id)
+check(
+    stored.memory is not None
+    and stored.memory.vram_max_mb == 4096.0
+    and stored.memory.strict is False,
+    "overrides win on the stored effective values",
+)
+check(
+    stored.memory.demand_mb == 4096.0
+    and stored.memory.demand_source == "stated",
+    "the override's stated demand is the stored demand",
+)
+
+# No overrides: the graph's defaults, and an unknown demand claims the
+# capacity the cached probe reports (FakeDeviceProbe: 12216 MB).
+plain = graphs.start_execution.execute(VALID)
+plain_finished = wait_until(
+    lambda: (
+        graphs.get_execution.execute(plain.execution_id).status.is_terminal
+    ),
+    timeout=5.0,
+)
+check(plain_finished, "the plain run reaches a terminal state")
+plain_stored = start_repo.get(plain.execution_id)
+check(
+    plain_stored.memory is not None
+    and plain_stored.memory.demand_mb == 12216.0
+    and plain_stored.memory.demand_source == "unknown",
+    "no overrides: unknown demand claims the probe's reported capacity",
 )
 
 # Reconcile: both non-terminal shapes are dead-process debris.

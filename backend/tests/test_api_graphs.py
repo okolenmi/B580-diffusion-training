@@ -227,6 +227,31 @@ expect_error(
     "the largest representable id is a normal lookup, not a range error",
 )
 
+# -- run: per-execution memory overrides (MEM-02 #2) -------------------
+over_body = valid_graph()
+over_body["memory_overrides"] = {"vram_max_mb": 4096, "strict": False}
+status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
+                               json_body=over_body)
+check(status == 201, "run with memory overrides accepted")
+over_id = body["execution_id"]
+over_done = wait_until(
+    lambda: get_exec(app, over_id)[2]["status"] in TERMINAL, timeout=5.0
+)
+check(over_done, "override run reaches a terminal state")
+
+# A typo in an override is a 422 naming the key -- it must not fall
+# back to the graph's value, because the caller asked to change
+# exactly that value.
+typo = valid_graph()
+typo["memory_overrides"] = {"vram_max": 4096}
+status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST", json_body=typo)
+check(status == 422, "unknown memory override key refused with 422")
+loc = body.get("error", {}).get("details", [{}])[0].get("loc", [])
+check(
+    "memory_overrides" in loc and "vram_max" in loc,
+    f"the 422 points at the offending key (got {loc})",
+)
+
 # -- single-active + stop --------------------------------------------------
 status, _, body = asgi_request(
     app, f"{GRAPH}/run",
@@ -341,10 +366,12 @@ on_disk = sum(p.stat().st_size for p in scratch_dir.iterdir()
               if p.is_file())
 check(on_disk > 0, f"and they are not empty ({on_disk} bytes)")
 
+status, _, before = asgi_request(app, f"{GRAPH}/executions")
+total = before["count"]
 status, _, body = asgi_request(app, f"{GRAPH}/executions", method="DELETE")
-check(status == 200 and body["deleted"] == 3,
+check(status == 200 and body["deleted"] == total,
       f"delete wipes execution history, including the run just started "
-      f"above ({body.get('deleted')})")
+      f"above ({body.get('deleted')}/{total})")
 left = sorted(p.name for p in scratch_dir.iterdir())
 check(left == [],
       f"and the scratch too, so clearing the history frees the disk "

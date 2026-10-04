@@ -18,12 +18,13 @@ from ...application.ports.graph_execution_repository import GraphExecutionReposi
 from ...domain.entities.graph_execution import GraphExecution
 from ...domain.exceptions import DomainError
 from ...domain.graph import GraphDefinition, NodeResult
+from ...domain.memory_settings import EffectiveMemory
 from ...domain.value_objects import ExecutionId, GraphStatus
 from .sqlite import SqliteDatabase, fits_in_sqlite_int
 
 _COLUMNS = (
-    "id, status, graph, results, error, created_at, updated_at, "
-    "started_at, finished_at"
+    "id, status, graph, results, error, memory_json, created_at, "
+    "updated_at, started_at, finished_at"
 )
 
 # id is generated; graph is immutable (the submission snapshot).
@@ -50,12 +51,17 @@ def _decode_results(raw: str) -> tuple[NodeResult, ...]:
 def _row_to_execution(row) -> GraphExecution:
     # restore(), not GraphExecution(): see the run mapper's note
     # (docs 08 S-16).
+    memory_raw = row["memory_json"]
     return GraphExecution.restore(
         id=ExecutionId(row["id"]),
         status=GraphStatus(row["status"]),
         graph=GraphDefinition.from_dict(json.loads(row["graph"])),
         results=_decode_results(row["results"]),
         error=row["error"],
+        memory=(
+            EffectiveMemory.from_dict(json.loads(memory_raw))
+            if memory_raw else None
+        ),
         created_at=_parse_dt(row["created_at"]),  # NOT NULL in schema
         updated_at=_parse_dt(row["updated_at"]),  # NOT NULL in schema
         started_at=_parse_dt(row["started_at"]),
@@ -73,8 +79,9 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
         with self._db.connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO graph_executions "
-                "(status, graph, results, error, created_at, updated_at, "
-                " started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(status, graph, results, error, memory_json, created_at, "
+                " updated_at, started_at, finished_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._insert_values(execution),
             )
             execution.assign_id(ExecutionId(cursor.lastrowid))
@@ -89,6 +96,10 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
                 SqliteGraphExecutionRepository._results_payload(execution.results)
             ),
             execution.error,
+            (
+                json.dumps(execution.memory.as_dict())
+                if execution.memory is not None else None
+            ),
             execution.created_at.isoformat(),
             execution.updated_at.isoformat(),
             execution.started_at.isoformat() if execution.started_at else None,

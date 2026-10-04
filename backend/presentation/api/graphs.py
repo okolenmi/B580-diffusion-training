@@ -104,9 +104,17 @@ def run_graph(
     body: GraphRunIn, services: ApplicationServices = Depends(get_services)
 ):
     """Validate (422 with all issues if bad), refuse while one runs
-    (409), then queue and start the execution on a worker thread."""
+    (409), then queue and start the execution on a worker thread.
+    ``memory_overrides`` are this run's overrides of the graph's memory
+    settings; the effective values land on the execution row."""
     return execution_summary_out(
-        services.graphs.start_execution.execute(body.to_definition())
+        services.graphs.start_execution.execute(
+            body.to_definition(),
+            memory_overrides=(
+                body.memory_overrides.as_overrides()
+                if body.memory_overrides else None
+            ),
+        )
     )
 
 

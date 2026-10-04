@@ -970,14 +970,17 @@ def build_services(
         graph_runtime = ReflectedGraphRuntime(
             graph_registry, memory_releaser=lambda: None, monitor_bus=monitor_bus
         )
+    # One directory for the supervisor and the sweep, so a test
+    # can assert that clearing the history cleared the disk too.
+    # Unconditional: a caller that passes only ``graph_executions``
+    # still needs the path defined (the old nested assignment left it
+    # unbound and the first use raised NameError).
+    graph_scratch = project_root / "test-graph-scratch"
     if graph_executions is None or graph_library is None:
         graphs_db = SqliteDatabase(project_root / "test-graphs.db")
         graphs_db.initialize()
         if graph_executions is None:
             graph_executions = SqliteGraphExecutionRepository(graphs_db)
-            # One directory for the supervisor and the sweep, so a test
-            # can assert that clearing the history cleared the disk too.
-            graph_scratch = project_root / "test-graph-scratch"
         if graph_library is None:
             graph_library = SqliteGraphLibrary(graphs_db)
     execution_writer = ExecutionLifecycleWriter(
@@ -1105,6 +1108,7 @@ def build_services(
                 runtime=graph_runtime,
                 launcher=graph_supervisor,
                 clock=clock,
+                device_probe=shared_probe,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

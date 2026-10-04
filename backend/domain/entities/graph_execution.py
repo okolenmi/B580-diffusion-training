@@ -35,6 +35,7 @@ from ..events import (
 from ..exceptions import DomainError
 from ..graph import GraphDefinition, NodeResult
 from ..lifecycle import StatusMachine
+from ..memory_settings import EffectiveMemory
 from ..value_objects import GRAPH_TRANSITIONS, ExecutionId, GraphStatus
 
 
@@ -50,6 +51,7 @@ class GraphExecution:
         id: ExecutionId | None = None,
         results: tuple[NodeResult, ...] = (),
         error: str | None = None,
+        memory: EffectiveMemory | None = None,
         updated_at: datetime | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -66,6 +68,7 @@ class GraphExecution:
         self._graph = graph
         self._results: tuple[NodeResult, ...] = tuple(results)
         self._error = error
+        self._memory = memory
         self._created_at = created_at
         self._updated_at = updated_at if updated_at is not None else created_at
         self._started_at = started_at
@@ -76,9 +79,20 @@ class GraphExecution:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create(cls, *, graph: GraphDefinition, created_at: datetime) -> GraphExecution:
+    def create(
+        cls,
+        *,
+        graph: GraphDefinition,
+        created_at: datetime,
+        memory: EffectiveMemory | None = None,
+    ) -> GraphExecution:
         """Register a new execution in ``queued`` state (no id yet)."""
-        return cls(status=GraphStatus.QUEUED, graph=graph, created_at=created_at)
+        return cls(
+            status=GraphStatus.QUEUED,
+            graph=graph,
+            created_at=created_at,
+            memory=memory,
+        )
 
     @classmethod
     def restore(cls, **fields: object) -> GraphExecution:
@@ -119,6 +133,13 @@ class GraphExecution:
     @property
     def graph(self) -> GraphDefinition:
         return self._graph
+
+    @property
+    def memory(self) -> EffectiveMemory | None:
+        """The effective memory values computed when this execution was
+        admitted (``memory_json``), or ``None`` for a row written before
+        that column existed."""
+        return self._memory
 
     @property
     def results(self) -> tuple[NodeResult, ...]:

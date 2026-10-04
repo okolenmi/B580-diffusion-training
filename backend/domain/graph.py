@@ -16,8 +16,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-GRAPH_FORMAT = 1
-"""Version stamped into stored graph payloads (``{"format": 1, ...}``)."""
+from .memory_settings import MemorySettings
+
+GRAPH_FORMAT = 2
+"""Version stamped into stored graph payloads (``{"format": 2, ...}``).
+
+Format 1 graphs load with default ``MemorySettings`` (the graph has no
+memory settings, so the server uses the observed peak or refuses).
+Format 2 adds the ``memory`` key to the payload.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +68,14 @@ class NodeResult:
 
 @dataclass(frozen=True, slots=True)
 class GraphDefinition:
-    """A whole submitted graph: nodes + edges, immutable."""
+    """A whole submitted graph: nodes + edges + this graph's own memory
+    settings, immutable."""
 
     nodes: tuple[GraphNodeSpec, ...] = ()
     edges: tuple[GraphEdgeSpec, ...] = ()
+    #: The graph is the configurable object (ADR 0005): each graph holds
+    #: its own budget here, not in a global setting.
+    memory: MemorySettings = field(default_factory=MemorySettings)
 
     @property
     def node_ids(self) -> tuple[str, ...]:
@@ -81,8 +92,9 @@ class GraphDefinition:
         return tuple(e for e in self.edges if e.to_node == node_id)
 
     def as_dict(self) -> dict:
-        """Storage/wire shape: ``{"format": 1, "nodes": [...],
-        "edges": [...]}`` (params dicts passed through verbatim)."""
+        """Storage/wire shape: ``{"format": 2, "nodes": [...],
+        "edges": [...], "memory": {...}}`` (params dicts passed through
+        verbatim)."""
         return {
             "format": GRAPH_FORMAT,
             "nodes": [
@@ -98,6 +110,7 @@ class GraphDefinition:
                 }
                 for e in self.edges
             ],
+            "memory": self.memory.as_dict(),
         }
 
     @classmethod
@@ -108,6 +121,9 @@ class GraphDefinition:
         ``params`` defaults to ``{}``, unknown keys are ignored -- the
         authoritative shape check is ``validate()``, run before any
         execution, never this decoder.
+
+        Format 1 graphs (no ``memory`` key) load with default
+        ``MemorySettings``. Format 2 graphs carry their own settings.
         """
         nodes = tuple(
             GraphNodeSpec(
@@ -126,4 +142,8 @@ class GraphDefinition:
             )
             for raw in payload.get("edges") or []
         )
-        return cls(nodes=nodes, edges=edges)
+        return cls(
+            nodes=nodes,
+            edges=edges,
+            memory=MemorySettings.from_dict(payload.get("memory")),
+        )

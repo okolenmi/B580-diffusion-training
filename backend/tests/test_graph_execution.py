@@ -692,7 +692,7 @@ saved = graphs.save_graph.execute("  my graph  ", payload, description="demo")
 check(saved.created is True, "first save answers 201")
 check(saved.graph.name == "my graph", "name trimmed")
 check(
-    saved.graph.graph["format"] == 1
+    saved.graph.graph["format"] == 2
     and saved.graph.graph["palette_note"] == "keep me",
     "format stamped; unknown keys preserved verbatim",
 )

@@ -182,7 +182,7 @@ check(
     and all(r["ok"] for r in detail["results"]),
     "full detail carries per-node results",
 )
-check(detail["graph"]["format"] == 1 and len(detail["graph"]["nodes"]) == 2,
+check(detail["graph"]["format"] == 2 and len(detail["graph"]["nodes"]) == 2,
       "full detail carries the submission snapshot")
 check(
     all(isinstance(r["duration_ms"], (int, float)) for r in detail["results"]),
@@ -275,7 +275,7 @@ status, _, body = asgi_request(
 check(status == 201, "first save answers 201")
 check(body["name"] == "my graph" and body["node_count"] == 2,
       "name trimmed, node_count derived")
-check(body["graph"]["format"] == 1 and body["graph"]["palette_note"] == "keep me",
+check(body["graph"]["format"] == 2 and body["graph"]["palette_note"] == "keep me",
       "format stamped; unknown keys preserved verbatim")
 
 status, _, body = asgi_request(

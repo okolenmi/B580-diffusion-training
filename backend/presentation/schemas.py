@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..application.dto import (
     DatasetDetail,
@@ -23,6 +23,7 @@ from ..application.ports.asset_store import AssetCatalog, AssetBrowse
 from ..application.ports.graph_catalog import CatalogSnapshot, NodeInfo, PortInfo
 from ..application.ports.graph_runtime import GraphIssue
 from ..domain.graph import GRAPH_FORMAT, GraphDefinition, GraphEdgeSpec, GraphNodeSpec
+from ..domain.memory_settings import AUTO, MemorySettings
 from ..application.ports.dataset_library import (
     DatasetInfo,
     DatasetItem,
@@ -865,11 +866,46 @@ class GraphEdgeIn(BaseModel):
     to_port: str
 
 
+class MemorySettingsIn(BaseModel):
+    """Per-graph memory settings on a submission.
+
+    Unlike the storage decoder -- which is tolerant by design because it
+    reads our own snapshots -- this is the caller-facing edge: an unknown
+    setting or a value that is neither a number nor ``"auto"`` is a 422
+    naming the offender, not silently defaulted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vram_min_mb: float = 0.0
+    vram_max_mb: float | str = AUTO
+    strict: bool = True
+    policy: str = "demand_driven"
+    ram_max_mb: float | str = AUTO
+
+    @field_validator("vram_max_mb", "ram_max_mb")
+    @classmethod
+    def _number_or_auto(cls, value: Any) -> Any:
+        if isinstance(value, str) and value != AUTO:
+            raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+        return value
+
+    def to_domain(self) -> MemorySettings:
+        return MemorySettings(
+            vram_min_mb=self.vram_min_mb,
+            vram_max_mb=self.vram_max_mb,
+            strict=self.strict,
+            policy=self.policy,
+            ram_max_mb=self.ram_max_mb,
+        )
+
+
 class GraphRunIn(BaseModel):
     """Submission body for ``/validate`` and ``/run``."""
 
     nodes: list[GraphNodeIn]
     edges: list[GraphEdgeIn] = Field(default_factory=list)
+    memory: MemorySettingsIn | None = None
 
     def to_definition(self) -> GraphDefinition:
         return GraphDefinition(
@@ -886,6 +922,7 @@ class GraphRunIn(BaseModel):
                 )
                 for e in self.edges
             ),
+            memory=self.memory.to_domain() if self.memory else MemorySettings(),
         )
 
 

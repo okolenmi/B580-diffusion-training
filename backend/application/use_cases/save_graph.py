@@ -17,6 +17,7 @@ from ..dto import SaveGraphResult, to_saved_graph_dto
 from ..errors import InvalidQueryError
 from ..ports.graph_library import GraphLibrary, normalize_graph_name
 from ...domain.graph import GRAPH_FORMAT
+from ...domain.memory_settings import MemorySettings
 
 MAX_DESCRIPTION = MAX_GRAPH_DESCRIPTION
 
@@ -58,6 +59,18 @@ class SaveGraph:
         payload = dict(graph)
         payload["nodes"] = nodes
         payload["edges"] = edges
+        memory = graph.get("memory")
+        if memory is not None:
+            if not isinstance(memory, dict):
+                raise InvalidQueryError("graph.memory must be an object")
+            unknown = set(memory) - set(MemorySettings().as_dict())
+            if unknown:
+                raise InvalidQueryError(
+                    "unknown memory setting(s): "
+                    + ", ".join(sorted(unknown))
+                    + "; known: "
+                    + ", ".join(sorted(MemorySettings().as_dict()))
+                )
         stamp = payload.get("format")
         if not isinstance(stamp, int) or isinstance(stamp, bool):
             payload["format"] = GRAPH_FORMAT

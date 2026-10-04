@@ -520,6 +520,71 @@ missing is a real run:**
   configurable object** -- it is what carries a budget, and it has "a lot of
   room for improvement" as a configurable thing.
 
+  **Feasibility, measured 2026-10-04 -- and the blocker is named.**
+
+  A reservation has to sum something. The obvious candidate is wrong: **a
+  node's peak is not the sum of its residents.** Measured on the B580, rank
+  64, `1024 aes`, gradient checkpointing on:
+
+  | batch | peak reserved | residents | workspace | workspace as % of peak |
+  |---|---|---|---|---|
+  | 1 | 7,230 MB | 5,611 MB | 1,619 MB | 22% |
+  | 2 | 7,666 MB | 5,611 MB | 2,055 MB | 27% |
+  | 4 | 8,954 MB | 5,611 MB | 3,343 MB | 37% |
+
+  The two halves are of completely different quality:
+
+  * **Residents are exact and free.** Constant at 5,611 MB (model 4,897 +
+    optimizer 714) regardless of batch, and derivable from parameter count
+    x dtype with no measurement at all. This part is easy.
+  * **Workspace is the hard part, and it is 22-37% of the peak.** It is also
+    **not linear in batch**: +436 MB per extra sample from 1 to 2, +644 MB
+    per sample from 2 to 4, so a straight-line fit is off by 416 MB at batch
+    4. It depends on resolution, batch and whether checkpointing is on, none
+    of which any node currently reports.
+
+  **And nothing in the tree can report either number today.** `Port` is
+  declarative metadata -- name, type, required, default, doc, choices,
+  `visible_when` -- with no cost field, and `Node` has `build`,
+  `validate_inputs`, `validate_outputs` and nothing pre-build. So there is no
+  seam for a node to state its demand, which is the actual blocker; the
+  arithmetic above only says what the seam would have to return.
+
+  **A node that cannot state its demand must be UNKNOWN, and UNKNOWN must
+  block.** There is a precedent for exactly this three-valued shape in this
+  codebase: `check_comfy_conflicts` reports safe / conflict / **unknown**
+  (installed but undeclared), and unknown gets a strict pin -- "treating
+  unknown as safe is how a soft install quietly becomes the hard one". Same
+  argument, same severity: under reservation, admitting a graph containing a
+  node whose workspace is unknown is admitting a graph that may OOM at step
+  900, which is the failure the whole idea exists to prevent. The cost of
+  that rule is real and should be said out loud rather than discovered --
+  every graph containing any node that has not implemented an estimator is
+  un-runnable, on day one, which is most of them.
+
+  **First slice, when picked up** -- ordered so each step is checkable
+  against something already measured:
+
+  1. A `VramEstimate` value object carrying `resident_bytes` and
+     `workspace_bytes`, and a `Node` hook returning it or `None`. The
+     default is `None`, i.e. unknown, and it stays that way rather than
+     returning 0: 0 is a claim, and a claim nobody checked is how a soft
+     install becomes a hard one.
+  2. Admission as three-valued, reusing `check_comfy_conflicts`' shape
+     rather than inventing a second vocabulary for the same idea.
+  3. An estimator for exactly one node, the UNet holder, where `resident` is
+     exact from shapes and `workspace` is a **measured** constant with its
+     batch scaling fitted to the three points above -- and checked to fail
+     loudly rather than silently extrapolate outside the fitted range.
+  4. Only then: does the sum match a real run's measured peak? The number to
+     beat is the 2,055 MB workspace at batch 2, and the test that matters is
+     a graph whose estimate is *below* the measured peak, because that is
+     the one that would have been admitted and then OOMed.
+
+  Steps 1-3 are mechanical. Step 4 is where this could turn out to need a
+  different answer, and it is worth knowing that before treating step 1 as
+  progress.
+
   **Left to design when this is picked up**, and these are naming the work
   rather than answering it: what a graph's settings object contains beyond the
   budget (ordering policy between its own nodes is the obvious second thing,

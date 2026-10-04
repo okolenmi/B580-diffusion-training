@@ -1,4 +1,4 @@
-"""The CLIP BPE tokenizer, reimplemented rather than imported.
+r"""The CLIP BPE tokenizer, reimplemented rather than imported.
 
 Design doc 12, section 7.3, section C2. This is the last piece of the
 ComfyUI dependency, and it is the one that is mostly *data* rather than code.

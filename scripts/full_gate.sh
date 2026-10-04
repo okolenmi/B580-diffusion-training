@@ -114,6 +114,15 @@ else
   echo "== backend lint skipped (ruff not installed in the gate interpreter) =="
 fi
 
+# Compiles the whole tree with SyntaxWarning as an error, so a file that
+# will stop compiling cannot sit here unnoticed. Deliberately *not* a ruff
+# baseline check: an invalid escape sequence is not one of nodes/ or
+# manager/'s stylistic conventions, and this needs nothing but the
+# interpreter above, so unlike the ruff steps it cannot be skipped for a
+# missing dev dependency. scripts/check_syntax.py says why in full.
+echo "== syntax (SyntaxWarning as error, whole tree) =="
+"$GATE_PYTHON" scripts/check_syntax.py
+
 # The wider ruff + mypy run, measured against scripts/quality_baseline.json
 # (docs 08 N-11). The F,E9 check above stays because it is the subset that
 # must be zero outright -- undefined names are always a bug, whereas a

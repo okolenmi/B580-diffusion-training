@@ -70,11 +70,16 @@ class _FakeResourceControl(ResourceControlHandle):
     def __init__(self, events: list):
         self._events = events
         self._offloadable: set = set()
+        self._sacrificable: set = set()
 
-    def register(self, name, resident, offloadable: bool = False) -> None:
+    def register(self, name, resident, offloadable: bool = False,
+                 sacrificable: bool = False) -> None:
         if offloadable:
             self._offloadable.add(name)
-        self._events.append(f"register:{name}:offloadable={offloadable}")
+        if sacrificable:
+            self._sacrificable.add(name)
+        self._events.append(
+            f"register:{name}:offloadable={offloadable}:sacrificable={sacrificable}")
 
     def before_step(self, step: int) -> None:
         self._events.append(f"before_step:{step}")
@@ -315,8 +320,19 @@ def check_model_is_registered_non_offloadable_and_never_released():
     print("[model: registered offloadable=False, offload() never called]")
     events: list = []
     _run(_FakeOptimizer(events), events)
-    check("register:model:offloadable=False" in events, events)
+    check(any(e.startswith("register:model:offloadable=False") for e in events), events)
+    # Sacrificable, not offloadable. offloadable would mean "released between
+    # uses", which is wrong for the model: it is used every step, so
+    # before_step()'s safety net would evict it eagerly and pay a 2,594 ms
+    # round trip (measured, B580) to no purpose. Sacrificable means "moves
+    # only when something asks for the room", which is the conditioning miss
+    # path -- and ForwardPhase's own ensure_loaded("model") brings it back.
+    check("sacrificable=True" in next(
+        e for e in events if e.startswith("register:model:")), events)
     check(not any("release:model" in e for e in events), events)
+    check(any("ensure_loaded:model" in e for e in events),
+          f"the forward re-ensures the model, since a sacrifice may have moved "
+          f"it (got {events})")
     print("    PASS")
 
 
@@ -336,6 +352,12 @@ def check_ensure_loaded_always_fires_but_release_does_not_when_calibration_canno
         check(step_events == [
             step_events[0],  # before_step:N
             "ensure_loaded:text_encoder", "encode",
+            # ensure_loaded("model"): the model is registered
+            # *sacrificable*, so conditioning may have moved it to make
+            # room for CLIP and the forward is what brings it back.
+            # Unconditional -- one memory read per step for the
+            # capability, which ForwardPhase's docstring states.
+            "ensure_loaded:model",
             "forward", "ensure_loaded:optimizer", "optimizer_step",
         ], step_events)
     print("    PASS")
@@ -396,7 +418,19 @@ def check_fused_optimizer_same_fallback_never_calls_step_either_way():
         check(step_events == [
             step_events[0],  # before_step:N
             "ensure_loaded:text_encoder", "encode",
-            "begin_step", "forward", "ensure_loaded:optimizer",
+            # ensure_loaded("model"): the model is registered
+            # *sacrificable*, so conditioning may have moved it to make
+            # room for CLIP and the forward is what brings it back.
+            # Unconditional -- one memory read per step for the
+            # capability, which ForwardPhase's docstring states.
+            "begin_step",
+            # ensure_loaded("model"): the model is registered
+            # *sacrificable*, so conditioning may have moved it to
+            # make room for CLIP and the forward brings it back.
+            # Unconditional -- one memory read per step for the
+            # capability (ForwardPhase's own docstring).
+            "ensure_loaded:model",
+            "forward", "ensure_loaded:optimizer",
         ], step_events)
     print("    PASS")
 

@@ -449,7 +449,14 @@ def _resource_control():
     from nodes.memory.control_handle import ResourceControlHandle
 
     class _RC(ResourceControlHandle):
-        def register(self, name, resident, offloadable=False): pass
+        # `sacrificable` is accepted and ignored: this double is a stand-in
+        # for the handle's *shape*, and the probe never asks for anything to
+        # be sacrificed, so honouring the third registration state would mean
+        # modelling eviction policy this test has no stake in. It is listed
+        # because the trainer passes it and a narrower signature is a
+        # TypeError rather than a skipped assertion.
+        def register(self, name, resident, offloadable=False, sacrificable=False):
+            pass
         def before_step(self, step): pass
         def ensure_loaded(self, name): pass
         def release(self, name): pass

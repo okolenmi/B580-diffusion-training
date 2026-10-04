@@ -81,7 +81,8 @@ from .handle import DeviceResident
 class ResourceControlHandle(ABC):
 
     @abstractmethod
-    def register(self, name: str, resident: DeviceResident, offloadable: bool = False) -> None:
+    def register(self, name: str, resident: DeviceResident, offloadable: bool = False,
+                 sacrificable: bool = False) -> None:
         """Called by the trainer once each of its own residents (model,
         optimizer, text_encoder, ...) is actually constructed --
         nothing exists to register before that. offloadable=True marks
@@ -91,7 +92,34 @@ class ResourceControlHandle(ABC):
         never told about would get -- explicit opt-in, not an inferred
         default. Only mark a resident offloadable if something calls
         ensure_loaded() on it before it's actually needed again --
-        otherwise it can be offloaded here and never brought back."""
+        otherwise it can be offloaded here and never brought back.
+
+        **`sacrificable` is a third state, and a real one.** `offloadable`
+        answers "may this be released *between* uses", which is the
+        optimizer's and the text encoder's situation: their idle windows are
+        known, so dropping them the moment their phase ends is free.
+        `sacrificable` answers a different question -- "may this be moved out
+        of the way because something *else* needs the room right now", which
+        is the large base model's situation. It is used every step, so
+        releasing it proactively buys nothing and costs a great deal:
+        measured on the B580 a UNet round trip is 1,449 ms down plus 1,145 ms
+        up = 2,594 ms against a 2,430 ms step. Doing that from
+        `before_step()` every step is a 2.1x slowdown bought with nothing.
+
+        So these are not a weaker and a stronger `offloadable`:
+
+          * never          -- never moves
+          * offloadable    -- may be released between its own uses
+          * sacrificable   -- moves only to satisfy an explicit
+                              `ensure_loaded()`, and only once no
+                              offloadable resident can make room
+
+        `before_step()` honours the middle one only. `ensure_loaded()`
+        honours both, and a trainer that sacrifices something owns calling
+        `ensure_loaded()` on it again before its next use -- the obligation
+        `offloadable` already carries, and the reason the model is
+        registered non-offloadable by default rather than sacrificable.
+        """
 
     @abstractmethod
     def before_step(self, step: int) -> None:
@@ -178,15 +206,23 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         # contract worth relying on even though real Python dicts keep insertion
         # order -- this is the one place that order actually matters, so it's
         # explicit here rather than borrowed incidentally from something else.
+        # Sacrificable residents, in registration order, appended after
+        # `_offloadable` so they are always considered *last* -- a resident
+        # moved only under demand is by definition the expensive last resort,
+        # and a cheap offloadable one that could have made room should.
+        self._sacrificable: list[str] = []
         self._offloaded: set[str] = set()
 
-    def register(self, name: str, resident: DeviceResident, offloadable: bool = False) -> None:
+    def register(self, name: str, resident: DeviceResident, offloadable: bool = False,
+                 sacrificable: bool = False) -> None:
         self._coordinator.register(name, resident)
         if offloadable:
             self._offloadable.append(name)
+        if sacrificable:
+            self._sacrificable.append(name)
 
     def before_step(self, step: int) -> None:
-        self._make_room(exclude=())
+        self._make_room(exclude=(), demand_driven=False)
 
     def ensure_loaded(self, name: str) -> None:
         if name in self._offloaded:
@@ -200,7 +236,7 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             # this returns.
             self._device_ctx.synchronize()
             self._offloaded.discard(name)
-        self._make_room(exclude=(name,))
+        self._make_room(exclude=(name,), demand_driven=True)
 
     def release(self, name: str) -> None:
         if name not in self._offloadable:
@@ -224,11 +260,24 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
     def usable_budget_mb(self) -> Optional[float]:
         return self._budget.vram_budget_mb - self._budget.vram_reserve_mb
 
-    def _make_room(self, exclude: tuple[str, ...]) -> None:
+    def _make_room(self, exclude: tuple[str, ...],
+                   demand_driven: bool = False) -> None:
         """Shared by before_step() (exclude=() -- a general check
         between steps) and ensure_loaded() (exclude=(name,) -- whatever
         was just reloaded is off-limits, it's needed right now, that's
-        the whole reason ensure_loaded() was called). Re-measures after
+        the whole reason ensure_loaded() was called).
+
+        `demand_driven` is what separates the two callers. `before_step()`
+        passes False and only `offloadable` residents are candidates:
+        releasing something between steps is free precisely when its idle
+        window is known, and a resident that is about to be used -- a base
+        model -- is not between uses at all. `ensure_loaded()` passes True
+        and `sacrificable` residents join the candidate list, because
+        something needed the room *now*. Measured cost of getting that
+        wrong: a UNet round trip is 2,594 ms against a 2,430 ms step, so
+        `before_step()` doing it every step is a 2.1x slowdown.
+
+        Re-measures after
         each individual offload rather than estimating from
         footprint_bytes() and offloading everything that adds up to
         enough up front: one real number from the allocator beats a
@@ -247,7 +296,9 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         if stats is None:
             return
         usable_mb = self._budget.vram_budget_mb - self._budget.vram_reserve_mb
-        for name in self._offloadable:
+        candidates = self._offloadable + (
+            self._sacrificable if demand_driven else [])
+        for name in candidates:
             if name in exclude or name in self._offloaded:
                 continue
             if stats["reserved_mb"] <= usable_mb:

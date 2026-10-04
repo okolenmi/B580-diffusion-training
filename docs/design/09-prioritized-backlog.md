@@ -372,6 +372,49 @@ missing is a real run:**
   conditional instead of mandatory, which is the only part of it that
   costs more than it saves.
 
+  **(3) is built, and on this trainer it can never usefully trigger --
+  measured, 2026-10-04.** `ResourceControlHandle.register()` gained a third
+  state, `sacrificable`, beside `offloadable`. It is a third thing and not a
+  stronger `offloadable`: `offloadable` means "released *between* uses"
+  (the optimizer's and text encoder's situation, where the idle window is
+  known and dropping it is free), while `sacrificable` means "moved because
+  something else needs the room *now*". `before_step()` honours only the
+  first; `ensure_loaded()` honours both. Without the split, marking the model
+  `offloadable=True` would have `before_step()`'s per-step safety net evict
+  it eagerly -- a 2,594 ms round trip (1,449 down + 1,145 up) against a
+  2,430 ms step, a 2.1x slowdown bought with nothing. `ForwardPhase` now
+  calls `ensure_loaded("model")`, which is what brings it back.
+
+  **And the measurement says it never fires usefully here.** Per-phase
+  reserved, `non-square`, batch 2, prewarm off (every step a cache miss, so
+  CLIP is genuinely in play):
+
+      after CLIP loads (conditioning)   7,538 MB
+      after optimizer loads              7,784 MB
+      end of step (peak)                 8,760 MB
+
+  **The conditioning peak is below the step's own training peak.** So for any
+  budget B: at B >= 8,760 everything fits and no sacrifice is needed; at
+  7,538 <= B < 8,760 conditioning fits but training does not, and `strict`
+  correctly refuses; below 7,538 neither does. **Sacrificing the model cannot
+  rescue any budget, because the binding constraint is the training peak and
+  that peak contains the model.** Verified end to end: at budget 7,200 with
+  `--strict` the run still refuses, exactly as it did before the capability
+  existed.
+
+  **Its cost is one `memory_stats()` device query per step, and that is not
+  measurable**: A/B on `non-square`, batch 2, 12 steps, prewarm on -- before
+  0.484 and 0.480 steps/sec, after 0.482 and 0.475. Identical within this
+  card's run-to-run spread.
+
+  **So: a correct mechanism, at no measurable cost, that does not pay on this
+  configuration** -- and the reason is structural rather than incidental. Any
+  per-trainer capability is bounded by the fact that one step's peak is
+  dominated by the thing that step is training. Admission that actually binds
+  has to be decided across everything on the card at once, which is the
+  graph-level reservation above. Kept, because it is cheap, correct, and is
+  the seam a graph-level controller would use; not claimed as a win.
+
   **Prompt encoding is not a constraint -- measured, both dtypes.** The
   model already batches: `SDClipModel.encode(rows)` returns `(N, 77, D)`
   with the batch axis intact. `encode_token_ids` above it deliberately

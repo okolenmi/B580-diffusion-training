@@ -561,7 +561,27 @@ class ZeroGradPhase(ManagedStepPhase):
 
 
 class ForwardPhase(ManagedStepPhase):
+    """Runs the UNet forward, re-ensuring the model is resident first.
+
+    That `ensure_loaded` is not ceremony and not free: it is a real device
+    query (`memory_stats()`) every step, and it is here because the model is
+    registered *sacrificable* (see below), so conditioning may have moved it
+    to host RAM to make room for CLIP on a card that had none.
+
+    It is the cost of having the capability at all: a step that never
+    sacrifices the model pays one memory read for the privilege, and a step
+    that does pays the reload -- measured at 1,145 ms on the B580. The
+    alternative, registering the model as neither offloadable nor
+    sacrificable, is today's behaviour and is correct on any card with room
+    for CLIP alongside the model, which is most of them.
+    """
+
+    def __init__(self, resource_control=None):
+        self._resource_control = resource_control
+
     def run(self, state: ManagedStepState) -> ManagedStepState:
+        if self._resource_control is not None:
+            self._resource_control.ensure_loaded("model")
         state.extras["pred"] = state.model.forward(
             state.extras["xc"], state.extras["t"], state.extras["ctx_emb"], state.extras["y"])
         return state
@@ -1334,7 +1354,15 @@ class ManagedLoRATrainerNode(TrainerNode):
         optimizer_id = describe_optimizer(optimizer)
         print(f"[ManagedLoRATrainerNode] optimizer: {optimizer_id}")
 
-        resource_control.register("model", model, offloadable=False)
+        # Sacrificable, not offloadable. `offloadable` would mean "released
+        # between uses", which is wrong for the model -- it is used every step,
+        # so `before_step()`'s safety net would evict it eagerly and pay a
+        # 2,594 ms round trip to no purpose. Sacrificable means "moves only if
+        # something asks for the room", which is exactly the conditioning
+        # miss path. ForwardPhase's own ensure_loaded("model") is what brings
+        # it back, and that obligation is the price of the capability.
+        resource_control.register("model", model, offloadable=False,
+                                  sacrificable=True)
         resource_control.register("optimizer", optimizer, offloadable=True)
         resource_control.register("text_encoder", text_encoder, offloadable=True)
 
@@ -1378,7 +1406,7 @@ class ManagedLoRATrainerNode(TrainerNode):
                                      device_ctx=device_ctx, profile=profile,
                                      ensure_loaded_before_encode=not prewarm_text_encoder),
             ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum),
-            ForwardPhase(),
+            ForwardPhase(resource_control),
             LossPhase(loss_weighting,
                       backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0,
                       bucket_balance=bucket_balance),

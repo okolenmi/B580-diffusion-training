@@ -456,13 +456,35 @@ missing is a real run:**
   controller cannot see the conflict; a per-graph one is the only thing that
   can.
 
-  **Not designed, and these are the open questions rather than answers:**
-  whether "required VRAM" is a number or a reservation (a number lets two
-  nodes each believe there is room), what happens when the sum of demands
-  exceeds the card (refuse, or evict and retry — refusing is the only answer
-  that cannot deadlock), and whether the graph-level setting is a budget, a
-  policy, or both. The second one matters most: a controller that can only
-  fail is useless, and one that can preempt has to be able to.
+  **Admission is at graph start, by reservation -- settled 2026-10-04 by
+  the user, and it settles the question I had framed as open.** Each graph
+  holds its own budget and allocates only from the pool nothing else has
+  claimed. If the sum of demands exceeds the card, the run **cannot start** --
+  there is no in-flight eviction to design, no preemption, and no controller
+  that can fail halfway through and leave a graph half-admitted. My "refuse,
+  or evict and retry" was the wrong shape: it assumed admission happens during
+  a run, and the whole point is that it does not.
+
+  That also disposes of the only question I thought was sharp. A controller
+  that can only fail *is* useless -- unless failure is admission, decided
+  before the first step, where refusing is the complete and correct answer
+  rather than a corner case.
+
+  **The object is the graph, not a global setting and not a node.** Global
+  settings were considered first and rejected as wrong on both counts: they
+  cannot differ between graphs on one card, and a node is below the altitude
+  of a decision that is about everything on it. The **graph is the
+  configurable object** -- it is what carries a budget, and it has "a lot of
+  room for improvement" as a configurable thing.
+
+  **Left to design when this is picked up**, and these are naming the work
+  rather than answering it: what a graph's settings object contains beyond the
+  budget (ordering policy between its own nodes is the obvious second thing,
+  since two nodes in one graph can also conflict); whether a budget is a
+  hard reservation or a ceiling that nodes *request* against; and what a
+  graph looks like when two graphs are declared against one card and do not
+  both fit -- which under reservation is a start-up error, so the only design
+  question is what the message says and what it offers.
 
 - **The CLIP vocabulary, actually vendored** — the one item design doc 12
   §7 left open, and *not* a validation task: the code is done and tested,

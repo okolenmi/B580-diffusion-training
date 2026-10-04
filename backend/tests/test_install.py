@@ -203,8 +203,10 @@ try:
     refused = "nothing"
 except InstallError as exc:
     refused = str(exc)
-check("not known" in refused and "Nothing was changed" in refused,
-      f"reusing a venv we cannot identify is refused, and says so "
+check("could not be found" in refused and "Nothing was changed" in refused
+      and "Refusing rather than guessing" in refused,
+      f"reusing a venv we cannot identify is refused, says the server could "
+      f"not find it, and says why it is refusing "
       f"({refused!r})")
 check(not installer.requests,
       f"and pip was never run ({len(installer.requests)} requests)")

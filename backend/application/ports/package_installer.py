@@ -138,6 +138,15 @@ class PipInstaller(PackageInstaller):
             # Writing them to a real file is what makes pip honour them;
             # `-c` takes a path, not stdin.
             command += ["--constraint", str(constraints_path)]
+        # `--` ends pip's options, so everything after it is read as a
+        # requirement whatever it looks like. Without it, an entry beginning
+        # with `-` is an option: `--index-url=...` and `-r somefile` reach
+        # pip as instructions rather than as the names they were validated
+        # as. The use case already refuses such entries, so this is the
+        # second of two independent barriers rather than the only one --
+        # validation says what is allowed, and this makes it so even if
+        # something upstream of the validation changes later.
+        command.append("--")
         command += list(request.packages)
         return command
 

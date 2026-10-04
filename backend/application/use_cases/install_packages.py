@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,163 @@ from ..ports.package_installer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedRequirement:
+    """One accepted install entry: a name, and optionally one `==` version."""
+
+    text: str
+    name: str
+    canonical: str
+    version: str | None
+
+
+def canonicalize(name: str) -> str:
+    from packaging.utils import canonicalize_name
+    return canonicalize_name(name)
+
+
+def parse_requirement(text: str, *, require_version: bool = False
+                      ) -> ParsedRequirement:
+    """Parse `name` or `name==version`. Anything else is an `InstallError`.
+
+    **Why this exists at all.** The guard in `StartInstall.execute` used to
+    be `forbidden.intersection(packages)` on bare strings, which compares
+    the client's text to a set of names. That accepts everything except an
+    exact match, so all of these reached pip with `target="comfy"` -- a venv
+    this project does not own, and the one operation the whole design
+    refuses:
+
+        torch==2.5.0   Torch   torch[opt]   torch>=1   ' torch'
+        pytorch-triton-xpu
+
+    A string set membership test cannot see that `Torch` is `torch`. Parsing
+    can, and `packaging` -- already a server dependency, for the conflict
+    check's version comparisons -- is the right parser rather than a
+    hand-rolled regex, because PEP 508's name grammar has edge cases a regex
+    gets wrong.
+
+    `packaging` is not sufficient on its own, and the cases it accepts that
+    this must not were measured rather than assumed:
+
+    * `' torch'` and `'torch '` -- PEP 508 allows surrounding whitespace, so
+      without an explicit check the text handed to pip would not be the text
+      that was validated.
+    * `torch[opt]` -- extras, which can pull in anything at all.
+    * `torch @ https://...` -- a URL, which makes pip fetch from wherever.
+    * `torch;python_version<"3"` -- an environment marker.
+    * `torch>=1`, `torch~=2.5`, `torch!=2.5`, `torch===2.5` -- specifiers
+      other than a pin, which select a version nobody reviewed.
+
+    Names are compared through `canonicalize_name`, so `Torch`, `TORCH` and
+    `torch` are one name. `torch_` canonicalises to `torch-`, which is *not*
+    in the manifest, so it is refused as an unknown name rather than as a
+    spelling of a forbidden one -- refused either way, but the message says
+    which, and both reasons are tested.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    raw = text.strip()
+    if not raw:
+        raise InstallError(
+            "an empty entry is not a package name. Nothing was changed.")
+    if any(character.isspace() for character in text):
+        raise InstallError(
+            f"'{text}' contains whitespace. Only 'name' or 'name==version' is "
+            f"accepted, with nothing around it. Nothing was changed.")
+    if raw.startswith("-"):
+        raise InstallError(
+            f"'{text}' starts with '-', which makes it a pip option rather "
+            f"than a package. Nothing was changed.")
+
+    try:
+        requirement = Requirement(raw)
+    except InvalidRequirement as exc:
+        raise InstallError(
+            f"'{text}' is not a valid requirement ({exc}). Only 'name' or "
+            f"'name==version' is accepted. Nothing was changed.") from exc
+
+    if requirement.url:
+        raise InstallError(
+            f"'{text}' names a URL, which would make pip fetch from there. "
+            f"Only 'name' or 'name==version' is accepted. Nothing was changed.")
+    if requirement.extras:
+        raise InstallError(
+            f"'{text}' requests extras "
+            f"({', '.join(sorted(requirement.extras))}), which can pull in "
+            f"anything at all. Only 'name' or 'name==version' is accepted. "
+            f"Nothing was changed.")
+    if requirement.marker is not None:
+        raise InstallError(
+            f"'{text}' carries an environment marker ({requirement.marker}), "
+            f"so what it installs would depend on where it runs. Only 'name' "
+            f"or 'name==version' is accepted. Nothing was changed.")
+
+    operators = sorted({str(spec.operator) for spec in requirement.specifier})
+    if any(operator != "==" for operator in operators):
+        raise InstallError(
+            f"'{text}' pins with {', '.join(operators)} rather than '=='. An "
+            f"exact version is what gets reviewed; a range selects one nobody "
+            f"looked at. Nothing was changed.")
+
+    versions = [spec.version for spec in requirement.specifier]
+    if require_version and not versions:
+        raise InstallError(
+            f"'{text}' has no version, and this position requires an exact "
+            f"pin of the form 'name==version'. Nothing was changed.")
+
+    return ParsedRequirement(
+        text=text,
+        name=requirement.name,
+        canonical=canonicalize(requirement.name),
+        version=versions[0] if versions else None,
+    )
+
+
+def validate_install_entries(packages, constraints, target: str) -> None:
+    """Refuse anything the manifest does not vouch for, before anything runs.
+
+    Both checks apply to **both** targets, and the allowlist runs first.
+    Neither is really about ComfyUI: an entry that is not in the manifest is
+    an entry nobody chose on purpose, and a new virtualenv is still an
+    environment this project would then be responsible for.
+
+    `pytorch-triton-xpu` needs no manifest row of its own to be refused
+    here. It is a torch companion, so it belongs on the `never_install` set
+    if it is ever added -- and until then the allowlist refuses it first,
+    which is the stronger position.
+
+    Constraints are held to a stricter shape than packages: exactly
+    `name==version`. They are written into a file pip reads, and pip honours
+    option lines inside such a file, so an entry that is not a pin is an
+    entry that could be an instruction.
+    """
+    from ..ports.requirements_manifest import REQUIREMENTS
+
+    known = {canonicalize(r.distribution) for r in REQUIREMENTS}
+    forbidden = {canonicalize(r.distribution)
+                 for r in REQUIREMENTS if r.never_install}
+
+    for entry in packages:
+        requirement = parse_requirement(entry)
+        if requirement.canonical not in known:
+            raise InstallError(
+                f"'{entry}' is not a package this project declares it needs. "
+                f"This installer only installs the project's own manifest, "
+                f"because an entry nobody chose is an entry nobody reviewed. "
+                f"Known packages: {', '.join(sorted(known))}. Nothing was "
+                f"changed.")
+        if target == "comfy" and requirement.canonical in forbidden:
+            raise InstallError(
+                f"{requirement.name} is marked never-install: ComfyUI declares "
+                f"and pins it, and installing into that environment would "
+                f"change a version it owns. Use a separate virtualenv, where "
+                f"this project owns the environment and may install "
+                f"anything. Nothing was changed.")
+
+    for line in constraints:
+        parse_requirement(line, require_version=True)
 
 #: Job states. `interrupted` is not a failure of the install -- pip may well
 #: have finished -- it is a failure of the *report*, and the distinction is
@@ -162,6 +320,15 @@ class StartInstall:
     #: one running the server -- which is the only one known to work.
     base_python: str = ""
     jobs: dict[str, InstallJob] = field(default_factory=dict)
+    #: ComfyUI's venv interpreter, as this server finds it.
+    #:
+    #: A callable rather than a string so it is asked at install time and not
+    #: captured when the server started: the wizard's whole job is to *find*
+    #: that interpreter, and a value wired in at boot would report on
+    #: whichever venv happened to be configured at that moment. `None` means
+    #: "this construction cannot detect it", and a `comfy` install then
+    #: refuses rather than falling back to the client's value.
+    detect_comfy_python: Callable[[], str | None] | None = None
     _active: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -216,30 +383,39 @@ class StartInstall:
         # requirement uses, so it filtered nothing -- and the request it
         # then sent was accepted, asking to install torch into ComfyUI's
         # virtualenv. The one operation the entire design refuses.
+        #
+        # It was then a bare set intersection on the client's own text, which
+        # `torch==2.5.0`, `Torch`, `torch[opt]`, `torch>=1` and `' torch'`
+        # all walked straight past. `validate_install_entries` parses instead.
+        validate_install_entries(packages, constraints, target)
+
         if target == "comfy":
-            from ..ports.requirements_manifest import REQUIREMENTS
-
-            forbidden = {
-                r.distribution for r in REQUIREMENTS if r.never_install
-            }
-            attempted = sorted(forbidden.intersection(packages))
-            if attempted:
+            # The interpreter that runs pip is the server's answer, never the
+            # request's. `comfy_venv_python` used to be taken from the client
+            # and used verbatim, which made a form field the only thing
+            # between this endpoint and an arbitrary interpreter. It stays in
+            # the schema because the wizard shows the user which interpreter
+            # will run -- but only as something to check the server against,
+            # and a disagreement is a refusal rather than a preference.
+            detected = (self.detect_comfy_python()
+                        if self.detect_comfy_python else None)
+            if not detected:
                 raise InstallError(
-                    f"{', '.join(attempted)} is marked never-install: ComfyUI "
-                    f"declares and pins "
-                    f"{'them' if len(attempted) > 1 else 'it'}, and installing "
-                    f"into that environment would change a version it owns. "
-                    f"Use a separate virtualenv, where this project owns the "
-                    f"environment and may install anything. Nothing was changed."
+                    "ComfyUI's virtualenv could not be found, so this project "
+                    "cannot tell which interpreter it would install into. "
+                    "Refusing rather than guessing: 'we cannot show this is "
+                    "safe' is the honest answer for an environment it cannot "
+                    "identify. Nothing was changed."
                 )
-
-        if target == "comfy" and not comfy_venv_python:
-            raise InstallError(
-                "ComfyUI's virtualenv is not known, so there is nothing to "
-                "install into. Nothing was changed."
-            )
-        if target == "comfy" and comfy_venv_python:
-            target_python = comfy_venv_python
+            if comfy_venv_python and Path(comfy_venv_python) != Path(detected):
+                raise InstallError(
+                    f"the request names ComfyUI's interpreter as "
+                    f"{comfy_venv_python}, but the server finds it at "
+                    f"{detected}. This project installs into the interpreter it "
+                    f"detected, not one a caller supplied. Nothing was "
+                    f"changed."
+                )
+            target_python = detected
 
         job = InstallJob(
             id=uuid.uuid4().hex[:12],

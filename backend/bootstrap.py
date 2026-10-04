@@ -294,6 +294,13 @@ def build_container(settings: Settings) -> Container:
                 project_root=settings.project_root,
                 base_python=sys.executable,
                 jobs=install_jobs,
+                # Asked at install time rather than captured here: the wizard
+                # exists to *find* this interpreter, and `execute` installs
+                # into the one the server detects rather than the one a
+                # request names. Same reason `conflicts` above takes the port
+                # instead of a snapshot taken at wiring time.
+                detect_comfy_python=lambda: LocalComfyEnvironment
+                .default_venv_python(str(settings_store.get("comfy_dir", ""))),
             ),
             install_status=GetInstall(jobs=install_jobs),
         ),

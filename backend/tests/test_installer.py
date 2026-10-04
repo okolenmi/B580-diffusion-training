@@ -677,18 +677,24 @@ status, _, body = asgi_request(install_app, "/api/v1/installer/install",
                                method="POST",
                                json_body={"target": "comfy",
                                           "packages": ["fastapi"]})
-check(status == 400 and "not known" in str(body),
-      f"an unknown ComfyUI venv is refused too, rather than guessing one "
-      f"(got {status}: {body})")
+check(status == 400 and "could not be found" in str(body)
+      and "Nothing was changed" in str(body),
+      f"a server that cannot find ComfyUI's venv refuses rather than "
+      f"guessing one, and promises nothing changed (got {status}: {body})")
 
 # With one, it proceeds -- and installs exactly what it was told, so the
 # caller's list is never second-guessed into something else.
 recorded.clear()
 install_container, install_app = _with_install(
     install_container,
+    # The interpreter comes from the server now, so a container that *can*
+    # detect one is what "the venv is known" means. Asking for the same
+    # interpreter the request names keeps the check honest: if the server
+    # and the client ever disagree, this request is refused, and the refusal
+    # is checked further down.
     StartInstall(installer=_RecordingInstaller(),
                  project_root=install_root, base_python=sys.executable,
-                 jobs={}),
+                 jobs={}, detect_comfy_python=lambda: sys.executable),
 )
 status, _, body = asgi_request(install_app, "/api/v1/installer/install",
                                method="POST",

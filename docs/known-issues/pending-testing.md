@@ -161,11 +161,76 @@ it is a change to the handle's measurement semantics, and
 `smoke_test_resource_control_strict.py` scripts `reserved_mb` directly,
 so it is a real behavioural change with its own evidence.
 
-### Not yet run
+### (e) The deliberate collision, on the real card
 
-- **(e) the deliberate collision** -- a dataset task and a graph that do
-  not fit together, the second refused with the full breakdown.
-- **(f) default demand per dataset task type.**
+Production `MemoryLedger` + production `admit()`, a real `TorchDeviceProbe`
+(total 12,216 MB, so capacity 11,192 MB after the 1,024 MB foreign
+reserve), and the demands measured above:
+
+```
+task  demand=9424 MB -> granted 9424 MB
+      held now: 9424 MB, free: 1768 MB
+
+graph demand=9192 MB -> REFUSED (MemoryUnavailableError)
+
+  a graph run cannot be admitted: asked for 9192 MB but only 1768 MB is
+  free on the device (capacity 11192 MB, free 1768 MB, held by
+  task:ingest_lora)
+
+ledger after: held=9424 free=1768
+  holder: task:ingest_lora
+```
+
+The refusal names what was asked, what is free, the capacity, and **who
+holds the card** -- and the ledger still holds the task's claim afterwards,
+so a refused start leaks nothing.
+
+### (f) Default demand per dataset task type
+
+Measured by running each kind's real path (`DataTaskRunner`, the same
+call the child makes) in its own process against
+`div_4.safetensors`, sampling `memory_stats()` and `mem_get_info()`
+in-process. `TASK_DEMAND_MB` is in **allocator MB** (the ledger adds the
+600 MB overhead to reach device MB).
+
+| kind | input | peak reserved (allocator MB) | overhead | device MB |
+|---|---|---|---|---|
+| `ingest_lora` | 8 square images @ 1024px | **6,914.0** | 119.2 | 7,514 |
+| `ingest_lora` | 8 **non-square** images @ 1024px | **11,736.0** | −496.9 † | 12,336 |
+| `generate_teacher` | 2 conditions, 1 step @ 1024px | **8,824.0** | 525.0 | 9,424 |
+
+† negative, and a real reading rather than a bug: driver and allocator
+peaks were 3 seconds apart in a run that had already begun releasing.
+
+**`generate_teacher`'s 525 MB overhead matches the training figure** (~530),
+as it must -- it loads the full UNet and VAE. `ingest_lora`'s is ~119 MB
+because it loads only the VAE.
+
+**Recommendation: do not wire `TASK_DEMAND_MB` from these numbers yet.** The
+map takes one figure per kind, and ingest's peak is dominated by the input
+*aspect ratio*: 6,914 MB square against 11,736 MB non-square, a 1.7x
+spread on identical code and resolution. Worse, the non-square figure
+(12,336 device MB) exceeds the 11,192 MB capacity outright -- an ingest of
+non-square 1024px images does not fit on this card even with nothing else
+running. So:
+
+- wiring 6,914 understates the non-square case by ~70% and would admit runs
+  that then exhaust the card;
+- wiring 11,736 refuses *every* ingest, including the square ones that
+  comfortably fit.
+
+The empty map is the safe default and stays: a kind with no number is
+UNKNOWN, which the ledger treats as an exploratory exclusive claim --
+admitted when nothing else holds the card, refused with a breakdown
+otherwise. That is correct behaviour for a demand that depends on the
+input rather than on the kind. Wiring the map wants a decision about
+whether demand should be stated per *kind* at all, or per kind-and-input
+shape, and the non-square work already under way is what should settle it.
+
+All six items of this protocol have now been run on the B580. What remains
+is not measurement but two decisions, both recorded above: whether
+`TASK_DEMAND_MB` should be per kind or per kind-and-input-shape (f), and
+whether the handle should keep measuring `reserved_mb` (d', above).
 
 ## Pending
 

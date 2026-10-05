@@ -30,7 +30,7 @@ Rules that keep it fast and expandable:
 
 ## 3. Parity audit: legacy surface vs backend API
 
-51 legacy endpoints vs 50 backend endpoints -- and they are not a
+51 legacy endpoints vs 51 backend endpoints -- and they are not a
 1:1 mapping. Families:
 
 | Legacy family | Status |

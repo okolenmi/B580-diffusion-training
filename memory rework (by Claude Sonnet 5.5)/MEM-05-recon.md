@@ -20,6 +20,15 @@ inventories restating the code cannot help but drift.
   query. The in-repo precedent for `mem_get_info()` is
   `nodes/smoke_tests/fast_construction.py::_device_memory_mb()`
   (`torch.xpu.mem_get_info()` / `torch.cuda`) plus `archive/core/comfy_setup.py`.
+  `memory_stats()` *is* the telemetry source for #4's allocated/peak halves —
+  keys: `allocated_mb, reserved_mb, peak_allocated_mb, peak_reserved_mb,
+  active_mb, requested_mb, num_segments, num_alloc_retries, num_ooms`;
+  `None` on CPU (`_NullDeviceContext`).
+- **Child-side foreign users** — foreign demand is modelled only server-side
+  (`MemoryLedger.foreign_reserve_mb`, `config.memory_foreign_reserve_mb`;
+  12216 − 1024 foreign = 11192 capacity). The child models nothing; #2's
+  physical check is the first child-side defence against ComfyUI/the desktop
+  holding the room admission assumed free.
 - **`set_per_process_memory_fraction`** — zero references anywhere in the repo
   (only in the task/plan prose). The allocator backstop is new code.
 - **The layering test** (nodes must not import backend): the *rule* exists in
@@ -32,7 +41,11 @@ inventories restating the code cannot help but drift.
   exist, but **no production code calls them** (tests only). The writer's own
   header says "the fixed-interval producer is MEM-05 #4", and
   `test_memory_wiring.py::_MemoryReportChild`'s docstring pins the same
-  promise. There is no `threading.Timer`/child-side thread anywhere today.
+  promise. There is no `threading.Timer`/child-side thread anywhere today;
+  monitor records are event-driven (trainer reports at step boundaries,
+  `managed.py:988, 1446-1447, 1488-1492`). Consumers server-side:
+  `graph_supervisor.py:243-247` (reconcile drain) and `590-591` (watcher)
+  → `_record_peak` (`:723`, files only when the peak rose).
 - **Lifting node values into `MemorySettings` on load** (the
   `VRAMBudgetControllerNode` shim's other half): no such code exists;
   `vram_budget_mb` appears nowhere under `backend/`. Candidate hooks are
@@ -42,13 +55,18 @@ inventories restating the code cannot help but drift.
 
 - **Spawn args.** `GraphTaskLaunch` is `frozen/slotted` with
   `execution_id, graph_path, event_path, log_path`; filled by
-  `GraphExecutionSupervisor.launch`, command built in
-  `SubprocessGraphTaskGateway._build_command`, parsed by
-  `graph_task_worker._build_parser` (all three flags `required=True`).
+  `GraphExecutionSupervisor.launch` (`graph_supervisor.py:171-176`), command
+  built in `SubprocessGraphTaskGateway._build_command` (`graph_task_gateway.py:76-87`),
+  parsed by `graph_task_worker._build_parser` (all three flags `required=True`).
   Adding two flags touches: port dataclass, supervisor, command builder,
   parser — and the in-process gateway, which has no argv at all and must get
   the same numbers through `run_execution`/`build_runtime` or the two paths
   diverge (the worker module's own docstring demands they stay identical).
+  `GraphTaskLaunch` is also constructed directly by tests —
+  `test_graph_task_gateway.py:76-81` (`_launch`), `test_graph_adoption.py:359-365`
+  and `404-411` — so new fields need defaults or those helpers supply them;
+  their children would otherwise spawn with no memory args at all (see
+  decision under Traps).
 - **Where the numbers live today.** Only on the *row*: `GraphExecution.reserved_mb`
   (the grant) and `row.memory → EffectiveMemory` (the budget source).
   `ExecutionLauncher.launch(execution_id, graph)` receives neither, and the
@@ -60,8 +78,12 @@ inventories restating the code cannot help but drift.
 - **`ExecutionContext`** is a plain two-field bag
   (`monitor_bus`, `cancel_event`) whose docstring explicitly sanctions new
   fields; the runtime constructs it inside `ReflectedGraphRuntime.execute`
-  and hands it to `cls(context).build(...)`. That construction is the
-  exposure point for `memory`.
+  (`runtime.py:361-363`) and hands it to `cls(context).build(**inputs)`
+  (`runtime.py:378`). That construction is the exposure point for `memory`.
+  Every node also defaults to `context or ExecutionContext()`
+  (`nodes/core.py:278`), so a node reached outside the runtime sees
+  `memory = None` and must tolerate it. Other constructors: `scripts/hw_validate.py:483`,
+  smoke tests (monitor/cancel only), retired `archive/server/*`.
 - **`graph_task_worker.main()`** already has argv + writer + graph before
   `run_execution` — "build `GraphMemory` first, before loading anything"
   maps there (and to the in-process gateway's `body()` equivalently).
@@ -80,7 +102,14 @@ inventories restating the code cannot help but drift.
 - **`smoke_test_vram_budget_controller.py`** — node still returns a real
   handle unconditionally, keeps its over-budget warning (both numbers named),
   and survives `total_memory_mb() is None`; it monkeypatches
-  `DeviceContext.for_device`.
+  `DeviceContext.for_device`. The node's inputs are `vram_budget_mb`
+  (required), `vram_reserve_mb=512.0`, `device="xpu"`, `strict=False`; its
+  only other real consumer is `scripts/hw_validate.py:200-210`, which calls
+  `VRAMBudgetControllerNode(ctx).build(...)` directly — the shim must keep
+  that call working too.
+- **`smoke_test_adaptive_residency_controller.py`** — decides from
+  `usable_budget_mb()`/`memory_stats()` being `None` (`:122, :137`); another
+  consumer of the ABC surface that must keep its answers.
 - **Fakes with fixed signatures**: `_RecordingResourceControl` in
   `smoke_test_text_encoder_cache.py` has `register()` **without** a
   `sacrificable` kwarg — the adapter must not start calling `register` with
@@ -95,12 +124,21 @@ inventories restating the code cannot help but drift.
 
 ## Traps and open decisions
 
-1. **Strict default mismatch**: `ResourceBudget.strict=False` vs
+1. **Strict default mismatch**: `ResourceBudget` (`nodes/resource_budget.py`,
+   frozen, no `__post_init__` validation) defaults `strict=False` vs
    `MemorySettings.strict=True`. Any lift of node values into settings must
    decide this mapping explicitly.
 2. **Budget may be unknown** (`vram_max_mb == "auto"` with no peak): decide
    what `--memory-budget-mb` carries then (absent ⇒ no fraction backstop is
    the honest reading; the warning+continue case still gets recorded).
+   *Decided*: absent `--memory-budget-mb`/`--memory-grant-mb` are explicit
+   `UNKNOWN` in the child — one warning line, the check/backstop recorded as
+   not-performed, run continues (status quo). Production always supplies
+   both (the launch path's row has `reserved_mb` and a non-null
+   `demand_mb`, because admission refuses whenever it cannot know them), so
+   UNKNOWN only reaches direct-spawn tests — which then keep passing
+   unchanged. Rule 2 satisfied: named state + warning, never a silent
+   `None` skip.
 3. **Physical check exit**: the spec says "write an `outcome` with the
    numbers and exit cleanly" — outcome semantics are what the supervisor
    treats as completion, so this must be a recorded, explained exit, not an
@@ -122,6 +160,11 @@ inventories restating the code cannot help but drift.
    "record which backstop case happened" (fraction set vs unavailable) has
    no field for it today — the record shape may need one more key, which
    ripples into the reader, schema and contract test.
+8. **Warning channel**: the child has no per-run warning channel besides
+   `logger`/`print` (→ the run's log file via `stdout=log`); the only
+   structured channel is `ExecutionEventWriter` (node/monitor/memory/outcome
+   kinds). #3's one-time warning goes to the log; "record which case" goes
+   into the memory record.
 
 ## Related tests that will notice
 

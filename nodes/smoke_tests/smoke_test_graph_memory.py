@@ -18,6 +18,8 @@ telemetry can say which happened.
 
 import math
 import sys
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -29,7 +31,9 @@ from nodes.memory.graph_memory import (
     CHECK_SHORTFALL,
     CHECK_UNKNOWN,
     GraphMemory,
+    MemoryRequestDenied,
 )
+from nodes.memory.handle import DeviceResident
 
 failures = []
 
@@ -302,6 +306,215 @@ def check_memory_events_without_a_listener_are_not_an_error():
            "nothing was wired, nothing broke")
 
 
+# -- MEM-06: the lease policy -----------------------------------------------
+
+
+class _FakeResident(DeviceResident):
+    """A resident whose size and reload cost are whatever the test says.
+
+    ``reload_ms`` is really slept, so the cost GraphMemory measures
+    around ``reload()`` is a real measurement rather than a scripted
+    one -- the eviction policy orders by that measured number, and a
+    test that faked it would be testing the fake.
+    """
+
+    def __init__(self, name: str, size_mb: float, reload_ms: float = 0.0):
+        self.name = name
+        self.size_mb = size_mb
+        self.reload_ms = reload_ms
+        self.offloaded = False
+        self.offload_calls = 0
+        self.reload_calls = 0
+
+    def footprint_bytes(self) -> int:
+        return 0 if self.offloaded else int(self.size_mb * (1024 ** 2))
+
+    def offload(self) -> None:
+        self.offloaded = True
+        self.offload_calls += 1
+
+    def reload(self, device=None) -> None:
+        self.offloaded = False
+        self.reload_calls += 1
+        if self.reload_ms:
+            time.sleep(self.reload_ms / 1000.0)
+
+    def release(self) -> None:
+        pass
+
+
+def _memory_with(*residents, budget_mb):
+    memory = GraphMemory(budget_mb=budget_mb)
+    for resident, kwargs in residents:
+        memory.register_resident(resident.name, resident, **kwargs)
+    return memory
+
+
+def check_lease_is_granted_when_there_is_room():
+    print("[lease: room inside the budget is granted without evicting "
+          "anyone]")
+    resident = _FakeResident("model", 2000.0)
+    memory = _memory_with((resident, {}), budget_mb=10000.0)
+    with memory.request(3000.0, why="vae decode") as lease:
+        record(lease.mb == 3000.0, "the lease holds what was asked",
+               detail=repr(lease.mb))
+        record(resident.offload_calls == 0,
+               "nobody was evicted -- there was room",
+               detail=repr(resident.offload_calls))
+        record(memory.in_use_mb() == 5000.0,
+               "in-use counts the resident and the live lease",
+               detail=repr(memory.in_use_mb()))
+    record(memory.in_use_mb() == 2000.0,
+           "and the lease released on the way out",
+           detail=repr(memory.in_use_mb()))
+
+
+def check_lease_evicts_the_least_important_first():
+    print("[lease: pressure evicts by priority -- least important "
+          "first -- and pinned never]")
+    model = _FakeResident("model", 2000.0)
+    optimizer = _FakeResident("optimizer", 2000.0)
+    pinned = _FakeResident("pinned", 1000.0)
+    memory = _memory_with(
+        (model, {"priority": 10}),        # important: goes last
+        (optimizer, {"priority": 0}),     # least important: goes first
+        (pinned, {"pinned": True}),
+        budget_mb=6000.0,
+    )
+    with memory.request(2000.0, why="vae decode"):
+        record(optimizer.offloaded, "the lowest-priority resident moved",
+               detail=f"optimizer.offloaded={optimizer.offloaded}")
+        record(not model.offloaded, "the important one did not")
+        record(not pinned.offloaded, "and the pinned one never does")
+        record(memory.in_use_mb() <= 6000.0,
+               "a grant never leaves in-use above the budget",
+               detail=repr(memory.in_use_mb()))
+
+
+def check_a_denied_request_changes_nothing():
+    print("[lease: a request that cannot be satisfied is denied, and "
+          "everything it moved is put back]")
+    a = _FakeResident("a", 2000.0)
+    b = _FakeResident("b", 2000.0)
+    memory = _memory_with((a, {}), (b, {}), budget_mb=4000.0)
+    before = memory.in_use_mb()
+    denied = None
+    try:
+        with memory.request(5000.0, why="vae decode"):
+            record(False, "the block must not run")
+    except MemoryRequestDenied as exc:
+        denied = exc
+    record(denied is not None, "an impossible request is refused")
+    record(denied is not None and denied.needed_mb == 5000.0,
+           "the refusal carries what was needed")
+    record(denied is not None and denied.available_mb == 0.0,
+           "and what was available",
+           detail=repr(denied.available_mb if denied else None))
+    record(denied is not None and denied.evictable == ["a", "b"],
+           "and who was movable, by policy order",
+           detail=repr(denied.evictable if denied else None))
+    record(memory.in_use_mb() == before,
+           "in-use is exactly as it was", detail=repr(memory.in_use_mb()))
+    record(not a.offloaded and not b.offloaded,
+           "every evicted resident was reloaded before the refusal")
+    record(a.reload_calls == a.offload_calls
+           and b.reload_calls == b.offload_calls,
+           "each move was undone", detail=f"a={a.offload_calls}/"
+           f"{a.reload_calls} b={b.offload_calls}/{b.reload_calls}")
+
+
+def check_a_lease_restores_what_it_moved_even_on_an_exception():
+    print("[lease: the block's exit restores what it moved, including "
+          "when the body raises]")
+    resident = _FakeResident("model", 3000.0)
+    memory = _memory_with((resident, {}), budget_mb=3000.0)
+    raised = False
+    try:
+        with memory.request(3000.0, why="vae decode"):
+            record(resident.offloaded, "the resident made way for the lease")
+            raise ValueError("the body blew up")
+    except ValueError:
+        raised = True
+    record(raised, "the body's own exception still propagates")
+    record(resident.reload_calls == 1,
+           "and the resident was still put back", detail=repr(resident.reload_calls))
+    record(not resident.offloaded and memory.in_use_mb() == 3000.0,
+           "state restored", detail=repr(memory.in_use_mb()))
+
+
+def check_concurrent_requests_serialise():
+    print("[lease: two nodes asking at once are serialised, so together "
+          "they cannot overgrant]")
+    resident = _FakeResident("model", 3000.0)
+    memory = _memory_with((resident, {}), budget_mb=5000.0)
+    granted: list[str] = []
+    denied: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def ask(who: str) -> None:
+        barrier.wait()
+        try:
+            with memory.request(3000.0, why=who):
+                granted.append(who)
+                # Observe in-use at the moment both could be live.
+                time.sleep(0.02)
+        except MemoryRequestDenied:
+            denied.append(who)
+
+    threads = [threading.Thread(target=ask, args=(who,))
+               for who in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    record(len(granted) == 1,
+           "exactly one of two 3000 MB requests into a 5000 MB budget is "
+           "granted", detail=f"granted={granted} denied={denied}")
+    record(len(denied) == 1,
+           "the other is denied, not quietly overgranted",
+           detail=f"granted={granted} denied={denied}")
+    record(memory.in_use_mb() == 3000.0,
+           "and the graph is whole again afterwards",
+           detail=repr(memory.in_use_mb()))
+
+
+def check_eviction_prefers_the_cheapest_resident_to_restore():
+    print("[lease: once reload costs are measured, the cheapest to "
+          "restore is given up first]")
+    cheap = _FakeResident("cheap", 800.0, reload_ms=2.0)
+    dear = _FakeResident("dear", 800.0, reload_ms=40.0)
+    memory = _memory_with((cheap, {}), (dear, {}), budget_mb=1600.0)
+    # Round one is spent measuring: a request big enough to move both
+    # residents, so each one's real reload cost gets timed and stored.
+    with memory.request(1600.0, why="measuring round"):
+        pass
+    record(cheap.reload_calls == 1 and dear.reload_calls == 1,
+           "both residents were moved and measured once",
+           detail=f"cheap={cheap.reload_calls} dear={dear.reload_calls}")
+    # Round two needs room for exactly one of them. Whichever is
+    # cheapest to restore is the one that should go, and the other
+    # should be left alone.
+    with memory.request(800.0, why="second"):
+        record(cheap.offloaded,
+               "the cheapest-to-restore resident is evicted first",
+               detail=f"cheap.offload_calls={cheap.offload_calls}")
+        record(not dear.offloaded,
+               "the expensive one is kept", detail=f"dear="
+               f"{dear.offload_calls}")
+
+
+def check_an_unknown_budget_is_not_a_zero_budget():
+    print("[lease: with no budget stated the request is granted and said, "
+          "not refused]")
+    resident = _FakeResident("model", 9000.0)
+    memory = _memory_with((resident, {}), budget_mb=None)
+    with memory.request(500.0, why="vae decode"):
+        record(True, "granted without a ceiling to check against")
+        record(resident.offload_calls == 0, "and nothing evicted")
+    record(memory.in_use_mb() > 0.0,
+           "in-use is still accounted", detail=repr(memory.in_use_mb()))
+
+
 def main():
     check_stores_both_numbers()
     check_absent_is_unknown_not_zero()
@@ -318,6 +531,13 @@ def main():
     check_backstop_clamps_a_budget_above_the_total()
     check_memory_events_reach_the_listener()
     check_memory_events_without_a_listener_are_not_an_error()
+    check_lease_is_granted_when_there_is_room()
+    check_lease_evicts_the_least_important_first()
+    check_a_denied_request_changes_nothing()
+    check_a_lease_restores_what_it_moved_even_on_an_exception()
+    check_concurrent_requests_serialise()
+    check_eviction_prefers_the_cheapest_resident_to_restore()
+    check_an_unknown_budget_is_not_a_zero_budget()
 
     print()
     print("=" * 60)

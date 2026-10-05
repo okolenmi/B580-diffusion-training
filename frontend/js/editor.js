@@ -18,6 +18,7 @@
 import { api, ApiError } from "./api.js";
 import { subscribeEvents } from "./lib/events.js";
 import { el } from "./lib/dom.js";
+import { errText } from "./lib/errors.js";
 import { log, logError } from "./lib/log.js";
 import { GraphDoc } from "./editor/state.js";
 import { Canvas } from "./editor/canvas.js";
@@ -25,6 +26,7 @@ import { Inspector } from "./editor/inspector.js";
 import { Palette } from "./editor/palette.js";
 import { Executions } from "./editor/executions.js";
 import { Library } from "./editor/library.js";
+import { describeRefusal, panelModel } from "./lib/memory_panel.js";
 
 
 /* ---- system console: same capped pattern as the old dashboard ----
@@ -113,6 +115,73 @@ function renderIssues(issues) {
   }
 }
 
+/* ---- memory panel ---- */
+
+/* Every string below reaches the DOM through textContent. The panel's
+   content is a remembered peak, a verdict, and holder names from a
+   running graph -- none of it is trusted markup, and none of it gets
+   to become one. The wording and the unknown-handling live in
+   lib/memory_panel.js; this only walks what it returns. */
+
+function _row(className, text) {
+  const row = document.createElement("div");
+  row.className = className;
+  row.textContent = text;
+  return row;
+}
+
+function renderMemory(preview) {
+  const root = el("memory");
+  root.replaceChildren();
+  const model = panelModel(preview);
+
+  for (const [label, value] of model.settings) {
+    root.appendChild(_row("mem-row", `${label}: ${value}`));
+  }
+
+  // "ok"/"warn" reuse the issue styles; "bad" is a refusal, which is
+  // the same thing an error row already looks like.
+  root.appendChild(_row(`issue ${model.fit.level === "bad" ? "error" : model.fit.level}`,
+    model.fit.headline));
+  root.appendChild(_row("console-line info", model.fit.detail));
+  root.appendChild(_row("console-line info", model.peak));
+
+  for (const holder of model.holders) {
+    root.appendChild(_row("mem-row", `${holder.owner} holds ${holder.mb}`));
+  }
+}
+
+function renderMemoryRefusal(details, reason) {
+  const root = el("memory");
+  root.replaceChildren();
+  const refusal = describeRefusal(details, reason);
+  root.appendChild(_row("issue error", "Run refused"));
+  root.appendChild(_row("console-line info", refusal.headline));
+  for (const [label, value] of refusal.rows) {
+    root.appendChild(_row("mem-row", `${label}: ${value}`));
+  }
+  for (const holder of refusal.holders) {
+    root.appendChild(_row("mem-row", `${holder.owner} holds ${holder.mb}`));
+  }
+}
+
+/* Re-asked whenever the graph changes and whenever a run ends, because
+   "will it fit" is a statement about the live ledger -- an answer from
+   before a run started is stale the moment that run starts. */
+async function refreshMemory() {
+  try {
+    renderMemory(await api("/graphs/memory-preview", {
+      method: "POST", body: doc.toRunPayload(),
+    }));
+  } catch (err) {
+    // A preview that cannot be fetched shows as unknown, not as a
+    // stale "fits" left over from the last successful answer.
+    renderMemory(null);
+    log(`Memory preview unavailable: ${errText(err)}`, "warn");
+  }
+}
+
+
 /* ---- boot ---- */
 
 const doc = new GraphDoc();
@@ -200,6 +269,7 @@ async function boot() {
   const executions = new Executions(el("exec-list"), canvas, {
     onNote: log,
     onIssues: renderIssues,
+    onMemoryRefusal: renderMemoryRefusal,
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
     },
@@ -235,6 +305,7 @@ async function boot() {
     try {
       const res = await api("/graphs/validate", { method: "POST", body: doc.toRunPayload() });
       renderIssues(res.issues || []);
+      await refreshMemory();
       log(res.ok ? "Validation passed." : `Validation: ${res.issues.length} issue(s).`,
           res.ok ? "success" : "warn");
     } catch (err) {

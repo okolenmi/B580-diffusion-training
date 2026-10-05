@@ -19,12 +19,14 @@ const ACTIVE = new Set(["queued", "running"]);
 const TERMINAL = new Set(["finished", "error", "stopped"]);
 
 export class Executions {
-  constructor(root, canvas, { onNote, onRunState, onIssues }) {
+  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal }) {
     this.root = root;          // #exec-list
     this.canvas = canvas;
     this.onNote = onNote;
     this.onRunState = onRunState;  // (bool running) -> toggles Stop button
     this.onIssues = onIssues;      // (issues[]) -> renders the issues panel
+    // (details, reason) -> renders a refused start's full breakdown
+    this.onMemoryRefusal = onMemoryRefusal || (() => {});
     this.items = [];
     this.selected = null;
     this.liveId = null;        // execution this page started (badge stream)
@@ -115,6 +117,11 @@ export class Executions {
           `Graph invalid: ${issues ? issues.length : "?"} issue(s).`,
           "error",
         );
+      } else if (err instanceof ApiError && err.code === "memory_unavailable") {
+        // The ledger's whole breakdown, not a bare "refused": what was
+        // asked, what is free, and who holds the rest.
+        this.onMemoryRefusal(err.details, errText(err));
+        this.onNote(errText(err), "error");
       } else if (err instanceof ApiError && err.code === "graph_execution_active") {
         this.onNote("Another execution is active -- stop it first.", "warn");
         this.refresh();

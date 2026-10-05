@@ -11,7 +11,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import json
+import logging
+import math
 import threading
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from backend.application.memory_ledger import (
     DEFAULT_FOREIGN_RESERVE_MB,
@@ -23,6 +29,26 @@ from backend.application.memory_ledger import (
 
 def _ledger(total_mb: float = 12216.0) -> MemoryLedger:
     return MemoryLedger(total_mb=total_mb)
+
+
+def _check(ledger: MemoryLedger) -> None:
+    """Inspect the ledger after an operation (MEM-03H-01).
+
+    The two facts that must hold after *every* operation, before any
+    assertion about that operation's own result looks at anything else:
+    claims never exceed the capacity, and every total is a real number.
+    The seed bug was exactly their violation -- a NaN held total made
+    ``free_mb()`` NaN, and ``demand > NaN`` is False, so the ledger then
+    reported 19,592 MB free on an 11,192 MB card and granted it.
+    """
+    held = ledger.held_mb()
+    capacity = ledger.capacity_mb
+    free = ledger.free_mb()
+    assert math.isfinite(held) and math.isfinite(free), (
+        f"non-finite total after the operation: held={held} free={free}"
+    )
+    assert held <= capacity, f"held {held} exceeds capacity {capacity}"
+    assert free == capacity - held, f"free {free} != capacity {capacity} - held {held}"
 
 
 # -- capacity ---------------------------------------------------------------
@@ -67,8 +93,10 @@ def test_reserve_refusal_when_full():
 def test_reserve_explosive_only_when_empty():
     """An exploratory run is admitted only if nothing else holds the card."""
     ledger = _ledger()
-    # Empty: exploratory is admitted
-    r1 = ledger.reserve("graph_1", 0.0, exploratory=True)
+    # The demand a real exploratory start passes is the capacity claim
+    # (a zero demand is refused like any other unusable number,
+    # MEM-03H-01); what this test pins is the exclusivity, not that.
+    r1 = ledger.reserve("graph_1", ledger.capacity_mb, exploratory=True)
     assert isinstance(r1, Grant)
     assert r1.exploratory is True
     assert r1.mb == ledger.capacity_mb  # claims all free capacity
@@ -79,7 +107,7 @@ def test_reserve_explosive_refused_when_occupied():
     ledger = _ledger()
     r1 = ledger.reserve("graph_1", 5000.0)
     assert isinstance(r1, Grant)
-    r2 = ledger.reserve("graph_2", 0.0, exploratory=True)
+    r2 = ledger.reserve("graph_2", ledger.capacity_mb, exploratory=True)
     assert isinstance(r2, Refusal)
     assert "other holders" in r2.reason
 
@@ -122,7 +150,9 @@ def test_rename_moves_the_claim():
 def test_rename_keeps_exploratory_flag():
     """An exclusive claim stays exclusive across the rename."""
     ledger = _ledger()
-    grant = ledger.reserve("task:pending:xyz", 0.0, exploratory=True)
+    grant = ledger.reserve(
+        "task:pending:xyz", ledger.capacity_mb, exploratory=True
+    )
     assert isinstance(grant, Grant) and grant.exploratory
     ledger.rename("task:pending:xyz", "task:3")
     holders = ledger.snapshot()["holders"]
@@ -297,6 +327,157 @@ def test_refusal_breakdown():
     assert bd["what_would_fit"] == 2000.0
 
 
+# -- MEM-03H-01: unusable demands -------------------------------------------
+#
+# Every value that must never become a claim, at the ledger -- the third
+# of three independent checks (the API refuses with a 422, the domain
+# raises, and here a Refusal names the value). The seeds came from the
+# reproduction: nan was *granted* and made every total NaN, after which
+# "demand > NaN" was False and all later claims were granted too; -9000
+# was granted as if it freed space; zero was accepted as a claim.
+
+#: (value, one more that keeps the ledger honest): a boolean and a
+#: non-number ride along because Python compares them like numbers --
+#: True is the int 1, and "lots" > 99999 is simply a TypeError the
+#: caller should never have been able to trigger from a stored value.
+_UNUSABLE_DEMANDS = [
+    -1,
+    0,
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    True,
+    "lots",
+    10**400,  # too big to ever be a device size: refuses, not OverflowError
+]
+
+
+def test_reserve_refuses_unusable_demands():
+    """Each unusable demand is refused, named, and changes nothing."""
+    for value in _UNUSABLE_DEMANDS:
+        ledger = _ledger()
+        before_free = ledger.free_mb()
+        refusal = ledger.reserve("graph:1", value)
+        assert isinstance(refusal, Refusal), f"{value!r} was granted"
+        assert str(value) in refusal.reason, (
+            f"the reason must name the value: {refusal.reason!r}"
+        )
+        assert ledger.held_mb() == 0.0, f"{value!r} left held={ledger.held_mb()}"
+        assert ledger.free_mb() == before_free, (
+            f"{value!r} changed free: {ledger.free_mb()} != {before_free}"
+        )
+        assert ledger.snapshot()["holders"] == {}
+        _check(ledger)
+
+
+def test_bad_demand_refusal_breakdown_is_json():
+    """A refusal over an unusable demand still serializes as JSON.
+
+    The breakdown goes straight into the 409 response, and Starlette
+    serializes with ``allow_nan=False`` -- a ``requested_mb`` carrying
+    NaN would raise where this refusal owes an answer (the same 500
+    ``presentation/responses.py`` documents for a frame that carries
+    one). ``allow_nan=False`` here is that constraint, failing if the
+    sanitizing stops happening.
+    """
+    ledger = _ledger()
+    for value in (float("nan"), float("inf"), float("-inf"), "lots", 10**400):
+        refusal = ledger.reserve("graph:1", value)
+        assert isinstance(refusal, Refusal)
+        body = json.dumps(refusal.breakdown(), allow_nan=False)
+        assert "requested_mb" in body
+        _check(ledger)
+
+
+def test_exploratory_also_refuses_unusable_demands():
+    """The demand check runs whatever the mode (MEM-03H-01 says *any*).
+
+    An exploratory claim would have been the card's free space, so the
+    number itself could not have poisoned the totals -- but it is still
+    what the refusal reports, and one rule is easier to reason about
+    than a rule with a mode-shaped hole in it.
+    """
+    ledger = _ledger()
+    for value in (float("nan"), 0, -1, "lots"):
+        refusal = ledger.reserve("probe", value, exploratory=True)
+        assert isinstance(refusal, Refusal), f"exploratory {value!r} was granted"
+        assert str(value) in refusal.reason, refusal.reason
+        assert ledger.held_mb() == 0.0
+        _check(ledger)
+    # The demand production actually sends for an exploratory start.
+    grant = ledger.reserve("probe", ledger.capacity_mb, exploratory=True)
+    assert isinstance(grant, Grant) and grant.exploratory
+    _check(ledger)
+
+
+def test_rebuild_skips_unusable_claims():
+    """A row with an unusable claim is skipped *and logged* (MEM-03H-01).
+
+    One NaN row would poison the rebuilt totals -- exactly the ledger
+    the startup code exists to reproduce.
+    """
+    records: list[str] = []
+
+    class _Recorder(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    handler = _Recorder()
+    module_logger = logging.getLogger("backend.application.memory_ledger")
+    module_logger.addHandler(handler)
+    try:
+        ledger = _ledger()
+        ledger.rebuild_from_rows([
+            {"owner": "graph:1", "mb": 5000.0},
+            {"owner": "graph:nan", "mb": float("nan")},
+            {"owner": "graph:neg", "mb": -5.0},
+            {"owner": "graph:zero", "mb": 0.0},
+            {"owner": "graph:lots", "mb": "lots"},
+            {"owner": "graph:2", "mb": 2000.0},
+        ])
+    finally:
+        module_logger.removeHandler(handler)
+    assert ledger.held_mb() == 7000.0, ledger.held_mb()
+    for skipped in ("graph:nan", "graph:neg", "graph:zero", "graph:lots"):
+        assert ledger.held_by(skipped) == 0.0, skipped
+        assert skipped in "\n".join(records), f"{skipped} was skipped silently"
+    assert "graph:1" not in "\n".join(records), "a good row was complained about"
+    _check(ledger)
+
+
+#: Every operation shape, over arbitrary floats: the invariant this
+#: property defends (held never exceeds capacity, totals stay finite)
+#: is the whole admission contract -- the unit tests above pin the
+#: known-bad values, this pins all the others at once.
+_operations = st.lists(
+    st.tuples(
+        st.sampled_from(("reserve", "exploratory", "release", "rename")),
+        st.sampled_from(("graph:1", "graph:2", "graph:pending:x")),
+        st.sampled_from(("graph:1", "graph:2", "task:9")),
+        st.floats(allow_nan=True, allow_infinity=True),
+    ),
+    min_size=1,
+    max_size=30,
+)
+
+
+@given(_operations)
+@settings(max_examples=200, deadline=None)
+def test_random_sequences_stay_within_capacity(ops) -> None:
+    """Arbitrary reserve/release/rename sequences never overcommit."""
+    ledger = _ledger()
+    for kind, owner, other, demand in ops:
+        if kind == "reserve":
+            ledger.reserve(owner, demand)
+        elif kind == "exploratory":
+            ledger.reserve(owner, demand, exploratory=True)
+        elif kind == "release":
+            ledger.release(owner)
+        else:
+            ledger.rename(owner, other)
+        _check(ledger)
+
+
 
 def main() -> None:
     """Run every test in this file, listed by name.
@@ -330,6 +511,11 @@ def main() -> None:
         test_concurrent_reserves_exact_fit,
         test_grant_is_grant,
         test_refusal_breakdown,
+        test_reserve_refuses_unusable_demands,
+        test_bad_demand_refusal_breakdown_is_json,
+        test_exploratory_also_refuses_unusable_demands,
+        test_rebuild_skips_unusable_claims,
+        test_random_sequences_stay_within_capacity,
     ]
     for test in tests:
         test()

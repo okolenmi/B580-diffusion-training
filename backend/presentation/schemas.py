@@ -7,10 +7,11 @@ change never silently reshapes responses.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..application.dto import (
     DatasetDetail,
@@ -877,22 +878,66 @@ class MemorySettingsIn(BaseModel):
     reads our own snapshots -- this is the caller-facing edge: an unknown
     setting or a value that is neither a number nor ``"auto"`` is a 422
     naming the offender, not silently defaulted.
+
+    MEM-03H-01, API layer: a budget must be finite, never a boolean
+    (``True`` is an ``int`` in Python and would be read as 1 MB), never
+    negative, never above zero-less -- and the range must be ordered.
+    ``vram_max_mb: -9000`` used to be accepted with a 201 and made the
+    ledger report 19,592 MB free on an 11,192 MB card.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    vram_min_mb: float = 0.0
+    vram_min_mb: float = Field(0.0, ge=0, allow_inf_nan=False)
     vram_max_mb: float | str = AUTO
     strict: bool = True
     policy: str = "demand_driven"
     ram_max_mb: float | str = AUTO
 
-    @field_validator("vram_max_mb", "ram_max_mb")
+    @field_validator("vram_min_mb", "vram_max_mb", "ram_max_mb", mode="before")
+    @classmethod
+    def _no_boolean_budget(cls, value: Any) -> Any:
+        # Before coercion: pydantic's lax float would turn True into 1.0
+        # without complaint, and a budget of "1 MB" is not what the
+        # caller asked for anyway.
+        if isinstance(value, bool):
+            raise ValueError(f"{value!r} is a boolean, not a memory budget")
+        return value
+
+    @field_validator("vram_max_mb", "ram_max_mb", mode="before")
     @classmethod
     def _number_or_auto(cls, value: Any) -> Any:
-        if isinstance(value, str) and value != AUTO:
-            raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+        # Before coercion, so the check sees exactly what was sent: a
+        # ceiling of 0 says the graph may use nothing ("auto" is how
+        # you ask for everything free), and nan/inf compare as if they
+        # were real sizes.
+        if isinstance(value, str):
+            if value != AUTO:
+                raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+            return value
+        if isinstance(value, (int, float)):
+            try:
+                number = float(value)
+            except OverflowError:
+                # An int past the float range (10**400): pydantic turns
+                # ValueError into the 422, but would let OverflowError
+                # escape as a 500.
+                raise ValueError(
+                    f"{value!r} is too large to be a device size"
+                ) from None
+            if not math.isfinite(number) or number <= 0:
+                raise ValueError(f"{value!r} is not a finite number above zero")
+            return value
         return value
+
+    @model_validator(mode="after")
+    def _min_within_max(self) -> MemorySettingsIn:
+        if isinstance(self.vram_max_mb, float) and self.vram_min_mb > self.vram_max_mb:
+            raise ValueError(
+                f"vram_min_mb ({self.vram_min_mb}) exceeds vram_max_mb "
+                f"({self.vram_max_mb})"
+            )
+        return self
 
     def to_domain(self) -> MemorySettings:
         return MemorySettings(
@@ -912,22 +957,65 @@ class MemoryOverridesIn(BaseModel):
     the 422 -- a typo in an override must not silently become "use the
     graph's default", because the caller asked to change exactly that
     value.
+
+    MEM-03H-01: the same number checks as ``MemorySettingsIn`` -- an
+    override arrives through the same endpoint and would otherwise be
+    the softer way into the ledger with a bad value.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    vram_min_mb: float | None = None
+    vram_min_mb: float | None = Field(None, ge=0, allow_inf_nan=False)
     vram_max_mb: float | str | None = None
     strict: bool | None = None
     policy: str | None = None
     ram_max_mb: float | str | None = None
 
-    @field_validator("vram_max_mb", "ram_max_mb")
+    @field_validator("vram_min_mb", "vram_max_mb", "ram_max_mb", mode="before")
+    @classmethod
+    def _no_boolean_budget(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError(f"{value!r} is a boolean, not a memory budget")
+        return value
+
+    @field_validator("vram_max_mb", "ram_max_mb", mode="before")
     @classmethod
     def _number_or_auto(cls, value: Any) -> Any:
-        if isinstance(value, str) and value != AUTO:
-            raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+        # None means "keep the graph's value" and must fall through to
+        # the union; everything else is a value the caller is changing.
+        if value is None:
+            return value
+        if isinstance(value, str):
+            if value != AUTO:
+                raise ValueError(f"{value!r} is not a number or {AUTO!r}")
+            return value
+        if isinstance(value, (int, float)):
+            try:
+                number = float(value)
+            except OverflowError:
+                # An int past the float range (10**400): pydantic turns
+                # ValueError into the 422, but would let OverflowError
+                # escape as a 500.
+                raise ValueError(
+                    f"{value!r} is too large to be a device size"
+                ) from None
+            if not math.isfinite(number) or number <= 0:
+                raise ValueError(f"{value!r} is not a finite number above zero")
+            return value
         return value
+
+    @model_validator(mode="after")
+    def _min_within_max(self) -> MemoryOverridesIn:
+        maximum = self.vram_max_mb
+        if (
+            self.vram_min_mb is not None
+            and isinstance(maximum, float)
+            and self.vram_min_mb > maximum
+        ):
+            raise ValueError(
+                f"vram_min_mb ({self.vram_min_mb}) exceeds vram_max_mb ({maximum})"
+            )
+        return self
 
     def as_overrides(self) -> dict:
         """Only the keys that were named -- absent means "keep the
@@ -946,6 +1034,35 @@ class GraphRunIn(BaseModel):
     edges: list[GraphEdgeIn] = Field(default_factory=list)
     memory: MemorySettingsIn | None = None
     memory_overrides: MemoryOverridesIn | None = None
+
+    @model_validator(mode="after")
+    def _override_stays_in_range(self) -> GraphRunIn:
+        """The *merged* request must be ordered, not just each half.
+
+        ``memory`` and ``memory_overrides`` are checked apart, but the
+        domain sees their merge: an override that lifts the floor above
+        the graph's ceiling would otherwise reach the use case and die
+        there as a 500 (domain errors escaping a use case are always a
+        bug), instead of here as a 422 naming both numbers.
+        """
+        if self.memory is None or self.memory_overrides is None:
+            return self
+        minimum = (
+            self.memory_overrides.vram_min_mb
+            if self.memory_overrides.vram_min_mb is not None
+            else self.memory.vram_min_mb
+        )
+        maximum = (
+            self.memory_overrides.vram_max_mb
+            if self.memory_overrides.vram_max_mb is not None
+            else self.memory.vram_max_mb
+        )
+        if isinstance(maximum, float) and minimum > maximum:
+            raise ValueError(
+                f"vram_min_mb ({minimum}) exceeds vram_max_mb ({maximum}) "
+                "with the overrides applied"
+            )
+        return self
 
     def to_definition(self) -> GraphDefinition:
         return GraphDefinition(

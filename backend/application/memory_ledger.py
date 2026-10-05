@@ -18,6 +18,7 @@ its size, what is free, what was asked, and what would fit.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 
@@ -37,6 +38,48 @@ DEFAULT_FOREIGN_RESERVE_MB = 1024.0
 DEFAULT_PROCESS_OVERHEAD_MB = 600.0
 
 
+def _bad_demand_reason(demand_mb) -> str | None:
+    """Why this demand cannot be claimed, or None when it can.
+
+    MEM-03H-01, ledger layer -- the third of three independent checks
+    (API 422, domain ValueError, refusal here): ``nan`` used to be
+    granted, which made ``held_mb()`` and ``free_mb()`` NaN, after which
+    ``demand > NaN`` was False and *every* later claim was granted too;
+    ``-9000`` was granted as if it freed space; zero was accepted as a
+    claim. A demand is a size: a finite number, not a boolean, above
+    zero. The reason always names the value (task rule 6).
+    """
+    if isinstance(demand_mb, bool) or not isinstance(demand_mb, (int, float)):
+        return f"asked for {demand_mb!r}, which is not a number"
+    try:
+        number = float(demand_mb)
+    except (OverflowError, ValueError):  # an int too big to be a size
+        return f"asked for {demand_mb!r}, which is too large to be a device size"
+    if not math.isfinite(number) or number <= 0:
+        return (
+            f"asked for {number} MB, which is not a finite number above zero"
+        )
+    return None
+
+
+def _asked(demand_mb) -> float | str:
+    """The ask, in the form a refusal is allowed to carry.
+
+    The number when it is one, its repr when it is not: a refusal's
+    breakdown goes into a JSON response, and Starlette serializes with
+    ``allow_nan=False`` -- a breakdown carrying NaN would raise where a
+    409 was owed (the same 500 ``presentation/responses.py`` documents
+    for a frame that carries one).
+    """
+    if isinstance(demand_mb, bool) or not isinstance(demand_mb, (int, float)):
+        return repr(demand_mb)
+    try:
+        number = float(demand_mb)
+    except (OverflowError, ValueError):
+        return repr(demand_mb)
+    return number if math.isfinite(number) else repr(demand_mb)
+
+
 @dataclass(frozen=True, slots=True)
 class Grant:
     """A successful reservation. The child may now use up to `mb` device MB."""
@@ -53,7 +96,10 @@ class Refusal:
     and its size, what is free, what was asked, and what would fit."""
 
     owner: str
-    requested_mb: float
+    #: What was asked. A number when the ask was one; its repr when it
+    #: was not (``"nan"``, ``"'lots'"``) -- see ``_asked``, which keeps
+    #: the breakdown JSON-serializable for the response it lands in.
+    requested_mb: float | str
     capacity_mb: float
     foreign_reserve_mb: float
     free_mb: float
@@ -144,9 +190,25 @@ class MemoryLedger:
 
         `exploratory` marks an unknown-demand run that claims all free
         capacity. It is admitted only if nothing else holds the card.
+
+        A demand that is not a finite number above zero is refused
+        whatever the mode (MEM-03H-01), before any state is touched:
+        the reason names the value.
         """
         with self._lock:
             free = self.capacity_mb - self.held_mb()
+
+            bad = _bad_demand_reason(demand_mb)
+            if bad is not None:
+                return Refusal(
+                    owner=owner,
+                    requested_mb=_asked(demand_mb),
+                    capacity_mb=self.capacity_mb,
+                    foreign_reserve_mb=self._foreign_reserve_mb,
+                    free_mb=free,
+                    holders={h.owner: h.mb for h in self._holders.values()},
+                    reason=bad,
+                )
 
             if exploratory:
                 # An exploratory run claims all free capacity, but only if
@@ -252,10 +314,24 @@ class MemoryLedger:
         Each row is a dict with `owner` and `mb` keys. The ledger holds no
         state of its own beyond the lock; on startup it is rebuilt from
         rows of adopted/running children.
+
+        A row whose claim is not a finite number above zero is skipped
+        and logged (MEM-03H-01): such a claim never held anything worth
+        counting, and rebuilding it would poison the very totals this
+        rebuild exists to reproduce -- one NaN row and every later
+        admission decision is made against a NaN ledger.
         """
         with self._lock:
             self._holders.clear()
             for row in rows:
                 owner = row["owner"]
-                mb = float(row["mb"])
-                self._holders[owner] = _Holder(owner=owner, mb=mb)
+                mb = row["mb"]
+                bad = _bad_demand_reason(mb)
+                if bad is not None:
+                    logger.warning(
+                        "rebuild: skipping the claim of %r -- %s "
+                        "(a row that states no usable claim holds nothing)",
+                        owner, bad,
+                    )
+                    continue
+                self._holders[owner] = _Holder(owner=owner, mb=float(mb))

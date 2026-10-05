@@ -71,6 +71,14 @@ class SaveGraph:
                     + "; known: "
                     + ", ".join(sorted(MemorySettings().as_dict()))
                 )
+            try:
+                # Values, not just keys (MEM-03H-01): saving stores the
+                # block verbatim, so this is the moment a bad budget can
+                # be refused by name -- before it is a graph file that
+                # fails to load later.
+                MemorySettings.from_dict(memory)
+            except ValueError as exc:
+                raise InvalidQueryError(f"graph.memory: {exc}") from exc
         stamp = payload.get("format")
         if not isinstance(stamp, int) or isinstance(stamp, bool):
             payload["format"] = GRAPH_FORMAT

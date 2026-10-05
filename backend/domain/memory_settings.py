@@ -9,11 +9,49 @@ Bumped the graph format to 2; format 1 loads with defaults.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
 #: Sentinel for "use everything that is free".
 AUTO = "auto"
+
+
+def _budget(name: str, value, *, allow_auto: bool, zero_ok: bool) -> None:
+    """Validate one memory budget number (MEM-03H-01, domain layer).
+
+    The same conditions the API refuses, enforced here so a stored or
+    hand-edited graph file cannot smuggle a bad number past the edge:
+    a boolean (``True`` is an ``int`` in Python), a non-number, a
+    non-finite number, a negative one -- and, for a ceiling, zero.
+
+    ``zero_ok`` separates the two floors this pair of settings needs: a
+    *minimum* of 0 means "no floor" (it is the default), a *ceiling* of
+    0 says the graph may use nothing and is a mistake -- ``auto`` is how
+    a caller asks for everything free.
+    """
+    if isinstance(value, str):
+        if allow_auto and value == AUTO:
+            return
+        suffix = f" or {AUTO!r}" if allow_auto else ""
+        raise ValueError(f"{name}: {value!r} is not a number{suffix}")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name}: {value!r} is not a number")
+    try:
+        number = float(value)
+    except OverflowError:
+        # An int past the float range (10**400) is not a device size;
+        # left uncaught it would escape as a 500 from the save edge.
+        raise ValueError(
+            f"{name}: {value!r} is too large to be a device size"
+        ) from None
+    if not math.isfinite(number):
+        raise ValueError(f"{name}: {value!r} is not a finite number")
+    if zero_ok:
+        if number < 0:
+            raise ValueError(f"{name}: {number} MB is negative")
+    elif number <= 0:
+        raise ValueError(f"{name}: {number} MB is not above zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +71,24 @@ class MemorySettings:
     policy: str = "demand_driven"
     ram_max_mb: float | str = AUTO
 
+    def __post_init__(self) -> None:
+        """The numbers are checked on every construction, including the
+        ones that arrive through ``from_dict`` (a stored or hand-edited
+        graph file) or through ``_with_overrides`` (a request's merge).
+
+        MEM-03H-01, domain layer: independent of the API's 422, so a
+        bad value that never went through the endpoint still raises
+        here instead of reaching the ledger.
+        """
+        _budget("vram_min_mb", self.vram_min_mb, allow_auto=False, zero_ok=True)
+        _budget("vram_max_mb", self.vram_max_mb, allow_auto=True, zero_ok=False)
+        _budget("ram_max_mb", self.ram_max_mb, allow_auto=True, zero_ok=False)
+        if not isinstance(self.vram_max_mb, str) and self.vram_min_mb > self.vram_max_mb:
+            raise ValueError(
+                f"vram_min_mb ({self.vram_min_mb}) exceeds vram_max_mb "
+                f"({self.vram_max_mb})"
+            )
+
     def as_dict(self) -> dict:
         return {
             "vram_min_mb": self.vram_min_mb,
@@ -44,11 +100,13 @@ class MemorySettings:
 
     @classmethod
     def from_dict(cls, raw: dict | None) -> MemorySettings:
-        """Parse from a stored dict. Missing keys get defaults."""
+        """Parse from a stored dict. Missing keys get defaults; present
+        keys must be numbers that mean something -- ``__post_init__``
+        refuses the bad ones by name rather than coercing them."""
         if raw is None:
             return cls()
         return cls(
-            vram_min_mb=float(raw.get("vram_min_mb", 0.0)),
+            vram_min_mb=raw.get("vram_min_mb", 0.0),
             vram_max_mb=raw.get("vram_max_mb", AUTO),
             strict=bool(raw.get("strict", True)),
             policy=str(raw.get("policy", "demand_driven")),
@@ -136,8 +194,11 @@ def _with_overrides(
     for key, value in overrides.items():
         if key in merged:
             merged[key] = value
+    # No coercion here on purpose: MemorySettings.__post_init__ judges
+    # exactly what the request asked for (a True that float() would have
+    # turned into 1.0 is a boolean, not a budget).
     return MemorySettings(
-        vram_min_mb=float(merged["vram_min_mb"]),
+        vram_min_mb=merged["vram_min_mb"],
         vram_max_mb=merged["vram_max_mb"],
         strict=bool(merged["strict"]),
         policy=str(merged["policy"]),

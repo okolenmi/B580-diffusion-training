@@ -1510,6 +1510,68 @@ def test_peak_filing_guards() -> None:
     check(True, "a store that raises cannot abort the watcher (it logged)")
 
 
+def test_bad_budget_numbers_never_reach_the_ledger() -> None:
+    print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
+    repo = _graph_repo(root)
+    services = build_services(project_root=root, graph_executions=repo)
+    app = create_app(services)
+    ledger = services.memory_ledger()
+    check(ledger is not None, "fixture: the provider builds a ledger")
+    assert ledger is not None
+    check(
+        ledger.free_mb() == ledger.capacity_mb,
+        "fixture: the card starts free",
+    )
+
+    # The reproduction seeds, through the real endpoint (MEM-03H-01):
+    # -9000 used to be a 201 that made the ledger report 19,592 MB free
+    # on an 11,192 MB card. The inverted pair is the model-level rule,
+    # whose 422 loc is the block -- the field names ride in the message.
+    for memory, field in (
+        ({"vram_max_mb": -9000}, "vram_max_mb"),
+        ({"vram_min_mb": -1}, "vram_min_mb"),
+        ({"vram_max_mb": True}, "vram_max_mb"),
+        ({"vram_max_mb": float("nan")}, "vram_max_mb"),
+        ({"vram_max_mb": 0}, "vram_max_mb"),
+        ({"vram_max_mb": 10**400}, "vram_max_mb"),
+        ({"vram_min_mb": 5000, "vram_max_mb": 4096}, "vram_min_mb"),
+    ):
+        status, _, body = asgi_request(
+            app,
+            "/api/v1/graphs/run",
+            method="POST",
+            json_body={"nodes": [], "memory": memory},
+        )
+        check(
+            status == 422 and field in json.dumps(body),
+            f"{memory} -> 422 naming {field} (got {status}: {body})",
+        )
+
+    # The override path is the same door (the seed used it too).
+    status, _, body = asgi_request(
+        app,
+        "/api/v1/graphs/run",
+        method="POST",
+        json_body={"nodes": [], "memory_overrides": {"vram_max_mb": -9000}},
+    )
+    check(
+        status == 422 and "vram_max_mb" in json.dumps(body),
+        f"overrides vram_max_mb=-9000 -> 422 (got {status}: {body})",
+    )
+
+    # What a rejection must leave behind: nothing.
+    check(
+        ledger.free_mb() == ledger.capacity_mb,
+        f"every rejected submission claimed nothing: free {ledger.free_mb()} "
+        f"== capacity {ledger.capacity_mb}",
+    )
+    check(
+        len(repo.list_unfinished()) == 0,
+        "and not one execution row was written",
+    )
+
+
 def main() -> None:
     test_refused_run_holds_nothing_and_names_the_holder()
     test_crash_between_reserve_and_spawn_releases_then_converges()
@@ -1525,6 +1587,7 @@ def main() -> None:
     test_child_reported_peaks_land_in_the_store()
     test_reconcile_drain_files_peaks()
     test_peak_filing_guards()
+    test_bad_budget_numbers_never_reach_the_ledger()
     finish()
 
 

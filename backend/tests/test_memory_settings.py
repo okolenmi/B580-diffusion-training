@@ -349,6 +349,180 @@ def test_run_in_rejects_unknown_override_key():
         raise AssertionError("an unknown memory override key was accepted")
 
 
+# -- MEM-03H-01: unusable numbers -------------------------------------------
+#
+# The seeds came from the reproduction: through the real endpoint,
+# memory={"vram_max_mb": -9000} was a 201 and the ledger then reported
+# 19,592 MB free on an 11,192 MB card. Three independent layers each
+# hold on their own -- API 422 here, domain ValueError below, and the
+# ledger's own refusal in test_memory_ledger.py.
+
+#: Every value that must never become a budget, on a ceiling field.
+#: The last one is an int past the float range: it used to escape as an
+#: OverflowError -- a 500 -- from every layer but the ledger.
+_BUDGET_SEEDS = (
+    -1, 0, float("nan"), float("inf"), float("-inf"), True, "lots", 10**400,
+)
+#: On the *floor*: zero means "no floor" and is the field's own default,
+#: so it stays valid everywhere it means that.
+_MIN_SEEDS = (
+    -1, float("nan"), float("inf"), float("-inf"), True, "lots", 10**400,
+)
+
+
+def test_run_in_rejects_unusable_budgets():
+    """API layer: each unusable value is a 422 naming the field."""
+    from backend.presentation.schemas import GraphRunIn, MemoryOverridesIn
+
+    for field, seeds in (
+        ("vram_min_mb", _MIN_SEEDS),
+        ("vram_max_mb", _BUDGET_SEEDS),
+        ("ram_max_mb", _BUDGET_SEEDS),
+    ):
+        for value in seeds:
+            try:
+                GraphRunIn(nodes=[], memory={field: value})
+            except ValueError as exc:  # pydantic's ValidationError is one
+                assert field in str(exc), (field, value, exc)
+            else:
+                raise AssertionError(f"memory.{field}={value!r} was accepted")
+    # The override path is the same endpoint: the softer way in is not
+    # a way in.
+    for value in _BUDGET_SEEDS:
+        try:
+            GraphRunIn(nodes=[], memory_overrides={"vram_max_mb": value})
+        except ValueError as exc:
+            assert "vram_max_mb" in str(exc), (value, exc)
+        else:
+            raise AssertionError(f"overrides vram_max_mb={value!r} was accepted")
+    try:
+        MemoryOverridesIn(vram_min_mb=-1)
+    except ValueError as exc:
+        assert "vram_min_mb" in str(exc), exc
+    else:
+        raise AssertionError("overrides vram_min_mb=-1 was accepted")
+    # A zero floor is the default and stays valid.
+    body = GraphRunIn(nodes=[], memory={"vram_min_mb": 0})
+    assert body.memory is not None and body.memory.vram_min_mb == 0
+
+
+def test_run_in_rejects_inverted_ranges():
+    """min > max is refused wherever the two halves meet."""
+    from backend.presentation.schemas import GraphRunIn, MemoryOverridesIn
+
+    try:
+        GraphRunIn(nodes=[], memory={"vram_min_mb": 5000, "vram_max_mb": 4096})
+    except ValueError as exc:
+        assert "5000" in str(exc) and "4096" in str(exc), str(exc)
+    else:
+        raise AssertionError("an inverted memory block was accepted")
+    try:
+        MemoryOverridesIn(vram_min_mb=5000, vram_max_mb=4096)
+    except ValueError as exc:
+        assert "5000" in str(exc) and "4096" in str(exc), str(exc)
+    else:
+        raise AssertionError("an inverted override pair was accepted")
+    # The merged view: an override that lifts the floor above the
+    # graph's ceiling would reach the domain and die there as a 500.
+    try:
+        GraphRunIn(
+            nodes=[],
+            memory={"vram_max_mb": 4096},
+            memory_overrides={"vram_min_mb": 5000},
+        )
+    except ValueError as exc:
+        assert "overrides applied" in str(exc), str(exc)
+    else:
+        raise AssertionError("an override above the graph's ceiling was accepted")
+    # Ordered combinations still pass, including equal ends and an
+    # "auto" ceiling (nothing numeric to order against).
+    GraphRunIn(nodes=[], memory={"vram_min_mb": 4096, "vram_max_mb": 5000})
+    GraphRunIn(nodes=[], memory={"vram_min_mb": 5000, "vram_max_mb": 5000})
+    GraphRunIn(
+        nodes=[],
+        memory={"vram_max_mb": "auto"},
+        memory_overrides={"vram_min_mb": 9000},
+    )
+
+
+def test_domain_rejects_unusable_budgets():
+    """Domain layer: the same conditions raise ValueError -- straight
+    through the constructor and out of ``from_dict``, so a stored or
+    hand-edited graph file cannot smuggle one past the API."""
+    from backend.domain.memory_settings import MemorySettings
+
+    for field, seeds in (
+        ("vram_min_mb", _MIN_SEEDS),
+        ("vram_max_mb", _BUDGET_SEEDS),
+        ("ram_max_mb", _BUDGET_SEEDS),
+    ):
+        for value in seeds:
+            for build in (
+                lambda f=field, v=value: MemorySettings(**{f: v}),
+                lambda f=field, v=value: MemorySettings.from_dict({f: v}),
+            ):
+                try:
+                    build()
+                except ValueError as exc:
+                    assert field in str(exc), (field, value, exc)
+                else:
+                    raise AssertionError(
+                        f"{field}={value!r} was accepted (direct or from_dict)"
+                    )
+    assert MemorySettings(vram_min_mb=0).vram_min_mb == 0
+
+
+def test_domain_rejects_inverted_range():
+    """The ordering rule holds for constructed and stored settings."""
+    from backend.domain.memory_settings import MemorySettings
+
+    for build in (
+        lambda: MemorySettings(vram_min_mb=5000, vram_max_mb=4096),
+        lambda: MemorySettings.from_dict(
+            {"vram_min_mb": 5000, "vram_max_mb": 4096}
+        ),
+    ):
+        try:
+            build()
+        except ValueError as exc:
+            assert "exceeds" in str(exc), str(exc)
+        else:
+            raise AssertionError("an inverted range was accepted by the domain")
+    # Equal ends are ordered; a minimum above an "auto" ceiling has no
+    # ceiling to exceed (the ordering rule is about numeric maxima).
+    MemorySettings(vram_min_mb=5000, vram_max_mb=5000)
+    MemorySettings(vram_min_mb=9000)
+
+
+def test_save_graph_rejects_unusable_budget_values():
+    """The save edge refuses bad values by name, verbatim storage intact."""
+    from backend.application.errors import InvalidQueryError
+    from backend.application.use_cases.save_graph import SaveGraph
+
+    kept = SaveGraph._payload({
+        "nodes": [], "edges": [], "memory": {"vram_max_mb": 4096.0},
+    })
+    assert kept["memory"] == {"vram_max_mb": 4096.0}  # still verbatim
+    for value in (-9000, 0, float("nan"), True, "lots", 10**400):
+        try:
+            SaveGraph._payload({
+                "nodes": [], "edges": [], "memory": {"vram_max_mb": value},
+            })
+        except InvalidQueryError as exc:
+            assert "vram_max_mb" in str(exc), (value, exc)
+        else:
+            raise AssertionError(f"vram_max_mb={value!r} was saved")
+    try:
+        SaveGraph._payload({
+            "nodes": [], "edges": [],
+            "memory": {"vram_min_mb": 5000, "vram_max_mb": 4096},
+        })
+    except InvalidQueryError as exc:
+        assert "exceeds" in str(exc), str(exc)
+    else:
+        raise AssertionError("an inverted memory range was saved")
+
+
 
 def main() -> None:
     """Run every test in this file, listed by name.
@@ -385,6 +559,11 @@ def main() -> None:
         test_effective_memory_round_trips_storage,
         test_run_in_overrides_keep_only_the_named_keys,
         test_run_in_rejects_unknown_override_key,
+        test_run_in_rejects_unusable_budgets,
+        test_run_in_rejects_inverted_ranges,
+        test_domain_rejects_unusable_budgets,
+        test_domain_rejects_inverted_range,
+        test_save_graph_rejects_unusable_budget_values,
     ]
     for test in tests:
         test()

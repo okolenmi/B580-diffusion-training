@@ -174,3 +174,79 @@ inventories restating the code cannot help but drift.
 - `backend/tests/test_memory_wiring.py` — `_MemoryReportChild` scripted
   frames; its docstring (and `graph_event_stream.py`'s header) are the
   placeholders to update once #4 produces real frames.
+
+---
+
+# What MEM-05/MEM-06 actually landed (added after shipping, 2026-10-05)
+
+The terrain above described greenfield; here is what became of it, so the
+deferred work (#5's adapter and shim) starts from fact rather than from
+this document's expectations.
+
+## Landed
+
+- **MEM-05 #1–#4** (`a3adb80`, `2e911d8`, `47389c5`, `bd21ce1`). `FakeDevice`
+  now exists in `smoke_test_graph_memory.py` (capacity/allocation/overhead, a
+  foreign user that `appears()`); `DeviceContext.free_memory_mb()` and
+  `set_per_process_memory_fraction()` exist (base concrete, XPU/CUDA override).
+  The physical check is `GraphMemory.physical_check(device)`; the backstop is
+  `apply_allocator_backstop()`; telemetry is `MemoryTelemetry` plus
+  `wire_memory_events()`.
+- **MEM-05 #5, layering rule only** (`cb5f832`). The adapter and the
+  `VRAMBudgetControllerNode` shim are still open — see below.
+- **MEM-06** (`3ed14dd`). `GraphMemory.request(mb, why=...)` with
+  `register_resident`, `MemoryRequestDenied`, `Lease`, and the eviction policy.
+
+## Design decisions MEM-06 made that #5's adapter has to know
+
+1. **The consumer search came up empty, as the spec predicted.** The only
+   post-trainer large load in the tree is `nodes/model/vae_decode.py`, and
+   `lora_training_resources.py:132` says of it directly: *"nothing in nodes/
+   builds one yet (only legacy core.vae_decode.VAEDecoder, unused elsewhere in
+   nodes/)"*. The "preview/sample" hits in `nodes/train/managed.py` are
+   per-sample dataset noise, not image decoding. So nothing was migrated, per
+   the spec's own instruction.
+
+2. **`in_use` is this run's accounting, not the device's reading.** Sum of
+   loaded residents' footprints + live leases. The device reading is the
+   physical check's question; a lease asks what *this run* holds, which is
+   what the budget is a budget for.
+
+3. **Eviction order is a 4-part sort key** (`Resident._eviction_key`):
+   `(priority, reload_cost_per_mb, last_used)`, with pinned excluded
+   entirely. Unmeasured reload cost is `inf`, so it sorts **last** — evicting
+   something whose restore cost was never measured would be the guess the
+   ordering exists to avoid.
+
+4. **The reload cost is a real measurement**, timed around the actual
+   `resident.reload()` call and stored on the resident. It is what makes the
+   ordering improve over a run rather than being configured once.
+
+5. **A denial restores everything it moved before raising.** That is what
+   makes the spec's "leaving state unchanged" true rather than aspirational;
+   the test pins that every offload is matched by a reload.
+
+6. **Unknown budget is not a zero budget.** A run with no stated budget has no
+   ceiling to enforce, so `request()` grants with one warning line and evicts
+   nobody — the physical check and the allocator backstop are the enforcement
+   there (task rule 2).
+
+## Why #5's adapter is still open (the actual blockers, not effort)
+
+- **`before_step` and `ensure_loaded` are not the same operation.**
+  `before_step` may move only *offloadable* residents; `ensure_loaded` may move
+  *sacrificable* ones too (a UNet round trip is 2,594 ms against a 2,430 ms
+  step — measured, in `control_handle.py`'s own docstring). `request()` evicts
+  one policy-ordered candidate set with no notion of which caller asked. The
+  adapter needs either two candidate sets on `GraphMemory` or an explicit
+  "demand-driven" flag before it can be thin *and* preserve the three states.
+- **The ceiling must stay the node's own `ResourceBudget`.**
+  `smoke_test_resource_control_strict.py` pins it (600−100→500, and the raise
+  message names `700` and `500`) and reaches into `_coordinator`, `_offloaded`
+  and `_device_ctx`; a run's stated `vram_budget_mb` and admission's
+  `budget_mb` are different numbers, and conflating them changes behaviour for
+  existing trainers.
+- **The shim's "lifted on load" is a backend concern.** The node receives its
+  budget as a runtime *input*, so lifting it into `MemorySettings` at load time
+  means the graph-load path rewriting the block — a behaviour change for
+  existing trainers — and the "warning in the editor" half is MEM-07.

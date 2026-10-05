@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import signal
 import sys
 import threading
@@ -38,6 +39,8 @@ import traceback
 from pathlib import Path
 
 from ..python_floor import require_python
+
+logger = logging.getLogger(__name__)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -142,6 +145,50 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
     return outcome
 
 
+def physical_check_or_refuse(memory, writer, *, device="xpu", device_ctx=None) -> bool:
+    """MEM-05 #2: can the card really give what admission granted?
+
+    The child's check, run after ``GraphMemory`` is built and before
+    the graph runs anything: admission's ledger counts this project's
+    own claims plus a fixed foreign reserve, and neither knows ComfyUI
+    or the desktop -- the driver's real free memory is the only number
+    that sees what they took. ``device`` is the graph file's device
+    (``MemorySettings.device``); ``device_ctx`` is injectable for the
+    scripted tests, which otherwise get a real ``DeviceContext``.
+
+    The child's alone on purpose: an in-process run lives inside the
+    admission process, where the ledger's own check just answered, and
+    MEM-05 scopes this to the child -- where "exit cleanly" means
+    something. True = proceed. A shortfall *becomes the run's outcome*
+    (both numbers plus the party the ledger cannot see) and the child
+    returns 1: the supervisor finalises from the outcome record alone
+    and never reads the exit code, so this is the worker's normal
+    error-outcome exit, not a crash. Unknowns -- the grant never
+    travelled, or the backend cannot report free memory -- are logged
+    and continue: when the question cannot be asked, say so rather than
+    refuse on a zero or pretend it passed.
+    """
+    if device_ctx is None:
+        # Deferred: device.py imports torch, and this module's env vars
+        # (the Intel GPU shader caches) must be set before torch loads.
+        from nodes.components.device import DeviceContext
+
+        device_ctx = DeviceContext.for_device(device)
+    from nodes.memory.graph_memory import CHECK_UNKNOWN
+
+    check = memory.physical_check(device_ctx)
+    if check.refused:
+        message = check.refusal_message()
+        logger.warning("physical memory check refused the run: %s", message)
+        writer.outcome(error=message, results_count=0)
+        return False
+    if check.status == CHECK_UNKNOWN:
+        logger.warning(
+            "physical memory check could not be performed: %s", check.reason
+        )
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     # The floor first, before the signal handlers: a child that cannot run
     # should say why on stderr, where the supervisor's log will keep it.
@@ -203,18 +250,28 @@ def main(argv: list[str] | None = None) -> int:
     writer = ExecutionEventWriter(Path(args.events))
 
     try:
-        # MEM-05 #1: the memory picture first -- before the graph is
-        # read, before discovery, before torch. A GraphMemory built
-        # later could only judge what had already loaded; built here, a
-        # bad number fails the run while nothing is loaded yet (the
-        # except below turns the ValueError into an outcome record,
-        # like any other run outcome).
+        # MEM-05 #1: the memory picture first -- before discovery,
+        # before torch. A GraphMemory built later could only judge what
+        # had already loaded; built here, a bad number fails the run
+        # while nothing is loaded yet (the except below turns the
+        # ValueError into an outcome record, like any other run
+        # outcome). Reading the graph file itself is not "loading": it
+        # is the small definition JSON, and it names the device.
         memory = GraphMemory(
             grant_mb=args.memory_grant_mb, budget_mb=args.memory_budget_mb
         )
         graph = GraphDefinition.from_dict(
             json.loads(Path(args.graph).read_text(encoding="utf-8"))
         )
+        # MEM-05 #2, after the device context exists and before any
+        # node has built anything: if the card cannot actually give the
+        # grant the ledger held, this becomes the outcome and the child
+        # exits cleanly -- before any model is loaded. Unknowns
+        # continue with a warning (see the helper).
+        if not physical_check_or_refuse(
+            memory, writer, device=graph.memory.device
+        ):
+            return 1
         outcome = run_execution(
             graph, writer, cancel, build_runtime(writer, memory=memory)
         )

@@ -67,6 +67,75 @@ def test_memory_settings_from_none():
     assert s.vram_max_mb == AUTO
 
 
+def test_device_is_carried_validated_and_not_overridable():
+    """MEM-05 #2: the graph file names the device the child checks."""
+    from backend.application.errors import InvalidQueryError
+    from backend.application.use_cases.save_graph import SaveGraph
+    from backend.domain.memory_settings import _with_overrides
+    from backend.presentation.schemas import GraphRunIn
+
+    # Default, tolerant decode, round trip: graphs saved before MEM-05
+    # have no device key and get the default like every other missing
+    # field.
+    assert MemorySettings().device == "xpu"
+    assert MemorySettings().as_dict()["device"] == "xpu"
+    assert MemorySettings.from_dict({}).device == "xpu"
+    assert MemorySettings.from_dict({"device": "cuda"}).device == "cuda"
+    again = MemorySettings.from_dict(MemorySettings(device="cuda:1").as_dict())
+    assert again.device == "cuda:1"
+
+    # The domain refuses what a device name cannot be, by name.
+    for bad in ("", "   ", 123, True, None):
+        try:
+            MemorySettings(device=bad)
+        except ValueError as exc:
+            assert "device" in str(exc), (bad, exc)
+        else:
+            raise AssertionError(f"device={bad!r} was accepted")
+
+    # The run edge: carried into the definition the endpoint builds,
+    # and an empty name is a refusal here so it cannot escape the
+    # schema as a domain ValueError (a 500 instead of a 422).
+    body = GraphRunIn(nodes=[], memory={"device": "cuda"})
+    assert body.to_definition().memory.device == "cuda"
+    try:
+        GraphRunIn(nodes=[], memory={"device": " "})
+    except Exception as exc:
+        assert "device" in str(exc), str(exc)
+    else:
+        raise AssertionError("an empty device name was accepted at the edge")
+
+    # Overrides are the five known keys; device rides the graph, not
+    # the request: the child runs the device the graph *file* names,
+    # and an override would live only on the row it never sees.
+    try:
+        GraphRunIn(nodes=[], memory_overrides={"device": "cpu"})
+    except Exception as exc:
+        assert "device" in str(exc), str(exc)
+    else:
+        raise AssertionError("device was overridable per-request")
+    merged = _with_overrides(
+        MemorySettings(device="cuda"), {"device": "cpu", "strict": False}
+    )
+    assert merged.device == "cuda", "the domain's merge drops device too"
+    assert merged.strict is False, "the five known keys still override"
+
+    # The save edge: device is a known setting, and its values are
+    # checked like every budget before the block is stored verbatim.
+    kept = SaveGraph._payload(
+        {"nodes": [], "edges": [], "memory": {"device": "cuda"}}
+    )
+    assert kept["memory"] == {"device": "cuda"}
+    try:
+        SaveGraph._payload(
+            {"nodes": [], "edges": [], "memory": {"device": ""}}
+        )
+    except InvalidQueryError as exc:
+        assert "device" in str(exc), str(exc)
+    else:
+        raise AssertionError("an empty device name was saved")
+
+
 # -- Graph format round-trip -------------------------------------------------
 
 
@@ -538,6 +607,7 @@ def main() -> None:
         test_memory_settings_as_dict,
         test_memory_settings_from_dict,
         test_memory_settings_from_none,
+        test_device_is_carried_validated_and_not_overridable,
         test_graph_format_is_2,
         test_graph_as_dict_has_memory,
         test_graph_from_dict_round_trip,

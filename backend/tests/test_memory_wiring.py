@@ -2086,6 +2086,116 @@ def test_argv_carries_the_memory_numbers_to_the_child() -> None:
     )
 
 
+def test_physical_check_refuses_shortfall_and_continues_on_unknown() -> None:
+    print("-- physical check: shortfall becomes the outcome; unknowns warn "
+          "and continue --")
+    import logging
+
+    from backend.infrastructure.graph_task_worker import (
+        physical_check_or_refuse,
+    )
+    from nodes.memory.graph_memory import GraphMemory
+
+    class _Writer:
+        """The helper's whole surface: outcome records."""
+
+        def __init__(self) -> None:
+            self.outcomes: list[dict] = []
+
+        def outcome(self, **record) -> None:
+            self.outcomes.append(record)
+
+    class _Card:
+        """Injected instead of a real DeviceContext -- the helper's seam."""
+
+        def __init__(self, free_mb) -> None:
+            self.free_mb = free_mb
+
+        def free_memory_mb(self):
+            return self.free_mb
+
+    worker_logger = logging.getLogger(
+        "backend.infrastructure.graph_task_worker"
+    )
+    warnings: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record) -> None:
+            warnings.append(record.getMessage())
+
+    handler = _Capture()
+    worker_logger.addHandler(handler)
+    try:
+        # Shortfall: the card cannot give the grant. One outcome, both
+        # numbers in it, nothing run -- and False, which the child
+        # turns into "outcome written, exit 1" (the supervisor reads
+        # the record and never the exit code).
+        writer = _Writer()
+        proceeded = physical_check_or_refuse(
+            GraphMemory(grant_mb=6300.0), writer, device="xpu",
+            device_ctx=_Card(free_mb=5000.0),
+        )
+        check(proceeded is False, "shortfall: the run does not proceed")
+        check(
+            len(writer.outcomes) == 1,
+            f"exactly one outcome record (got {writer.outcomes!r})",
+        )
+        error = writer.outcomes[0].get("error") or ""
+        check(
+            "6300" in error and "5000" in error,
+            f"the outcome quotes the grant and what is free (got {error!r})",
+        )
+        check(
+            writer.outcomes[0].get("results_count") == 0,
+            f"a refusal runs nothing (got {writer.outcomes[0]!r})",
+        )
+
+        # Room: proceed, record nothing, warn nothing. device="cpu" is
+        # deliberate -- if the injected context did not win the
+        # dispatch, the null backend would answer unknown and warn.
+        warnings.clear()
+        writer = _Writer()
+        proceeded = physical_check_or_refuse(
+            GraphMemory(grant_mb=6300.0), writer, device="cpu",
+            device_ctx=_Card(free_mb=11000.0),
+        )
+        check(proceeded is True, "room: the run proceeds")
+        check(writer.outcomes == [], "no outcome written for a pass")
+        check(warnings == [], f"no warning for a pass (got {warnings!r})")
+
+        # No grant (the argv pairs never arrived): unknown, and said --
+        # not a refusal on a zero, not silence.
+        warnings.clear()
+        writer = _Writer()
+        proceeded = physical_check_or_refuse(
+            GraphMemory(), writer, device="xpu",
+            device_ctx=_Card(free_mb=5000.0),
+        )
+        check(proceeded is True, "no grant: unknowns continue")
+        check(writer.outcomes == [], "no outcome written on unknown")
+        check(
+            any("grant" in warning for warning in warnings),
+            f"the unknown is said as a warning (got {warnings!r})",
+        )
+
+        # The real dispatch with no injected context: device="cpu" ->
+        # the null backend, which has no free-memory notion ->
+        # unknown -> continue with a warning. No hardware involved.
+        warnings.clear()
+        writer = _Writer()
+        proceeded = physical_check_or_refuse(
+            GraphMemory(grant_mb=6300.0), writer, device="cpu",
+        )
+        check(proceeded is True, "a backend with no notion: continues")
+        check(writer.outcomes == [], "no refusal from an unknown answer")
+        check(
+            len(warnings) == 1,
+            f"exactly one warning saying why (got {warnings!r})",
+        )
+    finally:
+        worker_logger.removeHandler(handler)
+
+
 def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
     root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
@@ -2176,6 +2286,7 @@ def main() -> None:
     test_spawn_carries_the_rows_memory_numbers()
     test_a_launch_without_a_row_names_its_unknown_memory_numbers()
     test_argv_carries_the_memory_numbers_to_the_child()
+    test_physical_check_refuses_shortfall_and_continues_on_unknown()
     finish()
 
 

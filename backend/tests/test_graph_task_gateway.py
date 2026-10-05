@@ -261,6 +261,93 @@ def test_child_receives_the_memory_arguments() -> None:
     )
 
 
+def test_the_physical_check_refuses_a_grant_no_card_can_give() -> None:
+    print("\n== the physical check: a grant the card cannot give is an "
+          "outcome, not a crash ==")
+    import torch
+
+    if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        # The check's honest unknown on hardware without an xpu: the
+        # backend answers "no such notion" and the child continues.
+        # That branch is covered by the scripted helper test in
+        # test_memory_wiring.py; the refusal needs a real card.
+        print("  SKIP: no xpu here, so the check cannot answer a number")
+        return
+    # MEM-05 #2, end to end through the real child and the real
+    # mem_get_info: a grant of 1 TB fits on no card in existence, so
+    # the refusal is deterministic -- the B580 has 12,216 MB total.
+    # The numbers in the message are the point (task rule 6): the
+    # grant, what the driver actually had free, and the party outside
+    # the ledger.
+    launch = _launch(
+        13,
+        [_float_node("a", 1.5)],
+        budget_mb=6000.0,
+        grant_mb=1_000_000.0,
+    )
+    pid = GATEWAY.spawn(launch)
+    check(pid > 0, f"a real pid came back (got {pid})")
+
+    events = _collect(ExecutionEventTail(launch.event_path), pid)
+    outcome = next((e for e in events if e.kind is EventKind.OUTCOME), None)
+    check(
+        outcome is not None,
+        f"the refusal is an outcome record (got {events}; "
+        f"{_why_silent(launch)})",
+    )
+    error = str(outcome.payload.get("error")) if outcome else ""
+    check(
+        "1000000" in error,
+        f"quoting the grant (got {error!r})",
+    )
+    check(
+        "is free" in error and "ledger" in error,
+        f"quoting what was free and the party outside the ledger "
+        f"(got {error!r})",
+    )
+    check(
+        [e for e in events if e.kind is not EventKind.OUTCOME] == [],
+        f"nothing else followed it -- the refusal is one record, not a "
+        f"partial run (got {events})",
+    )
+    check(
+        wait_until(lambda: not GATEWAY.is_alive(pid), timeout=30.0),
+        "and the child exits",
+    )
+    log_text = launch.log_path.read_text(
+        encoding="utf-8", errors="replace"
+    ) if launch.log_path.exists() else ""
+    check(
+        "Traceback" not in log_text,
+        f"a refusal exits cleanly: an outcome, no traceback "
+        f"(log tail: {log_text[-300:]!r})",
+    )
+
+
+def test_nothing_in_the_supervision_path_classifies_on_the_exit_code() -> None:
+    print("\n== the exit code is not the outcome ==")
+    # Every error outcome -- the physical refusal above, a graph the
+    # runtime refuses, a bad GraphMemory number -- leaves the worker
+    # with return 1 and its record written, and that is the worker's
+    # *normal* error exit. If supervision ever keyed on the code, the
+    # record would be overruled by "the process failed" and the row
+    # would say "crashed, or a device fault killed it" about a run
+    # that explained itself. The classification comes from the record
+    # alone; this is the guard that keeps it that way (failing here
+    # means someone just made the exit code authoritative).
+    repo = Path(__file__).resolve().parents[2]
+    for relative in (
+        "backend/application/graph_supervisor.py",
+        "backend/infrastructure/graph_task_gateway.py",
+    ):
+        source = (repo / relative).read_text(encoding="utf-8")
+        check(
+            "returncode" not in source,
+            f"{relative} never reads a child's exit code "
+            f"(it would be spelled 'returncode')",
+        )
+
+
 def test_a_refused_graph_is_reported_by_the_child() -> None:
     print("\n== a graph the child refuses is an outcome, not a lost run ==")
     # The runtime re-validates inside execute() before building anything,
@@ -544,6 +631,8 @@ def main() -> None:
     tests = [
         test_child_runs_a_graph_end_to_end,
         test_child_receives_the_memory_arguments,
+        test_the_physical_check_refuses_a_grant_no_card_can_give,
+        test_nothing_in_the_supervision_path_classifies_on_the_exit_code,
         test_a_refused_graph_is_reported_by_the_child,
         test_a_killed_child_reports_no_outcome,
         test_stopping_a_run_actually_stops_it,

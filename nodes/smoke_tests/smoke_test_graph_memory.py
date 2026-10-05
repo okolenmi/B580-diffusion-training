@@ -1,10 +1,14 @@
-"""Checks nodes/memory/graph_memory.py's GraphMemory (MEM-05 #1).
+"""Checks nodes/memory/graph_memory.py's GraphMemory (MEM-05 #1, #2).
 
 The child's memory picture: two numbers, their unknowns named, and the
 validation that keeps a NaN or a negative out of everything downstream.
 The NaN case is the load-bearing one -- a NaN grant would make every
 ``free < grant`` comparison False, so the physical check that follows
 this constructor would pass on garbage instead of refusing it.
+
+Then the check itself (#2): what the pre-load comparison against the
+real card decides in each of its three states -- ok, shortfall, and the
+unknowns that must continue with a warning rather than pass on a zero.
 """
 
 import math
@@ -14,7 +18,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nodes.core import ExecutionContext
-from nodes.memory.graph_memory import GraphMemory
+from nodes.memory.graph_memory import (
+    CHECK_OK,
+    CHECK_SHORTFALL,
+    CHECK_UNKNOWN,
+    GraphMemory,
+)
 
 failures = []
 
@@ -86,12 +95,114 @@ def check_exec_context_carries_memory():
            detail=repr(ExecutionContext().memory))
 
 
+#: Distinguishes "answer from the arithmetic" (default) from a backend
+#: that explicitly answers None.
+_NO_OVERRIDE = object()
+
+
+class FakeDevice:
+    """A driver's-eye view of a card, with room foreign users can take
+    while the test watches -- the gap MEM-05 #2 exists to close.
+
+    Free is what the driver would report: everything, minus what the
+    allocator holds, minus this process's other overhead, minus whatever
+    a foreign process (ComfyUI, the desktop) has claimed and admission
+    knows nothing about.
+    """
+
+    def __init__(self, *, capacity_mb, allocation_mb=0.0, overhead_mb=0.0,
+                 free_override=_NO_OVERRIDE):
+        self.capacity_mb = capacity_mb
+        self.allocation_mb = allocation_mb
+        self.overhead_mb = overhead_mb
+        self.foreign_mb = 0.0
+        self._override = free_override
+
+    def appears(self, foreign_mb):
+        """A foreign process claims room the ledger cannot see."""
+        self.foreign_mb = foreign_mb
+
+    def free_memory_mb(self):
+        if self._override is not _NO_OVERRIDE:
+            return self._override
+        return (self.capacity_mb - self.allocation_mb
+                - self.overhead_mb - self.foreign_mb)
+
+
+def check_physical_ok_when_the_card_has_room():
+    print("[physical check: room for the grant -> ok, not refused]")
+    device = FakeDevice(capacity_mb=12216.0, allocation_mb=500.0,
+                        overhead_mb=400.0)
+    result = GraphMemory(grant_mb=6300.0).physical_check(device)
+    record(result.status == CHECK_OK, "status ok",
+           detail=f"{result.status} ({result.reason})")
+    record(not result.refused, "not refused")
+    record(result.free_mb is not None and result.free_mb == 11316.0,
+           "the free number is carried", detail=repr(result.free_mb))
+
+
+def check_physical_refuses_when_foreign_holds_the_room():
+    print("[physical check: foreign users the ledger cannot see take the "
+          "room -> shortfall, and the message quotes both numbers]")
+    device = FakeDevice(capacity_mb=7500.0, allocation_mb=500.0,
+                        overhead_mb=500.0)
+    device.appears(foreign_mb=400.0)  # free: 7500 - 500 - 500 - 400 = 6100
+    result = GraphMemory(grant_mb=6300.0).physical_check(device)
+    record(result.status == CHECK_SHORTFALL, "status shortfall",
+           detail=f"{result.status} ({result.reason})")
+    record(result.refused, "refused is True")
+    message = result.refusal_message()
+    record("6300" in message, "message quotes the grant", detail=message)
+    record("6100" in message, "message quotes what is free", detail=message)
+    record("foreign" in message, "message names the party outside the ledger",
+           detail=message)
+
+
+def check_physical_boundary_free_equals_grant_passes():
+    print("[physical check: free == grant is the boundary -- exactly "
+          "enough is enough]")
+    device = FakeDevice(capacity_mb=6300.0)
+    result = GraphMemory(grant_mb=6300.0).physical_check(device)
+    record(result.status == CHECK_OK, "exactly enough: ok",
+           detail=f"{result.status} ({result.reason})")
+
+
+def check_physical_unknowns_never_pass_or_refuse_silently():
+    print("[physical check: no grant, no answer, or a garbage answer -> "
+          "unknown with a reason -- never an ok that pretended]")
+    # No grant: the run's numbers never travelled (argv pairs absent).
+    unanswered = GraphMemory().physical_check(
+        FakeDevice(capacity_mb=12216.0))
+    record(unanswered.status == CHECK_UNKNOWN, "no grant: unknown",
+           detail=f"{unanswered.status} ({unanswered.reason})")
+    record(unanswered.reason != "", "the unknown carries a reason",
+           detail=repr(unanswered.reason))
+    # Backend with no such notion (CPU) or a failed query.
+    silent = GraphMemory(grant_mb=6300.0).physical_check(
+        FakeDevice(capacity_mb=12216.0, free_override=None))
+    record(silent.status == CHECK_UNKNOWN, "free is None: unknown",
+           detail=f"{silent.status} ({silent.reason})")
+    # A NaN reading would make free < grant False, i.e. "ok" on garbage.
+    garbage = GraphMemory(grant_mb=6300.0).physical_check(
+        FakeDevice(capacity_mb=12216.0, free_override=float("nan")))
+    record(garbage.status == CHECK_UNKNOWN, "NaN free: unknown, not ok",
+           detail=f"{garbage.status} ({garbage.reason})")
+    for name, result in (("no grant", unanswered), ("free None", silent),
+                         ("NaN free", garbage)):
+        record(not result.refused,
+               f"{name}: not refused (refusal needs both numbers)")
+
+
 def main():
     check_stores_both_numbers()
     check_absent_is_unknown_not_zero()
     check_rejects_bad_numbers()
     check_nan_cannot_smuggle_through()
     check_exec_context_carries_memory()
+    check_physical_ok_when_the_card_has_room()
+    check_physical_refuses_when_foreign_holds_the_room()
+    check_physical_boundary_free_equals_grant_passes()
+    check_physical_unknowns_never_pass_or_refuse_silently()
 
     print()
     print("=" * 60)

@@ -893,6 +893,11 @@ class MemorySettingsIn(BaseModel):
     strict: bool = True
     policy: str = "demand_driven"
     ram_max_mb: float | str = AUTO
+    #: Which accelerator the graph runs on (MEM-05). Validated at the
+    #: edge for the same reason every budget is: the domain refuses a
+    #: bad name too, and a domain error escaping this layer would be a
+    #: 500 rather than a 422 naming the offender.
+    device: str = "xpu"
 
     @field_validator("vram_min_mb", "vram_max_mb", "ram_max_mb", mode="before")
     @classmethod
@@ -939,6 +944,15 @@ class MemorySettingsIn(BaseModel):
             )
         return self
 
+    @field_validator("device", mode="after")
+    @classmethod
+    def _device_is_a_name(cls, value: str) -> str:
+        # The domain raises on this too; caught here so the caller gets
+        # a 422 with the field named instead of a 500 from below.
+        if not value.strip():
+            raise ValueError(f"{value!r} is not a device name")
+        return value
+
     def to_domain(self) -> MemorySettings:
         return MemorySettings(
             vram_min_mb=self.vram_min_mb,
@@ -946,6 +960,7 @@ class MemorySettingsIn(BaseModel):
             strict=self.strict,
             policy=self.policy,
             ram_max_mb=self.ram_max_mb,
+            device=self.device,
         )
 
 
@@ -957,6 +972,12 @@ class MemoryOverridesIn(BaseModel):
     the 422 -- a typo in an override must not silently become "use the
     graph's default", because the caller asked to change exactly that
     value.
+
+    MEM-05: ``device`` is deliberately not one of the overridable keys.
+    The child runs the device the *graph file* names; an override would
+    live only on the row, which the child never sees -- so the key is
+    refused here and the domain's merge drops it too, rather than
+    being accepted into a value nothing could honour.
 
     MEM-03H-01: the same number checks as ``MemorySettingsIn`` -- an
     override arrives through the same endpoint and would otherwise be

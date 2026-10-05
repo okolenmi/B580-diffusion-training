@@ -63,6 +63,11 @@ class MemorySettings:
     "everything that is free". `strict` (default True) means exceeding the
     budget is a bug in a node, not a condition to train through.
     `ram_max_mb` is carried and validated now, enforced later.
+    `device` names the accelerator this graph runs on -- carried and
+    validated now, and read by the child's physical check (MEM-05) to
+    know which card to ask; ``for_device``'s own dispatch decides what an
+    unfamiliar name means (an unknown backend answers "no such notion",
+    never a fabricated number).
     """
 
     vram_min_mb: float = 0.0
@@ -70,6 +75,7 @@ class MemorySettings:
     strict: bool = True
     policy: str = "demand_driven"
     ram_max_mb: float | str = AUTO
+    device: str = "xpu"
 
     def __post_init__(self) -> None:
         """The numbers are checked on every construction, including the
@@ -88,6 +94,12 @@ class MemorySettings:
                 f"vram_min_mb ({self.vram_min_mb}) exceeds vram_max_mb "
                 f"({self.vram_max_mb})"
             )
+        # The device is a name, not a number: a bool is not one (and
+        # would be one to a `str(...)` coercion), and an empty or
+        # whitespace-only string dispatches to the null context, which
+        # would quietly turn the physical check into no check at all.
+        if not isinstance(self.device, str) or not self.device.strip():
+            raise ValueError(f"device: {self.device!r} is not a device name")
 
     def as_dict(self) -> dict:
         return {
@@ -96,13 +108,16 @@ class MemorySettings:
             "strict": self.strict,
             "policy": self.policy,
             "ram_max_mb": self.ram_max_mb,
+            "device": self.device,
         }
 
     @classmethod
     def from_dict(cls, raw: dict | None) -> MemorySettings:
         """Parse from a stored dict. Missing keys get defaults; present
         keys must be numbers that mean something -- ``__post_init__``
-        refuses the bad ones by name rather than coercing them."""
+        refuses the bad ones by name rather than coercing them.
+        ``device`` is absent from every graph saved before MEM-05 and
+        defaults like every other tolerant decode here."""
         if raw is None:
             return cls()
         return cls(
@@ -111,6 +126,7 @@ class MemorySettings:
             strict=bool(raw.get("strict", True)),
             policy=str(raw.get("policy", "demand_driven")),
             ram_max_mb=raw.get("ram_max_mb", AUTO),
+            device=raw.get("device", "xpu"),
         )
 
 
@@ -189,10 +205,16 @@ def _with_overrides(
     """The graph's settings with the execution request's overrides
     applied. Unknown override keys are ignored, like every other
     tolerant decoder here; the five known keys keep the coercions
-    `MemorySettings` expects."""
+    `MemorySettings` expects. ``device`` is deliberately not among them
+    (sixth key or not): the child runs the device the *graph file*
+    names, and an override would live only on the row the child never
+    sees -- so a ``device`` key in overrides is dropped here exactly
+    like a typo, and the API refuses it with a 422 on the way in
+    (``MemoryOverridesIn`` forbids extra keys)."""
     if not overrides:
         return settings
     merged = settings.as_dict()
+    merged.pop("device", None)
     for key, value in overrides.items():
         if key in merged:
             merged[key] = value
@@ -205,6 +227,7 @@ def _with_overrides(
         strict=bool(merged["strict"]),
         policy=str(merged["policy"]),
         ram_max_mb=merged["ram_max_mb"],
+        device=settings.device,
     )
 
 
@@ -226,6 +249,8 @@ def effective_memory(
     `request_overrides` may carry `vram_min_mb`, `vram_max_mb`, `strict`,
     `policy`, `ram_max_mb` -- the execution request may override the
     graph's settings, so one saved graph can run with different budgets.
+    `device` is deliberately not among them (MEM-05): it is the graph's
+    own property, persisted in the graph file the child reads.
 
     `peak_record` is the peak store's current contents (fingerprint key ->
     peak MB). `fingerprint_key` is this graph's fingerprint key. If the

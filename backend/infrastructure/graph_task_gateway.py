@@ -256,6 +256,11 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
                 graph = GraphDefinition.from_dict(
                     json.loads(Path(launch.graph_path).read_text(encoding="utf-8"))
                 )
+                # MEM-05 #2's physical check is deliberately *not*
+                # called here: it is the child's (the spec scopes it to
+                # the worker, where "exit cleanly" means a process
+                # ending), and this path runs inside the admission
+                # process, where the ledger's own check just answered.
                 make = self._runtime_factory or (
                     lambda w: build_runtime(w, self._registry, memory=memory)
                 )

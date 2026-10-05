@@ -34,6 +34,53 @@ constructor.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+
+#: Physical-check outcomes (MEM-05 #2). Three named states, not a
+#: bool: "unknown" is a thing that happened (and gets said), not the
+#: absence of an answer.
+CHECK_OK = "ok"
+CHECK_SHORTFALL = "shortfall"
+CHECK_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class PhysicalCheck:
+    """What the pre-load comparison against the real card found.
+
+    Carries both numbers whenever either exists, because a refusal the
+    caller cannot quote numbers at (task rule 6) is just a "no".
+    """
+
+    #: One of the ``CHECK_*`` constants.
+    status: str
+    #: The claim admission held, or None when this run's numbers never
+    #: travelled to the child.
+    grant_mb: float | None
+    #: What the driver said was free, or None when the backend has no
+    #: such notion (CPU) or the query failed.
+    free_mb: float | None
+    #: Why the status is ``CHECK_UNKNOWN``; "" otherwise.
+    reason: str = ""
+
+    @property
+    def refused(self) -> bool:
+        return self.status == CHECK_SHORTFALL
+
+    def refusal_message(self) -> str:
+        """The outcome text for a shortfall -- only meaningful when
+        ``refused``, which by construction means both numbers exist.
+
+        A refusal the caller cannot quote numbers at (task rule 6) is
+        just a "no", so the message always carries the grant, what was
+        actually free, and the party admission's ledger structurally
+        cannot see."""
+        return (
+            f"memory: the card cannot give this run its granted "
+            f"{self.grant_mb} MB -- only {self.free_mb} MB is free "
+            f"(a foreign process such as ComfyUI or the desktop is not "
+            f"in the ledger)"
+        )
 
 
 def _size(name: str, value) -> float | None:
@@ -86,3 +133,43 @@ class GraphMemory:
     def budget_mb(self) -> float | None:
         """The allocator MB this process may use, or ``None`` (unknown)."""
         return self._budget_mb
+
+    def physical_check(self, device) -> PhysicalCheck:
+        """MEM-05 #2: can the card actually give what admission granted?
+
+        Run after the device context exists and before anything loads.
+        ``device`` is anything with ``free_memory_mb()`` -- the real
+        ``DeviceContext`` or a fake -- because admission's ledger knows
+        this project's own claims and nothing at all about foreign
+        users (ComfyUI, the desktop), and this comparison is the only
+        place that gap is closed.
+
+        Unknown, not guessed, on either side: no grant (this run's
+        numbers never travelled) or no answer from the backend (CPU, a
+        failed query) means no comparison exists -- the status says so
+        and the caller continues with a warning, rather than trusting a
+        zero that would either refuse everything or pass everything.
+        A non-finite reading is the same unknown: NaN would make
+        ``free < grant`` False, i.e. pass on garbage.
+        """
+        raw_free = device.free_memory_mb()
+        if self._grant_mb is None:
+            return PhysicalCheck(
+                CHECK_UNKNOWN, None,
+                None if raw_free is None else float(raw_free),
+                reason="this run's grant was never supplied",
+            )
+        if raw_free is None:
+            return PhysicalCheck(
+                CHECK_UNKNOWN, self._grant_mb, None,
+                reason="this device cannot report free memory",
+            )
+        free = float(raw_free)
+        if not math.isfinite(free):
+            return PhysicalCheck(
+                CHECK_UNKNOWN, self._grant_mb, None,
+                reason=f"the device reported a non-finite free reading ({raw_free!r})",
+            )
+        if free < self._grant_mb:
+            return PhysicalCheck(CHECK_SHORTFALL, self._grant_mb, free)
+        return PhysicalCheck(CHECK_OK, self._grant_mb, free)

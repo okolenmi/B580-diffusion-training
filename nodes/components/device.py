@@ -14,10 +14,13 @@ snapshot gap.
 
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def allocator_conf_env() -> str:
@@ -148,6 +151,25 @@ class DeviceContext(ABC):
         it can surface the mismatch instead of staying silent about it --
         see VRAMBudgetControllerNode.build()'s own use of this."""
 
+    def free_memory_mb(self) -> float | None:
+        """What the *driver* can still give, in MB -- mem_get_info's
+        free half, i.e. including the room other processes hold, which
+        is exactly what this process's own allocator bookkeeping
+        (memory_stats) can never see. None when this backend has no
+        such notion (CPU) or the query fails.
+
+        Not abstract on purpose (MEM-05): every DeviceContext subclass
+        in this repo, fake or real, predates this method, and making it
+        abstract would break each scripted test context that exists to
+        stand in for a *different* method. The base answer is the
+        honest one -- unknown -- and the two real backends override it.
+
+        What this exists for: the physical check before a run loads
+        anything (MEM-05 #2) -- admission's ledger knows this project's
+        claims, not ComfyUI or the desktop, and this is the only number
+        that sees what they took."""
+        return None
+
     @staticmethod
     def for_device(device) -> "DeviceContext":
         """Factory, called once at pipeline-construction time -- not a
@@ -196,6 +218,22 @@ class _XPUDeviceContext(DeviceContext):
         except Exception:
             return None
 
+    def free_memory_mb(self) -> float | None:
+        if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            return None
+        if not hasattr(torch.xpu, "mem_get_info"):
+            # Older build without the query: unknown, never a zero that
+            # would read as "the card is full".
+            return None
+        try:
+            free_b, _total_b = torch.xpu.mem_get_info()
+            return free_b / (1024 ** 2)
+        except Exception as exc:  # noqa: BLE001 -- the caller's unknown
+            # branch is the outcome; say why here, once per run, rather
+            # than degrade silently into a check that "passed".
+            logger.warning("torch.xpu.mem_get_info could not be read: %s", exc)
+            return None
+
 
 class _CUDADeviceContext(DeviceContext):
     """Same three operations for CUDA, reachable when for_device()
@@ -225,6 +263,18 @@ class _CUDADeviceContext(DeviceContext):
         try:
             return torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / (1024 ** 2)
         except Exception:
+            return None
+
+    def free_memory_mb(self) -> float | None:
+        if not torch.cuda.is_available():
+            return None
+        if not hasattr(torch.cuda, "mem_get_info"):
+            return None
+        try:
+            free_b, _total_b = torch.cuda.mem_get_info()
+            return free_b / (1024 ** 2)
+        except Exception as exc:  # noqa: BLE001 -- see the XPU twin
+            logger.warning("torch.cuda.mem_get_info could not be read: %s", exc)
             return None
 
 

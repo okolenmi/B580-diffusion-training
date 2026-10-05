@@ -11,17 +11,21 @@ The B580 has 12,216 MB. A rank-64 LoRA at 1024 px peaks at 7,666 MB
 does not report. Two graphs on one card each believe they are the only
 tenant, each stay under their own ceiling, and together overrun it.
 
-**The ~600 MB overhead figure is not yet confirmed and may be far too
-large.** Measured on this card on 2026-10-05
+**The ~600 MB overhead figure is confirmed, and it is specific to a loaded
+process.** Measured on this card on 2026-10-05
 ([`docs/known-issues/pending-testing.md`](../known-issues/pending-testing.md),
-MEM-08 (b)): driver movement minus allocator movement is **~19 MB** for an
-idle context and **0.0 MB** for a 2,048 MB allocation -- i.e. the overhead
-is a fixed one-time cost of a live context, not a per-allocation tax.
-The remaining measurement (overhead while a real model is loaded and
-training) is what decides whether `DEFAULT_PROCESS_OVERHEAD_MB = 600` is
-honest or ~30x too large, and it is the one item of that protocol still
-unrun. Until it is, 600 stands as a deliberately conservative placeholder
-rather than a measured constant.
+MEM-08 (b)): steady-state overhead during a rank-64 LoRA run at 1024 px is
+**~530 MB** (538.9 / 539.0 / 525.0 / 530.9 MB across the last four steps,
+from timestamp-paired driver and allocator readings of one run). So
+`DEFAULT_PROCESS_OVERHEAD_MB = 600` stands, ~13% conservative.
+
+The distinction matters and is easy to get backwards: an *idle* context
+overhead is only ~19 MB, and plain contiguous allocations add **0.0 MB** --
+the allocator and driver move together exactly. The ~511 MB difference
+appears only once real weights are resident (model, kernels, shader cache,
+XMP state). A reading taken from an idle process therefore understates this
+constant by more than an order of magnitude; it is the loaded case that
+admission has to reserve for.
 
 The existing `DeviceReservations` (nodes/memory/device_reservations.py) is
 an in-process, `threading.Lock`-protected dict. It cannot coordinate

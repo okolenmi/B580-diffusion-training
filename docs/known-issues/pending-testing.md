@@ -56,7 +56,7 @@ torch.xpu.set_per_process_memory_fraction(0.02)
 torch.zeros(64 * 2**20, dtype=torch.float32, device="xpu")  # raises
 ```
 
-### (b) Per-process overhead: ~20 MB at context creation, ~0 thereafter
+### (b) Per-process overhead: ~19 MB idle, ~530 MB once a model is loaded
 
 Driver movement (`mem_get_info`) minus allocator movement
 (`memory_stats`) is what "overhead" means here:
@@ -64,18 +64,42 @@ Driver movement (`mem_get_info`) minus allocator movement
 | Stage | driver moved | allocator moved | overhead |
 |---|---|---|---|
 | idle context (warmed) | 20.9 MB | 2.0 MB | **18.9 MB** |
-| allocating 2,048 MB | 2,048.0 MB | 2,048.0 MB | **0.0 MB** |
+| allocating 2,048 MB of plain tensors | 2,048.0 MB | 2,048.0 MB | **0.0 MB** |
 | after `empty_cache()` | -2,048.0 MB | -2,050.0 MB | 2.0 MB |
 
-So the overhead is a **fixed one-time cost of a live context (~19 MB)**,
-not a per-allocation tax: once the context exists, the allocator and the
-driver move together exactly.
+For an idle context and for plain contiguous allocations the overhead is a
+**fixed one-time cost of a live context (~19 MB)**, not a per-allocation
+tax: once the context exists, the allocator and the driver move together
+exactly.
 
-**This does not yet settle `DEFAULT_PROCESS_OVERHEAD_MB = 600`.** 600 is
-~30x the idle figure, which may simply be wrong, or may reflect a *loaded*
-process (shaders, kernels, XMP state for a real model) rather than an idle
-one. The measurement that would settle it is (b)-for-a-training-step, below,
-and it is the one item from this protocol still unrun.
+**A loaded training process is a different figure, and much larger.** From
+the archived run `A_after_mon` (rank-64 LoRA, 1024 px, batch 1, 40 steps),
+pairing each step's `reserved_mb` from `steps.jsonl` against the nearest
+`driver_used_mb` sample in `A_after_mon_vram_monitor.jsonl`, minus the
+idle foreign baseline (951.8 MB, sampled before this process was up):
+
+| step | reserved_mb | process driver usage | overhead |
+|---|---|---|---|
+| 36 | 8592.0 | 9130.9 | **538.9 MB** |
+| 37 | 8592.0 | 9131.0 | **539.0 MB** |
+| 38 | 8592.0 | 9117.0 | **525.0 MB** |
+| 39 | 8592.0 | 9122.9 | **530.9 MB** |
+
+So **~530 MB steady-state**, against ADR 0005's "~600 MB" and
+`DEFAULT_PROCESS_OVERHEAD_MB = 600`. The default is therefore sound and
+slightly conservative (~13% above measured) — **not** the 30x overstatement
+an idle-context reading alone would suggest. The ~511 MB gap between idle
+and loaded is the model, kernels, shader cache and XMP state, which exist
+only once real weights are resident; the "0.0 MB" row is that same
+allocator/driver agreement, in a process with none of that.
+
+*Method note:* these are two artifacts of one run, paired by timestamp
+rather than read from a single instrumented sample, and the monitor could
+not read the training process's allocator itself (`procs: []` throughout),
+so the allocator side comes from `steps.jsonl`. The steady-state rows
+agree to within ~2.5%, which is tighter than the run-to-run variation,
+but a single-instrumented run would be the clean form. No checkpoint is
+present on this machine to re-run it.
 
 ### (c) `mem_get_info` against the allocator, desktop running
 
@@ -96,11 +120,14 @@ physical check on an idle-looking machine.
 | 1,024 MB | 265.8 ms | 213.5 ms | 0.2 MB |
 | 2,048 MB | 531.0 ms | 427.0 ms | 19.8 MB |
 
-Roughly **0.26 ms per MB** in each direction. That is the cost the MEM-06
-eviction ordering sorts on, and it is real: the ordering is over hundreds
-of milliseconds, which is why it refuses to evict the large base model
-proactively (the "2.1x slowdown" in `control_handle.py`'s own docstring is
-this same number against a 2,430 ms step).
+Roughly **0.26 ms per MB** in each direction, i.e. ~3.9 GB/s offloading and
+~4.8 GB/s reloading on contiguous tensors. That is the cost the MEM-06
+eviction ordering sorts on, and it is what makes the ordering worth having
+at all. It is *not* a measurement of a UNet round trip or any other
+module-tree `.to("cpu")` move, which carries far more per-parameter
+overhead than a contiguous copy; the "2,594 ms" figure in
+`control_handle.py`'s docstring is its own separate measurement and this
+one neither confirms nor refutes it.
 
 **The "driver MB actually freed" column is the finding.** It is ~zero,
 because an offload does not return memory to the driver (see below).
@@ -136,9 +163,6 @@ so it is a real behavioural change with its own evidence.
 
 ### Not yet run
 
-- **(b) for a training step** -- the one measurement that decides whether
-  `DEFAULT_PROCESS_OVERHEAD_MB` (600) is right or 30x too large. Needs a
-  real training graph: `scripts/hw_validate.py`.
 - **(e) the deliberate collision** -- a dataset task and a graph that do
   not fit together, the second refused with the full breakdown.
 - **(f) default demand per dataset task type.**
@@ -160,16 +184,43 @@ so it is a real behavioural change with its own evidence.
   run in three.
 
 - **[2026-10-05] the handle's relief loop reads a number its own actions do
-  not move.** See MEM-08 (d') above: on this card an offload leaves
-  `reserved_mb` unchanged and frees no driver memory; only `empty_cache()`
-  does. `BudgetedResourceControlHandle._make_room()` reads `reserved_mb`
-  after every offload and loops until it falls, so it will keep offloading
-  residents that cannot relieve the reading and, under `strict=True`, can
-  raise about memory that was merely cached and was in fact available for
-  reuse throughout. Not a crash and not an OOM -- an over-eager loop. Not
-  fixed: it is a change to what the handle measures, its own smoke test
+  not move. Reads like a memory leak, and is not one.** See MEM-08 (d')
+  above: on this card an offload leaves `reserved_mb` unchanged and frees no
+  driver memory; only `empty_cache()` does.
+  `BudgetedResourceControlHandle._make_room()` reads `reserved_mb` after
+  every offload and loops until it falls.
+
+  **Why it looks like a leak.** From the handle's side `reserved_mb` only
+  ever rises and never comes back down, which is the signature of one. It
+  is not: `empty_cache()` returns the segments immediately (1,024 MB
+  resident -> `reserved` 1024.0 -> `.to("cpu")` still 1024.0 ->
+  `empty_cache()` 0.0). Nothing is lost; the allocator is holding segments
+  it is entitled to reuse.
+
+  **Why it still matters.** The memory *was* available for reuse the whole
+  time, so nothing was ever at risk of OOM. But the loop cannot see that,
+  so it keeps offloading residents that cannot relieve the reading, and
+  under `strict=True` it can raise a hard failure about a condition that
+  was never real.
+
+  **A second-order consequence, which is the sharper problem.** MEM-06's
+  lease API accounts by *declared footprint*, and a footprint **does** drop
+  the moment a resident is offloaded. The handle accounts by `reserved_mb`,
+  which does not. So the two halves of the memory rework disagree about
+  whether the same offload freed anything: the lease will grant a request
+  on the strength of room the handle still shows as held. Whichever way
+  this is resolved, the two accountings need to be reconciled deliberately
+  -- they currently answer "did that free memory?" differently, from the
+  same event.
+
+  Not fixed: it is a change to what the handle measures, its own smoke test
   scripts `reserved_mb` directly, and the right fix (measure allocator
-  availability, or reclaim on demand) is its own piece of work.
+  availability, or reclaim on demand) is its own piece of work. Note the
+  practical exposure is low today -- offloading is driven by pressure, and
+  for the current dataset shapes there is little reason to offload per
+  step; it becomes live with preview generation and with caching a large
+  pack of prompt embeddings, where both this loop and the two accountings
+  will actually be exercised.
 
 The two entries this section used to hold are now in
 [`resolved.md`](resolved.md) with the hardware numbers that closed them:

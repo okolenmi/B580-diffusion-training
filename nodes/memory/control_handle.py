@@ -74,8 +74,19 @@ from typing import Optional
 
 from ..components.device import DeviceContext
 from ..resource_budget import ResourceBudget
-from .coordinator import ResourceCoordinator
+from .graph_memory import GraphMemory
 from .handle import DeviceResident
+
+
+#: Priority bands for the two movable registration states, used when a
+#: resident is registered with the run's ``GraphMemory``. The numbers
+#: themselves are arbitrary; what matters is that an offloadable
+#: resident sorts ahead of a sacrificable one, so a demand-driven pass
+#: only reaches for the expensive last resort when nothing cheaper can
+#: make room. "never" is not a band at all -- it is pinned, and pinned
+#: is never a candidate.
+_OFFLOADABLE_PRIORITY = 0
+_SACRIFICABLE_PRIORITY = 10
 
 
 class ResourceControlHandle(ABC):
@@ -183,13 +194,50 @@ class ResourceControlHandle(ABC):
 
 
 class BudgetedResourceControlHandle(ResourceControlHandle):
-    """The one real implementation. Owns its own ResourceCoordinator
-    (residents don't exist yet when this is constructed, so there's
-    nothing for a caller-supplied coordinator to have registered
-    already -- see this module's own top docstring) and its own
-    DeviceContext (DeviceContext.for_device(), the same factory
-    core/comfy_setup.py-adjacent code already uses, not shared with
-    anything else since nothing else needs one before this)."""
+    """A thin adapter over ``GraphMemory`` (MEM-05 #5).
+
+    Owns almost nothing now: the eviction **order** and the resident
+    bookkeeping live in the graph's ``GraphMemory`` (which the whole
+    memory rework converges on), and this class supplies the two things
+    that are genuinely its own -- a budget *stated per node* rather than
+    by admission, and a device reading taken between steps rather than
+    on demand.
+
+    What that buys, concretely: one place decides which resident goes
+    first, and it is the same place the lease policy (MEM-06) asks, so a
+    trainer's reactive between-steps offloading and a downstream node's
+    ``memory.request()`` cannot disagree about who is cheapest to lose.
+    The measured reload cost that ordering uses is the same measurement
+    in both.
+
+    What it deliberately keeps, because merging them would change
+    behaviour for existing trainers:
+
+    * **the ceiling.** ``ResourceBudget``'s ``vram_budget_mb -
+      vram_reserve_mb`` is what this handle enforces, and it is the
+      *node's* number. The run's own ``GraphMemory.budget_mb`` is
+      admission's, a different quantity that exists only when the run
+      stated one; a handle is constructed by a node, long before or
+      outside any particular run, so the usable ceiling is what this
+      handle hands to the ``GraphMemory`` it owns.
+    * **the measurement.** Enforcement reads
+      ``DeviceContext.memory_stats()['reserved_mb']`` -- the allocator's
+      real reserved bytes, which cover everything this process holds,
+      not just this handle's declared footprints. Declared footprints
+      are what the lease API accounts with; they are not a substitute
+      for the real reading, and swapping one for the other here would
+      stop enforcing anything (every resident's ``footprint_bytes()`` is
+      best-effort by contract, and real ones report 0 while resident).
+
+    The three registration states map onto ``GraphMemory``'s resident
+    record exactly: ``never`` is pinned, ``offloadable`` and
+    ``sacrificable`` are both evictable and differ only in priority
+    band, which is what makes ``ensure_loaded``'s demand-driven pass
+    prefer an offloadable resident and fall back to a sacrificable one
+    only when nothing cheaper can make room. Their semantics are
+    unchanged -- ``register()``'s own docstring on the ABC above is
+    still the authoritative statement of them.
+    """
 
     def __init__(self, budget: ResourceBudget, device: str,
                  device_ctx: DeviceContext | None = None):
@@ -200,22 +248,35 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         # injection posture this project uses everywhere else (no singletons, per
         # the root README's Goals section, goal 3).
         self._device_ctx = device_ctx or DeviceContext.for_device(device)
-        self._coordinator = ResourceCoordinator()
-        self._offloadable: list[str] = []  # list, not set: registration order
-        # is the offload order below, and dict/set iteration order isn't a
-        # contract worth relying on even though real Python dicts keep insertion
-        # order -- this is the one place that order actually matters, so it's
-        # explicit here rather than borrowed incidentally from something else.
-        # Sacrificable residents, in registration order, appended after
-        # `_offloadable` so they are always considered *last* -- a resident
-        # moved only under demand is by definition the expensive last resort,
-        # and a cheap offloadable one that could have made room should.
+        usable_mb = budget.vram_budget_mb - budget.vram_reserve_mb
+        # This handle's own memory authority, whose budget is the usable
+        # ceiling above -- the same number _make_room() enforces against,
+        # so the accounting and the ordering share one bound.
+        self._memory = GraphMemory(budget_mb=usable_mb)
+        # The resident lifecycle and the offloaded set are the
+        # GraphMemory's, aliased rather than copied: two owners of "is
+        # this resident offloaded" is exactly the desync that would let
+        # the accounting and the eviction disagree. These two names are
+        # kept because they are what the trainer-facing surface (and the
+        # existing tests) reach for.
+        self._coordinator = self._memory._coordinator
+        self._offloaded = self._memory._offloaded
+        # The candidate sets by state. A list, in registration order,
+        # because that order is the final tiebreak and is not something
+        # to borrow incidentally from a hash table.
+        self._offloadable: list[str] = []
         self._sacrificable: list[str] = []
-        self._offloaded: set[str] = set()
 
     def register(self, name: str, resident: DeviceResident, offloadable: bool = False,
                  sacrificable: bool = False) -> None:
-        self._coordinator.register(name, resident)
+        # ``never`` (neither flag) is pinned; the two movable states are
+        # both evictable and differ only in priority band, so a
+        # demand-driven pass tries an offloadable resident before a
+        # sacrificable one. See this class's own docstring.
+        pinned = not (offloadable or sacrificable)
+        priority = _SACRIFICABLE_PRIORITY if sacrificable else _OFFLOADABLE_PRIORITY
+        self._memory.register_resident(
+            name, resident, pinned=pinned, priority=priority)
         if offloadable:
             self._offloadable.append(name)
         if sacrificable:
@@ -226,7 +287,7 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
 
     def ensure_loaded(self, name: str) -> None:
         if name in self._offloaded:
-            self._coordinator.reload(name)
+            self._memory.move(name, offload=False)
             # Defensive, see _make_room()'s own comment on the matching offload-side
             # call below for the full reasoning -- same "don't trust a memory_stats()
             # snapshot taken right after a transfer without an explicit sync first"
@@ -235,7 +296,6 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             # calls ensure_loaded() is about to use `name` itself immediately after
             # this returns.
             self._device_ctx.synchronize()
-            self._offloaded.discard(name)
         self._make_room(exclude=(name,), demand_driven=True)
 
     def release(self, name: str) -> None:
@@ -249,62 +309,62 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             )
         if name in self._offloaded:
             return
-        self._coordinator.offload(name)
-        self._offloaded.add(name)
+        self._memory.move(name, offload=True)
         # Same defensive reasoning as _make_room()'s own offload-side call below --
-        # this is the same operation (coordinator.offload(name) then synchronize()),
-        # just triggered deterministically by a caller instead of reactively by
-        # measured pressure.
+        # this is the same operation (move it off, then synchronize()), just
+        # triggered deterministically by a caller instead of reactively by measured
+        # pressure.
         self._device_ctx.synchronize()
 
     def usable_budget_mb(self) -> Optional[float]:
-        return self._budget.vram_budget_mb - self._budget.vram_reserve_mb
+        return self._memory.budget_mb
 
     def _make_room(self, exclude: tuple[str, ...],
                    demand_driven: bool = False) -> None:
-        """Shared by before_step() (exclude=() -- a general check
-        between steps) and ensure_loaded() (exclude=(name,) -- whatever
-        was just reloaded is off-limits, it's needed right now, that's
-        the whole reason ensure_loaded() was called).
+        """Relieve measured pressure by moving residents, in policy order.
 
-        `demand_driven` is what separates the two callers. `before_step()`
-        passes False and only `offloadable` residents are candidates:
-        releasing something between steps is free precisely when its idle
-        window is known, and a resident that is about to be used -- a base
-        model -- is not between uses at all. `ensure_loaded()` passes True
-        and `sacrificable` residents join the candidate list, because
+        Kept on this handle rather than delegated wholesale to
+        ``GraphMemory`` because it measures the *device* between steps --
+        see this class's docstring for why that is not the lease API's
+        declared-footprint accounting. The part that is purely a policy
+        decision, which resident goes next, is ``GraphMemory``'s and is
+        shared with every other user of it.
+
+        ``demand_driven`` separates the two callers, and the candidate
+        set carries it. ``before_step()`` offers only the *offloadable*
+        residents, because releasing something between steps is free
+        precisely when its idle window is known, and a resident about
+        to be used -- a base model -- is not between uses at all.
+        ``ensure_loaded()`` offers every evictable resident, because
         something needed the room *now*. Measured cost of getting that
         wrong: a UNet round trip is 2,594 ms against a 2,430 ms step, so
-        `before_step()` doing it every step is a 2.1x slowdown.
+        ``before_step()`` doing it every step is a 2.1x slowdown.
 
-        Re-measures after
-        each individual offload rather than estimating from
-        footprint_bytes() and offloading everything that adds up to
+        Re-measures after each individual move rather than estimating
+        from footprint_bytes() and moving everything that adds up to
         enough up front: one real number from the allocator beats a
-        predicted one, and stopping the moment it's enough avoids
-        offloading (and later having to reload) more than the pressure
-        actually required.
+        predicted one, and stopping the moment it's enough avoids moving
+        (and later having to reload) more than the pressure actually
+        required.
 
         Raises when self._budget.strict and usage is still over budget
-        once every offloadable, currently-loaded resident (outside
-        `exclude`) has been offloaded -- see ResourceBudget.strict's own
+        once every candidate, currently-loaded resident (outside
+        ``exclude``) has been moved -- see ResourceBudget.strict's own
         docstring for why. Default strict=False keeps this method's
-        previous behavior exactly (return once the offloadable list is
+        previous behavior exactly (return once the candidates are
         exhausted, over budget or not) -- existing callers/tests see no
         behavior change unless they opt in."""
         stats = self._device_ctx.memory_stats()
         if stats is None:
             return
-        usable_mb = self._budget.vram_budget_mb - self._budget.vram_reserve_mb
-        candidates = self._offloadable + (
-            self._sacrificable if demand_driven else [])
-        for name in candidates:
-            if name in exclude or name in self._offloaded:
-                continue
-            if stats["reserved_mb"] <= usable_mb:
-                return
-            self._coordinator.offload(name)
-            self._offloaded.add(name)
+        usable_mb = self._memory.budget_mb or 0.0
+        candidates = None if demand_driven else tuple(self._offloadable)
+        while stats["reserved_mb"] > usable_mb:
+            victim = self._memory.next_to_evict(
+                candidates=candidates, exclude=exclude)
+            if victim is None:
+                break
+            self._memory.move(victim.name, offload=True)
             # Defensive, not provable-necessary from this codebase's own offload()
             # implementations alone: every DeviceResident.offload() registered here
             # today already does a synchronous (non_blocking=False, torch's default)
@@ -339,4 +399,3 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
                 f"vram_budget_mb, or register more residents as offloadable if that's "
                 f"genuinely safe for them (see register()'s own docstring)."
             )
-

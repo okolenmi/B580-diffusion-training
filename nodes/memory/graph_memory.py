@@ -40,6 +40,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+from .coordinator import ResourceCoordinator
 from .handle import DeviceResident
 
 logger = logging.getLogger(__name__)
@@ -96,26 +97,32 @@ class MemoryRequestDenied(RuntimeError):
 class Resident:
     """One device-resident this graph may evict to satisfy a lease.
 
-    The eviction-relevant facts, nothing else. Kept here rather than
-    inferred from the ``DeviceResident`` because three of the four
-    (``priority``, the measured reload cost, the last-used stamp) are
-    things only the memory authority knows as it moves things around.
+    The eviction-relevant facts about a resident, and nothing else. The
+    resident object itself is owned by the run's ``ResourceCoordinator``
+    (the project's existing lifecycle abstraction, reused rather than
+    re-invented); this record is the *policy* view of it -- the three
+    things only the memory authority learns by moving things around:
+    priority, the measured reload cost, and the last-used stamp. It also
+    caches the footprint, which the coordinator can re-read but which
+    the accounting needs on every comparison.
 
-    ``reload_cost_ms`` starts unknown and is measured the first time
-    this resident is actually reloaded. Unknown sorts *last*: evicting
-    something whose restore cost has never been measured would be
-    guessing, and the whole ordering exists to avoid guessing.
+    Which residents are currently offloaded is **not** stored here: it
+    is the shared ``_offloaded`` name-set on ``GraphMemory``, so there
+    is exactly one answer to "is it offloaded" for everything that
+    cares (accounting, eviction eligibility, and the handle adapter).
     """
 
     name: str
     resident: DeviceResident
     pinned: bool = False
     priority: int = 0
-    #: The device footprint this resident holds right now, MB. Zero
-    #: while it is offloaded (its host-RAM copy does not count -- see
-    #: DeviceResident.footprint_bytes' own docstring).
+    #: The device footprint this resident holds, MB, as of the last
+    #: register/load. Zero while it is offloaded (its host-RAM copy does
+    #: not count -- see DeviceResident.footprint_bytes' own docstring).
     footprint_mb: float = 0.0
-    offloaded: bool = False
+    #: Measured on the first real reload; None until then. Unknown sorts
+    #: *last* in the eviction order -- evicting something whose restore
+    #: cost was never measured is the guess the ordering exists to avoid.
     reload_cost_ms: float | None = None
     last_used: float = field(default_factory=time.monotonic)
 
@@ -305,10 +312,20 @@ class GraphMemory:
         #: never runs under a worker (a unit test, a node building
         #: alone) simply has no listener -- see ``report_memory_event``.
         self.on_memory_event = None
-        # MEM-06. Insertion-ordered because registration order is the
-        # final tiebreak in the eviction policy, so it has to be a
-        # property of the container and not left to a hash table.
+        # MEM-06. Three collaborators, each with exactly one job:
+        #   _coordinator   -- owns the resident objects and moves them
+        #                     (the project's existing lifecycle
+        #                     abstraction, reused rather than re-invented)
+        #   _residents     -- the policy view (priority, measured cost,
+        #                     last-used, cached footprint); insertion-
+        #                     ordered because registration order is the
+        #                     final eviction tiebreak
+        #   _offloaded     -- the one answer to "is it offloaded",
+        #                     shared by the accounting, the eviction
+        #                     eligibility check, and the handle adapter
+        self._coordinator = ResourceCoordinator()
         self._residents: dict[str, Resident] = {}
+        self._offloaded: set[str] = set()
         self._active_leases: list[Lease] = []
         self._lock = threading.RLock()
 
@@ -363,13 +380,13 @@ class GraphMemory:
                     f"second registration would orphan the first "
                     f"resident's footprint in the eviction accounting"
                 )
+            self._coordinator.register(name, resident)
             self._residents[name] = Resident(
                 name=name,
                 resident=resident,
                 pinned=pinned,
                 priority=priority,
                 footprint_mb=resident.footprint_bytes() / (1024 ** 2),
-                offloaded=False,
                 last_used=time.monotonic(),
             )
 
@@ -399,7 +416,8 @@ class GraphMemory:
 
     def _in_use_mb(self) -> float:
         return (
-            sum(r.footprint_mb for r in self._residents.values() if not r.offloaded)
+            sum(r.footprint_mb for name, r in self._residents.items()
+                if name not in self._offloaded)
             + sum(lease.mb for lease in self._active_leases)
         )
 
@@ -468,7 +486,7 @@ class GraphMemory:
         if budget - self._in_use_mb() < wanted_mb:
             for resident in sorted(self._residents.values(),
                                    key=Resident._eviction_key):
-                if not resident.evictable or resident.offloaded:
+                if not resident.evictable or resident.name in self._offloaded:
                     continue
                 moved.append(resident)
                 cost_ms += self._move(resident, offload=True)
@@ -517,21 +535,72 @@ class GraphMemory:
         is not what an offload costs.
         """
         if offload:
-            resident.resident.offload()
-            resident.offloaded = True
+            self._coordinator.offload(resident.name)
+            self._offloaded.add(resident.name)
             # The footprint is gone now; keeping it would leave the
             # accounting claiming memory the device no longer holds.
             resident.footprint_mb = 0.0
             resident.last_used = time.monotonic()
             return 0.0
         started = time.monotonic()
-        resident.resident.reload()
+        self._coordinator.reload(resident.name)
         elapsed_ms = (time.monotonic() - started) * 1000.0
-        resident.offloaded = False
+        self._offloaded.discard(resident.name)
         resident.footprint_mb = resident.resident.footprint_bytes() / (1024 ** 2)
         resident.reload_cost_ms = elapsed_ms
         resident.last_used = time.monotonic()
         return elapsed_ms
+
+    def next_to_evict(self, *, candidates=None,
+                      exclude: tuple[str, ...] = ()) -> Resident | None:
+        """Which resident to give up next, in policy order -- or None.
+
+        The eviction decision on its own, separated from the moving, so
+        a caller that measures real pressure itself (the
+        ResourceControlHandle adapter: ``reserved_mb`` from the device,
+        not this object's accounting) can ask "who goes next", move that
+        one, and re-measure.
+
+        ``candidates`` restricts the choice to a subset -- which is how
+        the three registration states survive here: a proactive
+        between-steps check passes its *offloadable* residents, and a
+        demand-driven one passes nothing (every evictable resident,
+        offloadable first by priority). ``exclude`` names residents that
+        are needed right now and so cannot move.
+        """
+        with self._lock:
+            allowed = None if candidates is None else set(candidates)
+            for resident in sorted(self._residents.values(),
+                                   key=Resident._eviction_key):
+                if allowed is not None and resident.name not in allowed:
+                    continue
+                if (not resident.evictable
+                        or resident.name in self._offloaded
+                        or resident.name in exclude):
+                    continue
+                return resident
+            return None
+
+    def is_offloaded(self, name: str) -> bool:
+        """Whether a registered resident is currently off the device."""
+        with self._lock:
+            return name in self._offloaded
+
+    def move(self, name: str, *, offload: bool) -> float:
+        """Move one registered resident; returns the elapsed ms.
+
+        Public because the handle adapter drives its own measure-move-
+        re-measure loop and needs to move the resident this object just
+        chose. An offload returns 0.0 -- "reload cost" is not what an
+        offload costs.
+        """
+        with self._lock:
+            resident = self._residents.get(name)
+            if resident is None:
+                raise KeyError(
+                    f"move({name!r}): not registered with this graph's memory"
+                )
+            return self._move(resident, offload=offload)
 
     def physical_check(self, device) -> PhysicalCheck:
         """MEM-05 #2: can the card actually give what admission granted?

@@ -162,6 +162,14 @@ class _BareDevice:
     def total_memory_mb(self):
         return self.capacity_mb
 
+    def memory_stats(self):
+        """None: no allocator reading, so the handle's pressure loop is
+        a cheap no-op and what is under test is the shared ordering."""
+        return None
+
+    def synchronize(self):
+        pass
+
 
 class _RefusingDevice(_BareDevice):
     """A build where the context has the method but the torch build
@@ -391,6 +399,62 @@ def check_lease_evicts_the_least_important_first():
                detail=repr(memory.in_use_mb()))
 
 
+def check_the_handle_delegates_its_ordering_to_the_graph_memory():
+    print("[the handle adapter: eviction order is GraphMemory's, measured "
+          "once and shared]")
+    from nodes.memory.control_handle import BudgetedResourceControlHandle
+    from nodes.resource_budget import ResourceBudget
+
+    cheap = _FakeResident("cheap", 800.0, reload_ms=2.0)
+    dear = _FakeResident("dear", 800.0, reload_ms=40.0)
+    handle = BudgetedResourceControlHandle(
+        ResourceBudget(vram_budget_mb=1600.0, vram_reserve_mb=0.0),
+        device="cpu", device_ctx=_BareDevice(12216.0),
+    )
+    handle.register("cheap", cheap, offloadable=True)
+    handle.register("dear", dear, offloadable=True)
+    memory = handle._memory
+    record(isinstance(memory, GraphMemory),
+           "the handle's own authority is a GraphMemory")
+
+    # Move both through it, which times both real reloads -- the same
+    # measurement the lease API's ordering uses.
+    memory.move("cheap", offload=True)
+    memory.move("dear", offload=True)
+    memory.move("cheap", offload=False)
+    memory.move("dear", offload=False)
+    measured = memory._residents
+    record(measured["cheap"].reload_cost_ms is not None
+           and measured["dear"].reload_cost_ms is not None,
+           "both residents have a measured reload cost now")
+    record(measured["cheap"].reload_cost_ms < measured["dear"].reload_cost_ms,
+           "and the cheap one really measured cheaper",
+           detail=f"cheap={measured['cheap'].reload_cost_ms:.1f}ms "
+           f"dear={measured['dear'].reload_cost_ms:.1f}ms")
+
+    first = memory.next_to_evict()
+    record(first is not None and first.name == "cheap",
+           "so the handle's eviction picks the cheap one, by the policy "
+           "order rather than registration order",
+           detail=repr(first.name if first else None))
+
+    # And the states map as documented: offloadable outranks
+    # sacrificable, and "never" is not a candidate at all.
+    pinned = _FakeResident("pinned", 800.0)
+    handle.register("pinned", pinned)
+    record(memory._residents["pinned"].pinned,
+           "a resident registered with neither flag is pinned")
+    sacrificable = _FakeResident("sac", 800.0)
+    handle.register("sac", sacrificable, sacrificable=True)
+    record(not memory._residents["sac"].pinned
+           and memory._residents["sac"].priority
+           > memory._residents["cheap"].priority,
+           "a sacrificable one is evictable but sorts after an "
+           "offloadable one")
+    record(handle.release("cheap") is None,
+           "release() still moves an offloadable resident on demand")
+
+
 def check_a_denied_request_changes_nothing():
     print("[lease: a request that cannot be satisfied is denied, and "
           "everything it moved is put back]")
@@ -537,6 +601,7 @@ def main():
     check_a_lease_restores_what_it_moved_even_on_an_exception()
     check_concurrent_requests_serialise()
     check_eviction_prefers_the_cheapest_resident_to_restore()
+    check_the_handle_delegates_its_ordering_to_the_graph_memory()
     check_an_unknown_budget_is_not_a_zero_budget()
 
     print()

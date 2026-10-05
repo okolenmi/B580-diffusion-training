@@ -123,6 +123,12 @@ class GraphMemory:
     ) -> None:
         self._grant_mb = _size("grant_mb", grant_mb)
         self._budget_mb = _size("budget_mb", budget_mb)
+        #: MEM-05 #4: where lease/eviction decisions are reported, as
+        #: ``on_memory_event(event, mb, cost_ms)``. Set by the worker,
+        #: which owns the event writer; None until wired. A graph that
+        #: never runs under a worker (a unit test, a node building
+        #: alone) simply has no listener -- see ``report_memory_event``.
+        self.on_memory_event = None
 
     @property
     def grant_mb(self) -> float | None:
@@ -133,6 +139,20 @@ class GraphMemory:
     def budget_mb(self) -> float | None:
         """The allocator MB this process may use, or ``None`` (unknown)."""
         return self._budget_mb
+
+    def report_memory_event(self, event: str, mb: float, cost_ms: float) -> None:
+        """MEM-05 #4: report one lease/eviction decision to the worker.
+
+        Called by the lease policy (MEM-06) on every decision, with
+        the MB the decision granted, freed, or declined, and the
+        measured cost in ms of getting there -- for a grant, the
+        eviction cost paid to make room. The worker's listener writes
+        it as a memory record; with no listener this is a no-op, and
+        that is not an error: the decision's own log line is the
+        policy's, and the record is for the UI.
+        """
+        if self.on_memory_event is not None:
+            self.on_memory_event(event, mb, cost_ms)
 
     def physical_check(self, device) -> PhysicalCheck:
         """MEM-05 #2: can the card actually give what admission granted?

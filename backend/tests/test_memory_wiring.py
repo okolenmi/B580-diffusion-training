@@ -1661,11 +1661,13 @@ class _MemoryReportChild(GraphTaskGateway):
     """A gateway whose child is a *real* process writing real records.
 
     The writer, the event file, the tail and the watcher under test are
-    all the production ones; only the content is pinned, because the
-    fixed-interval telemetry that will produce these frames does not
-    exist yet (MEM-05 #4). Cross-process property, real process: three
-    memory frames -- 6000, a rise to 7200, a dip back to 6500 -- and a
-    clean outcome.
+    all the production ones; only the content is pinned. The child's own
+    fixed-interval producer (the worker's ``MemoryTelemetry``,
+    MEM-05 #4) writes frames on a schedule -- this one writes three by
+    hand because the watcher's peak-filing is what is under test, and
+    it needs a rise and a dip no schedule would produce. Cross-process
+    property, real process: three memory frames -- 6000, a rise to
+    7200, a dip back to 6500 -- and a clean outcome.
     """
 
     _SCRIPT = (
@@ -2328,6 +2330,143 @@ def test_allocator_backstop_cases_and_their_warnings() -> None:
         worker_logger.removeHandler(handler)
 
 
+def test_memory_telemetry_writes_frames_on_a_schedule() -> None:
+    print("-- telemetry: frames on a schedule, a final frame, and a stop --")
+    import threading
+    import time
+
+    from backend.infrastructure.graph_task_worker import MemoryTelemetry
+    from nodes.memory.graph_memory import GraphMemory
+
+    class _Device:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def memory_stats(self):
+            self.calls += 1
+            return {
+                "reserved_mb": 5000.0,
+                "allocated_mb": 4000.0,
+                "peak_allocated_mb": 6000.0,
+                "peak_reserved_mb": 7200.0,
+            }
+
+    class _SilentDevice:
+        """A CPU backend: no allocator numbers at all."""
+
+        def memory_stats(self):
+            return None
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.frames: list[dict] = []
+
+        def memory(self, **record) -> None:
+            self.frames.append(record)
+
+    device = _Device()
+    writer = _Writer()
+    memory = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
+    cancel = threading.Event()
+    telemetry = MemoryTelemetry(
+        device, writer, memory, "enforced", cancel, interval_s=0.05
+    )
+    telemetry.start()
+    time.sleep(0.45)  # ~9 intervals; the schedule is the point
+    telemetry.stop()
+    check(len(writer.frames) >= 3,
+          f"frames on a schedule (got {len(writer.frames)})")
+    check(
+        writer.frames[-1]["peak_mb"] == 7200.0,
+        f"the final frame is the run's last numbers "
+        f"(got {writer.frames[-1] if writer.frames else None})",
+    )
+    for frame in writer.frames:
+        check(frame["budget_mb"] == 6000.0,
+              f"every frame carries the budget (got {frame})")
+        check(frame["backstop"] == "enforced",
+              f"every frame carries the backstop case (got {frame})")
+    check(not telemetry._thread.is_alive(), "the thread stopped")
+
+    # A device that cannot answer is skipped, not zeroed (task rule 2).
+    silent_writer = _Writer()
+    silent = MemoryTelemetry(
+        _SilentDevice(), silent_writer, memory, "enforced", cancel,
+        interval_s=0.05,
+    )
+    silent.start()
+    time.sleep(0.15)
+    silent.stop()
+    check(silent_writer.frames == [],
+          f"no frame without device numbers (got {silent_writer.frames})")
+
+    # A zero interval would busy-loop; it is refused by name.
+    try:
+        MemoryTelemetry(device, writer, memory, "enforced", cancel,
+                        interval_s=0.0)
+    except ValueError as exc:
+        check("interval_s" in str(exc),
+              f"a zero interval is refused by name (got {exc})")
+    else:
+        raise AssertionError("a zero interval was accepted")
+
+
+def test_memory_events_cross_into_the_event_file() -> None:
+    print("-- memory events: a decision becomes a frame with MB and cost --")
+    from backend.infrastructure.graph_task_worker import wire_memory_events
+    from nodes.memory.graph_memory import GraphMemory
+
+    class _Device:
+        def memory_stats(self):
+            return {
+                "reserved_mb": 5000.0,
+                "allocated_mb": 4000.0,
+                "peak_allocated_mb": 6000.0,
+                "peak_reserved_mb": 7200.0,
+            }
+
+    class _SilentDevice:
+        def memory_stats(self):
+            return None
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.frames: list[dict] = []
+
+        def memory(self, **record) -> None:
+            self.frames.append(record)
+
+    memory = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
+    writer = _Writer()
+    wire_memory_events(memory, writer, _Device(), "enforced")
+    check(memory.on_memory_event is not None,
+          "the worker's listener is wired onto the memory")
+    memory.report_memory_event("eviction", 1234.0, 56.7)
+    check(len(writer.frames) == 1,
+          f"one frame per decision (got {writer.frames})")
+    frame = writer.frames[0]
+    check(
+        frame["event"] == "eviction"
+        and frame["mb"] == 1234.0
+        and frame["cost_ms"] == 56.7,
+        f"the decision's name, MB and cost (got {frame})",
+    )
+    check(frame["peak_mb"] == 7200.0,
+          f"with the snapshot alongside (got {frame})")
+    check(frame["backstop"] == "enforced",
+          f"and the backstop case (got {frame})")
+
+    # A device that cannot answer writes no frame: there are no device
+    # numbers to report, and the decision's log line is the policy's
+    # own (MEM-06).
+    silent_writer = _Writer()
+    memory2 = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
+    wire_memory_events(memory2, silent_writer, _SilentDevice(), "enforced")
+    memory2.report_memory_event("lease_granted", 500.0, 0.0)
+    check(silent_writer.frames == [],
+          f"no frame without device numbers (got {silent_writer.frames})")
+
+
 def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
     root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
@@ -2420,6 +2559,8 @@ def main() -> None:
     test_argv_carries_the_memory_numbers_to_the_child()
     test_physical_check_refuses_shortfall_and_continues_on_unknown()
     test_allocator_backstop_cases_and_their_warnings()
+    test_memory_telemetry_writes_frames_on_a_schedule()
+    test_memory_events_cross_into_the_event_file()
     finish()
 
 

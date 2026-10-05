@@ -96,6 +96,32 @@ def test_memory_record_round_trip() -> None:
               "not a zero claim")
 
 
+def test_memory_event_frame_round_trip() -> None:
+    print("\n== a lease/eviction frame survives with its MB and cost ==")
+    # MEM-05 #4: the decision's three fields alongside the snapshot,
+    # so the frame sits in the timeline like any other.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _path(tmp)
+        writer = ExecutionEventWriter(path)
+        writer.memory(
+            reserved_mb=5000.0, allocated_mb=4000.0, peak_mb=7200.0,
+            budget_mb=8000.0, backstop="enforced",
+            event="eviction", mb=1234.0, cost_ms=56.7,
+        )
+        writer.close()
+        events = [e for e in ExecutionEventTail(path).poll()
+                  if e.kind is EventKind.MEMORY]
+        check(len(events) == 1, f"the frame read back (got {len(events)})")
+        frame = events[0].payload
+        check(frame["event"] == "eviction", "the decision's name intact")
+        check(frame["mb"] == 1234.0, "the MB it freed intact")
+        check(frame["cost_ms"] == 56.7, "the measured cost in ms intact")
+        check(frame["backstop"] == "enforced",
+              "and the backstop case rides along")
+        check(frame["peak_mb"] == 7200.0,
+              "with the snapshot alongside, so it sits in the timeline")
+
+
 def test_torn_tail_is_withheld() -> None:
     print("\n== a half-written line is not a record ==")
     with tempfile.TemporaryDirectory() as tmp:
@@ -242,6 +268,7 @@ def test_two_writers_can_share_one_directory() -> None:
 def main() -> None:
     test_round_trip()
     test_memory_record_round_trip()
+    test_memory_event_frame_round_trip()
     test_torn_tail_is_withheld()
     test_bad_records_do_not_end_the_stream()
     test_nonfinite_is_sanitized_before_the_browser_sees_it()

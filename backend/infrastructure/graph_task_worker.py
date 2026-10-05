@@ -38,6 +38,8 @@ import sys
 import threading
 import traceback
 from pathlib import Path
+from types import TracebackType
+from typing import Literal
 
 from ..python_floor import require_python
 
@@ -255,6 +257,127 @@ def apply_allocator_backstop(memory, device) -> str:
     return BACKSTOP_ENFORCED
 
 
+#: Seconds between memory telemetry frames (MEM-05 #4). One second
+#: matches the monitor frames' own cadence (the writer's header's
+#: "about one a second") and keeps even a multi-hour run's event file
+#: to a few records a minute.
+MEMORY_TELEMETRY_INTERVAL_S = 1.0
+
+
+class MemoryTelemetry:
+    """The child's fixed-interval memory producer (MEM-05 #4).
+
+    A daemon thread, because the run must never wait for it: it writes
+    a frame every ``interval_s`` until stopped, then writes one final
+    frame -- the last numbers before the outcome, so the peak the
+    watcher files is the run's true high-water mark rather than the
+    last interval's (a run that ends between intervals would
+    otherwise report a stale peak).
+
+    A frame the device cannot answer (CPU: ``memory_stats()`` is None)
+    is skipped, not zeroed -- unknown is never a zero (task rule 2).
+    """
+
+    def __init__(self, device, writer, memory, backstop, cancel,
+                 interval_s: float = MEMORY_TELEMETRY_INTERVAL_S) -> None:
+        if interval_s <= 0:
+            raise ValueError(
+                f"interval_s must be positive, got {interval_s!r}"
+            )
+        self._device = device
+        self._writer = writer
+        self._memory = memory
+        self._backstop = backstop
+        self._cancel = cancel
+        self._interval_s = interval_s
+        self._thread = threading.Thread(
+            target=self._loop,
+            name="backend-graph-memory-telemetry",
+            daemon=True,
+        )
+
+    def _frame(self) -> None:
+        stats = self._device.memory_stats()
+        if stats is None:
+            return
+        self._writer.memory(
+            reserved_mb=stats["reserved_mb"],
+            allocated_mb=stats["allocated_mb"],
+            # The high-water mark of what the process *held* -- reserved
+            # includes the allocator's cache, which is what admission's
+            # remembered demand has to assume stays held.
+            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"]),
+            budget_mb=self._memory.budget_mb,
+            backstop=self._backstop,
+        )
+
+    def _loop(self) -> None:
+        # wait(timeout) returns True the instant cancel is set, so a
+        # stop costs no extra frame here -- stop() writes the final
+        # one itself.
+        while not self._cancel.wait(self._interval_s):
+            self._frame()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        # The final frame first: the run's last numbers, so the peak
+        # the watcher files is the true high-water mark. Then cancel
+        # (the loop exits at once) and join -- a daemon thread that
+        # outlived the process would be a thread writing to a closed
+        # file.
+        self._frame()
+        self._cancel.set()
+        self._thread.join()
+
+    def __enter__(self) -> MemoryTelemetry:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        self.stop()
+        # False, explicitly: a telemetry stop must never swallow an
+        # exception the run is trying to raise.
+        return False
+
+
+def wire_memory_events(memory, writer, device, backstop) -> None:
+    """MEM-05 #4: route lease/eviction decisions into the event file.
+
+    The lease policy (MEM-06) reports every decision through
+    ``GraphMemory.report_memory_event``; this is the worker's side of
+    that bridge -- the decision crosses the process boundary as a
+    memory record carrying the MB and the measured cost in ms, with
+    the device snapshot alongside so the frame sits in the timeline
+    like any other. A device that cannot answer (CPU) writes no
+    frame: there are no device numbers to report, and the decision's
+    log line is the policy's own.
+    """
+
+    def _write(event: str, mb: float, cost_ms: float) -> None:
+        stats = device.memory_stats()
+        if stats is None:
+            return
+        writer.memory(
+            reserved_mb=stats["reserved_mb"],
+            allocated_mb=stats["allocated_mb"],
+            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"]),
+            budget_mb=memory.budget_mb,
+            backstop=backstop,
+            event=event,
+            mb=mb,
+            cost_ms=cost_ms,
+        )
+
+    memory.on_memory_event = _write
+
+
 def main(argv: list[str] | None = None) -> int:
     # The floor first, before the signal handlers: a child that cannot run
     # should say why on stderr, where the supervisor's log will keep it.
@@ -349,8 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         # MEM-05 #3: the allocator's own cap, best-effort -- a refusal
         # is the physical check's job; this is the belt to its braces.
         # The case rides the first memory frame so the telemetry (and
-        # the UI reading it) can say which happened from the start,
-        # before the fixed-interval producer of MEM-05 #4 exists.
+        # the UI reading it) can say which happened from the start.
         backstop = apply_allocator_backstop(memory, device_ctx)
         writer.memory(
             reserved_mb=0.0,
@@ -359,10 +481,17 @@ def main(argv: list[str] | None = None) -> int:
             budget_mb=memory.budget_mb,
             backstop=backstop,
         )
-        outcome = run_execution(
-            graph, writer, cancel, build_runtime(writer, memory=memory)
-        )
-        return 1 if outcome.error else 0
+        # MEM-05 #4: the fixed-interval producer, and the bridge that
+        # carries lease/eviction decisions into the same file. Both
+        # wrap the whole run -- discovery included, which is the
+        # child's longest stretch of device-quiet time and would
+        # otherwise be the one part of the process no frame covers.
+        wire_memory_events(memory, writer, device_ctx, backstop)
+        with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel):
+            outcome = run_execution(
+                graph, writer, cancel, build_runtime(writer, memory=memory)
+            )
+            return 1 if outcome.error else 0
     except Exception as exc:  # noqa: BLE001 -- the server needs to hear about this
         writer.outcome(error=f"{type(exc).__name__}: {exc}", results_count=0)
         traceback.print_exc(file=sys.stderr)

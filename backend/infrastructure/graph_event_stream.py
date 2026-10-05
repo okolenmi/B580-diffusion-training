@@ -30,13 +30,15 @@ Four record kinds, append-only, one JSON object per line:
 
 ``memory``
     One memory telemetry frame: ``reserved_mb``, ``allocated_mb``,
-    ``peak_mb``, ``budget_mb`` (null = no budget stated), and
+    ``peak_mb``, ``budget_mb`` (null = no budget stated),
     ``backstop`` (MEM-05 #3) -- the allocator-cap case for this run:
-    "enforced", or the honest name for why not. The child
-    reports numbers; the server's watcher files ``peak_mb`` into the
-    peak store under the fingerprint key admission stored on the row
-    (MEM-04 #2) -- one configuration-keyed high-water mark per graph,
-    written by the one writer. The fixed-interval producer is MEM-05 #4.
+    "enforced", or the honest name for why not -- and, on a
+    lease/eviction frame, ``event``/``mb``/``cost_ms`` (MEM-05 #4).
+    The child reports numbers; the server's watcher files ``peak_mb``
+    into the peak store under the fingerprint key admission stored on
+    the row (MEM-04 #2) -- one configuration-keyed high-water mark per
+    graph, written by the one writer. The fixed-interval producer is
+    the worker's ``MemoryTelemetry`` (MEM-05 #4).
 
 ``outcome``
     The run finished -- successfully or not. Written by the child, so the
@@ -150,6 +152,9 @@ class ExecutionEventWriter:
         peak_mb: float,
         budget_mb: float | None,
         backstop: str | None = None,
+        event: str | None = None,
+        mb: float | None = None,
+        cost_ms: float | None = None,
     ) -> None:
         """One memory telemetry frame (MEM-04 #2).
 
@@ -162,9 +167,16 @@ class ExecutionEventWriter:
         "enforced", or the honest name for why not ("unavailable" --
         this torch build has no ``set_per_process_memory_fraction``;
         "unknown_budget" / "unknown_total" -- the fraction could not be
-        computed). None on a frame that does not carry it. The child
-        writes it on the start-of-run frame; the fixed-interval
-        producer of MEM-05 #4 repeats it on every frame.
+        computed). None on a frame that does not carry it.
+
+        ``event``/``mb``/``cost_ms`` (MEM-05 #4) turn the frame into a
+        lease/eviction annotation: the decision's name, the MB it
+        granted/freed/declined, and the measured cost in ms of getting
+        there (for a grant, the eviction cost paid to make room). The
+        four numbers alongside are the device snapshot at the decision,
+        so the frame sits in the timeline like any other. The fixed-
+        interval producer (the worker's ``MemoryTelemetry``) leaves
+        these three None.
         """
         self._write(
             {
@@ -174,6 +186,9 @@ class ExecutionEventWriter:
                 "peak_mb": peak_mb,
                 "budget_mb": budget_mb,
                 "backstop": backstop,
+                "event": event,
+                "mb": mb,
+                "cost_ms": cost_ms,
             }
         )
 

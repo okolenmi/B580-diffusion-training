@@ -193,9 +193,14 @@ def test_child_runs_a_graph_end_to_end() -> None:
     )
     check(GATEWAY.is_alive(pid), "and it is alive")
 
+    # The until waits for the child to exit, not just for the outcome:
+    # the final telemetry frame is written after the outcome and before
+    # the process exits, so "outcome and gone" is what collects all of
+    # them -- "outcome" alone can return between the two writes.
     events = _collect(ExecutionEventTail(launch.event_path), pid,
                      until=lambda seen: any(
-                         e.kind is EventKind.OUTCOME for e in seen))
+                         e.kind is EventKind.OUTCOME for e in seen
+                     ) and not GATEWAY.is_alive(pid))
     kinds = [e.kind for e in events]
     check(
         kinds == [
@@ -203,9 +208,10 @@ def test_child_runs_a_graph_end_to_end() -> None:
             EventKind.NODE,
             EventKind.NODE,
             EventKind.OUTCOME,
+            EventKind.MEMORY,
         ],
-        f"the backstop's start frame, two node records and one outcome, "
-        f"in order (got {kinds})",
+        f"the start frame, two node records, the outcome, and the final "
+        f"frame, in order (got {kinds})",
     )
     by_id = {e.payload["node_id"]: e.payload for e in events if e.kind is EventKind.NODE}
     check(
@@ -217,9 +223,10 @@ def test_child_runs_a_graph_end_to_end() -> None:
         by_id["b"]["ok"] and by_id["b"]["outputs"]["value"] == 2.5,
         "and the second's",
     )
+    outcome = next(e for e in events if e.kind is EventKind.OUTCOME)
     check(
-        events[-1].payload == {"kind": "outcome", "error": None, "results_count": 2},
-        f"the outcome record says it finished clean (got {events[-1].payload})",
+        outcome.payload == {"kind": "outcome", "error": None, "results_count": 2},
+        f"the outcome record says it finished clean (got {outcome.payload})",
     )
     check(
         wait_until(lambda: not GATEWAY.is_alive(pid), timeout=30.0),
@@ -251,9 +258,14 @@ def test_child_receives_the_memory_arguments() -> None:
         f"{cmdline_mentions(pid, '--memory-grant-mb')!r})",
     )
 
+    # The until waits for the child to exit, not just for the outcome:
+    # the final telemetry frame is written after the outcome and before
+    # the process exits, so "outcome and gone" is what collects all of
+    # them -- "outcome" alone can return between the two writes.
     events = _collect(ExecutionEventTail(launch.event_path), pid,
                      until=lambda seen: any(
-                         e.kind is EventKind.OUTCOME for e in seen))
+                         e.kind is EventKind.OUTCOME for e in seen
+                     ) and not GATEWAY.is_alive(pid))
     kinds = [e.kind for e in events]
     check(
         kinds == [
@@ -261,9 +273,10 @@ def test_child_receives_the_memory_arguments() -> None:
             EventKind.NODE,
             EventKind.NODE,
             EventKind.OUTCOME,
+            EventKind.MEMORY,
         ],
         f"and the child still runs the graph to a clean outcome, with the "
-        f"backstop case on the start frame (got {kinds})",
+        f"backstop case on the start and final frames (got {kinds})",
     )
     memory_frame = events[0].payload
     check(memory_frame["reserved_mb"] == 0.0
@@ -289,9 +302,31 @@ def test_child_receives_the_memory_arguments() -> None:
         f"the start frame says which backstop case happened "
         f"(got {memory_frame['backstop']!r}, expected {expected_backstop!r})",
     )
+    # The final frame: the run's last numbers, written as the child
+    # stops, so the peak the watcher files is the true high-water mark
+    # rather than the last interval's.
+    memory_frames = [e for e in events if e.kind is EventKind.MEMORY]
     check(
-        events[-1].payload == {"kind": "outcome", "error": None, "results_count": 2},
-        f"the outcome says it finished clean (got {events[-1].payload})",
+        len(memory_frames) >= 2,
+        f"a start frame and a final frame (got {len(memory_frames)})",
+    )
+    final_frame = memory_frames[-1].payload
+    check(
+        final_frame["budget_mb"] == 6000.0
+        and final_frame["backstop"] == expected_backstop,
+        f"the final frame carries the same budget and case "
+        f"(got {final_frame})",
+    )
+    for frame in memory_frames:
+        for key in ("reserved_mb", "allocated_mb", "peak_mb"):
+            check(
+                isinstance(frame.payload[key], (int, float)),
+                f"{key} is a number on every frame (got {frame.payload})",
+            )
+    outcome = next(e for e in events if e.kind is EventKind.OUTCOME)
+    check(
+        outcome.payload == {"kind": "outcome", "error": None, "results_count": 2},
+        f"the outcome says it finished clean (got {outcome.payload})",
     )
     check(
         wait_until(lambda: not GATEWAY.is_alive(pid), timeout=30.0),

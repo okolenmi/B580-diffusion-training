@@ -280,6 +280,28 @@ def check_backstop_clamps_a_budget_above_the_total():
            detail=repr(device.fraction))
 
 
+def check_memory_events_reach_the_listener():
+    print("[memory events: a lease/eviction decision reaches the wired "
+          "listener]")
+    memory = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
+    seen = []
+    memory.on_memory_event = lambda event, mb, cost_ms: seen.append(
+        (event, mb, cost_ms)
+    )
+    memory.report_memory_event("eviction", 1234.0, 56.7)
+    record(seen == [("eviction", 1234.0, 56.7)],
+           "the listener got the decision with MB and cost",
+           detail=repr(seen))
+
+
+def check_memory_events_without_a_listener_are_not_an_error():
+    print("[memory events: no listener is a no-op, not an error]")
+    memory = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
+    memory.report_memory_event("lease_granted", 500.0, 0.0)
+    record(memory.on_memory_event is None,
+           "nothing was wired, nothing broke")
+
+
 def main():
     check_stores_both_numbers()
     check_absent_is_unknown_not_zero()
@@ -294,6 +316,8 @@ def main():
     check_backstop_unavailable_without_the_attribute()
     check_backstop_unknowns_name_the_missing_number()
     check_backstop_clamps_a_budget_above_the_total()
+    check_memory_events_reach_the_listener()
+    check_memory_events_without_a_listener_are_not_an_error()
 
     print()
     print("=" * 60)

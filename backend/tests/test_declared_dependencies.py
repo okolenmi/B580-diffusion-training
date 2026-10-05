@@ -38,6 +38,17 @@ either in the manifest or in the allowlist below, with a reason.
   production, and they are allowed to reach further than the code they
   check.
 
+**The one direction between our own packages** (MEM-05 #5): `nodes/` is
+the layer the backend is built on top of, so a node module importing
+`backend/` inverts that and is refused here. `backend/` importing
+`nodes/` is the whole design and stays legal. The rule is a directional
+AST check over the `nodes/` tree -- absolute `backend` imports and
+relative ones whose level resolves up to the top-level `backend` -- and
+it reports the offending file and line, not just a count. A live smoke
+test (`smoke_test_graph_memory.py`) reaches into `backend/` to test the
+worker's own wiring helpers; that is why `nodes/smoke_tests` is excluded
+above rather than this rule carving out exceptions.
+
 Run: `python backend/tests/test_declared_dependencies.py`
 """
 
@@ -228,5 +239,81 @@ report(from_txt == from_manifest,
 
 report(not (set(imported) - declared - set(TRANSITIVE_BUT_DIRECT)),
        "so no import is unaccounted for by either list")
+
+print("\n-- and the one direction between our own packages that is forbidden --")
+
+
+def _backend_target(node, package_parts: list[str]) -> str | None:
+    """The top-level ``backend`` module one import node reaches, or None.
+
+    Two shapes count, because both are ways to actually import it:
+    ``import backend.x`` / ``from backend.x import y`` (absolute), and
+    a relative import whose level climbs out of the importing file's own
+    package to the repo root. For ``nodes/memory/graph_memory.py`` the
+    package is ``nodes.memory``, so ``.`` is ``nodes.memory``, ``..`` is
+    ``nodes`` and ``...`` is the top level -- only the last reaches
+    ``backend``. Walking the package parts up by ``level - 1`` and
+    reading the target off whatever is left is what keeps a
+    ``from ..backend`` inside ``nodes/memory/`` (which is ``nodes.backend``,
+    a different thing) from being flagged.
+    """
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name == "backend" or alias.name.startswith("backend."):
+                return alias.name
+        return None
+    if not isinstance(node, ast.ImportFrom):
+        return None
+    if node.level == 0:
+        module = node.module or ""
+        return module if module == "backend" or module.startswith("backend.") else None
+    climbed = node.module or ""
+    remaining = package_parts[: len(package_parts) - (node.level - 1)]
+    resolved = ".".join(remaining + ([climbed] if climbed else []))
+    return resolved if resolved == "backend" or resolved.startswith("backend.") else None
+
+
+def backend_imports_under(prefix: str) -> list[tuple[str, int]]:
+    """Every `backend` import reached from a module under ``prefix``.
+
+    Returns ``(relative path, line number)`` for each hit, so a failure
+    names the offending line instead of just the file.
+    """
+    hits: list[tuple[str, int]] = []
+    for path in sorted(REPO.rglob("*.py")):
+        rel = path.relative_to(REPO).as_posix()
+        if not rel.startswith(prefix) or rel.startswith(EXCLUDED_PREFIXES):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        package_parts = rel.split("/")[:-1]
+        for node in ast.walk(tree):
+            if _backend_target(node, package_parts) is not None:
+                hits.append((rel, node.lineno))
+    return hits
+
+
+layering_violations = backend_imports_under("nodes/")
+report(not layering_violations,
+       f"no node module imports backend ({len(layering_violations)} violation(s)) "
+       f"-- nodes/ is the layer the backend runs on top of, never the other "
+       f"way round (task rule 9 / ADR 0005 'Layering')",
+       "reached backend from: "
+       + "; ".join(f"{f}:{line}" for f, line in layering_violations[:6]))
+
+# Guard against the check quietly measuring nothing: it must actually walk
+# the node tree, or a future refactor that moves the files would turn this
+# into a green that means nothing.
+node_modules = [
+    path for path in REPO.rglob("*.py")
+    if path.relative_to(REPO).as_posix().startswith("nodes/")
+    and not path.relative_to(REPO).as_posix().startswith(EXCLUDED_PREFIXES)
+]
+report(len(node_modules) > 100,
+       f"and the pass actually walked the node tree ({len(node_modules)} modules)",
+       f"only {len(node_modules)} modules found under nodes/ -- the rule "
+       f"would pass by measuring nothing")
 
 finish()

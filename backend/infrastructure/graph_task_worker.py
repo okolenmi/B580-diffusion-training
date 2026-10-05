@@ -48,6 +48,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--execution", type=int, required=True)
     p.add_argument("--graph", required=True, help="JSON GraphDefinition")
     p.add_argument("--events", required=True, help="append-only event file")
+    # MEM-05 #1: the row's numbers, optional so a caller that has none
+    # (and every test that never knew about them) still spawns -- the
+    # child treats an absent pair as its explicit unknown.
+    p.add_argument(
+        "--memory-budget-mb",
+        type=float,
+        default=None,
+        help="allocator MB this run may use (absent = unknown)",
+    )
+    p.add_argument(
+        "--memory-grant-mb",
+        type=float,
+        default=None,
+        help="device MB admission granted this run (absent = unknown)",
+    )
     return p
 
 
@@ -75,12 +90,16 @@ class _EventMonitorBus:
         pass
 
 
-def build_runtime(writer, registry=None):
+def build_runtime(writer, registry=None, memory=None):
     """The one runtime both gateways run: the real one, wired to the file.
 
     Takes the registry so the in-process gateway can reuse the server's
     already-discovered one instead of paying discovery again; the child
-    passes nothing and discovers its own.
+    passes nothing and discovers its own. ``memory`` is the run's
+    GraphMemory (MEM-05 #1), built by the caller before anything loads
+    and carried to every node through ``ExecutionContext``; None means
+    the spawn carried no memory numbers, which the caller passed along
+    as its explicit unknown rather than resolving to a zero here.
     """
     from .graph.discovery import NodeRegistry
     from .graph.runtime import ReflectedGraphRuntime
@@ -88,6 +107,7 @@ def build_runtime(writer, registry=None):
     return ReflectedGraphRuntime(
         registry if registry is not None else NodeRegistry(),
         monitor_bus=_EventMonitorBus(writer),
+        memory=memory,
     )
 
 
@@ -176,16 +196,28 @@ def main(argv: list[str] | None = None) -> int:
     set_xpu_perf_env_vars()
 
     from backend.domain.graph import GraphDefinition
+    from nodes.memory.graph_memory import GraphMemory
 
     from .graph_event_stream import ExecutionEventWriter
 
     writer = ExecutionEventWriter(Path(args.events))
 
     try:
+        # MEM-05 #1: the memory picture first -- before the graph is
+        # read, before discovery, before torch. A GraphMemory built
+        # later could only judge what had already loaded; built here, a
+        # bad number fails the run while nothing is loaded yet (the
+        # except below turns the ValueError into an outcome record,
+        # like any other run outcome).
+        memory = GraphMemory(
+            grant_mb=args.memory_grant_mb, budget_mb=args.memory_budget_mb
+        )
         graph = GraphDefinition.from_dict(
             json.loads(Path(args.graph).read_text(encoding="utf-8"))
         )
-        outcome = run_execution(graph, writer, cancel, build_runtime(writer))
+        outcome = run_execution(
+            graph, writer, cancel, build_runtime(writer, memory=memory)
+        )
         return 1 if outcome.error else 0
     except Exception as exc:  # noqa: BLE001 -- the server needs to hear about this
         writer.outcome(error=f"{type(exc).__name__}: {exc}", results_count=0)

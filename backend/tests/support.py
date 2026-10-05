@@ -818,6 +818,22 @@ class TakeHandleNode(Node):
         return {"ok": isinstance(handle, Handle)}
 
 
+class MemoryProbeNode(Node):
+    """Touches the execution context's memory object (MEM-05 #1 proof).
+
+    Reports the injected GraphMemory's grant, or ``None`` when the
+    runtime was built without one (direct calls, spawns that carried no
+    memory numbers) -- the same shape MonitorProbeNode gives the bus.
+    """
+
+    INPUTS = {}
+    OUTPUTS = {"grant_mb": Port(name="grant_mb", type=float, required=False)}
+
+    def build(self):
+        memory = self.context.memory
+        return {"grant_mb": None if memory is None else memory.grant_mb}
+
+
 FIXTURE_NODES: dict[str, type] = {
     cls.__name__: cls
     for cls in (
@@ -836,6 +852,7 @@ FIXTURE_NODES: dict[str, type] = {
         EmitSubHandleNode,
         TakeHandleNode,
         MonitorProbeNode,
+        MemoryProbeNode,
     )
 }
 

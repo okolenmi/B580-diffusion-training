@@ -128,9 +128,11 @@ class EffectiveMemory:
     strict: bool
     policy: str
     ram_max_mb: float | str
-    #: The demand in device MB: stated beats observed (held = max of the
-    #: two, as in `Reservation.held_mb`); observed = recorded peak +
-    #: pillow.
+    #: The demand in allocator MB: stated beats observed (held = max of
+    #: the two, as in `Reservation.held_mb`); observed = recorded peak +
+    #: pillow. The caller that turns a demand into a device claim adds
+    #: the per-process overhead (start_graph_execution), which is what
+    #: makes this number the allocator's side and not the device's.
     demand_mb: float | None
     #: Whether the demand came from a stated value, an observed peak, or
     #: is unknown.

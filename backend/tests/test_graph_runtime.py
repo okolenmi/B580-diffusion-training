@@ -25,6 +25,7 @@ from backend.tests.support import (
     finish,
     fixture_graph_registry,
 )
+from nodes.memory.graph_memory import GraphMemory
 
 releases = {"n": 0}
 
@@ -392,6 +393,35 @@ unwired = runtime.execute(
 check(
     unwired.error is None and unwired.results[0].outputs["seen"] is False,
     "no bus wired: context.monitor_bus is None and the node survives",
+)
+
+# ==========================================================================
+# Memory wiring (MEM-05 #1) -- the injected GraphMemory reaches the node
+# ==========================================================================
+
+memory_runtime = ReflectedGraphRuntime(
+    fixture_graph_registry(),
+    memory_releaser=lambda: None,
+    memory=GraphMemory(grant_mb=6300.0, budget_mb=6000.0),
+)
+with_memory = memory_runtime.execute(
+    make(node("m", "MemoryProbeNode")),
+    cancel_event=threading.Event(),
+)
+check(
+    with_memory.error is None
+    and with_memory.results[0].outputs["grant_mb"] == 6300.0,
+    "the injected GraphMemory reaches the node through the context",
+)
+
+no_memory = runtime.execute(
+    make(node("m", "MemoryProbeNode")),
+    cancel_event=threading.Event(),
+)
+check(
+    no_memory.error is None
+    and no_memory.results[0].outputs["grant_mb"] is None,
+    "no memory wired: context.memory is None and the node survives",
 )
 
 finish()

@@ -159,7 +159,7 @@ class ExecutionContext:
     new global to invent.
     """
 
-    def __init__(self, monitor_bus=None, cancel_event=None):
+    def __init__(self, monitor_bus=None, cancel_event=None, memory=None):
         self.monitor_bus = monitor_bus
         # threading.Event, not asyncio -- graph execution runs in a plain
         # background thread (server/routes_nodegraph.py), and a Node's
@@ -169,6 +169,13 @@ class ExecutionContext:
         # involved) -- should_cancel() handles that without every caller
         # needing its own None-check.
         self.cancel_event = cancel_event
+        # The run's GraphMemory (MEM-05): built by the worker before
+        # anything loads and threaded through the runtime here, so a node
+        # asks the graph what it may use instead of probing the device
+        # itself. None outside a supervised run (direct calls, tests, a
+        # spawn that carried no memory numbers) -- the same contract as
+        # monitor_bus: the consumer checks, the node survives.
+        self.memory = memory
 
     def should_cancel(self) -> bool:
         return self.cancel_event is not None and self.cancel_event.is_set()

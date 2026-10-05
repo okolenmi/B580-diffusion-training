@@ -51,12 +51,23 @@ class GraphTaskLaunch:
     ``event_path`` is the append-only report channel described in
     ``graph_event_stream``; the parent creates the directory and the
     child opens the file for append.
+
+    The two memory numbers ride along as plain floats because they
+    exist only on the execution row: the graph file carries the
+    *graph's* settings, not this run's admission result (overrides,
+    peak-derived demand). ``None`` means the number was never supplied;
+    the child builds its GraphMemory with that number unknown rather
+    than this dataclass inventing a zero for it.
     """
 
     execution_id: ExecutionId
     graph_path: Path
     event_path: Path
     log_path: Path
+    #: Allocator MB this run may use (the fraction backstop's input).
+    memory_budget_mb: float | None = None
+    #: Device MB admission granted this run (the physical check's input).
+    memory_grant_mb: float | None = None
 
 
 

@@ -168,11 +168,42 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         # needs the old records kept.
         paths["events"].write_text("", encoding="utf-8")
 
+        # The child's memory picture (MEM-05 #1), read off the row
+        # because that is the only place it exists: admission stored
+        # the grant and the effective values there, and
+        # ``launch(execution_id, graph)`` is not told either. Unknown is
+        # a named state, not a zero -- the launch still proceeds and
+        # the child warns instead of checking against nothing.
+        execution = self._executions.get(execution_id)
+        memory_grant_mb = execution.reserved_mb if execution is not None else None
+        memory_budget_mb = (
+            execution.memory.demand_mb
+            if execution is not None and execution.memory is not None
+            else None
+        )
+        missing = [
+            name
+            for name, value in (
+                ("--memory-grant-mb", memory_grant_mb),
+                ("--memory-budget-mb", memory_budget_mb),
+            )
+            if value is None
+        ]
+        if missing:
+            logger.warning(
+                "execution %s: launching without %s; the child will treat "
+                "them as unknown rather than check against nothing",
+                execution_id,
+                " and ".join(missing),
+            )
+
         launch = GraphTaskLaunch(
             execution_id=execution_id,
             graph_path=paths["graph"],
             event_path=paths["events"],
             log_path=paths["log"],
+            memory_budget_mb=memory_budget_mb,
+            memory_grant_mb=memory_grant_mb,
         )
         try:
             pid = self._gateway.spawn(launch)

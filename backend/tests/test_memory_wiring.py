@@ -83,6 +83,7 @@ from backend.application.use_cases import (
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec
 from backend.domain.memory_settings import MemorySettings, effective_memory
+from backend.domain.value_objects import ExecutionId
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
@@ -1891,6 +1892,200 @@ def test_peak_filing_guards() -> None:
     check(True, "a store that raises cannot abort the watcher (it logged)")
 
 
+class _CapturingChild(GraphTaskGateway):
+    """Records the launches it was given, then ends the run immediately.
+
+    Outcome written *inside* ``spawn``, before the watcher thread
+    starts, so the watcher finds a finished run rather than a process
+    it has to watch die -- these tests are about what the launch
+    carried, not about supervision (which the file's other tests own).
+    """
+
+    def __init__(self) -> None:
+        self.launches: list[GraphTaskLaunch] = []
+
+    def spawn(self, launch: GraphTaskLaunch) -> int:
+        self.launches.append(launch)
+        writer = ExecutionEventWriter(launch.event_path)
+        writer.outcome(error=None, results_count=0)
+        writer.close()
+        return 1
+
+    def request_stop(self, pid: int) -> None:
+        pass
+
+    def kill(self, pid: int) -> None:
+        pass
+
+    def is_alive(self, pid: int) -> bool:
+        return False
+
+    def find_running_all(self, execution_id) -> list[int]:
+        return []
+
+    def find_running(self, execution_id) -> int | None:
+        return None
+
+
+def _capturing_supervisor(root: Path, repo, clock, gateway) -> GraphExecutionSupervisor:
+    return GraphExecutionSupervisor(
+        executions=repo,
+        writer=_writer(repo, clock),
+        gateway=gateway,
+        events=EventPublisher(events=RecordingEventBus()),
+        clock=clock,
+        scratch_dir=root / "scratch",
+        make_tail=ExecutionEventTail,
+        poll_interval=0.02,
+    )
+
+
+def test_spawn_carries_the_rows_memory_numbers() -> None:
+    print("-- the launch the supervisor builds carries the row's grant and budget --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-spawnargs-"))
+    repo = _graph_repo(root)
+    clock = FakeClock()
+    provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
+    gateway = _CapturingChild()
+    supervisor = _capturing_supervisor(root, repo, clock, gateway)
+    start = _graph_start(repo, provider, launcher=supervisor, clock=clock)
+
+    summary = start.execute(valid_graph())
+    row = repo.get(summary.execution_id)
+
+    check(len(gateway.launches) == 1, f"one launch was built (got {len(gateway.launches)})")
+    launch = gateway.launches[0]
+    check(
+        row.reserved_mb is not None and launch.memory_grant_mb == row.reserved_mb,
+        f"the grant the child gets is the row's own claim "
+        f"(got {launch.memory_grant_mb}, row {row.reserved_mb})",
+    )
+    check(
+        row.memory is not None and launch.memory_budget_mb == row.memory.demand_mb,
+        f"and the budget is the row's demand -- the numbers exist only on "
+        f"the row, never in the graph file "
+        f"(got {launch.memory_budget_mb}, row "
+        f"{row.memory.demand_mb if row.memory is not None else None})",
+    )
+    check(
+        wait_until(
+            lambda: repo.get(summary.execution_id).status.is_terminal, timeout=10.0
+        ),
+        "the captured child still ends the run cleanly",
+    )
+
+
+def test_a_launch_without_a_row_names_its_unknown_memory_numbers() -> None:
+    print("-- rule 2: a launch that cannot find its row says the numbers "
+          "are unknown, out loud --")
+    import logging
+
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-spawnunknown-"))
+    repo = _graph_repo(root)
+    clock = FakeClock()
+    gateway = _CapturingChild()
+    supervisor = _capturing_supervisor(root, repo, clock, gateway)
+
+    messages: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = _Capture()
+    logger = logging.getLogger("backend.application.graph_supervisor")
+    logger.addHandler(handler)
+    try:
+        # No row for this id is in the repository -- the adoption-style
+        # call whose row lives somewhere this supervisor cannot see.
+        supervisor.launch(ExecutionId(7), valid_graph())
+    finally:
+        logger.removeHandler(handler)
+
+    check(len(gateway.launches) == 1, "the launch still happened")
+    launch = gateway.launches[0]
+    check(
+        launch.memory_grant_mb is None and launch.memory_budget_mb is None,
+        f"both numbers are None, not an invented zero (got grant="
+        f"{launch.memory_grant_mb}, budget={launch.memory_budget_mb})",
+    )
+    check(
+        any(
+            "--memory-grant-mb" in m and "--memory-budget-mb" in m
+            for m in messages
+        ),
+        f"and the warning names both missing flags (got {messages})",
+    )
+
+
+def test_argv_carries_the_memory_numbers_to_the_child() -> None:
+    print("-- argv: known numbers travel as pairs, unknown ones are omitted --")
+    from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
+    from backend.infrastructure.graph_task_worker import _build_parser
+
+    def _pair(command: list[str], flag: str) -> str | None:
+        return command[command.index(flag) + 1] if flag in command else None
+
+    gateway = SubprocessGraphTaskGateway(
+        WorkspaceLayout(Path(__file__).resolve().parents[2])
+    )
+    full = GraphTaskLaunch(
+        execution_id=ExecutionId(7),
+        graph_path=Path("g.json"),
+        event_path=Path("e.jsonl"),
+        log_path=Path("l.log"),
+        memory_budget_mb=6000.0,
+        memory_grant_mb=6300.0,
+    )
+    # Private by design: this builder is the only thing that turns a
+    # launch into argv, so it is what "the numbers reached the child"
+    # has to assert against.
+    command = gateway._build_command(full)
+    check(
+        _pair(command, "--memory-budget-mb") == "6000.0",
+        f"budget sent as a parseable pair (got {command})",
+    )
+    check(
+        _pair(command, "--memory-grant-mb") == "6300.0",
+        f"grant sent as a parseable pair (got {command})",
+    )
+
+    bare = GraphTaskLaunch(
+        execution_id=ExecutionId(7),
+        graph_path=Path("g.json"),
+        event_path=Path("e.jsonl"),
+        log_path=Path("l.log"),
+    )
+    command = gateway._build_command(bare)
+    check(
+        "--memory-budget-mb" not in command and "--memory-grant-mb" not in command,
+        f"unknown numbers are omitted, not sent as zero (got {command})",
+    )
+
+    parsed = _build_parser().parse_args(
+        [
+            "--execution", "7",
+            "--graph", "g.json",
+            "--events", "e.jsonl",
+            "--memory-budget-mb", "6000.0",
+            "--memory-grant-mb", "6300.0",
+        ]
+    )
+    check(
+        parsed.memory_budget_mb == 6000.0 and parsed.memory_grant_mb == 6300.0,
+        f"the worker's parser reads both flags back "
+        f"(got {parsed.memory_budget_mb}, {parsed.memory_grant_mb})",
+    )
+    plain = _build_parser().parse_args(
+        ["--execution", "7", "--graph", "g.json", "--events", "e.jsonl"]
+    )
+    check(
+        plain.memory_budget_mb is None and plain.memory_grant_mb is None,
+        f"no flags: both stay None -- explicit unknown, never a zero "
+        f"(got {plain.memory_budget_mb}, {plain.memory_grant_mb})",
+    )
+
+
 def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
     root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
@@ -1978,6 +2173,9 @@ def main() -> None:
     test_unknown_total_refusal_names_what_the_rows_still_claim()
     test_task_start_with_an_unknown_total_names_the_graph_row()
     test_health_names_row_holders_while_the_total_is_unknown()
+    test_spawn_carries_the_rows_memory_numbers()
+    test_a_launch_without_a_row_names_its_unknown_memory_numbers()
+    test_argv_carries_the_memory_numbers_to_the_child()
     finish()
 
 

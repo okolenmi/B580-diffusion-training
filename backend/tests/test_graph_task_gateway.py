@@ -66,7 +66,9 @@ GATEWAY = SubprocessGraphTaskGateway(WorkspaceLayout(Path(__file__).resolve().pa
 WAIT = 90.0
 
 
-def _launch(execution_id: int, nodes: list[dict], *, edges=None) -> GraphTaskLaunch:
+def _launch(execution_id: int, nodes: list[dict], *, edges=None,
+            budget_mb: float | None = None,
+            grant_mb: float | None = None) -> GraphTaskLaunch:
     """Write a graph to disk and return the launch describing it."""
     graph = TMP / f"graph_{execution_id}.json"
     graph.write_text(
@@ -78,6 +80,8 @@ def _launch(execution_id: int, nodes: list[dict], *, edges=None) -> GraphTaskLau
         graph_path=graph,
         event_path=TMP / f"events_{execution_id}.jsonl",
         log_path=TMP / f"run_{execution_id}.log",
+        memory_budget_mb=budget_mb,
+        memory_grant_mb=grant_mb,
     )
 
 
@@ -213,6 +217,47 @@ def test_child_runs_a_graph_end_to_end() -> None:
     check(
         wait_until(lambda: not GATEWAY.is_alive(pid), timeout=30.0),
         "and the child exits afterwards, so a watcher waiting on liveness ends",
+    )
+
+
+def test_child_receives_the_memory_arguments() -> None:
+    print("\n== the row's memory numbers ride along on the child's argv ==")
+    # MEM-05 #1: a spawn carrying grant and budget must survive the
+    # builder, the parser and the child's own GraphMemory construction,
+    # and the graph must still run. The flag showing up on /proc is the
+    # part only a real child can prove -- argparse would reject a typo
+    # here, and the child would die before its first record.
+    launch = _launch(
+        12,
+        [_float_node("a", 1.5), _float_node("b", 2.5)],
+        budget_mb=6000.0,
+        grant_mb=6300.0,
+    )
+    pid = GATEWAY.spawn(launch)
+    check(pid > 0, f"a real pid came back (got {pid})")
+    check(
+        wait_until(
+            lambda: cmdline_mentions(pid, "--memory-grant-mb") is True,
+            timeout=WAIT,
+        ),
+        f"the grant flag is on the child's /proc cmdline (got "
+        f"{cmdline_mentions(pid, '--memory-grant-mb')!r})",
+    )
+
+    events = _collect(ExecutionEventTail(launch.event_path), pid,
+                     until=lambda seen: len(seen) >= 3)
+    kinds = [e.kind for e in events]
+    check(
+        kinds == [EventKind.NODE, EventKind.NODE, EventKind.OUTCOME],
+        f"and the child still runs the graph to a clean outcome (got {kinds})",
+    )
+    check(
+        events[-1].payload == {"kind": "outcome", "error": None, "results_count": 2},
+        f"the outcome says it finished clean (got {events[-1].payload})",
+    )
+    check(
+        wait_until(lambda: not GATEWAY.is_alive(pid), timeout=30.0),
+        "and the child exits",
     )
 
 
@@ -498,6 +543,7 @@ def main() -> None:
     # suite from 6.3s to 15s, and together they cost about one.
     tests = [
         test_child_runs_a_graph_end_to_end,
+        test_child_receives_the_memory_arguments,
         test_a_refused_graph_is_reported_by_the_child,
         test_a_killed_child_reports_no_outcome,
         test_stopping_a_run_actually_stops_it,

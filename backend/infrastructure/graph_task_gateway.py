@@ -74,7 +74,7 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         return proc.pid
 
     def _build_command(self, launch: GraphTaskLaunch) -> list[str]:
-        return [
+        command = [
             self._layout.venv_python,
             "-m",
             CMDLINE_MARKER,
@@ -85,6 +85,14 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
             "--events",
             str(launch.event_path),
         ]
+        # The row's memory numbers (MEM-05 #1). Only known ones travel:
+        # an absent pair is the child's explicit unknown, whereas a
+        # zero here would be an invented claim to check against.
+        if launch.memory_budget_mb is not None:
+            command += ["--memory-budget-mb", str(launch.memory_budget_mb)]
+        if launch.memory_grant_mb is not None:
+            command += ["--memory-grant-mb", str(launch.memory_grant_mb)]
+        return command
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -221,6 +229,7 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
 
     def spawn(self, launch: GraphTaskLaunch) -> int:
         from backend.domain.graph import GraphDefinition
+        from nodes.memory.graph_memory import GraphMemory
 
         from .graph_event_stream import ExecutionEventWriter
         from .graph_task_worker import build_runtime, run_execution
@@ -235,11 +244,20 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
 
         def body() -> None:
             try:
+                # The same GraphMemory the child builds from argv, and
+                # for the same reason: built before anything loads, so
+                # a bad number becomes an outcome record rather than a
+                # surprise later (MEM-05 #1). The two paths differ in
+                # where the interpreter state lives and in nothing else.
+                memory = GraphMemory(
+                    grant_mb=launch.memory_grant_mb,
+                    budget_mb=launch.memory_budget_mb,
+                )
                 graph = GraphDefinition.from_dict(
                     json.loads(Path(launch.graph_path).read_text(encoding="utf-8"))
                 )
                 make = self._runtime_factory or (
-                    lambda w: build_runtime(w, self._registry)
+                    lambda w: build_runtime(w, self._registry, memory=memory)
                 )
                 run_execution(graph, writer, cancel, make(writer))
             except Exception as exc:  # noqa: BLE001 -- the watcher needs to hear

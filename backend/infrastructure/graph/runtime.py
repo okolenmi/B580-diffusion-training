@@ -152,12 +152,17 @@ class ReflectedGraphRuntime(GraphRuntime):
         *,
         memory_releaser=_default_memory_releaser,
         monitor_bus=None,
+        memory=None,
     ) -> None:
         self._registry = registry
         self._memory_releaser = memory_releaser
         # None is legal (tests/direct calls: nodes no-op on it) but the
         # real composition root always passes the SharedMonitorBus.
         self._monitor_bus = monitor_bus
+        # The run's GraphMemory (MEM-05 #1), built by the caller before
+        # anything loads; None carries the caller's explicit unknown
+        # through, exactly like monitor_bus.
+        self._memory = memory
 
     # ------------------------------------------------------------------
     # GraphRuntime port
@@ -357,9 +362,11 @@ class ReflectedGraphRuntime(GraphRuntime):
         # wired (the SharedMonitorBus in production) reaches MonitorNode
         # and the trainer's report handles through the context; None
         # stays legal for direct calls -- nodes handle it (see
-        # nodes/monitor/training_progress).
+        # nodes/monitor/training_progress). ``memory`` is the run's
+        # GraphMemory on the same contract (MEM-05 #1).
         context = ExecutionContext(
-            monitor_bus=self._monitor_bus, cancel_event=cancel_event
+            monitor_bus=self._monitor_bus, cancel_event=cancel_event,
+            memory=self._memory,
         )
         outputs_by_node: dict[str, dict] = {}
         results: list[NodeResult] = []

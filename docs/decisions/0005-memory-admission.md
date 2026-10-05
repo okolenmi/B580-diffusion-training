@@ -14,9 +14,9 @@ tenant, each stay under their own ceiling, and together overrun it.
 The existing `DeviceReservations` (nodes/memory/device_reservations.py) is
 an in-process, `threading.Lock`-protected dict. It cannot coordinate
 processes: two children each see 0 MB held by the other, so both are
-admitted. The existing `PeakRecord` (nodes/memory/peak_record.py) writes
-atomically (temp file + rename) but loses updates across processes: six
-processes recording distinct peaks at the same instant ended with a stored
+admitted. The `PeakRecord` JSON file (nodes/memory/peak_record.py, since
+removed) wrote atomically (temp file + rename) but lost updates across processes:
+six processes recording distinct peaks at the same instant ended with a stored
 peak lower than the highest recorded in 69 of 150 trials.
 
 ## Decision
@@ -114,7 +114,8 @@ into graph settings on load.
 - `DeviceReservations` as a per-process dict: replaced by the server-side
   ledger for cross-process claims.
 - `PeakRecord` as a JSON file: replaced by the SQLite peak store for
-  cross-process persistence. The in-process implementation is kept only if
-  made correct (fcntl lock around read-modify-write + fsync).
+  cross-process persistence. Removed (MEM-04 #3) rather than kept and made
+  correct with an fcntl lock: its 14 checks are ported to the SQLite store's
+  tests, including corruption reads as unknown and re-records rewrite cleanly.
 - `VRAMBudgetControllerNode`: lifted into graph settings on load, then
   removed.

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 #: Extra VRAM held above an observed peak, in MB. Same as
-#: `device_reservations.OBSERVED_PILLOW_MB` and `peak_record.DEFAULT_PILLOW_MB`.
+#: `device_reservations.OBSERVED_PILLOW_MB`.
 OBSERVED_PILLOW_MB = 150.0
 
 #: Default foreign reserve: the desktop and other applications. Measured

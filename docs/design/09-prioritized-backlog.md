@@ -601,6 +601,8 @@ missing is a real run:**
   `nodes/memory/device_reservations.py` (the registry, per *device* -- the
   device is the resource being divided) and `nodes/memory/peak_record.py`
   (what previous runs actually peaked at, on disk). 22 + 14 checks.
+  (`peak_record.py` removed in MEM-04 #3; its 14 checks now live in
+  `backend/tests/test_memory_peak_store.py` against the SQLite store.)
 
       card 12,216 MB (that is 11.93 GiB in MB)
       1. first ever run of a configuration    REFUSED -- nothing known
@@ -622,10 +624,10 @@ missing is a real run:**
   exactly that.
 
   **Which collapses the two modes into one.** Observed mode is not a separate
-  policy; it is this mechanism with the number read from `PeakRecord` instead
-  of typed by a person. Both are checked identically, because the entire value
-  of observing is that the observation happened *before* this run. So
-  `admit()` now **requires** a number and refuses when there is none.
+  policy; it is this mechanism with the number read from the persistent peak
+  record instead of typed by a person. Both are checked identically, because
+  the entire value of observing is that the observation happened *before* this
+  run. So `admit()` now **requires** a number and refuses when there is none.
 
   **That last change came from the demonstration run, and it closed a hole in
   my own code.** `admit(..., stated_mb=None)` used to mean "observed mode,

@@ -1,12 +1,16 @@
 """Tests for SqlitePeakStore: one writer for peaks.
 
-The existing PeakRecord (nodes/memory/peak_record.py) writes atomically
-(temp file + rename) but loses updates across processes: six processes
-recording distinct peaks at the same instant ended with a stored peak
-lower than the highest recorded in 69 of 150 trials.
+The `PeakRecord` JSON file this replaces (removed in MEM-04 #3) wrote
+atomically (temp file + rename) but lost updates across processes: six
+processes recording distinct peaks at the same instant ended with a
+stored peak lower than the highest recorded in 69 of 150 trials.
 
-This module is the fix: a SQLite table with `INSERT ... ON CONFLICT DO
-UPDATE SET peak = MAX(peak, excluded.peak)`.
+This store is the fix: a SQLite table with `INSERT ... ON CONFLICT DO
+UPDATE SET peak = MAX(peak, excluded.peak)`. The ported section below
+carries the 14 checks of the removed file implementation's smoke test
+(monotonic, corruption reads as unknown, one fingerprint never answers
+for another), so the guarantees that implementation had to keep stay
+pinned on this one.
 """
 
 from __future__ import annotations
@@ -174,6 +178,113 @@ def test_samples_incremented():
         assert row[0] == 3
 
 
+# -- ported from nodes/smoke_tests/smoke_test_peak_record.py (MEM-04 #3) ----
+# The numbers are ones this session measured on the B580: rank-64 LoRA at
+# 1024 with checkpointing peaks at 7,666 MB at batch 2 and 8,954 MB at
+# batch 4; residents are constant at 5,611 MB; reserved drift across runs
+# is 0-14 MB, which is what the 150 MB pillow has to cover and why it is
+# not larger. The other four of the original 14 checks live in the tests
+# above: unknown is None (not zero), peak + pillow, never lowered,
+# forget reads as unknown.
+
+
+def test_higher_peak_raises_the_stored_value():
+    """A worse run raises the mark (ported check 4)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _store(Path(tmp) / "peaks.db")
+        store.record("fp1", 7666.0)  # batch 2
+        store.record("fp1", 8954.0)  # batch 4, measured later, is worse
+        assert store.peak_mb("fp1") == 8954.0
+        assert store.reservation_mb("fp1") == 9104.0
+
+
+def test_fingerprints_stay_separate():
+    """One configuration's numbers never answer another's (checks 5-7)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _store(Path(tmp) / "peaks.db")
+        batch2 = "sdxl|2|1024|1024|64|True|adamw"
+        batch4 = "sdxl|4|1024|1024|64|True|adamw"
+        no_ckpt = "sdxl|2|1024|1024|64|False|adamw"
+        assert store.peak_mb(batch2) is None  # never measured: unknown
+        store.record(batch2, 7666.0)
+        assert store.peak_mb(batch4) is None  # another batch, unmeasured
+        assert store.peak_mb(no_ckpt) is None  # another checkpointing flag
+        store.record(batch4, 8954.0)
+        assert store.peak_mb(batch2) == 7666.0  # recording one leaves others
+        assert store.peak_mb(no_ckpt) is None
+
+
+def test_store_leaves_no_litter():
+    """Every write, including over a corrupt file, stays in the one file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        store = _store(db)
+        store.record("fp1", 7666.0)
+        db.write_text("{ not json, not sqlite either }")
+        store.record("fp1", 7666.0)  # discard + rewrite, no debris left
+        store.forget("fp1")
+        assert {p.name for p in Path(tmp).iterdir()} == {"peaks.db"}
+
+
+def test_corrupt_db_reads_as_unknown_and_rewrites_cleanly():
+    """Checks 9-10: a damaged file is a cache miss, then a clean file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        store = _store(db)
+        store.record("fp1", 7666.0)
+        db.write_text("{ not json, not sqlite either }")
+        # (9) corrupt reads as unknown: never a zero, never a crash.
+        assert store.peak_mb("fp1") is None
+        assert store.reservation_mb("fp1") is None
+        assert store.known() == {}
+        # (10) re-recording rewrites a clean file, and MAX starts over
+        # from what is actually in it.
+        assert store.record("fp1", 3000.0) == 3000.0
+        assert store.peak_mb("fp1") == 3000.0
+        store.record("fp1", 7666.0)
+        assert store.peak_mb("fp1") == 7666.0
+        # ...and a fresh instance sees the rewritten file, not the debris.
+        assert _store(db).peak_mb("fp1") == 7666.0
+
+
+def test_known_holds_plain_readable_numbers():
+    """The rows are real numbers a person can read (check 11)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        store = _store(db)
+        store.record("fp1", 7666.0)
+        known = store.known()
+        assert known == {"fp1": 7666.0}
+        assert isinstance(known["fp1"], float)
+        # ...and straight through sqlite, not only the store's own code.
+        import sqlite3
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT peak_mb FROM memory_peaks WHERE fingerprint = ?",
+                ("fp1",),
+            ).fetchone()
+        assert row is not None and float(row[0]) == 7666.0
+
+
+def test_forget_leaves_other_configurations_alone():
+    """Forgetting one key drops only that one (check 13)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _store(Path(tmp) / "peaks.db")
+        store.record("fp1", 7666.0)
+        store.record("fp2", 8954.0)
+        store.forget("fp1")
+        assert store.peak_mb("fp1") is None
+        assert store.peak_mb("fp2") == 8954.0
+
+
+def test_reopen_sees_the_measurement():
+    """A second store over the same file sees the first's (check 14)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        first = _store(db)
+        first.record("fp1", 7666.0)
+        assert _store(db).peak_mb("fp1") == 7666.0
+
 
 def main() -> None:
     """Run every test in this file, listed by name.
@@ -194,6 +305,13 @@ def main() -> None:
         test_concurrent_writers_max_semantics,
         test_concurrent_writers_threads,
         test_samples_incremented,
+        test_higher_peak_raises_the_stored_value,
+        test_fingerprints_stay_separate,
+        test_store_leaves_no_litter,
+        test_corrupt_db_reads_as_unknown_and_rewrites_cleanly,
+        test_known_holds_plain_readable_numbers,
+        test_forget_leaves_other_configurations_alone,
+        test_reopen_sees_the_measurement,
     ]
     for test in tests:
         test()

@@ -225,9 +225,9 @@ def admit(reservations: DeviceReservations, owner: str, *,
 
     **The observed and stated modes are not two mechanisms.** They are this one
     mechanism with the number coming from different places: a *stated*
-    reservation is written by a person, an *observed* one is read out of
-    `PeakRecord` (nodes/memory/peak_record.py) from what a previous run of the
-    same configuration actually peaked at, plus a small pillow. Both are
+    reservation is written by a person, an *observed* one is read out of a
+    persistent peak record (the SQLite peak store, MEM-04) from what a previous
+    run of the same configuration actually peaked at, plus a small pillow. Both are
     checked the same way, because the whole point of observing is that the
     observation happened *before* this run -- a peak learned while the run is
     already going can only be enforced by killing it, which is the worst place
@@ -243,7 +243,7 @@ def admit(reservations: DeviceReservations, owner: str, *,
         raise ReservationRefused(
             f"{owner} cannot be admitted: nothing is known about how much VRAM "
             f"it needs. Supply a stated reservation, or measure this "
-            f"configuration once so PeakRecord can supply one -- an "
+            f"configuration once so the peak record can supply one -- an "
             f"unmeasured run is refused, not admitted with a zero claim."
         )
     fits = reservations.fits(stated_mb, exclude=owner)

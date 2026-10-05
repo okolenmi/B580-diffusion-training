@@ -2196,6 +2196,138 @@ def test_physical_check_refuses_shortfall_and_continues_on_unknown() -> None:
         worker_logger.removeHandler(handler)
 
 
+def test_allocator_backstop_cases_and_their_warnings() -> None:
+    print("-- backstop: the case is named, and the warning says why --")
+    import logging
+
+    from backend.infrastructure.graph_task_worker import (
+        BACKSTOP_ENFORCED,
+        BACKSTOP_UNKNOWN_BUDGET,
+        BACKSTOP_UNKNOWN_TOTAL,
+        BACKSTOP_UNAVAILABLE,
+        apply_allocator_backstop,
+    )
+    from nodes.memory.graph_memory import GraphMemory
+
+    class _Card:
+        """A device double: a total, and a cap that can answer False --
+        one of the two ways a build can lack the attribute."""
+
+        def __init__(self, total_mb, *, cap_result=True):
+            self.total_mb = total_mb
+            self.cap_result = cap_result
+            self.fraction = None
+
+        def total_memory_mb(self):
+            return self.total_mb
+
+        def set_per_process_memory_fraction(self, fraction):
+            self.fraction = fraction
+            return self.cap_result
+
+    class _BareCard:
+        """The other way: no method at all, like a CPU backend."""
+
+        def __init__(self, total_mb):
+            self.total_mb = total_mb
+
+        def total_memory_mb(self):
+            return self.total_mb
+
+    worker_logger = logging.getLogger(
+        "backend.infrastructure.graph_task_worker"
+    )
+    warnings: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record) -> None:
+            warnings.append(record.getMessage())
+
+    handler = _Capture()
+    worker_logger.addHandler(handler)
+    try:
+        # Enforced: the fraction is budget/total, nothing warned.
+        warnings.clear()
+        card = _Card(12216.0)
+        case = apply_allocator_backstop(
+            GraphMemory(budget_mb=6000.0), card
+        )
+        check(case == BACKSTOP_ENFORCED, f"case is enforced (got {case})")
+        check(
+            abs(card.fraction - 6000.0 / 12216.0) < 1e-9,
+            f"the fraction is budget/total (got {card.fraction!r})",
+        )
+        check(warnings == [], f"no warning when it works (got {warnings!r})")
+
+        # Unavailable, both shapes: no method on the device, and a
+        # method that answers False. The spec's warning, verbatim.
+        for name, card in (
+            ("no method", _BareCard(12216.0)),
+            ("False", _Card(12216.0, cap_result=False)),
+        ):
+            warnings.clear()
+            case = apply_allocator_backstop(
+                GraphMemory(budget_mb=6000.0), card
+            )
+            check(
+            case == BACKSTOP_UNAVAILABLE,
+            f"{name}: case is unavailable (got {case})",
+        )
+            check(
+                any("budget not enforced by the allocator" in w
+                    for w in warnings),
+                f"{name}: the warning is the spec's sentence "
+                f"(got {warnings!r})",
+            )
+
+        # Unknowns name the missing number, never a zero.
+        warnings.clear()
+        case = apply_allocator_backstop(
+            GraphMemory(grant_mb=6300.0), _Card(12216.0)
+        )
+        check(
+            case == BACKSTOP_UNKNOWN_BUDGET,
+            f"no budget: unknown_budget (got {case})",
+        )
+        check(
+            any("no budget was stated" in w for w in warnings),
+            f"and the warning says which number is missing (got {warnings!r})",
+        )
+        warnings.clear()
+        case = apply_allocator_backstop(
+            GraphMemory(budget_mb=6000.0), _Card(None)
+        )
+        check(
+            case == BACKSTOP_UNKNOWN_TOTAL,
+            f"no total: unknown_total (got {case})",
+        )
+        check(
+            any("device total is unknown" in w for w in warnings),
+            f"and the warning says which number is missing (got {warnings!r})",
+        )
+
+        # A budget above the total is capped, and the cap is said.
+        warnings.clear()
+        card = _Card(12216.0)
+        case = apply_allocator_backstop(
+            GraphMemory(budget_mb=20000.0), card
+        )
+        check(
+            case == BACKSTOP_ENFORCED,
+            f"capped: still enforced (got {case})",
+        )
+        check(
+            card.fraction == 1.0,
+            f"the fraction is capped at 1.0 (got {card.fraction!r})",
+        )
+        check(
+            any("exceeds the device total" in w for w in warnings),
+            f"and the over-reach is not silent (got {warnings!r})",
+        )
+    finally:
+        worker_logger.removeHandler(handler)
+
+
 def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
     root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
@@ -2287,6 +2419,7 @@ def main() -> None:
     test_a_launch_without_a_row_names_its_unknown_memory_numbers()
     test_argv_carries_the_memory_numbers_to_the_child()
     test_physical_check_refuses_shortfall_and_continues_on_unknown()
+    test_allocator_backstop_cases_and_their_warnings()
     finish()
 
 

@@ -234,6 +234,19 @@ class _XPUDeviceContext(DeviceContext):
             logger.warning("torch.xpu.mem_get_info could not be read: %s", exc)
             return None
 
+    def set_per_process_memory_fraction(self, fraction: float) -> bool:
+        """Cap this process's allocator at ``fraction`` of the device
+        total (MEM-05 #3's backstop).
+
+        False when this torch build has no such attribute -- the caller
+        logs the warning and continues, because a backstop that cannot
+        be applied is a fact about the run, not a reason to refuse it.
+        """
+        if not hasattr(torch.xpu, "set_per_process_memory_fraction"):
+            return False
+        torch.xpu.set_per_process_memory_fraction(fraction)
+        return True
+
 
 class _CUDADeviceContext(DeviceContext):
     """Same three operations for CUDA, reachable when for_device()
@@ -276,6 +289,14 @@ class _CUDADeviceContext(DeviceContext):
         except Exception as exc:  # noqa: BLE001 -- see the XPU twin
             logger.warning("torch.cuda.mem_get_info could not be read: %s", exc)
             return None
+
+    def set_per_process_memory_fraction(self, fraction: float) -> bool:
+        # See the XPU twin: False is the honest answer on a build without
+        # the attribute, and the caller's warning is the outcome.
+        if not hasattr(torch.cuda, "set_per_process_memory_fraction"):
+            return False
+        torch.cuda.set_per_process_memory_fraction(fraction)
+        return True
 
 
 class _NullDeviceContext(DeviceContext):

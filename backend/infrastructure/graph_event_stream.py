@@ -30,7 +30,9 @@ Four record kinds, append-only, one JSON object per line:
 
 ``memory``
     One memory telemetry frame: ``reserved_mb``, ``allocated_mb``,
-    ``peak_mb``, ``budget_mb`` (null = no budget stated). The child
+    ``peak_mb``, ``budget_mb`` (null = no budget stated), and
+    ``backstop`` (MEM-05 #3) -- the allocator-cap case for this run:
+    "enforced", or the honest name for why not. The child
     reports numbers; the server's watcher files ``peak_mb`` into the
     peak store under the fingerprint key admission stored on the row
     (MEM-04 #2) -- one configuration-keyed high-water mark per graph,
@@ -147,6 +149,7 @@ class ExecutionEventWriter:
         allocated_mb: float,
         peak_mb: float,
         budget_mb: float | None,
+        backstop: str | None = None,
     ) -> None:
         """One memory telemetry frame (MEM-04 #2).
 
@@ -154,6 +157,14 @@ class ExecutionEventWriter:
         stated for this run -- never 0.0, which would claim the run was
         given nothing on purpose (task rule 2: an absent value is an
         explicit unknown, not a zero).
+
+        ``backstop`` (MEM-05 #3) is the allocator-cap case for this run:
+        "enforced", or the honest name for why not ("unavailable" --
+        this torch build has no ``set_per_process_memory_fraction``;
+        "unknown_budget" / "unknown_total" -- the fraction could not be
+        computed). None on a frame that does not carry it. The child
+        writes it on the start-of-run frame; the fixed-interval
+        producer of MEM-05 #4 repeats it on every frame.
         """
         self._write(
             {
@@ -162,6 +173,7 @@ class ExecutionEventWriter:
                 "allocated_mb": allocated_mb,
                 "peak_mb": peak_mb,
                 "budget_mb": budget_mb,
+                "backstop": backstop,
             }
         )
 

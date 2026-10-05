@@ -194,11 +194,18 @@ def test_child_runs_a_graph_end_to_end() -> None:
     check(GATEWAY.is_alive(pid), "and it is alive")
 
     events = _collect(ExecutionEventTail(launch.event_path), pid,
-                     until=lambda seen: len(seen) >= 3)
+                     until=lambda seen: any(
+                         e.kind is EventKind.OUTCOME for e in seen))
     kinds = [e.kind for e in events]
     check(
-        kinds == [EventKind.NODE, EventKind.NODE, EventKind.OUTCOME],
-        f"two node records and one outcome, in order (got {kinds})",
+        kinds == [
+            EventKind.MEMORY,
+            EventKind.NODE,
+            EventKind.NODE,
+            EventKind.OUTCOME,
+        ],
+        f"the backstop's start frame, two node records and one outcome, "
+        f"in order (got {kinds})",
     )
     by_id = {e.payload["node_id"]: e.payload for e in events if e.kind is EventKind.NODE}
     check(
@@ -245,11 +252,42 @@ def test_child_receives_the_memory_arguments() -> None:
     )
 
     events = _collect(ExecutionEventTail(launch.event_path), pid,
-                     until=lambda seen: len(seen) >= 3)
+                     until=lambda seen: any(
+                         e.kind is EventKind.OUTCOME for e in seen))
     kinds = [e.kind for e in events]
     check(
-        kinds == [EventKind.NODE, EventKind.NODE, EventKind.OUTCOME],
-        f"and the child still runs the graph to a clean outcome (got {kinds})",
+        kinds == [
+            EventKind.MEMORY,
+            EventKind.NODE,
+            EventKind.NODE,
+            EventKind.OUTCOME,
+        ],
+        f"and the child still runs the graph to a clean outcome, with the "
+        f"backstop case on the start frame (got {kinds})",
+    )
+    memory_frame = events[0].payload
+    check(memory_frame["reserved_mb"] == 0.0
+          and memory_frame["allocated_mb"] == 0.0
+          and memory_frame["peak_mb"] == 0.0,
+          f"the start frame reports nothing allocated yet "
+          f"(got {memory_frame})")
+    check(memory_frame["budget_mb"] == 6000.0,
+          f"the start frame carries the budget (got {memory_frame})")
+    # The case is a property of the installed torch build, not of this
+    # test: this repo's pinned build has the attribute (measured), so
+    # the cap is applied -- and on a build without it the same frame
+    # says "unavailable" instead of pretending.
+    import torch
+
+    expected_backstop = (
+        "enforced"
+        if hasattr(torch.xpu, "set_per_process_memory_fraction")
+        else "unavailable"
+    )
+    check(
+        memory_frame["backstop"] == expected_backstop,
+        f"the start frame says which backstop case happened "
+        f"(got {memory_frame['backstop']!r}, expected {expected_backstop!r})",
     )
     check(
         events[-1].payload == {"kind": "outcome", "error": None, "results_count": 2},

@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import signal
 import sys
 import threading
@@ -41,6 +42,15 @@ from pathlib import Path
 from ..python_floor import require_python
 
 logger = logging.getLogger(__name__)
+
+#: Allocator-backstop outcomes (MEM-05 #3). ``enforced`` is the only one
+#: that capped anything; the rest are the honest names for "could not",
+#: each logged once per run and recorded in the telemetry so the UI
+#: can say which happened -- never nothing.
+BACKSTOP_ENFORCED = "enforced"
+BACKSTOP_UNAVAILABLE = "unavailable"
+BACKSTOP_UNKNOWN_BUDGET = "unknown_budget"
+BACKSTOP_UNKNOWN_TOTAL = "unknown_total"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -189,6 +199,62 @@ def physical_check_or_refuse(memory, writer, *, device="xpu", device_ctx=None) -
     return True
 
 
+def apply_allocator_backstop(memory, device) -> str:
+    """MEM-05 #3: cap this process's allocator at ``budget / total``.
+
+    The grant is what admission held on the device; the budget is what
+    this process may hand out; the fraction is the one lever the
+    allocator itself gives. Best-effort by design: a backstop that
+    cannot be applied -- no budget stated, no total to divide by, no
+    ``set_per_process_memory_fraction`` on this torch build -- is one
+    warning and a continue, never a refusal. The physical check is the
+    refusal; this is the belt to its braces.
+
+    ``device`` is anything with ``total_memory_mb()`` and (on a real
+    backend) ``set_per_process_memory_fraction()`` -- a
+    ``DeviceContext`` or a fake -- mirroring ``GraphMemory``'s own
+    duck-typed ``physical_check``.
+
+    Returns the case, which the caller records in the telemetry: the
+    UI says "enforced" or names why not, never nothing.
+    """
+    budget = memory.budget_mb
+    if budget is None:
+        logger.warning(
+            "budget not enforced by the allocator: no budget was stated "
+            "for this run"
+        )
+        return BACKSTOP_UNKNOWN_BUDGET
+    total = device.total_memory_mb()
+    if total is None or not math.isfinite(total) or total <= 0:
+        logger.warning(
+            "budget not enforced by the allocator: the device total is "
+            "unknown"
+        )
+        return BACKSTOP_UNKNOWN_TOTAL
+    # A budget above the total is a misconfiguration, not a license to
+    # over-subscribe: the fraction is capped at "everything" and the
+    # over-reach is left for the physical check to refuse (it compares
+    # the grant against what is free, and the grant is the budget plus
+    # overhead).
+    fraction = budget / total
+    if fraction > 1.0:
+        logger.warning(
+            "budget %.0f MB exceeds the device total %.0f MB; capping the "
+            "allocator fraction at 1.0",
+            budget,
+            total,
+        )
+        fraction = 1.0
+    if not hasattr(device, "set_per_process_memory_fraction"):
+        logger.warning("budget not enforced by the allocator")
+        return BACKSTOP_UNAVAILABLE
+    if not device.set_per_process_memory_fraction(fraction):
+        logger.warning("budget not enforced by the allocator")
+        return BACKSTOP_UNAVAILABLE
+    return BACKSTOP_ENFORCED
+
+
 def main(argv: list[str] | None = None) -> int:
     # The floor first, before the signal handlers: a child that cannot run
     # should say why on stderr, where the supervisor's log will keep it.
@@ -268,10 +334,31 @@ def main(argv: list[str] | None = None) -> int:
         # grant the ledger held, this becomes the outcome and the child
         # exits cleanly -- before any model is loaded. Unknowns
         # continue with a warning (see the helper).
+        #
+        # The context is built once and shared with the backstop below:
+        # the check asks it what is free, the backstop asks it what
+        # exists in total, and a backend that cannot answer at all is
+        # one unknown rather than two.
+        from nodes.components.device import DeviceContext
+
+        device_ctx = DeviceContext.for_device(graph.memory.device)
         if not physical_check_or_refuse(
-            memory, writer, device=graph.memory.device
+            memory, writer, device=graph.memory.device, device_ctx=device_ctx
         ):
             return 1
+        # MEM-05 #3: the allocator's own cap, best-effort -- a refusal
+        # is the physical check's job; this is the belt to its braces.
+        # The case rides the first memory frame so the telemetry (and
+        # the UI reading it) can say which happened from the start,
+        # before the fixed-interval producer of MEM-05 #4 exists.
+        backstop = apply_allocator_backstop(memory, device_ctx)
+        writer.memory(
+            reserved_mb=0.0,
+            allocated_mb=0.0,
+            peak_mb=0.0,
+            budget_mb=memory.budget_mb,
+            backstop=backstop,
+        )
         outcome = run_execution(
             graph, writer, cancel, build_runtime(writer, memory=memory)
         )

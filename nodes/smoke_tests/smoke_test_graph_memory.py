@@ -1,4 +1,4 @@
-"""Checks nodes/memory/graph_memory.py's GraphMemory (MEM-05 #1, #2).
+"""Checks nodes/memory/graph_memory.py's GraphMemory (MEM-05 #1, #2, #3).
 
 The child's memory picture: two numbers, their unknowns named, and the
 validation that keeps a NaN or a negative out of everything downstream.
@@ -9,6 +9,11 @@ this constructor would pass on garbage instead of refusing it.
 Then the check itself (#2): what the pre-load comparison against the
 real card decides in each of its three states -- ok, shortfall, and the
 unknowns that must continue with a warning rather than pass on a zero.
+
+And the backstop (#3): the allocator's own cap, ``budget / total``,
+applied through the device when the installed torch build has the
+attribute -- and the honest case name when it does not, so the
+telemetry can say which happened.
 """
 
 import math
@@ -17,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.infrastructure.graph_task_worker import apply_allocator_backstop
 from nodes.core import ExecutionContext
 from nodes.memory.graph_memory import (
     CHECK_OK,
@@ -111,12 +117,14 @@ class FakeDevice:
     """
 
     def __init__(self, *, capacity_mb, allocation_mb=0.0, overhead_mb=0.0,
-                 free_override=_NO_OVERRIDE):
+                 free_override=_NO_OVERRIDE, total_override=_NO_OVERRIDE):
         self.capacity_mb = capacity_mb
         self.allocation_mb = allocation_mb
         self.overhead_mb = overhead_mb
         self.foreign_mb = 0.0
         self._override = free_override
+        self._total_override = total_override
+        self.fraction = None
 
     def appears(self, foreign_mb):
         """A foreign process claims room the ledger cannot see."""
@@ -127,6 +135,36 @@ class FakeDevice:
             return self._override
         return (self.capacity_mb - self.allocation_mb
                 - self.overhead_mb - self.foreign_mb)
+
+    def total_memory_mb(self):
+        if self._total_override is not _NO_OVERRIDE:
+            return self._total_override
+        return self.capacity_mb
+
+    def set_per_process_memory_fraction(self, fraction):
+        """The allocator's cap, recorded so the test can read it back."""
+        self.fraction = fraction
+        return True
+
+
+class _BareDevice:
+    """A device with no allocator-fraction notion: the method is simply
+    absent, which is how a CPU backend or an older torch build looks
+    to the backstop."""
+
+    def __init__(self, capacity_mb):
+        self.capacity_mb = capacity_mb
+
+    def total_memory_mb(self):
+        return self.capacity_mb
+
+
+class _RefusingDevice(_BareDevice):
+    """A build where the context has the method but the torch build
+    answers False: the cap cannot be applied."""
+
+    def set_per_process_memory_fraction(self, fraction):
+        return False
 
 
 def check_physical_ok_when_the_card_has_room():
@@ -193,6 +231,55 @@ def check_physical_unknowns_never_pass_or_refuse_silently():
                f"{name}: not refused (refusal needs both numbers)")
 
 
+def check_backstop_enforced_when_the_build_has_the_attribute():
+    print("[backstop: budget/total is set on the device, and the case "
+          "says so]")
+    device = FakeDevice(capacity_mb=12216.0)
+    case = apply_allocator_backstop(GraphMemory(budget_mb=6000.0), device)
+    record(case == "enforced", "case is enforced", detail=case)
+    record(
+        abs(device.fraction - 6000.0 / 12216.0) < 1e-9,
+        "the fraction is budget/total",
+        detail=repr(device.fraction),
+    )
+
+
+def check_backstop_unavailable_without_the_attribute():
+    print("[backstop: no set_per_process_memory_fraction on this build "
+          "-> unavailable, not a refusal]")
+    case = apply_allocator_backstop(
+        GraphMemory(budget_mb=6000.0), _BareDevice(12216.0))
+    record(case == "unavailable", "case is unavailable", detail=case)
+    case = apply_allocator_backstop(
+        GraphMemory(budget_mb=6000.0), _RefusingDevice(12216.0))
+    record(case == "unavailable",
+           "a False from the device is the same case", detail=case)
+
+
+def check_backstop_unknowns_name_the_missing_number():
+    print("[backstop: no budget or no total -> the case names which]")
+    device = FakeDevice(capacity_mb=12216.0)
+    case = apply_allocator_backstop(GraphMemory(grant_mb=6300.0), device)
+    record(case == "unknown_budget", "no budget stated: unknown_budget",
+           detail=case)
+    case = apply_allocator_backstop(
+        GraphMemory(budget_mb=6000.0),
+        FakeDevice(capacity_mb=12216.0, total_override=None),
+    )
+    record(case == "unknown_total", "no total to divide by: unknown_total",
+           detail=case)
+
+
+def check_backstop_clamps_a_budget_above_the_total():
+    print("[backstop: a budget above the total is capped at 1.0, not "
+          "passed through as a license to over-subscribe]")
+    device = FakeDevice(capacity_mb=12216.0)
+    case = apply_allocator_backstop(GraphMemory(budget_mb=20000.0), device)
+    record(case == "enforced", "still enforced (capped)", detail=case)
+    record(device.fraction == 1.0, "the fraction is capped at 1.0",
+           detail=repr(device.fraction))
+
+
 def main():
     check_stores_both_numbers()
     check_absent_is_unknown_not_zero()
@@ -203,6 +290,10 @@ def main():
     check_physical_refuses_when_foreign_holds_the_room()
     check_physical_boundary_free_equals_grant_passes()
     check_physical_unknowns_never_pass_or_refuse_silently()
+    check_backstop_enforced_when_the_build_has_the_attribute()
+    check_backstop_unavailable_without_the_attribute()
+    check_backstop_unknowns_name_the_missing_number()
+    check_backstop_clamps_a_budget_above_the_total()
 
     print()
     print("=" * 60)

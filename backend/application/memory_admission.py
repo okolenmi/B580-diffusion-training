@@ -21,7 +21,9 @@ them the same way:
 * **`admit()`** -- reserve-or-raise 409 ``memory_unavailable`` with the
   refusal's full breakdown (rule 6: capacity, foreign reserve, every
   holder and its size, free, asked), plus the explicit
-  device-total-unknown refusal for a container with no ledger.
+  device-total-unknown refusal for a container with no ledger, plus
+  (MEM-03H-02) the refusal for a graph whose declared ``vram_min_mb``
+  floor the device cannot honor.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from typing import NoReturn
 from uuid import uuid4
 
 from .errors import MemoryUnavailableError
@@ -88,17 +91,27 @@ def admit(
     *,
     exploratory: bool,
     what: str,
+    vram_min_mb: float = 0.0,
 ) -> Grant:
     """Reserve for `owner`, or refuse with the whole breakdown.
 
-    Both refusals are 409 ``memory_unavailable``:
+    The refusals are 409 ``memory_unavailable``:
 
     * no ledger -- the device total is unknown, so nothing can be
       sized. An explicit UNKNOWN refusal, never an unchecked claim
-      (task rule 2).
+      (task rule 2). Checked first: while the total is unknown no
+      floor question can be answered either.
     * a `Refusal` from the ledger -- the breakdown in ``details`` names
       capacity, foreign reserve, every holder and its size, what is
       free, what was asked (rule 6).
+    * the graph's declared floor (MEM-03H-02, ``vram_min_mb`` in
+      allocator MB; 0 means no floor, which is every caller but the
+      graph start path): an exploratory claim would be all free space,
+      so refuse when free cannot cover ``vram_min_mb + process
+      overhead``; a stated or observed claim must itself reach the
+      floor, or the run would start below the minimum it declared.
+      Both carry the same breakdown, and the reason names the floor
+      and the number it was measured against.
     """
     if ledger is None:
         raise MemoryUnavailableError(
@@ -110,6 +123,27 @@ def admit(
                 "holders": {},
             },
         )
+
+    if vram_min_mb > 0:
+        # One snapshot: the numbers the refusal quotes must describe
+        # the same moment (the free that failed and the holders that
+        # left it free come from one read).
+        snapshot = ledger.snapshot()
+        floor_mb = vram_min_mb + snapshot["process_overhead_mb"]
+        free = snapshot["free_mb"]
+        below = free < floor_mb if exploratory else demand_mb < floor_mb
+        if below:
+            _refuse_below_floor(
+                snapshot=snapshot,
+                owner=owner,
+                what=what,
+                vram_min_mb=vram_min_mb,
+                floor_mb=floor_mb,
+                demand_mb=demand_mb,
+                free_mb=free,
+                exploratory=exploratory,
+            )
+
     outcome = ledger.reserve(owner, demand_mb, exploratory=exploratory)
     if isinstance(outcome, Refusal):
         names = ", ".join(sorted(outcome.holders)) or "nobody"
@@ -120,6 +154,54 @@ def admit(
             details=outcome.breakdown(),
         )
     return outcome
+
+
+def _refuse_below_floor(
+    *,
+    snapshot: dict,
+    owner: str,
+    what: str,
+    vram_min_mb: float,
+    floor_mb: float,
+    demand_mb: float,
+    free_mb: float,
+    exploratory: bool,
+) -> NoReturn:
+    """Raise the floor refusal, carrying the ledger's own breakdown.
+
+    Built through the ``Refusal`` dataclass on purpose: a floor refusal
+    then has exactly the keys any other refusal has (rule 6), instead of
+    a hand-assembled dict that could drift from them.
+    """
+    holders = {
+        name: claim["mb"] for name, claim in snapshot["holders"].items()
+    }
+    names = ", ".join(sorted(holders)) or "nobody"
+    needs = (
+        f"needs at least {vram_min_mb:g} MB (vram_min_mb) plus "
+        f"{snapshot['process_overhead_mb']:g} MB of process overhead "
+        f"= {floor_mb:g} MB"
+    )
+    reason = (
+        f"{needs}, but only {free_mb:g} MB is free"
+        if exploratory
+        else f"{needs}, but its demand is only {demand_mb:g} MB"
+    )
+    refusal = Refusal(
+        owner=owner,
+        requested_mb=floor_mb,
+        capacity_mb=snapshot["capacity_mb"],
+        foreign_reserve_mb=snapshot["foreign_reserve_mb"],
+        free_mb=free_mb,
+        holders=holders,
+        reason=reason,
+    )
+    raise MemoryUnavailableError(
+        f"{what} cannot be admitted: {reason} "
+        f"(capacity {snapshot['capacity_mb']:.0f} MB, free {free_mb:.0f} MB, "
+        f"held by {names})",
+        details=refusal.breakdown(),
+    )
 
 
 class LedgerProvider:

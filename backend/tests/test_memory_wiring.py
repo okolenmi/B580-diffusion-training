@@ -1148,7 +1148,7 @@ class _PeakProbeNode(Node):
         return {"ok": True}
 
 
-def _observed_graph() -> GraphDefinition:
+def _observed_graph(memory: MemorySettings | None = None) -> GraphDefinition:
     return GraphDefinition(
         nodes=(
             GraphNodeSpec(
@@ -1165,16 +1165,17 @@ def _observed_graph() -> GraphDefinition:
             ),
         ),
         edges=(),
+        memory=memory if memory is not None else MemorySettings(),
     )
 
 
-def _observed_case(prefix: str, *, seed_peak: float | None):
-    """Admit the fingerprintable graph once; return (row, ledger).
+def _observed_setup(prefix: str, *, seed_peak: float | None):
+    """Everything `_observed_case` does except the start itself.
 
-    The store is either seeded with ``seed_peak`` under the expected key
-    or left empty -- the two worlds this package has to keep apart:
-    measured and never-measured (the second must stay *unknown*, never
-    become a zero).
+    Returns ``(start, repo, provider)`` so a test can decide what to
+    execute -- the floor tests (MEM-03H-02) need to run the same
+    observed-demand setup with different memory settings, including one
+    that must be refused before a row exists.
     """
     root = Path(tempfile.mkdtemp(prefix=prefix))
     make_v2_dataset(root, "shapes", items=3)
@@ -1197,6 +1198,18 @@ def _observed_case(prefix: str, *, seed_peak: float | None):
         runtime=ReflectedGraphRuntime(registry),
         peak_source=peak_source,
     )
+    return start, repo, provider
+
+
+def _observed_case(prefix: str, *, seed_peak: float | None):
+    """Admit the fingerprintable graph once; return (row, ledger).
+
+    The store is either seeded with ``seed_peak`` under the expected key
+    or left empty -- the two worlds this package has to keep apart:
+    measured and never-measured (the second must stay *unknown*, never
+    become a zero).
+    """
+    start, repo, provider = _observed_setup(prefix, seed_peak=seed_peak)
     summary = start.execute(_observed_graph())
     return repo.get(summary.execution_id), provider()
 
@@ -1247,6 +1260,226 @@ def test_admission_reads_the_remembered_peak_and_keys_the_row() -> None:
         ledger2.held_mb() == 7750.0,
         f"the ledger holds exactly that (got {ledger2.held_mb()})",
     )
+
+
+# MEM-03H-02: vram_min_mb was validated, stored and shown, but never
+# answered for. These five tests are the floor it now has to cover.
+
+
+def _floor_case(prefix: str, memory: MemorySettings):
+    """A start wired like the other admission tests, with this memory.
+
+    Unknown peaks (the default) plus a non-stated maximum leave the
+    demand unknown -- the exploratory path where the declared floor is
+    the only thing between the graph and a claim it cannot run inside.
+    """
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    repo = _graph_repo(root)
+    provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
+    start = _graph_start(repo, provider, launcher=_AdmittedOnly())
+    graph = GraphDefinition(
+        nodes=valid_graph().nodes,
+        edges=valid_graph().edges,
+        memory=memory,
+    )
+    return start, repo, provider(), graph
+
+
+def test_vram_min_floor_refuses_an_exploratory_start_it_cannot_cover() -> None:
+    print("-- vram_min_mb: an exploratory start below the floor is refused --")
+    start, repo, ledger, graph = _floor_case(
+        "backend-mem-floor-high-", MemorySettings(vram_min_mb=11000)
+    )
+    check(ledger is not None, "fixture: the provider builds a ledger")
+    assert ledger is not None
+    check(
+        ledger.capacity_mb == 11192.0,
+        f"fixture: capacity 12216 - 1024 (got {ledger.capacity_mb})",
+    )
+
+    # 11000 + 600 process overhead = 11600 > 11192 free: even the
+    # empty card cannot cover the floor, and the demand is unknown,
+    # so this is an exploratory start.
+    exc = _refusal(
+        lambda: start.execute(graph),
+        "a floor the empty card cannot cover is refused 409",
+    )
+    if exc is not None:
+        check(
+            exc.code == "memory_unavailable" and exc.status_code == 409,
+            f"409 memory_unavailable (got {exc.status_code} {exc.code})",
+        )
+        check(
+            "11000" in str(exc),
+            f"the message names the floor (got {str(exc)!r})",
+        )
+        check(
+            "11192" in str(exc),
+            f"the message names what is free (got {str(exc)!r})",
+        )
+        details = exc.details or {}
+        check(
+            {
+                "owner", "requested_mb", "capacity_mb", "foreign_reserve_mb",
+                "free_mb", "holders", "reason", "what_would_fit",
+            } <= set(details),
+            f"the refusal carries the whole breakdown (got {sorted(details)})",
+        )
+        check(
+            details.get("requested_mb") == 11600.0,
+            f"requested = vram_min_mb + process overhead "
+            f"(got {details.get('requested_mb')})",
+        )
+        reason = str(details.get("reason", ""))
+        check(
+            "vram_min_mb" in reason and "11192" in reason,
+            f"the reason names the setting and the free space "
+            f"(got {reason!r})",
+        )
+    check(
+        ledger.held_mb() == 0.0,
+        f"a refused floor holds nothing (got {ledger.held_mb()})",
+    )
+    check(len(repo.list_unfinished()) == 0, "and writes no row")
+
+
+def test_vram_min_floor_admits_an_exploratory_start_it_can_cover() -> None:
+    print("-- vram_min_mb: an exploratory start above the floor admits --")
+    start, repo, ledger, graph = _floor_case(
+        "backend-mem-floor-low-", MemorySettings(vram_min_mb=500)
+    )
+    assert ledger is not None
+
+    summary = start.execute(graph)
+    row = repo.get(summary.execution_id)
+    check(
+        ledger.held_mb() == ledger.capacity_mb,
+        f"admitted as the exploratory claim of all free space "
+        f"({ledger.held_mb()} vs {ledger.capacity_mb})",
+    )
+    check(
+        row.reserved_mb == ledger.capacity_mb,
+        f"the row records the same claim (got {row.reserved_mb})",
+    )
+    check(len(repo.list_unfinished()) == 1, "and the run has its row")
+
+
+def test_vram_min_is_no_extra_condition_for_a_stated_demand_that_fits() -> None:
+    print("-- vram_min_mb: a stated demand that fits is admitted as asked --")
+    start, repo, ledger, graph = _floor_case(
+        "backend-mem-floor-stated-",
+        MemorySettings(vram_min_mb=1000, vram_max_mb=4096),
+    )
+    assert ledger is not None
+
+    summary = start.execute(graph)
+    row = repo.get(summary.execution_id)
+    check(
+        row.reserved_mb == 4696.0,
+        f"the claim is the stated demand + overhead, neither inflated "
+        f"nor refused by the floor (got {row.reserved_mb})",
+    )
+    check(
+        ledger.held_mb() == 4696.0,
+        f"the ledger holds exactly that (got {ledger.held_mb()})",
+    )
+
+
+def test_vram_min_above_the_remembered_demand_is_refused() -> None:
+    print("-- vram_min_mb: a floor above the observed demand is refused --")
+    start, repo, provider = _observed_setup(
+        "backend-mem-floor-peak-", seed_peak=5000.0
+    )
+    ledger = provider()
+    check(ledger is not None, "fixture: the provider builds a ledger")
+    assert ledger is not None
+
+    # The remembered peak says 5150 (5000 + 150 pillow), so the claim
+    # would be 5750 device MB -- under a floor of 8000 + 600: a run
+    # started below the minimum it declares.
+    exc = _refusal(
+        lambda: start.execute(_observed_graph(memory=MemorySettings(vram_min_mb=8000))),
+        "a floor above the remembered demand is refused 409",
+    )
+    if exc is not None:
+        check(
+            exc.code == "memory_unavailable" and exc.status_code == 409,
+            f"409 memory_unavailable (got {exc.status_code} {exc.code})",
+        )
+        check(
+            "8000" in str(exc),
+            f"the message names the floor (got {str(exc)!r})",
+        )
+        check(
+            "5750" in str(exc),
+            f"the message names the demand (got {str(exc)!r})",
+        )
+        details = exc.details or {}
+        check(
+            details.get("requested_mb") == 8600.0,
+            f"requested = vram_min_mb + process overhead "
+            f"(got {details.get('requested_mb')})",
+        )
+        check(
+            "vram_min_mb" in str(details.get("reason", "")),
+            f"the reason names the setting (got {details.get('reason')!r})",
+        )
+    check(
+        ledger.held_mb() == 0.0,
+        f"a refused floor holds nothing (got {ledger.held_mb()})",
+    )
+    check(len(repo.list_unfinished()) == 0, "and writes no row")
+
+
+def test_vram_min_under_the_remembered_demand_admits() -> None:
+    print("-- vram_min_mb: a floor under the observed demand admits --")
+    start, repo, provider = _observed_setup(
+        "backend-mem-floor-fit-", seed_peak=5000.0
+    )
+    ledger = provider()
+    assert ledger is not None
+
+    summary = start.execute(
+        _observed_graph(memory=MemorySettings(vram_min_mb=4000))
+    )
+    row = repo.get(summary.execution_id)
+    check(
+        row.reserved_mb == 5750.0,
+        f"the claim is the observed demand + overhead, untouched by "
+        f"the floor (got {row.reserved_mb})",
+    )
+    check(
+        ledger.held_mb() == 5750.0,
+        f"the ledger holds exactly that (got {ledger.held_mb()})",
+    )
+
+
+def test_a_floor_never_answers_before_the_unknown_device_total() -> None:
+    print("-- vram_min_mb: an unknown device total still answers first --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-floor-nocard-"))
+    repo = _graph_repo(root)
+    start = _graph_start(repo, lambda: None)
+    graph = GraphDefinition(
+        nodes=valid_graph().nodes,
+        edges=valid_graph().edges,
+        memory=MemorySettings(vram_min_mb=11000),
+    )
+    exc = _refusal(
+        lambda: start.execute(graph),
+        "no ledger is refused before any floor question is asked",
+    )
+    if exc is not None:
+        details = exc.details or {}
+        check(
+            details.get("reason") == "device_total_unknown",
+            f"rule 2: the explicit unknown, not the floor ({details})",
+        )
+        check(
+            "vram_min_mb" not in str(exc),
+            f"it does not pretend to have measured a floor "
+            f"(got {str(exc)!r})",
+        )
+    check(len(repo.list_unfinished()) == 0, "and writes no row")
 
 
 class _RecordingPeakStore(PeakStore):
@@ -1588,6 +1821,12 @@ def main() -> None:
     test_reconcile_drain_files_peaks()
     test_peak_filing_guards()
     test_bad_budget_numbers_never_reach_the_ledger()
+    test_vram_min_floor_refuses_an_exploratory_start_it_cannot_cover()
+    test_vram_min_floor_admits_an_exploratory_start_it_can_cover()
+    test_vram_min_is_no_extra_condition_for_a_stated_demand_that_fits()
+    test_vram_min_above_the_remembered_demand_is_refused()
+    test_vram_min_under_the_remembered_demand_admits()
+    test_a_floor_never_answers_before_the_unknown_device_total()
     finish()
 
 

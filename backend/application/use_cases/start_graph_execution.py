@@ -140,6 +140,10 @@ class StartGraphExecution:
                 device_demand,
                 exploratory=exploratory,
                 what="this graph execution",
+                # MEM-03H-02: the graph's declared floor. 0 means no
+                # floor; admit() answers for it only with a ledger, so
+                # the device-total-unknown refusal still comes first.
+                vram_min_mb=memory.vram_min_mb,
             )
             execution = GraphExecution.create(
                 graph=graph,

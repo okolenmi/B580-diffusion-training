@@ -195,37 +195,38 @@ in-process. `TASK_DEMAND_MB` is in **allocator MB** (the ledger adds the
 
 | kind | input | peak reserved (allocator MB) | overhead | device MB |
 |---|---|---|---|---|
-| `ingest_lora` | 8 square images @ 1024px | **6,914.0** | 119.2 | 7,514 |
-| `ingest_lora` | 8 **non-square** images @ 1024px | **11,736.0** | −496.9 † | 12,336 |
+| `ingest_lora` | 8 square images @ 512 and @ 768px | **2,268.0** | ~465 | 2,868 |
+| `ingest_lora` | 8 **non-square** images @ 512 and @ 768px | **4,882.0** | ~100 | 5,482 |
 | `generate_teacher` | 2 conditions, 1 step @ 1024px | **8,824.0** | 525.0 | 9,424 |
 
-† negative, and a real reading rather than a bug: driver and allocator
-peaks were 3 seconds apart in a run that had already begun releasing.
-
-**`generate_teacher`'s 525 MB overhead matches the training figure** (~530),
-as it must -- it loads the full UNet and VAE. `ingest_lora`'s is ~119 MB
+`generate_teacher`'s 525 MB overhead matches the training figure (~530),
+as it must -- it loads the full UNet and VAE. `ingest_lora`'s is far lower
 because it loads only the VAE.
 
-**Recommendation: do not wire `TASK_DEMAND_MB` from these numbers yet.** The
-map takes one figure per kind, and ingest's peak is dominated by the input
-*aspect ratio*: 6,914 MB square against 11,736 MB non-square, a 1.7x
-spread on identical code and resolution. Worse, the non-square figure
-(12,336 device MB) exceeds the 11,192 MB capacity outright -- an ingest of
-non-square 1024px images does not fit on this card even with nothing else
-running. So:
+**Correction, and it retracts an earlier claim here.** A first pass measured
+ingest by forcing `latent_size=128` (i.e. a 1024px *output*) over the
+512--768px source images, and reported 6,914 MB square / 11,736 MB
+non-square, concluding that "an ingest of non-square 1024px images does not
+fit on this card". **That was wrong.** It was upscaling 512--768px sources
+to 1024px, not measuring the real workload: at native resolution the same
+code peaks at 2,268 / 4,882 MB, and 5,482 device MB sits comfortably inside
+the 11,192 MB capacity. The non-square case is the heavier one -- the crops
+`_preprocess_image_crops` takes to cover a square area -- and its own
+docstring already records the VRAM ratchet an unbounded `fit` long side
+caused, but it fits the card.
 
-- wiring 6,914 understates the non-square case by ~70% and would admit runs
-  that then exhaust the card;
-- wiring 11,736 refuses *every* ingest, including the square ones that
-  comfortably fit.
-
-The empty map is the safe default and stays: a kind with no number is
-UNKNOWN, which the ledger treats as an exploratory exclusive claim --
-admitted when nothing else holds the card, refused with a breakdown
-otherwise. That is correct behaviour for a demand that depends on the
-input rather than on the kind. Wiring the map wants a decision about
-whether demand should be stated per *kind* at all, or per kind-and-input
-shape, and the non-square work already under way is what should settle it.
+**`TASK_DEMAND_MB` is deliberately still empty.** Now that the measurement
+is representative, the reason is narrower but still real: ingest's demand is
+a function of the *input* (2,268 vs 4,882 MB, a 2.15x spread on identical
+code), and resolution moves it too -- the 1024px-upscaling run was 3x the
+native one. A single per-kind constant cannot honestly cover that. The
+empty map is the safe default and stays: a kind with no number is UNKNOWN,
+which the ledger treats as an exploratory exclusive claim -- admitted when
+nothing else holds the card, refused with a breakdown otherwise. For an
+ingest that wants 5,482 device MB that is already the right behaviour in
+practice. Wiring the map wants one decision first -- whether demand is
+stated per *kind* or per kind-and-input-shape -- and that belongs with the
+resolution and aspect work, not ahead of it.
 
 All six items of this protocol have now been run on the B580. What remains
 is not measurement but two decisions, both recorded above: whether

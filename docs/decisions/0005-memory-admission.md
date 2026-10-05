@@ -50,19 +50,18 @@ MEM-08 (f):
 
 | kind | input | allocator MB | device MB |
 |---|---|---|---|
-| `ingest_lora` | 8 square images @ 1024px | 6,914.0 | 7,514 |
-| `ingest_lora` | 8 non-square images @ 1024px | 11,736.0 | 12,336 |
+| `ingest_lora` | 8 square images @ 512/768px | 2,268.0 | 2,868 |
+| `ingest_lora` | 8 non-square images @ 512/768px | 4,882.0 | 5,482 |
 | `generate_teacher` | 2 conditions @ 1024px | 8,824.0 | 9,424 |
 
 `TASK_DEMAND_MB` is deliberately **still empty**, and these numbers are not
-in it. Ingest's peak is dominated by the input's *aspect ratio* -- a 1.7x
-spread on identical code and resolution -- and the non-square figure
-(12,336 device MB) exceeds the 11,192 MB capacity outright, so no single
-per-kind number is honest for both. An unknown demand already behaves
-safely (exploratory exclusive: admitted only when the card is otherwise
-free, refused with a breakdown otherwise), and that is the better default
-than a figure that is wrong by 70% in one direction and unusable in the
-other.
+in it. Ingest's demand is a function of the *input*, not the kind: a 2.15x
+aspect spread on identical code, and 3x between native resolution and the
+1024px-upscaled case. A per-kind constant cannot honestly cover that. An
+unknown demand already behaves safely (exploratory exclusive: admitted only
+when the card is otherwise free, refused with a breakdown otherwise), which
+is the right behaviour for a 5,482 MB ingest, so the map stays empty until
+demand can be stated per kind-and-input-shape rather than per kind alone.
 
 ### Two levels, two owners
 

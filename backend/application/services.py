@@ -71,6 +71,7 @@ from .use_cases.update_config import UpdateConfig
 from .use_cases.update_dataset_item import UpdateDatasetItem
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
+from .use_cases.preview_graph_memory import PreviewGraphMemory
 from .use_cases.validate_graph import ValidateGraph
 from .use_cases.write_config_raw import WriteConfigRaw
 
@@ -161,6 +162,8 @@ class GraphServices:
     catalog: ListNodeCatalog
     diagnostics: NodeDiagnostics
     validate: ValidateGraph
+    #: MEM-07: what a run of this graph would need, before it runs.
+    preview_memory: PreviewGraphMemory
     start_execution: StartGraphExecution
     list_executions: ListGraphExecutions
     get_execution: GetGraphExecution

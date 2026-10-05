@@ -1173,6 +1173,29 @@ class GraphIssueOut(BaseModel):
     param: str | None = None
 
 
+class MemoryPreviewOut(BaseModel):
+    """What a run of this graph would need, and whether it fits now.
+
+    Always 200 -- a preview never refuses anything, it reports. The
+    nulls are the point: ``peak_mb`` null is "never measured", not
+    "needs nothing", and ``device_demand_mb`` null is "no ledger yet".
+    """
+
+    fingerprint_key: str | None
+    peak_mb: float | None
+    demand_mb: float | None
+    demand_source: str
+    exploratory: bool
+    device_demand_mb: float | None
+    verdict: str
+    reason: str | None
+    capacity_mb: float | None
+    free_mb: float | None
+    held_mb: float | None
+    foreign_reserve_mb: float | None
+    holders: dict[str, dict]
+
+
 class ValidateOut(BaseModel):
     """Always 200: ``ok=false`` means the run endpoint would reject
     this submission (422 with these same issues)."""

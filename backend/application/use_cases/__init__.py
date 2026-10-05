@@ -67,6 +67,7 @@ from .update_config import UpdateConfig
 from .update_dataset_item import UpdateDatasetItem
 from .update_settings import UpdateSettings
 from .upload_asset import UploadAsset
+from .preview_graph_memory import PreviewGraphMemory
 from .validate_graph import ValidateGraph
 from .write_config_raw import WriteConfigRaw
 
@@ -126,6 +127,7 @@ __all__ = [
     "UpdateDatasetItem",
     "UpdateSettings",
     "UploadAsset",
+    "PreviewGraphMemory",
     "ValidateGraph",
     "WriteConfigRaw",
 ]

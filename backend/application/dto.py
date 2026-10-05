@@ -274,6 +274,41 @@ class ExecutionListResult:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphMemoryPreview:
+    """What admission would decide for a graph that has not started.
+
+    Every optional field is an explicit unknown rather than a zero
+    (task rule 2): a null ``peak_mb`` means this configuration has never
+    been measured, which is a different fact from "it needs nothing",
+    and a null ``device_demand_mb`` means there was no ledger to measure
+    free space against.
+    """
+
+    fingerprint_key: str | None
+    #: The remembered high-water mark for this fingerprint, allocator MB.
+    peak_mb: float | None
+    #: Allocator MB the run would need, and where that number came from
+    #: ("stated" / "observed" / "unknown").
+    demand_mb: float | None
+    demand_source: str
+    exploratory: bool
+    #: Allocator demand plus the per-process overhead -- the quantity the
+    #: ledger actually compares against free space. None with no ledger.
+    device_demand_mb: float | None
+    #: "fits" / "does_not_fit" / "unknown" / "exploratory".
+    verdict: str
+    #: Why the verdict is what it is, or None when it fits.
+    reason: str | None
+    capacity_mb: float | None
+    free_mb: float | None
+    held_mb: float | None
+    foreign_reserve_mb: float | None
+    #: Who holds the card, straight from the ledger snapshot the UI
+    #: already reads for /health.
+    holders: dict[str, dict]
+
+
+@dataclass(frozen=True, slots=True)
 class GraphValidationResult:
     """``ok`` is "no error-severity issue"; warnings never block."""
 

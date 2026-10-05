@@ -111,6 +111,7 @@ from backend.application.use_cases import (
     ListNodeCatalog,
     MakeAssetFolder,
     NodeDiagnostics,
+    PreviewGraphMemory,
     ReadConfigRaw,
     ReadDatasetFile,
     ReconcileDatasetTasks,
@@ -1033,6 +1034,18 @@ def build_services(
     # composition, next to the databases this build already owns, shared
     # by admission (reads) and the supervisor (files what a run reports).
     peak_store = SqlitePeakStore(project_root / "test-memory-peaks.db")
+    # Fingerprint + remembered peak, built once and shared by the panel
+    # preview and the run admission below (see bootstrap: three
+    # constructions is three chances to disagree on which configuration
+    # a peak belongs to). Fixture nodes declare no memory_fields and
+    # fixture graphs name no dataset, so every fingerprint here is
+    # unknown -- exactly what these tests claimed before the read half
+    # existed, never a zero peak.
+    fixture_peak_source = GraphPeakSource(
+        datasets=dataset_library,
+        peaks=peak_store,
+        resolve_memory_fields=memory_fields_resolver(graph_registry),
+    )
     if graph_executions is None or graph_library is None:
         graphs_db = SqliteDatabase(project_root / "test-graphs.db")
         graphs_db.initialize()
@@ -1189,6 +1202,10 @@ def build_services(
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),
+            preview_memory=PreviewGraphMemory(
+                memory_ledger=memory_ledger,
+                peak_source=fixture_peak_source.observed,
+            ),
             diagnostics=NodeDiagnostics(catalog=graph_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
             start_execution=StartGraphExecution(
@@ -1202,11 +1219,7 @@ def build_services(
                 # graphs name no dataset, so every fingerprint here is
                 # unknown -- exactly what these tests claimed before the
                 # read half existed, never a zero peak.
-                peak_source=GraphPeakSource(
-                    datasets=dataset_library,
-                    peaks=peak_store,
-                    resolve_memory_fields=memory_fields_resolver(graph_registry),
-                ).observed,
+                peak_source=fixture_peak_source.observed,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

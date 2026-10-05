@@ -22,6 +22,8 @@ Every error leaves as the one envelope; see ``presentation/errors.py``.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, Query, Response
 
 from ...application.limits import DEFAULT_EXECUTION_PAGE_SIZE
@@ -30,6 +32,7 @@ from ..deps import get_services
 from ..schemas import (
     DeleteExecutionsOut,
     DeleteGraphOut,
+    MemoryPreviewOut,
     DiagnosticsIn,
     DiagnosticsOut,
     ExecutionListOut,
@@ -81,6 +84,20 @@ def node_diagnostics(
     return DiagnosticsOut(
         messages=services.graphs.diagnostics.execute(class_name, dict(body.params))
     )
+
+
+@router.post("/memory-preview", response_model=MemoryPreviewOut)
+def preview_graph_memory(
+    body: GraphRunIn, services: ApplicationServices = Depends(get_services)
+):
+    """The learned peak for this graph's fingerprint and whether it fits.
+
+    A dry run of the same arithmetic admission performs, so the panel's
+    "will it fit" cannot promise something the run endpoint would then
+    refuse. Always 200: a preview reports, it never rejects.
+    """
+    result = services.graphs.preview_memory.execute(body.to_definition())
+    return MemoryPreviewOut(**asdict(result))
 
 
 @router.post("/validate", response_model=ValidateOut)

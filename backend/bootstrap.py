@@ -91,6 +91,7 @@ from .application.use_cases import (
     UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
+    PreviewGraphMemory,
     ValidateGraph,
     WriteConfigRaw,
 )
@@ -294,6 +295,17 @@ def build_container(settings: Settings) -> Container:
         make_tail=ExecutionEventTail,
     )
 
+    # Fingerprint (MEM-01) + remembered peak (MEM-04), built once here
+    # and shared by everything that has to agree on which configuration
+    # a peak belongs to: the panel's preview, the run admission below,
+    # and the watcher above that files this run's own reported peaks.
+    # Three constructions of the same thing is three chances not to.
+    graph_peak_source = GraphPeakSource(
+        datasets=dataset_library,
+        peaks=peak_store,
+        resolve_memory_fields=memory_fields_resolver(graph_registry),
+    )
+
     services = ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
@@ -396,6 +408,10 @@ def build_container(settings: Settings) -> Container:
             catalog=ListNodeCatalog(catalog=graph_catalog),
             diagnostics=NodeDiagnostics(catalog=graph_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
+            preview_memory=PreviewGraphMemory(
+                memory_ledger=memory_ledger,
+                peak_source=graph_peak_source.observed,
+            ),
             start_execution=StartGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,
@@ -403,14 +419,12 @@ def build_container(settings: Settings) -> Container:
                 launcher=graph_supervisor,
                 clock=clock,
                 memory_ledger=memory_ledger,
-                # Fingerprint (MEM-01) + remembered peak (MEM-04): the
-                # key it computes is what the watcher above files this
-                # run's own reported peaks under.
-                peak_source=GraphPeakSource(
-                    datasets=dataset_library,
-                    peaks=peak_store,
-                    resolve_memory_fields=memory_fields_resolver(graph_registry),
-                ).observed,
+                # The same instance the panel previews through: the
+                # fingerprint it computes is what the watcher above files
+                # this run's own reported peaks under, and a preview
+                # keyed differently would quote a peak belonging to some
+                # other configuration.
+                peak_source=graph_peak_source.observed,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

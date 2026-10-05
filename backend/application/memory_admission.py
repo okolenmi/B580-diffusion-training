@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from typing import NoReturn
+from typing import NoReturn, Protocol, runtime_checkable
 from uuid import uuid4
 
 from .errors import MemoryUnavailableError
@@ -45,6 +45,33 @@ logger = logging.getLogger(__name__)
 #: What every caller holds: the container's ledger, or None while the
 #: device total is unknown. A plain callable so tests can pass a lambda.
 LedgerSource = Callable[[], MemoryLedger | None]
+
+
+@runtime_checkable
+class RowHolders(Protocol):
+    """A ledger source that can also answer what the rows still claim.
+
+    MEM-03H-03: while no ledger exists (the device total is unknown)
+    the unfinished rows are the only record of who holds the device --
+    typically an adopted child from before a restart, plausibly why the
+    probe cannot answer at all. A plain callable (a test's
+    ``lambda: None``) has no rows wired to it and is *not* this: empty
+    is the truth it tells, not a default it forgets.
+    """
+
+    def unbuilt_holders(self) -> dict[str, float]: ...
+
+
+def holders_without_ledger(source: LedgerSource | None) -> dict[str, float]:
+    """What the unfinished rows claim, while no ledger can answer.
+
+    The unknown-total refusal and /health name these instead of
+    reporting a bare unknown (MEM-03H-03): owner -> MB, in the same
+    shape a ledger refusal's ``holders`` carries.
+    """
+    if isinstance(source, RowHolders):
+        return source.unbuilt_holders()
+    return {}
 
 
 def graph_owner(execution_id: int) -> str:
@@ -92,6 +119,7 @@ def admit(
     exploratory: bool,
     what: str,
     vram_min_mb: float = 0.0,
+    source: LedgerSource | None = None,
 ) -> Grant:
     """Reserve for `owner`, or refuse with the whole breakdown.
 
@@ -100,7 +128,11 @@ def admit(
     * no ledger -- the device total is unknown, so nothing can be
       sized. An explicit UNKNOWN refusal, never an unchecked claim
       (task rule 2). Checked first: while the total is unknown no
-      floor question can be answered either.
+      floor question can be answered either. ``source`` is the same
+      callable the ledger came from, and while it answers None its
+      rows are the only record of who holds the device, so the
+      refusal names them (MEM-03H-03) instead of reporting an empty
+      ``holders``.
     * a `Refusal` from the ledger -- the breakdown in ``details`` names
       capacity, foreign reserve, every holder and its size, what is
       free, what was asked (rule 6).
@@ -114,13 +146,18 @@ def admit(
       and the number it was measured against.
     """
     if ledger is None:
+        holders = holders_without_ledger(source)
+        claimed = ", ".join(
+            f"{name} = {mb:g} MB" for name, mb in sorted(holders.items())
+        )
+        named = f"; the rows still claim {claimed}" if holders else ""
         raise MemoryUnavailableError(
             f"{what} cannot be admitted: the device total is unknown, so no "
-            "claim can be sized (the probe has not reported a card)",
+            f"claim can be sized (the probe has not reported a card){named}",
             details={
                 "reason": "device_total_unknown",
                 "requested_mb": demand_mb,
-                "holders": {},
+                "holders": holders,
             },
         )
 
@@ -283,3 +320,13 @@ class LedgerProvider:
             if task.reserved_mb:
                 rows.append({"owner": task_owner(task.id), "mb": task.reserved_mb})
         return rows
+
+    def unbuilt_holders(self) -> dict[str, float]:
+        """What the unfinished rows claim -- answerable with no ledger.
+
+        Fresh read through the rows `_claim_rows` reads (MEM-03H-03):
+        the point is the truth *now*, and reconcile/sweeper release
+        rows as they find them stale, so a cached answer would name
+        holders that no longer hold.
+        """
+        return {row["owner"]: row["mb"] for row in self._claim_rows()}

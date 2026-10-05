@@ -144,6 +144,9 @@ class StartGraphExecution:
                 # floor; admit() answers for it only with a ledger, so
                 # the device-total-unknown refusal still comes first.
                 vram_min_mb=memory.vram_min_mb,
+                # MEM-03H-03: while admit() finds no ledger, its rows
+                # say who holds the device -- the refusal names them.
+                source=self._memory_ledger,
             )
             execution = GraphExecution.create(
                 graph=graph,

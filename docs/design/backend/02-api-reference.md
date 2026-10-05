@@ -72,7 +72,7 @@ the other processes it talks to. That is this document.
   | `graph_invalid` | 422 | graphs |
   | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found` | 404 | graphs |
   | `graph_execution_active`, `graph_execution_not_active` | 409 | graphs |
-  | `memory_unavailable` | 409 | graphs, datasets (memory admission: this start cannot fit on the device — either the device total is unknown (`details.reason = device_total_unknown`) or the ledger's refusal is in `details`: capacity, foreign reserve, every holder and its size, free, asked. A refused start writes no row and holds nothing) |
+  | `memory_unavailable` | 409 | graphs, datasets (memory admission: this start cannot fit on the device — either the device total is unknown (`details.reason = device_total_unknown`, and `details.holders` names what the unfinished rows still claim) or the ledger's refusal is in `details`: capacity, foreign reserve, every holder and its size, free, asked. A refused start writes no row and holds nothing) |
   | `node_diagnostics_failed` | 400 | graphs |
   | `installer_not_allowed` | 409 | installer (a wizard write after this installation is configured) |
   | `installer_busy` | 409 | installer (an install is already running in this process) |

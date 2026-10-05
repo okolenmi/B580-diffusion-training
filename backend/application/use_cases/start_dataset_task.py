@@ -185,6 +185,9 @@ class StartDatasetTask:
                 device_demand,
                 exploratory=exploratory,
                 what=f"a '{kind.value}' task",
+                # MEM-03H-03: while admit() finds no ledger, its rows
+                # say who holds the device -- the refusal names them.
+                source=self._memory_ledger,
             )
 
             task: DatasetTask | None = None

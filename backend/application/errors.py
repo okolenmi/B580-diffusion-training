@@ -95,7 +95,8 @@ class MemoryUnavailableError(ApplicationError):
     ``details`` carries the ledger refusal's full breakdown (rule 6):
     capacity, foreign reserve, every holder and its size, what is free,
     what was asked -- or ``reason: device_total_unknown`` when the
-    container could not size a claim at all.
+    container could not size a claim at all, with ``holders`` naming
+    what the unfinished rows still claim (MEM-03H-03).
     """
 
     code = "memory_unavailable"

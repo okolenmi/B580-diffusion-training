@@ -49,6 +49,40 @@ Unknown is never a zero claim. Policy for unknown: admit **only if nothing
 else holds the card**, as an *exploratory exclusive* run that claims **all
 free capacity**, and record its peak; otherwise refuse with the breakdown.
 
+### An unknown device total names what the rows still claim (MEM-03H-03)
+
+"Unknown total" has two causes with different stories: nothing has probed
+yet (a fresh install, no torch), and *the probe cannot answer* -- a server
+restarted while an adopted child holds the card, or properties unreadable
+because the device is busy. The unfinished rows are the record of the
+second case, so both surfaces say it instead of a bare unknown:
+
+- the 409 `memory_unavailable` refusal (`details.reason =
+  device_total_unknown`) carries `details.holders` recovered from the
+  graph/task rows -- owner and size -- and names them in the message;
+- `/health` answers `memory: {"total_mb": null, "holders": {...}}` while
+  no ledger exists: still an explicit unknown (a null total, never a
+  fabricated zero), now with the row-recovered holders beside it.
+
+With no such rows both say `holders: {}`, which is the truth there, not
+a default. A source with no rows wired to it (a bare test lambda) also
+answers empty.
+
+### What counts as GPU-using (decided MEM-03H-03; not implemented)
+
+A node class is GPU-using when it sets `uses_accelerator = True`; the
+default is `False`, which is right for pure-data nodes (scale, reshape,
+metadata). A graph is GPU-using iff one of its node classes is.
+
+**Decided:** a graph with no GPU-using node takes no device claim -- it
+skips level-1 admission entirely, so an unknown total cannot block it.
+**Not implemented:** no class carries the attribute yet, and every
+graph -- pure-data included -- still passes through admission, so today
+an unknown total refuses all starts (the safe side). The classification
+has to arrive with discovery (ComfyUI's own node classes are not ours
+to edit), and the admission skip lands with it. Until then this section
+is the decided rule, not the behavior.
+
 ### Peaks are written by one writer: the server
 
 Children report peaks through the event file; the server applies them with

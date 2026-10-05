@@ -653,6 +653,11 @@ def test_without_a_ledger_every_start_refuses_explicitly() -> None:
             "device total is unknown" in str(exc),
             f"the message says it in words (got {str(exc)!r})",
         )
+        check(
+            details.get("holders") == {},
+            f"a source with no rows wired to it names no holders "
+            f"({details})",
+        )
     check(
         len(repo.list_unfinished()) == 0,
         "an unknown-device refusal writes no graph row",
@@ -739,7 +744,8 @@ def test_health_reports_the_live_ledger_snapshot() -> None:
         f"after the run the card reads free (got {memory})",
     )
 
-    # No card: the snapshot is null -- an explicit unknown, never zero.
+    # No card: an explicit unknown -- null total, never zero -- with
+    # empty holders, because this root has no rows to name (MEM-03H-03).
     no_card = build_services(
         project_root=Path(tempfile.mkdtemp(prefix="backend-mem-nocard-")),
         device_probe=FakeDeviceProbe(
@@ -747,11 +753,14 @@ def test_health_reports_the_live_ledger_snapshot() -> None:
         ),
     )
     status, _, body = asgi_request(create_app(no_card), "/api/v1/health")
+    memory = body.get("memory") if isinstance(body, dict) else None
     check(
         status == 200
-        and isinstance(body, dict)
-        and body.get("memory") is None,
-        f"an unknown device total reports null, never a zero ({body})",
+        and isinstance(memory, dict)
+        and memory.get("total_mb") is None
+        and memory.get("holders") == {},
+        f"an unknown device total reports a null total and no holders "
+        f"it could name, never a zero ({body})",
     )
 
 
@@ -1482,6 +1491,145 @@ def test_a_floor_never_answers_before_the_unknown_device_total() -> None:
     check(len(repo.list_unfinished()) == 0, "and writes no row")
 
 
+# MEM-03H-03: "unknown total" hides the restart-while-busy case, where
+# the rows still say who holds the device. Both surfaces name them.
+
+
+def _no_total_probe() -> FakeDeviceProbe:
+    """A card whose properties cannot be read: total stays None.
+
+    The busy case, not the absent one: `present` is true (the probe
+    saw a device) but no total ever arrives, so the provider answers
+    no ledger -- exactly what a restart while an adopted child holds
+    the card produces.
+    """
+    return FakeDeviceProbe(
+        DeviceReport(present=True, backend="xpu", name=None)
+    )
+
+
+def test_unknown_total_refusal_names_what_the_rows_still_claim() -> None:
+    print("-- unknown total: the refusal names what the rows still claim --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-unknowntot-"))
+    repo = _graph_repo(root)
+    tasks = _task_repo(root)
+    task = tasks.add(
+        dataset="d", kind=TaskKind.INGEST_LORA, total=1, params={},
+        reserved_mb=3000.0,
+    )
+    busy = _provider(_no_total_probe(), repo, tasks)
+    check(busy() is None, "fixture: a card with no total builds no ledger")
+
+    start = _graph_start(repo, busy, launcher=_AdmittedOnly())
+    exc = _refusal(
+        lambda: start.execute(valid_graph()),
+        "a start with an unknown total is refused 409",
+    )
+    if exc is not None:
+        holder = task_owner(task.id)
+        check(
+            holder in str(exc),
+            f"the refusal names the adopted row's holder "
+            f"(got {str(exc)!r})",
+        )
+        details = exc.details or {}
+        check(
+            details.get("reason") == "device_total_unknown",
+            f"the reason is still the explicit unknown ({details})",
+        )
+        check(
+            details.get("holders") == {holder: 3000.0},
+            f"details.holders carries owner and size from the row "
+            f"({details.get('holders')})",
+        )
+    check(
+        len(repo.list_unfinished()) == 0,
+        "the refused start writes no graph row",
+    )
+
+
+def test_task_start_with_an_unknown_total_names_the_graph_row() -> None:
+    print("-- unknown total: a task start names the adopted graph row --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-unknowntot-task-"))
+    repo = _graph_repo(root)
+    tasks = _task_repo(root)
+    execution = repo.add(
+        GraphExecution.create(
+            graph=valid_graph(), created_at=NOW, reserved_mb=7000.0
+        )
+    )
+    busy = _provider(_no_total_probe(), repo, tasks)
+    check(busy() is None, "fixture: a card with no total builds no ledger")
+
+    # Assembled by hand, like the other no-ledger task start: the
+    # wired container's provider is exactly what this case replaces.
+    library = SqliteDatasetLibrary(WorkspaceLayout(root))
+    ckpt = root / "ckpt"
+    ckpt.mkdir(parents=True, exist_ok=True)
+    (ckpt / "m.safetensors").write_bytes(b"st")
+    imgs = _image_dir(root)
+    make_v2_dataset(root, "unknowntot")
+    start_task = StartDatasetTask(
+        library=library,
+        tasks=tasks,
+        gateway=FakeDatasetTaskGateway(),
+        checkpoints_dir=lambda: ckpt,
+        memory_ledger=busy,
+    )
+    exc = _refusal(
+        lambda: start_task.execute(_task_cmd("unknowntot", imgs)),
+        "a task start with an unknown total is refused 409",
+    )
+    if exc is not None:
+        holder = graph_owner(execution.require_id())
+        check(
+            holder in str(exc),
+            f"the refusal names the adopted graph row "
+            f"(got {str(exc)!r})",
+        )
+        details = exc.details or {}
+        check(
+            details.get("holders") == {holder: 7000.0},
+            f"details.holders carries owner and size from the row "
+            f"({details.get('holders')})",
+        )
+    check(
+        len(tasks.list_unfinished()) == 0,
+        "the refused task writes no row",
+    )
+
+
+def test_health_names_row_holders_while_the_total_is_unknown() -> None:
+    print("-- health: unknown total, holders named from the rows --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-unknowntot-health-"))
+    graphs_db = SqliteDatabase(root / "test-graphs.db")
+    graphs_db.initialize()
+    repo = SqliteGraphExecutionRepository(graphs_db)
+    execution = repo.add(
+        GraphExecution.create(
+            graph=valid_graph(), created_at=NOW, reserved_mb=7000.0
+        )
+    )
+    services = build_services(
+        project_root=root, device_probe=_no_total_probe(),
+    )
+    status, _, body = asgi_request(create_app(services), "/api/v1/health")
+    memory = body.get("memory") if isinstance(body, dict) else None
+    check(
+        status == 200
+        and isinstance(memory, dict)
+        and memory.get("total_mb") is None,
+        f"an unknown total stays an explicit unknown, never a zero "
+        f"({memory})",
+    )
+    check(
+        isinstance(memory, dict)
+        and memory.get("holders")
+        == {graph_owner(execution.require_id()): 7000.0},
+        f"health names what the rows still claim ({memory})",
+    )
+
+
 class _RecordingPeakStore(PeakStore):
     """An in-memory PeakStore that remembers the order of the writes.
 
@@ -1827,6 +1975,9 @@ def main() -> None:
     test_vram_min_above_the_remembered_demand_is_refused()
     test_vram_min_under_the_remembered_demand_admits()
     test_a_floor_never_answers_before_the_unknown_device_total()
+    test_unknown_total_refusal_names_what_the_rows_still_claim()
+    test_task_start_with_an_unknown_total_names_the_graph_row()
+    test_health_names_row_holders_while_the_total_is_unknown()
     finish()
 
 

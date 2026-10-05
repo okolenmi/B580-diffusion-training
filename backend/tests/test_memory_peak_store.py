@@ -26,6 +26,13 @@ from pathlib import Path
 
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
 
+#: How long the concurrency workers may take to reach (and be released
+#: from) their barrier. Generous next to the real cost -- six processes
+#: starting and racing takes well under a second -- because the point is
+#: only to turn "hung forever" into "failed, and said so"; every trial
+#: below pays it only if something is actually wrong.
+_BARRIER_TIMEOUT_S = 120.0
+
 
 def _store(db_path: Path) -> SqlitePeakStore:
     return SqlitePeakStore(db_path)
@@ -92,9 +99,25 @@ def test_forget():
 
 
 def _record_worker(db_path: str, fingerprint: str, value: float, barrier):
-    """Worker that records one peak after the barrier."""
+    """Worker that records one peak after the barrier.
+
+    The store is constructed *before* the barrier, deliberately. That
+    order is what keeps the trial a clean test of the write race: each
+    process finishes its own initialisation first, so the only thing
+    they contend on afterwards is the record. Constructing after the
+    barrier instead puts six processes through SqlitePeakStore's
+    "file has no SQLite header yet -> discard it" recovery at the same
+    instant, and one discards another's database -- which showed up as
+    a genuine lost update (stored 1300.0 against a maximum of 1500.0)
+    the moment the order was changed. Construction first, then the
+    barrier, then the write.
+
+    The barrier is timed anyway: an untimed wait turns one wedged
+    process into an indefinite hang reported only as a bare "TIMED
+    OUT" by run_all's outer cap, with nothing saying which test hung.
+    """
     store = SqlitePeakStore(db_path)
-    barrier.wait()
+    barrier.wait(timeout=_BARRIER_TIMEOUT_S)
     store.record(fingerprint, value)
 
 
@@ -123,8 +146,21 @@ def test_concurrent_writers_max_semantics():
             ]
             for p in processes:
                 p.start()
+            # Timed joins with stragglers reaped. An untimed join() here
+            # turns one wedged worker into an indefinite hang (the shape
+            # that produced the 600s "TIMED OUT" above), and leaves its
+            # temp database open for the rest of the run.
             for p in processes:
-                p.join()
+                p.join(timeout=_BARRIER_TIMEOUT_S)
+            stragglers = [p for p in processes if p.is_alive()]
+            for p in stragglers:
+                p.terminate()
+                p.join(timeout=10.0)
+            assert not stragglers, (
+                f"{len(stragglers)} worker(s) did not finish within "
+                f"{_BARRIER_TIMEOUT_S}s and had to be terminated -- the "
+                f"store deadlocked rather than losing an update"
+            )
 
             store = SqlitePeakStore(db_path)
             stored = store.reservation_mb(fingerprint, pillow_mb=0.0)

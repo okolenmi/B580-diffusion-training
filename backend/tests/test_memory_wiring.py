@@ -1764,9 +1764,17 @@ def test_child_reported_peaks_land_in_the_store() -> None:
         f"only rises cost a statement -- the 6500 tail frame was skipped "
         f"(got {store.calls})",
     )
+    # Polled, not asserted once: the row reaches its terminal status
+    # inside _finish (mark_finished + commit), and the per-run rise
+    # bookkeeping is released by the *finally* just after it. Asserting
+    # the moment the row looks terminal therefore reads a window where
+    # the run is legitimately finished but its bookkeeping not yet
+    # dropped -- a race that surfaced about one gate run in five under
+    # load, in the test only. Same assertion, waited for.
     check(
-        supervisor._peak_seen == {},
-        "the per-run rise bookkeeping is released with the run",
+        wait_until(lambda: supervisor._peak_seen == {}, timeout=10.0),
+        f"the per-run rise bookkeeping is released with the run "
+        f"(got {supervisor._peak_seen})",
     )
 
 

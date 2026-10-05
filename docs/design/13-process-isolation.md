@@ -34,18 +34,24 @@ meant to break: close the parent and the child gets `EPIPE` on its next
 write, so a server restart would kill the run it was supposed to
 survive. A file has no such coupling.
 
-Three record kinds, one JSON object per line:
+Four record kinds, one JSON object per line:
 
 | kind | meaning |
 |---|---|
 | `node` | a node finished; the payload is a described `NodeResult` |
 | `monitor` | a live monitor report: `monitor_id`, `data` |
+| `memory` | one memory frame: `reserved_mb`, `allocated_mb`, `peak_mb`, `budget_mb` (null = no budget stated) |
 | `outcome` | the run ended: `error`, `results_count` |
 
 `outcome` is the one that earns its keep. Without it, "the graph
 failed" and "the process died" are the same absence, and a run killed by
 a device fault would be reported as a **success** because nobody wrote
 down a problem.
+
+`memory` is how the server learns what a run actually reached: the
+watcher files `peak_mb` into the peak store under the fingerprint key
+admission stored on the row (MEM-04 #2), one statement per rise, and
+admission reads that store back as the next run's observed demand.
 
 Records are written per record with a fresh append-mode handle rather
 than through a buffer held for the whole run. That costs one

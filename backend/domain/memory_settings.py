@@ -77,6 +77,13 @@ class EffectiveMemory:
     #: Whether the demand came from a stated value, an observed peak, or
     #: is unknown.
     demand_source: str  # "stated" | "observed" | "unknown"
+    #: The memory fingerprint key this execution was admitted under
+    #: (MEM-01). The row carries it so the watcher can file the child's
+    #: reported peaks in the peak store under the *same* key admission
+    #: read its past under. None when the fingerprint was unknown at
+    #: admission -- the watcher then records nothing, which is the same
+    #: unknown admission already decided on, never a zero peak.
+    fingerprint_key: str | None
 
     def as_dict(self) -> dict:
         """Storage shape -- the execution row's ``memory_json`` column."""
@@ -88,12 +95,19 @@ class EffectiveMemory:
             "ram_max_mb": self.ram_max_mb,
             "demand_mb": self.demand_mb,
             "demand_source": self.demand_source,
+            "fingerprint_key": self.fingerprint_key,
         }
 
     @classmethod
     def from_dict(cls, raw: dict) -> EffectiveMemory:
         """Parse a stored ``memory_json`` payload back, round-tripping
-        `as_dict` exactly -- including a null demand."""
+        `as_dict` exactly -- including a null demand.
+
+        ``fingerprint_key`` was added after the first rows were written,
+        so its absence is tolerated the same way every other tolerant
+        decoder here tolerates it: no key, None -- unknown, not zero.
+        """
+        key = raw.get("fingerprint_key")
         return cls(
             vram_min_mb=float(raw["vram_min_mb"]),
             vram_max_mb=raw["vram_max_mb"],
@@ -105,6 +119,7 @@ class EffectiveMemory:
                 else float(raw["demand_mb"])
             ),
             demand_source=str(raw["demand_source"]),
+            fingerprint_key=None if key is None else str(key),
         )
 
 
@@ -153,7 +168,10 @@ def effective_memory(
     peak MB). `fingerprint_key` is this graph's fingerprint key. If the
     fingerprint is unknown or not in the record, the demand is unknown;
     with no `capacity_mb` either (no probe reading), an unknown demand
-    stays ``None`` -- unknown is never a zero claim.
+    stays ``None`` -- unknown is never a zero claim. The key itself is
+    carried onto the returned `EffectiveMemory` (and from there into the
+    row's ``memory_json``) so the watcher has the key admission used when
+    it files this run's own peak (MEM-04 #2).
     """
     # -- apply request overrides ---------------------------------------------
     effective = _with_overrides(graph_settings, request_overrides)
@@ -201,4 +219,5 @@ def effective_memory(
         ram_max_mb=ram_max_mb,
         demand_mb=demand_mb,
         demand_source=demand_source,
+        fingerprint_key=fingerprint_key,
     )

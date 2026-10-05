@@ -12,6 +12,9 @@ for unknown.
 
 The table is created on first use. The store is thread-safe within a
 process (SQLite handles concurrent access).
+
+Implements the application's ``PeakStore`` port: admission reads through
+``peak_mb``, the supervisor's watcher writes through ``record``.
 """
 
 from __future__ import annotations
@@ -19,8 +22,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ..application.ports.peak_store import PeakStore
 
-class SqlitePeakStore:
+
+class SqlitePeakStore(PeakStore):
     """Remembered peaks, per configuration, in SQLite.
 
     One writer (the server) applies each child's reported peak with MAX
@@ -78,6 +83,21 @@ class SqlitePeakStore:
             ).fetchone()
             return float(row["peak_mb"]) if row else float(peak_mb)
 
+    def peak_mb(self, fingerprint: str) -> float | None:
+        """The remembered peak for one configuration.
+
+        None when nothing has been measured for it. **Not zero** -- zero
+        is a claim that a run needs nothing, and admitting on that is how
+        two runs end up believing the card is theirs (the port's rule,
+        for every implementation).
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT peak_mb FROM memory_peaks WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            return None if row is None else float(row["peak_mb"])
+
     def reservation_mb(self, fingerprint: str, *, pillow_mb: float = 150.0) -> float | None:
         """What to reserve for this configuration before starting it.
 
@@ -85,14 +105,8 @@ class SqlitePeakStore:
         claim that a run needs nothing, and admitting on that is how two runs
         end up believing the card is theirs.
         """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT peak_mb FROM memory_peaks WHERE fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-            if row is None:
-                return None
-            return float(row["peak_mb"]) + pillow_mb
+        peak = self.peak_mb(fingerprint)
+        return None if peak is None else peak + pillow_mb
 
     def known(self) -> dict[str, float]:
         """Every remembered peak, for a person to read."""

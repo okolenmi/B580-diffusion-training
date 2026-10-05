@@ -23,6 +23,10 @@ class EventKind(str, Enum):
 
     ``NODE``   a node finished; the payload is a described ``NodeResult``
     ``MONITOR``a live monitor report; payload has ``monitor_id``/``data``
+    ``MEMORY``a memory telemetry frame; payload has ``reserved_mb``,
+               ``allocated_mb``, ``peak_mb`` and ``budget_mb`` (null when
+               no budget was stated -- never 0.0, which would claim the
+               run was given nothing on purpose)
     ``OUTCOME``the run ended; payload has ``error``/``results_count``
 
     ``OUTCOME`` is the one that earns its keep: without it, "the graph
@@ -33,6 +37,7 @@ class EventKind(str, Enum):
 
     NODE = "node"
     MONITOR = "monitor"
+    MEMORY = "memory"
     OUTCOME = "outcome"
 
 

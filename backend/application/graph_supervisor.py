@@ -29,21 +29,27 @@ releases it in its own ``finally``, in whichever process ran the graph
 (docs 08 S-05). The *server-side* admission claim (MEM-03's ledger,
 ``reserved_mb``) is: every watcher path funnels through ``_finish`` and
 ``_release``, so the claim goes back exactly when the child actually
-stops, under whatever owner it was renamed to.
+stops, under whatever owner it was renamed to. The same watcher is also
+where a child's reported memory peaks get filed (MEM-04 #2): a ``memory``
+record's ``peak_mb`` goes into the peak store under the fingerprint key
+admission stored on the row -- one writer, monotonic, only on a rise.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 from pathlib import Path
+from typing import Any
 
 from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .memory_admission import LedgerSource, graph_owner, release
 from .ports.graph_task_stream import EventKind
+from .ports.peak_store import PeakStore
 from .event_publisher import EventPublisher
 from .lifecycle_writer import ExecutionLifecycleWriter
 from .ports.clock import Clock
@@ -64,6 +70,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         events: EventPublisher,
         clock: Clock,
         memory_ledger: LedgerSource | None = None,
+        peak_store: PeakStore | None = None,
         monitor_bus=None,
         scratch_dir: Path,
         poll_interval: float = 0.1,
@@ -84,6 +91,11 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         # exist either, because a start without a ledger refuses before
         # it reserves. Both composition roots always pass one.
         self._memory_ledger = memory_ledger
+        # Where a child's reported peaks are filed (MEM-04 #2, see
+        # ``_record_peak``). None only in tests that do not exercise
+        # peaks -- a run whose peaks are not recorded still runs; both
+        # composition roots pass the store.
+        self._peak_store = peak_store
         # Where the per-execution graph.json and events.jsonl live. Not
         # the runs dir: these are supervision scratch, and a run row's
         # artifacts are a different thing with a different lifetime.
@@ -116,6 +128,10 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         self._pids: dict[ExecutionId, int] = {}
         self._stop_requested: set[ExecutionId] = set()
         self._replaying: set[ExecutionId] = set()
+        # The peak this run has already had filed, so frames that repeat
+        # it cost no statement (see ``_record_peak``). Popped in
+        # ``_release`` with everything else the watcher forgets.
+        self._peak_seen: dict[ExecutionId, float] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -224,6 +240,11 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                             duration_ms=float(payload.get("duration_ms") or 0.0),
                         )
                     )
+                elif event.kind is EventKind.MEMORY:
+                    # A run that finished while no server was watching
+                    # still reported its peak; the reconcile drain files
+                    # it under the row's key, same as the steady watcher.
+                    self._record_peak(execution_id, event.payload)
                 elif event.kind is EventKind.OUTCOME:
                     said_how_it_ended = True
                     raw = event.payload.get("error")
@@ -566,6 +587,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                     self._record_node(execution_id, event.payload)
             elif kind is EventKind.MONITOR:
                 self._republish_monitor(event.payload)
+            elif kind is EventKind.MEMORY:
+                self._record_peak(execution_id, event.payload)
             else:  # OUTCOME
                 outcomes.append(event.payload)
         return outcomes
@@ -697,6 +720,80 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         except Exception:  # noqa: BLE001 -- telemetry must not abort the run
             logger.exception("republishing a monitor report failed")
 
+    def _record_peak(self, execution_id: ExecutionId, payload: dict) -> None:
+        """File one child-reported peak in the peak store (MEM-04 #2).
+
+        The child reports numbers; the row's ``memory_json`` carries the
+        fingerprint key admission computed for this run, and the store is
+        keyed by it -- so the same key admission *read* the past under is
+        the key this run's own high-water mark is written under. One
+        statement per rise, and the store's ``MAX`` semantics make a
+        duplicate write harmless anyway.
+
+        Guarded like ``_record_node`` and ``_republish_monitor``: a path
+        inside ``_apply`` never raises into the watcher, so telemetry
+        trouble costs the record, not the run's supervision.
+
+        Two numbers are deliberately *not* filed. A peak of 0 or less
+        means the run never allocated anything (it died before touching
+        the device), and storing it would have admission read back a
+        claim that this configuration needs nothing -- unknown, never
+        zero (task rule 2). And a peak at or below what this run has
+        already had filed is not a rise: the fixed-interval frames after
+        a run stops growing repeat the same number (MEM-05 #4), and they
+        cost nothing once the run has plateaued.
+        """
+        if self._peak_store is None:
+            return
+        # The frame is a child's JSON: its values are untyped, and
+        # float() raising TypeError on None *is* this guard -- the
+        # except below is where "no peak was stated" is handled.
+        raw: Any = payload.get("peak_mb")
+        try:
+            peak = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "execution %s: memory record without a usable peak_mb (%r); "
+                "not recorded",
+                execution_id, payload.get("peak_mb"),
+            )
+            return
+        if not math.isfinite(peak) or peak <= 0.0:
+            logger.debug(
+                "execution %s: memory record reports no measured peak (%s); "
+                "not recorded",
+                execution_id, peak,
+            )
+            return
+        try:
+            execution = self._executions.get(execution_id)
+            key = (
+                None
+                if execution is None or execution.memory is None
+                else execution.memory.fingerprint_key
+            )
+            if key is None:
+                # Exactly what admission saw: an unknown fingerprint has
+                # no configuration to file a peak under.
+                logger.debug(
+                    "execution %s: peak %s MB not recorded, the graph's "
+                    "fingerprint is unknown",
+                    execution_id, peak,
+                )
+                return
+            risen = self._peak_seen.get(execution_id)
+            if risen is not None and peak <= risen:
+                return  # this run has already reported this much
+            self._peak_store.record(key, peak)
+            self._peak_seen[execution_id] = peak
+        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
+            # The frame itself is gone (the offset already advanced), so
+            # the next frame's number -- no lower than this one for a
+            # healthy run -- is what will be filed instead.
+            logger.exception(
+                "recording a peak for execution %s failed", execution_id
+            )
+
     def _finish(
         self,
         execution_id: ExecutionId,
@@ -823,7 +920,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         )
 
     def _release(self, execution_id: ExecutionId, pid: int) -> None:
-        """Forget a finished run: its pid, its stop marker, its claim.
+        """Forget a finished run: its pid, its stop marker, its claim,
+        its peak bookkeeping.
 
         The in-process gateway keeps a thread and a cancel event per
         execution, so it needs telling; the subprocess one keeps a Popen
@@ -842,6 +940,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             self._pids.pop(execution_id, None)
             self._stop_requested.discard(execution_id)
             self._replaying.discard(execution_id)
+            self._peak_seen.pop(execution_id, None)
         reap = getattr(self._gateway, "reap", None)
         if reap is not None:
             reap(pid)

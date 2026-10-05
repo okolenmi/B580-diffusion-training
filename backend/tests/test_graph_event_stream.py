@@ -73,6 +73,29 @@ def test_round_trip() -> None:
         check(tail.poll() == [], "and nothing on a third poll")
 
 
+def test_memory_record_round_trip() -> None:
+    print("\n== a memory frame survives the file in all four numbers ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _path(tmp)
+        writer = ExecutionEventWriter(path)
+        writer.memory(reserved_mb=5000.0, allocated_mb=4000.0,
+                      peak_mb=7200.0, budget_mb=8000.0)
+        writer.memory(reserved_mb=5000.0, allocated_mb=4000.0,
+                      peak_mb=7200.0, budget_mb=None)
+        writer.close()
+        events = [e for e in ExecutionEventTail(path).poll()
+                  if e.kind is EventKind.MEMORY]
+        check(len(events) == 2, f"both frames read back (got {len(events)})")
+        first = events[0].payload
+        check(first["reserved_mb"] == 5000.0, "reserved intact")
+        check(first["allocated_mb"] == 4000.0, "allocated intact")
+        check(first["peak_mb"] == 7200.0, "peak intact")
+        check(first["budget_mb"] == 8000.0, "a stated budget intact")
+        check(events[1].payload["budget_mb"] is None,
+              "an absent budget reads back as null -- an explicit unknown, "
+              "not a zero claim")
+
+
 def test_torn_tail_is_withheld() -> None:
     print("\n== a half-written line is not a record ==")
     with tempfile.TemporaryDirectory() as tmp:
@@ -218,6 +241,7 @@ def test_two_writers_can_share_one_directory() -> None:
 
 def main() -> None:
     test_round_trip()
+    test_memory_record_round_trip()
     test_torn_tail_is_withheld()
     test_bad_records_do_not_end_the_stream()
     test_nonfinite_is_sanitized_before_the_browser_sees_it()

@@ -24,6 +24,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
+from .application.graph_peak_source import GraphPeakSource
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.lifecycle_writer import ExecutionLifecycleWriter
 from .application.memory_admission import LedgerProvider, release, task_owner
@@ -105,7 +106,7 @@ from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .infrastructure.graph.catalog import DiscoveredGraphCatalog
-from .infrastructure.graph.discovery import NodeRegistry
+from .infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
 from .infrastructure.graph_event_stream import ExecutionEventTail
 from .infrastructure.graph_task_gateway import (
@@ -114,6 +115,7 @@ from .infrastructure.graph_task_gateway import (
 )
 from .application.ports.graph_task_gateway import GraphTaskGateway
 from .application.ports.monitor_bus import MonitorBus
+from .infrastructure.memory_peak_store import SqlitePeakStore
 from .infrastructure.monitor_bus import SharedMonitorBus
 from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -274,6 +276,11 @@ def build_container(settings: Settings) -> Container:
     sweep_scratch = SweepExecutionScratch(
         executions=graph_executions, scratch_dir=graph_scratch,
     )
+    # Remembered peaks per configuration (MEM-04), in their own file
+    # next to the database: one writer for peaks, shared by admission
+    # (reads through it) and the watcher (files what a child reports).
+    # Self-creating table, so no migration owns it.
+    peak_store = SqlitePeakStore(database.path.parent / "memory_peaks.db")
     graph_supervisor = GraphExecutionSupervisor(
         executions=graph_executions,
         writer=execution_writer,
@@ -281,6 +288,7 @@ def build_container(settings: Settings) -> Container:
         events=publisher,
         clock=clock,
         memory_ledger=memory_ledger,
+        peak_store=peak_store,
         monitor_bus=monitor_bus,
         scratch_dir=graph_scratch,
         make_tail=ExecutionEventTail,
@@ -395,6 +403,14 @@ def build_container(settings: Settings) -> Container:
                 launcher=graph_supervisor,
                 clock=clock,
                 memory_ledger=memory_ledger,
+                # Fingerprint (MEM-01) + remembered peak (MEM-04): the
+                # key it computes is what the watcher above files this
+                # run's own reported peaks under.
+                peak_source=GraphPeakSource(
+                    datasets=dataset_library,
+                    peaks=peak_store,
+                    resolve_memory_fields=memory_fields_resolver(graph_registry),
+                ).observed,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

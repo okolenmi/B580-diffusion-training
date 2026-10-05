@@ -28,6 +28,7 @@ from collections.abc import Callable
 
 from nodes.core import Node
 
+from ...application.memory_fingerprint import MemoryFieldsResolver
 from ...application.ports.graph_catalog import CatalogLoadError
 
 ScanResult = tuple[dict[str, type], tuple[CatalogLoadError, ...]]
@@ -105,3 +106,24 @@ class NodeRegistry:
                     classes, errors = self._scan()
                     self._classes, self._errors = classes, errors
         return self._classes, self._errors
+
+
+def memory_fields_resolver(registry: NodeRegistry) -> MemoryFieldsResolver:
+    """Resolve a class name to its declared ``memory_fields`` (MEM-01).
+
+    Reads the class-level declaration off the registry's cached classes:
+    data, not code, so nothing is instantiated and no module is imported
+    that the server's catalog would not import anyway (the registry walk
+    already imports every ``nodes/`` module once). A class that declares
+    nothing -- or does not exist -- answers None, which the fingerprint
+    reads as "this node contributes no field" rather than as a default.
+    """
+    def resolve(class_name: str) -> tuple[str, ...] | None:
+        classes, _errors = registry.load()
+        cls = classes.get(class_name)
+        fields = getattr(cls, "memory_fields", None) if cls is not None else None
+        if not fields:
+            return None
+        return tuple(str(field) for field in fields)
+
+    return resolve

@@ -21,7 +21,11 @@ from backend.application.errors import (
     DatasetNotMigratedError,
     InvalidQueryError,
 )
-from backend.application.ports.dataset_library import BulkItemChanges, ItemChanges
+from backend.application.ports.dataset_library import (
+    BulkItemChanges,
+    ItemChanges,
+    LatentBucket,
+)
 from backend.infrastructure.dataset_files import FsDatasetFiles
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.workspace import WorkspaceLayout
@@ -102,6 +106,49 @@ check(stats.pending == 4 and stats.committed == 0, "stats starts fully pending")
 check(stats.bad == 1, "stats.bad counts type='bad'")
 check(stats.shards == 1 and stats.bytes == 1024, "stats shards/bytes from shards table")
 check(stats.sets == 0, "stats.sets starts empty")
+
+# -- latent buckets (the memory fingerprint's shape source, MEM-01/04) ------
+
+# The good rows only: 3 of the 4 are good and every row is 64x64, so a
+# curated-out row must not change which key a training run files its
+# peak under (see the port's rule).
+check(
+    library.latent_buckets("raw") == (LatentBucket(height=64, width=64, count=3),),
+    f"one bucket over the good rows (got {library.latent_buckets('raw')})",
+)
+check(
+    library.latent_buckets("bridge-ds") == (),
+    "a dataset with no trajectories has no buckets -- the fingerprint "
+    "reads that as shapeless/unknown, never a 0x0 shape",
+)
+
+# Mixed shapes, grouped with counts, and a curated-out giant that must
+# not appear: it is a shape no run trains, and keying on it would file
+# small-shape peaks under a large-shape key.
+make_v2_dataset(root, "shapes", items=0)
+_shapes = datasets / "shapes" / "metadata.db"
+with sqlite3.connect(str(_shapes)) as _conn:
+    for _i, (_h, _w, _kind) in enumerate(
+        [(64, 64, "good"), (64, 64, "good"), (128, 100, "good"), (256, 256, "bad")],
+        start=1,
+    ):
+        _conn.execute(
+            "INSERT INTO trajectories (source_id, shard_id, shard_index, "
+            "sample_count, seed, prompt, neg_prompt, model_type, type, cfg, "
+            "source_path, latent_h, latent_w, preview_path, extra) "
+            "VALUES (1, 1, ?, 1, ?, '', '', 'eps', ?, NULL, NULL, ?, ?, "
+            "NULL, NULL)",
+            (_i - 1, 100 + _i, _kind, _h, _w),
+        )
+    _conn.commit()
+check(
+    library.latent_buckets("shapes")
+    == (LatentBucket(height=64, width=64, count=2),
+        LatentBucket(height=128, width=100, count=1)),
+    "grouped by shape with counts, curated-out row excluded",
+)
+expect(DatasetNotFoundError, lambda: library.latent_buckets("nope"),
+       "buckets on a missing dataset refuse by name")
 
 # -- items: read + filter ---------------------------------------------------
 
@@ -305,6 +352,8 @@ check(by_name["legacy"].stats is None, "v1 stats are None (never fabricated)")
 check(library.get("legacy").format_version == 0, "v1 identity readable")
 expect(DatasetNotMigratedError, lambda: library.stats("legacy"),
        "v1 stats refused with migration error")
+expect(DatasetNotMigratedError, lambda: library.latent_buckets("legacy"),
+       "v1 buckets refused")
 expect(DatasetNotMigratedError, lambda: library.list_items("legacy"),
        "v1 items refused")
 expect(DatasetNotMigratedError, lambda: library.list_sets("legacy"),

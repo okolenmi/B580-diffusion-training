@@ -12,7 +12,7 @@ the history it missed).
 
 What is on it
 -------------
-Three record kinds, append-only, one JSON object per line:
+Four record kinds, append-only, one JSON object per line:
 
 ``node``
     A node finished. Carries the same ``NodeResult`` the in-process path
@@ -27,6 +27,14 @@ Three record kinds, append-only, one JSON object per line:
     own bus as the single source of what a dashboard sees, including the
     "opened the page mid-run and still saw the history" property, since
     the file *is* the history.
+
+``memory``
+    One memory telemetry frame: ``reserved_mb``, ``allocated_mb``,
+    ``peak_mb``, ``budget_mb`` (null = no budget stated). The child
+    reports numbers; the server's watcher files ``peak_mb`` into the
+    peak store under the fingerprint key admission stored on the row
+    (MEM-04 #2) -- one configuration-keyed high-water mark per graph,
+    written by the one writer. The fixed-interval producer is MEM-05 #4.
 
 ``outcome``
     The run finished -- successfully or not. Written by the child, so the
@@ -129,6 +137,31 @@ class ExecutionEventWriter:
                 "kind": EventKind.MONITOR.value,
                 "monitor_id": monitor_id,
                 "data": sanitize(data),
+            }
+        )
+
+    def memory(
+        self,
+        *,
+        reserved_mb: float,
+        allocated_mb: float,
+        peak_mb: float,
+        budget_mb: float | None,
+    ) -> None:
+        """One memory telemetry frame (MEM-04 #2).
+
+        All four are allocator MB. ``budget_mb`` None means no budget was
+        stated for this run -- never 0.0, which would claim the run was
+        given nothing on purpose (task rule 2: an absent value is an
+        explicit unknown, not a zero).
+        """
+        self._write(
+            {
+                "kind": EventKind.MEMORY.value,
+                "reserved_mb": reserved_mb,
+                "allocated_mb": allocated_mb,
+                "peak_mb": peak_mb,
+                "budget_mb": budget_mb,
             }
         )
 

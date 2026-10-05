@@ -172,6 +172,21 @@ def test_fingerprint_no_buckets_unknown():
     assert "buckets" in result.reason
 
 
+def test_fingerprint_shapeless_bucket_unknown():
+    """Rows that never recorded a latent size -> UnknownFingerprint.
+
+    A 0x0 "largest bucket" must not become a key: it would file this
+    dataset's peak under a key a genuinely large-shape run also computes
+    (the key carries no dataset identity), and the read-back would be a
+    peak measured at the wrong size.
+    """
+    stats = {"buckets": [{"height": 0, "width": 0, "count": 10}]}
+    result = graph_fingerprint(_FULL_GRAPH, stats,
+                              resolve_memory_fields=_FULL_RESOLVER)
+    assert isinstance(result, UnknownFingerprint)
+    assert "shape" in result.reason
+
+
 def test_fingerprint_no_declaring_nodes_unknown():
     """A graph with no nodes that declare memory_fields -> UnknownFingerprint."""
     no_fields_graph = _graph(
@@ -236,6 +251,7 @@ def main() -> None:
         test_fingerprint_missing_field_unknown,
         test_fingerprint_no_dataset_stats_unknown,
         test_fingerprint_no_buckets_unknown,
+        test_fingerprint_shapeless_bucket_unknown,
         test_fingerprint_no_declaring_nodes_unknown,
         test_fingerprint_key_is_stable,
         test_fingerprint_same_config_same_key,

@@ -50,6 +50,20 @@ class DatasetStats:
 
 
 @dataclass(frozen=True, slots=True)
+class LatentBucket:
+    """One distinct latent shape in a dataset, and how much carries it.
+
+    What the memory fingerprint (MEM-01) needs: the peak VRAM a run
+    reaches is set by the largest shape the loader can draw, so admission
+    wants the shapes, not the totals.
+    """
+
+    height: int
+    width: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class DatasetSummary:
     """One list entry: identity always, stats only for v2 datasets.
     ``preview_path`` is filled by the list use case via the
@@ -136,6 +150,24 @@ class DatasetLibrary(ABC):
     @abstractmethod
     def stats(self, name: str) -> DatasetStats:
         """Counts for a v2 dataset (``DatasetNotMigratedError`` on v1)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def latent_buckets(self, name: str) -> tuple[LatentBucket, ...]:
+        """Distinct latent shapes over a v2 dataset's ``good`` trajectories.
+
+        One entry per ``(latent_h, latent_w)`` the loader can draw, with
+        a row count. ``type = 'good'`` is what training can actually
+        reach, so a curated-out huge row cannot fingerprint a dataset to
+        a shape no run trains -- the stored peak would then be measured
+        at small shapes under a large-shape key and read back as if it
+        were the large shape's. An empty tuple (no good trajectories)
+        reaches the fingerprint as shapeless and goes *unknown*, never
+        defaulted.
+
+        ``DatasetNotFoundError`` on a name that does not exist,
+        ``DatasetNotMigratedError`` on v1, same as ``stats``.
+        """
         raise NotImplementedError
 
     @abstractmethod

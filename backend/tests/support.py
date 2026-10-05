@@ -53,6 +53,7 @@ from backend.application.memory_ledger import (
     DEFAULT_PROCESS_OVERHEAD_MB,
 )
 from backend.application.project_paths import ProjectPaths
+from backend.application.graph_peak_source import GraphPeakSource
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.event_publisher import EventPublisher
 from backend.application.lifecycle_writer import (
@@ -143,10 +144,11 @@ from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
-from backend.infrastructure.graph.discovery import NodeRegistry
+from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.graph_event_stream import ExecutionEventTail
 from backend.infrastructure.graph_task_gateway import InProcessGraphTaskGateway
+from backend.infrastructure.memory_peak_store import SqlitePeakStore
 from backend.infrastructure.monitor_bus import SharedMonitorBus
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -1010,6 +1012,10 @@ def build_services(
     # still needs the path defined (the old nested assignment left it
     # unbound and the first use raised NameError).
     graph_scratch = project_root / "test-graph-scratch"
+    # The test twin of bootstrap's peak store (MEM-04 #2): one store per
+    # composition, next to the databases this build already owns, shared
+    # by admission (reads) and the supervisor (files what a run reports).
+    peak_store = SqlitePeakStore(project_root / "test-memory-peaks.db")
     if graph_executions is None or graph_library is None:
         graphs_db = SqliteDatabase(project_root / "test-graphs.db")
         graphs_db.initialize()
@@ -1065,6 +1071,7 @@ def build_services(
             events=publisher,
             clock=clock,
             memory_ledger=memory_ledger,
+            peak_store=peak_store,
             monitor_bus=monitor_bus,
             scratch_dir=graph_scratch,
             make_tail=ExecutionEventTail,
@@ -1174,6 +1181,15 @@ def build_services(
                 launcher=graph_supervisor,
                 clock=clock,
                 memory_ledger=memory_ledger,
+                # Fixture nodes declare no memory_fields and fixture
+                # graphs name no dataset, so every fingerprint here is
+                # unknown -- exactly what these tests claimed before the
+                # read half existed, never a zero peak.
+                peak_source=GraphPeakSource(
+                    datasets=dataset_library,
+                    peaks=peak_store,
+                    resolve_memory_fields=memory_fields_resolver(graph_registry),
+                ).observed,
             ),
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),

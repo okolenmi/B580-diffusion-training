@@ -140,6 +140,15 @@ def graph_fingerprint(
     # The peak is set by the largest shape. "Largest" means the bucket with
     # the most pixels (height * width), not the one with the most samples.
     largest = max(buckets, key=lambda b: b["height"] * b["width"])
+    # Shapeless rows (latent_h/w never filled in) are unknown, not a
+    # 0x0 configuration: a key that ignores shape would file this
+    # dataset's peak under a key a genuinely large-shape run also
+    # computes, and the read-back would then be a peak measured at the
+    # wrong size.
+    if largest["height"] <= 0 or largest["width"] <= 0:
+        return UnknownFingerprint(
+            reason="largest bucket carries no latent shape"
+        )
     latent_h = largest["height"]
     latent_w = largest["width"]
 

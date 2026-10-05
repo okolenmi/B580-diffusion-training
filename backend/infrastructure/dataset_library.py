@@ -41,6 +41,7 @@ from ..application.ports.dataset_library import (
     DatasetStats,
     DatasetSummary,
     ItemChanges,
+    LatentBucket,
     TrainingSetInfo,
 )
 from .workspace import WorkspaceLayout
@@ -101,6 +102,11 @@ class SqliteDatasetLibrary(DatasetLibrary):
         directory = self._existing_dir(name)
         self._require_v2(directory, name)
         return self._stats(directory)
+
+    def latent_buckets(self, name: str) -> tuple[LatentBucket, ...]:
+        directory = self._existing_dir(name)
+        self._require_v2(directory, name)
+        return self._latent_buckets(directory)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -582,6 +588,32 @@ class SqliteDatasetLibrary(DatasetLibrary):
             sets=int(row["sets"]),
             shards=int(row["shards"]),
             bytes=int(row["bytes"]),
+        )
+
+    @staticmethod
+    def _latent_buckets(directory: Path) -> tuple[LatentBucket, ...]:
+        """Distinct ``(latent_h, latent_w)`` shapes over the good rows.
+
+        ``type = 'good'`` only: see the port -- a curated-out row must
+        not change which fingerprint a training run files its peak
+        under. One GROUP BY over the trajectories table, at graph-start
+        time only (not on the list path, where this would cost a scan
+        per dataset).
+        """
+        with sqlite3.connect(str(directory / "metadata.db")) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT latent_h, latent_w, COUNT(*) AS count "
+                "FROM trajectories WHERE type = 'good' "
+                "GROUP BY latent_h, latent_w"
+            ).fetchall()
+        return tuple(
+            LatentBucket(
+                height=int(row["latent_h"]),
+                width=int(row["latent_w"]),
+                count=int(row["count"]),
+            )
+            for row in rows
         )
 
     @staticmethod

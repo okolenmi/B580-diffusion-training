@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -46,6 +47,12 @@ from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.dto import StartDatasetTaskCommand
 from backend.application.errors import MemoryUnavailableError
 from backend.application.event_publisher import EventPublisher
+from backend.application.graph_peak_source import (
+    GraphPeakSource,
+    ObservedPeak,
+    unknown_peaks,
+)
+from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.lifecycle_writer import ExecutionLifecycleWriter
 from backend.application.memory_admission import (
     LedgerProvider,
@@ -62,6 +69,11 @@ from backend.application.memory_ledger import (
 from backend.application.ports.dataset_tasks import TaskKind
 from backend.application.ports.environment import DeviceReport
 from backend.application.ports.execution_launcher import ExecutionLauncher
+from backend.application.ports.graph_task_gateway import (
+    GraphTaskGateway,
+    GraphTaskLaunch,
+)
+from backend.application.ports.peak_store import PeakStore
 from backend.application.use_cases import (
     ReconcileDatasetTasks,
     ReconcileGraphExecutions,
@@ -70,9 +82,16 @@ from backend.application.use_cases import (
 )
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec
+from backend.domain.memory_settings import MemorySettings, effective_memory
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
+from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph_event_stream import (
+    ExecutionEventTail,
+    ExecutionEventWriter,
+)
+from backend.infrastructure.memory_peak_store import SqlitePeakStore
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
@@ -92,6 +111,7 @@ from backend.tests.support import (
     make_v2_dataset,
     wait_until,
 )
+from nodes.core import Node, Port
 
 NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 
@@ -158,6 +178,18 @@ class _BoomLauncher(_NoChildren):
         raise RuntimeError("spawn died")
 
 
+class _AdmittedOnly(_NoChildren):
+    """Accepts the start and never runs it: admission-only tests.
+
+    What such a test asserts is what admission *read* (the remembered
+    peak, the fingerprint key) and what it *granted* -- the row keeps
+    both without a child ever existing.
+    """
+
+    def launch(self, execution_id, graph) -> None:
+        return None
+
+
 def _provider(probe, graph_executions, dataset_tasks) -> LedgerProvider:
     return LedgerProvider(
         probe=probe,
@@ -176,15 +208,21 @@ def _writer(repo, clock) -> ExecutionLifecycleWriter:
     )
 
 
-def _graph_start(repo, ledger_source, *, launcher=None, clock=None):
+def _graph_start(repo, ledger_source, *, launcher=None, clock=None,
+                 runtime=None, peak_source=None):
     clock = clock if clock is not None else FakeClock()
     return StartGraphExecution(
         executions=repo,
         writer=_writer(repo, clock),
-        runtime=ReflectedGraphRuntime(fixture_graph_registry()),
+        runtime=(runtime if runtime is not None
+                 else ReflectedGraphRuntime(fixture_graph_registry())),
         launcher=launcher if launcher is not None else _NoChildren(),
         clock=clock,
         memory_ledger=ledger_source,
+        # ``unknown_peaks`` keeps the default exactly what this suite
+        # claimed before the read half existed: no fingerprint inputs,
+        # every demand unknown, never a zero peak (MEM-04 #2).
+        peak_source=peak_source if peak_source is not None else unknown_peaks,
     )
 
 
@@ -1061,6 +1099,417 @@ def test_real_http_children_race_for_one_device() -> None:
         check(not server_thread.is_alive(), "the server shut down cleanly")
 
 
+# ==========================================================================
+# MEM-04 #2: admission reads the remembered peak, the watcher files what a
+# child reports -- under the same fingerprint key on the row
+# ==========================================================================
+
+#: What one graph's fingerprint looks like end to end: model, batch,
+#: latent h/w (the largest good bucket of the ``shapes`` fixture, 64x64),
+#: rank, checkpointing, optimizer.
+_OBSERVED_KEY = "sdxl|2|64|64|64|True|adamw"
+
+
+class _PeakProbeNode(Node):
+    """A node that declares every fingerprint field and names a dataset.
+
+    The fixture palette declares no ``memory_fields`` and no
+    ``dataset_root`` input, so a graph that can actually be *fingerprinted*
+    (MEM-01) needs its own node class: the observed path is only real if
+    the start use case computed the key itself, from the registry's
+    declarations and the dataset's latent buckets.
+    """
+
+    memory_fields = ("model", "batch_size", "rank", "checkpointing", "optimizer")
+
+    INPUTS = {
+        "model": Port(name="model", type=str, required=False, default="sdxl"),
+        "batch_size": Port(name="batch_size", type=int, required=False, default=1),
+        "rank": Port(name="rank", type=int, required=False, default=8),
+        "checkpointing": Port(
+            name="checkpointing", type=bool, required=False, default=False
+        ),
+        "optimizer": Port(name="optimizer", type=str, required=False, default="adamw"),
+        "dataset_root": Port(
+            name="dataset_root", type=str, required=False, default=None
+        ),
+    }
+    OUTPUTS = {"ok": Port(name="ok", type=bool, doc="ran")}
+
+    def build(
+        self,
+        model="sdxl",
+        batch_size=1,
+        rank=8,
+        checkpointing=False,
+        optimizer="adamw",
+        dataset_root=None,
+    ):
+        return {"ok": True}
+
+
+def _observed_graph() -> GraphDefinition:
+    return GraphDefinition(
+        nodes=(
+            GraphNodeSpec(
+                id="p",
+                class_name="PeakProbeNode",
+                params={
+                    "model": "sdxl",
+                    "batch_size": 2,
+                    "rank": 64,
+                    "checkpointing": True,
+                    "optimizer": "adamw",
+                    "dataset_root": "shapes",
+                },
+            ),
+        ),
+        edges=(),
+    )
+
+
+def _observed_case(prefix: str, *, seed_peak: float | None):
+    """Admit the fingerprintable graph once; return (row, ledger).
+
+    The store is either seeded with ``seed_peak`` under the expected key
+    or left empty -- the two worlds this package has to keep apart:
+    measured and never-measured (the second must stay *unknown*, never
+    become a zero).
+    """
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    make_v2_dataset(root, "shapes", items=3)
+    registry = NodeRegistry(scan=lambda: ({"PeakProbeNode": _PeakProbeNode}, ()))
+    store = SqlitePeakStore(root / "memory_peaks.db")
+    if seed_peak is not None:
+        store.record(_OBSERVED_KEY, seed_peak)
+    repo = _graph_repo(root)
+    provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
+    peak_source = GraphPeakSource(
+        datasets=SqliteDatasetLibrary(WorkspaceLayout(root)),
+        peaks=store,
+        resolve_memory_fields=memory_fields_resolver(registry),
+    ).observed
+    start = _graph_start(
+        repo,
+        provider,
+        launcher=_AdmittedOnly(),
+        clock=FakeClock(),
+        runtime=ReflectedGraphRuntime(registry),
+        peak_source=peak_source,
+    )
+    summary = start.execute(_observed_graph())
+    return repo.get(summary.execution_id), provider()
+
+
+def test_admission_reads_the_remembered_peak_and_keys_the_row() -> None:
+    print("-- observed demand: admission reads the peak store, keys the row --")
+    row, ledger = _observed_case("backend-mem-unmeasured-", seed_peak=None)
+    memory = row.memory
+    check(
+        memory is not None and memory.fingerprint_key == _OBSERVED_KEY,
+        f"the row carries the fingerprint admission computed "
+        f"(got {memory.fingerprint_key if memory else None!r})",
+    )
+    check(
+        memory is not None and memory.demand_source == "unknown",
+        "a known fingerprint that was never measured is an unknown "
+        "demand, not a zero claim",
+    )
+    check(ledger is not None, "fixture: the provider builds a ledger")
+    assert ledger is not None and memory is not None
+    check(
+        memory.demand_mb == ledger.capacity_mb,
+        f"unknown falls back to the exclusive capacity claim "
+        f"({memory.demand_mb} vs {ledger.capacity_mb})",
+    )
+    check(
+        ledger.held_mb() == row.reserved_mb,
+        f"and the ledger holds exactly the claim the row recorded "
+        f"({ledger.held_mb()} vs {row.reserved_mb})",
+    )
+
+    row2, ledger2 = _observed_case("backend-mem-remembered-", seed_peak=7000.0)
+    memory2 = row2.memory
+    check(
+        memory2 is not None and memory2.demand_mb == 7150.0,
+        f"observed demand = remembered peak + 150 pillow "
+        f"(got {memory2.demand_mb if memory2 else None})",
+    )
+    check(memory2 is not None and memory2.demand_source == "observed",
+          "and the demand is labeled observed")
+    check(
+        row2.reserved_mb == 7750.0,
+        f"a grant is device MB: demand + 600 process overhead "
+        f"(got {row2.reserved_mb})",
+    )
+    assert ledger2 is not None
+    check(
+        ledger2.held_mb() == 7750.0,
+        f"the ledger holds exactly that (got {ledger2.held_mb()})",
+    )
+
+
+class _RecordingPeakStore(PeakStore):
+    """An in-memory PeakStore that remembers the order of the writes.
+
+    The SQLite store's ``MAX`` semantics would hide *which* frames
+    reached it: filed-then-overtaken is indistinguishable from never
+    filed. What MEM-04 #2 promises is one statement **only when the peak
+    rose**, and only a recording double can see that.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, float]] = []
+        self._peaks: dict[str, float] = {}
+
+    def record(self, fingerprint: str, peak_mb: float) -> float:
+        self.calls.append((fingerprint, peak_mb))
+        stored = max(self._peaks.get(fingerprint, peak_mb), peak_mb)
+        self._peaks[fingerprint] = stored
+        return stored
+
+    def peak_mb(self, fingerprint: str) -> float | None:
+        return self._peaks.get(fingerprint)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _MemoryReportChild(GraphTaskGateway):
+    """A gateway whose child is a *real* process writing real records.
+
+    The writer, the event file, the tail and the watcher under test are
+    all the production ones; only the content is pinned, because the
+    fixed-interval telemetry that will produce these frames does not
+    exist yet (MEM-05 #4). Cross-process property, real process: three
+    memory frames -- 6000, a rise to 7200, a dip back to 6500 -- and a
+    clean outcome.
+    """
+
+    _SCRIPT = (
+        "import sys\n"
+        "sys.path.insert(0, {root!r})\n"
+        "from pathlib import Path\n"
+        "from backend.infrastructure.graph_event_stream import ExecutionEventWriter\n"
+        "w = ExecutionEventWriter(Path({event!r}))\n"
+        "w.memory(reserved_mb=5000.0, allocated_mb=4000.0, peak_mb=6000.0, budget_mb=None)\n"
+        "w.memory(reserved_mb=5000.0, allocated_mb=4500.0, peak_mb=7200.0, budget_mb=None)\n"
+        "w.memory(reserved_mb=5000.0, allocated_mb=4500.0, peak_mb=6500.0, budget_mb=None)\n"
+        "w.outcome(error=None, results_count=0)\n"
+        "w.close()\n"
+    )
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen[bytes] | None = None
+
+    def spawn(self, launch: GraphTaskLaunch) -> int:
+        script = self._SCRIPT.format(
+            root=str(_REPO_ROOT), event=str(launch.event_path)
+        )
+        self._proc = subprocess.Popen([sys.executable, "-c", script])
+        return self._proc.pid
+
+    def request_stop(self, pid: int) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+
+    def kill(self, pid: int) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.kill()
+
+    def is_alive(self, pid: int) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def find_running_all(self, execution_id) -> list[int]:
+        return []
+
+    def find_running(self, execution_id) -> int | None:
+        return None
+
+
+def test_child_reported_peaks_land_in_the_store() -> None:
+    print("-- a real child process reports peaks; the watcher files the rises --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-childpeak-"))
+    repo = _graph_repo(root)
+    clock = FakeClock()
+    provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
+    store = _RecordingPeakStore()
+    gateway = _MemoryReportChild()
+    supervisor = GraphExecutionSupervisor(
+        executions=repo,
+        writer=_writer(repo, clock),
+        gateway=gateway,
+        events=EventPublisher(events=RecordingEventBus()),
+        clock=clock,
+        peak_store=store,
+        scratch_dir=root / "scratch",
+        make_tail=ExecutionEventTail,
+        poll_interval=0.02,
+    )
+    start = _graph_start(
+        repo,
+        provider,
+        launcher=supervisor,
+        clock=clock,
+        peak_source=lambda _graph: ObservedPeak("fp-e2e", None),
+    )
+    summary = start.execute(valid_graph())
+    row = repo.get(summary.execution_id)
+    check(
+        row.memory is not None and row.memory.fingerprint_key == "fp-e2e",
+        "the row carries the key the watcher files this run's peaks under",
+    )
+    check(
+        wait_until(
+            lambda: repo.get(summary.execution_id).status.is_terminal,
+            timeout=30.0,
+        ),
+        "the run reaches a terminal state",
+    )
+    check(
+        gateway._proc is not None and gateway._proc.returncode == 0,
+        f"the child wrote its records cleanly (rc="
+        f"{gateway._proc.returncode if gateway._proc else 'no proc'})",
+    )
+    check(
+        store.peak_mb("fp-e2e") == 7200.0,
+        f"the child's peak landed in the store (got {store.peak_mb('fp-e2e')})",
+    )
+    check(
+        store.calls == [("fp-e2e", 6000.0), ("fp-e2e", 7200.0)],
+        f"only rises cost a statement -- the 6500 tail frame was skipped "
+        f"(got {store.calls})",
+    )
+    check(
+        supervisor._peak_seen == {},
+        "the per-run rise bookkeeping is released with the run",
+    )
+
+
+def test_reconcile_drain_files_peaks() -> None:
+    print("-- the post-restart drain files a peak no live watcher saw --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-drain-"))
+    repo = _graph_repo(root)
+    clock = FakeClock()
+    store = SqlitePeakStore(root / "memory_peaks.db")
+    supervisor = GraphExecutionSupervisor(
+        executions=repo,
+        writer=_writer(repo, clock),
+        gateway=None,
+        events=EventPublisher(events=RecordingEventBus()),
+        clock=clock,
+        peak_store=store,
+        scratch_dir=root / "scratch",
+        make_tail=ExecutionEventTail,
+    )
+    row = GraphExecution.create(
+        graph=valid_graph(),
+        created_at=NOW,
+        memory=effective_memory(MemorySettings(), None, None, "fp-drain", 11192.0),
+    )
+    repo.add(row)
+    events_path = supervisor._paths_for(row.id)["events"]
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = ExecutionEventWriter(events_path)
+    writer.memory(
+        reserved_mb=4000.0, allocated_mb=3000.0, peak_mb=5000.0, budget_mb=None
+    )
+    writer.outcome(error=None, results_count=0)
+    writer.close()
+    outcome = supervisor.recorded_outcome(row.id)
+    check(
+        outcome is not None and outcome.error is None,
+        "the drain reads the run's own outcome",
+    )
+    check(
+        store.peak_mb("fp-drain") == 5000.0,
+        f"and files the peak the run reported while no one was watching "
+        f"(got {store.peak_mb('fp-drain')})",
+    )
+
+
+def test_peak_filing_guards() -> None:
+    print("-- what never reaches the store: no key, no usable number, no rise --")
+    root = Path(tempfile.mkdtemp(prefix="backend-mem-peaksafe-"))
+    repo = _graph_repo(root)
+    clock = FakeClock()
+    store = _RecordingPeakStore()
+    supervisor = GraphExecutionSupervisor(
+        executions=repo,
+        writer=_writer(repo, clock),
+        gateway=None,
+        events=EventPublisher(events=RecordingEventBus()),
+        clock=clock,
+        peak_store=store,
+        scratch_dir=root / "scratch",
+        make_tail=ExecutionEventTail,
+    )
+    # A row whose fingerprint admission could not compute (also the shape
+    # of every row written before this package existed).
+    keyless = GraphExecution.create(graph=valid_graph(), created_at=NOW)
+    repo.add(keyless)
+    supervisor._record_peak(keyless.id, {"peak_mb": 9000.0})
+    check(
+        store.calls == [],
+        "unknown fingerprint -> nothing filed (the watcher has no key, "
+        "exactly like admission had no past)",
+    )
+
+    keyed = GraphExecution.create(
+        graph=valid_graph(),
+        created_at=NOW,
+        memory=effective_memory(MemorySettings(), None, None, "fp-guards", 11192.0),
+    )
+    repo.add(keyed)
+    for payload in (
+        {},
+        {"peak_mb": None},
+        {"peak_mb": "lots"},
+        {"peak_mb": 0.0},
+        {"peak_mb": -4.0},
+        {"peak_mb": float("nan")},
+    ):
+        supervisor._record_peak(keyed.id, dict(payload))
+    check(
+        store.calls == [],
+        f"malformed / non-positive peaks are refused, not stored "
+        f"(got {store.calls})",
+    )
+    supervisor._record_peak(keyed.id, {"peak_mb": 1000.0})
+    check(store.calls == [("fp-guards", 1000.0)], "a measured peak is filed")
+    supervisor._record_peak(keyed.id, {"peak_mb": 900.0})
+    check(
+        store.calls == [("fp-guards", 1000.0)],
+        "a lower frame for the same run costs no statement",
+    )
+    supervisor._record_peak(keyed.id, {"peak_mb": 1200.0})
+    check(
+        store.calls == [("fp-guards", 1000.0), ("fp-guards", 1200.0)],
+        "and the next rise is filed again",
+    )
+
+    # A store that raises must cost the record, never the supervision.
+    class _Exploding(PeakStore):
+        def record(self, fingerprint: str, peak_mb: float) -> float:
+            raise RuntimeError("database is locked")
+
+        def peak_mb(self, fingerprint: str) -> float | None:
+            return None
+
+    boom = GraphExecutionSupervisor(
+        executions=repo,
+        writer=_writer(repo, clock),
+        gateway=None,
+        events=EventPublisher(events=RecordingEventBus()),
+        clock=clock,
+        peak_store=_Exploding(),
+        scratch_dir=root / "scratch2",
+        make_tail=ExecutionEventTail,
+    )
+    boom._record_peak(keyed.id, {"peak_mb": 2000.0})
+    check(True, "a store that raises cannot abort the watcher (it logged)")
+
+
 def main() -> None:
     test_refused_run_holds_nothing_and_names_the_holder()
     test_crash_between_reserve_and_spawn_releases_then_converges()
@@ -1072,6 +1521,10 @@ def main() -> None:
     test_health_reports_the_live_ledger_snapshot()
     test_the_probe_is_admitted_and_degrades_when_refused()
     test_real_http_children_race_for_one_device()
+    test_admission_reads_the_remembered_peak_and_keys_the_row()
+    test_child_reported_peaks_land_in_the_store()
+    test_reconcile_drain_files_peaks()
+    test_peak_filing_guards()
     finish()
 
 

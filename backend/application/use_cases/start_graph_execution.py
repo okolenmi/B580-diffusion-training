@@ -21,6 +21,7 @@ import threading
 
 from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphExecutionActiveError, GraphInvalidError
+from ..graph_peak_source import PeakSource
 from ..memory_admission import LedgerSource, admit, graph_owner, pending_owner
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
@@ -44,6 +45,7 @@ class StartGraphExecution:
         launcher: ExecutionLauncher,
         clock: Clock,
         memory_ledger: LedgerSource,
+        peak_source: PeakSource,
     ) -> None:
         self._executions = executions
         self._writer = writer
@@ -56,6 +58,11 @@ class StartGraphExecution:
         # and then every start is refused explicitly rather than
         # admitted unchecked.
         self._memory_ledger = memory_ledger
+        # Required for the same reason: where this graph's remembered
+        # peak comes from. The answer may be "unknown" for every graph
+        # (``unknown_peaks``), but the container says so deliberately
+        # rather than by omission.
+        self._peak_source = peak_source
         self._lock = threading.Lock()
 
     def execute(
@@ -71,9 +78,11 @@ class StartGraphExecution:
         computed here, once, against the ledger's capacity, and stored
         on the row; the ledger's claim (``reserved_mb``) is stored with
         them, so a restart reproduces the same held total from the
-        rows. ``peak_record`` and ``fingerprint_key`` stay None until
-        the peak writer and the fingerprint adapter exist (MEM-04 #2);
-        until then the demand is stated or unknown, never observed.
+        rows. The observed half of the demand (MEM-04 #2) comes from
+        ``peak_source``: a known fingerprint with a remembered peak makes
+        the demand ``peak + pillow`` (stated still beats observed), and
+        the fingerprint key travels onto the row so the watcher can file
+        this run's own reported peak under the same key.
         """
         ledger = self._memory_ledger()
         with self._lock:
@@ -95,11 +104,12 @@ class StartGraphExecution:
                     },
                 )
 
+            observed = self._peak_source(graph)
             memory = effective_memory(
                 graph.memory,
                 memory_overrides,
-                peak_record=None,
-                fingerprint_key=None,
+                peak_record=observed.peak_record(),
+                fingerprint_key=observed.fingerprint_key,
                 capacity_mb=ledger.capacity_mb if ledger is not None else None,
             )
             exploratory = memory.demand_source == "unknown"

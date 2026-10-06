@@ -1,5 +1,40 @@
 # TASK: memory admission and per-graph memory (merged design)
 
+> **Archived 2026-10-06 — complete except two items, both recorded here.**
+> MEM-00 through MEM-08 landed, plus MEM-03H-01..03 and MEM-09 (a follow-up
+> this plan did not anticipate). Commits, newest first:
+>
+> | Item | Commit |
+> |---|---|
+> | MEM-09: reclaim the allocator cache when an offload cannot lower `reserved_mb` | `c57a7e7` |
+> | MEM-07: the graph memory panel | `a588227` |
+> | the node-attached monitor widget design (design-not-built) | `5ed3540` |
+> | MEM-07: `POST /graphs/memory-preview` | `3087b66` |
+> | MEM-08: the hardware protocol, all of (a)-(f) | `c897d03`, `7612591`, `afbb3b5`, `c603b9f` |
+> | MEM-05 #5: `BudgetedResourceControlHandle` | `d52da06` |
+> | MEM-05 #5: the `nodes` ↛ `backend` layering rule | `cb5f832` |
+> | MEM-05 #1..#4 | `a3adb80`, `2e911d8`, `47389c5`, `bd21ce1` |
+> | MEM-06: the lease engine | `3ed14dd` |
+>
+> **Not done — `VRAMBudgetControllerNode` becomes a shim** (MEM-05 #5's last
+> sentence, below at line ~213). The lift is a graph-load change that rewrites
+> the budget source for existing trainers, and the two numbers are not
+> interchangeable: the node's `vram_budget_mb` is an *allocator* ceiling with a
+> reserve subtracted, graph `vram_max_mb` is a *device* claim with overhead and
+> foreign reserve added. Which wins when a graph has both is an unmade
+> decision, now recorded in `docs/decisions/0005-memory-admission.md` under
+> "Not a node". The editor-warning half is unblocked by MEM-07's panel; the
+> lift half is not.
+>
+> **Not done — the two accountings still disagree.** MEM-06's lease API
+> accounts by declared footprint (which drops on offload); the handle accounts
+> by `reserved_mb` (which does not, on this backend). MEM-09 fixed the
+> handle's response to that reading but not the disagreement itself. Recorded
+> in `docs/known-issues/pending-testing.md`.
+>
+> `MEM-05-recon.md` in this folder is the working notes, and its closing
+> section lists what actually landed.
+
 Repository `okolenmi/B580-diffusion-training`, start from `main` at `5f767e5` or
 later. Read first, in this order: `docs/design/09-prioritized-backlog.md`
 (the "Memory admission belongs to the graph" item and the three entries after

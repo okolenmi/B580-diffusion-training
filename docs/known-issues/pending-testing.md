@@ -152,14 +152,78 @@ and only `empty_cache()` returns them to the driver.
 (its own docstring: the trainer owns `empty_cache_every_n_steps` and
 forcing a reclaim on every per-step offload was a measured cost).
 
-Consequence, not yet acted on: the handle's relief loop will keep
-offloading residents that cannot relieve the reading, and under
-`strict=True` can then raise even though the memory genuinely was not
-needed -- it was merely cached. The memory was still available for
-*reuse* the whole time, so nothing was actually at risk. Not fixed here:
-it is a change to the handle's measurement semantics, and
-`smoke_test_resource_control_strict.py` scripts `reserved_mb` directly,
-so it is a real behavioural change with its own evidence.
+### (d'') What the offload's failure to move `reserved_mb` costs, and the fix
+
+The consequence named in (d') is real and was measured directly, by
+running the loop's two possible remedies side by side on the card. Two
+offloadable residents (512 MB and 256 MB, `reserved` at rest 768 MB)
+against a 600 MB usable ceiling, both arms in one process, best of 3:
+
+```
+arm 1  offload, re-measure, offload again   177.6 ms   offloaded [a, b]
+        still over budget: reserved=768 > 600   <- True
+arm 2  offload, reclaim, re-measure         130.0 ms   offloaded [a]
+        still over budget: reserved=256 > 600   <- False
+```
+
+Arm 1 evicted **both** residents and still missed the ceiling, because
+neither eviction moved the reading its own exit condition tests. Under
+`strict=True` that is a hard failure about a condition a single reclaim
+clears. The cost is not the 178 ms: an offloadable resident is
+offloadable precisely because it gets reloaded, so every resident arm 1
+moved is a host-to-device transfer charged again on each subsequent use.
+
+So the loop now reclaims instead. `BudgetedResourceControlHandle._reclaim()`
+hands the cache back, re-reads, and logs one line naming the reading it was
+chasing. Three properties make it a fix rather than a new tax:
+
+- **At most once per relief attempt.** A second reclaim with nothing
+  allocated in between returns exactly what the first returned, so it
+  cannot lower the reading further.
+- **Never when under budget.** `text_encoder.py`'s offload() docstring
+  records that forcing a reclaim per per-step offload was a measured cost,
+  which is why the trainer owns `empty_cache_every_n_steps`. That reasoning
+  is about a *recurring* reclaim; this one fires only when an eviction has
+  already proved inert.
+- **Safe with live tensors.** `empty_cache()` returns only segments
+  nothing is allocated from. Measured with a 1024 MB tensor live:
+  `reserved` 1024.0 and `allocated` 1024.0 both before and after.
+
+Measured cost of the action, against the thing it replaces: a reclaim after
+one offload was **132 ms** (512 MB resident) and **267 ms** (1024 MB), versus
+**132 ms** / **263 ms** for one offload-and-reload round trip of the same
+resident. Reclaiming instead of evicting is not the expensive branch, and it
+leaves a resident resident rather than requiring it back.
+
+`strict=True`'s message now names the reclaim, so a reader who hits it knows
+the cache was already tried and was not the answer.
+
+Two notes on the evidence, both about the measurement rather than the finding.
+First, the reclaim cost and the round-trip cost came out within 1% of each
+other at both sizes, which is suspiciously close for two operations that do
+different work; the reclaim figure is dominated by the preceding offload's
+transfer, since both arms include one. Second, an earlier version of the
+arm script hung, and the cause was a transcription error worth recording:
+it called `offload()` unconditionally, without the real loop's
+`next_to_evict() is None` exit. On an already-offloaded resident the offload
+is a host-side no-op, so `reserved` never moved and neither did the loop's
+exit condition. The real loop terminates *only* by exhausting candidates,
+which is itself the thing being demonstrated -- an eviction-only loop's
+termination depends on there being something left to evict, not on having
+achieved anything.
+
+The `reserved_mb` reading is unchanged, deliberately. It is a correct
+reading of a number this process holds and may spend again; what was wrong
+was the action chosen in response to it, not the measurement.
+
+`smoke_test_resource_control_strict.py`'s eight original checks pass
+unchanged. Six new checks cover this, on a `_CachingDeviceContext` that
+models the real allocator's contract (an offload moves live MB into cache,
+so `reserved` holds; only `empty_cache()` moves it out) -- the scripted
+readings-based fake could not have caught this, since it returns whatever
+numbers it was handed and so makes an eviction-only loop look correct.
+Verified failing without the fix: reverting the reclaim block fails on
+"b must not be evicted once an eviction proved unable to move the reading".
 
 ### (e) The deliberate collision, on the real card
 
@@ -235,6 +299,34 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 
 ## Pending
 
+- **[2026-10-06] the lease API and the handle still account for the same
+  offload differently.** The sharper half of the `reserved_mb` issue, and
+  deliberately left open by MEM-09.
+
+  `BudgetedResourceControlHandle._make_room()` reads
+  `memory_stats()['reserved_mb']` and, on this backend, an offload does not
+  move it -- the freed segments stay in the allocator's cache. MEM-06's
+  lease API accounts by *declared footprint*, and a footprint **does** drop
+  the moment a resident is offloaded. So the two halves of the memory rework
+  answer "did that offload free anything?" differently, from the same event,
+  and a lease can be granted on the strength of room the handle still shows
+  as held.
+
+  MEM-09 fixed the loop's *response* to that reading (it reclaims once
+  instead of evicting residents that cannot move it) and left the reading
+  itself alone. It deliberately did not reconcile the two accountings, because
+  they answer different questions on purpose: a lease asks what this run
+  declared it needs, the handle asks what the allocator holds. Reconciling
+  them means deciding which of those the lease's grant should be bounded by,
+  which is a design call rather than a bug fix -- and doing it inside
+  `GraphMemory.request()` would touch the admission path that MEM-05 #2's
+  physical check already depends on.
+
+  Worth doing before preview generation and large prompt-embedding caches
+  land, since those are what actually make per-step offloading happen.
+  Until then exposure is low: offloading is pressure-driven, and current
+  dataset shapes rarely trigger it.
+
 - **[2026-10-04] `test_graph_task_gateway.py`'s cooperative-stop test failed
   about one gate run in eight under load. RESOLVED 2026-10-05.** It was
   reproduced and rooted: both stop tests (`test_stopping_a_run_actually_stops_it`
@@ -250,43 +342,40 @@ whether the handle should keep measuring `reserved_mb` (d', above).
   run in three.
 
 - **[2026-10-05] the handle's relief loop reads a number its own actions do
-  not move. Reads like a memory leak, and is not one.** See MEM-08 (d')
-  above: on this card an offload leaves `reserved_mb` unchanged and frees no
-  driver memory; only `empty_cache()` does.
-  `BudgetedResourceControlHandle._make_room()` reads `reserved_mb` after
-  every offload and loops until it falls.
+  not move. Reads like a memory leak, and is not one. FIXED 2026-10-06.**
+  See MEM-08 (d') for the measurement and (d'') for the fix.
 
-  **Why it looks like a leak.** From the handle's side `reserved_mb` only
+  **Why it looked like a leak.** From the handle's side `reserved_mb` only
   ever rises and never comes back down, which is the signature of one. It
   is not: `empty_cache()` returns the segments immediately (1,024 MB
   resident -> `reserved` 1024.0 -> `.to("cpu")` still 1024.0 ->
   `empty_cache()` 0.0). Nothing is lost; the allocator is holding segments
   it is entitled to reuse.
 
-  **Why it still matters.** The memory *was* available for reuse the whole
-  time, so nothing was ever at risk of OOM. But the loop cannot see that,
-  so it keeps offloading residents that cannot relieve the reading, and
-  under `strict=True` it can raise a hard failure about a condition that
-  was never real.
+  **What it actually cost.** Measured by running both remedies side by side
+  (d''): the eviction-only loop offloaded *both* registered residents, still
+  missed its own ceiling, and under `strict=True` would have raised about a
+  condition one reclaim clears. Each resident it moved is a host-to-device
+  transfer charged again on every subsequent use.
 
-  **A second-order consequence, which is the sharper problem.** MEM-06's
-  lease API accounts by *declared footprint*, and a footprint **does** drop
-  the moment a resident is offloaded. The handle accounts by `reserved_mb`,
-  which does not. So the two halves of the memory rework disagree about
-  whether the same offload freed anything: the lease will grant a request
-  on the strength of room the handle still shows as held. Whichever way
-  this is resolved, the two accountings need to be reconciled deliberately
-  -- they currently answer "did that free memory?" differently, from the
-  same event.
+  **The fix.** `_make_room()` now notices that a move did not lower the
+  reading, and reclaims the allocator cache once instead of evicting
+  another resident. At most once per relief attempt, and never when under
+  budget -- so it is not the per-step tax `text_encoder.py`'s offload()
+  docstring exists to avoid. The `reserved_mb` reading itself is unchanged;
+  it was the response to it that was wrong.
 
-  Not fixed: it is a change to what the handle measures, its own smoke test
-  scripts `reserved_mb` directly, and the right fix (measure allocator
-  availability, or reclaim on demand) is its own piece of work. Note the
-  practical exposure is low today -- offloading is driven by pressure, and
-  for the current dataset shapes there is little reason to offload per
-  step; it becomes live with preview generation and with caching a large
-  pack of prompt embeddings, where both this loop and the two accountings
-  will actually be exercised.
+  **Left open, deliberately: the two accountings still disagree.** MEM-06's
+  lease API accounts by *declared footprint*, which **does** drop when a
+  resident is offloaded; the handle accounts by `reserved_mb`, which does
+  not. So a lease can be granted on the strength of room the handle still
+  shows as held. This fix does not touch that, because the two answer
+  different questions on purpose -- the lease asks what *this run* declared
+  it needs, the handle asks what the allocator holds -- but the pair needs
+  reconciling deliberately rather than left to disagree, and that is its own
+  piece of work. Practical exposure remains low today (offloading is
+  pressure-driven, and current dataset shapes rarely trigger it); it becomes
+  live with preview generation and large prompt-embedding caches.
 
 The two entries this section used to hold are now in
 [`resolved.md`](resolved.md) with the hardware numbers that closed them:

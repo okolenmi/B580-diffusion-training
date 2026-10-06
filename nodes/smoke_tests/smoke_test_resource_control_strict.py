@@ -45,9 +45,10 @@ class _FakeDeviceContext(DeviceContext):
         self._sequence = list(reserved_mb_sequence)
         self._calls = 0
         self.synchronize_call_count = 0
+        self.empty_cache_call_count = 0
 
     def empty_cache(self) -> None:
-        pass
+        self.empty_cache_call_count += 1
 
     def synchronize(self) -> None:
         self.synchronize_call_count += 1
@@ -56,6 +57,102 @@ class _FakeDeviceContext(DeviceContext):
         value = self._sequence[min(self._calls, len(self._sequence) - 1)]
         self._calls += 1
         return {"reserved_mb": value}
+
+    def reset_peak_stats(self) -> None:
+        pass
+
+    def total_memory_mb(self) -> float | None:
+        return None
+
+
+class _CachingDeviceContext(DeviceContext):
+    """A device whose offloads do NOT move ``reserved_mb``, which is what
+    the real XPU backend does (measured on the B580, torch 2.12.1+xpu: an
+    offload frees ``allocated``, and only ``empty_cache()`` frees
+    ``reserved``). The scripted _FakeDeviceContext above cannot model
+    this, because it just returns whatever numbers it was handed -- so a
+    loop that only ever evicts looks correct against it and is not.
+
+    This one holds the truth: live MB goes to ``_live``, an offload moves
+    live MB into ``_cached`` (so ``reserved`` holds, because the
+    segments are still the allocator's), and ``empty_cache()`` moves
+    ``_cached`` back out. That is the caching allocator's actual
+    contract, and it is what makes the reclaim necessary rather than
+    merely tidy."""
+
+    def __init__(self, live_mb: float, budget_mb: float):
+        self._live = live_mb
+        self._cached = 0.0
+        self._budget = budget_mb
+        self.empty_cache_call_count = 0
+        self.synchronize_call_count = 0
+        self._reclaim_returns_nothing = False
+
+    def empty_cache(self) -> None:
+        self.empty_cache_call_count += 1
+        # A segment still in use is not returned to the driver, so a
+        # reclaim can legitimately do nothing. _reclaim_returns_nothing
+        # scripts that case: what the check above needs is a *device* that
+        # refuses the reclaim, not a handle that repeats it.
+        if not self._reclaim_returns_nothing:
+            self._cached = 0.0
+
+    def synchronize(self) -> None:
+        self.synchronize_call_count += 1
+
+    def memory_stats(self):
+        return {"reserved_mb": self._live + self._cached, "allocated_mb": self._live}
+
+    def note_offload(self, mb: float) -> None:
+        """What an offload does to the device: the memory leaves
+        ``allocated`` and becomes cache, and ``reserved`` does not move."""
+        moved = min(mb, self._live)
+        self._live -= moved
+        self._cached += moved
+
+    def reset_peak_stats(self) -> None:
+        pass
+
+    def total_memory_mb(self) -> float | None:
+        return None
+
+
+class _SizedResident(DeviceResident):
+    """A resident that reports a real footprint and moves real device MB
+    through its device on offload, so _CachingDeviceContext's accounting
+    has something to move."""
+
+    def __init__(self, name: str, device_ctx, footprint_mb: float):
+        self.name = name
+        self._device_ctx = device_ctx
+        self._footprint_mb = footprint_mb
+        self._offloaded = False
+        self.offload_calls = 0
+        self.reload_calls = 0
+
+    def footprint_bytes(self) -> int:
+        return 0 if self._offloaded else int(self._footprint_mb * 1024 * 1024)
+
+    def offload(self) -> None:
+        self.offload_calls += 1
+        if not self._offloaded:
+            self._device_ctx.note_offload(self._footprint_mb)
+            self._offloaded = True
+
+    def reload(self, device=None) -> None:
+        self.reload_calls += 1
+        if self._offloaded:
+            self._live_add(self._footprint_mb)
+            self._offloaded = False
+
+    def _live_add(self, mb: float) -> None:
+        self._device_ctx._live += mb
+        # A reload serves from cache first, which is what the allocator is
+        # entitled to do and why the reclaim is safe to omit here.
+        self._device_ctx._cached = max(0.0, self._device_ctx._cached - mb)
+
+    def release(self) -> None:
+        pass
 
     def reset_peak_stats(self) -> None:
         pass
@@ -195,6 +292,174 @@ def check_ensure_loaded_reloads_and_synchronizes():
     print("    PASS")
 
 
+def check_loop_stops_evicting_when_eviction_does_not_move_the_reading():
+    print("[an offload that does not lower reserved_mb: the loop reclaims the "
+          "allocator cache instead of evicting every remaining resident]")
+    # 1000 MB live, 500 MB usable budget. Evicting "a" frees its 600 MB into
+    # the cache, so reserved_mb stays 1000 -- and on this backend evicting "b"
+    # and "c" would not move it either. Reclaiming drops reserved to 400.
+    device_ctx = _CachingDeviceContext(live_mb=1000.0, budget_mb=500.0)
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=device_ctx)
+    a = _SizedResident("a", device_ctx, 600.0)
+    b = _SizedResident("b", device_ctx, 200.0)
+    c = _SizedResident("c", device_ctx, 200.0)
+    control.register("a", a, offloadable=True)
+    control.register("b", b, offloadable=True)
+    control.register("c", c, offloadable=True)
+
+    control.before_step(0)
+
+    check(a.offload_calls == 1, "the first eviction is still the right move")
+    check(b.offload_calls == 0,
+          f"b must not be evicted once an eviction proved unable to move the "
+          f"reading (offload_calls={b.offload_calls})")
+    check(c.offload_calls == 0,
+          f"c likewise (offload_calls={c.offload_calls})")
+    check(device_ctx.empty_cache_call_count == 1,
+          f"must reclaim exactly once (got {device_ctx.empty_cache_call_count})")
+    stats = device_ctx.memory_stats()
+    check(stats["reserved_mb"] <= 500.0,
+          f"the reclaim should have brought it under the usable budget, "
+          f"got {stats['reserved_mb']}")
+    print("    PASS")
+
+
+def check_reclaim_is_not_repeated_for_a_still_over_budget_reading():
+    print("[reclaim is attempted at most once per relief attempt -- a second "
+          "one with nothing allocated in between returns what the first did]")
+    # 1000 MB live that empty_cache() does NOT release (a segment still in
+    # use), so the reading stays over budget after the reclaim. Two
+    # offloadable residents: neither may be evicted past the first, and the
+    # reclaim must not repeat.
+    device_ctx = _CachingDeviceContext(live_mb=1000.0, budget_mb=500.0)
+    device_ctx._reclaim_returns_nothing = True
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=device_ctx)
+    a = _SizedResident("a", device_ctx, 600.0)
+    b = _SizedResident("b", device_ctx, 400.0)
+    control.register("a", a, offloadable=True)
+    control.register("b", b, offloadable=True)
+
+    control.before_step(0)  # strict=False: must not raise
+
+    check(device_ctx.empty_cache_call_count == 1,
+          f"a second reclaim returns the same segments the first did "
+          f"(got {device_ctx.empty_cache_call_count} calls)")
+    # "b" is evicted once and only once: the loop must not keep evicting
+    # residents after its only remaining lever has been spent.
+    check(b.offload_calls <= 1, b.offload_calls)
+    check(a.offload_calls + b.offload_calls == 2,
+          f"exactly one offload per resident, no repeats "
+          f"(a={a.offload_calls} b={b.offload_calls})")
+    print("    PASS")
+
+
+def check_strict_true_raises_only_after_reclaiming():
+    print("[strict=True: a reading that stays over budget after both levers "
+          "raises; one the reclaim clears does not]")
+    # The reclaim clears it -> strict must NOT raise, and must not have
+    # evicted every resident to find that out.
+    clears = _CachingDeviceContext(live_mb=1000.0, budget_mb=500.0)
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0, strict=True)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=clears)
+    a = _SizedResident("a", clears, 600.0)
+    b = _SizedResident("b", clears, 400.0)
+    control.register("a", a, offloadable=True)
+    control.register("b", b, offloadable=True)
+
+    raised = False
+    try:
+        control.before_step(0)
+    except RuntimeError as e:
+        raised = True
+        check(e is not None, "")
+    check(not raised,
+          "strict=True raised about a ceiling the reclaim had already cleared")
+    check(b.offload_calls == 0, "must not have evicted b to find that out")
+    print("    PASS")
+
+
+def check_strict_true_still_raises_when_reclaiming_does_not_help():
+    print("[strict=True: still raises when the reading survives both eviction "
+          "and reclaim -- a genuinely live overage is not excused]")
+    sticky = _CachingDeviceContext(live_mb=1000.0, budget_mb=500.0)
+    sticky._reclaim_returns_nothing = True
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0, strict=True)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=sticky)
+    a = _SizedResident("a", sticky, 600.0)
+    control.register("a", a, offloadable=True)
+
+    raised = False
+    try:
+        control.before_step(0)
+    except RuntimeError as e:
+        raised = True
+        # The message must now name the reclaim too, so a reader who hits it
+        # knows the cache was already tried and was not the answer.
+        check("reclaim" in str(e), f"message should name the reclaim: {e}")
+        check("1000" in str(e) and "500" in str(e),
+              f"message should still name the actual and usable MB: {e}")
+    check(raised, "a live overage after both levers must still raise")
+    check(a.offload_calls == 1, "must still have evicted what it could")
+    check(sticky.empty_cache_call_count == 1, sticky.empty_cache_call_count)
+    print("    PASS")
+
+
+def check_under_budget_never_reclaims():
+    print("[nothing over budget: no eviction and no reclaim -- a reclaim on "
+          "every step is the cost text_encoder.py's offload() exists to avoid]")
+    device_ctx = _CachingDeviceContext(live_mb=400.0, budget_mb=500.0)
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=device_ctx)
+    a = _SizedResident("a", device_ctx, 400.0)
+    control.register("a", a, offloadable=True)
+
+    control.before_step(0)
+    control.before_step(1)
+    control.before_step(2)
+
+    check(a.offload_calls == 0, a.offload_calls)
+    check(device_ctx.empty_cache_call_count == 0,
+          f"under budget must never reclaim (got "
+          f"{device_ctx.empty_cache_call_count} calls across three steps)")
+    print("    PASS")
+
+
+def check_ensure_loaded_under_pressure_reclaims_before_evicting():
+    print("[ensure_loaded(): demand-driven relief reclaims rather than "
+          "evicting every evictable resident once eviction proves inert]")
+    # 700 MB live against a 500 MB usable budget. ensure_loaded("a") excludes a,
+    # so the demand-driven pass considers "other" then "other2". Offloading
+    # "other" caches its 300 MB and leaves reserved at 700; reclaiming brings
+    # it to 400, under budget, so "other2" never has to move.
+    device_ctx = _CachingDeviceContext(live_mb=700.0, budget_mb=500.0)
+    budget = ResourceBudget(vram_budget_mb=600.0, vram_reserve_mb=100.0)
+    control = BudgetedResourceControlHandle(budget, device="cpu", device_ctx=device_ctx)
+    a = _SizedResident("a", device_ctx, 100.0)
+    other = _SizedResident("other", device_ctx, 300.0)
+    other2 = _SizedResident("other2", device_ctx, 300.0)
+    control.register("a", a, offloadable=True)
+    control.register("other", other, sacrificable=True)
+    control.register("other2", other2, sacrificable=True)
+
+    control.ensure_loaded("a")
+
+    check(other.offload_calls == 1,
+          f"the first demand-driven eviction still happens "
+          f"(offload_calls={other.offload_calls})")
+    check(other2.offload_calls == 0,
+          f"the second sacrificable fallback must not fire while a reclaim "
+          f"is available (offload_calls={other2.offload_calls})")
+    check(device_ctx.empty_cache_call_count == 1,
+          device_ctx.empty_cache_call_count)
+    check(a.offload_calls == 0, "the resident just used must stay resident")
+    check(device_ctx.memory_stats()["reserved_mb"] <= 500.0,
+          f"and the reclaim should have cleared it, got "
+          f"{device_ctx.memory_stats()['reserved_mb']}")
+    print("    PASS")
+
+
 def check_device_ctx_none_uses_real_factory_unchanged():
     print("[device_ctx omitted: falls back to the real DeviceContext.for_device(device), "
           "same as before this session's constructor change]")
@@ -241,6 +506,12 @@ def main():
     check_strict_true_raises_when_budget_cannot_be_honored()
     check_strict_true_does_not_raise_when_budget_is_actually_honored()
     check_ensure_loaded_reloads_and_synchronizes()
+    check_loop_stops_evicting_when_eviction_does_not_move_the_reading()
+    check_reclaim_is_not_repeated_for_a_still_over_budget_reading()
+    check_strict_true_raises_only_after_reclaiming()
+    check_strict_true_still_raises_when_reclaiming_does_not_help()
+    check_under_budget_never_reclaims()
+    check_ensure_loaded_under_pressure_reclaims_before_evicting()
     check_device_ctx_none_uses_real_factory_unchanged()
     check_release_offloads_unconditionally_and_rejects_non_offloadable()
     print()

@@ -128,7 +128,39 @@ one JSON file.
 ### Not a node
 
 `VRAMBudgetControllerNode` becomes a deprecated shim whose values are lifted
-into graph settings on load.
+into graph settings on load. **Not done.** The lift is a graph-load change
+that rewrites the budget source for existing trainers, and the two numbers
+are not interchangeable: the node's `vram_budget_mb` is an *allocator*
+ceiling with a reserve subtracted from it, while graph `vram_max_mb` is a
+*device* claim with overhead and foreign reserve added. Which wins when a
+graph has both is a decision this ADR does not make. The editor-warning half
+of the shim is unblocked by MEM-07's panel; the lift half is not.
+
+### An offload frees allocated, not reserved (MEM-09)
+
+Measured on the B580, torch 2.12.1+xpu: a `.to("cpu")` takes the process from
+`reserved=1024 allocated=1024` to `reserved=1024 allocated=0`, and only
+`empty_cache()` reaches `reserved=0`. So the caching allocator keeps the
+segments, and a budget expressed as a ceiling on `reserved` is not lowered by
+evicting a resident.
+
+The handle measures `reserved` deliberately -- it is what the allocator
+actually holds, covering everything in the process rather than this handle's
+declared footprints -- so the measurement stays and the *response* changes:
+when a move does not lower the reading, `_make_room()` reclaims the cache
+once rather than evicting another resident. Measured side by side, the
+eviction-only loop offloaded every registered resident, still missed its own
+ceiling, and under `strict=True` would have raised about a condition one
+reclaim clears; the reclaim version evicted one and cleared it. At most once
+per relief attempt, and never when already under budget, so it is not the
+per-step reclaim that `text_encoder.py`'s `offload()` docstring measures as a
+real cost.
+
+Left open, and recorded in `docs/known-issues/pending-testing.md`: the lease
+API accounts by declared footprint (which *does* drop on offload) while the
+handle accounts by `reserved` (which does not). The two answer different
+questions on purpose, but reconciling them is still needed before per-step
+offloading becomes routine.
 
 ## Consequences
 

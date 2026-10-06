@@ -69,6 +69,7 @@ A third addition, `release()`, is the deterministic counterpart to
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -76,6 +77,8 @@ from ..components.device import DeviceContext
 from ..resource_budget import ResourceBudget
 from .graph_memory import GraphMemory
 from .handle import DeviceResident
+
+logger = logging.getLogger(__name__)
 
 
 #: Priority bands for the two movable registration states, used when a
@@ -347,23 +350,45 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
         (and later having to reload) more than the pressure actually
         required.
 
+        When a move does not lower the reading -- which on this backend is
+        the ordinary case, because an offload frees ``allocated`` and not
+        ``reserved`` -- it reclaims the allocator's cache once instead of
+        moving another resident, and says so in one log line. See
+        ``_reclaim()`` for the measurement and for why this is not the
+        per-step tax the trainer's ``empty_cache_every_n_steps`` exists to
+        avoid. At most one reclaim per call: a second with nothing
+        allocated in between returns what the first returned.
+
         Raises when self._budget.strict and usage is still over budget
         once every candidate, currently-loaded resident (outside
-        ``exclude``) has been moved -- see ResourceBudget.strict's own
-        docstring for why. Default strict=False keeps this method's
-        previous behavior exactly (return once the candidates are
-        exhausted, over budget or not) -- existing callers/tests see no
-        behavior change unless they opt in."""
+        ``exclude``) has been moved and the cache has been reclaimed --
+        see ResourceBudget.strict's own docstring for why. Default
+        strict=False keeps this method's previous behavior (return once
+        the candidates are exhausted, over budget or not) -- existing
+        callers/tests see no behavior change unless they opt in."""
         stats = self._device_ctx.memory_stats()
         if stats is None:
             return
         usable_mb = self._memory.budget_mb or 0.0
         candidates = None if demand_driven else tuple(self._offloadable)
+        # At most one reclaim per relief attempt. A second one with nothing
+        # allocated in between returns exactly what the first returned, so
+        # repeating it cannot lower the reading further -- and the reading
+        # is the loop's only exit condition.
+        reclaimed = False
         while stats["reserved_mb"] > usable_mb:
             victim = self._memory.next_to_evict(
                 candidates=candidates, exclude=exclude)
             if victim is None:
-                break
+                # Nothing left this handle is allowed to move. Before
+                # concluding the overage is real, check the other
+                # possibility: that it is cached rather than live.
+                if reclaimed:
+                    break
+                reclaimed = True
+                stats = self._reclaim() or stats
+                continue
+            before = stats["reserved_mb"]
             self._memory.move(victim.name, offload=True)
             # Defensive, not provable-necessary from this codebase's own offload()
             # implementations alone: every DeviceResident.offload() registered here
@@ -385,17 +410,80 @@ class BudgetedResourceControlHandle(ResourceControlHandle):
             # report hadn't reached yet (that entry explicitly scoped itself to
             # core/trainer.py, not nodes/).
             self._device_ctx.synchronize()
-            stats = self._device_ctx.memory_stats()
+            stats_after = self._device_ctx.memory_stats()
+            if stats_after is not None:
+                stats = stats_after
+            if stats["reserved_mb"] < before:
+                # The offload moved the reading, which is the only thing the
+                # loop's own action can do. Keep going while it keeps working.
+                continue
+            # It did not. On this hardware (measured, torch 2.12.1+xpu,
+            # Intel Arc B580) that is the normal case rather than the
+            # exception: an offload frees the allocator's *allocated*
+            # bytes but not its *reserved* segments, which stay in its
+            # cache until empty_cache() hands them back to the driver.
+            #      live            reserved=1024  allocated=1024
+            #      after .to(cpu)  reserved=1024  allocated=   0
+            #      after cache     reserved=   0  allocated=   0
+            # Evicting more residents here cannot lower `reserved_mb`, so
+            # every one of them is a host->device transfer paid for
+            # again on the next use, buying nothing the loop can see.
+            # Reclaim instead, once, then re-measure.
+            if reclaimed:
+                break
+            reclaimed = True
+            stats = self._reclaim() or stats
         if self._budget.strict and stats["reserved_mb"] > usable_mb:
             raise RuntimeError(
                 f"BudgetedResourceControlHandle: {stats['reserved_mb']:.0f}MB reserved "
                 f"still exceeds the {usable_mb:.0f}MB usable budget "
                 f"({self._budget.vram_budget_mb:.0f}MB minus "
                 f"{self._budget.vram_reserve_mb:.0f}MB reserve) after offloading every "
-                f"resident registered as offloadable -- nothing left this handle is "
-                f"allowed to move. Raising now (strict=True) rather than silently "
+                f"resident registered as offloadable and reclaiming the allocator "
+                f"cache -- nothing left that this handle may release. Raising now "
+                f"(strict=True) rather than silently "
                 f"training on past the ceiling you asked for, which is exactly the "
                 f"VRAM-pressure condition this handle exists to prevent. Either raise "
                 f"vram_budget_mb, or register more residents as offloadable if that's "
                 f"genuinely safe for them (see register()'s own docstring)."
             )
+
+    def _reclaim(self) -> Optional[dict[str, float]]:
+        """Hand the allocator's cached segments back to the driver, then
+        re-read. Returns the new snapshot, or None if the device has no
+        reading to give.
+
+        Safe to call with tensors still resident, and this is why it is
+        not merely a performance knob: ``empty_cache()`` returns only
+        segments nothing is allocated from, so it cannot pull memory out
+        from under a live tensor. Measured on the B580 with a 1024 MB
+        tensor live, ``reserved`` and ``allocated`` both held across the
+        call (1024.0 / 1024.0 before and after).
+
+        Deliberately *not* called on every offload. This project's own
+        ``nodes/model/text_encoder.py`` offload() docstring records that
+        forcing a reclaim per per-step offload was a measured cost, which
+        is why the trainer owns ``empty_cache_every_n_steps`` instead.
+        What that reasoning misses is the case this method exists for: an
+        offload that the loop's own condition cannot see, where reclaiming
+        is not a recurring tax but the only action that lowers the number
+        the loop is reading. Measured cost of the action taken here --
+        one reclaim after one offload, ~130 ms against a ~132 ms
+        host->device round trip for the resident it replaced -- so
+        reclaiming instead of evicting is not the expensive branch, and it
+        leaves a resident resident rather than requiring it back.
+        """
+        self._device_ctx.synchronize()
+        self._device_ctx.empty_cache()
+        self._device_ctx.synchronize()
+        stats = self._device_ctx.memory_stats()
+        if stats is None:
+            return None
+        logger.info(
+            "BudgetedResourceControlHandle: allocator cache reclaimed to relieve a "
+            "reserved-memory ceiling (%0.0fMB reserved against a %0.0fMB usable "
+            "budget) -- an offload does not lower reserved_mb on this backend, so "
+            "further eviction would not have moved it",
+            stats["reserved_mb"], self._memory.budget_mb or 0.0,
+        )
+        return stats

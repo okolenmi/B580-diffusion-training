@@ -210,6 +210,44 @@ query on the loader's own `metadata.db` is the safe source and is cheap, but it
 is a change to the data path and belongs in its own commit with its own test.
 Not taken here because this file is a measurement record, not a change set.
 
+## Where it is triggered in a graph
+
+**`ManagedDatasetSourceNode.build()` — the dataset-loading node.** Not a
+trainer hook and not a server-side spawn argument, because of the two facts
+already established:
+
+- **Order.** Nodes build in topological order
+  (`backend/infrastructure/graph/runtime.py:385`), so the dataset is built
+  before the trainer that consumes its batches. The dataset is also the first
+  node that knows how many distinct latent shapes the run will see.
+- **Timing.** The variable is read lazily, so "before the first training step"
+  is early enough. That is what frees this from the constraint that made the
+  `graph_task_worker` placement impossible.
+
+The count comes from `loader.trajectories`, which `ManagedDatasetLoader` has
+already fetched in its constructor — no extra query, and nothing that advances
+loader state. It **over-counts**: 63 rows for `non-square`, where the loader
+emits 44. That is deliberate and load-bearing. Samples in incomplete
+`(prompt, size)` groups never reach training, so the trajectory table contains
+shapes this run will never compile a primitive for. Over-counting is the only
+safe direction here, because capacity is a ceiling and unused entries cost
+nothing: `non-square` gets 2205 (63 x 35) rather than 1540 (44 x 35), which is
+free, whereas an under-count is the 4x revisit penalty.
+
+Three properties, each with a check:
+
+- **The dataset node cannot become the reason a dataset fails to load.** The
+  whole sizing block is best-effort; anything unexpected is logged and the
+  measured default stands, which is correct for `non-square` and merely
+  conservative for anything larger.
+- **An operator's exported value survives**, because a knob that cannot be
+  deliberately set smaller is not a knob. The shortfall is logged when the
+  computed requirement is larger, since the symptom it causes looks exactly
+  like a bug.
+- **Sizing does not cost the node its batches.** Checked explicitly: the
+  dataset node still yields a usable batch afterwards. A mis-sized cache that
+  broke data loading would be a worse bug than the slow steps it prevents.
+
 ## Where grouping becomes the answer instead
 
 The 4096-shape worst case (`[64-128]x[64-128]` unstandardised) needs ~143,000
@@ -286,10 +324,8 @@ any preview or VAE decode.
 1. **Shape bucketing** — the only remaining lever on a cost that is ~40% of
    every run, and above 512 distinct shapes the only lever that is *cheaper*.
    Blocked on the loss-mask decision, not on measurement.
-2. **Wire the sizing into the trainer.** `primitive_cache_capacity_for_shapes()`
-   is ready and tested; it needs a distinct-shape count from a source that does
-   not advance loader state. A `DISTINCT` query on the loader's own
-   `metadata.db` is the safe source and belongs in its own commit.
+2. **Wire the sizing into the trainer.** Done — see "Where it is triggered in a
+   graph" above: `ManagedDatasetSourceNode.build()`.
 3. **Pre-warm** is *not* an alternative to bucketing: it pays the same ~166 s
    per run, just earlier and in one lump, and a graph run is a fresh process
    every time so there is nothing to amortize against. Earlier drafts of this

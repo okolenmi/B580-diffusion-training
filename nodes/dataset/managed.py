@@ -154,6 +154,40 @@ class ManagedDatasetSourceNode(DataSourceNode):
             keep_incomplete=inputs.get(
                 "keep_incomplete_batches", self.INPUTS["keep_incomplete_batches"].default),
         )
+        # Size the oneDNN primitive cache to this dataset's shape count
+        # (nodes/xpu_env.py's own docstring for why it belongs here).
+        #
+        # This node is the trigger, and the reason is graph execution order:
+        # nodes build in topological order (backend/infrastructure/graph/
+        # runtime.py), so the dataset is built before the trainer that consumes
+        # its batches. It is also the only node that knows how many distinct
+        # latent shapes the run will see.
+        #
+        # Best-effort by construction: the sizing must never be the reason a
+        # dataset fails to load, so anything unexpected here is swallowed and
+        # the default capacity stands. That default is measured to cover
+        # `non-square`, and capacity is a ceiling rather than an allocation,
+        # so a run that skips this step still works -- it is just sized for
+        # one dataset rather than its own.
+        try:
+            shapes = {
+                (row.get("latent_h"), row.get("latent_w"))
+                for row in (loader.trajectories or [])
+                if row.get("latent_h") and row.get("latent_w")
+            }
+            # Over-counts on purpose (63 rows -> 44 trained shapes for
+            # non-square); the module docstring says why that is the safe
+            # direction.
+            from ..xpu_env import apply_primitive_cache_capacity_for_shapes
+            apply_primitive_cache_capacity_for_shapes(len(shapes))
+        except Exception as exc:  # noqa: BLE001 -- sizing is never load's business
+            import logging
+            logging.getLogger(__name__).warning(
+                "could not size the oneDNN primitive cache to this dataset "
+                "(%s: %s); keeping the default capacity, which is measured to "
+                "cover a 44-shape dataset", type(exc).__name__, exc,
+            )
+
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)
         return result

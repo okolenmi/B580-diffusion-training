@@ -39,6 +39,7 @@ had a reason to care about) that whoever already chose not to enable it
 in the older route didn't make for this file to second-guess.
 """
 
+import logging
 import os
 
 
@@ -141,6 +142,14 @@ def set_xpu_perf_env_vars(
 #: 4x revisit penalty.
 DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY = 2048
 
+#: True once the capacity has come from an explicitly exported variable rather
+#: than from this module's default. ``apply_primitive_cache_capacity_for_shapes``
+#: needs it because by the time the dataset node runs, this function has
+#: already been called once (the graph child calls it before torch) and has
+#: written the default -- so "the variable is set" no longer distinguishes "an
+#: operator chose this" from "we filled in a default".
+_capacity_was_explicit = False
+
 #: Measured primitives per distinct latent shape, as a bracket rather than a
 #: point, because that is the precision the measurement has: 44 shapes need a
 #: capacity in (1280, 1536], which is 29.1 to 34.9 per shape. The wide end is
@@ -186,13 +195,67 @@ def primitive_cache_capacity_for_shapes(
                distinct_shapes * PRIMITIVES_PER_SHAPE_MEASURED[1])
 
 
+def apply_primitive_cache_capacity_for_shapes(
+        distinct_shapes: int | None) -> int | None:
+    """Size the cache to a dataset, once the dataset is known. Returns the
+    capacity now in effect, or None when nothing was applied.
+
+    Called by the dataset-loading node, which is the first thing in a graph
+    that knows how many distinct latent shapes the run will see, and it
+    builds before the trainer because the graph is executed in topological
+    order. That ordering is what makes this work at all: the variable is read
+    lazily (measured -- setting it after torch is imported and the device is
+    touched gives the same revisit/steady as setting it before), so "early
+    enough" means "before the first training step", not "before torch".
+
+    **The count this is given over-counts, on purpose.** Distinct
+    ``latent_h``/``latent_w`` in the trajectory table is 63 for `non-square`
+    where the loader emits 44, because samples in incomplete
+    ``(prompt, size)`` groups never reach training. Over-counting is the safe
+    direction and the only one that matters here: capacity is a ceiling and
+    unused entries cost nothing (peak host RSS byte-identical from 1024 to
+    262144), so a generous estimate is free, while an under-estimate is the
+    4x revisit penalty this whole mechanism exists to remove.
+
+    An operator who exported the variable keeps it. Their choice is respected
+    even when the computed requirement is larger, because a knob that cannot
+    be deliberately set smaller is not a knob -- but the shortfall is logged,
+    since the symptom it causes (slow revisits) looks identical to a bug.
+    """
+    required = primitive_cache_capacity_for_shapes(distinct_shapes)
+    if required is None:
+        return None
+
+    name = "ONEDNN_PRIMITIVE_CACHE_CAPACITY"
+    current = os.environ.get(name)
+    if current is not None and _capacity_was_explicit:
+        try:
+            have = int(current.strip())
+        except ValueError:
+            have = None
+        if have is not None and have < required:
+            logging.getLogger(__name__).warning(
+                "%s=%s was set explicitly but %d distinct latent shapes need "
+                "about %d entries (measured 29-35 primitives per shape). Slow "
+                "steps that recur on the same shapes are what a too-small "
+                "cache looks like; unset the variable to let it be sized",
+                name, current, distinct_shapes, required,
+            )
+        return have if have is not None else None
+
+    _set_primitive_cache_capacity(required)
+    return required
+
+
 def _set_primitive_cache_capacity(explicit: int | None) -> None:
     """Resolve the capacity from (in order) an explicit argument, the
     environment, then the measured default; warn on an unusable value."""
+    global _capacity_was_explicit
     name = "ONEDNN_PRIMITIVE_CACHE_CAPACITY"
     if explicit is not None:
         value = explicit
     elif name in os.environ:
+        _capacity_was_explicit = True
         raw = os.environ[name]
         try:
             value = int(raw.strip())
@@ -211,7 +274,6 @@ def _set_primitive_cache_capacity(explicit: int | None) -> None:
 
 
 def _warn_bad_capacity(raw: str, source: str) -> None:
-    import logging
     logging.getLogger(__name__).warning(
         "ignoring %s=%r from %s: not a usable oneDNN primitive cache capacity; "
         "using the measured default %d. oneDNN parses this with strtol, so an "

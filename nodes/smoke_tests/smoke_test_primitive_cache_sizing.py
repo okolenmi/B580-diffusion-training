@@ -146,6 +146,95 @@ def check_the_grouping_threshold_is_a_shape_count_not_a_capacity():
     print("    PASS")
 
 
+def check_the_dataset_node_triggers_the_sizing():
+    print("[ManagedDatasetSourceNode.build() sizes the cache to its dataset -- "
+          "the trigger, because it is the first node that knows the shape count]")
+    import os
+    from nodes import xpu_env
+    # The graph child calls set_xpu_perf_env_vars() before torch, so by the
+    # time a dataset node builds the variable already holds the default. This
+    # check reproduces that order rather than starting from a clean env.
+    os.environ.pop("ONEDNN_PRIMITIVE_CACHE_CAPACITY", None)
+    xpu_env._capacity_was_explicit = False
+    xpu_env.set_xpu_perf_env_vars()
+    before = os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"]
+
+    from nodes.dataset.managed import ManagedDatasetSourceNode
+    out = ManagedDatasetSourceNode(None).build(
+        dataset_root="non-square", batch_size=2, shuffle=True)
+    after = os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"]
+
+    # The count the node uses over-counts (63 rows vs 44 trained shapes), which
+    # is the safe direction: capacity is free, an under-count is not.
+    check(int(after) > int(before),
+          f"the dataset node did not raise the capacity: {before} -> {after}")
+    check(int(after) == 2205,
+          f"expected 63 shapes x 35 = 2205, got {after}")
+    # And the node still does its actual job afterwards: a mis-sized cache must
+    # not cost the run its batches.
+    batch = next(iter(out["batches"]))
+    check(batch["x_t"] is not None, "batches stopped iterating")
+    print(f"    capacity {before} -> {after}; batches still iterate")
+    print("    PASS")
+
+
+def check_an_explicitly_exported_value_is_not_overridden_by_the_dataset():
+    print("[a capacity an operator exported survives the dataset node -- a knob "
+          "that cannot be deliberately set smaller is not a knob -- but the "
+          "shortfall is logged, because slow revisits look like a bug]")
+    import io
+    import logging
+    import os
+    from nodes import xpu_env
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "2048"
+    try:
+        xpu_env._capacity_was_explicit = False
+        xpu_env.set_xpu_perf_env_vars()  # sees the export, marks it explicit
+        check(xpu_env._capacity_was_explicit,
+              "an exported value must be recorded as explicit, or the dataset "
+              "node cannot tell an operator's choice from our default")
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("nodes.xpu_env")
+        logger.addHandler(handler)
+        previous = logger.level
+        logger.setLevel(logging.WARNING)
+        try:
+            from nodes.dataset.managed import ManagedDatasetSourceNode
+            ManagedDatasetSourceNode(None).build(
+                dataset_root="non-square", batch_size=2, shuffle=True)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous)
+
+        check(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] == "2048",
+              f"the dataset node overrode an explicit value: "
+              f"{os.environ['ONEDNN_PRIMITIVE_CACHE_CAPACITY']}")
+        check("distinct latent shapes need" in stream.getvalue(),
+              f"the shortfall must be logged, got: {stream.getvalue()!r}")
+    finally:
+        os.environ.pop("ONEDNN_PRIMITIVE_CACHE_CAPACITY", None)
+        xpu_env._capacity_was_explicit = False
+    print("    PASS")
+
+
+def check_an_unknown_shape_count_leaves_the_default_alone():
+    print("[apply_primitive_cache_capacity_for_shapes(None) changes nothing and "
+          "reports nothing applied]")
+    import os
+    from nodes import xpu_env
+    os.environ.pop("ONEDNN_PRIMITIVE_CACHE_CAPACITY", None)
+    xpu_env._capacity_was_explicit = False
+    xpu_env.set_xpu_perf_env_vars()
+    before = os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"]
+    got = xpu_env.apply_primitive_cache_capacity_for_shapes(None)
+    check(got is None, f"None shape count should report nothing applied, got {got}")
+    check(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] == before,
+          "an unknown shape count must not change the capacity")
+    print("    PASS")
+
+
 def main():
     check_the_measured_bracket_is_still_what_the_comment_claims()
     check_sizing_is_from_the_wide_end_not_the_narrow_one()
@@ -155,6 +244,9 @@ def main():
     check_the_default_is_never_smaller_than_the_formula_for_small_datasets()
     check_the_growth_is_linear_in_shape_count()
     check_the_grouping_threshold_is_a_shape_count_not_a_capacity()
+    check_the_dataset_node_triggers_the_sizing()
+    check_an_explicitly_exported_value_is_not_overridden_by_the_dataset()
+    check_an_unknown_shape_count_leaves_the_default_alone()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

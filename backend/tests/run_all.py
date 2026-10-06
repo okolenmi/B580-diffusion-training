@@ -164,6 +164,10 @@ def report(total: int, failed: list[str], unhermetic: list[str]) -> int:
         print(f"BACKEND TESTS: {len(failed)}/{total} FILE(S) FAILED")
         for name in failed:
             print(f"  - {name}")
+        # Point at the kept output rather than at "run it again": a
+        # load-sensitive flake will usually pass on the second attempt,
+        # and a second attempt is evidence about the second attempt.
+        print(f"\n  each failing file's output: {log_dir()}/<name>.log")
     else:
         print(f"BACKEND TESTS: ALL {total} FILE(S) PASSED")
 
@@ -172,6 +176,43 @@ def report(total: int, failed: list[str], unhermetic: list[str]) -> int:
     # the gate go green on a suite that does not work on a fresh clone,
     # which is the whole thing the self-check exists to catch.
     return 1 if (failed or unhermetic) else 0
+
+
+def log_dir() -> Path:
+    """Where the last run's per-file output is kept.
+
+    Only failures are written. A passing file's output is printed by
+    main() and then has no further use, while a failing file's output is
+    the only evidence of what went wrong -- and several of these files
+    fail only under load, so the natural response to a flake (run it
+    again) describes a *new* run rather than the failed one, and usually
+    passes, which is precisely when the original output matters most.
+
+    Overwritten per file on each run, so the directory holds one run's
+    worth and cannot grow: the scratch-directory leak fixed in
+    docs/known-issues/resolved.md (4,834 directories, 2.1 GB of /tmp
+    tmpfs) is the same failure mode in miniature, and this must not
+    reintroduce it.
+    """
+    d = Path(tempfile.gettempdir()) / "backend-test-logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _keep_output(name: str, rc: int, output: str) -> None:
+    """Persist one failing file's output. Never raises.
+
+    A log that cannot be written must not turn a passing run into a
+    failing one, or a full disk into a red gate; the verdict comes from
+    the exit code and nothing here may touch it.
+    """
+    if rc == 0:
+        return
+    try:
+        (log_dir() / f"{name}.log").write_text(
+            f"exit {rc}\n\n{output}", errors="replace")
+    except OSError:
+        pass
 
 
 def run_one(job: tuple[str, str]) -> tuple[str, int, str]:
@@ -185,9 +226,13 @@ def run_one(job: tuple[str, str]) -> tuple[str, int, str]:
             [sys.executable, str(HERE / name)],
             capture_output=True, text=True, env=env, timeout=600,
         )
-        return name, result.returncode, (result.stdout or "") + (result.stderr or "")
+        output = (result.stdout or "") + (result.stderr or "")
+        _keep_output(name, result.returncode, output)
+        return name, result.returncode, output
     except subprocess.TimeoutExpired:
-        return name, 124, f"TIMED OUT after 600s: {name}"
+        output = f"TIMED OUT after 600s: {name}"
+        _keep_output(name, 124, output)
+        return name, 124, output
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

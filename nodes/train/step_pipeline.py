@@ -46,6 +46,7 @@ from ..memory.profile import ResourceProfile
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
 from .loss import LossWeighting, t_bucket_losses
+from .step_notify import notify_step
 from .schedule import LRSchedule
 
 
@@ -451,8 +452,26 @@ class MonitoringPhase(StepPhase):
         loss_value = float(state.extras["loss"].item())
         lr = state.extras["lr"]
 
-        if self._on_step is not None:
-            self._on_step(state.step, loss_value)
+        # The latent shape this step ran on, handed to on_step alongside the
+        # loss. This is the one piece of context every shape-cost question
+        # needs and nothing else provides: without it, steps.jsonl cannot
+        # distinguish a step that was slow because its shape was new from
+        # one that was slow for no shape-related reason, which is the whole
+        # discriminator. Measured on the B580, a multi-resolution run has
+        # 40% of steps taking >2s while its *median* step is faster than a
+        # single-shape run's -- so "which shape was this step" is what turns
+        # a throughput number into a diagnosis. Read defensively: any batch
+        # shape this project produces is acceptable, and a monitoring report
+        # must not fail a run over a missing key.
+        shape = None
+        batch = state.batch
+        if isinstance(batch, dict):
+            latent = batch.get("x_t")
+            latent_shape = getattr(latent, "shape", None)
+            if latent_shape is not None and len(latent_shape) >= 2:
+                shape = f"{int(latent_shape[-2])}x{int(latent_shape[-1])}"
+
+        notify_step(self._on_step, state.step, loss_value, shape)
 
         timing = state.extras.get("timing_ms")
         mem = None

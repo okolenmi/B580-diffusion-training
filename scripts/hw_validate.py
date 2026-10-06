@@ -107,9 +107,16 @@ class MemProbe:
 def make_on_step(jsonl_path: Path, probe: MemProbe, state: dict):
     fh = jsonl_path.open("a")
 
-    def on_step(step: int, loss) -> None:
+    def on_step(step: int, loss, shape=None) -> None:
         now = time.monotonic()
         row = {"step": int(step), "loss": float(loss), "wall": round(time.time(), 3)}
+        # The latent shape this step ran on. Both trainer routes pass it (see
+        # MonitoringPhase in nodes/train/step_pipeline.py for why it belongs in
+        # the record). Key omitted when None rather than written as null: the
+        # monitor's rule is that a series with no source draws a gap, and this
+        # file is read by the same tooling.
+        if shape is not None:
+            row["latent_shape"] = shape
         prev = state.get("t_prev")
         if prev is not None:
             row["dt_sec"] = round(now - prev, 4)

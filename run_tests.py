@@ -33,6 +33,7 @@ import concurrent.futures as cf
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -132,6 +133,31 @@ def _banner(suite: str, name: str) -> None:
     print(f"\n{'=' * 70}\n[{suite}] {name}\n{'=' * 70}", flush=True)
 
 
+def _last_run_dir() -> Path:
+    """Where the previous run's per-file output is kept.
+
+    A failing run's output is printed, but printing is not the same as
+    keeping it: this suite has files that fail only under load (see
+    docs/known-issues/pending-testing.md's cooperative-stop entry, and
+    the same class of flake fixed at ddd04df), and the natural response
+    to a flake is to run the file again -- which tells you about *now*,
+    not about the run that failed, and costs the whole suite's wall clock
+    each time.
+
+    So every file's output is written here as it completes, one file per
+    log, overwritten at the start of each run. Overwritten rather than
+    appended so this cannot grow without bound: the leak fix in
+    docs/known-issues/resolved.md removed thousands of scratch
+    directories from /tmp, and a log directory that accumulated a full
+    suite's output per run would reintroduce the same shape of problem
+    in a smaller way. Only the most recent run is on disk, which is the
+    only one anyone can act on.
+    """
+    d = Path(tempfile.gettempdir()) / "b580-test-logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _run_one(job: tuple[str, str, Path, str]
              ) -> tuple[str, str, int, float, str]:
     suite, name, path, interpreter = job
@@ -139,8 +165,15 @@ def _run_one(job: tuple[str, str, Path, str]
     proc = subprocess.run(  # noqa: S603 -- fixed argv, no shell
         [interpreter, str(path)], capture_output=True, text=True)
     elapsed = time.monotonic() - started
-    return (suite, name, proc.returncode, elapsed,
-            (proc.stdout or "") + (proc.stderr or ""))
+    output = (proc.stdout or "") + (proc.stderr or "")
+    try:
+        (_last_run_dir() / f"{suite}__{name}.log").write_text(output, errors="replace")
+    except OSError:
+        # A log that cannot be written must not fail a run: the verdict
+        # comes from the exit code, which is unaffected. Losing the log
+        # costs diagnosability, not correctness.
+        pass
+    return (suite, name, proc.returncode, elapsed, output)
 
 
 def _default_jobs() -> int:
@@ -260,6 +293,13 @@ def main() -> None:
 
     if failed:
         print(f"\n{len(failed)}/{len(results)} test file(s) failed.")
+        # Name the log for each one, so the failing output is readable
+        # without re-running anything. Re-running answers a different
+        # question -- it describes a new run, not the one that failed --
+        # and for a load-sensitive flake it usually passes, which is
+        # exactly when the original output is the only evidence there is.
+        for suite, name in failed:
+            print(f"    {_last_run_dir() / f'{suite}__{name}.log'}")
         sys.exit(1)
     print(f"\nAll {len(results)} test file(s) passed.")
 

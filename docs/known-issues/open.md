@@ -41,7 +41,40 @@ already-recorded failures are never downgraded. Every branch, including
 the exit codes in real child processes, is checked by
 `nodes/smoke_tests/smoke_test_oom_contention.py`.
 
-## 44 distinct latent resolutions cost a measured 2x, and it is not the loader's fault
+## 44 distinct latent resolutions cost a measured 2x — cause found, one env var fixes it
+
+**Found 2026-10-04. Cause identified and fix measured 2026-10-06; this entry's
+diagnosis is superseded, its measurements stand.** The full measurement is in
+`shapes diversity problem/MEASURED-shape-stall.md` at the repository root,
+with the probe and the three runs' `steps.jsonl` beside it. The short version:
+
+`ONEDNN_PRIMITIVE_CACHE_CAPACITY` defaults to **1024**, which cannot hold the
+oneDNN primitives for a multi-resolution dataset, so every shape *transition*
+re-creates them. At 300 steps, batch 2:
+
+| run | revisit / steady | steps/sec |
+|---|---|---|
+| default capacity (1024) | **4.34x** | 0.480 |
+| `ONEDNN_PRIMITIVE_CACHE_CAPACITY=65536` | **0.99x** | **0.741** |
+| `1024 aes` single-shape control | — | 0.769 |
+
+**1.54x throughput, no dataset change and no change to training numerics**, and
+the gap to single-shape training closes from 1.60x to **1.04x**. Peak reserved
+is identical either way (8,774 MB) — the primitive cache is host memory. Not
+yet landed in `nodes/xpu_env.py`; and only the two capacities above are
+measured, so the smallest sufficient value is not known.
+
+**The cost is per shape transition, not per distinct shape.** Classifying each
+step by its shape: repeat (same as previous) 0.873 s, revisit 3.790 s, first
+sighting 3.989 s. There are 44 first sightings and 118 slow steps, so the 74
+slow revisits are exactly what the cache fixes. This also explains the bimodal
+step times: 40% of steps take >2 s and hold 74% of wall time, while the
+**median step (0.873 s) is faster than the single-shape control's (1.283 s)** —
+small latents really are cheaper; the loss is entirely in transitions.
+
+Everything below this paragraph is the 2026-10-04 investigation, kept because
+its exclusions are what made the diagnosis quick and its numbers are still
+correct.
 
 **Found 2026-10-04, while closing the `keep_incomplete_batches` pending
 entry.** Asked as a performance question -- `non-square` trains at half the
@@ -50,7 +83,7 @@ throughput of `1024 aes` -- and the answer is not where it was expected.
 | dataset | distinct latent shapes | mean same-shape run | steps/sec |
 |---|---|---|---|
 | `1024 aes` | 1 | 100.0 | **0.813** |
-| `non-square` | **44** | 2.12 | **0.412** |
+| `non-square` | **44** | 2.16 | **0.412** |
 
 **1.97x for 44 shapes against 1.** `non-square` contains essentially every
 integer resolution in range — H from 48 to 95, W from 48 to 93, 44 distinct
@@ -98,6 +131,25 @@ it is not a small change: padding changes what the loss is computed over, so
 the true size has to survive into the loss and into any preview or VAE
 decode. It is recorded here rather than done, because it changes training
 semantics and that is a project's call.
+
+**Superseded 2026-10-06: don't do this first.** The 2x this table trades against
+is not a per-step cost of having 44 shapes -- it is primitive-cache thrash on
+transitions, and one environment variable recovers 1.54x of it for free.
+Bucketing to 3 shapes is now second-order: it would reduce the *number* of
+first sightings (~3.9 s x 44, ~170 s per process, and every graph run is a
+fresh child process so it is repaid in full each time) and not the transition
+cost that actually dominates a long run. It remains the right lever if a
+dataset with many more shapes makes the transitions worse, and it stays
+blocked on the loss-mask question regardless.
+
+**To make any of this measurable, `steps.jsonl` now records `latent_shape`.**
+This entry's diagnosis took four wrong turns before the cause was found, and
+every one of them came from not being able to see which shape a slow step ran
+on: `steps.jsonl` recorded time and memory but not shape, so the shape order
+had to be reconstructed by replaying the seeded loader stream, and the
+reconstruction was wrong (it reported revisits at 0.95x when they are 4.34x).
+Both `MonitoringPhase` classes now pass the step's latent shape to `on_step`
+(`nodes/train/step_notify.py`), and `hw_validate.py` records it.
 
 ## Attention-checkpointing density and the memory-floor levers, at 1024 / batch 2
 

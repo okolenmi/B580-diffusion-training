@@ -85,6 +85,7 @@ from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
 from .node import TrainerNode
 from .schedule import LRSchedule
 from .step_pipeline import _phase_label
+from .step_notify import notify_step
 from .t_probe import TProbe, format_probe_line
 
 
@@ -927,8 +928,21 @@ class MonitoringPhase(ManagedStepPhase):
         self._window_t.clear()
         lr = state.extras["lr"]
 
-        if self._on_step is not None:
-            self._on_step(state.step, loss_value)
+        # The latent shape this step ran on, matching the main route's
+        # MonitoringPhase (step_pipeline.py). With grad_accum > 1 a step spans
+        # several micro-steps, so this is the LAST micro-step's shape -- the
+        # same "which shape was this optimizer step" the main route reports,
+        # not a summary of several. See that class's comment for why a shape
+        # belongs in the step record at all.
+        shape = None
+        batch = state.batch
+        if isinstance(batch, dict):
+            latent = batch.get("x_t")
+            latent_shape = getattr(latent, "shape", None)
+            if latent_shape is not None and len(latent_shape) >= 2:
+                shape = f"{int(latent_shape[-2])}x{int(latent_shape[-1])}"
+
+        notify_step(self._on_step, state.step, loss_value, shape)
 
         if self._monitor is None and not self._profile:
             return state

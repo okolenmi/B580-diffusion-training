@@ -479,15 +479,118 @@ Not implemented: it needs a pre-warm phase inside the trainer, and the honest
 version of that has to respect the memory ceiling rather than assume a thread
 count.
 
+## Shape pre-warm: a possible feature, documented and not built
+
+**Status: not implemented, and not recommended as designed here.** The premise
+is sound and measured; the memory budget is not. Recorded because the idea is
+good and the reason it fails is specific enough that a later attempt can start
+from the constraint rather than rediscovering it.
+
+### The premise, and why it is true
+
+A oneDNN primitive is keyed on (op type, shape, dtype) — never on values. So
+warming every shape a dataset contains needs the same ops at the same shapes,
+and nothing else:
+
+- no real checkpoint — the real model is already loaded and has the right
+  architecture, so warming can run *through it* on random noise;
+- no optimizer — backward needs `requires_grad`, not an optimizer (714 MB);
+- no text encoder — a UNet forward/backward never touches it (1,561 MB);
+- no real data — the input is `randn`.
+
+The cache experiment already proved the mechanism: raising
+`ONEDNN_PRIMITIVE_CACHE_CAPACITY` removed the cost from revisits (4.34x ->
+0.99x) while leaving first sightings untouched (3.99 s -> 3.85 s). That cache
+stores primitives, so a new shape's ~4 s is descriptor construction plus JIT.
+
+### The measured constraint
+
+A minimal warm — real UNet, random noise, no optimizer, no text encoder, no real
+data, `empty_cache()` between shapes to stop the allocator ratchet — still
+needed **nearly the whole 12 GB card for a single shape**. VRAM was at 48 MB
+free with one thread and one shape in flight.
+
+The breakdown, from the project's own measured component footprints:
+
+| | MB |
+|---|---|
+| SDXL UNet weights (bf16, 2.57 B params) | 4,897 |
+| LoRA-like adapters | 80 |
+| one shape's forward/backward activations | **~7,000** |
+| **total** | **~12,000 of 12,216** |
+
+**The bottleneck is activations, not the model.** Unloading the optimizer and
+text encoder frees 2,991 MB, which the minimal version already excluded — and
+it changed nothing. So there was nothing left to unload, and concurrency was
+never going to fit. Two threads need 1.6-3.3 GB of workspace *each* on top of
+that.
+
+### Why this was not built
+
+Three attempts, each failing for a reason that was visible before it ran:
+
+1. **A full-stack probe** (`probe_shape_stall.py --warm-threads`) held the whole
+   training stack to answer a question about shapes. It reserved 10,760 MB at
+   *one* thread and died at two. The allocator ratchets reserved to the
+   high-water mark across all 63 shapes, because each shape's segments differ
+   in size and the caching allocator keeps every one.
+2. **A minimal version** with everything unnecessary removed still needed
+   ~12 GB for one shape, for the reason in the table above.
+3. Both were `DEVICE_LOST` (`UR_RESULT_ERROR_DEVICE_LOST`), which on this card
+   means the allocation exceeded what the driver would give.
+
+The mistake that cost the most was answering a question about the *broken
+probe* instead of the *design*: "roughly one thread's worth" was a measurement
+of a process holding a full training stack, stated as if it were a property of
+warming. It was not, and it should not have been reported as one.
+
+### What would actually be needed
+
+Activation memory scales with batch and shape; the primitive cache does not
+care about either. So the routes that could work are ones that shrink
+activations:
+
+- **Warm at batch 1.** Halves activation memory. Uncertain whether it helps:
+  primitives are keyed on shape *including batch*, so a batch-1 primitive may
+  not satisfy a batch-2 request. Untested, and it is the first thing to check
+  because it is cheap.
+- **Warm layer-by-layer**, materialising one layer at a time, warming it,
+  freeing it. Peak becomes one layer's weights plus that layer's activations —
+  hundreds of MB rather than 4.9 GB. This is where an unloading system earns
+  its keep: the win is activations, not the 2.3 GB of optimizer and text
+  encoder. Requires collecting every layer's input shape first, which a
+  `meta`-device forward does with no device memory at all.
+- **A cross-process primitive cache** would be the real fix — every graph run
+  is a fresh child process (MEM-05), so the ~184 s of serial compile is repaid
+  in full on every run. oneDNN has no supported persistent form. That is a
+  platform limit, not a setting nobody found.
+
+### What is already bought, and what that leaves
+
+Two things in this file already attack the same cost, and they are why
+pre-warm is not the next thing to build:
+
+- **Bucketing** removes 41 of the 44 compiles (159 s -> 12 s) and needs no
+  extra memory. It is implemented and default-off.
+- **The primitive cache** removes the transition cost (4.34x -> 0.99x) and
+  costs no host RAM.
+
+After both, three serial compiles cost ~12 s per run. Pre-warm would save at
+most ~6 s of that, and only if it could run concurrently — which the memory
+budget says it cannot. The remaining prize is small, and the honest
+conclusion is that the single-core bottleneck is better attacked by reducing
+the number of shapes than by parallelising their compilation.
+
 ## What to do next
 
 1. **The single-core bottleneck is the real remaining limit**, and it is not
    shape-specific: the run uses 1.00 cores throughout with the GPU at 25-30%.
    Bucketing removes 41 of the 44 compiles, but the serial
    descriptor-plus-JIT work per shape remains, inline in the op-launch path.
-2. **Concurrent shape compilation** is the untried lever (2 threads max on this
-   card). Worth ~6 s per run after bucketing, ~92 s without it. Needs a
-   pre-warm phase in the trainer that respects the memory ceiling.
+2. **Concurrent shape compilation** — measured and closed. See "Shape
+   pre-warm: a possible feature, documented and not built" below: a minimal
+   warm needs ~12 GB for one shape, so there is no room for a second thread,
+   and the blocker is activations rather than anything unloadable.
 3. **OneDNN JIT is single-threaded per primitive** and serial across primitives
    within a step, so there is no environment variable for it. A cross-process
    primitive cache would be the real fix and oneDNN has no supported one; that

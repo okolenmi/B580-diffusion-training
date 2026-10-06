@@ -97,6 +97,22 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "nothing to report yet), t_values stays the plain pinned cycle. "
                 "None with any static t_mode = today's behavior, unchanged.",
             visible_when=("t_mode", ("adaptive", "exact"))),
+        "shape_bucket_multiple": Port(
+            name="shape_bucket_multiple", type=int, required=False, default=0,
+            doc="0 (default) trains on the shapes the dataset actually stores. "
+                "N > 1 pads each latent up to the next multiple of N, so a "
+                "multi-resolution dataset trains on few shapes: measured on "
+                "`non-square`, a multiple of 32 collapses 63 shapes to 3 for "
+                "+15% latent compute. It pays a one-time cost -- fewer shapes "
+                "means fewer first-sighting compiles, ~3.85 s each -- and a "
+                "permanent one, that compute. Break-even is ~430 steps at "
+                "batch 4 and ~1130 at batch 2, so this is a short-run setting. "
+                "Off by default: it changes which pixels the loss covers and "
+                "the order samples arrive in. The padded region is excluded "
+                "from the loss by a mask, so nothing is trained on padding; "
+                "padding is placed at a random offset so borders do not become "
+                "systematically real.",
+        ),
         "keep_incomplete_batches": Port(
             name="keep_incomplete_batches", type=bool, required=False, default=False,
             doc="Batches are formed per identical (caption, image size) group. With "
@@ -153,6 +169,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
             t_values=t_values,
             keep_incomplete=inputs.get(
                 "keep_incomplete_batches", self.INPUTS["keep_incomplete_batches"].default),
+            shape_bucket_multiple=inputs.get(
+                "shape_bucket_multiple", self.INPUTS["shape_bucket_multiple"].default),
         )
         # Size the oneDNN primitive cache to this dataset's shape count
         # (nodes/xpu_env.py's own docstring for why it belongs here).

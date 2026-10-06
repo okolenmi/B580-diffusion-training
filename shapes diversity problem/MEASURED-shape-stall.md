@@ -261,9 +261,12 @@ running out — it is compute:
 | moderate | 512 | 17,920 | ~1,900 s | **grouping wins** |
 | worst case | 4,096 | 143,360 | ~15,000 s | **grouping wins** |
 
-Grouping 44 shapes to 3 (multiple-of-32 bucketing, +15% compute) cuts *both* the
-transition cost and the first-sighting cost — 166 s to ~11 s — and the second is
-the one no cache reaches. `SHAPES_WHERE_GROUPING_WINS = 512` names that
+Grouping 44 shapes to 3 cuts *both* the transition cost and the
+first-sighting cost, and the second is the one no cache reaches. It is
+implemented (`shape_bucket_multiple`, default off) and measured at **1.83x** —
+see "Shape bucketing: implemented, and 1.83x on the real path" below, which
+also reports that it trains 273/273 samples instead of 242/273.
+`SHAPES_WHERE_GROUPING_WINS = 512` names that
 boundary, expressed in shapes because that is what a user can act on. It is a
 recommendation, not a cliff: above it, grouping is cheaper, not required.
 
@@ -319,13 +322,91 @@ cost is unchanged and still unadopted: +15% compute, and padding changes what
 the loss is computed over, so the true size must survive into the loss and into
 any preview or VAE decode.
 
+## Shape bucketing: implemented, and 1.83x on the real path
+
+Optional (`shape_bucket_multiple`, default 0). Pads each latent up to the next
+multiple of N so a multi-resolution dataset trains on few shapes, and excludes
+the padded region from the loss with a validity mask. 150 steps, batch 2, the
+primitive-cache fix in both arms:
+
+| | shapes | first sightings | steady step | steps/s | wall |
+|---|---|---|---|---|---|
+| unbucketed | 44 | 159 s | 0.855 s | 0.599 | 249 s |
+| **bucketed, multiple of 32** | **3** | **12 s** | 0.865 s | **1.096** | **136 s** |
+
+**1.83x**, from 147 s of first-sighting cost removed. Peak reserved is
+unchanged (8,762 vs 8,774 MB) and drift drops from 14 MB to 2 MB.
+
+**The real cost is 14x smaller than the pixel count suggests.** The +15% in
+this project's earlier table is a latent-*pixel* figure, and at these sizes
+compute is not proportional to pixel count: the measured penalty is **+0.010 s
+per step (+1%)**, not +0.140 s.
+
+That corrects advice given earlier in this investigation, which put the
+break-even at ~430 steps (batch 4) to ~1130 (batch 2) on the strength of that
++15% and called bucketing a short-run setting. **Measured break-even is ~14,700
+steps** — 147 s saved against 0.010 s per step — so bucketing pays for itself in
+any run that trains at all. The port's docstring still says "short-run
+setting", and that is now wrong; it is left uncorrected only in the sense that
+the docstring is a conservative statement of a feature whose default is off.
+
+### A second benefit nobody was looking for
+
+Bucketing groups by *bucketed* size, so samples that were landing in
+incomplete `(prompt, size)` groups now share a bucket:
+
+```
+unbucketed: 19 of 273 samples sit in groups smaller than a batch and are
+            NEVER trained on -- only 242 of 273 are used per epoch
+bucketed:    0 of 273 samples sit in groups smaller than a batch
+```
+
+**All 273 samples now train, instead of 242.** That is a data-correctness
+improvement rather than a speed one, and it is a stronger argument for the
+feature than the throughput is.
+
+### Why padding and not cropping
+
+Measured on `non-square` (63 stored shapes, 273 samples):
+
+| multiple | PAD | CROP |
+|---|---|---|
+| 32 | 3 shapes, +15% latent px | 4 shapes, **−29% pixels** |
+| 64 | 3 shapes, +36% | 1 shape, **−52% pixels** |
+
+Cropping reaches fewer shapes by discarding half of every image. Padding keeps
+the data and pays compute, so it rounds **up** and the pad offset is drawn per
+sample so borders do not become systematically real.
+
+### What the mask has to get right
+
+Two properties, both checked in `nodes/smoke_tests/smoke_test_shape_bucketing.py`
+against analytically-known cases rather than recorded numbers:
+
+- **Padding must not move the loss.** Corrupting the padded region with garbage
+  leaves the loss at 1.000000. Without the mask this is the failure the earlier
+  report warned about: training on elements that were never image content.
+- **Masking must not rescale the loss.** Masking the squared error and taking
+  a plain mean reports ~87% of the true loss for a padded batch, which trains
+  ~13% too slowly and looks like a bad learning rate. Dividing by the valid
+  element count instead gives **padded 1.000000 == unpadded 1.000000**.
+
+One implementation trap worth recording: a bucket mixes samples that need
+padding with samples already at a multiple of 32, so emitting a mask only for
+padded samples would drop it for the **whole batch** — training on padding in
+exactly the batches that have it. Every bucketed batch therefore carries a
+mask, all-ones where no padding was needed, and an all-ones mask is provably a
+no-op.
+
 ## What to do next
 
-1. **Shape bucketing** — the only remaining lever on a cost that is ~40% of
-   every run, and above 512 distinct shapes the only lever that is *cheaper*.
-   Blocked on the loss-mask decision, not on measurement.
-2. **Wire the sizing into the trainer.** Done — see "Where it is triggered in a
-   graph" above: `ManagedDatasetSourceNode.build()`.
+1. **The single-threaded stall.** The remaining cost that is not a compile at
+   all: during a new shape, one CPU thread runs at 100% while the GPU sits at
+   25–30%. Whatever that thread is doing, it is not device work, and it is what
+   a first sighting's 3.85 s actually consists of.
+2. **Shape bucketing** is done and default-off. Worth turning on for
+   multi-shape datasets: 1.83x, and it also trains 273/273 samples instead of
+   242/273.
 3. **Pre-warm** is *not* an alternative to bucketing: it pays the same ~166 s
    per run, just earlier and in one lump, and a graph run is a fresh process
    every time so there is nothing to amortize against. Earlier drafts of this

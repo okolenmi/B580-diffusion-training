@@ -211,6 +211,7 @@ def build_common(ctx, args, probe: MemProbe):
     batches = ManagedDatasetSourceNode(ctx).build(
         dataset_root=args.dataset, batch_size=args.batch, shuffle=True,
         keep_incomplete_batches=getattr(args, "keep_incomplete_batches", False),
+        shape_bucket_multiple=getattr(args, "shape_bucket_multiple", 0),
     )["batches"]
     schedule = CosineLRScheduleNode(ctx).build(
         lr=args.lr, total_steps=args.steps)["schedule"]
@@ -390,6 +391,13 @@ def main() -> None:
                              "behavior), 0.5=every 2nd, 0.0=none (ResBlock checkpointing "
                              "unaffected either way)")
     common.add_argument("--weight-store", default="bf16", choices=["bf16", "nf4"])
+    # Optional shape bucketing (off by default). Pads latents up to a
+    # multiple of N so a multi-resolution dataset trains on few shapes, at a
+    # permanent +compute cost -- see the node port's own docstring.
+    common.add_argument("--shape-bucket-multiple", type=int, default=0,
+                        help="0 = off; N > 1 pads each latent up to the next "
+                             "multiple of N (32 collapses non-square's 44 "
+                             "shapes to 3 for +15%% compute)")
     common.add_argument("--keep-incomplete-batches", action="store_true",
                         help="keep samples in (prompt, size) groups smaller than a "
                              "batch, as smaller batches, instead of dropping them. "

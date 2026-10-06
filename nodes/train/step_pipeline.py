@@ -231,6 +231,13 @@ class PrepareDiffusionInputsPhase(StepPhase):
         state.extras["t"] = t
         state.extras["sigma"] = sigma
         state.extras["xc"] = xc
+        # Shape-bucketing validity mask, when the dataset padded (LossPhase
+        # divides by the valid element count rather than the total, so a
+        # padded batch trains at the same scale as an unpadded one). Absent
+        # for every graph that did not ask for bucketing, which is why the
+        # loss keeps its original expression in that case.
+        if batch.get("valid_mask") is not None:
+            state.extras["valid_mask"] = batch["valid_mask"].to(state.device)
 
         if self._gate_enabled:
             set_lora_gate(compute_lora_gate(
@@ -331,7 +338,29 @@ class LossPhase(StepPhase):
         target = state.extras["target"]
         sigma = state.extras["sigma"]
         per_sample = (pred.float() - target.float()).pow(2)
-        per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
+        # Optional shape-bucketing mask. When the dataset padded latents up to
+        # a bucket size, the padded elements are not image content and must
+        # not be trained on; the mask arrives as (B, 1, H, W) and covers
+        # exactly the real pixels.
+        #
+        # The normalisation matters as much as the exclusion. Masking the
+        # squared error and then taking a plain mean would rescale every loss
+        # by the valid fraction -- a batch that is 10% pad would report ~10%
+        # of the loss and train 10x too slowly. So the sum is divided by the
+        # valid element count instead of the total, which keeps a padded
+        # sample's loss on the same scale as an unpadded one's.
+        #
+        # Absent key = every element is real, and this reduces to the original
+        # expression exactly. That is the un-bucketed case, which is every graph
+        # that did not ask for bucketing.
+        mask = state.extras.get("valid_mask")
+        if mask is not None:
+            m = mask.to(dtype=per_sample.dtype).expand_as(per_sample)
+            per_sample = (per_sample * m).view(per_sample.shape[0], -1).sum(dim=1)
+            valid_n = m.view(m.shape[0], -1).sum(dim=1).clamp(min=1.0)
+            per_sample = per_sample / valid_n
+        else:
+            per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
         sigmas = sigma.float().reshape(-1)
         w_bucket = None
         if self._bucket_balance is not None:

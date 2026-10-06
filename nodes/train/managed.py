@@ -424,6 +424,13 @@ class PrepareDiffusionInputsPhase(ManagedStepPhase):
         state.extras["t"] = t
         state.extras["sigma"] = sigma
         state.extras["xc"] = xc
+        # Shape-bucketing validity mask, when the dataset padded (LossPhase
+        # divides by the valid element count rather than the total, so a
+        # padded batch trains at the same scale as an unpadded one). Absent
+        # for every graph that did not ask for bucketing, which is why the
+        # loss keeps its original expression in that case.
+        if batch.get("valid_mask") is not None:
+            state.extras["valid_mask"] = batch["valid_mask"].to(state.device)
 
         if self._gate_enabled:
             set_lora_gate(compute_lora_gate(

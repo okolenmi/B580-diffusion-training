@@ -19,11 +19,19 @@ class ManagedDatasetLoader:
                  shuffle: bool = True, batch_size: int = 1, use_dataset_cfg: bool = True,
                  t_low: int = 1, t_high: int = 999, t_mode: str = "uniform",
                  bucket_balance=None, t_values: str = "",
-                 keep_incomplete: bool = False):
+                 keep_incomplete: bool = False,
+                 shape_bucket_multiple: int = 0):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
         self.batch_size = batch_size
+        # 0 = off (default, and what every graph built before this knob
+        # existed gets). N > 1 pads each latent up to the next multiple of N so
+        # a multi-resolution dataset trains on few shapes. Opt-in because it
+        # changes what the loss is computed over and the order samples arrive
+        # in: the padded region is excluded by a mask (LossPhase), and samples
+        # are regrouped by bucketed size. See _bucket_size/_apply_bucket.
+        self.shape_bucket_multiple = int(shape_bucket_multiple or 0)
         # Kept as a parameter for core/trainer.py's existing call site; the
         # only code that ever read it (baked-format dual-pass target
         # blending) went out with that format -- single-latent batches carry
@@ -161,6 +169,56 @@ class ManagedDatasetLoader:
                   "latents only; regenerate with 'LoRA (Images + Captions)' ingestion.")
         return all_samples
 
+    def _bucket_size(self, h: int, w: int) -> tuple[int, int]:
+        """The (h, w) this sample trains at, and whether it was bucketed.
+
+        With ``shape_bucket_multiple`` unset (the default) this returns the
+        sample's own size, so every existing graph trains on exactly the
+        shapes it trained on before. That is the whole reason bucketing is a
+        knob and not a behaviour change: a dataset of one shape cannot tell
+        the difference, and a dataset of 63 can opt in deliberately.
+        """
+        m = self.shape_bucket_multiple
+        if m <= 1:
+            return h, w
+        H = ((h + m - 1) // m) * m      # round UP: keep every pixel
+        W = ((w + m - 1) // m) * m
+        return H, W
+
+    def _apply_bucket(self, x0: torch.Tensor, H: int, W: int
+                      ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Pad (C, h, w) up to (C, H, W); return it with a (H, W) validity mask.
+
+        Returns None when the sample is already the bucket size, so the common
+        "no padding needed" path allocates nothing and the batch carries no
+        mask at all.
+
+        **Rounds up, never down.** Rounding down would be cheaper in compute
+        and need no mask, but it discards real pixels: on `non-square`,
+        cropping to a multiple of 64 reaches a single shape by throwing away
+        52% of every image. Padding keeps the data and pays in compute (+15%
+        at a multiple of 32, measured), which is the trade this feature exists
+        to make explicit rather than to hide.
+
+        The pad offset is drawn per sample so the model sees borders on every
+        side over an epoch, rather than learning that the bottom and right are
+        always real. The mask is what makes the padding safe: without it the
+        loss would train on pad pixels (see LossPhase).
+        """
+        h, w = int(x0.shape[-2]), int(x0.shape[-1])
+        if (H, W) == (h, w):
+            return None
+        ph, pw = H - h, W - w
+        top = random.randint(0, ph) if ph else 0
+        left = random.randint(0, pw) if pw else 0
+        # Shape-generic over the leading dims: a sample's latent is (C, h, w)
+        # in some loaders and (1, C, h, w) in others, and this must not care.
+        out = x0.new_zeros((*x0.shape[:-2], H, W))
+        valid = x0.new_zeros((*x0.shape[:-2], H, W), dtype=torch.float32)
+        out[..., top:top + h, left:left + w] = x0
+        valid[..., top:top + h, left:left + w] = 1.0
+        return out, valid
+
     def _materialize(self, s: Dict) -> Dict:
         """Turn a single-latent sample (just x0) into a trainable one --
         fresh noise every call and a timestep from the run's
@@ -170,6 +228,28 @@ class ManagedDatasetLoader:
         fixed draw in for the loader's whole lifetime)."""
         x0 = s["x0"]
         model_type = s.get("model_type") or "eps"
+
+        # Optional shape bucketing: pad this sample up to its bucket before
+        # any noise is drawn, so the noise and the target describe the same
+        # padded tensor the model will see.
+        valid_mask = None
+        H, W = self._bucket_size(int(x0.shape[-2]), int(x0.shape[-1]))
+        if self.shape_bucket_multiple > 1:
+            applied = self._apply_bucket(x0, H, W)
+            if applied is None:
+                # Already the bucket size. Emit an all-ones mask anyway, so
+                # every batch in a bucketed run carries one. A bucket can mix
+                # shapes that need padding with shapes that do not (48x64 pads,
+                # 64x64 does not), and a mask present only for the padded
+                # members would be dropped for the whole batch by the merge --
+                # training on padding for exactly the batches that have it.
+                # All-ones is not a special case in the loss: sum/n == mean.
+                valid_mask = x0.new_ones((*x0.shape[:-2], H, W),
+                                         dtype=torch.float32)
+            else:
+                x0, valid_mask = applied
+                s = dict(s)
+                s["x0"] = x0
 
         t_val = self._t_sampler.draw(random)
         at, st = get_alpha_sigma(t_val)
@@ -183,6 +263,11 @@ class ManagedDatasetLoader:
         out["target_p"] = None
         out["target_n"] = None
         out["t"] = t_val
+        if valid_mask is not None:
+            # Only present when padding happened. Absent is the common case
+            # and means "every element is real", so the loss's own code path is
+            # unchanged for un-bucketed graphs.
+            out["valid_mask"] = valid_mask
         return out
 
     @staticmethod
@@ -202,6 +287,12 @@ class ManagedDatasetLoader:
             out["target_p"] = torch.cat([s["target_p"] for s in samples], dim=0)
         if samples[0].get("target_n") is not None:
             out["target_n"] = torch.cat([s["target_n"] for s in samples], dim=0)
+        if samples[0].get("valid_mask") is not None:
+            # Present for every sample in a bucketed run (see _materialize:
+            # all-ones where no padding was needed), so the whole batch has one
+            # and the loss always knows which elements are real.
+            out["valid_mask"] = torch.cat(
+                [s["valid_mask"] for s in samples], dim=0)
         return out
 
     def __iter__(self) -> Iterator[Dict]:
@@ -223,7 +314,15 @@ class ManagedDatasetLoader:
         # 1. Group by key (prompt, neg_prompt, size)
         buckets = {}
         for s in self._samples:
-            size = s["x0"].shape[2:]
+            h, w = int(s["x0"].shape[-2]), int(s["x0"].shape[-1])
+            if self.shape_bucket_multiple > 1:
+                # Bucket by the shape the sample will actually train at, not
+                # the shape it was stored at. Two stored sizes that round to
+                # the same bucket must land in the same group, or the run pays
+                # a transition it was trying to avoid.
+                size = self._bucket_size(h, w)
+            else:
+                size = (h, w)
             key = (s["prompt"], s["neg_prompt"], size)
             if key not in buckets:
                 buckets[key] = []

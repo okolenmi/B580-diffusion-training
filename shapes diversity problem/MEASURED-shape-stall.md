@@ -257,7 +257,7 @@ running out — it is compute:
 
 | dataset | shapes | capacity needed | first-sighting cost/run | verdict |
 |---|---|---|---|---|
-| `non-square` | 44 | 1,536 | ~166 s | cache is enough |
+| `non-square` | 44 | 1,536 | ~184 s (44 x 4.18 s) | cache is enough |
 | moderate | 512 | 17,920 | ~1,900 s | **grouping wins** |
 | worst case | 4,096 | 143,360 | ~15,000 s | **grouping wins** |
 
@@ -398,15 +398,100 @@ exactly the batches that have it. Every bucketed batch therefore carries a
 mask, all-ones where no padding was needed, and an all-ones mask is provably a
 no-op.
 
+## The single-threaded stall: what it actually is
+
+The remaining cost, and the one the user reported independently: during a new
+shape, **one CPU thread runs at 100% while the GPU sits at 25-30%**.
+
+Measured with kernel thread accounting (`/proc/<pid>/task/*/stat`, no profiler
+needed), correlating each step window from `steps.jsonl` against per-sample CPU
+deltas:
+
+| | n | step | CPU/step | **cores busy** | `python` | `pt_autograd_0` |
+|---|---|---|---|---|---|---|
+| slow (>2 s) | 18 | 4.18 s | 4.17 s | **1.00** | 1.64 s | 2.53 s |
+| fast (≤2 s) | 21 | 1.05 s | 1.06 s | **1.01** | 0.35 s | 0.70 s |
+
+Three things follow, and the first two are not what the symptom suggests:
+
+1. **The whole run is single-core, not just the stalls.** `cores busy` is 1.00
+   in both columns. Nothing about this is specific to a new shape — the GPU is
+   under-fed for the entire run, and a new shape just adds ~3.1 s more of the
+   same serial CPU work. That reframes the problem: it is not "compiles are
+   slow", it is "one thread cannot keep the device fed".
+
+2. **The extra time is split across two threads, and most of it is in the
+   autograd worker.** A slow step spends +1.29 s more on `python` and +1.83 s
+   more on `pt_autograd_0` than a fast one. `pt_autograd_0` is the thread that
+   drives backward kernel launches, so the work is **inline in the op-launch
+   path during backward** — not a separate compile pool, and not something
+   running on a runtime-owned worker thread. Only one other thread exists
+   (`p:clctxworker0`, Level Zero) and it does no measurable CPU at all.
+
+3. **So the cost is per-shape primitive creation, and it was already
+   identified as such by the cache experiment.** Raising
+   `ONEDNN_PRIMITIVE_CACHE_CAPACITY` removed the cost from revisits while
+   leaving first sightings untouched (4.34x -> 0.99x, first 3.99 s -> 3.85 s).
+   That cache stores oneDNN *primitives*, so a new shape's ~4 s is descriptor
+   construction plus JIT, happening on the caller's thread. No profiler is
+   needed to know this; the earlier experiment is the evidence.
+
+### What could not be measured here, and why
+
+- **`ONEDNN_VERBOSE=2` produces no oneDNN output on this torch build** (only
+  the Rusticl/Mesa warning). So per-primitive `jit` timings are unavailable,
+  and `analyze_onednn_verbose.py` in this folder cannot run against this build
+  at all — it is written for a build that honours the variable.
+- **Native stack traces are blocked.** `kernel.yama.ptrace_scope` is 1, so gdb
+  cannot attach to the running trainer, and no py-spy is installed. Frames
+  naming oneDNN's JIT internals would confirm point 3 rather than establish it.
+
+Both gaps are tooling, not findings: the thread profile and the cache
+experiment together already say what the work is and where it runs.
+
+### A bug this analysis found in itself
+
+The first version of the thread sampler ranked the "busiest" thread by
+**cumulative** CPU. That makes the lifetime leader the busiest in *every*
+sample, so it reported `python` at **99% of samples** — a confident, plausible,
+wrong answer for a run using 1.00 cores across two threads. Fixed to rank by
+per-sample delta, and `check_thread_ranking.py` exercises both rankings on
+synthetic input so the difference is demonstrated rather than asserted:
+cumulative says one thread 100%, per-sample correctly says 50/50.
+
+### What is left to try, and its size
+
+The only lever not yet used is **compiling shapes concurrently** — the report's
+experiment D. The ceiling is memory: each concurrent step holds 1.6-3.3 GB of
+workspace on top of a ~7.5 GB floor, so about **two** threads on this card.
+
+But it is a much smaller prize than it was, and the reason is the two sections
+above this one:
+
+- **Bucketing already removed 41 of the 44 compiles** (159 s -> 12 s).
+- **A persistent SYCL kernel cache does not touch it** (2%).
+
+So after bucketing, three serial compiles cost ~12 s per run, and parallelising
+them saves at most ~6 s. The lever matters for datasets where bucketing is off
+— 44 shapes, 184 s of serial compile, ~92 s with two threads — and for the
+first run on any new machine, which pays every shape's compile from nothing.
+Not implemented: it needs a pre-warm phase inside the trainer, and the honest
+version of that has to respect the memory ceiling rather than assume a thread
+count.
+
 ## What to do next
 
-1. **The single-threaded stall.** The remaining cost that is not a compile at
-   all: during a new shape, one CPU thread runs at 100% while the GPU sits at
-   25–30%. Whatever that thread is doing, it is not device work, and it is what
-   a first sighting's 3.85 s actually consists of.
-2. **Shape bucketing** is done and default-off. Worth turning on for
-   multi-shape datasets: 1.83x, and it also trains 273/273 samples instead of
-   242/273.
+1. **The single-core bottleneck is the real remaining limit**, and it is not
+   shape-specific: the run uses 1.00 cores throughout with the GPU at 25-30%.
+   Bucketing removes 41 of the 44 compiles, but the serial
+   descriptor-plus-JIT work per shape remains, inline in the op-launch path.
+2. **Concurrent shape compilation** is the untried lever (2 threads max on this
+   card). Worth ~6 s per run after bucketing, ~92 s without it. Needs a
+   pre-warm phase in the trainer that respects the memory ceiling.
+3. **OneDNN JIT is single-threaded per primitive** and serial across primitives
+   within a step, so there is no environment variable for it. A cross-process
+   primitive cache would be the real fix and oneDNN has no supported one; that
+   is a platform limit rather than a setting nobody found.
 3. **Pre-warm** is *not* an alternative to bucketing: it pays the same ~166 s
    per run, just earlier and in one lump, and a graph run is a fresh process
    every time so there is nothing to amortize against. Earlier drafts of this

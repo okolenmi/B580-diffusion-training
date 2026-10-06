@@ -148,7 +148,88 @@ The bracket is **(1024, 2048]** — so 2048 is the smallest *measured* sufficien
 value for *this* dataset, not a proven minimum, and the requirement scales with
 the shape count. A dataset with several hundred distinct shapes needs more.
 
-## The persistent disk cache does not work — measured, not assumed
+## Sizing the cache to a dataset, and where that stops being the answer
+
+Three further measurements, because "set it to 65536" was an answer to a
+question nobody had asked yet.
+
+**The variable is read lazily.** `set_xpu_perf_env_vars()` is documented as
+having to run before anything touches an XPU device, and that is true for the
+five SYCL variables — but not for this one. Setting the capacity *after*
+importing torch **and** touching the device gives revisit/steady **0.99x**,
+identical to setting it before:
+
+| capacity 2048 set... | revisit/steady | steps/s |
+|---|---|---|
+| before torch import | 0.99x | 0.599 |
+| **after device init** | **0.99x** | 0.577 |
+
+So the dataset's shape count does not have to be known before torch loads. That
+matters because `set_xpu_perf_env_vars()` runs in the graph child *before the
+graph is parsed*, so a dataset-sized capacity could not have been set there;
+this is what makes the option open at all. (The 0.577 vs 0.599 is run-to-run
+noise — the sweep spread across working capacities was 0.583–0.620.)
+
+**How many primitives per shape.** Narrowing the 44-shape bracket:
+
+| capacity | revisit/steady |
+|---|---|
+| 1024 | 3.85x |
+| 1280 | 2.22x |
+| **1536** | **1.05x** |
+| 2048 | 0.99x |
+
+44 shapes need **(1280, 1536]**, i.e. **29.1 to 34.9 primitives per shape**.
+Sizing uses the wide end, so a dataset is never sized to the optimistic end of
+a 1.2x-wide measurement.
+
+**Capacity is a ceiling, not an allocation.** Peak host RSS is **15,567 MB at
+every capacity measured: 1024, 1536, 2048, 4096, 8192, 16384, 32768, 65536,
+262144** — byte-identical across a 256x range, and `VmHWM` is a kernel
+high-water mark, so unlike a sampler it cannot miss a peak. Unused capacity is
+free. That is why the shipped default is a round 2048 rather than the measured
+1536: the cost of headroom is zero and the cost of being stingy is a 4x revisit
+penalty.
+
+**Landed:** `nodes/xpu_env.py` exposes `set_xpu_perf_env_vars(onednn_primitive_
+cache_capacity=N)` and `primitive_cache_capacity_for_shapes(n)`. Resolution
+order is explicit argument → exported `ONEDNN_PRIMITIVE_CACHE_CAPACITY` → the
+measured default, because both gateways spawn children via `os.environ.copy()`
+(`backend/infrastructure/graph_task_gateway.py:98`), so one export covers the
+server and every child it starts. An unusable value is refused with a warning
+*and replaced in the environment* — oneDNN reads `os.environ` directly, so
+leaving `"junk"` there is what makes it parse as 0, not the warning.
+17 checks across `smoke_test_xpu_env.py` and
+`smoke_test_primitive_cache_sizing.py`.
+
+**Not wired into the trainer yet.** The sizing function is ready and tested;
+calling it needs a distinct-shape count, and the two available sources are both
+awkward. Iterating the batch source would advance loader state
+(`bucket_balance.observe`, epoch counters) and can skip data. A `DISTINCT`
+query on the loader's own `metadata.db` is the safe source and is cheap, but it
+is a change to the data path and belongs in its own commit with its own test.
+Not taken here because this file is a measurement record, not a change set.
+
+## Where grouping becomes the answer instead
+
+The 4096-shape worst case (`[64-128]x[64-128]` unstandardised) needs ~143,000
+entries at 35 primitives per shape. **The cache would hold it, free.** So the
+boundary where "raise the cache" stops being the answer is *not* the cache
+running out — it is compute:
+
+| dataset | shapes | capacity needed | first-sighting cost/run | verdict |
+|---|---|---|---|---|
+| `non-square` | 44 | 1,536 | ~166 s | cache is enough |
+| moderate | 512 | 17,920 | ~1,900 s | **grouping wins** |
+| worst case | 4,096 | 143,360 | ~15,000 s | **grouping wins** |
+
+Grouping 44 shapes to 3 (multiple-of-32 bucketing, +15% compute) cuts *both* the
+transition cost and the first-sighting cost — 166 s to ~11 s — and the second is
+the one no cache reaches. `SHAPES_WHERE_GROUPING_WINS = 512` names that
+boundary, expressed in shapes because that is what a user can act on. It is a
+recommendation, not a cliff: above it, grouping is cheaper, not required.
+
+## The persistent disk cache does not work — measured at two run lengths
 
 `SYCL_CACHE_PERSISTENT=1` + `SYCL_CACHE_DIR`, with the primitive fix in place so
 only first-sighting cost remains, 150 steps per run:
@@ -164,7 +245,21 @@ disk.** The reason is the layer mismatch this file keeps running into: it
 persists SYCL's SPIR-V kernel binaries, while the first-sighting cost is
 oneDNN *primitive* creation, which has no supported persistent form.
 
-So the ~164 s per run is **not removable by configuration**. It was measured,
+Re-measured at **300 steps** to test whether a longer run amortises it better.
+It does not, and the reason is structural rather than incidental — first
+sightings are capped at 44 *per process* because there are only 44 unique
+shapes, so the fixed cost stays ~166 s while the denominator grows:
+
+| | first sighting | total per run | steps/s |
+|---|---|---|---|
+| off, 300 steps | 3.862 s | 170 s | 0.735 |
+| cold, 300 steps | 3.851 s | 169 s | 0.746 |
+| **warm, 300 steps** | **3.767 s** | **166 s** | 0.761 |
+
+**4 s of 166 s — the same 2% as at 150 steps.** A longer run makes the saving a
+*smaller* fraction, not a larger one.
+
+So the ~166 s per run is **not removable by configuration**. It was measured,
 not inferred, and it is the reason the recommendation below changed.
 
 ## The remaining cost is ~40% of every run, and only shape count touches it
@@ -189,13 +284,18 @@ any preview or VAE decode.
 ## What to do next
 
 1. **Shape bucketing** — the only remaining lever on a cost that is ~40% of
-   every run. Blocked on the loss-mask decision, not on measurement.
-2. **Pre-warm** is *not* an alternative to bucketing here: it pays the same
-   ~164 s per run, just earlier and in one lump, and a graph run is a fresh
-   process every time so there is nothing to amortize against. Earlier drafts of
-   this file listed it as a fix; it only moves the bill.
-3. Re-measure the sweep if the dataset's shape count grows a lot — 2048 is
-   sized for 44.
+   every run, and above 512 distinct shapes the only lever that is *cheaper*.
+   Blocked on the loss-mask decision, not on measurement.
+2. **Wire the sizing into the trainer.** `primitive_cache_capacity_for_shapes()`
+   is ready and tested; it needs a distinct-shape count from a source that does
+   not advance loader state. A `DISTINCT` query on the loader's own
+   `metadata.db` is the safe source and belongs in its own commit.
+3. **Pre-warm** is *not* an alternative to bucketing: it pays the same ~166 s
+   per run, just earlier and in one lump, and a graph run is a fresh process
+   every time so there is nothing to amortize against. Earlier drafts of this
+   file listed it as a fix; it only moves the bill.
+4. Re-measure the per-shape ratio if the model changes — 35 is a property of
+   this UNet on this backend, not a constant of oneDNN.
 
 ## Method notes
 

@@ -86,6 +86,70 @@ def check_capacity_is_at_least_the_measured_sufficient_value():
     print("    PASS")
 
 
+def check_an_exported_value_is_honoured():
+    print("[a value already in the environment is KEPT -- a knob an operator "
+          "cannot set before a run is not a knob, and both gateways spawn "
+          "children via os.environ.copy()]")
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "99999"
+    set_xpu_perf_env_vars()
+    check(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] == "99999",
+          f"an exported value was overwritten: "
+          f"{os.environ['ONEDNN_PRIMITIVE_CACHE_CAPACITY']}")
+    print("    PASS")
+
+
+def check_an_explicit_argument_beats_the_environment():
+    print("[an explicit argument wins over the environment -- a caller that "
+          "computed the capacity from the dataset knows more than a shell "
+          "variable can]")
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "99999"
+    set_xpu_perf_env_vars(onednn_primitive_cache_capacity=4096)
+    check(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] == "4096",
+          os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"])
+    print("    PASS")
+
+
+def check_an_unusable_value_is_refused_and_says_so():
+    print("[a non-numeric or below-1 value is refused with a warning -- oneDNN "
+          "parses this with strtol, so 'junk' becomes 0 and a cache of zero "
+          "entries is worse than not setting it]")
+    import io
+    import logging
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger("nodes.xpu_env")
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.WARNING)
+    try:
+        for bad in ("junk", "0", "-5", ""):
+            os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = bad
+            set_xpu_perf_env_vars()
+            got = os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"]
+            check(got == str(xpu_env.DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY),
+                  f"{bad!r} should have been refused, got {got!r}")
+        check("ignoring" in stream.getvalue(),
+              "refusing a value must say so, or a mistyped export looks exactly "
+              "like the fix not working")
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    print("    PASS")
+
+
+def check_a_refused_value_never_survives_in_the_environment():
+    print("[a refused value does not stay in os.environ -- oneDNN reads the "
+          "environment directly, so leaving 'junk' there would be what makes it "
+          "parse as 0, not the warning]")
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "junk"
+    set_xpu_perf_env_vars()
+    check(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"]
+          == str(xpu_env.DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY),
+          f"the refused value must be replaced in os.environ, got "
+          f"{os.environ['ONEDNN_PRIMITIVE_CACHE_CAPACITY']!r}")
+    print("    PASS")
+
+
 def check_calling_twice_changes_nothing():
     print("[idempotent: calling twice leaves the same value (both entry points "
           "call it, and a graph child is spawned from a process that called it)]")
@@ -120,6 +184,10 @@ def main():
     check_onednn_primitive_cache_capacity_is_set()
     check_capacity_is_not_the_measured_bad_default()
     check_capacity_is_at_least_the_measured_sufficient_value()
+    check_an_exported_value_is_honoured()
+    check_an_explicit_argument_beats_the_environment()
+    check_an_unusable_value_is_refused_and_says_so()
+    check_a_refused_value_never_survives_in_the_environment()
     check_calling_twice_changes_nothing()
     check_no_torch_is_imported()
     print()

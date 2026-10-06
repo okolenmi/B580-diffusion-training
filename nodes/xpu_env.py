@@ -42,14 +42,37 @@ in the older route didn't make for this file to second-guess.
 import os
 
 
-def set_xpu_perf_env_vars() -> None:
+def set_xpu_perf_env_vars(
+    onednn_primitive_cache_capacity: int | None = None,
+) -> None:
     """Idempotent (plain assignment, safe to call more than once or from
     more than one entry point in the same process) and side-effect-free
     beyond os.environ -- no torch import here, so this is safe to call
     before torch (or anything importing it) is touched at all, which is
     the whole point: SYCL reads these at its own runtime init, the first
     time anything actually touches an XPU device, so setting them even
-    slightly late (after that first touch) is too late."""
+    slightly late (after that first touch) is too late.
+
+    ``onednn_primitive_cache_capacity`` overrides the default below. Two
+    ways to use it, both of which reach every training process:
+
+    * pass it, from a caller that knows the answer -- a graph child given
+      the shape count by the server, which already reads the dataset's
+      latent buckets during admission;
+    * export ``ONEDNN_PRIMITIVE_CACHE_CAPACITY`` before starting the server.
+      Both gateways spawn children via ``os.environ.copy()``
+      (backend/infrastructure/graph_task_gateway.py), so one export covers
+      the server and every child it starts, which is the whole reason an
+      exported value is honoured here rather than overwritten: a knob an
+      operator cannot set before a run is not a knob.
+
+    An explicit argument wins over the environment, because a caller that
+    computed a value from the dataset knows more than a shell variable
+    could. An unusable value -- non-numeric, or below 1 -- is refused and
+    the default is used instead, with a warning: oneDNN parses this with
+    strtol, so a bad value silently becomes 0, and a cache of zero entries
+    is worse than the default this function exists to set.
+    """
     # os.environ["SYCL_CACHE_PERSISTENT"] = "1"
     # os.environ["SYCL_CACHE_DIR"] = str(Path.home() / ".cache" / "sycl_kernels")
     os.environ["SYCL_IN_MEM_CACHE_EVICTION_THRESHOLD"] = "0"
@@ -94,7 +117,106 @@ def set_xpu_perf_env_vars() -> None:
     # Here rather than in a trainer or a config file: this function is the
     # one place both entry points already call before torch is imported
     # (backend/cli.py, and each graph child in
-    # backend/infrastructure/graph_task_worker.py). Unconditional, like the
-    # five lines above: a conditional assignment would let a stale exported
-    # value silently restore the penalty this line removes.
-    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "2048"
+    # backend/infrastructure/graph_task_worker.py).
+    #
+    # Unlike the five lines above, an already-set value is KEPT, not
+    # overwritten -- see the docstring on the parameter. That is the
+    # opposite of what this function does elsewhere, and deliberately: the
+    # other five are internal tuning this project asserts, while this one
+    # has to be raiseable by whoever owns the dataset, because the right
+    # value depends on the dataset's shape count and this module cannot
+    # see a dataset. An override in effect is logged, so a run that is slow
+    # for this reason says so instead of looking like a mystery.
+    _set_primitive_cache_capacity(onednn_primitive_cache_capacity)
+
+
+#: Used when nothing supplies a capacity and no dataset is known.
+#:
+#: Sized for `non-square` (44 shapes) with headroom: measured, the working set
+#: is (1280, 1536], and peak host RSS was byte-identical at every capacity
+#: from 1024 to 262144 -- a 256x range. So capacity is a ceiling, not an
+#: allocation, and headroom above what a dataset needs is free. That is why
+#: this is a round number above the requirement rather than the requirement:
+#: the cost of being generous is zero and the cost of being stingy is the
+#: 4x revisit penalty.
+DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY = 2048
+
+#: Measured primitives per distinct latent shape, as a bracket rather than a
+#: point, because that is the precision the measurement has: 44 shapes need a
+#: capacity in (1280, 1536], which is 29.1 to 34.9 per shape. The wide end is
+#: used for sizing so a dataset is never sized to the optimistic end.
+PRIMITIVES_PER_SHAPE_MEASURED = (29, 35)
+
+#: Above this many distinct latent shapes, grouping is recommended over a
+#: bigger cache -- not because the cache runs out, but because grouping is
+#: cheaper on both axes at once. At 35 primitives/shape, 4096 shapes would
+#: need ~143k entries; the cache would hold them, free, but grouping 44
+#: shapes to 3 also cuts the ~166s per-run first-sighting cost to ~11s,
+#: which no cache can touch. Named as a constant so the recommendation has a
+#: number attached rather than living only in prose.
+SHAPES_WHERE_GROUPING_WINS = 512
+
+
+def primitive_cache_capacity_for_shapes(
+        distinct_shapes: int | None) -> int | None:
+    """A capacity that holds ``distinct_shapes`` shapes' primitives, or
+    None when the shape count is unknown.
+
+    Sized from the wide end of the measured bracket (35 primitives per shape)
+    so a dataset is never sized to the optimistic end of a 1.2x-wide
+    measurement. Returns None for an unknown or non-positive count rather than
+    a default: "we do not know how many shapes this dataset has" is a
+    different fact from "this dataset has few shapes", and answering it with
+    a number would hide the difference. The caller then uses the default,
+    which is generous because capacity is free.
+
+    This cannot fail for want of a number -- the measured ratio is a property
+    of the model and the backend, not of the dataset -- but it can be wrong
+    for a model whose per-shape primitive count differs from the SDXL UNet
+    that was measured. For that case the caller keeps an explicit override
+    (an argument, or the environment variable).
+    """
+    if distinct_shapes is None:
+        return None
+    if not isinstance(distinct_shapes, int) or isinstance(distinct_shapes, bool):
+        return None
+    if distinct_shapes <= 0:
+        return None
+    return max(DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY,
+               distinct_shapes * PRIMITIVES_PER_SHAPE_MEASURED[1])
+
+
+def _set_primitive_cache_capacity(explicit: int | None) -> None:
+    """Resolve the capacity from (in order) an explicit argument, the
+    environment, then the measured default; warn on an unusable value."""
+    name = "ONEDNN_PRIMITIVE_CACHE_CAPACITY"
+    if explicit is not None:
+        value = explicit
+    elif name in os.environ:
+        raw = os.environ[name]
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            _warn_bad_capacity(raw, "environment")
+            value = DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY
+    else:
+        value = DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY
+
+    if value < 1:
+        _warn_bad_capacity(str(value),
+                           "argument" if explicit is not None else "environment")
+        value = DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY
+
+    os.environ[name] = str(value)
+
+
+def _warn_bad_capacity(raw: str, source: str) -> None:
+    import logging
+    logging.getLogger(__name__).warning(
+        "ignoring %s=%r from %s: not a usable oneDNN primitive cache capacity; "
+        "using the measured default %d. oneDNN parses this with strtol, so an "
+        "unusable value becomes 0 -- a cache of zero entries, worse than not "
+        "setting it at all",
+        "ONEDNN_PRIMITIVE_CACHE_CAPACITY", raw, source,
+        DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY,
+    )

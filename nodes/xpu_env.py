@@ -58,3 +58,34 @@ def set_xpu_perf_env_vars() -> None:
     os.environ["UR_L0_USE_RELAXED_ALLOCATION_LIMITS"] = "1"
     os.environ["SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS"] = "1"
     os.environ["IGC_EnableDPEmulation"] = "1"
+
+    # oneDNN's primitive cache, sized for a multi-resolution dataset.
+    #
+    # The default (1024) cannot hold the primitives a UNet needs per latent
+    # shape, so a dataset with more than a few distinct shapes re-creates
+    # them on every shape *transition*. Measured on the B580, torch
+    # 2.12.1+xpu, 300 steps at batch 2 over `non-square` (44 shapes,
+    # clumped at mean 2.16):
+    #
+    #   capacity 1024 (default)  revisit 4.34x steady  0.480 steps/sec
+    #   capacity 65536 (this)     revisit 0.99x steady  0.741 steps/sec
+    #   single-shape control                           0.769 steps/sec
+    #
+    # 1.54x, no dataset change and no change to training numerics. Steps
+    # repeating the previous shape average 0.87s against revisits' 3.79s,
+    # which is what "per transition" means. Peak reserved is 8,774 MB either
+    # way: this cache is host memory and does not compete for the card.
+    #
+    # 65536 is the smallest value MEASURED to work, not the smallest that
+    # would -- only 1024 and 65536 have been run, so the figure and its host
+    # RAM cost are both unmeasured (docs/known-issues/open.md).
+    #
+    # Here rather than in a trainer or a config file: this function is the
+    # one place both entry points already call before torch is imported
+    # (backend/cli.py, and each graph child in
+    # backend/infrastructure/graph_task_worker.py -- and MEM-05 made every
+    # graph run a fresh process, so a setting that lives in the server is
+    # not a setting the child gets). Unconditional, like the five lines
+    # above: a conditional assignment would let a stale exported value
+    # silently restore the penalty this line removes.
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "65536"

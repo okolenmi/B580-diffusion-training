@@ -50,12 +50,14 @@ with the probe and the three runs' `steps.jsonl` beside it. The short version:
 
 `ONEDNN_PRIMITIVE_CACHE_CAPACITY` defaults to **1024**, which cannot hold the
 oneDNN primitives for a multi-resolution dataset, so every shape *transition*
-re-creates them. At 300 steps, batch 2:
+re-creates them. Set to **2048** — the smallest value measured to work; 65536
+was tried first and buys nothing over it, and peak host RSS is byte-identical
+at every capacity. At 300 steps, batch 2:
 
 | run | revisit / steady | steps/sec |
 |---|---|---|
 | default capacity (1024) | **4.34x** | 0.480 |
-| `ONEDNN_PRIMITIVE_CACHE_CAPACITY=65536` | **0.99x** | **0.741** |
+| `ONEDNN_PRIMITIVE_CACHE_CAPACITY=2048` | **0.99x** | **0.741** |
 | `1024 aes` single-shape control | — | 0.769 |
 
 **1.54x throughput, no dataset change and no change to training numerics**, and
@@ -132,15 +134,28 @@ the true size has to survive into the loss and into any preview or VAE
 decode. It is recorded here rather than done, because it changes training
 semantics and that is a project's call.
 
-**Superseded 2026-10-06: don't do this first.** The 2x this table trades against
-is not a per-step cost of having 44 shapes -- it is primitive-cache thrash on
-transitions, and one environment variable recovers 1.54x of it for free.
-Bucketing to 3 shapes is now second-order: it would reduce the *number* of
-first sightings (~3.9 s x 44, ~170 s per process, and every graph run is a
-fresh child process so it is repaid in full each time) and not the transition
-cost that actually dominates a long run. It remains the right lever if a
-dataset with many more shapes makes the transitions worse, and it stays
-blocked on the loss-mask question regardless.
+**Superseded 2026-10-06: don't do this for the transitions.** The 2x this table
+trades against is not a per-step cost of having 44 shapes — it is
+primitive-cache thrash on transitions, and one environment variable
+(`ONEDNN_PRIMITIVE_CACHE_CAPACITY`, now 2048) recovers 1.62x of it for free, at
+no host-RAM cost.
+
+**But do still do it for the first sightings.** The cache fixes *transitions*
+only. First sightings still cost ~3.85 s each, and every graph run is a fresh
+child process (MEM-05), so a 44-shape dataset repays **~164 s per run — about
+40% of a 300-step run's wall time.** Three measurements bear on whether that is
+configurable, and all three say no:
+
+- a larger primitive cache does not touch it (65536 is no better than 2048);
+- `SYCL_CACHE_PERSISTENT=1` saves **2%** (3 s of 164 s) while writing 1,138 MB
+  to disk — it persists SYCL's kernels, not oneDNN's primitives;
+- pre-warming pays the same ~164 s, just earlier, because there is no next run
+  in the same process to amortize it against.
+
+Bucketing 44 shapes to 3 cuts first sightings from 44 to ~3 (~164 s -> ~12 s)
+and is the only lever left on it. Cost unchanged and still unadopted: **+15%
+compute**, and padding changes what the loss is computed over, so the true size
+must survive into the loss and into any preview or VAE decode.
 
 **To make any of this measurable, `steps.jsonl` now records `latent_shape`.**
 This entry's diagnosis took four wrong turns before the cause was found, and

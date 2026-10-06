@@ -70,17 +70,19 @@ def check_capacity_is_not_the_measured_bad_default():
     print("    PASS")
 
 
-def check_capacity_is_large_enough_for_a_multi_shape_dataset():
-    print("[the capacity exceeds the measured-bad 1024 by enough to plausibly "
-          "hold a UNet's primitives for 44 shapes]")
+def check_capacity_is_at_least_the_measured_sufficient_value():
+    print("[the capacity is at least 2048 -- the smallest value MEASURED to hold "
+          "`non-square`'s primitives (1024 measured 3.85x on revisits)]")
     value = int(os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"])
-    # Not a performance assertion -- the measured working value is 65536 and
-    # only 1024 and 65536 have been run. This just refuses to let the setting
-    # drift back to single-digit thousands without someone noticing, which is
-    # the range where a 44-shape dataset provably does not fit.
-    check(value >= 8192,
-          f"capacity {value} is back in the range measured not to hold a "
-          f"multi-resolution dataset's primitives")
+    # Not a performance assertion, and deliberately loose: 2048 is what a
+    # 44-shape dataset was measured to need, and the requirement scales with
+    # the shape count, so a dataset with hundreds of shapes needs more and
+    # raising this must not be blocked by this test. What it refuses is a
+    # silent drop to the measured-bad default or below.
+    check(value >= 2048,
+          f"capacity {value} is below the smallest value measured to work "
+          f"(2048); 1024 measured revisit 3.85x steady on the B580")
+    print(f"    value: {value}")
     print("    PASS")
 
 
@@ -117,7 +119,7 @@ def check_no_torch_is_imported():
 def main():
     check_onednn_primitive_cache_capacity_is_set()
     check_capacity_is_not_the_measured_bad_default()
-    check_capacity_is_large_enough_for_a_multi_shape_dataset()
+    check_capacity_is_at_least_the_measured_sufficient_value()
     check_calling_twice_changes_nothing()
     check_no_torch_is_imported()
     print()

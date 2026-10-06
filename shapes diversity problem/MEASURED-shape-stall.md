@@ -101,13 +101,13 @@ Reading the table counts shapes the trainer never sees.
 
 ## What landed in the repo
 
-- **`nodes/xpu_env.py` sets `ONEDNN_PRIMITIVE_CACHE_CAPACITY=65536`.** Placed
+- **`nodes/xpu_env.py` sets `ONEDNN_PRIMITIVE_CACHE_CAPACITY=2048`.** Placed
   there because it is the one place both entry points already call before torch
   is imported — `backend/cli.py` for the server, and each graph child in
   `backend/infrastructure/graph_task_worker.py`. Since MEM-05 made every graph
   run a fresh process, a setting that lives in the server is not a setting the
   child gets. `nodes/smoke_tests/smoke_test_xpu_env.py` (5 checks) pins it,
-  including that the value is not silently back at oneDNN's 1024.
+  including that the value cannot silently fall back to oneDNN's 1024.
 - **`MonitoringPhase` (both routes) passes the step's latent shape to
   `on_step`**, and `hw_validate.py` records it as `latent_shape`. Without it,
   none of the above is measurable from a run's output — which is why two wrong
@@ -117,25 +117,85 @@ Reading the table counts shapes the trainer never sees.
   `analyze_steps.py` in this folder, written before that change, expects
   `shapes.jsonl` and is superseded by reading `latent_shape` directly.
 
+## The landed capacity: 2048, not 65536
+
+A capacity sweep, production env, 150 steps per point (44 shapes end their
+first sightings by ~step 44, so the remaining ~100 steps are revisits — ample
+to see whether revisits are fast, and half the cost of a 300-step run):
+
+| capacity | revisit/steady | steps/s | peak host RSS |
+|---|---|---|---|
+| 1024 (oneDNN default) | **3.85x** | 0.488 | 15,567 MB |
+| **2048** | **0.99x** | 0.599 | 15,567 MB |
+| 4096 | 1.00x | 0.620 | 15,567 MB |
+| 8192 | 1.00x | 0.591 | 15,567 MB |
+| 16384 | 0.99x | 0.605 | 15,567 MB |
+| 32768 | 1.01x | 0.583 | 15,567 MB |
+| 65536 | 1.00x | 0.591 | 15,567 MB |
+
+**2048 is enough, and 65536 buys nothing over it** (0.599 vs 0.591 steps/s at
+equal steps, identical ratios) — so the value first landed was 32x larger than
+needed. Corrected to 2048. The spread across 2048–65536 (0.583–0.620) is
+run-to-run noise; revisit/steady is flat at ~1.00 throughout and is the measure
+that discriminates, being independent of step count.
+
+**Host RAM cost: none.** Peak RSS is byte-identical at all seven capacities.
+`VmHWM` is a kernel-maintained high-water mark, so unlike a sampler it cannot
+miss a peak — this is not a measurement gap. The primitive descriptors are
+simply small.
+
+The bracket is **(1024, 2048]** — so 2048 is the smallest *measured* sufficient
+value for *this* dataset, not a proven minimum, and the requirement scales with
+the shape count. A dataset with several hundred distinct shapes needs more.
+
+## The persistent disk cache does not work — measured, not assumed
+
+`SYCL_CACHE_PERSISTENT=1` + `SYCL_CACHE_DIR`, with the primitive fix in place so
+only first-sighting cost remains, 150 steps per run:
+
+| | first sighting | steps/s | disk cache after |
+|---|---|---|---|
+| persistent cache off | 3.718 s | 0.598 | 0 files |
+| cold (cache empty) | 3.680 s | 0.611 | 108 files / 1,138 MB |
+| **warm (second process)** | **3.604 s** | 0.624 | 108 files / 1,138 MB |
+
+**A warm cache saves 3 s of a 164 s cost — 2% throughput, for 1.1 GB written to
+disk.** The reason is the layer mismatch this file keeps running into: it
+persists SYCL's SPIR-V kernel binaries, while the first-sighting cost is
+oneDNN *primitive* creation, which has no supported persistent form.
+
+So the ~164 s per run is **not removable by configuration**. It was measured,
+not inferred, and it is the reason the recommendation below changed.
+
+## The remaining cost is ~40% of every run, and only shape count touches it
+
+With the fix landed, a run still pays ~3.85 s x 44 = **~164 s** of first
+sightings. A 300-step run takes ~400 s, so that fixed cost is **~40% of
+wall time** — paid in full on *every* run, because MEM-05 made every graph run a
+fresh child process.
+
+This reverses an earlier statement in this file, which called shape bucketing
+"clearly second-order". That was wrong, and it was wrong because it reasoned
+only about the *transition* cost the cache fix removes. The first-sighting cost
+is a per-run fixed cost, it is not amortizable, no cache reaches it, and it
+dominates short runs — which is the common case for a graph execution.
+
+Bucketing 44 shapes to 3 cuts first sightings from 44 to ~3, i.e. ~164 s to
+~12 s. That is the remaining win, and it is now the *only* lever on it. Its
+cost is unchanged and still unadopted: +15% compute, and padding changes what
+the loss is computed over, so the true size must survive into the loss and into
+any preview or VAE decode.
+
 ## What to do next
 
-1. **Find the smallest sufficient capacity.** Only 1024 (broken) and 65536
-   (works) are measured, so the landed value may be far larger than needed. A
-   sweep over 2048/4096/8192/16384/32768 would pin it down
-   (`find_capacity.py`, ~11 min per point on a 300-step run). Mechanical, not a
-   question.
-2. **Persistent disk cache** (`SYCL_CACHE_PERSISTENT=1`, `SYCL_CACHE_DIR`) is the
-   bigger remaining win, because **every graph run is a fresh child process**
-   (MEM-05) — so the 44 first sightings are repaid in full on every run, which
-   is ~3.85 s x 44 = **~170 s**. Not measured.
-3. **Pre-warm** is the same ~170 s paid once per run instead of being amortised
-   over a long run; the two are alternatives, not complements.
-4. Shape bucketing (44 -> 3 with padding, +15% compute) is *not* needed for the
-   throughput problem and would change what the loss is computed over. It was
-   the recommendation before this measurement; it is now clearly second-order.
-5. **Host RAM cost of a 65536-entry cache is unmeasured.** It is host memory and
-   cannot OOM the card, but on a small-memory host a large cache is not free.
-   `find_capacity.py` samples `VmHWM` per run and would answer it.
+1. **Shape bucketing** — the only remaining lever on a cost that is ~40% of
+   every run. Blocked on the loss-mask decision, not on measurement.
+2. **Pre-warm** is *not* an alternative to bucketing here: it pays the same
+   ~164 s per run, just earlier and in one lump, and a graph run is a fresh
+   process every time so there is nothing to amortize against. Earlier drafts of
+   this file listed it as a fix; it only moves the bill.
+3. Re-measure the sweep if the dataset's shape count grows a lot — 2048 is
+   sized for 44.
 
 ## Method notes
 

@@ -64,28 +64,37 @@ def set_xpu_perf_env_vars() -> None:
     # The default (1024) cannot hold the primitives a UNet needs per latent
     # shape, so a dataset with more than a few distinct shapes re-creates
     # them on every shape *transition*. Measured on the B580, torch
-    # 2.12.1+xpu, 300 steps at batch 2 over `non-square` (44 shapes,
-    # clumped at mean 2.16):
+    # 2.12.1+xpu, batch 2, production env, `non-square` (44 shapes,
+    # clumped at mean 2.16), by capacity:
     #
-    #   capacity 1024 (default)  revisit 4.34x steady  0.480 steps/sec
-    #   capacity 65536 (this)     revisit 0.99x steady  0.741 steps/sec
-    #   single-shape control                           0.769 steps/sec
+    #   capacity  revisit / steady   steps/s (150 steps)   peak host RSS
+    #      1024         3.85x             0.488               15,567 MB
+    #      2048         0.99x             0.599               15,567 MB
+    #     65536         1.00x             0.591               15,567 MB
     #
-    # 1.54x, no dataset change and no change to training numerics. Steps
-    # repeating the previous shape average 0.87s against revisits' 3.79s,
-    # which is what "per transition" means. Peak reserved is 8,774 MB either
-    # way: this cache is host memory and does not compete for the card.
+    # 2048 is enough and 65536 buys nothing over it, so this is 2048 rather
+    # than the 65536 first tried -- 32x more cache for an identical number.
+    # Peak host RSS is byte-identical at every capacity, so the cache costs
+    # no measurable host memory either (VmHWM is a kernel high-water mark, so
+    # this is not a sampling gap).
     #
-    # 65536 is the smallest value MEASURED to work, not the smallest that
-    # would -- only 1024 and 65536 have been run, so the figure and its host
-    # RAM cost are both unmeasured (docs/known-issues/open.md).
+    # 2048 is what `non-square` needs, and the requirement scales with the
+    # shape count: a dataset with several hundred distinct shapes needs more.
+    # Raise it if revisits go slow again -- revisit/steady is the signal, and
+    # it is directly measurable now that each step records its shape.
+    #
+    # This fixes TRANSITIONS only. First sightings still cost ~3.85 s each,
+    # and since every graph run is a fresh process (MEM-05), a 44-shape
+    # dataset repays ~164 s per run -- roughly 40% of a 300-step run. That
+    # cost is not configurable: SYCL_CACHE_PERSISTENT was measured to save
+    # 2% of it while writing 1.1 GB to disk, because it persists SYCL's
+    # kernels and not oneDNN's primitives. Fewer distinct shapes is the only
+    # lever on it (docs/known-issues/open.md).
     #
     # Here rather than in a trainer or a config file: this function is the
     # one place both entry points already call before torch is imported
     # (backend/cli.py, and each graph child in
-    # backend/infrastructure/graph_task_worker.py -- and MEM-05 made every
-    # graph run a fresh process, so a setting that lives in the server is
-    # not a setting the child gets). Unconditional, like the five lines
-    # above: a conditional assignment would let a stale exported value
-    # silently restore the penalty this line removes.
-    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "65536"
+    # backend/infrastructure/graph_task_worker.py). Unconditional, like the
+    # five lines above: a conditional assignment would let a stale exported
+    # value silently restore the penalty this line removes.
+    os.environ["ONEDNN_PRIMITIVE_CACHE_CAPACITY"] = "2048"

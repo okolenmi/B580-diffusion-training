@@ -169,31 +169,77 @@ a fast one.
 5. **Static conditioning buffers.** `ctx_emb`/`y` would have to be copied into
    static tensors each step, which is where L1's per-sample sizes land.
 
-## L5.1 — activation checkpointing costs 1.56x of step time
+## L5.1 — activation checkpointing: the probe said 1.56x, the real run OOMs
 
-Incidental to the capture probe, and larger than expected. Same model, same
-buffers, one variable:
+**This corrects a number reported earlier in this file.** The capture probe
+measured checkpointing OFF at 564.5 ms against 878.3 ms ON — 1.56x — and that
+figure was written up as "1.56x faster for +3,460 MB, whether a full run fits
+unmeasured". The full run does not fit:
 
-| | eager step | reserved |
-|---|---|---|
-| checkpointing **ON** (production) | 878.3 ms | 6,294 MB |
-| checkpointing **OFF** | **564.5 ms** | **9,754 MB** |
+| | steps/s | ms/step | steps completed | peak reserved |
+|---|---|---|---|---|
+| checkpointing **ON** (production) | 1.023 | 978 | **150 / 150** | 7,220 MB |
+| checkpointing **OFF** | 1.227 | 815 | **4 / 150** | 10,282 MB |
 
-**1.56x faster for +3,460 MB.** Whether a full training run fits without it is
-unmeasured — the production run peaks at 7,220 MB with checkpointing on, so
-the naive projection is ~10.7 GB against a 12,216 MB card, which is inside the
-harness's 11,500 MB budget but not comfortably. `--attn-ckpt-fraction` already
-exists for the intermediate points and is the next thing to sweep; this probe
-used all-or-nothing only because it is not the question the probe was written
-for.
+```
+torch.OutOfMemoryError: XPU out of memory. Tried to allocate 20.00 MiB.
+GPU 0 has a total capacity of 11.93 GiB of which 5.62 MiB is free.
+Of the allocated memory 10.43 GiB is allocated by PyTorch,
+and 94.57 MiB is reserved by PyTorch but unallocated.
+```
 
-## L4 — not measured yet
+**Checkpointing OFF is ~1.2x faster and dies at step 4.** The probe's 1.56x was
+real for what it measured — a bare UNet with no optimizer, no text encoder and
+no residency controller — and wrong as a statement about training. Two things
+it left out, both of which cost memory rather than time: the optimizer's state
+and the LoRA gradients, and the residency controller holding the text encoder's
+budget. This is the clearest instance in this task of a correct isolated
+measurement being the wrong answer, and the only reason it is not still
+circulating is that the full run was actually executed.
 
-`hw_validate.py --batch 1/2/4/8` on a dataset whose images share captions
-(`non-square` has exactly one distinct prompt, confirmed by every prewarm line
-in this task's runs: "1 distinct prompt(s)"). Whether step time stays flat as
-batch grows is what decides the whole per-sample-captioning change, and it is
-the one L4 item that needs no code to answer.
+`--attn-ckpt-fraction` (0.5, 0.25, …) already exists and is the real sweep: it
+trades a fraction of the 1.2x for a fraction of the +3 GB. Not run — the
+question L5.1 asks is answered, and the useful follow-up is "which fraction",
+which needs its own measurement.
+
+## L4 — step time IS flat to batch 4, so per-sample captions are worth doing
+
+The first measure, no code. `hw_validate.py --batch 1/2/4/8` on `non-square`,
+150 steps, `shape_bucket_multiple=32` (so 3 shapes and the compile cost is out
+of the way).
+
+| batch | steps/s | ms/step | **images/s** | vs batch 1 | peak MB | reserved drift |
+|---|---|---|---|---|---|---|
+| 1 | 0.988 | 1,012 | 0.99 | 1.00x | 7,226 | 10 MB |
+| 2 | 0.996 | 1,004 | 1.99 | 2.02x | 7,220 | 2 MB |
+| 4 | 0.996 | 1,004 | 3.98 | **4.03x** | 7,376 | 2 MB |
+| 8 | 0.645 | 1,550 | 5.16 | 5.22x | 8,336 | **640 MB** |
+
+**Step time is flat within 5% from batch 1 to batch 4** — 0.988 → 0.996 steps/s,
+which is noise — while images/s goes up **4.03x**. It stops being flat at batch
+8: 1,550 ms/step, so batch 8 buys only 1.30x over batch 4 and costs +960 MB
+more reserved plus 640 MB of allocator drift (MEM-09's ratchet, reappearing
+across shapes once activations are big enough to matter).
+
+This is the premise L4's structural change rests on, and it holds with room to
+spare: because a step costs the same at batch 1 as at batch 4, a batch that may
+contain four different captions instead of one costs *nothing extra*, and the
+loader no longer has to put every image with a unique caption in a batch of its
+own. **Batch 4 is the sweet spot on this card** — the last size that is still
+free.
+
+Two limits on what this establishes:
+
+- **`non-square` has exactly one distinct caption** (every prewarm line in this
+  task's runs: "1 distinct prompt(s)"). So this measures that a *bigger* batch
+  is free. It does **not** measure that *heterogeneous captions* in one batch
+  are cheap — that needs per-sample `ctx_emb`/`y`, which is the code L4 defers
+  until this premise is checked, and which adds a text-encoder encode per
+  distinct caption in the batch. On a one-caption dataset that is one encode
+  either way, so this run cannot speak to it at all.
+- **LoRA conditioning dominates the per-step CPU cost, not the text encoder.**
+  At 22,297 launches per step there is no room in the budget for a per-sample
+  conditioning path to be free by default; it has to earn its place.
 
 ## What is not worth doing, and why
 
@@ -201,8 +247,34 @@ the one L4 item that needs no code to answer.
   `shapes diversity problem/MEASURED-shape-stall.md`: activation-bound at
   ~12 GB for a single shape, so no room for a second thread. After bucketing,
   three serial compiles cost ~9 s per run, so the remaining prize is small.
+- **Turning activation checkpointing off.** ~1.2x, and it OOMs at step 4 in a
+  real run (L5.1 above). `--attn-ckpt-fraction` is the real lever, not the
+  on/off switch.
 - **A cross-process primitive cache** would fix the whole class, and oneDNN has
   no supported persistent form. Platform limit, not a missing setting.
 - **LoRA launch micro-optimisation**, per L5.2 above: the levers that work all
   cost precision or need a correctness answer first, against a 2x that graph
   capture delivers with neither.
+
+## Where the throughput went, and what is left
+
+Starting point and the order things were measured in:
+
+| | steps/s | vs start |
+|---|---|---|
+| 44 shapes, launch-bound (the original problem) | 0.690 | — |
+| + primitive cache sized to the shape count | 0.757 | 1.10x |
+| + shape bucketing x32 | 1.076 | **1.56x** |
+| + XPU graph capture, MATH SDPA (one shape, not yet integrated) | 2.15 equiv. | **~2.0x more** |
+
+Bucketing and graph capture are close to additive — one removes compile
+stalls, the other removes launch cost — because they attack different parts of
+the same 48 us-per-launch budget. The capture number is *not* a drop-in: it is
+one shape, no optimizer step, no conditioning, and it needs MATH or EFFICIENT
+SDPA in place of the faster default.
+
+The thing none of this fixes: **at batch 8 the GPU becomes the limit**, and
+nothing in the launch budget can help there. The remaining headroom on this
+card is in getting to a useful batch size cheaply, which is L4's structural
+lever and not a throughput one.
+

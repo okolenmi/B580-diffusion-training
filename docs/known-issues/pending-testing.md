@@ -299,6 +299,71 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 
 ## Pending
 
+- **[2026-10-07] shape bucketing's default, now that (c) has been reported.**
+  `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
+
+  Measured on a fixed unpadded holdout, with a seed-to-seed control to read
+  against: a multiple of 16 and a multiple of 32 are **within noise** of not
+  bucketing, and a multiple of **24 is measurably worse** (+0.000748, 2.9x the
+  0.000258 control). x32 is 1.56x faster with peak memory unchanged.
+
+  Not defaulted on, deliberately. "Within noise at 300 steps" is not "no
+  difference", the measurement is one dataset with one caption, and the
+  remaining arguments for off are unchanged. The x24 result is the durable
+  lesson: **pad fraction predicts the cost, bucket count does not** — x24
+  reaches fewer shapes than x32 while padding nearly twice as much, so a
+  policy chosen by shape count would pick the worst of the three.
+
+- **[2026-10-07] `--attn-ckpt-fraction`, the real version of the
+  checkpointing lever.** Turning activation checkpointing **off** is ~1.2x
+  faster and **OOMs at step 4** in a real run (peak 10,282 MB against a
+  12,216 MB card), so the on/off switch is not a choice on this card. The
+  fraction sweep (0.5, 0.25, …) trades a fraction of that 1.2x for a fraction
+  of the +3 GB and is unrun. Note the correction this records: an isolated
+  probe measured checkpointing-off at **1.56x** and that figure was reported
+  as a trade to weigh before the full run was executed. Correct for a bare
+  UNet with no optimizer, text encoder or residency controller; wrong for
+  training, because what the probe omitted costs memory rather than time.
+
+- **[2026-10-07] `test_memory_peak_store.py`'s concurrency test reports a
+  lost update when the real failure is an I/O error.** Pre-existing and
+  load-dependent; reproduced on an unmodified tree, so it is not caused by
+  whatever ran before it. Left unfixed here deliberately — it is not this
+  work's to change, and a green gate that was made green by editing a test
+  is worth less than the flake.
+
+  **Mechanism, precisely.** `test_concurrent_writers_max_semantics` starts
+  six processes that each construct a `SqlitePeakStore` over one path on
+  tmpfs, meet at a `threading.Barrier`, then `record()`. Under contention one
+  worker's `_ensure_table()` raises
+  `sqlite3.OperationalError: disk I/O error`. That worker therefore never
+  reaches the barrier, so the other five wait out `_BARRIER_TIMEOUT_S` (120 s)
+  and get `BrokenBarrierError`. The parent then reads back a value written by
+  only five writers and asserts
+  `stored == max(values) (lost update!)` — which is the symptom, not the
+  cause. The lost update it names did not happen; a writer failed to start.
+
+  Observed: 1 failure in 12 concurrent runs of that file on a clean tree, and
+  1 in 4 `run_all.py` runs. `/tmp` was not full (20 GB tmpfs, 57 MB used,
+  5.1 M free inodes), so it is contention on tmpfs rather than exhaustion.
+
+  Two things are wrong and both are in the test, not the store:
+
+  1. **A worker that dies before the barrier is indistinguishable from a
+     lost update.** The parent's assertion names the wrong failure. A
+     non-zero child exit, or a `BrokenBarrierError` from a worker, should be
+     reported as itself — that is the diagnosis the log already contains and
+     the assertion discards.
+  2. **The barrier amplifies one slow start into a 120 s stall.** Nothing
+     waits for the barrier with any awareness that a peer has already failed,
+     so a single I/O error costs two minutes of wall time before the real
+     cause is read.
+
+  Reusable rule: a concurrency test that asserts on the *result* rather than
+  on the *participants'* exit status will convert any participant failure into
+  a plausible-looking correctness failure. Collect child failures first and
+  assert on those.
+
 - **[2026-10-06] the lease API and the handle still account for the same
   offload differently.** The sharper half of the `reserved_mb` issue, and
   deliberately left open by MEM-09.

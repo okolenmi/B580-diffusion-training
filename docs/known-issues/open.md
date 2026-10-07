@@ -166,6 +166,56 @@ reconstruction was wrong (it reported revisits at 0.95x when they are 4.34x).
 Both `MonitoringPhase` classes now pass the step's latent shape to `on_step`
 (`nodes/train/step_notify.py`), and `hw_validate.py` records it.
 
+## The step is bound by one thread issuing ~22,000 launches per step
+
+**Found 2026-10-07.** `scripts/count_launches.py` counts them exactly, on the
+`meta` device, through the project's own UNet and LoRA layers: **22,297
+kernel-launching aten ops per production step** (base model 6,737; the LoRA
+branch adds 8,095; checkpoint recompute adds 7,465). At the measured 1.06 s of
+CPU per fast step that is 48 us per launch — a normal eager PyTorch XPU launch
+— so the count explains the time and step time is (launches) x (48 us).
+
+**XPU graph capture is the lever, and it works: 2.05-2.08x.** `torch.xpu.XPUGraph`
+exists on this 2.12.1+xpu build. Capturing one real UNet forward+backward at
+one shape with static input buffers and replaying it:
+
+| | eager | replay | vs production eager |
+|---|---|---|---|
+| production (default SDPA, checkpointing ON) | 878.3 ms | — | — |
+| MATH SDPA + capture | 1010.1 ms | **421.2 ms** | **2.08x** |
+| EFFICIENT SDPA + capture | 993.4 ms | **430.5 ms** | **2.04x** |
+| FLASH SDPA + capture | 828.6 ms | — | **cannot capture** |
+
+The blocker is the SDPA backend and, for FLASH, it is not ours to fix: the
+SYCL Graph extension reports
+`sycl_ext_oneapi_work_group_scratch_memory ... not yet available`. The
+activation-checkpointing `fork_rng` hazard did **not** bite — capture
+succeeded with checkpointing ON.
+
+Not built, and the reasons are itemised in
+`shapes diversity problem 2/MEASURED-launch-bound.md`: one graph and one pool
+(~460-520 MB) per shape, the optimizer step not captured, in-place parameter
+updates being load-bearing (an optimizer that replaced `param.data` would leave
+the graph reading freed memory), dropout RNG untested, and static conditioning
+buffers still to be designed.
+
+**Two related results, both measured rather than argued:**
+
+*Step time is flat to batch 4*, so a batch may carry four different captions
+instead of one at no extra cost: 0.988 steps/s at batch 1 and 0.996 at batch 4,
+while images/s goes 0.99 → 3.98. It stops being flat at batch 8 (1,550 ms/step,
++960 MB, 640 MB of allocator drift). `non-square` has a single caption, so this
+establishes that a bigger batch is free — not that heterogeneous captions are.
+
+*LoRA launch micro-optimisation has no free win.* Fusing `scaling` and the
+residual add with `addmm` needs matching dtypes, so preserving fp32 costs a
+cast that cancels the saving (−0.5%); computing the adapter in bf16 is −7.2%
+but costs up to **2.27%** relative error on the adapter's own delta, growing
+with rank. Hoisting the A/B casts to a per-step cache is −22.8% and needs an
+invalidation design that does not exist: `param.data.copy_()` — which
+`LoRALinear.load_lora_weights` uses — bumps neither `_version` nor `data_ptr`,
+so the obvious cache key misses the one writer this codebase has.
+
 ## Attention-checkpointing density and the memory-floor levers, at 1024 / batch 2
 
 **The question.** Gradient checkpointing costs a ~25% recompute penalty,

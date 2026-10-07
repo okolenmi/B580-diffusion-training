@@ -85,7 +85,7 @@ from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
 from .bucket_sizes import encode_with_true_sizes
 from .node import TrainerNode
 from .schedule import LRSchedule
-from .step_pipeline import _phase_label
+from .step_pipeline import CacheThrashMixin, _phase_label
 from .step_notify import notify_step
 from .t_probe import TProbe, format_probe_line
 
@@ -811,7 +811,7 @@ class ProbePhase(ManagedStepPhase):
         return state
 
 
-class MonitoringPhase(ManagedStepPhase):
+class MonitoringPhase(CacheThrashMixin, ManagedStepPhase):
     """Runs last in the step -- after EncodeConditioningPhase and
     BackwardAndOptimizerStepPhase have already released everything
     they each manage.
@@ -901,6 +901,14 @@ class MonitoringPhase(ManagedStepPhase):
                  optimizer_id: str = "", grad_accum: int = 1,
                  usable_budget_mb: Optional[float] = None,
                  bucket_balance=None):
+        # Same one-time cache-thrash diagnostic the main route's
+        # MonitoringPhase has, from the same mixin -- see
+        # nodes/train/step_pipeline.py's CacheThrashMixin for why it is
+        # shared rather than written twice. Its observe() call sits after
+        # this class's mid-window early return, so with grad_accum > 1 it is
+        # fed once per OPTIMIZER step, over the window's full wall time,
+        # rather than once per micro-step.
+        self._cache_thrash_init()
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._coordinator = coordinator
@@ -959,6 +967,7 @@ class MonitoringPhase(ManagedStepPhase):
                 shape = f"{int(latent_shape[-2])}x{int(latent_shape[-1])}"
 
         notify_step(self._on_step, state.step, loss_value, shape)
+        self._cache_thrash_observe(shape)
 
         if self._monitor is None and not self._profile:
             return state

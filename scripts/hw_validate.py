@@ -148,6 +148,37 @@ def make_on_step(jsonl_path: Path, probe: MemProbe, state: dict):
     return on_step, fh
 
 
+class _Tee:
+    """Writes to the real stdout and to a file, and is still a stdout.
+
+    Minimal on purpose: it has to behave like the stream it replaces for the
+    `print(..., flush=True)` calls the nodes make and for anything that reads
+    `sys.stdout.fileno()`, or the tee itself becomes the bug. `isatty` and
+    `fileno` delegate to the real stream rather than guessing.
+    """
+
+    def __init__(self, real, handle):
+        self._real = real
+        self._handle = handle
+
+    def write(self, data):
+        self._handle.write(data)
+        return self._real.write(data)
+
+    def flush(self):
+        self._handle.flush()
+        return self._real.flush()
+
+    def isatty(self):
+        return self._real.isatty()
+
+    def fileno(self):
+        return self._real.fileno()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def summarize(jsonl_path: Path) -> dict:
     rows = [json.loads(line) for line in jsonl_path.read_text().splitlines() if line.strip()]
     steady = [r for r in rows if not r.get("covers_load") and "dt_sec" in r]
@@ -170,6 +201,126 @@ def summarize(jsonl_path: Path) -> dict:
                                "drift": round(reserved[-1] - reserved[0], 1) if len(reserved) > 1 else None},
     }
     return out
+
+
+# --------------------------------------------------------- fixed holdout eval
+#
+# Answers the one question a step time cannot: does a setting change *what the
+# model learned*? A run's own loss is measured on whatever it happened to
+# train on, so comparing the bucketed run's loss to the unbucketed run's
+# compares two different sets of samples at two different shapes -- it cannot
+# distinguish "bucketing damaged the model" from "bucketing changed the data".
+#
+# So the holdout is built FIRST, from a loader with bucketing off, and is
+# byte-identical between runs: the same samples, the same noise, the same t,
+# the same conditioning. The RNG is reseeded immediately before building it,
+# so the identity does not depend on how much randomness the training run
+# happened to consume first (which differs between arms by construction).
+# `holdout_digest` in summary.json is the check: if the two arms disagree on
+# it, the comparison's premise is broken and the numbers mean nothing.
+
+
+def build_fixed_holdout(args, ctx, batches: int, seed: int) -> list[dict]:
+    """`batches` unpadded batches, fixed, with no gradient anywhere.
+
+    Unpadded and it stays that way: the loader is built with
+    shape_bucket_multiple=0 whatever this run trains with, and shuffle=False so
+    the sample order cannot depend on the run. Each batch's tensors are copied
+    out of the loader's own objects, because the loader redraws noise on every
+    iteration and these have to survive more than one pass.
+    """
+    import torch
+    from nodes.dataset.managed import ManagedDatasetSourceNode
+
+    # Reseed immediately before, so the holdout depends only on `seed` and not
+    # on anything drawn before this point.
+    random.seed(seed)
+    torch.manual_seed(seed)
+    source = ManagedDatasetSourceNode(ctx).build(
+        dataset_root=args.dataset, batch_size=args.batch, shuffle=False,
+        keep_incomplete_batches=True, shape_bucket_multiple=0)["batches"]
+    holdout = []
+    for batch in source:
+        if batch.get("valid_mask") is not None:
+            raise AssertionError(
+                "the holdout must be unpadded, but this batch carries a "
+                "valid_mask -- the loader was not built with "
+                "shape_bucket_multiple=0")
+        holdout.append({
+            "x_t": batch["x_t"].clone(),
+            "target": batch["target"].clone(),
+            "t": batch["t"].clone(),
+            "prompt": batch["prompt"],
+        })
+        if len(holdout) >= batches:
+            break
+    return holdout
+
+
+def holdout_digest(holdout: list[dict]) -> str:
+    """A short digest of the holdout's contents, so two runs can prove they
+    evaluated the same thing instead of assuming it. Hashes the bytes of every
+    tensor plus the prompt, so any difference in sample, noise, t or caption
+    shows up as a different digest."""
+    import hashlib
+    h = hashlib.sha256()
+    for item in holdout:
+        h.update(item["prompt"].encode("utf-8"))
+        for key in ("x_t", "target", "t"):
+            tensor = item[key].detach().to("cpu").contiguous()
+            h.update(key.encode("ascii"))
+            h.update(str(tuple(tensor.shape)).encode("ascii"))
+            h.update(tensor.numpy().tobytes())
+    return h.hexdigest()[:16]
+
+
+def evaluate_holdout(holdout: list[dict], model, text_encoder, process,
+                     device: str) -> dict:
+    """Unweighted MSE per holdout batch, and the mean.
+
+    Deliberately the *plain* masked-mean expression with no loss weighting and
+    no LoRA gate: this is a fixed yardstick for comparing two runs, so it must
+    not itself depend on the run's weighting, and the gate is a training-time
+    device that has no meaning at inference. Both are stated in the report so
+    the number is not mistaken for "the run's loss".
+
+    Forward only, under no_grad, and the optimizer is never touched: this
+    measures the model as training left it.
+    """
+    import torch
+    from nodes.model.lora import lora_gate_override
+
+    model.eval()
+    per_batch = []
+    try:
+        with torch.no_grad(), lora_gate_override(None):
+            for item in holdout:
+                x_t = item["x_t"].to(device=device, dtype=torch.bfloat16)
+                target = item["target"].to(device=device, dtype=torch.bfloat16)
+                t = item["t"].to(device=device, dtype=torch.long).view(-1)
+                _, sigma = process.schedule.alpha_sigma(t)
+                xc = process.input_transform.scale_input(x_t, sigma)
+                # Unpadded by construction, so the size is x_t's own shape --
+                # the same call the trainer makes when no mask is present.
+                ctx_emb, y = text_encoder.encode(
+                    item["prompt"], batch_size=x_t.shape[0],
+                    height=x_t.shape[2] * 8, width=x_t.shape[3] * 8)
+                pred = model.forward(
+                    xc, t, ctx_emb.to(device=device, dtype=torch.bfloat16),
+                    y.to(device=device, dtype=torch.bfloat16))
+                mse = float((pred.float() - target.float()).pow(2).mean())
+                per_batch.append({"shape": [int(x_t.shape[-2]), int(x_t.shape[-1])],
+                                  "mse": mse})
+    finally:
+        model.train()
+    values = [b["mse"] for b in per_batch]
+    return {
+        "batches": len(values),
+        "mse_mean": sum(values) / len(values) if values else None,
+        "mse_min": min(values) if values else None,
+        "mse_max": max(values) if values else None,
+        "per_batch": per_batch,
+    }
 
 
 # ------------------------------------------------------------------ graphs
@@ -258,6 +409,7 @@ def run_main_route(args, ctx) -> str:
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,
         lr_schedule=schedule, steps=args.steps, resource_control=control,
         on_step=args._on_step, profile=args.profile)
+    _score_holdout_if_asked(args, model, encoder, ctx)
     return load_stats
 
 
@@ -313,7 +465,53 @@ def run_managed_route(args, ctx) -> str:
         probe_items=getattr(args, "probe_items", 2),
         probe_points_per_bucket=getattr(args, "probe_points_per_bucket", 2),
         probe_grad_alignment=getattr(args, "probe_grad_alignment", False))
+    # After training, so the model is scored as training left it. The encoder
+    # may have been offloaded by the residency controller, so it is brought
+    # back before use rather than assumed resident.
+    if getattr(args, "_holdout", None):
+        from nodes.model.resources_controller import ResourcesControllerNode
+        control.ensure_loaded("text_encoder")
+        _score_holdout_if_asked(args, trainer.unet, trainer.clip, ctx)
     return load_stats
+
+
+def _score_holdout_if_asked(args, model, text_encoder, ctx) -> None:
+    """Evaluate the fixed holdout after training, into summary.json.
+
+    A no-op unless --holdout-batches was given, so every existing invocation
+    of this harness behaves exactly as before.
+
+    The diffusion process is rebuilt rather than taken from the trainer: it is
+    a frozen configuration dataclass with no state the run mutated, and the
+    trainer node does not expose it. It is built with **the trainer node's own
+    defaults, copied** (ManagedLoRATrainerNode.build's
+    `inputs.get("diffusion_process") or DiffusionProcess(...)` line) -- using
+    anything else here would quietly score on a different input transform than
+    the run trained with, and the number would mean nothing.
+    """
+    if not getattr(args, "_holdout", None):
+        return
+    from nodes.components.diffusion import (DiffusionProcess,
+                                            DiscreteLinearNoiseSchedule,
+                                            EpsParameterization,
+                                            KarrasInputScaler)
+    process = DiffusionProcess(DiscreteLinearNoiseSchedule(), EpsParameterization(),
+                               KarrasInputScaler())
+    report = evaluate_holdout(args._holdout, model, text_encoder, process,
+                              device="xpu")
+    args._summary["holdout"] = {
+        "digest": args._holdout_digest,
+        "seed": args.holdout_seed,
+        "unweighted_mse_note": (
+            "plain mean squared error over a fixed unpadded holdout, no loss "
+            "weighting and no LoRA gate, forward-only -- a yardstick that does "
+            "not depend on the run's configuration, so it is comparable "
+            "between runs"),
+        **report,
+    }
+    print(f"  [holdout] mse mean {report['mse_mean']:.6f} over "
+          f"{report['batches']} batch(es) "
+          f"(min {report['mse_min']:.6f}, max {report['mse_max']:.6f})")
 
 
 # ------------------------------------------------------------------ driver
@@ -397,7 +595,27 @@ def main() -> None:
     common.add_argument("--shape-bucket-multiple", type=int, default=0,
                         help="0 = off; N > 1 pads each latent up to the next "
                              "multiple of N (32 collapses non-square's 44 "
-                             "shapes to 3 for +15%% compute)")
+                             "shapes to 3, measured 1.83x over 150 steps, at "
+                             "+1%% per step and 13.3%% mean pad -- run with "
+                             "--holdout-batches before believing the speed "
+                             "number is free)")
+    common.add_argument(
+        "--holdout-batches", type=int, default=0,
+        help="after training, evaluate the model on this many FIXED unpadded "
+             "batches and record the unweighted MSE in summary.json (0 = off). "
+             "The holdout is built before training, with bucketing off and "
+             "shuffle off, so two runs with the same --holdout-seed score "
+             "byte-identical inputs; summary.json's holdout.digest is how they "
+             "prove it. This is the only comparison here that can tell "
+             "'the setting changed the data' from 'the setting changed the "
+             "model' -- a run's own loss cannot, because it is measured on "
+             "whatever that run happened to train on")
+    common.add_argument(
+        "--holdout-seed", type=int, default=99991,
+        help="seed for the fixed holdout, deliberately different from --seed "
+             "so the holdout's samples and noise are not correlated with the "
+             "training draw; the holdout is reseeded with this immediately "
+             "before it is built, so its contents depend on it alone")
     common.add_argument("--keep-incomplete-batches", action="store_true",
                         help="keep samples in (prompt, size) groups smaller than a "
                              "batch, as smaller batches, instead of dropping them. "
@@ -482,6 +700,21 @@ def main() -> None:
     on_step, fh = make_on_step(jsonl_path, probe, {"t_prev": None, "probes": args._probes})
     args._on_step = on_step
 
+    # stdout is teed into console.log for the whole run. The file is listed in
+    # this script's own docstring as one of the three outputs and was never
+    # written -- so the node-side reports (the dataset node's bucketing pad
+    # fractions, the residency controller's calibration line, the prewarm
+    # summary) existed only in the terminal scrollback, which a later analysis
+    # run cannot read. Found by an analysis script reading `pad fraction` out
+    # of it and getting nothing.
+    #
+    # Tee, not redirect: these prints are operator-facing and this script's
+    # output is how a driver loop sees progress. Replacing sys.stdout would
+    # keep the file and lose the terminal.
+    log_fh = (out_dir / "console.log").open("w", errors="replace")
+    real_stdout = sys.stdout
+    sys.stdout = _Tee(real_stdout, log_fh)
+
     config = {k: v for k, v in vars(args).items() if not k.startswith("_")}
     config.update({
         "route": args.route,
@@ -492,10 +725,23 @@ def main() -> None:
                             if torch.xpu.is_available() else None),
     })
     summary = {"config": config, "outcome": None}
+    args._summary = summary
 
     t0 = time.monotonic()
     try:
         ctx = ExecutionContext()
+        # The holdout is built BEFORE training, and its digest recorded, so two
+        # runs can prove they scored the same thing rather than assume it. It
+        # is built here rather than inside a route builder because it is a
+        # property of the run, not of a route.
+        args._holdout = None
+        args._holdout_digest = None
+        if args.holdout_batches > 0:
+            args._holdout = build_fixed_holdout(
+                args, ctx, args.holdout_batches, args.holdout_seed)
+            args._holdout_digest = holdout_digest(args._holdout)
+            print(f"  [holdout] {len(args._holdout)} fixed unpadded batch(es), "
+                  f"digest {args._holdout_digest}")
         if args.route == "main":
             load_stats = run_main_route(args, ctx)
         else:
@@ -520,6 +766,10 @@ def main() -> None:
             summary["run_aggregates"] = summarize(jsonl_path)
         except Exception as exc:  # noqa: BLE001
             summary["run_aggregates"] = {"error": str(exc)}
+        # Restore stdout before the final report, so the summary line lands in
+        # the terminal even if the log file has become unwritable.
+        sys.stdout = real_stdout
+        log_fh.close()
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     print(f"\n=== hw_validate [{args.label}] outcome={summary['outcome']} "

@@ -418,7 +418,61 @@ class OptimizerStepPhase(StepPhase):
         return state
 
 
-class MonitoringPhase(StepPhase):
+class CacheThrashMixin:
+    """One time source and one print, for both routes' MonitoringPhase.
+
+    The detector (nodes/train/cache_thrash.py) compares the median time of a
+    step that *repeats* the previous shape against one that *revisits* a shape
+    it has seen before, and warns once when the second is much slower. That is
+    the measured signature of a oneDNN primitive cache too small for this run's
+    shapes (4.34x on the B580 at capacity 1024 with 44 shapes, and the ratio
+    went to 0.99x when the capacity was raised), and it is worth naming
+    because the sizing constant it depends on came from one configuration that
+    rank, DoRA, target selection and optimizer strategy all invalidate.
+
+    Kept as a mixin rather than duplicated in the two MonitoringPhase classes
+    because the two are deliberate re-implementations of each other (the
+    managed route's own module docstring says so), and a diagnostic that
+    exists on one route and not the other is worse than none: it looks like
+    the other route was checked.
+
+    The duration measured is wall time since this phase last ran, which is the
+    whole step -- MonitoringPhase is the last phase, so consecutive calls are
+    one step apart. Nothing else in either route already has it: timing_ms
+    only exists when profiling is on, and a detector that silently did
+    nothing in an unprofiled run would be exactly the wrong failure for a
+    diagnostic.
+    """
+
+    def _cache_thrash_init(self) -> None:
+        from .cache_thrash import PrimitiveCacheThrashDetector
+        self._cache_thrash = PrimitiveCacheThrashDetector()
+        self._cache_thrash_last = time.monotonic()
+
+    def _cache_thrash_observe(self, shape) -> None:
+        from .cache_thrash import format_warning
+        # Self-healing, because a diagnostic that can raise is worse than no
+        # diagnostic: several of this project's own tests construct a
+        # MonitoringPhase without running __init__ (they set the handful of
+        # attributes the phase under test needs and call run() directly), and
+        # a version that assumed the constructor had run failed all six of
+        # them with AttributeError on a None detector. Built on demand instead.
+        if getattr(self, "_cache_thrash", None) is None:
+            self._cache_thrash_init()
+        now = time.monotonic()
+        seconds = now - self._cache_thrash_last
+        self._cache_thrash_last = now
+        self._cache_thrash.observe(shape, seconds)
+        warning = format_warning(self._cache_thrash)
+        if warning is not None:
+            # print, not logging, for the same reason the loader's notices and
+            # the residency controller's lines are printed: an operator has to
+            # see this and act on it, and nothing in this project configures
+            # logging, so a message nobody can see is not a warning.
+            print(warning)
+
+
+class MonitoringPhase(CacheThrashMixin, StepPhase):
     """Builds and sends/prints the same report the old _run_step's tail
     built inline. Always last, never TimedPhase-wrapped -- report-
     building/printing overhead was never counted in the old step_total_ms
@@ -467,6 +521,7 @@ class MonitoringPhase(StepPhase):
                  coordinator=None, optimizer_id: str = "",
                  usable_budget_mb: Optional[float] = None,
                  bucket_balance=None):
+        self._cache_thrash_init()
         self._total_steps = total_steps
         self._device_ctx = device_ctx
         self._on_step = on_step
@@ -507,6 +562,7 @@ class MonitoringPhase(StepPhase):
                 shape = f"{int(latent_shape[-2])}x{int(latent_shape[-1])}"
 
         notify_step(self._on_step, state.step, loss_value, shape)
+        self._cache_thrash_observe(shape)
 
         timing = state.extras.get("timing_ms")
         mem = None

@@ -82,6 +82,7 @@ from ..model.text_encoder import TextEncoder
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import FusedOptimizerHandle, OptimizerHandle, describe_optimizer
 from .loss import LossWeighting, UniformLossWeighting, t_bucket_losses
+from .bucket_sizes import encode_with_true_sizes
 from .node import TrainerNode
 from .schedule import LRSchedule
 from .step_pipeline import _phase_label
@@ -500,9 +501,17 @@ class EncodeConditioningPhase(ManagedStepPhase):
             self._log("loaded")
         x_t = state.extras["x_t"]
         batch = state.batch
-        batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
-        ctx_emb, y = self._text_encoder.encode(
-            batch["prompt"], batch_size=x_t.shape[0], height=batch_h, width=batch_w)
+        # True sizes when the dataset padded (shape bucketing), the padded
+        # size otherwise -- same correction and same reason as
+        # nodes/train/step_pipeline.py's EncodeConditioningPhase, which this
+        # route deliberately re-implements rather than shares. The mask
+        # decides, not x_t: for a bucketed batch x_t's shape is the
+        # *bucket*, so conditioning from it tells the model the padded
+        # extent is the real one. No mask = no padding = the old call,
+        # byte-identical.
+        ctx_emb, y = encode_with_true_sizes(
+            self._text_encoder, batch["prompt"], x_t.shape[0], x_t,
+            state.extras.get("valid_mask"))
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         if self._controller.should_release("text_encoder"):

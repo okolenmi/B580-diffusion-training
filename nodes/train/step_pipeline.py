@@ -46,6 +46,7 @@ from ..memory.profile import ResourceProfile
 from ..monitor.handle import MonitorHandle
 from ..optimizer.handle import OptimizerHandle
 from .loss import LossWeighting, t_bucket_losses
+from .bucket_sizes import encode_with_true_sizes
 from .step_notify import notify_step
 from .schedule import LRSchedule
 
@@ -261,9 +262,14 @@ class EncodeConditioningPhase(StepPhase):
 
         x_t = state.extras["x_t"]
         batch = state.batch
-        batch_h, batch_w = x_t.shape[2] * 8, x_t.shape[3] * 8
-        ctx_emb, y = self._text_encoder.encode(batch["prompt"], batch_size=x_t.shape[0],
-                                                height=batch_h, width=batch_w)
+        # True sizes when the dataset padded (shape bucketing), the padded
+        # size otherwise. The mask decides, not x_t: for a bucketed batch
+        # x_t's shape is the *bucket*, so conditioning from it tells the
+        # model the padded extent is the real one. No mask = no padding =
+        # the old call, byte-identical.
+        ctx_emb, y = encode_with_true_sizes(
+            self._text_encoder, batch["prompt"], x_t.shape[0], x_t,
+            state.extras.get("valid_mask"))
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         return state

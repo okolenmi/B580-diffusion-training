@@ -242,10 +242,27 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
         if max_batches is not None and seen_batches > max_batches:
             reason = StopReason.MAX_BATCHES
             break
-        height = batch["x_t"].shape[2] * 8
-        width = batch["x_t"].shape[3] * 8
+        # Derive the resolution keys exactly the way
+        # nodes/train/bucket_sizes.py's encode_with_true_sizes() asks for
+        # them at encode time. For an unbucketed batch that is the padded
+        # shape (there is no padding), and for a bucketed one it is the
+        # per-sample true extent from the mask -- because warming the
+        # *padded* size would warm keys training never asks for, while the
+        # true sizes it does ask for went cold and each miss re-loads CLIP.
+        # A batch of one true size yields one key per distinct size, and the
+        # count in the key is how many rows that size fills, matching
+        # TextEncoder.encode_per_sample()'s grouping.
         prompt_key = (batch["prompt"], batch["x_t"].shape[0])
-        key = (prompt_key[0], prompt_key[1], height, width)
+        valid_mask = batch.get("valid_mask")
+        if valid_mask is None:
+            sizes = [(batch["x_t"].shape[2] * 8, batch["x_t"].shape[3] * 8,
+                      prompt_key[1])]
+        else:
+            from ..train.bucket_sizes import true_sizes_from_mask
+            import collections as _collections
+            per_size = _collections.Counter(
+                true_sizes_from_mask(valid_mask))
+            sizes = [(h, w, n) for (h, w), n in per_size.items()]
         # Counted on the **whole key**, resolution included -- and that is a
         # correction, not the obvious choice. A new resolution is cheap to
         # warm (1.6 ms against a prompt's 30 ms), which is what made it look
@@ -254,11 +271,19 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
         # alone at batch 65 missed 43 of them -- and a *missed* key costs
         # ~790 ms, because the miss self-loads CLIP. Cheap to warm and cheap
         # to miss are different things, and only the first one is true.
-        if key in unique_keys:
-            stale_batches += 1
-        else:
-            unique_keys.add(key)
+        #
+        # "Stale" is now per *batch*, not per key: a bucketed batch asks for
+        # several sizes at once, and a batch that introduced a new size is
+        # not stale no matter how many of its sizes were repeats.
+        fresh = [s for s in sizes
+                 if (prompt_key[0], prompt_key[1], s[0], s[1], s[2])
+                 not in unique_keys]
+        if fresh:
+            for h, w, n in sizes:
+                unique_keys.add((prompt_key[0], prompt_key[1], h, w, n))
             stale_batches = 0
+        else:
+            stale_batches += 1
         prompt_keys.add(prompt_key)
         threshold = None
         if stop_after_no_new_prompts is not None:
@@ -325,8 +350,15 @@ def warm_and_unload(cached: CachingTextEncoder, discovery: Discovery) -> int:
     host RAM (621 KB each, summed exactly by `cache_bytes()`).
     """
     keys = discovery.keys
-    prompt_keys = sorted({(p, bs) for p, bs, _, _ in keys})
-    resolution_keys = sorted({(h, w, bs) for _, bs, h, w in keys})
+    # Key layout is (prompt, batch_size, height, width, count): `count` is
+    # how many rows of that batch the size fills, which is what
+    # TextEncoder.encode_per_sample()'s grouping asks
+    # resolution_embedding() for and therefore what CachingTextEncoder keys
+    # its resolution half on. Warming through encode() below reaches
+    # encode_per_sample() with one size repeated `count` times, so it fills
+    # exactly that key.
+    prompt_keys = sorted({(p, bs) for p, bs, _, _, _ in keys})
+    resolution_keys = sorted({(h, w, n) for _, _, h, w, n in keys})
     capacity = prompt_capacity()
     warmable = prompt_keys[:capacity]
     skipped = len(prompt_keys) - len(warmable)
@@ -344,6 +376,13 @@ def warm_and_unload(cached: CachingTextEncoder, discovery: Discovery) -> int:
     # of them misses. The rest go through `warm_prompts`, which batches.
     cached.encode(warmable[0][0], warmable[0][1],
                   resolution_keys[0][0], resolution_keys[0][1])
+    # `warmable[0][1]` is a *prompt* batch size; the setup call above only
+    # needs some resolution key to exist so the device is set up, and fills
+    # (h, w, warmable[0][1]) whether or not any batch ever asks for that
+    # count. Harmless -- an unused entry costs ~0.3 KB of host RAM and the
+    # loop below overwrites nothing -- but stated rather than left to look
+    # deliberate, because it is the one key here not derived from a dataset
+    # key.
     setup = time.monotonic() - started
     started = time.monotonic()
     # Grouped by batch_size because that is part of the cache key, so one
@@ -358,8 +397,16 @@ def warm_and_unload(cached: CachingTextEncoder, discovery: Discovery) -> int:
         cached.warm_prompts(group, batch_size)
     prompt_time = time.monotonic() - started
     started = time.monotonic()
-    for height, width, batch_size in resolution_keys:
-        cached.encode(warmable[0][0], warmable[0][1], height, width)
+    for height, width, count in resolution_keys:
+        # Repeated `count` times and passed as *its own* batch_size: the
+        # length of `sizes` must equal batch_size
+        # (TextEncoder.encode_per_sample checks it), and more to the point
+        # `count` is the batch size of the batch this key came from, so this
+        # is the exact call training makes for that batch's slice of it. The
+        # prompt half is a hit by now, so the prompt is only there to be
+        # looked up.
+        cached.encode_per_sample(warmable[0][0], count,
+                                 [(height, width)] * count)
     resolution_time = time.monotonic() - started
     cached_bytes = getattr(cached, "cache_bytes", lambda: 0)()
     cached.unload()

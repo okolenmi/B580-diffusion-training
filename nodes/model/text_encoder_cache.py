@@ -201,7 +201,7 @@ class CachingTextEncoder(TextEncoder):
             self._resolution_cache.popitem(last=False)
         return res_emb
 
-    def encode(self, prompt: str, batch_size: int, height: int, width: int):
+    def encode_per_sample(self, prompt: str, batch_size: int, sizes):
         """Both cache keys checked *before* either half loads: a full
         miss (both halves cold) calls ensure_loaded() exactly once, not
         once per half. ensure_loaded() with the encoder already resident
@@ -214,23 +214,51 @@ class CachingTextEncoder(TextEncoder):
         redesign moved ensure into each half (c703aa6 edited the test,
         not this class), and is now one again for real: the halves keep
         their own per-miss ensure for direct callers (they're public
-        interface; base TextEncoder.encode() is the only in-repo path,
-        which is why this override can suppress the duplicates for the
-        duration of the call -- see _ensured_for_encode).
+        interface; the base class's encode()/encode_per_sample() are the
+        only in-repo paths, which is why this override can suppress the
+        duplicates for the duration of the call -- see
+        _ensured_for_encode).
+
+        **This is the override `encode()` no longer needs, and it replaces
+        it rather than sitting beside it.** The base `TextEncoder.encode()`
+        is now `encode_per_sample()` with one size repeated
+        batch_size times, so an `encode()` reaches this method through
+        normal dispatch -- and because `resolution_embedding()` is asked
+        for (height, width, count-of-samples-at-that-size), the key set
+        computed here is *identical* to what the old `encode()` override
+        computed for a uniform batch: one `(height, width, batch_size)`.
+        Keeping an `encode()` override as well would only mean this guard
+        ran twice per call, nesting its own flag.
+
+        The per-size loop means a mixed batch checks *every* (height,
+        width, count) it will ask for, not just one -- any of them
+        missing is a miss that has to bring CLIP back, so the honest test
+        is "did anything I am about to request miss".
         """
         if self._resource_control is not None:
             prompt_miss = (prompt, batch_size) not in self._prompt_cache
-            resolution_miss = (height, width, batch_size) not in self._resolution_cache
+            resolution_miss = any(
+                (int(h), int(w), len(idx)) not in self._resolution_cache
+                for (h, w), idx in self._group_by_size(sizes).items())
             if prompt_miss or resolution_miss:
                 self._resource_control.ensure_loaded(self._resource_name)
             self._ensured_for_encode = True
         try:
-            return super().encode(prompt, batch_size, height, width)
+            return super().encode_per_sample(prompt, batch_size, sizes)
         finally:
             # Restored even if the inner encoder raises: a flag stuck True
             # would make every later *direct* half call skip its own
             # ensure_loaded() and touch an offloaded encoder.
             self._ensured_for_encode = False
+
+    @staticmethod
+    def _group_by_size(sizes) -> dict:
+        """The base class's own grouping, not a second copy of it: this
+        override checks the keys it is about to request, and a second
+        implementation of the loop would be free to drift into checking a
+        key it never fills -- which fails as a silent cache miss, not an
+        error."""
+        return TextEncoder._group_by_size(sizes)
 
     def unload(self) -> None:
         self._inner.unload()

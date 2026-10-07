@@ -42,9 +42,67 @@ class TextEncoder(DeviceResident, ABC):
         the only reason it needed to become two pieces, but this default
         keeps calling it exactly this way meaning exactly what it always
         meant for every other caller."""
+        return self.encode_per_sample(
+            prompt, batch_size, [(height, width)] * batch_size)
+
+    @staticmethod
+    def _group_by_size(sizes) -> dict:
+        """(height, width) -> the sample rows it fills, in order.
+
+        Coercing each component with `int()` rather than indexing it is
+        deliberate on both counts: a caller deriving sizes from a tensor
+        hands over 0-dim tensors, which are not subscriptable at all, and
+        `hash(torch.tensor(512)) != hash(512)`, so without the coercion the
+        same size reached through two routes would be two cache keys. It is
+        also what CachingTextEncoder reuses to check the keys it is about
+        to request, so that check and this request cannot drift apart.
+        """
+        by_size: dict[tuple[int, int], list[int]] = {}
+        for i, (height, width) in enumerate(sizes):
+            # int() on each component rather than a tuple(...) or a dict
+            # lookup of the pair: a caller that derived sizes from a mask
+            # hands over 0-dim tensors, which are not subscriptable, and
+            # hash(torch.tensor(512)) != hash(512) anyway.
+            by_size.setdefault((int(height), int(width)), []).append(i)
+        return by_size
+
+    def encode_per_sample(self, prompt: str, batch_size: int, sizes):
+        """`encode()` for a batch whose samples do NOT all share one size.
+
+        `sizes` is one (height, width) pair per sample, in order. The
+        returned `y` carries each sample's own resolution embedding on its
+        own row, where `encode()` puts the same one on every row. This is
+        the one place either of them assembles `y`, so the two cannot
+        disagree about what a resolution embedding contributes to it.
+
+        `resolution_embedding()` is asked for one (height, width, count) at
+        a time rather than per sample, so a batch of N samples at one size
+        costs the same single call `encode()` always made, and only a
+        genuinely mixed batch asks more than once. Grouping by *count* as
+        well as by size is what keeps CachingTextEncoder's key meaningful:
+        its resolution key includes batch_size, so asking count=1 per
+        sample would be a different -- and far more numerous -- set of keys
+        than anything else in the codebase asks for.
+        """
         ctx, pooled = self.encode_prompt_only(prompt, batch_size)
-        res_emb = self.resolution_embedding(height, width, batch_size)
         import torch
+        if len(sizes) != batch_size:
+            raise ValueError(
+                f"encode_per_sample: got {len(sizes)} size(s) for a batch of "
+                f"{batch_size}; every sample needs exactly one (height, "
+                f"width) or the rows of y cannot be lined up with it")
+        by_size = self._group_by_size(sizes)
+        rows: list = [None] * batch_size
+        for (height, width), idx in by_size.items():
+            # One call per distinct size, at the number of rows it fills.
+            # `resolution_embedding` repeats its own row, so this block is
+            # exactly the tensor `encode()` would have produced for a
+            # same-sized batch of this many -- spread back onto the samples
+            # that asked for it.
+            block = self.resolution_embedding(height, width, len(idx))
+            for slot, row in zip(idx, block.unbind(0)):
+                rows[slot] = row
+        res_emb = torch.stack(rows, dim=0)
         return ctx, torch.cat([pooled, res_emb], dim=-1)
 
     @abstractmethod

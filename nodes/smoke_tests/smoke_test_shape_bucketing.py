@@ -21,6 +21,17 @@ for "off by default" to mean anything:
 
 (3) is the one that would survive review and still be wrong, so it is checked
 against an analytically-known case rather than a recorded number.
+
+**Conditioning** (the last block of checks) is a separate bug with the same
+cause and a worse failure mode. Both trainers read the size off x_t's shape,
+which for a bucketed batch is the *bucket*, and told the UNet one resolution
+for the whole batch. So a 520x480 image padded into a 768x512 bucket was
+described as 768x512 -- and since a bucket mixes true sizes by construction,
+that was every batch of every bucketed run, not a corner of it. Measured on
+`non-square` at batch 4 with a multiple of 32, 10 of the first 10 batches had
+mixed true sizes. The mask already carries the real extent, so the checks
+below require the conditioning to come from it and to be byte-identical to
+before when there is no mask at all.
 """
 
 import sys
@@ -31,8 +42,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 
 from manager.loader import ManagedDatasetLoader
+from nodes.model.text_encoder import TextEncoder
+from nodes.model.text_encoder_cache import CachingTextEncoder
+from nodes.train.bucket_sizes import (encode_with_true_sizes,
+                                      true_sizes_from_mask)
 from nodes.train.step_pipeline import LossPhase
 from nodes.train.loss import UniformLossWeighting
+
+
+class _RecordingControl:
+    """ResourceControlHandle stand-in that only records ensure_loaded().
+
+    Real enough for the property under test: CachingTextEncoder calls
+    ensure_loaded() *before* touching the inner encoder on a miss, and
+    counts of those calls are what a cache-key mismatch looks like from the
+    outside (an extra call is a reload the cache was supposed to avoid).
+    """
+
+    def __init__(self):
+        self.ensure_loaded_calls: list[str] = []
+
+    def ensure_loaded(self, name):
+        self.ensure_loaded_calls.append(name)
+
+
+def _discovered_keys(loader):
+    """The (prompt, batch_size, height, width, count) keys text-encoder
+    prewarm would find for this dataset -- the real discovery pass, not a
+    re-derivation of it, so a change to the production code cannot be
+    dodged by the test computing the same thing differently."""
+    from nodes.model.text_encoder_prewarm import discover_dataset_keys
+    return discover_dataset_keys(loader, max_batches=1000).keys
 
 
 def check(condition: bool, message: str):
@@ -40,11 +80,12 @@ def check(condition: bool, message: str):
         raise AssertionError(message)
 
 
-def _loader(multiple: int, dataset: str = "non-square") -> ManagedDatasetLoader:
+def _loader(multiple: int, dataset: str = "non-square",
+           shuffle: bool = True) -> ManagedDatasetLoader:
     from paths import resolve_safe_dataset_path
     return ManagedDatasetLoader(
         dataset_root=resolve_safe_dataset_path(dataset),
-        batch_size=2, shuffle=True, shape_bucket_multiple=multiple)
+        batch_size=2, shuffle=shuffle, shape_bucket_multiple=multiple)
 
 
 def _all_batches(multiple: int):
@@ -212,6 +253,260 @@ def check_no_mask_key_means_the_original_expression():
     print("    PASS")
 
 
+# --- conditioning of padded samples ---------------------------------------
+#
+# A bucketed batch's conditioning used to be derived from x_t's shape, which
+# is the *bucket*: every sample in a 96x64 bucket was described to the UNet
+# as 768x512 regardless of its real extent. Measured on `non-square` at
+# batch 4 with a multiple of 32, that was true of **10 of the first 10
+# batches** -- a bucket mixes true sizes by construction, so this was not an
+# edge case, it was every batch of every bucketed run.
+
+
+class _RecordingEncoder(TextEncoder):
+    """Minimal TextEncoder whose resolution embedding is a *readable* function
+    of (height, width), so a wrong row is a wrong number rather than a wrong
+    number nobody can attribute."""
+
+    def __init__(self):
+        self.calls: list[tuple[int, int, int]] = []
+
+    def encode_prompt_only(self, prompt, batch_size):
+        g = torch.Generator().manual_seed(len(prompt))
+        return (torch.randn(batch_size, 77, 4, generator=g),
+                torch.zeros(batch_size, 2))
+
+    def resolution_embedding(self, height, width, batch_size):
+        self.calls.append((height, width, batch_size))
+        # One column, the size encoded as a single number, so a test can read
+        # each row of y back as the (h, w) the model was told.
+        return torch.full((batch_size, 1), float(height) * 10000 + float(width))
+
+    def unload(self): ...
+    def offload(self): ...
+    def reload(self): ...
+    def release(self): ...
+    def footprint_bytes(self): return 0
+
+
+def _rows_of(y) -> list[tuple[int, int]]:
+    """Read each row of y back as the (height, width) it encodes."""
+    return [(int(v) // 10000, int(v) % 10000) for v in y[:, -1].tolist()]
+
+
+def _mask_for(h, w, H, W, top=0, left=0, channels=4):
+    """A (1, channels, H, W) mask with the real region placed at (top, left) --
+    the random-offset shape the loader actually emits."""
+    m = torch.zeros(1, channels, H, W)
+    m[:, :, top:top + h, left:left + w] = 1.0
+    return m
+
+
+def check_true_sizes_come_from_the_mask():
+    print("[true sizes are recovered from the mask's valid region, not from "
+          "the padded shape -- and not assuming the region starts at 0,0]")
+    # (B, C, H, W) -> (B, H, W) -> the bounding box of the non-zero region,
+    # in pixels (latent * 8, the VAE factor).
+    m = torch.cat([_mask_for(6, 8, 9, 8, top=1, left=0),      # 48x64
+                   _mask_for(9, 8, 9, 8)], 0)                  # 72x64, no pad
+    got = true_sizes_from_mask(m)
+    check(got == [(48, 64), (72, 64)],
+          f"expected [(48, 64), (72, 64)] from the mask's extents, got {got}")
+    print(f"    {got}")
+    # A mask that is not (B, C, H, W) must not silently produce something:
+    # the loader emits 4 channels, but a batch merged from (1, 4, H, W)
+    # samples has B of them, and the channel count is not the point.
+    m1 = torch.cat([_mask_for(6, 8, 9, 8, top=1, channels=1),
+                    _mask_for(9, 8, 9, 8, channels=1)], 0)
+    check(true_sizes_from_mask(m1) == [(48, 64), (72, 64)],
+          "one-channel masks must give the same answer as four-channel ones")
+    print("    PASS")
+
+
+def check_an_all_zero_mask_is_refused():
+    print("[an all-zero mask is refused, not turned into a 0x0 resolution "
+          "embedding -- that would be a plausible-looking wrong value "
+          "fed straight into the UNet]")
+    mask = torch.zeros(1, 4, 8, 8)
+    try:
+        true_sizes_from_mask(mask)
+    except ValueError as e:
+        check("all-zero" in str(e), f"unhelpful refusal: {e}")
+        print(f"    PASS: {str(e).split('.')[0]}")
+        return
+    raise AssertionError("an all-zero mask produced a size instead of "
+                         "refusing: the loader cannot emit one, so this means "
+                         "the mask did not come from the loader")
+
+
+def check_a_padded_sample_is_conditioned_by_its_true_size():
+    print("[the bug itself: a padded sample's conditioning equals what the "
+          "SAME sample gets unpadded]")
+    prompt = "a cat"
+    # Unpadded: a 6x8 latent, described as 48x64.
+    enc = _RecordingEncoder()
+    x_plain = torch.zeros(1, 4, 6, 8)
+    _, y_plain = encode_with_true_sizes(enc, prompt, 1, x_plain, None)
+    check(_rows_of(y_plain) == [(48, 64)],
+          f"unpadded 6x8 latent should be conditioned as 48x64, got "
+          f"{_rows_of(y_plain)}")
+
+    # Same sample, padded up to a 9x8 bucket (72x64). Its mask says 6x8 is
+    # real, so its conditioning must be 48x64 -- the number above.
+    enc2 = _RecordingEncoder()
+    x_pad = torch.zeros(1, 4, 9, 8)
+    mask = _mask_for(6, 8, 9, 8, top=2)
+    _, y_pad = encode_with_true_sizes(enc2, prompt, 1, x_pad, mask)
+    check(_rows_of(y_pad) == [(48, 64)],
+          f"a 6x8 sample padded into a 9x8 bucket was conditioned as "
+          f"{_rows_of(y_pad)}, not 48x64 -- the padded shape leaked in")
+    check(torch.equal(y_plain, y_pad),
+          f"padded {y_pad.tolist()} != unpadded {y_plain.tolist()} for the "
+          f"same sample")
+    print(f"    padded batch shape {tuple(x_pad.shape[-2:])} -> "
+          f"{_rows_of(y_pad)}, identical to the unpadded run")
+    print("    PASS")
+
+
+def check_a_mixed_bucket_gives_different_rows():
+    print("[samples of different true sizes in one bucket get different rows "
+          "-- one value for the whole batch is the bug's other half]")
+    mask = torch.cat([_mask_for(6, 8, 9, 8, top=1),     # 48x64
+                      _mask_for(7, 8, 9, 8, top=0),     # 56x64
+                      _mask_for(9, 8, 9, 8)], 0)        # 72x64, no padding
+    x_t = torch.zeros(3, 4, 9, 8)                       # all one bucket
+    _, y = encode_with_true_sizes(_RecordingEncoder(), "p", 3, x_t, mask)
+    rows = _rows_of(y)
+    check(rows == [(48, 64), (56, 64), (72, 64)],
+          f"expected one row per true size, got {rows}")
+    check(len(set(rows)) == 3,
+          f"rows must differ per sample, got {rows}")
+    # And the order must be the batch's order, not sorted or grouped.
+    mask2 = torch.cat([_mask_for(9, 8, 9, 8), _mask_for(6, 8, 9, 8)], 0)
+    _, y2 = encode_with_true_sizes(_RecordingEncoder(), "p", 2, x_t[:2], mask2)
+    check(_rows_of(y2) == [(72, 64), (48, 64)],
+          f"rows must follow batch order, got {_rows_of(y2)}")
+    print(f"    {rows}")
+    print("    PASS")
+
+
+def check_the_unbucketed_path_is_byte_identical():
+    print("[no mask = no padding = the exact tensors encode() always "
+          "returned, byte for byte -- not merely close]")
+    torch.manual_seed(0)
+    for (h, w) in ((6, 8), (12, 12), (9, 8)):
+        x_t = torch.zeros(2, 4, h, w)
+        enc_a, enc_b = _RecordingEncoder(), _RecordingEncoder()
+        _, via_helper = encode_with_true_sizes(enc_a, "p", 2, x_t, None)
+        _, via_encode = enc_b.encode("p", 2, h * 8, w * 8)
+        check(torch.equal(via_helper, via_encode),
+              f"{h}x{w}: unbucketed path changed -- "
+              f"{via_helper.tolist()} != {via_encode.tolist()}")
+        # ...and it must have asked the encoder exactly the one call it
+        # always did, so no extra device work appears in every step.
+        check(enc_a.calls == [(h * 8, w * 8, 2)],
+              f"{h}x{w}: expected one resolution_embedding call, got "
+              f"{enc_a.calls}")
+    print("    PASS: identical tensors, identical call count")
+
+
+def check_both_trainers_use_the_correction():
+    print("[both trainer routes use it, and neither reads x_t's shape as the "
+          "sample's size]")
+    import inspect
+    from nodes.train import managed, step_pipeline
+    for mod, cls in ((step_pipeline, "EncodeConditioningPhase"),
+                     (managed, "EncodeConditioningPhase")):
+        src = inspect.getsource(getattr(mod, cls).run)
+        check("encode_with_true_sizes" in src,
+              f"{mod.__name__}.{cls} must condition from the mask")
+        check("x_t.shape[2] * 8" not in src and "x_t.shape[2]*8" not in src,
+              f"{mod.__name__}.{cls} still derives the size from the padded "
+              f"shape")
+    # The helper is the single place that knows the rule, so a third route
+    # cannot re-derive it wrongly without this failing.
+    import nodes.train.bucket_sizes as bs
+    check(bs.encode_with_true_sizes.__doc__ is not None,
+          "the helper must carry the rule, not just implement it")
+    print("    PASS")
+
+
+def check_the_cache_key_matches_what_is_requested():
+    print("[CachingTextEncoder checks the keys it will request -- a key "
+          "checked but not filled is a silent permanent cache miss]")
+    inner = _RecordingEncoder()
+    control = _RecordingControl()
+    cache = CachingTextEncoder(inner, resource_control=control)
+    cache.encode_per_sample("p", 2, [(480, 640), (560, 640)])
+    first = len(control.ensure_loaded_calls)
+    check(first == 1,
+          f"a both-cold per-sample encode must ensure_loaded once, got {first}")
+    cache.encode_per_sample("p", 2, [(480, 640), (560, 640)])
+    check(len(control.ensure_loaded_calls) == first,
+          "a repeat of the same mixed batch re-loaded the encoder: the "
+          "resolution keys checked are not the ones filled")
+    # A new size at the same count is a resolution miss only.
+    cache.encode_per_sample("p", 2, [(480, 640), (720, 640)])
+    check(len(control.ensure_loaded_calls) == first + 1,
+          "a new size must be one more ensure_loaded")
+    # int sizes and 0-dim tensors must be the same key, or a caller that
+    # derives sizes from a mask never hits a key warmed from plain ints.
+    inner2 = _RecordingEncoder()
+    control2 = _RecordingControl()
+    cache2 = CachingTextEncoder(inner2, resource_control=control2)
+    cache2.encode_per_sample("p", 2, [(480, 640), (480, 640)])
+    calls_before = len(inner2.calls)
+    cache2.encode_per_sample(
+        "p", 2, [(torch.tensor(480), torch.tensor(640)),
+                 (torch.tensor(480), torch.tensor(640))])
+    check(len(inner2.calls) == calls_before,
+          f"tensor sizes made a different cache key: {inner2.calls}")
+    print("    PASS")
+
+
+def check_prewarm_derives_the_keys_training_asks_for():
+    print("[text-encoder prewarm discovers the TRUE sizes, so a bucketed "
+          "dataset does not warm keys training never asks for while the ones "
+          "it does ask for go cold -- each miss re-loads CLIP]")
+    # shuffle=False here, and deliberately: with bucketing the loader groups
+    # by (prompt, neg_prompt, bucketed size) and drops incomplete groups, so
+    # two different shuffles of `non-square` do not train the same samples
+    # and a second shuffle legitimately contains a size the first does not.
+    # Comparing discovery against a reference pass needs the same pass.
+    keys = _discovered_keys(_loader(32, shuffle=False))
+    sizes = {(h, w) for _, _, h, w, _ in keys}
+    padded = {(96 * 8, 64 * 8), (64 * 8, 64 * 8), (80 * 8, 64 * 8)}
+    check(sizes != padded,
+          f"discovery returned only the {len(padded)} padded bucket sizes, so "
+          f"the true sizes training asks for would all miss")
+    check(len(sizes) > len(padded),
+          f"expected the true sizes, got {len(sizes)}")
+    # Every discovered key must be one a real batch actually asks for, or
+    # warming spends its budget on entries nothing reads.
+    asked = set()
+    for batch in _loader(32, shuffle=False):
+        if batch.get("valid_mask") is None:
+            asked.add((batch["x_t"].shape[2] * 8, batch["x_t"].shape[3] * 8))
+        else:
+            asked.update(true_sizes_from_mask(batch["valid_mask"]))
+    check(sizes <= asked,
+          f"discovery invented sizes no batch asks for: "
+          f"{sorted(sizes - asked)[:4]}")
+    check(sizes == asked,
+          f"discovery missed sizes batches ask for: "
+          f"{sorted(asked - sizes)[:4]}")
+    # And the unbucketed case must be untouched: the same keys as before.
+    plain = _discovered_keys(_loader(0, shuffle=False))
+    plain_sizes = {(h, w) for _, _, h, w, _ in plain}
+    plain_padded = {(tuple(b["x_t"].shape[-2:])) for b in _loader(0, shuffle=False)}
+    check(plain_sizes == {(h * 8, w * 8) for h, w in plain_padded},
+          "the unbucketed discovery keys changed")
+    print(f"    bucketed: {len(sizes)} true sizes "
+          f"(vs {len(padded)} padded buckets); unbucketed: "
+          f"{len(plain_sizes)}, unchanged")
+    print("    PASS")
+
+
 def main():
     check_off_is_unchanged()
     check_on_collapses_the_shape_count()
@@ -221,6 +516,14 @@ def main():
     check_masking_does_not_rescale_the_loss()
     check_an_all_ones_mask_is_a_no_op()
     check_no_mask_key_means_the_original_expression()
+    check_true_sizes_come_from_the_mask()
+    check_an_all_zero_mask_is_refused()
+    check_a_padded_sample_is_conditioned_by_its_true_size()
+    check_a_mixed_bucket_gives_different_rows()
+    check_the_unbucketed_path_is_byte_identical()
+    check_both_trainers_use_the_correction()
+    check_the_cache_key_matches_what_is_requested()
+    check_prewarm_derives_the_keys_training_asks_for()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

@@ -299,25 +299,53 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 
 ## Pending
 
-- **[2026-10-07] shape bucketing's default, now that (c) has been reported.**
-  `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
+- **[2026-10-07] shape bucketing's default, and *which* multiple — the earlier
+  quality measurement was void.** `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
 
-  Measured on a fixed, byte-identical evaluation set across arms: a multiple of
-  16 and a multiple of 32 are indistinguishable from not bucketing, and a
-  multiple of **24 is worse on 16 of 16 batches** (paired sign test,
-  p ≈ 1.5e-5; +0.45% mean MSE). x32 is 1.56x faster with peak memory unchanged.
+  **The first sweep's quality numbers do not stand.** The managed trainer
+  route's `LossPhase` ignored the bucketing mask entirely, so bucketed runs
+  scored and trained on the padding *and* had loss and gradient scaled by the
+  valid fraction — a 25%-padded batch trained at 0.75x effective rate.
+  `hw_validate.py managed` is the route every bucketing measurement was taken
+  on. Fixed in `0a7f6a2`; the five runs are at `/tmp/opencode/void_runs/`. Their
+  throughput survives (the bug was in the loss, not the shapes); no quality
+  conclusion does, including "a multiple of 24 is measurably worse".
 
-  Not defaulted on, deliberately, and the measurement is weaker than it first
-  reads. It is a **fit** metric, not a held-out one — the 31 scored images are
-  training images — and the arms differed in data coverage as well as padding
-  (unbucketed trained on 242 distinct images, bucketed on 270-272, and left 2 of
-  the 31 unseen). "+0.45%" is a statement about a number, not about whether
-  x24's images look worse. The durable lesson is unaffected: **pad fraction
-  predicts the cost, bucket count does not** — x24 reaches fewer shapes than x32
-  while padding nearly twice as much, so a policy chosen by shape count would
-  pick the worst of the three.
+  **What survives is arithmetic, and it is the actionable part.** Both axes are
+  rounded up independently, so the multiple must divide the dataset's modal
+  side. `non-square`'s modal width is 64 latent (512 px), 204 of 273 samples;
+  64 divides 8, 16 and 32 and neither 24 nor 48. Measured consequences:
 
-  Also open: a genuinely held-out split, and a sample-count-matched comparison.
+  | mult | preserves width 64 | padded on both axes | mean pad | SDXL buckets |
+  |---|---|---|---|---|
+  | x8 | 210/273 | 0% | 4.8% | 3/13 |
+  | x16 | 242/273 | 0% | 10.5% | 3/7 |
+  | **x24** | **0/273** | **93%** | 25.1% | **0/5** |
+  | x32 | 246/273 | 0% | 13.3% | 3/3 |
+  | **x48** | **0/273** | **94%** | 50.6% | 0/3 |
+
+  So there is no universally good multiple: 24 and 48 are bad *here* only
+  because they do not divide 64, and the ranking would invert on a dataset
+  whose modal width were 72. x32 also happens to land every bucket on one of
+  SDXL's own training resolutions (512x512, 512x768, 768x512) and x24 on none.
+
+  Four mechanisms fit the void sweep equally — total pad, two-axis padding,
+  modal-width preservation, SDXL-bucket affinity — and x32 is good on all four
+  while x24 is bad on all four, which is why one comparison could not
+  separate them. x8 / x48 / x64 are queued to. One loose end argues against
+  the bucket hypothesis: x16 is 43% non-SDXL shapes and showed no degradation,
+  where a graded in-distribution effect predicts it should sit between x32 and
+  x24.
+
+  The cleanest separator would be **cropping to SDXL buckets** — 100%
+  in-distribution shapes *and* zero padding, which no multiple achieves because
+  padding always introduces a mismatch. `shapes diversity problem/shape_policy.py`
+  implements the cropping half; the loader only pads today.
+
+  Still open: a genuinely held-out split (the metric is a fit metric — the 31
+  scored images are training images), a sample-count-matched comparison, and
+  whether the multiple should become per-axis or whether the build-time report
+  should simply warn when it does not divide the modal side.
 
 - **[2026-10-07] `--attn-ckpt-fraction`, the real version of the
   checkpointing lever.** Turning activation checkpointing **off** is ~1.2x

@@ -140,6 +140,33 @@ primitive-cache thrash on transitions, and one environment variable
 (`ONEDNN_PRIMITIVE_CACHE_CAPACITY`, now 2048) recovers 1.62x of it for free, at
 no host-RAM cost.
 
+**Shipped as an opt-in knob 2026-10-07** (`shape_bucket_multiple`,
+default off), and the table's "+15% compute" turned out to be a bad proxy:
+the measured cost is +1% per step, because compute here is not proportional to
+latent pixel count. x32 on `non-square` is 1.56x over 300 steps with peak
+memory unchanged.
+
+**The part neither this table nor the knob's own docstring had: the multiple
+must divide the dataset's modal side.** Both axes are rounded up
+independently, so a multiple that does not divide the modal width pads the side
+you did not need padded. On `non-square` the modal width is 64 latent
+(512 px), 204 of 273 samples; 64 divides 8, 16 and 32 but neither 24 nor 48,
+and the consequences are not subtle —
+
+| mult | preserves width 64 | padded on **both** axes | mean pad |
+|---|---|---|---|
+| x16 | 242/273 | 0% | 10.5% |
+| **x24** | **0/273** | **93%** | 25.1% |
+| x32 | 246/273 | 0% | 13.3% |
+| **x48** | **0/273** | **94%** | 50.6% |
+
+Padding both axes is the case to avoid: the model sees a noisy border on all
+four sides instead of two, on ~93% of samples. So 24 and 48 are not bad
+multiples, they are bad *on this dataset*; on one whose modal width were 72
+the ranking inverts. Since the knob is a single global integer it cannot
+express the rule, which is why the build-time pad report exists and why
+choosing a multiple is still a judgement call rather than a lookup.
+
 **But do still do it for the first sightings.** The cache fixes *transitions*
 only. First sightings still cost ~3.85 s each, and every graph run is a fresh
 child process (MEM-05), so a 44-shape dataset repays **~164 s per run — about

@@ -1,8 +1,93 @@
 # L2: does shape bucketing cost quality, and which multiple?
 
-Answered by measurement, not argument. Both questions needed a number that did
-not exist before: loss on a **fixed unpadded holdout**, which nothing in the
-project could previously produce.
+> ## EVERY QUALITY NUMBER IN THE "FIRST SWEEP" SECTION BELOW IS VOID
+>
+> Found 2026-10-07, after those runs were taken. The **managed** trainer
+> route's `LossPhase` had no bucketing-mask handling at all: it took a plain
+> mean over the whole canvas, so every bucketed run scored (and trained on) the
+> padding, **and had its loss and gradient scaled by the valid fraction** — a
+> 25%-padded batch trained at 0.75x the effective rate. `hw_validate.py
+> managed` is the route every measurement here was taken on.
+>
+> The fix is `0a7f6a2`. The five first-sweep runs are kept at
+> `/tmp/opencode/void_runs/` rather than deleted, because their **throughput**
+> numbers survive — the bug was in the loss, not in the shapes or the launches
+> — but not one quality conclusion does.
+>
+> The tell was in data this file already contained and read as interesting:
+> bucketed runs' *training* loss was up to 42.7% below unbucketed's while their
+> unpadded evaluation was 0.45% above it. That divergence was not a mechanism.
+> At x24's 25.1% mean pad, the rescaling alone predicts a 0.749x loss ratio
+> against the 0.573x that was measured.
+>
+> **A re-run of all five, plus x8 / x48 / x64, is what this document now
+> waits on.** The analysis sections below are kept because the *shapes* are
+> properties of the dataset and are unaffected — but the verdicts are not.
+
+## What is settled regardless of the loss bug: which shapes each multiple produces
+
+This is arithmetic on the dataset, not a measurement of training, so it stands:
+
+| mult | buckets | latent sides | px buckets | SDXL buckets | pad W | pad H | **2-axis** | mean pad | width kept at 64 |
+|---|---|---|---|---|---|---|---|---|---|
+| off | 63 | 48-96 | — | 2/63 | 0% | 0% | 0% | 0% | 273/273 |
+| x8 | 13 | 48,56,64,72,80,88,96 | 384…768 | 3/13 | 17% | 57% | **0%** | 4.8% | 210/273 |
+| x16 | 7 | 48,64,80,96 | 384…768 | 3/7 | 24% | 63% | **0%** | 10.5% | 242/273 |
+| x24 | 5 | 48,72,96 | 384…768 | **0/5** | **98%** | 95% | **93%** | 25.1% | **0/273** |
+| x32 | 3 | 64,96 | **512×512, 512×768, 768×512** | **3/3** | 25% | 68% | **0%** | 13.3% | 246/273 |
+| x48 | 3 | 48,96 | 384…768 | 0/3 | **99%** | 95% | **94%** | 50.6% | **0/273** |
+| x64 | 3 | 64,128 | 512×512, 512×1024, 1024×512 | 1/3 (3/3 incl. 1024-px sides) | 25% | 69% | **0%** | 23.4% | 246/273 |
+
+**The dataset's modal width is exactly 64 latent (512 px), 204 of 273 samples.**
+64 is divisible by 8, 16 and 32 and by neither 24 nor 48. So:
+
+- **x24 and x48 are the only multiples that never preserve that width** (0 of
+  273 samples keep it) and the only ones that **pad on both axes** (93-94%).
+  Every other multiple pads at most one axis, so content stays full-bleed on
+  one side and the model sees a noisy border on two edges rather than four.
+- **x32 lands every bucket on one of SDXL's own training resolutions** —
+  512×512, 512×768, 768×512 — and x24 lands on none of them.
+
+### The lesson is about the interaction, not the number
+
+24 and 48 are not bad multiples. They are bad *on this dataset*, because its
+modal side is 64 and they do not divide it. On a dataset whose modal width were
+72, x24 would preserve it, x32 would pad it, and the ranking would invert.
+
+The rule that falls out: **prefer a multiple that divides the dataset's modal
+side.** `shape_bucket_multiple` is a single global integer that rounds both
+axes up independently, so it cannot express that — a user who picks 24 has no
+way to learn that they just padded the width of 75% of their dataset. The
+build-time pad report (below) is where that should say so.
+
+### Four candidate mechanisms, and the runs that separate them
+
+x32 is good on all four counts and x24 is bad on all four, which is why the
+first sweep's single comparison could not distinguish anything:
+
+1. **total pad fraction** — 13.3% vs 25.1%
+2. **two-axis padding** — 0% vs 93%
+3. **modal-width preservation** — 246/273 vs 0/273
+4. **SDXL-bucket affinity** — 3/3 vs 0/5
+
+| run | designed to test | prediction if (1) pad dominates | if (4) shapes dominate |
+|---|---|---|---|
+| **x8** | lowest pad (4.8%), 0% two-axis, but 3/13 SDXL buckets | fine | worse |
+| **x64** | high pad (23.4%), width preserved, all SDXL buckets | worse | fine |
+| **x48** | 94% two-axis, 50.6% pad, 0/3 buckets | much worse | worse |
+
+One loose end for mechanism 4, recorded because it argues *against* it: x16 is
+**43% non-SDXL shapes** and showed no degradation in the first sweep at all. A
+graded in-distribution-fraction effect predicts x16 should sit between x32
+(3/3) and x24 (0/5). It did not. A threshold, or a different mechanism
+entirely, fits better.
+
+The cleanest separator is **cropping to SDXL buckets** — 100% in-distribution
+shapes *and* 0% padding, which no multiple can achieve because padding always
+introduces a mismatch. `shapes diversity problem/shape_policy.py` already
+implements the cropping half; the loader only pads today.
+
+---
 
 ## The measurement, and what it actually measures
 
@@ -50,7 +135,10 @@ difference. The raw spread across the 16 batches is **47x** (0.0068 to 0.318) �
 a number that looks like it should swamp a 0.45% effect, and does not, because
 it never enters a paired difference.
 
-## Results: 300 steps, batch 2, seed 1234
+## Results: 300 steps, batch 2, seed 1234 — **VOID, see the banner**
+
+These are the runs that found the managed-route mask bug, so they are kept as
+the record of what was measured on a broken loss rather than as findings.
 
 | run | bucket | buckets | first-sighting s | steps/s | peak MB | pad mean | pad max | **holdout MSE** |
 |---|---|---|---|---|---|---|---|---|
@@ -60,7 +148,14 @@ it never enters a paired difference.
 | `L2_x24` | 24 | 5 | 18.9 | 1.045 | 7,220 | 25.1% | 39.5% | 0.167034 |
 | `L2_x32` | 32 | 3 | 8.9 | **1.076** | 7,220 | 13.3% | 32.3% | 0.166414 |
 
-### (c) Quality: the paired result, and what it does not say
+### (c) Quality — VOID. The paired *method* still stands.
+
+The paired per-batch comparison is still the right way to read this metric, and
+the 16-of-16 result below is what made the x24 signal worth chasing. But every
+number was produced by a run whose loss excluded nothing and was rescaled by
+the valid fraction, so none of it is evidence about bucketing.
+
+
 
 Two runs of the *same* configuration differing only in seed give **0.000258**,
 which is a noise floor but not a test — n=1. The stronger evidence is the

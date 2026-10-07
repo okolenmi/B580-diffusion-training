@@ -425,11 +425,12 @@ class PrepareDiffusionInputsPhase(ManagedStepPhase):
         state.extras["t"] = t
         state.extras["sigma"] = sigma
         state.extras["xc"] = xc
-        # Shape-bucketing validity mask, when the dataset padded (LossPhase
-        # divides by the valid element count rather than the total, so a
-        # padded batch trains at the same scale as an unpadded one). Absent
-        # for every graph that did not ask for bucketing, which is why the
-        # loss keeps its original expression in that case.
+        # Shape-bucketing validity mask, when the dataset padded (this file's
+        # LossPhase divides by the valid element count rather than the total,
+        # so a padded batch trains at the same scale as an unpadded one --
+        # it did not, and the smoke test did not check, until 2026-10-07).
+        # Absent for every graph that did not ask for bucketing, which is why
+        # the loss keeps its original expression in that case.
         if batch.get("valid_mask") is not None:
             state.extras["valid_mask"] = batch["valid_mask"].to(state.device)
 
@@ -638,7 +639,42 @@ class LossPhase(ManagedStepPhase):
         target = state.extras["target"]
         sigma = state.extras["sigma"]
         per_sample = (pred.float() - target.float()).pow(2)
-        per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
+        # Optional shape-bucketing mask. This mirrors the main route's
+        # LossPhase expression-for-expression (nodes/train/step_pipeline.py),
+        # and the reason it has to is not stylistic: **this method had no
+        # mask handling at all**, so a bucketed run through the managed route
+        # -- the route `hw_validate.py managed` drives, and therefore the route
+        # every measurement of shape bucketing in this project was taken on --
+        # took a plain mean over a canvas that is 13-25% padding, and trained
+        # on it. PrepareDiffusionInputsPhase below already stashed the mask and
+        # its comment already claimed this method divided by the valid element
+        # count; neither was true. The smoke test only exercised the main
+        # route's LossPhase, so the suite was green throughout.
+        #
+        # What the unmasked version measured, on the real dataset: a bucketed
+        # run's reported training loss fell by up to 42% relative to the
+        # unbucketed run's -- a run that scores a whole noisy padding region it
+        # is not supposed to be learning from is optimising a different
+        # objective, so its loss is not comparable to an unpadded run's and
+        # says nothing about quality.
+        #
+        # The normalisation matters as much as the exclusion: masking the
+        # squared error and taking a plain mean would rescale every loss by
+        # the valid fraction, so a 13%-padded batch would report ~13% of the
+        # loss and train 7.7x too slowly. Dividing by the valid element count
+        # instead keeps a padded sample on the same scale as an unpadded one.
+        #
+        # Absent key = every element is real, and this reduces to the original
+        # expression exactly, which is every graph that did not ask for
+        # bucketing.
+        mask = state.extras.get("valid_mask")
+        if mask is not None:
+            m = mask.to(dtype=per_sample.dtype).expand_as(per_sample)
+            per_sample = (per_sample * m).view(per_sample.shape[0], -1).sum(dim=1)
+            valid_n = m.view(m.shape[0], -1).sum(dim=1).clamp(min=1.0)
+            per_sample = per_sample / valid_n
+        else:
+            per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
         sigmas = sigma.float().reshape(-1)
         w_bucket = None
         if self._bucket_balance is not None:

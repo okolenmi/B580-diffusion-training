@@ -179,20 +179,38 @@ def check_padding_never_discards_a_pixel():
 
 
 def _loss_for(pred, target, mask=None):
-    """Run the real LossPhase over a synthetic state, returning the loss."""
+    """The main route's LossPhase over a synthetic state, returning the loss.
+
+    Only the main route, because the analytic checks below are about the loss
+    *mathematics*, and check_both_routes_agree() is what holds both routes to
+    it. Routing every analytic case through both would have caught the managed
+    route's missing mask; routing them through one and adding a separate
+    equivalence check would not have, which is exactly what happened.
+    """
+    return _loss_both_routes(pred, target, mask)[0]
+
+
+def _loss_both_routes(pred, target, mask):
+    """(loss, loss) from each route's own LossPhase, on identical inputs."""
+    from nodes.train.managed import LossPhase as ManagedLoss
+    from nodes.train.managed import ManagedStepState
+    from nodes.train.step_pipeline import LossPhase as MainLoss
     from nodes.train.step_pipeline import StepState
 
-    class _Ctx:
-        pass
+    def _fill(state):
+        state.extras["pred"] = pred
+        state.extras["target"] = target
+        state.extras["sigma"] = torch.full((pred.shape[0],), 0.5)
+        if mask is not None:
+            state.extras["valid_mask"] = mask
+        return state
 
-    state = StepState(step=0, batch=None, model=None, device=pred.device)
-    state.extras["pred"] = pred
-    state.extras["target"] = target
-    state.extras["sigma"] = torch.full((pred.shape[0],), 0.5)
-    if mask is not None:
-        state.extras["valid_mask"] = mask
-    return float(LossPhase(UniformLossWeighting()).run(state)
-                 .extras["loss"])
+    main = MainLoss(UniformLossWeighting()).run(
+        _fill(StepState(step=0, batch=None, model=None, device=pred.device)))
+    managed = ManagedLoss(UniformLossWeighting()).run(
+        _fill(ManagedStepState(step=0, batch=None, model=None,
+                              device=pred.device)))
+    return (float(main.extras["loss"]), float(managed.extras["loss"]))
 
 
 def check_the_loss_ignores_padded_elements():
@@ -646,6 +664,64 @@ def check_prewarm_derives_the_keys_training_asks_for():
     print("    PASS")
 
 
+def check_both_routes_agree():
+    print("[the two trainers' LossPhase are the SAME function on the mask -- the "
+          "managed one had none, and every bucketing measurement in this "
+          "project was taken on the managed route]")
+    torch.manual_seed(0)
+    cases = []
+    # analytic cases first: identical content, different pad fractions
+    for pad in (0.0, 0.25, 0.5):
+        pred = torch.zeros(2, 4, 8, 8)
+        target = torch.zeros(2, 4, 8, 8)
+        mask = torch.ones(2, 4, 8, 8)
+        target[:, :, :int(8 * (1 - pad)), :] = 1.0
+        mask[:, :, int(8 * (1 - pad)):, :] = 0.0
+        cases.append((f"pad {pad:.0%}", pred, target, mask))
+    # a real-shaped mask with a random offset, which is what the loader emits
+    m = torch.zeros(2, 4, 12, 8)
+    m[:, :, 3:9, 1:6] = 1.0
+    cases.append(("offset 12x8", torch.randn(2, 4, 12, 8),
+                  torch.randn(2, 4, 12, 8), m))
+    # garbage in the pad region must change nothing. Only the PAD is
+    # corrupted -- adding a constant to `pred` everywhere would corrupt the
+    # real content too, and both routes would (correctly) report a different
+    # number, which is the mistake this check first made.
+    pred = torch.zeros(1, 4, 8, 8)
+    target = torch.zeros(1, 4, 8, 8)
+    target[:, :, :4, :] = 1.0
+    mask = torch.zeros(1, 4, 8, 8)
+    mask[:, :, :4, :] = 1.0
+    pred_corrupt = pred.clone()
+    pred_corrupt[:, :, 4:, :] = 99.0        # pad rows only
+    cases.append(("clean pad", pred, target, mask))
+    cases.append(("corrupt pad", pred_corrupt, target, mask))
+    # and no mask at all, which must reduce to the plain mean
+    cases.append(("no mask", torch.randn(2, 4, 8, 8), torch.randn(2, 4, 8, 8),
+                  None))
+
+    for label, p, t, msk in cases:
+        main_loss, managed_loss = _loss_both_routes(p, t, msk)
+        check(abs(main_loss - managed_loss) < 1e-6,
+              f"{label}: main route {main_loss} != managed route "
+              f"{managed_loss} -- the two LossPhase have drifted, and only one "
+              f"of them is exercised by hw_validate")
+    print(f"    {len(cases)} case(s), both routes agree to 1e-6")
+
+    # The specific failure that shipped: a padded batch whose pad region is
+    # pure garbage must still report the unpadded loss. Unfixed, the managed
+    # route reported a number that moved with the garbage.
+    _, clean_p, clean_t, clean_mask = cases[-3]
+    _, dirty_p, dirty_t, dirty_mask = cases[-2]
+    clean, clean_m = _loss_both_routes(clean_p, clean_t, clean_mask)
+    dirty, dirty_m = _loss_both_routes(dirty_p, dirty_t, dirty_mask)
+    check(abs(clean - dirty) < 1e-6 and abs(clean_m - dirty_m) < 1e-6,
+          f"corrupting the pad moved the managed route's loss "
+          f"({clean_m} -> {dirty_m}); it is still scoring the padding")
+    print(f"    pad corruption moves neither route's loss ({clean:.6f})")
+    print("    PASS")
+
+
 def main():
     check_off_is_unchanged()
     check_on_collapses_the_shape_count()
@@ -655,6 +731,7 @@ def main():
     check_masking_does_not_rescale_the_loss()
     check_an_all_ones_mask_is_a_no_op()
     check_no_mask_key_means_the_original_expression()
+    check_both_routes_agree()
     check_true_sizes_come_from_the_mask()
     check_an_all_zero_mask_is_refused()
     check_a_padded_sample_is_conditioned_by_its_true_size()

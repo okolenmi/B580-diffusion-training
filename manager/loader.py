@@ -185,6 +185,113 @@ class ManagedDatasetLoader:
         W = ((w + m - 1) // m) * m
         return H, W
 
+    def pad_fraction_stats(self) -> Optional[dict]:
+        """Every sample's pad fraction and its distribution, or None when
+        bucketing is off.
+
+        The number an operator needs before turning this on is not "does it
+        pad" but "how much of each image is padding", because a large pad
+        fraction is the permanent cost: the padded region is excluded from
+        the loss but still occupies the compute. Measured on `non-square` at
+        a multiple of 32, it ranges from 0% to 38.9% per sample -- a single
+        average would hide exactly the samples that make a run expensive.
+
+        **Read from the DB metadata, not from the loaded latents**, so this
+        is answerable at build time: `build()` never iterates batches, and
+        loading every latent to measure a ratio that only depends on the
+        stored shape would cost a full dataset read. `_bucket_size` is the
+        same function `_materialize` applies, called here rather than
+        reimplemented, so the reported fraction cannot drift from the one
+        that happens.
+
+        Returns the weighted-over-samples distribution (each sample counted
+        once, not each shape once) plus the per-shape table, since a sample's
+        fraction is a function of its shape and the table is what makes an
+        outlier attributable to a specific image size.
+        """
+        if self.shape_bucket_multiple <= 1:
+            return None
+        by_shape: dict[tuple[int, int, int, int], int] = {}
+        for t in self.trajectories:
+            h, w = t.get("latent_h"), t.get("latent_w")
+            if not h or not w:
+                continue
+            H, W = self._bucket_size(int(h), int(w))
+            key = (int(h), int(w), H, W)
+            by_shape[key] = by_shape.get(key, 0) + 1
+        if not by_shape:
+            return None
+        shapes = []
+        fractions: list[float] = []
+        for (h, w, H, W), n in sorted(by_shape.items()):
+            pad = 1.0 - (h * w) / float(H * W)
+            shapes.append({"latent_hw": (h, w), "bucket_hw": (H, W),
+                           "samples": n, "pad_fraction": pad,
+                           "latent_pixel_factor": (H * W) / float(h * w)})
+            fractions.extend([pad] * n)
+        fractions.sort()
+
+        def pct(p: float) -> float:
+            # Nearest-rank, so a reported percentile is always a value that
+            # actually occurs rather than an interpolation between two.
+            idx = min(len(fractions) - 1,
+                      max(0, int(round(p / 100.0 * len(fractions) + 0.5)) - 1))
+            return fractions[idx]
+
+        n_samples = len(fractions)
+        return {
+            "multiple": self.shape_bucket_multiple,
+            "samples": n_samples,
+            "shapes_in": len({(h, w) for h, w, _, _ in by_shape}),
+            "shapes_out": len({(H, W) for _, _, H, W in by_shape}),
+            "padded_samples": sum(1 for f in fractions if f > 0.0),
+            "distinct_bucketed_shapes": sorted({(H, W) for _, _, H, W in by_shape}),
+            "pad_fraction_min": fractions[0],
+            "pad_fraction_median": pct(50),
+            "pad_fraction_mean": sum(fractions) / n_samples,
+            "pad_fraction_p90": pct(90),
+            "pad_fraction_max": fractions[-1],
+            "latent_pixel_factor": sum(
+                s["latent_pixel_factor"] * s["samples"] for s in shapes) / n_samples,
+            "per_shape": shapes,
+        }
+
+    def report_pad_fraction(self) -> Optional[dict]:
+        """print() pad_fraction_stats() once, for an operator to read.
+
+        print, not logging, for the same reason as the other two notices
+        this class prints (the skipped-trajectory count above and the
+        dropped-incomplete-batch warning): these are numbers a person is
+        meant to see and decide by, this project's convention is stdout, and
+        nothing in it configures logging -- so a measurement nobody can see
+        is not a measurement.
+
+        Per-shape rows rather than one summary line: the fraction is a
+        function of the shape, so the table is the per-sample report (every
+        sample's own number, via its row) *and* the distribution's source.
+        """
+        stats = self.pad_fraction_stats()
+        if stats is None:
+            return None
+        print(f"  [DataLoader] shape bucketing x{stats['multiple']}: "
+              f"{stats['samples']} sample(s), {stats['shapes_in']} shape(s) "
+              f"in -> {stats['shapes_out']} bucket(s) "
+              f"{stats['distinct_bucketed_shapes']}")
+        print(f"  [DataLoader] pad fraction: median "
+              f"{stats['pad_fraction_median']:.1%}, mean "
+              f"{stats['pad_fraction_mean']:.1%}, p90 "
+              f"{stats['pad_fraction_p90']:.1%}, max "
+              f"{stats['pad_fraction_max']:.1%}; "
+              f"{stats['padded_samples']}/{stats['samples']} sample(s) padded; "
+              f"latent pixels x{stats['latent_pixel_factor']:.3f}")
+        for s in stats["per_shape"]:
+            print(f"    {s['latent_hw'][0]:>3}x{s['latent_hw'][1]:<3} -> "
+                  f"{s['bucket_hw'][0]:>3}x{s['bucket_hw'][1]:<3} latent  "
+                  f"{s['samples']:>5} sample(s)  "
+                  f"pad {s['pad_fraction']:>6.1%}  "
+                  f"latent pixels x{s['latent_pixel_factor']:.3f}")
+        return stats
+
     def _apply_bucket(self, x0: torch.Tensor, H: int, W: int
                       ) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Pad (C, h, w) up to (C, H, W); return it with a (H, W) validity mask.

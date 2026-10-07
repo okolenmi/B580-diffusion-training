@@ -212,6 +212,26 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "cover a 44-shape dataset", type(exc).__name__, exc,
             )
 
+        # What bucketing costs this dataset, once, before any step runs: the
+        # pad fraction per sample and its distribution. Reported here because
+        # build() is the only point that knows the dataset's shapes without
+        # having iterated it, and because the permanent cost of the knob is
+        # invisible otherwise -- the one-time saving is in the speed, the
+        # recurring cost is in the padding, and only one of them shows up in
+        # a step time.
+        #
+        # A no-op when bucketing is off, which is the default: there is no
+        # padding to report and the report would only be noise.
+        try:
+            loader.report_pad_fraction()
+        except Exception as exc:  # noqa: BLE001 -- a report is never load's business
+            import logging
+            logging.getLogger(__name__).warning(
+                "could not report bucketing's pad fraction for this dataset "
+                "(%s: %s); training is unaffected either way", type(exc).__name__,
+                exc,
+            )
+
         result = {"batches": ManagedDatasetBatchSource(loader)}
         self.validate_outputs(result)
         return result

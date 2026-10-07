@@ -34,6 +34,7 @@ below require the conditioning to come from it and to be byte-identical to
 before when there is no mask at all.
 """
 
+import collections
 import sys
 from pathlib import Path
 
@@ -81,11 +82,28 @@ def check(condition: bool, message: str):
 
 
 def _loader(multiple: int, dataset: str = "non-square",
-           shuffle: bool = True) -> ManagedDatasetLoader:
+           shuffle: bool = True, keep_incomplete: bool = False
+           ) -> ManagedDatasetLoader:
     from paths import resolve_safe_dataset_path
     return ManagedDatasetLoader(
-        dataset_root=resolve_safe_dataset_path(dataset),
-        batch_size=2, shuffle=shuffle, shape_bucket_multiple=multiple)
+        dataset_root=resolve_safe_dataset_path(dataset), batch_size=2,
+        shuffle=shuffle, keep_incomplete=keep_incomplete,
+        shape_bucket_multiple=multiple)
+
+
+def _every_sample_loader(multiple: int) -> ManagedDatasetLoader:
+    """A loader that yields every sample, for checks about per-sample
+    quantities.
+
+    keep_incomplete=True, because with shuffle=True and batch_size=2 the
+    loader skips a random 3 samples per epoch (its own warning says so), and
+    a check that compares the dataset against the emitted batches would then
+    fail on sampling noise -- two shapes hold only the skipped samples, so
+    they are absent from a shuffled epoch and present in the dataset. That is
+    a real property of the loader and worth knowing, but it is not what these
+    checks are about.
+    """
+    return _loader(multiple, shuffle=True, keep_incomplete=True)
 
 
 def _all_batches(multiple: int):
@@ -464,6 +482,127 @@ def check_the_cache_key_matches_what_is_requested():
     print("    PASS")
 
 
+def check_pad_fraction_report_is_off_unless_asked_for():
+    print("[no pad report when bucketing is off -- the knob is off by default, "
+          "so the common build must print nothing new]")
+    check(_loader(0).pad_fraction_stats() is None,
+          "bucketing off must not produce pad statistics")
+    check(_loader(0).report_pad_fraction() is None,
+          "bucketing off must not print a pad report")
+    print("    PASS")
+
+
+def check_pad_fraction_report_matches_what_is_actually_padded():
+    print("[the reported pad fraction is the fraction the loader really pads "
+          "-- checked against the emitted batches, not against a formula]")
+    for multiple in (16, 24, 32, 64):
+        stats = _loader(multiple).pad_fraction_stats()
+        check(stats is not None, f"x{multiple}: no stats with bucketing on")
+        # Every shape in the report must be one a batch's mask actually
+        # recovers, and every trained shape must be in the report. If the
+        # report used a different rounding than _bucket_size, one of the two
+        # sets would have an element the other lacks.
+        reported = {(s["latent_hw"][0], s["latent_hw"][1])
+                    for s in stats["per_shape"]}
+        trained = set()
+        counts = collections.Counter()
+        for batch in _every_sample_loader(multiple):
+            for h_px, w_px in true_sizes_from_mask(batch["valid_mask"]):
+                trained.add((h_px // 8, w_px // 8))
+                counts[(h_px // 8, w_px // 8)] += 1
+        check(reported == trained,
+              f"x{multiple}: report covers {len(reported)} shape(s), training "
+              f"sees {len(trained)}; "
+              f"{sorted(reported ^ trained)[:4]}")
+        # And the per-shape sample counts must be the real ones, which is the
+        # part a shape-set comparison cannot see.
+        table_counts = {(s["latent_hw"][0], s["latent_hw"][1]): s["samples"]
+                        for s in stats["per_shape"]}
+        check(table_counts == dict(counts),
+              f"x{multiple}: per-shape sample counts disagree with the "
+              f"batches")
+        check(stats["samples"] == sum(counts.values()),
+              f"x{multiple}: sample total {stats['samples']} != "
+              f"{sum(counts.values())}")
+        print(f"    x{multiple}: {stats['shapes_in']} -> {stats['shapes_out']} "
+              f"buckets, {stats['samples']} samples, pad median "
+              f"{stats['pad_fraction_median']:.1%} max "
+              f"{stats['pad_fraction_max']:.1%}")
+    print("    PASS")
+
+
+def check_pad_fraction_arithmetic_is_right():
+    print("[the fraction itself: 1 - real/canvas, per sample, weighted over "
+          "samples rather than over shapes]")
+    # One shape at a time, so the numbers are checkable by hand.
+    loader = _loader(16)
+    stats = loader.pad_fraction_stats()
+    for s in stats["per_shape"]:
+        h, w = s["latent_hw"]
+        H, W = s["bucket_hw"]
+        check(H >= h and W >= w,
+              f"{h}x{w} -> {H}x{W} shrank; bucketing pads up only")
+        want = 1.0 - (h * w) / float(H * W)
+        check(abs(s["pad_fraction"] - want) < 1e-12,
+              f"{h}x{w}: pad fraction {s['pad_fraction']} != {want}")
+        # A sample already on a multiple must report exactly zero, not a
+        # rounding crumb that would show up as "1 padded sample" for a
+        # shape that never padded.
+        if (h, w) == (H, W):
+            check(s["pad_fraction"] == 0.0,
+                  f"{h}x{w} is already a bucket but reports "
+                  f"{s['pad_fraction']} pad")
+    check(stats["padded_samples"] ==
+          sum(s["samples"] for s in stats["per_shape"] if s["pad_fraction"] > 0),
+          "padded_samples must count samples, not shapes")
+    check(0.0 <= stats["pad_fraction_min"] <= stats["pad_fraction_max"] <= 1.0,
+          f"distribution out of range: "
+          f"{stats['pad_fraction_min']}..{stats['pad_fraction_max']}")
+    check(stats["pad_fraction_min"] <= stats["pad_fraction_median"]
+          <= stats["pad_fraction_max"],
+          "median outside [min, max]")
+    check(stats["pad_fraction_median"] <= stats["pad_fraction_p90"]
+          <= stats["pad_fraction_max"],
+          "p90 outside [median, max]")
+    # The mean is over samples, so a shape with many samples must pull it.
+    weighted = sum(s["pad_fraction"] * s["samples"]
+                   for s in stats["per_shape"]) / stats["samples"]
+    check(abs(stats["pad_fraction_mean"] - weighted) < 1e-12,
+          f"mean {stats['pad_fraction_mean']} is not the sample-weighted "
+          f"{weighted}")
+    unweighted = sum(s["pad_fraction"] for s in stats["per_shape"]) / len(
+        stats["per_shape"])
+    check(abs(stats["pad_fraction_mean"] - unweighted) > 1e-9
+          or len(stats["per_shape"]) == 1,
+          "mean is being taken over shapes; the shape sample counts differ, "
+          "so the two cannot coincide")
+    print(f"    mean {stats['pad_fraction_mean']:.4f} = sample-weighted "
+          f"(shape-weighted would be {unweighted:.4f})")
+    print("    PASS")
+
+
+def check_bucketing_cost_is_visible_at_build():
+    print("[build() reports the pad fraction once, before any step -- the "
+          "recurring cost of the knob is invisible in a step time, and only "
+          "the one-time saving shows up there]")
+    import inspect
+    from nodes.dataset.managed import ManagedDatasetSourceNode
+    src = inspect.getsource(ManagedDatasetSourceNode.build)
+    check("report_pad_fraction" in src,
+          "build() must report bucketing's cost, since it is the only point "
+          "that knows the dataset's shapes without iterating it")
+    # Swallowed on failure, like the cache sizing above it: a report must
+    # never be the reason a dataset fails to load.
+    check("except Exception" in src,
+          "the report must not be able to fail a build")
+    # And it must fire only when there is padding to report, so the default
+    # build prints nothing new. The loader side of that is checked above.
+    stats = _loader(32).report_pad_fraction()
+    check(isinstance(stats, dict) and stats["pad_fraction_max"] > 0,
+          "x32 must report a nonzero pad fraction")
+    print("    PASS")
+
+
 def check_prewarm_derives_the_keys_training_asks_for():
     print("[text-encoder prewarm discovers the TRUE sizes, so a bucketed "
           "dataset does not warm keys training never asks for while the ones "
@@ -523,6 +662,10 @@ def main():
     check_the_unbucketed_path_is_byte_identical()
     check_both_trainers_use_the_correction()
     check_the_cache_key_matches_what_is_requested()
+    check_pad_fraction_report_is_off_unless_asked_for()
+    check_pad_fraction_report_matches_what_is_actually_padded()
+    check_pad_fraction_arithmetic_is_right()
+    check_bucketing_cost_is_visible_at_build()
     check_prewarm_derives_the_keys_training_asks_for()
     print()
     print("=" * 60)

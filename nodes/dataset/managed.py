@@ -99,19 +99,25 @@ class ManagedDatasetSourceNode(DataSourceNode):
             visible_when=("t_mode", ("adaptive", "exact"))),
         "shape_bucket_multiple": Port(
             name="shape_bucket_multiple", type=int, required=False, default=0,
-            doc="0 (default) trains on the shapes the dataset actually stores. "
+            doc="0 (default, off) trains on the shapes the dataset stores. "
                 "N > 1 pads each latent up to the next multiple of N, so a "
-                "multi-resolution dataset trains on few shapes: measured on "
-                "`non-square`, a multiple of 32 collapses 63 shapes to 3 for "
-                "+15% latent compute. It pays a one-time cost -- fewer shapes "
-                "means fewer first-sighting compiles, ~3.85 s each -- and a "
-                "permanent one, that compute. Break-even is ~430 steps at "
-                "batch 4 and ~1130 at batch 2, so this is a short-run setting. "
-                "Off by default: it changes which pixels the loss covers and "
-                "the order samples arrive in. The padded region is excluded "
-                "from the loss by a mask, so nothing is trained on padding; "
-                "padding is placed at a random offset so borders do not become "
-                "systematically real.",
+                "multi-resolution dataset trains on few shapes. Measured on "
+                "`non-square` at batch 2: a multiple of 32 collapses 44 shapes "
+                "to 3, cuts first-sighting compiles from 159 s to 12 s, and "
+                "runs 1.83x faster over 150 steps (0.599 -> 1.096 steps/s). "
+                "The permanent cost is small: +1% per step (+0.010 s), well "
+                "under the +15% a latent-pixel count suggests, because compute "
+                "here is not proportional to pixel count. It also trains "
+                "273/273 samples instead of 242/273, since grouping by "
+                "bucketed size empties the incomplete (caption, size) groups "
+                "that were being dropped. Off by default because it changes "
+                "which pixels the loss covers and the order samples arrive in. "
+                "Padded elements are excluded from the loss by a mask -- so "
+                "nothing is trained on padding, and the loss is not rescaled "
+                "by the padded fraction -- and the pad offset is drawn per "
+                "sample so borders do not become systematically real. Pads up, "
+                "never down: cropping to a multiple of 64 would reach a single "
+                "shape by discarding 52% of every image.",
         ),
         "keep_incomplete_batches": Port(
             name="keep_incomplete_batches", type=bool, required=False, default=False,

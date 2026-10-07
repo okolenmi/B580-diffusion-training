@@ -60,10 +60,10 @@ axes up independently, so it cannot express that — a user who picks 24 has no
 way to learn that they just padded the width of 75% of their dataset. The
 build-time pad report (below) is where that should say so.
 
-### Four candidate mechanisms, and the runs that separate them
+### Four candidate mechanisms, and what separated them
 
-x32 is good on all four counts and x24 is bad on all four, which is why the
-first sweep's single comparison could not distinguish anything:
+x32 was good on all four counts and x24 bad on all four, which is why the first
+sweep's single comparison could not distinguish anything:
 
 1. **total pad fraction** — 13.3% vs 25.1%
 2. **two-axis padding** — 0% vs 93%
@@ -76,16 +76,17 @@ first sweep's single comparison could not distinguish anything:
 | **x64** | high pad (23.4%), width preserved, all SDXL buckets | worse | fine |
 | **x48** | 94% two-axis, 50.6% pad, 0/3 buckets | much worse | worse |
 
-One loose end for mechanism 4, recorded because it argues *against* it: x16 is
-**43% non-SDXL shapes** and showed no degradation in the first sweep at all. A
-graded in-distribution-fraction effect predicts x16 should sit between x32
-(3/3) and x24 (0/5). It did not. A threshold, or a different mechanism
-entirely, fits better.
+**x8 and x48 ran; x64 was queued but the elimination is already complete without
+it** (see "What the seven arms settle"). x8 came back fine, killing mechanism 4.
+x48 came back worst while x24 — identical to it on mechanisms 2 and 3 — came
+back fine, killing mechanism 2 and leaving mechanism 1.
 
-The cleanest separator is **cropping to SDXL buckets** — 100% in-distribution
+The cleanest separator had been cropping to SDXL buckets: 100% in-distribution
 shapes *and* 0% padding, which no multiple can achieve because padding always
-introduces a mismatch. `shapes diversity problem/shape_policy.py` already
-implements the cropping half; the loader only pads today.
+introduces a mismatch. `shapes diversity problem/shape_policy.py` implements the
+cropping half; the loader only pads today. It is no longer needed to answer the
+question, but it remains the untested option if pad volume is ever the binding
+constraint.
 
 ---
 
@@ -135,7 +136,56 @@ difference. The raw spread across the 16 batches is **47x** (0.0068 to 0.318) �
 a number that looks like it should swamp a 0.45% effect, and does not, because
 it never enters a paired difference.
 
-## Results: 300 steps, batch 2, seed 1234 — **VOID, see the banner**
+## Results after the fix: 300 steps, batch 2, seed 1234
+
+| run | bucket | buckets | first-sighting s | steps/s | peak MB | pad mean | **holdout MSE** | Δ vs x0 |
+|---|---|---|---|---|---|---|---|---|
+| `L2_x0` | off | 44 | 153.9 | 0.720 | 7,234 | 0% | 0.166322 | — |
+| `L2_x0_b` | off, seed 4321 | 44 | 152.4 | 0.728 | 7,234 | 0% | 0.166765 | **+0.000443** |
+| `L2_x8` | 8 | 13 | 51.8 | 0.948 | 7,232 | 4.8% | 0.166166 | −0.000155 |
+| `L2_x16` | 16 | 7 | 25.3 | 1.020 | 7,232 | 10.5% | 0.166065 | −0.000257 |
+| **`L2_x24`** | 24 | 5 | 18.4 | 1.049 | 7,220 | 25.1% | 0.166569 | +0.000247 |
+| `L2_x32` | 32 | 3 | 8.7 | **1.078** | 7,220 | 13.3% | 0.166188 | −0.000133 |
+| **`L2_x48`** | 48 | 3 | 8.7 | 0.985 | 7,220 | 50.6% | **0.168623** | **+0.002302** |
+
+All seven arms produced digest `087d80cc6b1149f9`.
+
+**The noise control is +0.000443.** Against it, only **x48 is worse** (5.2× the
+control). Every other multiple is within noise, including **x24**, which the
+void sweep called "measurably worse" — that was the loss bug, and it is
+withdrawn.
+
+### What the seven arms settle, by elimination
+
+**The SDXL-bucket hypothesis is dead.** `x8` lands on only **3 of 13** buckets
+and shows no degradation. If affinity to SDXL's training resolutions mattered,
+x8 would be the worst arm and it is among the best.
+
+**Two-axis padding is dead too.** x24 shares *every* one of x48's suspicious
+properties — 0 SDXL buckets, 0 of 273 samples keeping the modal width, 93-94%
+padded on both axes — and differs only in pad volume. It is within noise. So
+those three properties are not what makes x48 bad.
+
+**Pad fraction is the mechanism**, with the threshold between 25% (fine) and 51%
+(worse). That also has a plain reading: at 50.6% pad, half the canvas is noise
+the model is not scored on, so half the compute per step buys nothing and the
+real-pixel batch is halved.
+
+The four hypotheses this document opened with are now one. Pad fraction predicts
+every arm; bucket count, SDXL affinity, two-axis padding and modal-width
+preservation each predict at least one arm backwards.
+
+### Throughput
+
+x32 is **1.50x** (0.720 → 1.078 steps/s) with peak memory unchanged (7,220 vs
+7,234 MB) and first-sighting time cut from 153.9 s to 8.7 s. x16 gives 1.42x at
+the lowest pad that still collapses the shape count. x8 is 1.32x but keeps 13
+buckets, so it pays 51.8 s of compiles to save 32.7.
+
+**x32 is the right default for this dataset** on all three of: throughput, pad
+fraction, and SDXL-bucket alignment.
+
+## Results before the fix — VOID, kept as the record
 
 These are the runs that found the managed-route mask bug, so they are kept as
 the record of what was measured on a broken loss rather than as findings.

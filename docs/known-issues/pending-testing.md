@@ -302,50 +302,52 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 - **[2026-10-07] shape bucketing's default, and *which* multiple — the earlier
   quality measurement was void.** `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
 
-  **The first sweep's quality numbers do not stand.** The managed trainer
-  route's `LossPhase` ignored the bucketing mask entirely, so bucketed runs
-  scored and trained on the padding *and* had loss and gradient scaled by the
-  valid fraction — a 25%-padded batch trained at 0.75x effective rate.
-  `hw_validate.py managed` is the route every bucketing measurement was taken
-  on. Fixed in `0a7f6a2`; the five runs are at `/tmp/opencode/void_runs/`. Their
-  throughput survives (the bug was in the loss, not the shapes); no quality
-  conclusion does, including "a multiple of 24 is measurably worse".
+  **The first sweep's quality numbers did not stand, and re-running them changed
+  the answer.** The managed trainer route's `LossPhase` ignored the bucketing
+  mask entirely, so bucketed runs scored and trained on the padding *and* had
+  loss and gradient scaled by the valid fraction. `hw_validate.py managed` is
+  the route every bucketing measurement was taken on. Fixed in `0a7f6a2`; the
+  five void runs are at `/tmp/opencode/void_runs/`.
 
-  **What survives is arithmetic, and it is the actionable part.** Both axes are
-  rounded up independently, so the multiple must divide the dataset's modal
-  side. `non-square`'s modal width is 64 latent (512 px), 204 of 273 samples;
-  64 divides 8, 16 and 32 and neither 24 nor 48. Measured consequences:
+  Re-run, 300 steps, batch 2, all arms on the same fixed 16-batch evaluation set
+  (digest `087d80cc6b1149f9`), noise control **+0.000443**:
 
-  | mult | preserves width 64 | padded on both axes | mean pad | SDXL buckets |
-  |---|---|---|---|---|
-  | x8 | 210/273 | 0% | 4.8% | 3/13 |
-  | x16 | 242/273 | 0% | 10.5% | 3/7 |
-  | **x24** | **0/273** | **93%** | 25.1% | **0/5** |
-  | x32 | 246/273 | 0% | 13.3% | 3/3 |
-  | **x48** | **0/273** | **94%** | 50.6% | 0/3 |
+  | mult | steps/s | pad mean | MSE | Δ vs x0 | verdict |
+  |---|---|---|---|---|---|
+  | off | 0.720 | 0% | 0.166322 | — | — |
+  | off, seed 2 | 0.728 | 0% | 0.166765 | +0.000443 | ← control |
+  | x8 | 0.948 | 4.8% | 0.166166 | −0.000155 | within noise |
+  | x16 | 1.020 | 10.5% | 0.166065 | −0.000257 | within noise |
+  | x24 | 1.049 | 25.1% | 0.166569 | +0.000247 | **within noise** |
+  | x32 | **1.078** | 13.3% | 0.166188 | −0.000133 | within noise |
+  | x48 | 0.985 | 50.6% | 0.168623 | **+0.002302** | **WORSE, 5.2× noise** |
 
-  So there is no universally good multiple: 24 and 48 are bad *here* only
-  because they do not divide 64, and the ranking would invert on a dataset
-  whose modal width were 72. x32 also happens to land every bucket on one of
-  SDXL's own training resolutions (512x512, 512x768, 768x512) and x24 on none.
+  **"A multiple of 24 is measurably worse" is withdrawn** — that was the loss
+  bug. Only x48 degrades, and only above ~50% pad.
 
-  Four mechanisms fit the void sweep equally — total pad, two-axis padding,
-  modal-width preservation, SDXL-bucket affinity — and x32 is good on all four
-  while x24 is bad on all four, which is why one comparison could not
-  separate them. x8 / x48 / x64 are queued to. One loose end argues against
-  the bucket hypothesis: x16 is 43% non-SDXL shapes and showed no degradation,
-  where a graded in-distribution effect predicts it should sit between x32 and
-  x24.
+  **Four mechanisms fitted the void sweep equally; three are now dead.**
+  SDXL-bucket affinity is dead because x8 lands on 3 of 13 buckets and is fine.
+  Two-axis padding is dead because x24 shares *every* suspicious property of
+  x48 (0 SDXL buckets, 0/273 samples keeping the modal width, 93% two-axis) and
+  differs only in pad volume, and it is fine. **Pad fraction is the
+  mechanism**, threshold somewhere between 25% and 51%. Modal-width preservation
+  is not separately supported and is not needed: pad fraction predicts every arm
+  while each other candidate predicts at least one backwards.
 
-  The cleanest separator would be **cropping to SDXL buckets** — 100%
-  in-distribution shapes *and* zero padding, which no multiple achieves because
-  padding always introduces a mismatch. `shapes diversity problem/shape_policy.py`
-  implements the cropping half; the loader only pads today.
+  **x32 is the right default for this dataset** — 1.50x throughput, peak memory
+  unchanged, 13.3% pad, and every bucket on one of SDXL's own training
+  resolutions. Still not defaulted on: this is a 300-step fit metric on the
+  training images themselves, and the knob changes which pixels the loss covers
+  and the order samples arrive in.
 
-  Still open: a genuinely held-out split (the metric is a fit metric — the 31
-  scored images are training images), a sample-count-matched comparison, and
-  whether the multiple should become per-axis or whether the build-time report
-  should simply warn when it does not divide the modal side.
+  Both axes are nonetheless rounded independently, so the multiple must divide
+  the dataset's modal side — 64 divides 8/16/32 and neither 24 nor 48 — and the
+  knob cannot express that rule. The build-time pad report is where it should
+  say so.
+
+  Still open: a genuinely held-out split, a sample-count-matched comparison,
+  cropping to SDXL buckets as the zero-pad alternative, and whether the multiple
+  should become per-axis.
 
 - **[2026-10-07] `--attn-ckpt-fraction`, the real version of the
   checkpointing lever.** Turning activation checkpointing **off** is ~1.2x

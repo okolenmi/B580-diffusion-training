@@ -207,17 +207,34 @@ def summarize(jsonl_path: Path) -> dict:
 #
 # Answers the one question a step time cannot: does a setting change *what the
 # model learned*? A run's own loss is measured on whatever it happened to
-# train on, so comparing the bucketed run's loss to the unbucketed run's
-# compares two different sets of samples at two different shapes -- it cannot
-# distinguish "bucketing damaged the model" from "bucketing changed the data".
+# train on, so comparing two arms' training losses compares two different sets
+# of samples at two different shapes -- it cannot distinguish "the setting
+# damaged the model" from "the setting changed the data".
 #
-# So the holdout is built FIRST, from a loader with bucketing off, and is
-# byte-identical between runs: the same samples, the same noise, the same t,
+# So the evaluation set is built FIRST, from a loader with bucketing off, and
+# is byte-identical between runs: the same samples, the same noise, the same t,
 # the same conditioning. The RNG is reseeded immediately before building it,
 # so the identity does not depend on how much randomness the training run
 # happened to consume first (which differs between arms by construction).
-# `holdout_digest` in summary.json is the check: if the two arms disagree on
-# it, the comparison's premise is broken and the numbers mean nothing.
+# `holdout.digest` in summary.json is the check: if two arms disagree on it,
+# the comparison's premise is broken and the numbers mean nothing.
+#
+# **It is NOT a held-out set, and the flag name overstates what it measures.**
+# The samples come from the same dataset the model trains on, so this scores
+# *fit*, not generalization. Measured on `non-square` at 16 batches: the set is
+# 31 images, and after 300 steps the bucketed arms had trained on all 31 while
+# an unbucketed arm had trained on 29 -- 6% of the scored set was unseen, and
+# that arm was being *penalised* on it. A name like `--eval-batches` would be
+# honest; the flag keeps its name because it is already in run configs and
+# renaming it would change recorded configuration for no gain. What the number
+# supports is "did training make this set worse", and a genuinely held-out
+# split is still unbuilt.
+#
+# What it DOES support, because the arms are paired: same image, same noise,
+# same t, per batch, so per-batch difficulty cancels in the difference. The
+# raw spread across batches is ~47x on this dataset and never enters a paired
+# difference at all.
+
 
 
 def build_fixed_holdout(args, ctx, batches: int, seed: int) -> list[dict]:
@@ -603,13 +620,14 @@ def main() -> None:
         "--holdout-batches", type=int, default=0,
         help="after training, evaluate the model on this many FIXED unpadded "
              "batches and record the unweighted MSE in summary.json (0 = off). "
-             "The holdout is built before training, with bucketing off and "
-             "shuffle off, so two runs with the same --holdout-seed score "
-             "byte-identical inputs; summary.json's holdout.digest is how they "
-             "prove it. This is the only comparison here that can tell "
-             "'the setting changed the data' from 'the setting changed the "
-             "model' -- a run's own loss cannot, because it is measured on "
-             "whatever that run happened to train on")
+             "Built before training, with bucketing off and shuffle off, so two "
+             "runs with the same --holdout-seed score byte-identical inputs; "
+             "summary.json's holdout.digest is how they prove it. NOT a "
+             "held-out split: the samples come from the training dataset, so "
+             "this measures fit, not generalization. What it does buy is a "
+             "*paired* comparison -- identical image, noise and t per batch, so "
+             "batch difficulty cancels -- which a run's own loss cannot give "
+             "because it is measured on whatever that run happened to train on")
     common.add_argument(
         "--holdout-seed", type=int, default=99991,
         help="seed for the fixed holdout, deliberately different from --seed "

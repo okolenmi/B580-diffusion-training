@@ -302,17 +302,22 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 - **[2026-10-07] shape bucketing's default, now that (c) has been reported.**
   `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
 
-  Measured on a fixed unpadded holdout, with a seed-to-seed control to read
-  against: a multiple of 16 and a multiple of 32 are **within noise** of not
-  bucketing, and a multiple of **24 is measurably worse** (+0.000748, 2.9x the
-  0.000258 control). x32 is 1.56x faster with peak memory unchanged.
+  Measured on a fixed, byte-identical evaluation set across arms: a multiple of
+  16 and a multiple of 32 are indistinguishable from not bucketing, and a
+  multiple of **24 is worse on 16 of 16 batches** (paired sign test,
+  p ≈ 1.5e-5; +0.45% mean MSE). x32 is 1.56x faster with peak memory unchanged.
 
-  Not defaulted on, deliberately. "Within noise at 300 steps" is not "no
-  difference", the measurement is one dataset with one caption, and the
-  remaining arguments for off are unchanged. The x24 result is the durable
-  lesson: **pad fraction predicts the cost, bucket count does not** — x24
-  reaches fewer shapes than x32 while padding nearly twice as much, so a
-  policy chosen by shape count would pick the worst of the three.
+  Not defaulted on, deliberately, and the measurement is weaker than it first
+  reads. It is a **fit** metric, not a held-out one — the 31 scored images are
+  training images — and the arms differed in data coverage as well as padding
+  (unbucketed trained on 242 distinct images, bucketed on 270-272, and left 2 of
+  the 31 unseen). "+0.45%" is a statement about a number, not about whether
+  x24's images look worse. The durable lesson is unaffected: **pad fraction
+  predicts the cost, bucket count does not** — x24 reaches fewer shapes than x32
+  while padding nearly twice as much, so a policy chosen by shape count would
+  pick the worst of the three.
+
+  Also open: a genuinely held-out split, and a sample-count-matched comparison.
 
 - **[2026-10-07] `--attn-ckpt-fraction`, the real version of the
   checkpointing lever.** Turning activation checkpointing **off** is ~1.2x

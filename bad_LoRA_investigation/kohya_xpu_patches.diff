@@ -1,0 +1,154 @@
+diff --git a/library/ipex/__init__.py b/library/ipex/__init__.py
+index 92a88e2..45d60d2 100644
+--- a/library/ipex/__init__.py
++++ b/library/ipex/__init__.py
+@@ -29,46 +29,49 @@ def ipex_init(): # pylint: disable=too-many-statements
+             except Exception:
+                 pass
+             # Replace cuda with xpu:
+-            torch.cuda.current_device = torch.xpu.current_device
+-            torch.cuda.current_stream = torch.xpu.current_stream
+-            torch.cuda.device = torch.xpu.device
+-            torch.cuda.device_count = torch.xpu.device_count
+-            torch.cuda.device_of = torch.xpu.device_of
+-            torch.cuda.get_device_name = torch.xpu.get_device_name
+-            torch.cuda.get_device_properties = torch.xpu.get_device_properties
+-            torch.cuda.init = torch.xpu.init
+-            torch.cuda.is_available = torch.xpu.is_available
+-            torch.cuda.is_initialized = torch.xpu.is_initialized
++            #
++            # Each of the ~90 assignments below is guarded individually.
++            # They were written as one unguarded block, which makes the
++            # hijack all-or-nothing: a single attribute that does not exist
++            # on this torch build aborts the whole sequence, leaving
++            # `torch.cuda` half-swapped -- `is_available()` pointing at XPU
++            # while `torch.Tensor.cuda` is untouched. Code that then reads
++            # the device as CUDA gets "PyTorch is not linked with support
++            # for cuda devices" from a torch that is working perfectly well
++            # on XPU, which is a very misleading error for a hijack that
++            # failed silently rather than loudly.
++            #
++            # torch 2.12 here: `torch.xpu.Optional` no longer exists, and
++            # several of the private names below have moved. Missing names
++            # are skipped; the ones that exist are still redirected, which
++            # is all a hijack needs to be correct.
++            def _mirror(name):
++                """torch.cuda.<name> := torch.xpu.<name>, skipping absences."""
++                try:
++                    setattr(torch.cuda, name, getattr(torch.xpu, name))
++                except AttributeError:
++                    pass
++
++            for _name in (
++                "current_device", "current_stream", "device", "device_count",
++                "device_of", "get_device_name", "get_device_properties", "init",
++                "is_available", "is_initialized", "stream", "Event", "Stream",
++                "is_current_stream_capturing", "set_stream", "streams",
++                "default_generators", "_get_device_index", "StreamContext",
++                "random", "_lazy_init", "_lazy_call",
++            ):
++                _mirror(_name)
++            for _name in ("Optional", "__cached__", "__loader__", "Any", "__doc__",
++                          "__annotations__", "__package__", "__builtins__", "__name__",
++                          "__spec__", "__file__", "torch", "__path__"):
++                _mirror(_name)
++            for _cls in (torch.Tensor, torch.nn.Module):
++                try:
++                    _cls.cuda = _cls.xpu
++                except AttributeError:
++                    pass
+             torch.cuda.is_current_stream_capturing = lambda: False
+-            torch.cuda.stream = torch.xpu.stream
+-            torch.cuda.Event = torch.xpu.Event
+-            torch.cuda.Stream = torch.xpu.Stream
+-            torch.Tensor.cuda = torch.Tensor.xpu
+             torch.Tensor.is_cuda = torch.Tensor.is_xpu
+-            torch.nn.Module.cuda = torch.nn.Module.xpu
+-            torch.cuda.Optional = torch.xpu.Optional
+-            torch.cuda.__cached__ = torch.xpu.__cached__
+-            torch.cuda.__loader__ = torch.xpu.__loader__
+-            torch.cuda.streams = torch.xpu.streams
+-            torch.cuda.Any = torch.xpu.Any
+-            torch.cuda.__doc__ = torch.xpu.__doc__
+-            torch.cuda.default_generators = torch.xpu.default_generators
+-            torch.cuda._get_device_index = torch.xpu._get_device_index
+-            torch.cuda.__path__ = torch.xpu.__path__
+-            torch.cuda.set_stream = torch.xpu.set_stream
+-            torch.cuda.torch = torch.xpu.torch
+-            torch.cuda.__annotations__ = torch.xpu.__annotations__
+-            torch.cuda.__package__ = torch.xpu.__package__
+-            torch.cuda.__builtins__ = torch.xpu.__builtins__
+-            torch.cuda._lazy_init = torch.xpu._lazy_init
+-            torch.cuda.StreamContext = torch.xpu.StreamContext
+-            torch.cuda._lazy_call = torch.xpu._lazy_call
+-            torch.cuda.random = torch.xpu.random
+-            torch.cuda.__name__ = torch.xpu.__name__
+-            torch.cuda.__spec__ = torch.xpu.__spec__
+-            torch.cuda.__file__ = torch.xpu.__file__
+-            # torch.cuda.is_current_stream_capturing = torch.xpu.is_current_stream_capturing
+-
+             if torch_version < version.parse("2.3"):
+                 torch.cuda._initialization_lock = torch.xpu.lazy_init._initialization_lock
+                 torch.cuda._initialized = torch.xpu.lazy_init._initialized
+diff --git a/library/sdxl_model_util.py b/library/sdxl_model_util.py
+index 0613153..0a20b2b 100644
+--- a/library/sdxl_model_util.py
++++ b/library/sdxl_model_util.py
+@@ -273,9 +273,34 @@ def load_models_from_sdxl_checkpoint(model_version, ckpt_path, map_location, dty
+         elif k.startswith("conditioner.embedders.1.model."):
+             te2_sd[k] = state_dict.pop(k)
+ 
++    # A CLIP-L (text encoder 1) stored in HF diffusers layout already carries
++    # the `text_model.` prefix after the container prefix is stripped, i.e.
++    # the checkpoint has
++    #     conditioner.embedders.0.transformer.text_model.encoder.layers.N...
++    # and the strip above leaves `text_model.encoder.layers.N...`, while
++    # `CLIPTextModel` (below) wants `encoder.layers.N...`. Kohya's CLIP-L
++    # path otherwise assumes an OpenCLIP checkpoint, whose keys are
++    # `transformer.resblocks.N.attn.in_proj_weight` -- hence the
++    # `convert_sd_clip` call that does not exist for this shape.
++    #
++    # Symptom without this: `Error(s) in loading state_dict for
++    # CLIPTextModel` listing every key as both unexpected and missing,
++    # which says nothing about the cause. Only applied when the stripped
++    # keys look like diffusers CLIP keys, so OpenCLIP checkpoints are
++    # untouched.
++    if te1_sd and any(k.startswith("text_model.") for k in te1_sd):
++        te1_sd = {k[len("text_model."):] if k.startswith("text_model.") else k: v for k, v in te1_sd.items()}
++        logger.info(f"stripped 'text_model.' from {len(te1_sd)} CLIP-L keys (diffusers-layout CLIP)")
++
+     # 最新の transformers では position_ids を含むとエラーになるので削除 / remove position_ids for latest transformers
+     if "text_model.embeddings.position_ids" in te1_sd:
+         te1_sd.pop("text_model.embeddings.position_ids")
++    # Same key, unprefixed -- present after the diffusers-layout strip above
++    # and not covered by the pop, so it reaches load_state_dict as an
++    # unexpected key. `position_ids` is a registered buffer that newer
++    # transformers derives rather than stores, exactly as the comment above
++    # says, so dropping it is the same fix in the other spelling.
++    te1_sd.pop("embeddings.position_ids", None)
+ 
+     info1 = _load_state_dict_on_device(text_model1, te1_sd, device=map_location)  # remain fp32
+     logger.info(f"text encoder 1: {info1}")
+diff --git a/sdxl_train_network.py b/sdxl_train_network.py
+index a924852..ba861ef 100644
+--- a/sdxl_train_network.py
++++ b/sdxl_train_network.py
+@@ -179,5 +179,18 @@ if __name__ == "__main__":
+     args_util.verify_command_line_training_args(args)
+     args = args_util.read_config_from_file(args, parser)
+ 
++    # `trainer.train()` does `importlib.import_module(args.network_module)` and
++    # then calls `create_network(1.0, dim, alpha, vae, text_encoder, unet,
++    # neuron_dropout=..., **net_kwargs)`. No training script registers a
++    # --network_module argument (only the *_gen_img generators do), so at this
++    # commit args.network_module is undefined and `sdxl_train_network.py`
++    # cannot run at all:
++    #   AttributeError: 'NoneType' object has no attribute 'startswith'
++    #
++    # The module is `networks.lora`, not this file: this file defines only
++    # SdxlNetworkTrainer and setup_parser, and `networks/lora.py` is the one
++    # whose create_network has exactly the signature train_network calls.
++    args.network_module = "networks.lora"
++
+     trainer = SdxlNetworkTrainer()
+     trainer.train(args)

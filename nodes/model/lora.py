@@ -125,6 +125,17 @@ def compute_lora_gate(t: torch.Tensor, train_low: float, train_high: float,
     return torch.sigmoid(dist / max(width, 1e-6))
 
 
+#: Named target sets for LoRAConfig.target_modules.
+#: ATTENTION is this project's historical default. KOHYA_DEFAULT matches what
+#: kohya sd-scripts' default SDXL LoRA adapts (every Linear inside each
+#: Transformer2DModel): 722 modules on SDXL. KOHYA_PLUS is the same UNet set
+#: with the conditioning-path embeddings kept (target_conditioning_path=True,
+#: the default): 722 + time_embed/label_emb = 726 modules on SDXL.
+TARGETS_ATTENTION = ["to_q", "to_k", "to_v", "to_out.0"]
+TARGETS_KOHYA_DEFAULT = TARGETS_ATTENTION + ["ff.net.0.proj", "ff.net.2", "proj_in", "proj_out"]
+TARGETS_KOHYA_PLUS = list(TARGETS_KOHYA_DEFAULT)
+
+
 @dataclass
 class LoRAConfig:
     rank: int = 64
@@ -133,10 +144,31 @@ class LoRAConfig:
     target_modules: Optional[List[str]] = None
     block_weights: Optional[Dict[str, float]] = None
     target_all: bool = False
+    # time_embed.* and label_emb.* sit on the global conditioning path
+    # (emb = time_embed(t) + label_emb(y) is added into EVERY ResBlock).
+    # True keeps the historical behaviour (they are always adapted, 564 modules
+    # on SDXL). False restricts adaptation to attention like kohya / diffusers
+    # LoRA defaults (560 modules). Added as an A/B switch for quality debugging.
+    target_conditioning_path: bool = True
 
     def __post_init__(self):
         if self.target_modules is None:
-            self.target_modules = ["to_q", "to_k", "to_v", "to_out.0"]
+            self.target_modules = list(TARGETS_ATTENTION)
+        elif isinstance(self.target_modules, str):
+            # Convenience for graph/UI ports, which carry strings: a preset name
+            # ("attention", "kohya_default", "kohya_plus") or a comma-separated
+            # pattern list.
+            # "kohya_plus" resolves to the same UNet patterns as
+            # "kohya_default"; the "+" is target_conditioning_path (default
+            # True) keeping time_embed.*/label_emb.*: 726 modules on SDXL
+            # instead of 722.
+            presets = {"attention": TARGETS_ATTENTION, "kohya_default": TARGETS_KOHYA_DEFAULT,
+                       "kohya_plus": TARGETS_KOHYA_PLUS}
+            raw = self.target_modules.strip()
+            self.target_modules = (list(presets[raw]) if raw in presets
+                                   else [t.strip() for t in raw.split(",") if t.strip()])
+            if not self.target_modules:
+                raise ValueError("target_modules string selected no patterns")
 
 
 # ComfyUI SDXL UNet attention structure:
@@ -482,17 +514,23 @@ def _inject_lora(model: nn.Module, config: LoRAConfig, prefix: str = "",
             parent_name = prefix.rpartition(".")[2] if prefix else ""
             is_target = False
 
-            # to_q / to_k / to_v : direct attributes of CrossAttention
-            if name in ("to_q", "to_k", "to_v"):
-                is_target = True
-            # to_out.0 : the first element inside nn.Sequential named "to_out"
-            elif parent_name == "to_out" and name.isdigit() and name == "0":
+            # Honour config.target_modules (it used to be read nowhere: the set
+            # was hard-coded to q/k/v/to_out.0). A pattern matches a layer whose
+            # dotted name equals it or ends with "." + it, so the defaults
+            # ("to_q", "to_k", "to_v", "to_out.0") select exactly the layers the
+            # old hard-coded test did, and "ff.net.0.proj", "ff.net.2",
+            # "proj_in", "proj_out" now select the feed-forward and projection
+            # Linears that kohya's default SDXL LoRA also adapts (722 modules
+            # total instead of 560).
+            if any(full_name == pat or full_name.endswith("." + pat)
+                   for pat in config.target_modules):
                 is_target = True
             # Extra blocks: time_embed and label_emb use segment-boundary match
-            elif (_segment_match(full_name, "time_embed")
-                 or full_name.startswith("time_embed.")
-                 or _segment_match(full_name, "label_emb")
-                 or full_name.startswith("label_emb.")):
+            elif config.target_conditioning_path and (
+                    _segment_match(full_name, "time_embed")
+                    or full_name.startswith("time_embed.")
+                    or _segment_match(full_name, "label_emb")
+                    or full_name.startswith("label_emb.")):
                 is_target = True
             
             # Support targeting ANY linear/conv layer inside a block that has weighting

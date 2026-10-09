@@ -201,6 +201,7 @@ def build_lora_injected_unet(
     use_checkpoint: bool = True,
     adapter_strategy: AdapterStrategy | None = None,
     frozen_weight_store_factory=None,
+    target_conditioning_path: bool = True,
 ) -> ComfyUNetTrainableModel:
     """The real construction logic `ComfyUNetLoRANode.build()` runs --
     extracted so there's exactly one implementation, not one now and a
@@ -240,6 +241,7 @@ def build_lora_injected_unet(
         alpha=_effective_alpha(alpha=alpha, rank=rank, policy=resolved_scaling_policy),
         dropout=dropout,
         target_modules=target_modules,
+        target_conditioning_path=target_conditioning_path,
     )
     wrapper = ComfyUNetWrapper(
         weights.unet_sd,
@@ -292,7 +294,21 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "alpha is the effective value, not this Port's nominal one).",
         ),
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
-        "target_modules": Port(name="target_modules", type=Any, required=False, default=None),
+        "target_modules": Port(
+            name="target_modules", type=Any, required=False, default=None,
+            doc="Which Linear layers get an adapter. None / \"attention\" (historical "
+                "default): to_q, to_k, to_v, to_out.0 (560 modules on SDXL). "
+                "\"kohya_default\": also ff.net.0.proj, ff.net.2, proj_in, proj_out "
+                "(722, what kohya sd-scripts adapts). \"kohya_plus\": same UNet set "
+                "with the conditioning-path embeddings kept (726 with the default "
+                "target_conditioning_path=True). Or a comma-separated list of "
+                "layer-name suffixes. (Before this was wired it was ignored.)"),
+        "target_conditioning_path": Port(
+            name="target_conditioning_path", type=bool, required=False, default=True,
+            doc="True (historical default): also adapt time_embed.* and label_emb.* "
+                "(+4 modules on SDXL, 564 total). False: attention only (560), the "
+                "kohya/diffusers default. A/B switch for LoRA quality debugging.",
+        ),
         "use_checkpoint": Port(
             name="use_checkpoint", type=bool, required=False, default=True,
             doc="Gradient (activation) checkpointing -- trades recompute time for a real "
@@ -343,6 +359,8 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
             adapter_strategy=inputs.get("adapter_strategy"),
             frozen_weight_store_factory=inputs.get("frozen_weight_store"),
+            target_conditioning_path=inputs.get(
+                "target_conditioning_path", self.INPUTS["target_conditioning_path"].default),
         )
         result = {"model": model}
         self.validate_outputs(result)

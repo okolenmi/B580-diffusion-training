@@ -36,3 +36,12 @@
   anywhere in the UI/docs.** The step-counting refactor fixed the mechanism,
   but nothing explains "steps now means real updates, cache/compute cost
   scales with steps*grad_accum" to a new user reading the config file cold.
+
+- **[2026-10-09] LoRA-branch launch micro-optimisation (L5.2) stays
+  unbuilt by measurement.** Best shippable variant saves 0.5% of
+  launches; −7.2% costs up to 2.27% error on the adapter delta (grows
+  with rank); −22.8% needs a bf16 A/B cache whose obvious invalidation
+  key misses this codebase's actual writer (`param.data.copy_()` bumps
+  neither `_version` nor `data_ptr`). Graph capture delivers ~2x with
+  neither cost. Full numbers in `shapes diversity problem
+  2/MEASURED-launch-bound.md` (L5.2 section).

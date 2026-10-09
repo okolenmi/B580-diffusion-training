@@ -160,6 +160,105 @@ def check_capture_is_not_ready_on_cpu():
     print("    PASS")
 
 
+def check_main_route_graph_phase_zeroes_steps_and_reports():
+    print("[main-route graph phase: zeroes in place, steps, reports loss]")
+    from nodes.train.step_pipeline import GraphForwardLossBackwardPhase, StepState
+    torch.manual_seed(3)
+    model = _TinyModel()
+    runner = XPUGraphStepRunner(model, UniformLossWeighting(), "cpu")
+    phase = GraphForwardLossBackwardPhase(runner)
+    xc, t, ctx, y, target, sigma, mask = _inputs()
+    st = StepState(step=0, batch=None, model=model, device="cpu",
+                   extras={"xc": xc, "t": t, "ctx_emb": ctx, "y": y,
+                           "target": target, "sigma": sigma,
+                           "valid_mask": mask})
+    out = phase.run(st)
+    check(out.extras["xpu_graph_how"] == "eager-live",
+          f"on CPU the phase must fall back, got {out.extras.get('xpu_graph_how')}")
+    with torch.no_grad():
+        want = masked_per_sample_mse(model.forward(xc, t, ctx, y),
+                                     target, mask).mean()
+    check(abs(out.extras["loss"].item() - want.item()) < 1e-6,
+          "phase loss differs from the direct expression")
+    check(model.proj.weight.grad is not None
+          and model.proj.weight.grad.abs().sum() > 0,
+          "phase did not leave grads in .grad")
+    # Second run: grads must be zeroed first, not accumulated onto.
+    g1 = model.proj.weight.grad.clone()
+    phase.run(st)
+    g2 = model.proj.weight.grad.clone()
+    check(torch.allclose(g1, g2, atol=1e-6),
+          "second run accumulated onto the first's grads -- zeroing missing")
+    print("    PASS")
+
+
+def check_supervised_node_refuses_fused_graph():
+    print("[main-route node: fused optimizer + graph flag refused at build]")
+    from nodes.core import ExecutionContext
+    from nodes.optimizer.handle import FusedOptimizerHandle
+    from nodes.train.schedule import ConstantLRSchedule
+    from nodes.train.supervised import SupervisedLoRATrainerNode
+
+    class _FakeFused(FusedOptimizerHandle):
+        @property
+        def lr(self):
+            return 1e-4
+
+        def update_lr(self, new_lr):
+            pass
+
+        def step(self, n_steps=1):
+            pass
+
+        def zero_grad(self):
+            pass
+
+        def offload_states_to_cpu(self):
+            pass
+
+        def reload_states_to_device(self, device=None):
+            pass
+
+        def decay_states(self, factor):
+            pass
+
+        def reset_states(self):
+            pass
+
+        def free_states(self):
+            pass
+
+        def begin_step(self, sub_steps=1):
+            pass
+
+        def prepare_next_pass(self):
+            pass
+
+        def footprint_bytes(self):
+            return 0
+
+    class _FakeModel:
+        def train(self):
+            return self
+
+        def trainable_parameters(self):
+            return [torch.zeros(2, 2)]
+
+    node = SupervisedLoRATrainerNode()
+    node.context = ExecutionContext()
+    try:
+        node.build(model=_FakeModel(), batches=iter([]),
+                   optimizer=_FakeFused(), text_encoder=object(),
+                   lr_schedule=ConstantLRSchedule(lr=1e-4), steps=1,
+                   use_xpu_graph=True)
+    except ValueError as e:
+        check("fused" in str(e),
+              f"refusal must name the fused optimizer; got: {e}")
+        print("    PASS")
+        return
+    check(False, "fused optimizer + use_xpu_graph built without refusal")
+
+
 class _FacadeModel:
     """A TrainableModel-shaped façade like ComfyUNetTrainableModel: no
     .modules(), inner nn.Module behind .raw.model."""
@@ -207,6 +306,8 @@ def main():
     check_backward_scale_is_baked()
     check_dropout_is_refused()
     check_dropout_scan_reaches_through_the_facade()
+    check_main_route_graph_phase_zeroes_steps_and_reports()
+    check_supervised_node_refuses_fused_graph()
     check_capture_is_not_ready_on_cpu()
     print()
     print("=" * 60)

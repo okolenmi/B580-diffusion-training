@@ -32,8 +32,8 @@ from ..optimizer.handle import FusedOptimizerHandle, describe_optimizer
 from .loss import UniformLossWeighting
 from .node import TrainerNode
 from .step_pipeline import (BackwardPhase, EncodeConditioningPhase, FetchBatchPhase,
-                             ForwardPhase, LossPhase, MonitoringPhase,
-                             OptimizerBeginStepPhase, OptimizerStepPhase,
+                             ForwardPhase, GraphForwardLossBackwardPhase, LossPhase,
+                             MonitoringPhase, OptimizerBeginStepPhase, OptimizerStepPhase,
                              PrepareDiffusionInputsPhase, StepState, TimedPhase,
                              TrainingStepPipeline, _phase_label)
 
@@ -83,6 +83,16 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "Same parameter, same default, as the legacy pipeline's gate_width "
                 "(core/config_model.py) -- see nodes/model/lora.py's compute_lora_gate for the "
                 "exact formula and a worked numeric example.",
+        ),
+        "use_xpu_graph": Port(
+            name="use_xpu_graph", type=bool, required=False, default=False,
+            doc="L5.3: capture forward+loss+backward into an XPUGraph replay "
+                "per bucket shape (managed-route acceptance: +37% steps/s "
+                "for +1.5 GB). Same runner and contract as the managed "
+                "route -- optimizer step stays in its own phase, unchanged. "
+                "Default False = the eager phases, unchanged. Refused with "
+                "fused optimizers and active Dropout; the model is never "
+                "offloaded on this route, so no pinning needed.",
         ),
         "profile": Port(
             name="profile", type=bool, required=False, default=False,
@@ -194,6 +204,21 @@ class SupervisedLoRATrainerNode(TrainerNode):
             DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
         bucket_balance = inputs.get("bucket_balance")  # None = no rebalancing
+        use_xpu_graph: bool = inputs.get(
+            "use_xpu_graph", self.INPUTS["use_xpu_graph"].default)
+        graph_runner = None
+        if use_xpu_graph:
+            if is_fused:
+                raise ValueError(
+                    "use_xpu_graph is incompatible with a fused optimizer: its "
+                    "update fires inside backward() (per-parameter hooks), which "
+                    "a captured graph cannot replay. Use a non-fused optimizer "
+                    "node with graph capture.")
+            from .xpu_graph_step import XPUGraphStepRunner
+            graph_runner = XPUGraphStepRunner(
+                model, loss_weighting, device,
+                bucket_balance=bucket_balance)
+            graph_runner.refuse_if_unsupported()
 
         # Registered for profile=True's tracked_footprint_mb cross-check
         # (nodes/train/step_pipeline.py's MonitoringPhase) -- not driving
@@ -237,10 +262,13 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 gate_train_high=inputs.get("gate_train_high", self.INPUTS["gate_train_high"].default),
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
             EncodeConditioningPhase(inputs["text_encoder"]),
-            OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused),
-            ForwardPhase(),
-            LossPhase(loss_weighting, bucket_balance=bucket_balance),
-            BackwardPhase(),
+            OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused,
+                                    skip_zero_grad=graph_runner is not None),
+            *( [GraphForwardLossBackwardPhase(graph_runner)]
+               if graph_runner is not None else
+               [ForwardPhase(),
+                LossPhase(loss_weighting, bucket_balance=bucket_balance),
+                BackwardPhase()] ),
             OptimizerStepPhase(optimizer, is_fused),
         ]
         if profile:

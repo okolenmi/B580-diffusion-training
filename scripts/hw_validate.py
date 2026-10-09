@@ -426,7 +426,8 @@ def run_main_route(args, ctx) -> str:
     SupervisedLoRATrainerNode(ctx).build(
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,
         lr_schedule=schedule, steps=args.steps, resource_control=control,
-        on_step=args._on_step, profile=args.profile)
+        on_step=args._on_step, profile=args.profile,
+        use_xpu_graph=getattr(args, "use_xpu_graph", False))
     _score_holdout_if_asked(args, model, encoder, ctx)
     return load_stats
 

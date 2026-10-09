@@ -285,14 +285,22 @@ class OptimizerBeginStepPhase(StepPhase):
     A genuinely separate reason to change from ForwardPhase (a new
     optimizer's begin-step semantics, not a new model architecture)."""
 
-    def __init__(self, optimizer: OptimizerHandle, lr_schedule: LRSchedule, is_fused: bool):
+    def __init__(self, optimizer: OptimizerHandle, lr_schedule: LRSchedule, is_fused: bool,
+                 skip_zero_grad: bool = False):
         self._optimizer = optimizer
         self._lr_schedule = lr_schedule
         self._is_fused = is_fused
+        # L5.3 graph capture: the runner zeroes grads in place at window
+        # start (the optimizer's zero_grad reassigns .grad, which a replay
+        # would write past) -- then this phase only updates the LR.
+        self._skip_zero_grad = skip_zero_grad
 
     def run(self, state: StepState) -> StepState:
         lr = self._lr_schedule.value(state.step)
         self._optimizer.update_lr(lr)
+        if self._skip_zero_grad:
+            state.extras["lr"] = lr
+            return state
         if self._is_fused:
             self._optimizer.begin_step(sub_steps=1)
         else:
@@ -339,12 +347,11 @@ class LossPhase(StepPhase):
         self._bucket_balance = bucket_balance
 
     def run(self, state: StepState) -> StepState:
-        import torch
+        from .loss import apply_loss_weighting, masked_per_sample_mse
 
         pred = state.extras["pred"]
         target = state.extras["target"]
         sigma = state.extras["sigma"]
-        per_sample = (pred.float() - target.float()).pow(2)
         # Optional shape-bucketing mask. When the dataset padded latents up to
         # a bucket size, the padded elements are not image content and must
         # not be trained on; the mask arrives as (B, 1, H, W) and covers
@@ -360,37 +367,21 @@ class LossPhase(StepPhase):
         # Absent key = every element is real, and this reduces to the original
         # expression exactly. That is the un-bucketed case, which is every graph
         # that did not ask for bucketing.
+        #
+        # The reduction itself lives in nodes/train/loss.py
+        # (masked_per_sample_mse + apply_loss_weighting), shared with the
+        # managed route's LossPhase and the XPU-graph runner -- one
+        # implementation, not three matching ones.
         mask = state.extras.get("valid_mask")
-        if mask is not None:
-            m = mask.to(dtype=per_sample.dtype).expand_as(per_sample)
-            per_sample = (per_sample * m).view(per_sample.shape[0], -1).sum(dim=1)
-            valid_n = m.view(m.shape[0], -1).sum(dim=1).clamp(min=1.0)
-            per_sample = per_sample / valid_n
-        else:
-            per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
+        per_sample = masked_per_sample_mse(pred, target, mask)
         sigmas = sigma.float().reshape(-1)
         w_bucket = None
         if self._bucket_balance is not None:
             w_bucket = self._bucket_balance.weight_for_t(
                 state.extras.get("t"), dtype=per_sample.dtype,
                 device=per_sample.device)
-        if sigmas.numel() == per_sample.numel():
-            weights = torch.tensor(
-                [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
-                dtype=per_sample.dtype, device=per_sample.device)
-            if w_bucket is not None:
-                weights = weights * w_bucket
-            state.extras["loss"] = (per_sample * weights).mean()
-        else:
-            # One shared sigma (scalar schedule output, or a shape that
-            # doesn't track the batch): every sample gets the same weight,
-            # so per-sample weighting collapses exactly to the old scalar
-            # multiply -- one host sync, same as the original code's own.
-            weight = self._loss_weighting.weight(float(sigmas.mean().item()))
-            if w_bucket is not None:
-                state.extras["loss"] = (per_sample * w_bucket).mean() * weight
-            else:
-                state.extras["loss"] = per_sample.mean() * weight
+        state.extras["loss"] = apply_loss_weighting(
+            per_sample, sigmas, self._loss_weighting, w_bucket)
         state.extras["per_sample_loss"] = per_sample.detach()
         return state
 
@@ -399,6 +390,37 @@ class BackwardPhase(StepPhase):
 
     def run(self, state: StepState) -> StepState:
         state.extras["loss"].backward()
+        return state
+
+
+class GraphForwardLossBackwardPhase(StepPhase):
+    """Forward + loss + backward as one XPU-graph replay per shape (L5.3,
+    main route).
+
+    Same runner and contract as the managed route's GraphForwardLossBackwardPhase
+    (nodes/train/managed.py -- read its docstring for the invariants), minus
+    the optimizer half: this route splits the optimizer step into its own
+    phase, which stays exactly as it was. Zeroing still moves into the
+    runner (see OptimizerBeginStepPhase's skip_zero_grad); the step itself,
+    fused-or-not, is untouched.
+    """
+
+    def __init__(self, runner):
+        self._runner = runner
+
+    def run(self, state: StepState) -> StepState:
+        # This route has no accumulation windows: every step is micro 0, so
+        # the window zeroing lives here rather than in a separate phase.
+        self._runner.zero_window()
+        loss, per_sample, how = self._runner.step(
+            micro=0,
+            xc=state.extras["xc"], t=state.extras["t"],
+            ctx_emb=state.extras["ctx_emb"], y=state.extras["y"],
+            target=state.extras["target"], sigma=state.extras["sigma"],
+            mask=state.extras.get("valid_mask"))
+        state.extras["loss"] = loss
+        state.extras["per_sample_loss"] = per_sample
+        state.extras["xpu_graph_how"] = how
         return state
 
 

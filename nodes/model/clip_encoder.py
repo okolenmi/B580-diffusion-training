@@ -81,7 +81,12 @@ class SDXLClipEncoder:
         # (nodes/model/tokenizer.py and nodes/model/clip.py). They were
         # comfy's sdxl_clip; see design doc 12 section 7.3.
         self.tokenizer = SDXLTokenizer()
-        self.clip_model = SDXLClipModel(device="cpu", dtype=self.dtype)
+        # Meta-device construction, same reason as the UNet wrapper's:
+        # eager init randomly fills 818M params (~4 s, measured) that the
+        # load_state_dict below overwrites immediately.
+        with torch.device("meta"):
+            self.clip_model = SDXLClipModel(device="meta", dtype=self.dtype)
+        self.clip_model.to_empty(device="cpu")
         self.clip_model.eval()
 
         # Extract and load CLIP weights using load_state_dict (same as ComfyUI)

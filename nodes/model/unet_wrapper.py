@@ -99,7 +99,14 @@ class ComfyUNetWrapper:
         cfg = dict(self.SDXL_CONFIG)
         cfg["use_checkpoint"] = use_checkpoint
         cfg["adm_in_channels"] = adm_in_channels
-        self.model = UNetModel(**cfg)
+        # Meta-device construction: eager init randomly fills 2.5B params
+        # (~11 s of single-threaded CPU fill, measured) that the
+        # load_state_dict below overwrites immediately. to_empty()
+        # materializes real storage, then loading proceeds as before;
+        # verified bit-identical across all 1680 tensors vs the eager path.
+        with torch.device("meta"):
+            self.model = UNetModel(**cfg)
+        self.model.to_empty(device="cpu")
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
         if missing:

@@ -10,7 +10,7 @@ could disagree with the measurement:
   summary.json  steps/s, peak reserved, holdout MSE + its digest, outcome
   steps.jsonl   one row per step, with `latent_shape` (so first sightings and
                 revisits can be classified offline, exactly as
-                `shapes diversity problem/analyze_steps.py` does)
+                `archive/shapes diversity problem/analyze_steps.py` does)
   console.log   the build-time pad-fraction report, parsed back out
 
 **The digest is checked before any comparison is printed.** Two runs that
@@ -49,7 +49,7 @@ def load_jsonl(path: Path) -> list[dict]:
 def classify(rows: list[dict], skip: int) -> dict:
     """Split step durations into first sighting / revisit / repeat.
 
-    Same definitions as `shapes diversity problem/analyze_steps.py`, which is
+    Same definitions as `archive/shapes diversity problem/analyze_steps.py`, which is
     where they were established: a *repeat* continues the previous step's
     shape, a *revisit* returns to a shape seen earlier, and a *first sighting*
     is one this process has never run.

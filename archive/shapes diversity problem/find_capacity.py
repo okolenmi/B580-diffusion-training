@@ -31,7 +31,7 @@ from pathlib import Path
 
 REPO = Path("/home/okolenmi/Desktop/B580-diffusion-training")
 PYTHON = "/home/okolenmi/comfy/venv/bin/python"
-PROBE = REPO / "shapes diversity problem" / "probe_shape_stall.py"
+PROBE = REPO / "archive/shapes diversity problem" / "probe_shape_stall.py"
 OUT = Path("/tmp/opencode/shapes")
 
 

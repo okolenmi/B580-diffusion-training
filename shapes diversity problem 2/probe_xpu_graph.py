@@ -4,7 +4,7 @@ integration.
 
 The project's own measurement says the training step is bound by one thread
 issuing ~22,000 kernel launches per step at ~48 us each
-(scripts/count_launches.py; `shapes diversity problem/MEASURED-shape-stall.md`).
+(scripts/count_launches.py; `archive/shapes diversity problem/MEASURED-shape-stall.md`).
 That is exactly the workload CUDA/XPU graph capture exists for: replaying a
 captured launch sequence instead of issuing it again. If replay removes most of
 the launch cost it is worth more than every launch-count micro-optimisation

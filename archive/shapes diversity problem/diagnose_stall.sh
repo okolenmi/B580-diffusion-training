@@ -32,7 +32,7 @@ TRAIN_PID=$!
 sleep 20
 SAMPLER_PID=""
 for pid in $(pgrep -f "hw_validate.py main --label $LABEL"); do
-  /home/okolenmi/comfy/venv/bin/python "shapes diversity problem/thread_watch.py" \
+  /home/okolenmi/comfy/venv/bin/python "archive/shapes diversity problem/thread_watch.py" \
       "$pid" --interval 0.2 --out "$OUT/${LABEL}.threads.csv" \
       > "$OUT/${LABEL}.threads.txt" 2>&1 &
   SAMPLER_PID=$!

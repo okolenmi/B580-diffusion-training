@@ -83,7 +83,7 @@ back fine, killing mechanism 2 and leaving mechanism 1.
 
 The cleanest separator had been cropping to SDXL buckets: 100% in-distribution
 shapes *and* 0% padding, which no multiple can achieve because padding always
-introduces a mismatch. `shapes diversity problem/shape_policy.py` implements the
+introduces a mismatch. `archive/shapes diversity problem/shape_policy.py` implements the
 cropping half; the loader only pads today. It is no longer needed to answer the
 question, but it remains the untested option if pad volume is ever the binding
 constraint.

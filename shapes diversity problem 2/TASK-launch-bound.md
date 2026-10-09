@@ -1,7 +1,7 @@
 # TASK: the training step is CPU-launch-bound (follow-ups to the shape-stall work)
 
 Repository `okolenmi/B580-diffusion-training`, `main` at `61c172b` or later. Read
-`shapes diversity problem/MEASURED-shape-stall.md` first (the "single-threaded stall"
+`archive/shapes diversity problem/MEASURED-shape-stall.md` first (the "single-threaded stall"
 section) and run `count_launches.py` (copy it to `scripts/`). Same working rules as the
 earlier task files: one commit per item, measurements in the commit body, never weaken a
 test, say plainly what was only tested on CPU.

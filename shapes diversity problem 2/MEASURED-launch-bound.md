@@ -244,7 +244,7 @@ Two limits on what this establishes:
 ## What is not worth doing, and why
 
 - **Shape pre-warm.** Measured and closed in
-  `shapes diversity problem/MEASURED-shape-stall.md`: activation-bound at
+  `archive/shapes diversity problem/MEASURED-shape-stall.md`: activation-bound at
   ~12 GB for a single shape, so no room for a second thread. After bucketing,
   three serial compiles cost ~9 s per run, so the remaining prize is small.
 - **Turning activation checkpointing off.** ~1.2x, and it OOMs at step 4 in a

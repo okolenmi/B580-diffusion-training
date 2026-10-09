@@ -45,7 +45,7 @@ the exit codes in real child processes, is checked by
 
 **Found 2026-10-04. Cause identified and fix measured 2026-10-06; this entry's
 diagnosis is superseded, its measurements stand.** The full measurement is in
-`shapes diversity problem/MEASURED-shape-stall.md` at the repository root,
+`archive/shapes diversity problem/MEASURED-shape-stall.md`,
 with the probe and the three runs' `steps.jsonl` beside it. The short version:
 
 `ONEDNN_PRIMITIVE_CACHE_CAPACITY` defaults to **1024**, which cannot hold the

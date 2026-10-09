@@ -123,10 +123,10 @@ attention, no cond) · `A1_kohya722.safetensors` (ours, matched 722) ·
 
 ## Reproduce
 
-    python bad_LoRA_investigation/a2_mine.py --dataset a1_one --steps 500 \
+    python archive/bad-LoRA-investigation/a2_mine.py --dataset a1_one --steps 500 \
       --batch 1 --rank 16 --alpha 16 --schedule constant \
       --target-modules kohya_plus --out <name>
-    python bad_LoRA_investigation/step2_loss_parity.py
-    python bad_LoRA_investigation/latent_stats.py --shards datasets/a1_one/shards \
+    python archive/bad-LoRA-investigation/step2_loss_parity.py
+    python archive/bad-LoRA-investigation/latent_stats.py --shards datasets/a1_one/shards \
       --images runs/a1_one_image/images \
       --ckpt /home/okolenmi/comfy/ComfyUI/models/checkpoints/div_4.safetensors --px 512

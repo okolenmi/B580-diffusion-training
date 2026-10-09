@@ -88,19 +88,18 @@ LOCAL = frozenset({
 
 #: Top-level directories whose contents are not the running project.
 #:
-#: `bad_LoRA_investigation` joins `scripts` here for the same reason: it holds
-#: standalone diagnostic programs, nothing in the running tree imports them,
-#: and they deliberately depend on *reference* implementations the trainer
-#: itself must not acquire -- diffusers, transformers, and (for A2) kohya
-#: sd-scripts. Those are oracles for checking this project, not inputs to
-#: it; declaring them in requirements.txt would put them in COMFY_ADDITIONS
-#: and pip-install an oracle into the trainer's own environment, which is the
-#: wrong dependency direction. The trainer reaches its training deps only
-#: through the manifest below.
+#: `archive` covers retired work including `archive/bad-LoRA-investigation`,
+#: which holds standalone diagnostic programs (nothing in the running tree
+#: imports them) that deliberately depend on *reference* implementations
+#: the trainer itself must not acquire -- diffusers, transformers, and
+#: (for A2) kohya sd-scripts. Those are oracles for checking this project,
+#: not inputs to it; declaring them in requirements.txt would put them in
+#: COMFY_ADDITIONS and pip-install an oracle into the trainer's own
+#: environment, which is the wrong dependency direction. The trainer
+#: reaches its training deps only through the manifest below.
 EXCLUDED_PREFIXES = (
     "archive",
     "scripts",
-    "bad_LoRA_investigation",
     "backend/tests",
     "nodes/smoke_tests",
     "manager/smoke_tests",

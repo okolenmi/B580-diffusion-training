@@ -1,6 +1,6 @@
 # MEASURED: running kohya sd-scripts on Intel XPU (4 patches, 2 of them upstream bugs)
 
-Task item: **A2** (`bad_LoRA_investigation/TASK-lora-quality-and-multishape.md`).
+Task item: **A2** (`archive/bad-LoRA-investigation/TASK-lora-quality-and-multishape.md`).
 Status: toolchain working. **No A2 verdict yet** — see "not yet measured".
 Hardware: Intel Arc B580, 12,216 MB. torch 2.12.1+xpu, kohya at commit
 `6721028c79ee85a78b3a06dfd8954dae310a1cce` (dev, 2026-06-16).

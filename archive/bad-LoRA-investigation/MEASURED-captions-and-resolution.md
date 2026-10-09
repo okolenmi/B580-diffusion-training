@@ -1,6 +1,6 @@
 # MEASURED: captionless training + resolution conditioning (A2/A5/A6 evidence)
 
-Task: `bad_LoRA_investigation/TASK-lora-quality-and-multishape.md`
+Task: `archive/bad-LoRA-investigation/TASK-lora-quality-and-multishape.md`
 Status: **negative results for two suspects; one risk identified, not a cause.**
 Hardware: Intel Arc B580, 12,216 MB. bf16, real SDXL weights (`div_4.safetensors`).
 One run at a time.
@@ -92,10 +92,10 @@ mechanisms (the captionless ctx, the loss weighting at high t, or the
 
 ## Reproduce
 
-    python bad_LoRA_investigation/caption_gap.py
-    python bad_LoRA_investigation/a5_per_t_holdout.py \
+    python archive/bad-LoRA-investigation/caption_gap.py
+    python archive/bad-LoRA-investigation/a5_per_t_holdout.py \
       --lora bad=/home/okolenmi/comfy/ComfyUI/models/loras/Test_02.safetensors
-    python bad_LoRA_investigation/a6_resolution.py \
+    python archive/bad-LoRA-investigation/a6_resolution.py \
       --lora bad=/home/okolenmi/comfy/ComfyUI/models/loras/Test_02.safetensors \
       --sizes 88x64,64x64,128x128
 

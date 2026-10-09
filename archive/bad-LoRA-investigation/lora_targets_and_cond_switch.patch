@@ -1,0 +1,129 @@
+diff --git a/nodes/model/lora.py b/nodes/model/lora.py
+index 1e1c331..d925574 100644
+--- a/nodes/model/lora.py
++++ b/nodes/model/lora.py
+@@ -125,6 +125,14 @@ def compute_lora_gate(t: torch.Tensor, train_low: float, train_high: float,
+     return torch.sigmoid(dist / max(width, 1e-6))
+ 
+ 
++#: Named target sets for LoRAConfig.target_modules.
++#: ATTENTION is this project's historical default. KOHYA_DEFAULT matches what
++#: kohya sd-scripts' default SDXL LoRA adapts (every Linear inside each
++#: Transformer2DModel): 722 modules on SDXL.
++TARGETS_ATTENTION = ["to_q", "to_k", "to_v", "to_out.0"]
++TARGETS_KOHYA_DEFAULT = TARGETS_ATTENTION + ["ff.net.0.proj", "ff.net.2", "proj_in", "proj_out"]
++
++
+ @dataclass
+ class LoRAConfig:
+     rank: int = 64
+@@ -133,10 +141,25 @@ class LoRAConfig:
+     target_modules: Optional[List[str]] = None
+     block_weights: Optional[Dict[str, float]] = None
+     target_all: bool = False
++    # time_embed.* and label_emb.* sit on the global conditioning path
++    # (emb = time_embed(t) + label_emb(y) is added into EVERY ResBlock).
++    # True keeps the historical behaviour (they are always adapted, 564 modules
++    # on SDXL). False restricts adaptation to attention like kohya / diffusers
++    # LoRA defaults (560 modules). Added as an A/B switch for quality debugging.
++    target_conditioning_path: bool = True
+ 
+     def __post_init__(self):
+         if self.target_modules is None:
+-            self.target_modules = ["to_q", "to_k", "to_v", "to_out.0"]
++            self.target_modules = list(TARGETS_ATTENTION)
++        elif isinstance(self.target_modules, str):
++            # Convenience for graph/UI ports, which carry strings: a preset name
++            # ("attention", "kohya_default") or a comma-separated pattern list.
++            presets = {"attention": TARGETS_ATTENTION, "kohya_default": TARGETS_KOHYA_DEFAULT}
++            raw = self.target_modules.strip()
++            self.target_modules = (list(presets[raw]) if raw in presets
++                                   else [t.strip() for t in raw.split(",") if t.strip()])
++            if not self.target_modules:
++                raise ValueError("target_modules string selected no patterns")
+ 
+ 
+ # ComfyUI SDXL UNet attention structure:
+@@ -482,17 +505,23 @@ def _inject_lora(model: nn.Module, config: LoRAConfig, prefix: str = "",
+             parent_name = prefix.rpartition(".")[2] if prefix else ""
+             is_target = False
+ 
+-            # to_q / to_k / to_v : direct attributes of CrossAttention
+-            if name in ("to_q", "to_k", "to_v"):
+-                is_target = True
+-            # to_out.0 : the first element inside nn.Sequential named "to_out"
+-            elif parent_name == "to_out" and name.isdigit() and name == "0":
++            # Honour config.target_modules (it used to be read nowhere: the set
++            # was hard-coded to q/k/v/to_out.0). A pattern matches a layer whose
++            # dotted name equals it or ends with "." + it, so the defaults
++            # ("to_q", "to_k", "to_v", "to_out.0") select exactly the layers the
++            # old hard-coded test did, and "ff.net.0.proj", "ff.net.2",
++            # "proj_in", "proj_out" now select the feed-forward and projection
++            # Linears that kohya's default SDXL LoRA also adapts (722 modules
++            # total instead of 560).
++            if any(full_name == pat or full_name.endswith("." + pat)
++                   for pat in config.target_modules):
+                 is_target = True
+             # Extra blocks: time_embed and label_emb use segment-boundary match
+-            elif (_segment_match(full_name, "time_embed")
+-                 or full_name.startswith("time_embed.")
+-                 or _segment_match(full_name, "label_emb")
+-                 or full_name.startswith("label_emb.")):
++            elif config.target_conditioning_path and (
++                    _segment_match(full_name, "time_embed")
++                    or full_name.startswith("time_embed.")
++                    or _segment_match(full_name, "label_emb")
++                    or full_name.startswith("label_emb.")):
+                 is_target = True
+             
+             # Support targeting ANY linear/conv layer inside a block that has weighting
+diff --git a/nodes/model/lora_injector.py b/nodes/model/lora_injector.py
+index fb58cf8..c62aa53 100644
+--- a/nodes/model/lora_injector.py
++++ b/nodes/model/lora_injector.py
+@@ -201,6 +201,7 @@ def build_lora_injected_unet(
+     use_checkpoint: bool = True,
+     adapter_strategy: AdapterStrategy | None = None,
+     frozen_weight_store_factory=None,
++    target_conditioning_path: bool = True,
+ ) -> ComfyUNetTrainableModel:
+     """The real construction logic `ComfyUNetLoRANode.build()` runs --
+     extracted so there's exactly one implementation, not one now and a
+@@ -240,6 +241,7 @@ def build_lora_injected_unet(
+         alpha=_effective_alpha(alpha=alpha, rank=rank, policy=resolved_scaling_policy),
+         dropout=dropout,
+         target_modules=target_modules,
++        target_conditioning_path=target_conditioning_path,
+     )
+     wrapper = ComfyUNetWrapper(
+         weights.unet_sd,
+@@ -292,7 +294,19 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
+                 "alpha is the effective value, not this Port's nominal one).",
+         ),
+         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
+-        "target_modules": Port(name="target_modules", type=Any, required=False, default=None),
++        "target_modules": Port(
++            name="target_modules", type=Any, required=False, default=None,
++            doc="Which Linear layers get an adapter. None / \"attention\" (historical "
++                "default): to_q, to_k, to_v, to_out.0 (560 modules on SDXL). "
++                "\"kohya_default\": also ff.net.0.proj, ff.net.2, proj_in, proj_out "
++                "(722, what kohya sd-scripts adapts). Or a comma-separated list of "
++                "layer-name suffixes. (Before this was wired it was ignored.)"),
++        "target_conditioning_path": Port(
++            name="target_conditioning_path", type=bool, required=False, default=True,
++            doc="True (historical default): also adapt time_embed.* and label_emb.* "
++                "(+4 modules on SDXL, 564 total). False: attention only (560), the "
++                "kohya/diffusers default. A/B switch for LoRA quality debugging.",
++        ),
+         "use_checkpoint": Port(
+             name="use_checkpoint", type=bool, required=False, default=True,
+             doc="Gradient (activation) checkpointing -- trades recompute time for a real "
+@@ -343,6 +357,8 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
+             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
+             adapter_strategy=inputs.get("adapter_strategy"),
+             frozen_weight_store_factory=inputs.get("frozen_weight_store"),
++            target_conditioning_path=inputs.get(
++                "target_conditioning_path", self.INPUTS["target_conditioning_path"].default),
+         )
+         result = {"model": model}
+         self.validate_outputs(result)

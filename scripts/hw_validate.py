@@ -380,6 +380,7 @@ def build_common(ctx, args, probe: MemProbe):
         dataset_root=args.dataset, batch_size=args.batch, shuffle=True,
         keep_incomplete_batches=getattr(args, "keep_incomplete_batches", False),
         shape_bucket_multiple=getattr(args, "shape_bucket_multiple", 0),
+        group_by_size_only=getattr(args, "group_by_size_only", False),
     )["batches"]
     schedule = CosineLRScheduleNode(ctx).build(
         lr=args.lr, total_steps=args.steps)["schedule"]
@@ -606,6 +607,15 @@ def main() -> None:
                              "behavior), 0.5=every 2nd, 0.0=none (ResBlock checkpointing "
                              "unaffected either way)")
     common.add_argument("--weight-store", default="bf16", choices=["bf16", "nf4"])
+    # L4: size-only batch grouping (off by default). Lets one batch carry
+    # several captions; needs --shape-bucket-multiple > 1 (the loader
+    # refuses otherwise). Conditioning is assembled per sample, one
+    # text-encode per distinct caption, cache-served.
+    common.add_argument("--group-by-size-only", action="store_true",
+                        help="group batches by size bucket alone instead of "
+                             "(caption, size): multi-caption datasets train "
+                             "every sample instead of only full "
+                             "single-caption groups")
     # Optional shape bucketing (off by default). Pads latents up to a
     # multiple of N so a multi-resolution dataset trains on few shapes, at a
     # permanent +compute cost -- see the node port's own docstring.

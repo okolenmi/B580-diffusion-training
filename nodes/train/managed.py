@@ -512,7 +512,8 @@ class EncodeConditioningPhase(ManagedStepPhase):
         # byte-identical.
         ctx_emb, y = encode_with_true_sizes(
             self._text_encoder, batch["prompt"], x_t.shape[0], x_t,
-            state.extras.get("valid_mask"))
+            state.extras.get("valid_mask"),
+            prompts=batch.get("prompts"))
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         if self._controller.should_release("text_encoder"):

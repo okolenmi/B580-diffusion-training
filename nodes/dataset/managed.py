@@ -155,6 +155,16 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "printed at the first epoch). True = keep those samples as smaller batches "
                 "so every image is trained every epoch; the cost is extra batch shapes "
                 "(one more per resolution), which can add a one-time kernel-warmup stall."),
+        "group_by_size_only": Port(
+            name="group_by_size_only", type=bool, required=False, default=False,
+            doc="L4: form batches per size bucket alone, so one batch can carry "
+                "several captions and per-image-caption datasets train every sample "
+                "instead of only full single-caption groups. Requires "
+                "shape_bucket_multiple > 1 (without bucketing there is no common "
+                "shape to batch on). False = the historical (caption, size) "
+                "grouping, unchanged. Conditioning is assembled per sample "
+                "(one text-encode per distinct caption, cache-served), so a "
+                "mixed batch costs nothing extra in steady state."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
@@ -203,6 +213,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "keep_incomplete_batches", self.INPUTS["keep_incomplete_batches"].default),
             shape_bucket_multiple=inputs.get(
                 "shape_bucket_multiple", self.INPUTS["shape_bucket_multiple"].default),
+            group_by_size_only=inputs.get(
+                "group_by_size_only", self.INPUTS["group_by_size_only"].default),
         )
         # Size the oneDNN primitive cache to this dataset's shape count
         # (nodes/xpu_env.py's own docstring for why it belongs here).

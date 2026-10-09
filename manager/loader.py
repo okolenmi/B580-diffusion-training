@@ -21,7 +21,8 @@ class ManagedDatasetLoader:
                  t_low: int = 1, t_high: int = 999, t_mode: str = "uniform",
                  bucket_balance=None, t_values: str = "",
                  keep_incomplete: bool = False,
-                 shape_bucket_multiple: int = 0):
+                 shape_bucket_multiple: int = 0,
+                 group_by_size_only: bool = False):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
@@ -46,6 +47,18 @@ class ManagedDatasetLoader:
         # emits those chunks as smaller batches instead. Default False =
         # the historical behavior, unchanged (and announced once, below).
         self.keep_incomplete = keep_incomplete
+        # L4: group batches by size bucket only, letting one batch carry
+        # several captions. Default False = the historical (prompt, size)
+        # grouping above, unchanged. True requires shape bucketing: without
+        # it, "one size" is each sample's own shape, mixing shapes in one
+        # batch cannot collate, and the conditioning has no mask to recover
+        # per-sample sizes from -- so it is a config error, not a fallback.
+        self.group_by_size_only = group_by_size_only
+        if group_by_size_only and self.shape_bucket_multiple <= 1:
+            raise ValueError(
+                "group_by_size_only=True needs shape_bucket_multiple > 1: "
+                "without bucketing there is no common shape to batch on and "
+                "no valid_mask to recover per-sample sizes from")
         self._warned_dropping = False
         # Single-latent datasets: every t is chosen at draw time, so this is
         # the whole of a run's t configuration. Interpreted and validated in
@@ -442,6 +455,7 @@ class ManagedDatasetLoader:
             "target": torch.cat([s["target"] for s in samples], dim=0),
             "t": torch.tensor([s["t"] for s in samples]),
             "prompt": samples[0]["prompt"],
+            "prompts": [s["prompt"] for s in samples],
             "neg_prompt": samples[0]["neg_prompt"],
             "seed": samples[0]["seed"],
             "metadata": samples[0]["metadata"],
@@ -475,7 +489,10 @@ class ManagedDatasetLoader:
             self._samples = self._load_all_samples()
             print(f"  [DataLoader] {len(self._samples)} samples loaded.")
 
-        # 1. Group by key (prompt, neg_prompt, size)
+        # 1. Group by key (prompt, neg_prompt, size) -- or by size bucket
+        # alone under group_by_size_only (L4), so one batch can carry
+        # several captions and per-image-caption datasets train every
+        # sample instead of only full single-caption groups.
         buckets = {}
         for s in self._samples:
             h, w = int(s["x0"].shape[-2]), int(s["x0"].shape[-1])
@@ -487,7 +504,7 @@ class ManagedDatasetLoader:
                 size = self._bucket_size(h, w)
             else:
                 size = (h, w)
-            key = (s["prompt"], s["neg_prompt"], size)
+            key = size if self.group_by_size_only else (s["prompt"], s["neg_prompt"], size)
             if key not in buckets:
                 buckets[key] = []
             buckets[key].append(s)

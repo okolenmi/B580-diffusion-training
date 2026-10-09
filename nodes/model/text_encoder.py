@@ -105,6 +105,42 @@ class TextEncoder(DeviceResident, ABC):
         res_emb = torch.stack(rows, dim=0)
         return ctx, torch.cat([pooled, res_emb], dim=-1)
 
+    def encode_per_sample_prompts(self, prompts: list[str], sizes):
+        """`encode_per_sample` for a batch whose samples do NOT share one prompt.
+
+        One `encode_prompt_only(prompt, 1)` per distinct prompt (the text
+        cache dedups repeats, so a batch of one caption costs one encode),
+        then each sample takes the ctx/pooled rows of its own prompt and the
+        resolution row of its own size. `sizes` is one (height, width) pair
+        per sample, in order, like `encode_per_sample`.
+
+        A batch of identical prompts returns the same values as
+        `encode_per_sample` for that prompt (pinned by test) -- the only
+        difference is how the rows are gathered, never what fills them.
+        """
+        import torch
+        if len(prompts) != len(sizes):
+            raise ValueError(
+                f"encode_per_sample_prompts: got {len(prompts)} prompt(s) for "
+                f"{len(sizes)} size(s); every sample needs exactly one of each")
+        uniq = list(dict.fromkeys(prompts))
+        ctx_one: dict[str, object] = {}
+        pooled_one: dict[str, object] = {}
+        for p in uniq:
+            c, pl = self.encode_prompt_only(p, 1)
+            ctx_one[p], pooled_one[p] = c, pl
+        ctx = torch.cat([ctx_one[p].expand(1, -1, -1) for p in prompts], dim=0)
+        pooled = torch.cat([pooled_one[p].expand(1, -1) for p in prompts],
+                           dim=0)
+        by_size = self._group_by_size(sizes)
+        rows: list = [None] * len(prompts)
+        for (height, width), idx in by_size.items():
+            block = self.resolution_embedding(height, width, len(idx))
+            for slot, row in zip(idx, block.unbind(0)):
+                rows[slot] = row
+        res_emb = torch.stack(rows, dim=0)
+        return ctx, torch.cat([pooled, res_emb], dim=-1)
+
     @abstractmethod
     def unload(self) -> None:
         ...

@@ -298,6 +298,27 @@ cost is the loader regrouping plus `y` assembly, not encodes. What L4
 buys on multi-caption data is not speed but **data**: 28 → 273 usable
 samples per epoch at batch 4 unbucketed.
 
+### Built 2026-10-09: size-only grouping + per-sample conditioning
+
+`ManagedDatasetLoader(group_by_size_only=True)` groups by size bucket
+alone (refuses without bucketing — unbucketed mixed shapes cannot
+collate and there is no mask); batches carry a per-sample `prompts`
+list (`prompt` kept as `prompts[0]` for old consumers).
+`encode_with_true_sizes(..., prompts=)` routes uniform lists to the
+unchanged single-prompt call (byte-identical) and mixed lists to the new
+`TextEncoder.encode_per_sample_prompts` (one `encode_prompt_only(p, 1)`
+per distinct prompt, cache-served; per-sample ctx/pooled/size rows).
+Both `EncodeConditioningPhase`s pass `batch.get("prompts")`; default
+grouping never touches new code. Node Port + `hw_validate.py`
+`--group-by-size-only` wired.
+
+GPU proof (`L4_sizeonly`: multi-caption, batch 4, x32, 150 steps, seed
+1234): 150/150 ok, loss 0.157 → 0.091, **67/67 batches hetero**
+(2–4 captions), 268/273 trained (5 incomplete-chunk drops, expected),
+0.906 steps/s vs same-seed single-caption control 0.939 (−3.5%,
+noise-level), peak identical 7,376 MB. Hetero costs nothing per step;
+it buys the data (232 → 268 trained at x32; 28 → 273 unbucketed).
+
 ## What is not worth doing, and why
 
 - **Shape pre-warm.** Measured and closed in

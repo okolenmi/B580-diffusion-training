@@ -73,7 +73,8 @@ def true_sizes_from_mask(valid_mask, downscale: int = 8) -> list[tuple[int, int]
 
 
 def encode_with_true_sizes(text_encoder, prompt: str, batch_size: int,
-                           x_t, valid_mask, downscale: int = 8):
+                           x_t, valid_mask, downscale: int = 8,
+                           prompts: list[str] | None = None):
     """(ctx, y) for a batch, describing each sample's *true* extent.
 
     The one-call form when there is nothing to correct -- no mask, so no
@@ -89,10 +90,26 @@ def encode_with_true_sizes(text_encoder, prompt: str, batch_size: int,
     for such a batch, but only the per-sample call is *derived* from the
     right number, and the padded size it would have used is exactly the
     number this function exists to stop using.
+
+    `prompts` (one string per sample, in order) enables hetero-caption
+    batches (L4): None (the default, and what every existing caller passes)
+    keeps the single-prompt path above byte-identical. A list whose entries
+    are all equal routes to the same single-prompt call -- values identical,
+    no new code in the loop. Only a genuinely mixed list reaches
+    `encode_per_sample_prompts`, which the text cache serves per distinct
+    prompt (repeats are free).
     """
     if valid_mask is None:
+        if prompts is not None and len(set(prompts)) > 1:
+            raise ValueError(
+                "encode_with_true_sizes: mixed prompts with no valid_mask; "
+                "per-sample sizes are unrecoverable without the mask, so this "
+                "batch cannot be conditioned. Size-only grouping requires "
+                "shape bucketing (which always ships a mask).")
         return text_encoder.encode(prompt, batch_size=batch_size,
                                    height=x_t.shape[2] * downscale,
                                    width=x_t.shape[3] * downscale)
     sizes = true_sizes_from_mask(valid_mask, downscale=downscale)
+    if prompts is not None and len(set(prompts)) > 1:
+        return text_encoder.encode_per_sample_prompts(prompts, sizes)
     return text_encoder.encode_per_sample(prompt, batch_size, sizes)

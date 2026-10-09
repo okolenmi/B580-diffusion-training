@@ -599,6 +599,119 @@ def check_pad_fraction_arithmetic_is_right():
     print("    PASS")
 
 
+def check_per_sample_prompts_assemble_per_prompt_rows():
+    print("[hetero batch: each sample gets its own prompt's ctx rows and its "
+          "own size's y row]")
+    from nodes.train.bucket_sizes import encode_with_true_sizes
+    enc = _RecordingEncoder()
+    prompts = ["a", "bb", "ccc"]
+    # Two samples share a true size, one differs; offsets differ too, so the
+    # rows cannot come from position.
+    mask = torch.cat([_mask_for(8, 8, 8, 8),
+                      _mask_for(4, 8, 8, 8, top=2),
+                      _mask_for(8, 8, 8, 8)], dim=0)
+    x_t = torch.randn(3, 4, 8, 8)
+    ctx, y = encode_with_true_sizes(enc, prompts[0], 3, x_t, mask,
+                                    prompts=prompts)
+    check(ctx.shape == (3, 77, 4) and y.shape == (3, 3),
+          f"shapes {tuple(ctx.shape)} {tuple(y.shape)}, want (3,77,4) (3,3)")
+    for i, p in enumerate(prompts):
+        want_ctx, want_pooled = enc.encode_prompt_only(p, 1)
+        check(torch.equal(ctx[i : i + 1], want_ctx),
+              f"row {i}: ctx is not prompt {p!r}'s encoding")
+        check(torch.equal(y[i : i + 1, :2], want_pooled),
+              f"row {i}: pooled half is not prompt {p!r}'s")
+    check(_rows_of(y) == [(64, 64), (32, 64), (64, 64)],
+          f"y rows encode {_rows_of(y)}, want true sizes")
+    check(not torch.equal(ctx[0], ctx[1]),
+          "distinct prompts produced identical ctx rows; the batch is not "
+          "actually per-sample")
+    print("    PASS")
+
+
+def check_uniform_prompts_take_the_old_path():
+    print("[all-equal prompts list: values identical to the prompt-less call, "
+          "so default grouping never touches new code]")
+    from nodes.train.bucket_sizes import encode_with_true_sizes
+    enc = _RecordingEncoder()
+    mask = torch.cat([_mask_for(8, 8, 8, 8),
+                      _mask_for(4, 8, 8, 8, top=2)], dim=0)
+    x_t = torch.randn(2, 4, 8, 8)
+    old_ctx, old_y = encode_with_true_sizes(enc, "same", 2, x_t, mask)
+    new_ctx, new_y = encode_with_true_sizes(enc, "same", 2, x_t, mask,
+                                            prompts=["same", "same"])
+    check(torch.equal(old_ctx, new_ctx) and torch.equal(old_y, new_y),
+          "uniform prompts list changed the values; the old path must be "
+          "untouched")
+    # And with no mask at all the prompts list must not matter either.
+    x1 = torch.randn(2, 4, 8, 8)
+    a_ctx, a_y = encode_with_true_sizes(enc, "same", 2, x1, None)
+    b_ctx, b_y = encode_with_true_sizes(enc, "same", 2, x1, None,
+                                        prompts=["same", "same"])
+    check(torch.equal(a_ctx, b_ctx) and torch.equal(a_y, b_y),
+          "uniform prompts list changed the unmasked path")
+    print("    PASS")
+
+
+def check_mixed_prompts_without_a_mask_are_refused():
+    print("[mixed prompts + no mask: loud refusal, never silent wrong sizes]")
+    from nodes.train.bucket_sizes import encode_with_true_sizes
+    enc = _RecordingEncoder()
+    x_t = torch.randn(2, 4, 8, 8)
+    try:
+        encode_with_true_sizes(enc, "a", 2, x_t, None,
+                               prompts=["a", "b"])
+    except ValueError:
+        print("    PASS")
+        return
+    check(False, "mixed prompts with no mask did not raise")
+
+
+def check_size_only_grouping_needs_bucketing():
+    print("[group_by_size_only without bucketing: config error, not fallback]")
+    from paths import resolve_safe_dataset_path
+    from manager.loader import ManagedDatasetLoader
+    try:
+        ManagedDatasetLoader(
+            dataset_root=resolve_safe_dataset_path("non-square"),
+            batch_size=2, group_by_size_only=True, shape_bucket_multiple=0)
+    except ValueError:
+        print("    PASS")
+        return
+    check(False, "size-only grouping without bucketing did not raise")
+
+
+def check_size_only_grouping_keeps_single_caption_yield():
+    print("[size-only grouping on one caption: same batches as the old key, "
+          "plus the per-sample prompts list]")
+    import random
+    from paths import resolve_safe_dataset_path
+    from manager.loader import ManagedDatasetLoader
+
+    def run(**kw):
+        random.seed(1234)
+        loader = ManagedDatasetLoader(
+            dataset_root=resolve_safe_dataset_path("non-square"),
+            batch_size=4, shuffle=True, keep_incomplete=False,
+            shape_bucket_multiple=32, **kw)
+        out = []
+        for b in loader:
+            out.append((b["x_t"].shape[0], b["prompt"], list(b["prompts"])))
+        return out
+
+    old = run()
+    new = run(group_by_size_only=True)
+    check(len(old) == len(new) == 67
+          and sum(n for n, _, _ in old) == sum(n for n, _, _ in new) == 268,
+          f"one caption must group identically either way: "
+          f"{len(old)}/{sum(n for n, _, _ in old)} vs "
+          f"{len(new)}/{sum(n for n, _, _ in new)}")
+    for n, p, ps in new:
+        check(ps == [p] * n,
+              "prompts list does not match the batch prompt")
+    print("    PASS")
+
+
 def check_per_axis_pad_report_names_the_modal_side():
     print("[per-axis report: modal side, who keeps it, who pads both axes -- "
           "the numbers that make a bad multiple legible]")
@@ -849,6 +962,11 @@ def main():
     check_pad_fraction_report_matches_what_is_actually_padded()
     check_pad_fraction_arithmetic_is_right()
     check_per_axis_pad_report_names_the_modal_side()
+    check_per_sample_prompts_assemble_per_prompt_rows()
+    check_uniform_prompts_take_the_old_path()
+    check_mixed_prompts_without_a_mask_are_refused()
+    check_size_only_grouping_needs_bucketing()
+    check_size_only_grouping_keeps_single_caption_yield()
     check_bucketing_cost_is_visible_at_build()
     check_prewarm_derives_the_keys_training_asks_for()
     print()

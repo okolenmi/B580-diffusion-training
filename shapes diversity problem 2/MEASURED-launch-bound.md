@@ -169,6 +169,42 @@ a fast one.
 5. **Static conditioning buffers.** `ctx_emb`/`y` would have to be copied into
    static tensors each step, which is where L1's per-sample sizes land.
 
+### Built 2026-10-09: integrated on the managed route (`use_xpu_graph`)
+
+`nodes/train/xpu_graph_step.py` (`XPUGraphStepRunner`) + `GraphForwardLossBackwardPhase`
+replacing Forward/Loss/Backward-backward when the Port is on (default off).
+Per (batch, H, W): statics + hoisted (B,) weight vector, 3 genuine eager
+warmups, capture, replay; optimizer step, clipping, encoding, monitoring
+eager. Loss math shared with LossPhase (`masked_per_sample_mse`,
+`apply_loss_weighting` in `loss.py`). Loud refusals: fused optimizer,
+Dropout(p>0) (scan reaches through the TrainableModel façade),
+grad_accum>1 (design handles it, parity run only covers 1 -- prove before
+lifting), unscannable model. Model pinned resident (sacrificable=False);
+grads zeroed in place (optimizer.zero_grad reassigns to None, which replay
+would write past). Fallbacks loud, never fatal.
+
+Acceptance (B4: loss parity over 200 steps, same seed; non-square, batch
+2, x32, non-fused AdamW):
+
+| | eager | graph | 
+|---|---|---|
+| steps/s steady | 0.991 | **1.353 (+37%)** |
+| peak reserved | 7,220 MB | 8,730 MB (+1.5 GB pools) |
+| max abs per-step loss diff | — | **2.96e-03** |
+| mean abs per-step diff | — | 2.15e-04 |
+| loss step 0 / step 199 | 0.007306 / 0.165788 | 0.007300 / 0.165932 |
+
+Parity holds; the residual is MATH-vs-default SDPA bf16 noise (6.5e-06 at
+step 0, slow drift). The acceptance caught one real bug first: reporting
+handles aliased warmup-eager tensors instead of capture-pool outputs
+froze the reported loss per shape (stale, correct-looking numbers --
+grads were live throughout). Fixed by keeping the loss/per_sample objects
+created inside the capture context.
+
+Still open (unchanged): main-route integration, grad_accum>1 proof,
+dropout>0 (needs register_generator_state), mid-run shape counts past
+the 4-graph cap stay eager.
+
 ## L5.1 — activation checkpointing: the probe said 1.56x, the real run OOMs
 
 **This corrects a number reported earlier in this file.** The capture probe

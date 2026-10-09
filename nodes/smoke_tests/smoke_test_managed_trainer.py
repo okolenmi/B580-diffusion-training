@@ -968,6 +968,8 @@ def check_build_rejects_invalid_training_shapes():
     expect_valueerror({"grad_accum": 0}, "grad_accum")
     expect_valueerror({"grad_clip_max_norm": -1.0}, "grad_clip_max_norm")
     expect_valueerror({"_fused": True, "grad_clip_max_norm": 1.0}, "fused")
+    expect_valueerror({"_fused": True, "use_xpu_graph": True}, "fused")
+    expect_valueerror({"use_xpu_graph": True, "grad_accum": 2}, "grad_accum")
     expect_valueerror({"save_every_n_steps": 1, "save_prefix": "   "}, "save_prefix")
     print("    PASS")
 

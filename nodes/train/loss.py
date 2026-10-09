@@ -60,6 +60,49 @@ class UniformLossWeighting(LossWeighting):
         return 1.0
 
 
+def masked_per_sample_mse(pred, target, mask=None):
+    """Per-sample MSE, mask-aware: the exact reduction both LossPhases use.
+
+    With a mask, squared error is summed over valid elements only and
+    divided by the valid element count (clamped) -- masking then taking a
+    plain mean would rescale the loss by the valid fraction. Without a
+    mask this is the plain mean. Extracted so the XPU-graph runner
+    (nodes/train/xpu_graph_step.py) trains on the identical expression
+    rather than a re-derivation; the LossPhases delegate to it.
+    """
+    per_sample = (pred.float() - target.float()).pow(2)
+    if mask is not None:
+        m = mask.to(dtype=per_sample.dtype).expand_as(per_sample)
+        per_sample = (per_sample * m).view(per_sample.shape[0], -1).sum(dim=1)
+        valid_n = m.view(m.shape[0], -1).sum(dim=1).clamp(min=1.0)
+        per_sample = per_sample / valid_n
+    else:
+        per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
+    return per_sample
+
+
+def apply_loss_weighting(per_sample, sigmas, loss_weighting, w_bucket=None):
+    """Weight a per-sample loss vector: the exact LossPhase branches.
+
+    Per-sample weights when the sigma count matches the sample count,
+    else one scalar weight from the mean sigma (times the bucket balance
+    when one applies). Same delegation reason as masked_per_sample_mse.
+    """
+    import torch
+    sigmas = sigmas.float().reshape(-1)
+    if sigmas.numel() == per_sample.numel():
+        weights = torch.tensor(
+            [loss_weighting.weight(float(s)) for s in sigmas.tolist()],
+            dtype=per_sample.dtype, device=per_sample.device)
+        if w_bucket is not None:
+            weights = weights * w_bucket
+        return (per_sample * weights).mean()
+    weight = loss_weighting.weight(float(sigmas.mean().item()))
+    if w_bucket is not None:
+        return (per_sample * w_bucket).mean() * weight
+    return per_sample.mean() * weight
+
+
 class MinSNRLossWeighting(LossWeighting):
     """Min-SNR-gamma (Hang et al., "Efficient Diffusion Training via
     Min-SNR Weighting Strategy", ICCV 2023, arXiv:2303.09556). The weight

@@ -482,7 +482,8 @@ def run_managed_route(args, ctx) -> str:
         probe_every_n_steps=getattr(args, "probe_every_n_steps", 0),
         probe_items=getattr(args, "probe_items", 2),
         probe_points_per_bucket=getattr(args, "probe_points_per_bucket", 2),
-        probe_grad_alignment=getattr(args, "probe_grad_alignment", False))
+        probe_grad_alignment=getattr(args, "probe_grad_alignment", False),
+        use_xpu_graph=getattr(args, "use_xpu_graph", False))
     # After training, so the model is scored as training left it. The encoder
     # may have been offloaded by the residency controller, so it is brought
     # back before use rather than assumed resident.
@@ -616,6 +617,10 @@ def main() -> None:
                              "(caption, size): multi-caption datasets train "
                              "every sample instead of only full "
                              "single-caption groups")
+    common.add_argument("--use-xpu-graph", action="store_true",
+                        help="L5.3: capture forward+loss+backward into an "
+                             "XPUGraph replay per shape (managed route only; "
+                             "refused with fused optimizers or dropout)")
     # Optional shape bucketing (off by default). Pads latents up to a
     # multiple of N so a multi-resolution dataset trains on few shapes, at a
     # permanent +compute cost -- see the node port's own docstring.

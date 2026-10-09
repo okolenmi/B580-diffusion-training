@@ -550,11 +550,17 @@ class ZeroGradPhase(ManagedStepPhase):
     optimizer state resident at all."""
 
     def __init__(self, optimizer: OptimizerHandle, lr_schedule: LRSchedule,
-                 is_fused: bool, grad_accum: int = 1):
+                 is_fused: bool, grad_accum: int = 1,
+                 skip_zero_grad: bool = False):
         self._optimizer = optimizer
         self._lr_schedule = lr_schedule
         self._is_fused = is_fused
         self._grad_accum = grad_accum
+        # L5.3 graph capture: the runner owns grad buffers (replay writes to
+        # captured addresses, so p.grad must never be reassigned -- and the
+        # optimizer's zero_grad() reassigns it to None). It zeroes in place
+        # at window start instead; this phase then only updates the LR.
+        self._skip_zero_grad = skip_zero_grad
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
         lr = self._lr_schedule.value(state.step)
@@ -565,6 +571,8 @@ class ZeroGradPhase(ManagedStepPhase):
             # destroying what's accumulated so far).
             return state
         self._optimizer.update_lr(lr)
+        if self._skip_zero_grad:
+            return state
         if self._is_fused:
             # sub_steps=grad_accum tells the fused handle's backward
             # hooks to span this many passes before applying anything --
@@ -634,12 +642,11 @@ class LossPhase(ManagedStepPhase):
         self._bucket_balance = bucket_balance
 
     def run(self, state: ManagedStepState) -> ManagedStepState:
-        import torch
+        from .loss import apply_loss_weighting, masked_per_sample_mse
 
         pred = state.extras["pred"]
         target = state.extras["target"]
         sigma = state.extras["sigma"]
-        per_sample = (pred.float() - target.float()).pow(2)
         # Optional shape-bucketing mask. This mirrors the main route's
         # LossPhase expression-for-expression (nodes/train/step_pipeline.py),
         # and the reason it has to is not stylistic: **this method had no
@@ -669,32 +676,15 @@ class LossPhase(ManagedStepPhase):
         # expression exactly, which is every graph that did not ask for
         # bucketing.
         mask = state.extras.get("valid_mask")
-        if mask is not None:
-            m = mask.to(dtype=per_sample.dtype).expand_as(per_sample)
-            per_sample = (per_sample * m).view(per_sample.shape[0], -1).sum(dim=1)
-            valid_n = m.view(m.shape[0], -1).sum(dim=1).clamp(min=1.0)
-            per_sample = per_sample / valid_n
-        else:
-            per_sample = per_sample.view(per_sample.shape[0], -1).mean(dim=1)
+        per_sample = masked_per_sample_mse(pred, target, mask)
         sigmas = sigma.float().reshape(-1)
         w_bucket = None
         if self._bucket_balance is not None:
             w_bucket = self._bucket_balance.weight_for_t(
                 state.extras.get("t"), dtype=per_sample.dtype,
                 device=per_sample.device)
-        if sigmas.numel() == per_sample.numel():
-            weights = torch.tensor(
-                [self._loss_weighting.weight(float(s)) for s in sigmas.tolist()],
-                dtype=per_sample.dtype, device=per_sample.device)
-            if w_bucket is not None:
-                weights = weights * w_bucket
-            loss = (per_sample * weights).mean()
-        else:
-            weight = self._loss_weighting.weight(float(sigmas.mean().item()))
-            if w_bucket is not None:
-                loss = (per_sample * w_bucket).mean() * weight
-            else:
-                loss = per_sample.mean() * weight
+        loss = apply_loss_weighting(per_sample, sigmas, self._loss_weighting,
+                                    w_bucket)
         state.extras["loss"] = loss
         state.extras["per_sample_loss"] = per_sample.detach()
         if self._backward_scale != 1.0:
@@ -793,6 +783,67 @@ class BackwardAndOptimizerStepPhase(ManagedStepPhase):
         mem = self._device_ctx.memory_stats()
         reserved = f"{mem['reserved_mb']:.0f}MB" if mem is not None else "n/a"
         print(f"    [residency] optimizer {moment}: vram_reserved={reserved}")
+
+
+class GraphForwardLossBackwardPhase(ManagedStepPhase):
+    """Forward + loss + backward as one XPU-graph replay per shape (L5.3).
+
+    Replaces ForwardPhase + LossPhase + BackwardAndOptimizerStepPhase's
+    backward half when use_xpu_graph is on; the optimizer step, clipping,
+    residency calls and boundary gating below are that phase's non-fused
+    logic unchanged (fused optimizers are refused at build, so there is no
+    fused branch to carry). Per micro-step: zero the window in place at
+    micro 0 (never the optimizer's zero_grad -- it reassigns .grad, which
+    a replay would then write past), replay or warm the runner, stash
+    loss/per_sample_loss for MonitoringPhase, optimizer step at the
+    boundary.
+
+    extras["pred"] is deliberately absent (the prediction lives in the
+    capture pool); extras["loss_for_backward"] is absent too (the grad
+    window scale is baked into the captured backward). Nothing downstream
+    reads either -- LossPhase was pred's only reader, and the scale key's
+    only reader was the phase this replaces.
+    """
+
+    def __init__(self, runner, optimizer: OptimizerHandle,
+                 resource_control: ResourceControlHandle,
+                 controller: "AdaptiveResidencyController",
+                 device_ctx=None, profile: bool = False,
+                 grad_accum: int = 1, grad_clip_max_norm: float = 0.0):
+        self._runner = runner
+        self._optimizer = optimizer
+        self._resource_control = resource_control
+        self._controller = controller
+        self._device_ctx = device_ctx
+        self._profile = profile
+        self._grad_accum = grad_accum
+        self._grad_clip_max_norm = grad_clip_max_norm
+
+    def run(self, state: ManagedStepState) -> ManagedStepState:
+        import torch
+        self._resource_control.ensure_loaded("optimizer")
+        if state.micro == 0:
+            self._runner.zero_window()
+        loss, per_sample, how = self._runner.step(
+            micro=state.micro,
+            xc=state.extras["xc"], t=state.extras["t"],
+            ctx_emb=state.extras["ctx_emb"], y=state.extras["y"],
+            target=state.extras["target"], sigma=state.extras["sigma"],
+            mask=state.extras.get("valid_mask"))
+        state.extras["loss"] = loss
+        state.extras["per_sample_loss"] = per_sample
+        state.extras["xpu_graph_how"] = how
+        is_boundary = state.micro + 1 >= self._grad_accum
+        if is_boundary:
+            if self._grad_clip_max_norm > 0.0:
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    state.model.trainable_parameters(),
+                    self._grad_clip_max_norm)
+                state.extras["grad_norm"] = float(total_norm)
+            self._optimizer.step(n_steps=1)
+        if self._controller.should_release("optimizer"):
+            self._resource_control.release("optimizer")
+        return state
 
 
 class ProbePhase(ManagedStepPhase):
@@ -1270,6 +1321,20 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "interior micro-steps -- only the boundary's full-window gradient "
                 "gets clipped.",
         ),
+        "use_xpu_graph": Port(
+            name="use_xpu_graph", type=bool, required=False, default=False,
+            doc="L5.3: capture forward+loss+backward into an XPUGraph replay "
+                "per bucket shape (~2x measured: forward+backward 878 ms -> "
+                "421 ms replay under MATH SDPA). One graph per (batch, H, W) "
+                "(~460-520 MB pool each, shared pool, 4 shapes max, then "
+                "eager); optimizer step, clipping, text encoding and all "
+                "monitoring stay eager. Default False = the three eager "
+                "phases, unchanged. Refused with fused optimizers (their "
+                "update fires inside backward hooks, uncapturable) and with "
+                "any active Dropout (replay would freeze the RNG); the model "
+                "is pinned resident for the run (a mid-run offload would "
+                "leave replays reading freed memory).",
+        ),
         "save_every_n_steps": Port(
             name="save_every_n_steps", type=int, required=False, default=0,
             doc="0 disables. >0 writes a full LoRA safetensors every N optimizer steps "
@@ -1358,6 +1423,8 @@ class ManagedLoRATrainerNode(TrainerNode):
         grad_accum: int = inputs.get("grad_accum", self.INPUTS["grad_accum"].default)
         grad_clip_max_norm: float = inputs.get(
             "grad_clip_max_norm", self.INPUTS["grad_clip_max_norm"].default)
+        use_xpu_graph: bool = inputs.get(
+            "use_xpu_graph", self.INPUTS["use_xpu_graph"].default)
         save_every_n_steps: int = inputs.get(
             "save_every_n_steps", self.INPUTS["save_every_n_steps"].default)
         save_prefix: str = inputs.get("save_prefix", self.INPUTS["save_prefix"].default)
@@ -1423,6 +1490,29 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "post-backward clip could run -- clipping here would silently do "
                 "nothing. Use a non-fused optimizer node with clipping, or "
                 "grad_clip_max_norm=0 with the fused one.")
+        graph_runner = None
+        if use_xpu_graph:
+            if is_fused:
+                raise ValueError(
+                    "use_xpu_graph is incompatible with a fused optimizer: its "
+                    "update fires inside backward() (per-parameter hooks), which "
+                    "a captured graph cannot replay -- and replaying a stale "
+                    "update would train wrong silently. Use a non-fused "
+                    "optimizer node with graph capture.")
+            if grad_accum > 1:
+                raise ValueError(
+                    "use_xpu_graph with grad_accum > 1 is not proven yet: the "
+                    "design handles it (in-place zero at window start, replay "
+                    "accumulates, window scale baked into the capture), but "
+                    "the parity run only covers grad_accum=1. Prove it with a "
+                    "same-seed parity run before lifting this, do not reason "
+                    "it away.")
+            from .xpu_graph_step import XPUGraphStepRunner
+            graph_runner = XPUGraphStepRunner(
+                model, loss_weighting, device,
+                backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0,
+                bucket_balance=bucket_balance)
+            graph_runner.refuse_if_unsupported()
         if probe_every < 0:
             raise ValueError(f"probe_every_n_steps must be >= 0, got {probe_every}")
         if probe_every > 0 and probe_grad_alignment and is_fused:
@@ -1446,8 +1536,14 @@ class ManagedLoRATrainerNode(TrainerNode):
         # something asks for the room", which is exactly the conditioning
         # miss path. ForwardPhase's own ensure_loaded("model") is what brings
         # it back, and that obligation is the price of the capability.
+        # Graph capture pins it resident instead (sacrificable=False): a
+        # replay reads weights at captured addresses, so a mid-run offload
+        # would leave replays reading freed memory -- silent corruption, not
+        # a slowdown, which is why this is structural rather than a warning.
+        # The price is real: capture pools plus a pinned model raise peak,
+        # so a tight budget OOMs loudly instead of degrading.
         resource_control.register("model", model, offloadable=False,
-                                  sacrificable=True)
+                                  sacrificable=not use_xpu_graph)
         resource_control.register("optimizer", optimizer, offloadable=True)
         resource_control.register("text_encoder", text_encoder, offloadable=True)
 
@@ -1490,15 +1586,22 @@ class ManagedLoRATrainerNode(TrainerNode):
             EncodeConditioningPhase(text_encoder, resource_control, controller,
                                      device_ctx=device_ctx, profile=profile,
                                      ensure_loaded_before_encode=not prewarm_text_encoder),
-            ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum),
-            ForwardPhase(resource_control),
-            LossPhase(loss_weighting,
-                      backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0,
-                      bucket_balance=bucket_balance),
-            BackwardAndOptimizerStepPhase(optimizer, is_fused, resource_control, controller,
-                                           device_ctx=device_ctx, profile=profile,
-                                           grad_accum=grad_accum,
-                                           grad_clip_max_norm=grad_clip_max_norm),
+            ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum,
+                          skip_zero_grad=graph_runner is not None),
+            *( [GraphForwardLossBackwardPhase(
+                graph_runner, optimizer, resource_control, controller,
+                device_ctx=device_ctx, profile=profile, grad_accum=grad_accum,
+                grad_clip_max_norm=grad_clip_max_norm)]
+               if graph_runner is not None else
+               [ForwardPhase(resource_control),
+                LossPhase(loss_weighting,
+                          backward_scale=1.0 / grad_accum if grad_accum > 1 else 1.0,
+                          bucket_balance=bucket_balance),
+                BackwardAndOptimizerStepPhase(
+                    optimizer, is_fused, resource_control, controller,
+                    device_ctx=device_ctx, profile=profile,
+                    grad_accum=grad_accum,
+                    grad_clip_max_norm=grad_clip_max_norm)] ),
             *([ProbePhase(TProbe(n_items=probe_items, points_per_bucket=probe_points,
                                  grad_alignment=probe_grad_alignment),
                           diffusion_process, probe_every, grad_accum=grad_accum)]

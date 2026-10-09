@@ -202,6 +202,25 @@ trades a fraction of the 1.2x for a fraction of the +3 GB. Not run — the
 question L5.1 asks is answered, and the useful follow-up is "which fraction",
 which needs its own measurement.
 
+### Follow-up run 2026-10-09: the fraction sweep (batch 2, x32, seed 1234)
+
+| fraction | steps/s | peak reserved | drift | loss path |
+|---|---|---|---|---|
+| 1.0 (control) | 0.996 | 7,220 MB | 2 MB | identical |
+| **0.5** | **1.166 (150 steps) / 1.238 (300 steps)** | 9,354 MB | 972 MB once, then flat | identical |
+| 0.25 | 0.582 | 10,590 MB | −2 MB | identical |
+| 0.0 | OOM at step 4 (prior result, stands) | 10,282 MB | — | — |
+
+Loss trajectories agree to the 4th decimal (0.00730 → ~0.1177 in all
+arms): fraction changes numerics not at all, as exact recompute predicts.
+The curve is **non-monotone**. 0.5 buys +17–24% for a one-time +2.1 GB
+(the 300-step run holds peak 9,354 flat from the first 50 steps, so the
+972 MB is a single allocator step, not a progressive ratchet). 0.25 is a
+cliff: uniformly 1.8x slower steps (median 1.70 s vs 0.95 s, not stalls —
+2 slow steps in every arm), the allocator-pressure regime at 87% full
+where every allocation fragments. So 0.5 is the only useful setting, and
+only with headroom; the 1.0 default stands for tight budgets.
+
 ## L4 — step time IS flat to batch 4, so per-sample captions are worth doing
 
 The first measure, no code. `hw_validate.py --batch 1/2/4/8` on `non-square`,

@@ -260,6 +260,44 @@ Two limits on what this establishes:
   At 22,297 launches per step there is no room in the budget for a per-sample
   conditioning path to be free by default; it has to earn its place.
 
+### Follow-up run 2026-10-09: hetero captions measured on synthetic data
+
+`datasets/multi-caption`: byte-identical copy of `non-square` latents with
+8 synthetic distinct prompts round-robin (34–35 samples each; datasets/ is
+gitignored — regenerate per `measure_l4_caption_cost.py`'s docstring).
+Measurement only; quality is irrelevant. Batch 4, shuffle, seed 1234:
+
+| dataset | bucket | keep_incomplete | trained/epoch | batches |
+|---|---|---|---|---|
+| non-square (1 caption) | off | False | 184/273 | 46 |
+| non-square | off | True | 273/273 | 97 |
+| non-square | x32 | False | 268/273 | 67 |
+| **multi-caption (8)** | off | False | **28/273** | 7 |
+| multi-caption | off | True | 273/273 | 187 |
+| multi-caption | x32 | False | 232/273 | 58 |
+| multi-caption | x32 | True | 273/273 | 79 |
+
+**Caption fragmentation, not shapes, is what starves the run.** Eight
+captions × 63 shapes → groups of ~4, and the default drops every group
+under the batch: 28 of 273 train per epoch. Bucketing mitigates much of
+it (8 × 3 buckets → groups of ~11: 232/273) because it collapses the
+shape axis of the grouping key. `keep_incomplete_batches=True` recovers
+everything but pays 187 batches for 273 samples unbucketed. Batches carry
+exactly one prompt by construction (`_merge_samples` takes
+`samples[0]`) — hetero batches cannot form under this grouping at all.
+
+Text-encode cost (real towers, XPU, `encode_prompts`): **31.5 ms per cold
+distinct prompt, linear** (1/4/8 prompts: 32/126/251 ms), **0.0 ms warm**
+(cache-consistent, verified equal tensors). One-time device init ~800 ms
+lives outside any prompt's number. Worst case per step — a full batch of
+4 never-seen captions — is ~126 ms against a ~1,000 ms step, paid once
+per caption and never again.
+
+So the hetero-caption price is ~zero in steady state, and L4's remaining
+cost is the loader regrouping plus `y` assembly, not encodes. What L4
+buys on multi-caption data is not speed but **data**: 28 → 273 usable
+samples per epoch at batch 4 unbucketed.
+
 ## What is not worth doing, and why
 
 - **Shape pre-warm.** Measured and closed in

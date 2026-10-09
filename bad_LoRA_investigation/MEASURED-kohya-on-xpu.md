@@ -126,7 +126,19 @@ Dataset wiring, worth recording because two of these are silent traps:
   large, but cropping and bucketing are disabled` on these sources (up to
   2480×3508).
 
-## Not yet measured
+## What this unblocked (A2 verdict, 2026-10-09)
+
+**A2 is done; see `MEASURED-targets-and-schedule.md` for the numbers.**
+Kohya trained to completion at rank 16/alpha 16 on the A1 single image
+(500 steps, reproduces the scene) and ran the matched 201-step arm at
+384px; this trainer ran the same arms. The comparison resolved to two
+configuration gaps, both fixed and measured: cosine-vs-constant LR
+schedule (~2x undertraining) and LoRA targets (560 vs kohya's 722;
+`kohya_plus` 726 renders best). The residual structural difference in
+§"Not yet measured" below (resize-to-bucket vs pad-to-bucket) stands as
+recorded but did not block the verdict — A1 uses identical pixels.
+
+## Not yet measured (original note, kept as written)
 
 **This establishes that A2 is runnable. It is not an A2 result.** No kohya
 LoRA has been trained to completion and none has been compared to anything.

@@ -62,8 +62,9 @@ at every capacity. At 300 steps, batch 2:
 
 **1.54x throughput, no dataset change and no change to training numerics**, and
 the gap to single-shape training closes from 1.60x to **1.04x**. Peak reserved
-is identical either way (8,774 MB) — the primitive cache is host memory. Not
-yet landed in `nodes/xpu_env.py`; and only the two capacities above are
+is identical either way (8,774 MB) — the primitive cache is host memory. Landed
+in `nodes/xpu_env.py` (`DEFAULT_ONEDNN_PRIMITIVE_CACHE_CAPACITY = 2048`); and
+only the two capacities above are
 measured, so the smallest sufficient value is not known.
 
 **The cost is per shape transition, not per distinct shape.** Classifying each

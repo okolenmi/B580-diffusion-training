@@ -15,6 +15,22 @@ torch 2.12.1+xpu, through `scripts/hw_validate.py` and
 `scripts/hw_validation_batch.sh`; the ones without it were found and fixed
 by inspection.
 
+- **[2026-10-09, confirmed on hardware + maintainer renders] LoRA quality
+  gap vs kohya was schedule + targets, not a trainer defect.** On one
+  512px image (rank 16, 500 steps, lr 1e-4): this trainer's cosine decay
+  applied ~0.52x kohya's constant-LR total (forensics 1.5–1.8x under,
+  matching the "needs 1.5x power" render verdict), and the historical
+  attention-only target set (560) forced `attn_output` to ~2x kohya's
+  while kohya adapts 722 modules incl. feed-forward/projections. Matched
+  arms land on kohya's weight distribution (attn_output 0.321 vs 0.324);
+  `kohya_plus` (722 + conditioning-path embeddings = 726) renders best.
+  New `target_modules` presets (`attention`/`kohya_default`/`kohya_plus`)
+  + `target_conditioning_path` switch on `ComfyUNetLoRANode`; default
+  behaviour unchanged. Full numbers:
+  `archive/bad-LoRA-investigation/MEASURED-targets-and-schedule.md`.
+  Open follow-ups: `kohya_plus`-as-default undecided; no bf16 optimizer
+  line (binds at high rank on 12 GB); >77-token captions untested.
+
 - **[2026-10-04, confirmed on hardware] `keep_incomplete_batches` and the training diagnostics: the counts were right, and the probe turns out to cost wall time and no memory at all.**
 
 - **[2026-09-30] Loader silently drops images whose (caption, size) group

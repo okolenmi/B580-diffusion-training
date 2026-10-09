@@ -16,7 +16,7 @@ dataset `non-square`, unless noted. One run at a time.
 | L5.1 checkpointing fraction | **measured, sweep not run** | `64186e3` | OFF is 1.2x but OOMs at step 4 in a real run (10,282 MB); `--attn-ckpt-fraction` is the real lever, unfractionated |
 | L5.2 LoRA-branch launches | **measured, not recommended, not built** | — | best shippable variant −0.5%; −7.2% costs up to 2.27% adapter-delta error; −22.8% needs an invalidation design that does not exist (recorded in `docs/known-issues/deferred.md`) |
 | L5.3 XPU graph capture | **measured, not integrated** | — | 2.04–2.08x replay vs production eager (MATH/EFFICIENT SDPA; FLASH cannot capture — SYCL limit); per-shape pools ~460–520 MB; optimizer step, multi-shape, dropout RNG open |
-| Per-axis pad report (`PENDING-per-axis-pad-report.md`) | **not built** | — | verified absent from `manager/loader.py` 2026-10-09; the four stats (modal side, preservation, both-axes, divisibility) remain the cheapest open item in this folder |
+| Per-axis pad report (`PENDING-per-axis-pad-report.md`) | **done 2026-10-09** | (this commit) | modal sides + divisibility + untouched/both-axes counts in the build report; x32 keeps 204/204 modal widths, x24 keeps 0, pads both axes on 254/273 |
 
 Open, in cheapest-first order: per-axis pad report (one pass over
 trajectories, spec complete) → `--attn-ckpt-fraction` sweep → L4

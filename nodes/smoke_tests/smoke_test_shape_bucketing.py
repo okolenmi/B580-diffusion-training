@@ -599,6 +599,112 @@ def check_pad_fraction_arithmetic_is_right():
     print("    PASS")
 
 
+def check_per_axis_pad_report_names_the_modal_side():
+    print("[per-axis report: modal side, who keeps it, who pads both axes -- "
+          "the numbers that make a bad multiple legible]")
+    import contextlib
+    import io
+    # Ground truth from the dataset, independent of the Counter logic inside
+    # pad_fraction_stats: sum the per_shape table (itself checked against
+    # emitted batches above) per axis and take the argmax.
+    for multiple in (24, 32, 48):
+        stats = _loader(multiple).pad_fraction_stats()
+        n = stats["samples"]
+        h_by: dict[int, int] = {}
+        w_by: dict[int, int] = {}
+        for s in stats["per_shape"]:
+            h, w = s["latent_hw"]
+            h_by[h] = h_by.get(h, 0) + s["samples"]
+            w_by[w] = w_by.get(w, 0) + s["samples"]
+        want_mh = max(h_by, key=lambda k: h_by[k])
+        want_mw = max(w_by, key=lambda k: w_by[k])
+        check(stats["modal_latent_h"] == want_mh
+              and stats["modal_latent_h_samples"] == h_by[want_mh],
+              f"x{multiple}: modal h {stats['modal_latent_h']} "
+              f"({stats['modal_latent_h_samples']}) != table {want_mh} "
+              f"({h_by[want_mh]})")
+        check(stats["modal_latent_w"] == want_mw
+              and stats["modal_latent_w_samples"] == w_by[want_mw],
+              f"x{multiple}: modal w {stats['modal_latent_w']} "
+              f"({stats['modal_latent_w_samples']}) != table {want_mw} "
+              f"({w_by[want_mw]})")
+        check(stats["modal_divisible"] ==
+              {"h": want_mh % multiple == 0, "w": want_mw % multiple == 0},
+              f"x{multiple}: divisibility flags {stats['modal_divisible']} "
+              f"wrong for modal {want_mh}x{want_mw}")
+        # Preserved counts recomputed from the table, same definition the
+        # implementation must use (bucket == own size).
+        want_hp = sum(s["samples"] for s in stats["per_shape"]
+                      if s["bucket_hw"][0] == s["latent_hw"][0])
+        want_wp = sum(s["samples"] for s in stats["per_shape"]
+                      if s["bucket_hw"][1] == s["latent_hw"][1])
+        want_mhp = sum(s["samples"] for s in stats["per_shape"]
+                       if s["latent_hw"][0] == want_mh
+                       and s["bucket_hw"][0] == s["latent_hw"][0])
+        want_mwp = sum(s["samples"] for s in stats["per_shape"]
+                       if s["latent_hw"][1] == want_mw
+                       and s["bucket_hw"][1] == s["latent_hw"][1])
+        want_both = sum(s["samples"] for s in stats["per_shape"]
+                        if s["bucket_hw"][0] > s["latent_hw"][0]
+                        and s["bucket_hw"][1] > s["latent_hw"][1])
+        for key, want in (("height_preserved_samples", want_hp),
+                          ("width_preserved_samples", want_wp),
+                          ("modal_height_preserved_samples", want_mhp),
+                          ("modal_width_preserved_samples", want_mwp),
+                          ("padded_both_axes_samples", want_both)):
+            check(stats[key] == want,
+                  f"x{multiple}: {key}={stats[key]} != table {want}")
+        # Partition: untouched + one-axis + both-axes == every sample.
+        one_axis = sum(s["samples"] for s in stats["per_shape"]
+                       if (s["bucket_hw"][0] > s["latent_hw"][0])
+                       != (s["bucket_hw"][1] > s["latent_hw"][1]))
+        untouched = sum(s["samples"] for s in stats["per_shape"]
+                        if s["pad_fraction"] == 0.0)
+        check(untouched + one_axis + want_both == n,
+              f"x{multiple}: {untouched}+{one_axis}+{want_both} != {n}")
+        check(want_both <= stats["padded_samples"] <= n,
+              f"x{multiple}: both-axes {want_both} outside [0, padded]")
+        # The wording the spec asks for: the report must say in words when
+        # the multiple does not divide the modal side -- and stay silent
+        # when it does (no recommendation either way, per the spec).
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _loader(multiple).report_pad_fraction()
+        out = buf.getvalue()
+        if not stats["modal_divisible"]["w"]:
+            check(f"does not divide the modal width {want_mw}" in out,
+                  f"x{multiple}: report never says the multiple misses the "
+                  f"modal width {want_mw}")
+        else:
+            check("does not divide" not in out,
+                  f"x{multiple}: report claims a miss that is not there")
+        print(f"    x{multiple}: modal {want_mh}x{want_mw}, kept "
+              f"{want_mhp}/{h_by[want_mh]} x {want_mwp}/{w_by[want_mw]}, "
+              f"both-axes {want_both}/{n}")
+    # Exact pins on non-square, the dataset every other check here uses:
+    # x32 keeps every modal sample, x24 keeps none, x48 pads both axes on
+    # nearly all. If the dataset changes these move with it -- update them,
+    # do not delete the check.
+    s32 = _loader(32).pad_fraction_stats()
+    check((s32["modal_latent_h"], s32["modal_latent_h_samples"]) == (64, 85)
+          and (s32["modal_latent_w"], s32["modal_latent_w_samples"]) == (64, 204),
+          "non-square modal sides moved; re-pin the numbers, do not drop them")
+    check(s32["modal_height_preserved_samples"] == 85
+          and s32["modal_width_preserved_samples"] == 204
+          and s32["padded_both_axes_samples"] == 0,
+          "x32 must keep all 85+204 modal samples and pad both axes on none")
+    s24 = _loader(24).pad_fraction_stats()
+    check(s24["modal_height_preserved_samples"] == 0
+          and s24["modal_width_preserved_samples"] == 0
+          and s24["padded_both_axes_samples"] == 254,
+          "x24 must keep no modal sample and pad both axes on 254/273")
+    s48 = _loader(48).pad_fraction_stats()
+    check(s48["padded_both_axes_samples"] == 256
+          and s48["modal_width_preserved_samples"] == 0,
+          "x48 must pad both axes on 256/273 and keep no modal width")
+    print("    PASS")
+
+
 def check_bucketing_cost_is_visible_at_build():
     print("[build() reports the pad fraction once, before any step -- the "
           "recurring cost of the knob is invisible in a step time, and only "
@@ -742,6 +848,7 @@ def main():
     check_pad_fraction_report_is_off_unless_asked_for()
     check_pad_fraction_report_matches_what_is_actually_padded()
     check_pad_fraction_arithmetic_is_right()
+    check_per_axis_pad_report_names_the_modal_side()
     check_bucketing_cost_is_visible_at_build()
     check_prewarm_derives_the_keys_training_asks_for()
     print()

@@ -1,6 +1,16 @@
 Per-axis padding and modal-side preservation, for `pad_fraction_stats()` /
 `report_pad_fraction()` in `manager/loader.py`.
 
+> **Built 2026-10-09** (`pad_fraction_stats()` + report lines +
+> `check_per_axis_pad_report_names_the_modal_side` in
+> `smoke_test_shape_bucketing.py`). One deviation, verified: the text below
+> says "`modal_side_preserved` ... 246/273 for x32" but 246 is the
+> **occupancy of the width-64 bucket**, while samples *untouched* on the
+> width are 204/273 (the modal samples, all kept: 204/204). Both are now
+> reported under exact names (`width_preserved_samples` =
+> bucket-is-own-size; `modal_width_preserved_samples` = modal *and*
+> untouched), so the prose/number mismatch cannot recur.
+
 **Why.** The `shape_bucket_multiple` knob rounds both axes up independently, so
 the multiple has to divide the dataset's modal side or it pads the side nobody
 needed padded. On `non-square` that is invisible from the existing report, which

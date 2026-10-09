@@ -2,6 +2,7 @@
 
 import json
 import random
+from collections import Counter
 from pathlib import Path
 from typing import List, Dict, Optional, Iterator, Union
 import torch
@@ -239,6 +240,35 @@ class ManagedDatasetLoader:
             return fractions[idx]
 
         n_samples = len(fractions)
+        # Per-axis numbers (PENDING-per-axis-pad-report): the multiple rounds
+        # both axes up independently, so it has to divide the dataset's modal
+        # side or it pads the side nobody needed padded. The total pad
+        # fraction cannot show that -- x24 reports 25.1% mean pad, which reads
+        # as "2x x32's 13.3%" rather than as "x24 pads the width of every
+        # single sample and x32 pads none". All derived from the same
+        # by_shape table, so they cannot drift from the fractions above.
+        h_counts: Counter[int] = Counter()
+        w_counts: Counter[int] = Counter()
+        for (h, w, _, _), n in by_shape.items():
+            h_counts[h] += n
+            w_counts[w] += n
+        modal_h, modal_h_n = h_counts.most_common(1)[0]
+        modal_w, modal_w_n = w_counts.most_common(1)[0]
+        m = self.shape_bucket_multiple
+        height_preserved = sum(n for (h, w, H, W), n in by_shape.items()
+                                 if H == h)
+        width_preserved = sum(n for (h, w, H, W), n in by_shape.items()
+                                if W == w)
+        # Modal-conditioned variant: samples AT the modal side left untouched.
+        # This is the number that separates x32 (204/204 modal samples kept)
+        # from x24 (0/204): the general counts above coincide with it here
+        # only because no non-modal side happens to be divisible.
+        modal_height_preserved = sum(n for (h, w, H, W), n in by_shape.items()
+                                     if h == modal_h and H == h)
+        modal_width_preserved = sum(n for (h, w, H, W), n in by_shape.items()
+                                    if w == modal_w and W == w)
+        padded_both_axes = sum(n for (h, w, H, W), n in by_shape.items()
+                               if H > h and W > w)
         return {
             "multiple": self.shape_bucket_multiple,
             "samples": n_samples,
@@ -253,6 +283,16 @@ class ManagedDatasetLoader:
             "pad_fraction_max": fractions[-1],
             "latent_pixel_factor": sum(
                 s["latent_pixel_factor"] * s["samples"] for s in shapes) / n_samples,
+            "modal_latent_h": modal_h,
+            "modal_latent_h_samples": modal_h_n,
+            "modal_latent_w": modal_w,
+            "modal_latent_w_samples": modal_w_n,
+            "modal_divisible": {"h": modal_h % m == 0, "w": modal_w % m == 0},
+            "height_preserved_samples": height_preserved,
+            "width_preserved_samples": width_preserved,
+            "modal_height_preserved_samples": modal_height_preserved,
+            "modal_width_preserved_samples": modal_width_preserved,
+            "padded_both_axes_samples": padded_both_axes,
             "per_shape": shapes,
         }
 
@@ -284,6 +324,23 @@ class ManagedDatasetLoader:
               f"{stats['pad_fraction_max']:.1%}; "
               f"{stats['padded_samples']}/{stats['samples']} sample(s) padded; "
               f"latent pixels x{stats['latent_pixel_factor']:.3f}")
+        print(f"  [DataLoader] modal latent side(s): h={stats['modal_latent_h']} "
+              f"({stats['modal_latent_h_samples']}/{stats['samples']} samples), "
+              f"w={stats['modal_latent_w']} "
+              f"({stats['modal_latent_w_samples']}/{stats['samples']} samples); "
+              f"modal samples kept: "
+              f"{stats['modal_height_preserved_samples']}/"
+              f"{stats['modal_latent_h_samples']} on h, "
+              f"{stats['modal_width_preserved_samples']}/"
+              f"{stats['modal_latent_w_samples']} on w; "
+              f"padded on both axes {stats['padded_both_axes_samples']}/"
+              f"{stats['samples']}")
+        for axis in ("h", "w"):
+            if not stats["modal_divisible"][axis]:
+                side = stats[f"modal_latent_{axis}"]
+                print(f"  [DataLoader] NOTE: x{stats['multiple']} does not divide "
+                      f"the modal {'height' if axis == 'h' else 'width'} {side} -- "
+                      f"that side is padded on every sample that has it")
         for s in stats["per_shape"]:
             print(f"    {s['latent_hw'][0]:>3}x{s['latent_hw'][1]:<3} -> "
                   f"{s['bucket_hw'][0]:>3}x{s['bucket_hw'][1]:<3} latent  "

@@ -480,3 +480,30 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 The two entries this section used to hold are now in
 [`resolved.md`](resolved.md) with the hardware numbers that closed them:
 `keep_incomplete_batches`, and the training diagnostics.
+
+## L4 size-only grouping + per-sample prompts (code landed, quality unproven)
+
+Built 2026-10-10 (`group_by_size_only`, `encode_per_sample_prompts`,
+both `EncodeConditioningPhase`s; default grouping untouched). Proven:
+CPU assembly/identity/refusal checks; GPU that 67/67 batches go hetero
+on synthetic 8-caption data with noise-level step cost and identical
+peak (`L4_sizeonly` vs `L4_control`). **Not proven: quality on a real
+many-caption dataset** -- the synthetic set measures plumbing, and a
+31 ms/cold-prompt encode is priced but a real caption distribution's
+effect on the LoRA is not. Confirm with: a captioned dataset, batch 4,
+`--group-by-size-only`, 300+ steps, then renders vs the same run with
+per-caption batches. Ref: `shapes diversity problem 2/STATUS.md` (L4 row).
+
+## L5.3 XPU graph capture (managed route proven, main route not)
+
+`use_xpu_graph` on the managed route: 200-step same-seed parity
+(max 2.96e-03, mean 2.15e-04), +37% steps/s for +1.5 GB, loud refusals
+(fused, Dropout>0, grad_accum>1). Proven on CPU (fallback math, zeroing
+discipline, 5-step training parity, refusals) and on the B580 for the
+managed route. **Not proven: the main route** (`SupervisedLoRATrainerNode`
++ `GraphForwardLossBackwardPhase`): same runner, separate wiring, needs
+its own 200-step parity run:
+`scripts/hw_validate.py main --dataset non-square --steps 200 --seed 1234
+--shape-bucket-multiple 32 --budget 11500 --batch 2 --use-xpu-graph`
+against the same without the flag. Also unproven: grad_accum>1 under
+capture on either route (refused until the parity run exists).

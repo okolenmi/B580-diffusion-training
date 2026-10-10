@@ -15,11 +15,17 @@ dataset `non-square`, unless noted. One run at a time.
 | L4 size-only grouping + per-sample conditioning | **done 2026-10-09** | (this commit) | loader flag (needs bucketing), prompts list, per-sample assembly, both phases; GPU: 67/67 batches hetero, loss falls, −3.5% steps/s vs control (noise), peak identical; buys data (28→273 unbucketed), not speed |
 | L5.1 checkpointing fraction | **done 2026-10-09** | (this commit) | non-monotone: 0.5 → +17–24% steps/s for one-time +2.1 GB (flat over 300 steps); 0.25 → 1.8x slower steps (allocator-pressure regime); 0.0 OOMs; loss identical all arms; 1.0 default stands |
 | L5.2 LoRA-branch launches | **measured, not recommended, not built** | — | best shippable variant −0.5%; −7.2% costs up to 2.27% adapter-delta error; −22.8% needs an invalidation design that does not exist (recorded in `docs/known-issues/deferred.md`) |
-| L5.3 XPU graph capture | **done 2026-10-09 (managed route, grad_accum=1)** | (this commit) | per-shape replay, optimizer eager; 200-step parity max 2.96e-03 (acceptance caught + fixed a stale-reporting bug); +37% steps/s for +1.5 GB; loud refusals (fused, dropout, accum>1); main route + accum proof still open |
+| L5.3 XPU graph capture | **done 2026-10-09/10 (managed proven; main-route code landed, unproven)** | (this commit + follow-up) | per-shape replay, optimizer eager; 200-step parity max 2.96e-03 (acceptance caught + fixed a stale-reporting bug); +37% steps/s for +1.5 GB; loud refusals (fused, dropout, accum>1); main route needs its own parity run, accum proof open (see pending-testing.md) |
 | Per-axis pad report (`PENDING-per-axis-pad-report.md`) | **done 2026-10-09** | (this commit) | modal sides + divisibility + untouched/both-axes counts in the build report; x32 keeps 204/204 modal widths, x24 keeps 0, pads both axes on 254/273 |
 
 Open, in cheapest-first order: per-axis pad report (one pass over
 trajectories, spec complete) → `--attn-ckpt-fraction` sweep → L4
 per-sample captions (needs a multi-caption dataset to evaluate) → L5.3
-integration (one graph per bucket shape, optimizer step, static
-conditioning). L5.2 stays unbuilt by measurement, not by neglect.
+integration. L5.2 stays unbuilt by measurement, not by neglect.
+
+Update 2026-10-10: all of the above is now done except L5.2 (deliberately
+unbuilt) — per-axis report built, fraction sweep measured (0.5 useful),
+L4 code built + GPU-plumbed (quality on real captions unproven), L5.3 on
+the managed route proven + main-route code landed unproven. Remaining:
+main-route parity run, grad_accum>1 proof, dropout>0 (see
+docs/known-issues/pending-testing.md).

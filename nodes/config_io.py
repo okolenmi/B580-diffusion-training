@@ -23,6 +23,8 @@ FLAT_TO_SECTION_MAP: dict[str, str] = {
     "lora_dropout": "tuning.dropout",
     "lora_output": "tuning.lora_output",
     "lora_target_all": "tuning.target_all",
+    "lora_target_modules": "tuning.target_modules",
+    "lora_target_conditioning_path": "tuning.target_conditioning_path",
 
     # cyclic keys -> tuning.*
     "cycle_steps": "tuning.cycle_steps",

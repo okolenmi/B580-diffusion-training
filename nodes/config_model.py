@@ -46,7 +46,7 @@ class CommonSettings(BaseModel):
     seed: int = 42
     save_every: int = Field(default=100, ge=0, le=10000)
 
-    lr_schedule: Literal["cosine", "poly"] = "cosine"
+    lr_schedule: Literal["cosine", "poly", "constant"] = "cosine"
     lr_end: float = Field(default=1e-5, ge=0.0)
     lr_power: float = Field(default=2.0, ge=0.1, le=5.0)
     lr_warmup_steps: int = Field(default=0, ge=0)
@@ -167,6 +167,21 @@ class LoRATuning(BaseModel):
     dropout: float = Field(default=0.0, ge=0.0, le=0.9)
     lora_output: str = Field(default="", description="Path to save trained LoRA weights")
     target_all: bool = Field(default=False, description="If True, inject LoRA into every Linear/Conv2d in weighted blocks (Full LoRA).")
+    target_modules: Literal["attention", "kohya_default", "kohya_plus"] = Field(
+        default="attention",
+        description="Which Linear layers get an adapter. 'attention' (default): to_q/to_k/to_v/"
+                    "to_out.0 (560 UNet modules). 'kohya_default': also ff.net.0.proj, ff.net.2, "
+                    "proj_in, proj_out (722 -- what kohya sd-scripts adapts). 'kohya_plus': same "
+                    "UNet set with the conditioning-path embeddings kept (726 with default "
+                    "target_conditioning_path). See the kohya_plus render evidence before "
+                    "changing this from the default.")
+    target_conditioning_path: bool = Field(
+        default=True,
+        description="Also adapt time_embed.* and label_emb.* (+4 modules). True (default) keeps "
+                    "the historical behaviour; False gives attention-only like kohya/diffusers "
+                    "defaults. On captionless data the cond path is the only global carrier; "
+                    "other tools (diffusers>=0.41+peft) do load these keys, mapped to "
+                    "time_embedding/add_embedding.")
     lora_continue_from: Optional[str] = Field(default=None, description="Path to existing LoRA adapter to resume from")
     block_weighting: str = Field(
         default="",

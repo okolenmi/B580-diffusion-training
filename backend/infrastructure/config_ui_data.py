@@ -84,6 +84,22 @@ EXTRAS: dict[str, ExtraDef] = {
          'blocks. Warning: This is much slower and requires more VRAM.',
  'group': '0. LAUNCH',
  'subgroup': 'Method-Specific Settings'},
+    'tuning.target_modules': {'label': 'LoRA Target Modules',
+ 'help': 'Which Linear layers get an adapter. attention (560 UNet modules, default); '
+         'kohya_default (722: adds feed-forward/projection linears, what kohya adapts); '
+         'kohya_plus (726: also keeps the time/label embedding modules). '
+         'CAUTION: kohya_plus renders best on captionless data but bakes dataset '
+         'constants into the global conditioning path -- see the B3 check.',
+ 'group': '0. LAUNCH',
+ 'subgroup': 'Method-Specific Settings',
+ 'choice_labels': {'attention': 'Attention only (560)',
+                   'kohya_default': 'Kohya default (722)',
+                   'kohya_plus': 'Kohya plus embeddings (726)'}},
+    'tuning.target_conditioning_path': {'label': 'Adapt Conditioning Path',
+ 'help': 'Also adapt time_embed.* and label_emb.* (+4 modules). On with attention '
+         'gives 564 (historical default); off gives 560 like kohya/diffusers.',
+ 'group': '0. LAUNCH',
+ 'subgroup': 'Method-Specific Settings'},
     'tuning.lora_continue_from': {'label': 'LoRA Continue From',
  'help': 'Optional: Path to an existing LoRA adapter file to resume training from. If '
          'empty or invalid, training starts from scratch. Pick from the dropdown, or '
@@ -316,7 +332,7 @@ EXTRAS: dict[str, ExtraDef] = {
  'extra_visible_when': {'common.optimizer': ['fused-adafactor', 'xpu-adafactor']}},
     'common.lr_schedule': {'label': 'LR Schedule',
  'group': '1. TRAINING',
- 'choice_labels': {'poly': 'Polynomial'}},
+ 'choice_labels': {'poly': 'Polynomial', 'cosine': 'Cosine', 'constant': 'Constant'}},
     'common.lr_end': {'label': 'LR End',
  'group': '1. TRAINING',
  'step': 1e-07,

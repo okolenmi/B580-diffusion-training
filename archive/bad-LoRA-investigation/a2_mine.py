@@ -28,7 +28,10 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+# parents[2]: this file was archived from bad_LoRA_investigation/ (one level
+# deeper) to archive/bad-LoRA-investigation/ on 2026-10-09; parents[1] is
+# now the archive folder, not the repo root.
+REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 

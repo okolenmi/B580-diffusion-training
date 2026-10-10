@@ -371,3 +371,15 @@ the same insertion and the same removal.
 
 Verified rather than assumed: a full harness run with `sys.modules` inspected
 afterwards reports `comfy imported during a full run: False`.
+## Config `lr_schedule` (and the new LoRA target keys) reach no schedule/injector node
+
+**Found 2026-10-10, read in code only.** `nodes/config_model.py` carries
+`lr_schedule` (now `cosine | poly | constant`), but nothing builds a schedule
+node from it: the only production instantiation of any `LRScheduleNode` is
+`scripts/hw_validate.py`'s hardcoded cosine, and no graph builder constructs
+trainer nodes from config at all. Setting `lr_schedule = "constant"` in a
+TOML today changes nothing. Same for the new `tuning.target_modules` /
+`tuning.target_conditioning_path` keys (C1): parsed, validated, mapped in
+`config_io.py`, labelled in the UI data -- and consumed nowhere. Wiring them
+into an actual config->graph path is the remaining work; until then they are
+documentation of intent, not controls.

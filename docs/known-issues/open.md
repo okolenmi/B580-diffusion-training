@@ -384,21 +384,25 @@ TOML today changes nothing. Same for the new `tuning.target_modules` /
 into an actual config->graph path is the remaining work; until then they are
 documentation of intent, not controls.
 
-## Late training hang at batch 8 / rank 64: GPU idle, sync spin (under diagnosis)
+## Late training hang at batch 8 / rank 64: GPU idle, sync spin (open)
 
-**Seen 2026-10-10, twice.** test2, rank 64/alpha 48, batch 8, main route:
-healthy for hundreds of steps (~10 GB VRAM), then GPU use drops to zero
-while the process stays alive at ~104% CPU. py-spy (3 samples over 40 s,
-then a second run) parks the main thread in the same place every time:
-`MonitoringPhase.run` at `float(state.extras["loss"].item())`
+**Seen 2026-10-10, twice, both batch 8.** test2, rank 64/alpha 48, batch 8,
+main route: healthy for hundreds of steps (~10.3-10.8 GB VRAM, flat), then
+a sudden jump toward maximum and the process wedges -- GPU use drops to
+zero while the process stays alive at ~104% CPU. py-spy (3 samples over
+40 s, then a second run) parks the main thread in the same place every
+time: `MonitoringPhase.run` at `float(state.extras["loss"].item())`
 (`nodes/train/step_pipeline.py`) -- a device-to-host sync that never
 completes while the card serves fresh contexts fine. No exception, no OOM,
 I/O counters frozen: userspace spin on a never-signalling event, not a
-deadlock on I/O. Batch-1/2/4 runs of the same shapes complete; 3-step
-batch-8 probes complete. B arms moved to batch 4 (compliant: B1 fixes
-rank/alpha/seed/steps/optimizer/LR, not batch). Suspects, unranked:
-a wedged per-context XPU queue after sustained high-VRAM training,
-allocator pressure under `expandable_segments` at ~11 GB, a rare-tkernel
-hang. Next: if batch-4 arms complete cleanly, bisect batch 8 with
-unbuffered progress (a2_mine `--progress`) to pin the wedge step, then
-strace/fault-handler the stall.
+deadlock on I/O.
+
+**Bisected 2026-10-10: batch 4 is flat through step 800+** (10.6-10.7 GB,
+no growth, same dataset/rank/seed family) -- no monotonic leak; the wedge
+is specific to sustained ~88%+ VRAM (batch 8 idles at 10.8 of 12.2 GB, so
+any transient spike touches the ceiling). Why it hangs instead of raising
+OOM is unproven (allocator-forensics follow-up: snapshots around the
+jump, `expandable_segments` off, scratch accounting). B arms moved to
+batch 4 (compliant: B1 fixes rank/alpha/seed/steps/optimizer/LR, not
+batch). Do NOT run production LoRAs at batch 8 on this card until the
+follow-up lands.

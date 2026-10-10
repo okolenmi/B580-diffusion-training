@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from nodes.core import ExecutionContext
+from nodes.monitor.handle import LiveMonitorHandle
 
 from ...application.ports.graph_runtime import (
     IssueSeverity,
@@ -41,6 +42,7 @@ from ...application.ports.graph_runtime import (
     NodeDoneCallback,
 )
 from ...domain.graph import GraphDefinition, NodeResult
+from ...domain.modules import node_stream_id
 from .discovery import NodeRegistry
 
 logger = logging.getLogger(__name__)
@@ -380,6 +382,8 @@ class ReflectedGraphRuntime(GraphRuntime):
                 for edge in graph.edges_to(node_id):
                     inputs[edge.to_port] = outputs_by_node[edge.from_node][edge.from_port]
 
+                self._attach_module_stream(cls, spec, inputs)
+
                 started = time.monotonic()
                 try:
                     outputs = cls(context).build(**inputs)
@@ -414,6 +418,23 @@ class ReflectedGraphRuntime(GraphRuntime):
                 self.release_memory()
             except Exception:  # noqa: BLE001 -- cleanup is best-effort
                 logger.exception("device memory release after a graph run failed")
+
+    def _attach_module_stream(self, cls: type, spec, inputs: dict) -> None:
+        """Give a node that declares live views somewhere to report them.
+
+        A node with ``MODULES`` and a ``monitor`` input that nothing was
+        wired to gets a handle onto its per-instance stream, so a graph
+        that never mentions a monitor node still has its loss chart: the
+        failure mode "forgot the monitor node, trained fine, reported
+        nothing" (docs/design/14 problem 2) goes away. A wired monitor
+        wins -- the old route keeps working unchanged.
+        """
+        if not cls.MODULES or self._monitor_bus is None:
+            return
+        port = cls.INPUTS.get("monitor")
+        if port is None or inputs.get("monitor") is not None:
+            return
+        inputs["monitor"] = LiveMonitorHandle(node_stream_id(spec.id), self._monitor_bus)
 
     def release_memory(self) -> None:
         """Return freed device memory to the driver (the legacy worker's

@@ -60,6 +60,11 @@ export class GraphDoc {
     this.nodes = new Map();   // id -> {id, class_name, x, y, params}
     this.edges = [];          // [{from_node, from_port, to_node, to_port}]
     this.nextId = 1;
+    // Graph-wide settings (the memory budget). Stored in the graph, so a
+    // saved graph, a run and a template built on it all agree. Keys other
+    // than the ones the Settings section edits (policy, device) are kept
+    // verbatim: this document must not silently drop what it did not draw.
+    this.memory = {};
     this.classByName = {};    // editor.js fills this after /graphs/nodes
     this.onChange = null;     // (reason, origin) => void
   }
@@ -149,6 +154,7 @@ export class GraphDoc {
     this.nodes.clear();
     this.edges = [];
     this.nextId = 1;
+    this.memory = {};
     this.changed("structure");
   }
 
@@ -169,7 +175,7 @@ export class GraphDoc {
   }
 
   toRunPayload() {
-    return {
+    const payload = {
       nodes: [...this.nodes.values()].map((n) => ({
         id: n.id,
         class_name: n.class_name,
@@ -177,13 +183,21 @@ export class GraphDoc {
       })),
       edges: this.edges.map((e) => ({ ...e })),
     };
+    // Sent only when something was set: an untouched graph submits exactly
+    // what it always did, and the server's defaults apply.
+    if (Object.keys(this.memory).length) payload.memory = { ...this.memory };
+    return payload;
   }
 
   toLibraryPayload(description = "") {
     const run = this.toRunPayload();
     const layout = {};
     for (const n of this.nodes.values()) layout[n.id] = { x: n.x, y: n.y };
-    return { format: 1, nodes: run.nodes, edges: run.edges, layout, description };
+    const out = { format: 1, nodes: run.nodes, edges: run.edges, layout, description };
+    // The budget is part of the graph: a saved graph that forgot it would
+    // run with the server default the next time it is loaded.
+    if (run.memory) out.memory = run.memory;
+    return out;
   }
 
   /* ---- loading ---- */
@@ -222,7 +236,17 @@ export class GraphDoc {
       }
     }
     this.nextId = this._scanNextId();
+    const mem = payload.memory;
+    this.memory = mem && typeof mem === "object" && !Array.isArray(mem) ? { ...mem } : {};
     this.changed("structure");
+  }
+
+  /** Set (or, for undefined/null/"", clear) one graph setting. */
+  setMemory(key, value) {
+    const clear = value === undefined || value === null || value === "";
+    if (clear) delete this.memory[key];
+    else this.memory[key] = value;
+    this.changed("memory", "settings");
   }
 
   /** Loaded node ids whose class is absent from the catalog (kept, not dropped). */

@@ -23,8 +23,11 @@ Implements the application's ``PeakStore`` port: admission reads through
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from ..application.ports.peak_store import PeakStore
 
@@ -32,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 #: The only header a SQLite database can start with.
 _SQLITE_HEADER = b"SQLite format 3\x00"
+
+#: How long a statement waits for another process's write lock. The default
+#: (5 s) is short for six processes recording at once on a slow disk.
+_BUSY_TIMEOUT_S = 30.0
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS memory_peaks (
@@ -41,6 +48,10 @@ CREATE TABLE IF NOT EXISTS memory_peaks (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
+
+
+def _identity(st: os.stat_result) -> tuple[int, int, int, int]:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 class SqlitePeakStore(PeakStore):
@@ -71,18 +82,60 @@ class SqlitePeakStore(PeakStore):
         peer holds it would throw away real measurements. The header is
         only wrong when this file never came from SQLite.
         """
-        if self._discard_if_not_a_database():
-            with sqlite3.connect(str(self._db_path)) as fresh:
-                fresh.execute(_CREATE_TABLE)
-        conn = sqlite3.connect(str(self._db_path))
+        self._discard_if_not_a_database()
+        conn = sqlite3.connect(str(self._db_path), timeout=_BUSY_TIMEOUT_S)
         conn.row_factory = sqlite3.Row
+        try:
+            # On every connect, not just the first: a file that is empty
+            # (new, or truncated to nothing) has no table, and a read of it
+            # must answer "unknown", not raise "no such table". When the
+            # table exists this is a schema read and takes no write lock.
+            with conn:
+                conn.execute(_CREATE_TABLE)
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
+    @contextmanager
+    def _tx(self) -> Iterator[sqlite3.Connection]:
+        """One connection, one transaction, and the connection is *closed*.
+
+        ``with sqlite3.connect(...) as conn`` commits but leaves the
+        connection open until it is garbage-collected; every call here used
+        to leak a file handle (and, in a process that records often, a
+        lock holder) that way.
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _discard_if_not_a_database(self) -> bool:
-        """Discard a file SQLite could not have written. True when discarded."""
+        """Discard a file SQLite could not have written. True when discarded.
+
+        **An empty file is not damage.** ``sqlite3.connect`` creates the
+        file at zero length and writes the header at the first commit, so a
+        peer that is *creating* the store right now looks exactly like a
+        file with no header. Treating that as corruption deleted the file
+        from under the peer's open connection: measured on 60 trials of six
+        processes constructing the store at the same instant, 177 ``disk I/O
+        error``s, 10 ``no such table``s and 27 trials that ended with the
+        highest recorded peak missing. SQLite itself treats a zero-length
+        file as a new database, so there is nothing to recover from.
+
+        A file with *some other* content really is not ours and is
+        discarded -- but only if it is still the very file that was
+        inspected. Two processes that both found the same bad file would
+        otherwise each unlink, and the second would delete the clean store
+        the first had just written.
+        """
         try:
             with open(self._db_path, "rb") as fh:
                 header = fh.read(16)
+                inspected = os.fstat(fh.fileno())
         except FileNotFoundError:
             return False
         except OSError as exc:
@@ -92,10 +145,19 @@ class SqlitePeakStore(PeakStore):
                 "peak store %s unreadable before connect: %s", self._db_path, exc
             )
             return False
-        if header == _SQLITE_HEADER:
+        if header == _SQLITE_HEADER or header == b"":
             return False
         try:
+            now = os.stat(self._db_path)
+            # Identity is more than the inode number: a filesystem hands a
+            # freed inode straight to the next file created, so a peer's
+            # replacement can carry the same number. Size and modification
+            # time tell the two files apart.
+            if _identity(now) != _identity(inspected):
+                return False  # a peer already replaced it; theirs is the clean one
             self._db_path.unlink()
+        except FileNotFoundError:
+            return False  # a peer discarded it first
         except OSError as exc:
             # Not removed: the next statement surfaces the same truth
             # instead of a silent fake-miss.
@@ -113,7 +175,7 @@ class SqlitePeakStore(PeakStore):
 
     def _ensure_table(self) -> None:
         """Create the table if it doesn't exist."""
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(_CREATE_TABLE)
 
     def record(self, fingerprint: str, peak_mb: float) -> float:
@@ -125,7 +187,7 @@ class SqlitePeakStore(PeakStore):
         Lowering it here would let the *next* run be admitted on a number this
         run already exceeded.
         """
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 """
                 INSERT INTO memory_peaks (fingerprint, peak_mb, samples, updated_at)
@@ -151,7 +213,7 @@ class SqlitePeakStore(PeakStore):
         two runs end up believing the card is theirs (the port's rule,
         for every implementation).
         """
-        with self._connect() as conn:
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT peak_mb FROM memory_peaks WHERE fingerprint = ?",
                 (fingerprint,),
@@ -170,7 +232,7 @@ class SqlitePeakStore(PeakStore):
 
     def known(self) -> dict[str, float]:
         """Every remembered peak, for a person to read."""
-        with self._connect() as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 "SELECT fingerprint, peak_mb FROM memory_peaks"
             ).fetchall()
@@ -178,7 +240,7 @@ class SqlitePeakStore(PeakStore):
 
     def forget(self, fingerprint: str) -> None:
         """Drop one configuration's measurement, so the next run re-measures."""
-        with self._connect() as conn:
+        with self._tx() as conn:
             conn.execute(
                 "DELETE FROM memory_peaks WHERE fingerprint = ?",
                 (fingerprint,),

@@ -92,6 +92,10 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
             command += ["--memory-budget-mb", str(launch.memory_budget_mb)]
         if launch.memory_grant_mb is not None:
             command += ["--memory-grant-mb", str(launch.memory_grant_mb)]
+        if launch.memory_adaptive:
+            command += ["--memory-adaptive"]
+        if launch.vram_min_mb:
+            command += ["--vram-min-mb", str(launch.vram_min_mb)]
         return command
 
     def _build_env(self) -> dict[str, str]:

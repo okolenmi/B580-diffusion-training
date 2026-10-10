@@ -46,7 +46,7 @@ export async function api(path, opts = {}) {
       // server's own error text is lost and the caller gets the generic
       // message below. Worth a line in the console so that is visible
       // rather than inferred from a vague UI message.
-      console.warn("api: non-JSON response body", res.status, url);
+      console.warn("api: non-JSON response body", res.status, BASE + path);
       data = null;
     }
   }

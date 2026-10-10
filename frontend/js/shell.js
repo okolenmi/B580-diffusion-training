@@ -42,7 +42,7 @@ const ICONS = {
 const MAIN_ITEMS = [
   { id: "graph", href: "/graph", label: "Graph Editor", icon: ICONS.graph },
   { id: "datasets", href: "/datasets", label: "Dataset manager", icon: ICONS.layers },
-  { id: "workflows", href: null, label: "Pre-built workflows", icon: ICONS.template },
+  { id: "workflows", href: "/templates", label: "Templates", icon: ICONS.template },
   { id: "tracker", href: "/", label: "System tracker", icon: ICONS.pulse },
   { id: "help", href: "/help", label: "Help", icon: ICONS.help },
 ];
@@ -54,6 +54,7 @@ function activeRailId() {
   const path = location.pathname;
   if (path === "/") return "tracker";
   if (path.startsWith("/graph")) return "graph";
+  if (path.startsWith("/templates")) return "workflows";
   if (path.startsWith("/datasets")) return "datasets";
   if (path.startsWith("/help")) return "help";
   if (path.startsWith("/settings")) return "settings";

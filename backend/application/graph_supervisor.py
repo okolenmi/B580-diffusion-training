@@ -46,6 +46,7 @@ from typing import Any
 
 from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
+from ..domain.modules import GRAPH_STREAM, node_stream_id
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .memory_admission import LedgerSource, graph_owner, release
 from .ports.graph_task_stream import EventKind
@@ -167,6 +168,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         # never comes through here, and it is exactly the one path that
         # needs the old records kept.
         paths["events"].write_text("", encoding="utf-8")
+        self._clear_streams(graph)
 
         # The child's memory picture (MEM-05 #1), read off the row
         # because that is the only place it exists: admission stored
@@ -181,6 +183,18 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             if execution is not None and execution.memory is not None
             else None
         )
+        # "auto" with nothing remembered about this graph is a *ceiling*
+        # (everything the ledger can give), and on a shared card that
+        # ceiling is routinely above what is physically free. The child
+        # adapts such a run to the real free memory; a stated or
+        # remembered demand is still checked exactly.
+        effective = execution.memory if execution is not None else None
+        memory_adaptive = bool(
+            effective is not None
+            and effective.demand_source == "unknown"
+            and effective.vram_max_mb == "auto"
+        )
+        vram_min_mb = float(effective.vram_min_mb) if effective is not None else 0.0
         missing = [
             name
             for name, value in (
@@ -204,6 +218,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             log_path=paths["log"],
             memory_budget_mb=memory_budget_mb,
             memory_grant_mb=memory_grant_mb,
+            memory_adaptive=memory_adaptive,
+            vram_min_mb=vram_min_mb,
         )
         try:
             pid = self._gateway.spawn(launch)
@@ -620,6 +636,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 self._republish_monitor(event.payload)
             elif kind is EventKind.MEMORY:
                 self._record_peak(execution_id, event.payload)
+                self._republish_memory(event.payload)
             else:  # OUTCOME
                 outcomes.append(event.payload)
         return outcomes
@@ -750,6 +767,47 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             )
         except Exception:  # noqa: BLE001 -- telemetry must not abort the run
             logger.exception("republishing a monitor report failed")
+
+    #: The memory-frame keys the graph-scope memory modules read.
+    _MEMORY_FRAME_KEYS = (
+        "t", "reserved_mb", "allocated_mb", "peak_mb", "budget_mb", "event", "mb",
+    )
+
+    def _republish_memory(self, payload: dict) -> None:
+        """Put a child's memory frame onto the graph-scope stream.
+
+        This is the data behind the "Device memory" chart a page can show
+        (``domain/modules.GRAPH_DISPLAYS``): the same frames the peak
+        store already listens to, now also visible live. Guarded like the
+        monitor republish -- telemetry never costs the run's supervision.
+        """
+        if self._monitor_bus is None:
+            return
+        try:
+            self._monitor_bus.report(
+                GRAPH_STREAM,
+                {k: payload[k] for k in self._MEMORY_FRAME_KEYS if k in payload},
+            )
+        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
+            logger.exception("republishing a memory frame failed")
+
+    def _clear_streams(self, graph: GraphDefinition) -> None:
+        """A new run starts with empty widget streams.
+
+        The child's own ``clear`` is a no-op across the process boundary
+        (its bus is not this server's), so the run that is *starting* is
+        the one place that can honestly say "drop the last run's history":
+        otherwise a page opened on the same node ids would draw the new
+        run's line over the old one -- the overlay bug MonitorBus.clear
+        exists to prevent, here for widget streams.
+        """
+        if self._monitor_bus is None:
+            return
+        for stream in (GRAPH_STREAM, *(node_stream_id(n.id) for n in graph.nodes)):
+            try:
+                self._monitor_bus.clear(stream)
+            except Exception:  # noqa: BLE001 -- a stale chart is not worth a failed launch
+                logger.exception("clearing stream %r failed", stream)
 
     def _record_peak(self, execution_id: ExecutionId, payload: dict) -> None:
         """File one child-reported peak in the peak store (MEM-04 #2).

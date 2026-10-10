@@ -37,6 +37,14 @@ from .use_cases.commit_dataset_items import CommitDatasetItems
 from .use_cases.create_dataset import CreateDataset
 from .use_cases.delete_dataset import DeleteDataset
 from .use_cases.delete_graph import DeleteGraph
+from .use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
+from .use_cases.run_template import RunTemplate
+from .use_cases.template_crud import (
+    DeleteTemplate,
+    GetTemplate,
+    ListTemplates,
+    SaveTemplate,
+)
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
 from .use_cases.discard_dataset_items import DiscardDatasetItems
 from .use_cases.get_config import GetConfig
@@ -177,6 +185,24 @@ class GraphServices:
 
 
 @dataclass(frozen=True, slots=True)
+class TemplateServices:
+    """Saved pages and monitor windows built on a graph, and what they can
+    bind to (docs/design/15). Separate from ``GraphServices`` so the
+    template feature lands -- and can be removed -- without touching it."""
+
+    #: What a graph offers a page: per-node fields + live views, plus the
+    #: graph's own modules.
+    describe: DescribeGraphModules
+    #: Does a (possibly unsaved) page still bind to its graph, block by block.
+    resolve: ResolveTemplate
+    save: SaveTemplate
+    get: GetTemplate
+    list: ListTemplates
+    delete: DeleteTemplate
+    run: RunTemplate
+
+
+@dataclass(frozen=True, slots=True)
 class MonitorServices:
     """Live node telemetry (the monitor page's data path, M6).
 
@@ -214,3 +240,7 @@ class ApplicationServices:
     # explicitly. Exposed on the aggregate so `/health` can show the
     # snapshot (holders, free) without reaching into a use case.
     memory_ledger: LedgerSource
+    # Templates (docs/design/15). Last, with a default, so every container
+    # built before templates existed stays valid; the templates router
+    # answers 503 ``templates_unavailable`` while this is None.
+    templates: TemplateServices | None = None

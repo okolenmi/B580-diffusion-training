@@ -341,6 +341,24 @@ class GraphMemory:
         """The allocator MB this process may use, or ``None`` (unknown)."""
         return self._budget_mb
 
+    def shrink_to(self, grant_mb: float) -> None:
+        """Lower this run's grant (and the budget with it) to ``grant_mb``.
+
+        Only ever lowers: a run that asked for "auto" was handed a
+        ceiling, and the card can turn out to have less free than that
+        ceiling (the desktop, ComfyUI). Shrinking to what is really free
+        lets it run inside its real share rather than refusing a run that
+        would have fit. Raising would be inventing memory, so a larger
+        number is ignored. Called once, by the worker, before anything
+        loads; the budget never exceeds the grant afterwards.
+        """
+        grant = _size_or_raise("grant_mb", grant_mb)
+        with self._lock:
+            if self._grant_mb is None or grant < self._grant_mb:
+                self._grant_mb = grant
+            if self._budget_mb is None or self._budget_mb > grant:
+                self._budget_mb = grant
+
     def report_memory_event(self, event: str, mb: float, cost_ms: float) -> None:
         """MEM-05 #4: report one lease/eviction decision to the worker.
 

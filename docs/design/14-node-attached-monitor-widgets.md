@@ -4,6 +4,9 @@
 any code, so the shape is argued on its merits rather than inherited from
 whatever the first implementation happened to be.*
 
+> **Update 2026-10-10:** built, and the five open questions below are
+> answered in [`15-graph-modules-and-templates.md`](15-graph-modules-and-templates.md).
+
 ## The problem with the monitor as it stands
 
 Monitoring today is one `MonitorNode` per stream:

@@ -80,6 +80,14 @@ def main() -> int:
                          "for the 722/726 B arms: +78M trainable params push "
                          "sustained VRAM to ~11.2 GB, where this card wedges "
                          "instead of raising OOM.")
+    ap.add_argument("--prewarm-unload", action="store_true",
+                    help="Encode every distinct (prompt, bucket shape) in the "
+                         "dataset up front at the training batch size, then "
+                         "unload the towers BEFORE step 0. Same math (later "
+                         "steps are cache hits either way), but the 1.5 GB is "
+                         "free from the first update -- needed because the "
+                         "first optimizer step itself can OOM at ~11.9 GB "
+                         "occupied, before any after-N unload could fire.")
     args = ap.parse_args()
 
     from nodes.core import ExecutionContext
@@ -125,6 +133,37 @@ def main() -> int:
     optimizer = ComposedAdamWOptimizerNode(ctx).build(
         params=params, lr=args.lr, state_precision="float32")["optimizer"]
 
+    if args.prewarm_unload:
+        # Warm every distinct (prompt, bucket shape) at the training batch
+        # size straight from trajectory metadata (no latent loads), then
+        # unload the towers before step 0. Later steps are cache hits
+        # either way; this only moves the 1.5 GB earlier, ahead of the
+        # first optimizer update that otherwise OOMs near the ceiling.
+        loader = batches._loader
+        by_shape: dict[tuple[int, int], None] = {}
+        prompts: dict[str, None] = {}
+        for t in loader.trajectories:
+            h, w = int(t.get("latent_h") or 0), int(t.get("latent_w") or 0)
+            if h and w:
+                by_shape[loader._bucket_size(h, w)] = None
+            if t.get("prompt") is not None:
+                prompts[t["prompt"]] = None
+        n = 0
+        for p in prompts:
+            for (H, W) in by_shape:
+                encoder.encode(p, batch_size=args.batch,
+                               height=H * 8, width=W * 8)
+                n += 1
+        encoder.unload()
+        # Towers moved to CPU frees allocations, but the caching
+        # allocator keeps the reserved pool -- without this the card
+        # sits at its old ceiling and the pressure never lifts.
+        import torch
+        if hasattr(torch, "xpu"):
+            torch.xpu.empty_cache()
+        print(f"  [encoder] prewarmed {n} key(s), unloaded before step 0",
+              flush=True)
+
     print(f"training {args.steps} steps, batch {args.batch}, "
           f"rank {args.rank}, alpha {args.alpha}, lr {args.lr} "
           f"({args.schedule}), targets={args.target_modules}, "
@@ -140,6 +179,14 @@ def main() -> int:
             before = encoder.footprint_bytes() if hasattr(
                 encoder, "footprint_bytes") else -1
             encoder.unload()
+            # Moving towers to CPU frees allocations but the caching
+            # allocator keeps the reserved pool -- without this the card
+            # stays at its ceiling and the pressure that wedges
+            # near-full runs never lifts. Safe here: between steps, only
+            # referenced tensors survive (grads/params/statics all live).
+            import torch
+            if hasattr(torch, "xpu"):
+                torch.xpu.empty_cache()
             print(f"  [encoder] unloaded after step {step} "
                   f"(footprint was {before / 1024 / 1024:.0f} MB)", flush=True)
 

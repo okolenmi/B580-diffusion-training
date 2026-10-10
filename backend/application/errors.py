@@ -303,6 +303,31 @@ class GraphNotFoundError(ApplicationError):
     code = "graph_not_found"
     status_code = 404
 
+class TemplateNotFoundError(ApplicationError):
+    """No saved template exists under the requested name."""
+
+    code = "template_not_found"
+    status_code = 404
+
+
+class TemplateInvalidError(ApplicationError):
+    """A template document or the values submitted to run one are wrong.
+
+    422 with every problem in ``details`` -- the same posture as
+    ``graph_invalid``: one round trip names everything to fix.
+    """
+
+    code = "template_invalid"
+    status_code = 422
+
+
+class TemplatesUnavailableError(ApplicationError):
+    """The container was built without the template services."""
+
+    code = "templates_unavailable"
+    status_code = 503
+
+
 class InstallerNotAllowedError(ApplicationError):
     """An installer write arrived while this installation is configured.
 

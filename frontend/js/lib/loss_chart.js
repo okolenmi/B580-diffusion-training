@@ -77,6 +77,9 @@ class LossChart {
     this.primaryKey = this.series[0].key;
     this.scale = (options && options.scale === "linear") ? "linear" : "symlog";
     this.trend = !!(options && options.trend);
+    // What the x axis is called in the tooltip: "Step" for training charts,
+    // "t (s)" for graph-scope charts whose x is seconds since the run began.
+    this.xLabel = (options && options.xLabel) || "Step";
     this.referenceLines = (options && options.referenceLines) || [];
     this.viewRange = null; // {min, max} step window or null = all recorded data
     this._trends = {}; // rebuilt per draw when trend is on: key -> _trendFor result
@@ -635,7 +638,8 @@ class LossChart {
     // label + raw value (smoothed in parens when available). A bucket
     // series with no value this step is omitted -- the chart's gap, stated
     // in text.
-    const lines = [{ text: `Step: ${best.step}`, color: null }];
+    const xText = Number.isInteger(best.step) ? String(best.step) : best.step.toFixed(1);
+    const lines = [{ text: `${this.xLabel}: ${xText}`, color: null }];
     for (const s of this.series) {
       if (s.hidden) continue;
       const v = best.values[s.key];

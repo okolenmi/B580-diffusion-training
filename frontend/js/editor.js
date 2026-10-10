@@ -26,6 +26,7 @@ import { Inspector } from "./editor/inspector.js";
 import { Palette } from "./editor/palette.js";
 import { Executions } from "./editor/executions.js";
 import { Library } from "./editor/library.js";
+import { GraphSettings } from "./editor/settings.js";
 import { describeRefusal, panelModel } from "./lib/memory_panel.js";
 
 
@@ -230,7 +231,31 @@ async function boot() {
     onNote: log,
   });
 
+  // The graph's own settings (memory budget). The list and how each is
+  // drawn come from the backend; a failure to fetch it leaves the section
+  // saying so rather than silently offering nothing.
+  let settings = null;
+  try {
+    const mods = await api("/templates/modules", { method: "POST", body: {} });
+    settings = new GraphSettings(el("graph-settings"), doc, mods.graph_fields || [], log);
+  } catch (err) {
+    const box = el("graph-settings");
+    box.replaceChildren();
+    const line = document.createElement("div");
+    line.className = "console-line warn";
+    line.textContent = `Graph settings unavailable: ${errText(err)}`;
+    box.append(line);
+  }
+  let memoryTimer = 0;
+
   doc.onChange = (reason, origin) => {
+    if (reason === "memory") {
+      // A budget edit changes "will it fit", not the canvas.
+      clearTimeout(memoryTimer);
+      memoryTimer = setTimeout(refreshMemory, 400);
+      return;
+    }
+    if (reason === "structure" && settings) settings.render();
     canvas.render();
     // The inspector skips rebuilding only for ITS OWN commits (so
     // text/number inputs keep focus); canvas widgets, drags and

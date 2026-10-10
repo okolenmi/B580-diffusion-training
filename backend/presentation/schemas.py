@@ -1125,6 +1125,13 @@ class PortOut(BaseModel):
     choices: list[str] | None = None
     visible_when: list[Any] | None = None
     widget_only: bool = False
+    label: str = ""
+    group: str = ""
+    advanced: bool = False
+    unit: str = ""
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
 
 
 class PresetOut(BaseModel):
@@ -1147,6 +1154,8 @@ class GraphNodeOut(BaseModel):
     node_kind: str
     presets: list[PresetOut] | None = None
     has_diagnostics: bool = False
+    #: Live-view modules this node offers a page (see ``nodes/ui.py``).
+    modules: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CatalogLoadErrorOut(BaseModel):
@@ -1295,6 +1304,13 @@ def port_out(port: PortInfo) -> PortOut:
         choices=list(port.choices) if port.choices is not None else None,
         visible_when=list(port.visible_when) if port.visible_when is not None else None,
         widget_only=port.widget_only,
+        label=port.label,
+        group=port.group,
+        advanced=port.advanced,
+        unit=port.unit,
+        minimum=port.minimum,
+        maximum=port.maximum,
+        step=port.step,
     )
 
 
@@ -1323,6 +1339,7 @@ def graph_node_out(info: NodeInfo) -> GraphNodeOut:
         node_kind=info.node_kind,
         presets=presets,
         has_diagnostics=info.has_diagnostics,
+        modules=[dict(m) for m in info.modules],
     )
 
 
@@ -1415,4 +1432,141 @@ def saved_graph_list_out(result) -> SavedGraphListOut:
     return SavedGraphListOut(
         graphs=[saved_graph_summary_out(g) for g in result.graphs],
         count=result.count,
+    )
+
+
+# --------------------------------------------------------------------------
+# Templates (saved pages / monitor windows) -- docs/design/15
+
+class TemplateIn(BaseModel):
+    """``PUT /templates/{name}``: the page document plus a description.
+
+    ``doc`` is deliberately an open object here: its shape is checked by
+    ``domain/template.validate_template_doc`` (which reports *every*
+    problem with a path), not by a pydantic model that would stop at the
+    first and could not carry the keys a newer frontend adds.
+    """
+
+    description: str = ""
+    doc: dict[str, Any]
+
+
+class SavedTemplateOut(BaseModel):
+    name: str
+    description: str = ""
+    kind: str
+    doc: dict[str, Any]
+    block_count: int
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedTemplateSummaryOut(BaseModel):
+    name: str
+    description: str = ""
+    kind: str
+    block_count: int
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedTemplateListOut(BaseModel):
+    templates: list[SavedTemplateSummaryOut]
+    count: int
+
+
+class DeleteTemplateOut(BaseModel):
+    deleted: bool
+
+
+class ModulesIn(BaseModel):
+    """``POST /templates/modules``: a graph (the editor's payload shape)."""
+
+    nodes: list[GraphNodeIn] = Field(default_factory=list)
+    edges: list[GraphEdgeIn] = Field(default_factory=list)
+    memory: MemorySettingsIn | None = None
+
+    def to_definition(self) -> GraphDefinition:
+        return GraphRunIn(
+            nodes=self.nodes, edges=self.edges, memory=self.memory
+        ).to_definition()
+
+
+class GraphModulesOut(BaseModel):
+    """Everything a page could bind to. The per-node and per-module dicts
+    are open on purpose -- they mirror ``nodes/ui.py`` descriptors, which
+    grow without a schema release."""
+
+    nodes: list[dict[str, Any]]
+    graph_fields: list[dict[str, Any]]
+    graph_displays: list[dict[str, Any]]
+
+
+class ResolveIn(BaseModel):
+    """``POST /templates/resolve``: a draft document, optionally with the
+    graph to resolve a monitor window against."""
+
+    doc: dict[str, Any]
+    graph: dict[str, Any] | None = None
+
+
+class BlockStatusOut(BaseModel):
+    id: str
+    status: str
+    detail: str = ""
+
+
+class ResolveOut(BaseModel):
+    modules: GraphModulesOut
+    blocks: list[BlockStatusOut]
+    issues: list[dict[str, Any]]
+
+
+class TemplateRunIn(BaseModel):
+    """``POST /templates/{name}/run``.
+
+    ``values`` is ``{"nodes": {node_id: {port: value}}, "memory": {key:
+    value}}`` and may only name fields the page exposes."""
+
+    values: dict[str, Any] = Field(default_factory=dict)
+    memory_overrides: MemoryOverridesIn | None = None
+
+
+def saved_template_out(dto) -> SavedTemplateOut:
+    return SavedTemplateOut(
+        name=dto.name, description=dto.description, kind=dto.kind, doc=dto.doc,
+        block_count=dto.block_count, node_count=dto.node_count,
+        created_at=dto.created_at, updated_at=dto.updated_at,
+    )
+
+
+def saved_template_list_out(result) -> SavedTemplateListOut:
+    return SavedTemplateListOut(
+        templates=[
+            SavedTemplateSummaryOut(
+                name=t.name, description=t.description, kind=t.kind,
+                block_count=t.block_count, node_count=t.node_count,
+                created_at=t.created_at, updated_at=t.updated_at,
+            )
+            for t in result.templates
+        ],
+        count=result.count,
+    )
+
+
+def graph_modules_out(modules) -> GraphModulesOut:
+    return GraphModulesOut(
+        nodes=[dict(n) for n in modules.nodes],
+        graph_fields=[dict(f) for f in modules.graph_fields],
+        graph_displays=[dict(d) for d in modules.graph_displays],
+    )
+
+
+def resolve_out(resolution) -> ResolveOut:
+    return ResolveOut(
+        modules=graph_modules_out(resolution.modules),
+        blocks=[BlockStatusOut(**b) for b in resolution.blocks],
+        issues=[dict(i) for i in resolution.issues],
     )

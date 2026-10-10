@@ -19,6 +19,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from .ui import DisplayModule
+
 
 @dataclass(frozen=True)
 class Port:
@@ -87,7 +89,38 @@ class Port:
     # same as every other Port here, this only ever shapes what the editor
     # draws.
 
+    # --- presentation hints for forms built from this node (templates) ---
+    # Same posture as path_kind/choices/visible_when/widget_only above:
+    # purely UI, build() and validate_inputs() never read them. They exist
+    # so a template page can draw a *good* control for a field and sort it
+    # sensibly, without a second hand-written description of the node.
+    label: str = ""
+    # Human label for the field; "" = derive from the port name.
+    group: str = ""
+    # Section heading the field belongs to on a form ("Optimizer", "Data").
+    advanced: bool = False
+    # True = hidden from a template's default field list; still addable.
+    # Marks the knobs a first-time user should not have to meet.
+    unit: str = ""
+    # Shown beside the control ("MB", "steps", "s").
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
+    # Numeric bounds / increment for int/float ports. Hints for the control;
+    # the node's own build() remains what enforces a real constraint.
+
     def __post_init__(self):
+        for bound in ("minimum", "maximum", "step"):
+            value = getattr(self, bound)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                raise TypeError(f"Port {self.name!r}: {bound} must be a number, got {value!r}.")
+        if (self.minimum is not None and self.maximum is not None
+                and self.minimum > self.maximum):
+            raise ValueError(
+                f"Port {self.name!r}: minimum={self.minimum} exceeds maximum={self.maximum}."
+            )
+        if self.step is not None and self.step <= 0:
+            raise ValueError(f"Port {self.name!r}: step must be positive, got {self.step}.")
         if self.choices is None:
             return
         if self.type is not str:
@@ -242,6 +275,15 @@ class Node(ABC):
     # "every declared preset's own fixed, required-only shape."
     NODE_KIND: ClassVar[str] = "static"
 
+    # Live views this node can offer a page while it runs (see nodes/ui.py).
+    # Empty (the default) means the node reports nothing worth a widget --
+    # true for almost every node. A node that declares modules reports its
+    # step data through its ``monitor`` input; when none is wired the runtime
+    # supplies a handle onto a per-instance stream (the backend names it, see
+    # backend/domain/modules.py), so the author declares what is shown and
+    # not where it travels.
+    MODULES: ClassVar[tuple[DisplayModule, ...]] = ()
+
     @classmethod
     def list_presets(cls) -> list[NodePreset]:
         """Only meaningful when NODE_KIND == "dynamic" -- see
@@ -310,6 +352,15 @@ class Node(ABC):
                 f"nothing can't be used in a graph -- if this is intentional, "
                 f"the class should stay abstract instead."
             )
+        if not isinstance(cls.MODULES, tuple) or not all(
+                isinstance(m, DisplayModule) for m in cls.MODULES):
+            raise TypeError(
+                f"{cls.__name__}.MODULES must be a tuple of DisplayModule, "
+                f"got {cls.MODULES!r}"
+            )
+        names = [m.name for m in cls.MODULES]
+        if len(set(names)) != len(names):
+            raise TypeError(f"{cls.__name__}.MODULES has duplicate names: {sorted(names)}")
         if cls.NODE_KIND not in ("static", "dynamic"):
             raise TypeError(
                 f"{cls.__name__}.NODE_KIND must be 'static' or 'dynamic', "

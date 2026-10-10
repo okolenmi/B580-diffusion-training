@@ -97,7 +97,10 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
     wrap.style.justifySelf = "start";
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = node.params[port.name] === true;
+    // An unset bool shows its declared default: the node runs with that
+    // value, so an unchecked box would claim the opposite.
+    const cur = node.params[port.name];
+    box.checked = cur === undefined || cur === null ? port.default === true : cur === true;
     box.addEventListener("change", () => {
       // store explicit false too: unchecking must override an earlier true
       node.params[port.name] = box.checked;
@@ -113,6 +116,12 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
     input.className = "cfg-input";
     input.type = "number";
     if (port.type === "float") input.step = "any";
+    // Presentation hints from the port declaration (Port.minimum/maximum/
+    // step): bounds and increment for the spinner. The node's own build()
+    // still decides what is actually valid.
+    if (port.minimum !== null && port.minimum !== undefined) input.min = String(port.minimum);
+    if (port.maximum !== null && port.maximum !== undefined) input.max = String(port.maximum);
+    if (port.step !== null && port.step !== undefined) input.step = String(port.step);
     input.value = current();
     if (port.default !== null && port.default !== undefined && input.value === "") {
       input.placeholder = String(port.default);

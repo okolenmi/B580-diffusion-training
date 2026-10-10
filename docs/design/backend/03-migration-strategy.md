@@ -30,13 +30,14 @@ Rules that keep it fast and expandable:
 
 ## 3. Parity audit: legacy surface vs backend API
 
-51 legacy endpoints vs 51 backend endpoints -- and they are not a
+51 legacy endpoints vs 58 backend endpoints -- and they are not a
 1:1 mapping. Families:
 
 | Legacy family | Status |
 |---|---|
 | config (`GET/PUT /config`, `GET/PUT /config/raw`, `/options/tree`, `/control/options`) | **parity** (PATCH merges nested partials; tree shape improved) |
 | installer (`/installer/readiness`, `/state`, `/manifest`, `/apply`) | **new**: first-run. Nothing in the legacy surface reported whether a machine could train, or wrote the paths before they were written by hand. `apply` is refused once configured. |
+| templates (`/templates/modules`, `/resolve`, list/`PUT`/`GET`/`DELETE` `/{name}`, `/{name}/run`) | **new**: saved pages and monitor windows built on a graph, run with typed values. Nothing in the legacy surface let someone use a graph without editing it. See `docs/design/15-graph-modules-and-templates.md`. |
 | training control (`/run/start`, `/run/stop`, `/run/status`, `/run/log`) | **dropped 2026-10-02**: the supervised-subprocess route they described spawned `python -m core.cli` and was removed with `core/`. Training is started as a graph execution -- see the nodegraph row and `docs/design/11-core-removal.md`. |
 | `/run/reset` | **dropped**: legacy in-memory service reset; backend state lives in the DB |
 | runs history (`/runs`, `/runs/{id}`, `/{id}/log`, `/{id}/events`, `/{id}/previews`, `/logs/clear`) | **dropped 2026-10-02**, with the route above. Graph executions have their own history (`/executions`, `/executions/{id}`), which is where "what ran, when, how did it end" now lives. |

@@ -155,6 +155,16 @@ from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
+from backend.infrastructure.persistence.template_library import SqliteTemplateLibrary
+from backend.application.services import TemplateServices
+from backend.application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
+from backend.application.use_cases.run_template import RunTemplate
+from backend.application.use_cases.template_crud import (
+    DeleteTemplate,
+    GetTemplate,
+    ListTemplates,
+    SaveTemplate,
+)
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
 from backend.infrastructure.workspace import WorkspaceLayout
@@ -1110,6 +1120,24 @@ def build_services(
     # same services object the route reads.
     install_jobs: dict = {}
     refusing_installer = RefusingPackageInstaller()
+    template_db = SqliteDatabase(project_root / "test-templates.db")
+    template_db.initialize()
+    template_library = SqliteTemplateLibrary(template_db)
+    # One instance for the editor's Run and for running a template, as in
+    # bootstrap: the single-active check lives under its lock.
+    start_execution = StartGraphExecution(
+        executions=graph_executions,
+        writer=execution_writer,
+        runtime=graph_runtime,
+        launcher=graph_supervisor,
+        clock=clock,
+        memory_ledger=memory_ledger,
+        # Fixture nodes declare no memory_fields and fixture graphs name
+        # no dataset, so every fingerprint here is unknown -- exactly what
+        # these tests claimed before the read half existed, never a zero peak.
+        peak_source=fixture_peak_source.observed,
+    )
+    describe_modules = DescribeGraphModules(catalog=graph_catalog)
     return ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
@@ -1200,6 +1228,15 @@ def build_services(
                 library=dataset_library, previews=dataset_previews
             ),
         ),
+        templates=TemplateServices(
+            describe=describe_modules,
+            resolve=ResolveTemplate(describe=describe_modules, runtime=graph_runtime),
+            save=SaveTemplate(library=template_library),
+            get=GetTemplate(library=template_library),
+            list=ListTemplates(library=template_library),
+            delete=DeleteTemplate(library=template_library),
+            run=RunTemplate(library=template_library, start=start_execution),
+        ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),
             preview_memory=PreviewGraphMemory(
@@ -1208,19 +1245,7 @@ def build_services(
             ),
             diagnostics=NodeDiagnostics(catalog=graph_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
-            start_execution=StartGraphExecution(
-                executions=graph_executions,
-                writer=execution_writer,
-                runtime=graph_runtime,
-                launcher=graph_supervisor,
-                clock=clock,
-                memory_ledger=memory_ledger,
-                # Fixture nodes declare no memory_fields and fixture
-                # graphs name no dataset, so every fingerprint here is
-                # unknown -- exactly what these tests claimed before the
-                # read half existed, never a zero peak.
-                peak_source=fixture_peak_source.observed,
-            ),
+            start_execution=start_execution,
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(

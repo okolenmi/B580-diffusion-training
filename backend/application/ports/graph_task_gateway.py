@@ -68,6 +68,14 @@ class GraphTaskLaunch:
     memory_budget_mb: float | None = None
     #: Device MB admission granted this run (the physical check's input).
     memory_grant_mb: float | None = None
+    #: True when the run asked for "auto" (no stated or remembered demand):
+    #: the grant is then an upper bound, not a promise, and the child may
+    #: shrink it to what the card really has free instead of refusing.
+    #: A stated budget stays exact -- the user asked for that number.
+    memory_adaptive: bool = False
+    #: The graph's declared floor (MemorySettings.vram_min_mb). An adaptive
+    #: run still refuses below it. 0 = no floor beyond the child's own.
+    vram_min_mb: float = 0.0
 
 
 

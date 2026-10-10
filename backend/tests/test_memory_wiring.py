@@ -2537,6 +2537,118 @@ def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     )
 
 
+def test_auto_budget_adapts_to_the_free_memory_instead_of_refusing() -> None:
+    print("-- adaptive run: 'auto' shrinks to what is free; a stated budget "
+          "stays exact --")
+    from backend.infrastructure.graph_task_worker import (
+        ADAPTIVE_FLOOR_MB,
+        ADAPTIVE_MARGIN_MB,
+        physical_check_or_refuse,
+    )
+    from nodes.memory.graph_memory import GraphMemory
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.outcomes: list[dict] = []
+
+        def outcome(self, **record) -> None:
+            self.outcomes.append(record)
+
+    class _Card:
+        def __init__(self, free_mb) -> None:
+            self.free_mb = free_mb
+
+        def free_memory_mb(self):
+            return self.free_mb
+
+    # The default 12 GB run: ledger capacity ~11000 granted, desktop holds
+    # some, so 9000 is free. Before: refused. Now: runs inside 9000 - margin.
+    memory = GraphMemory(grant_mb=11000.0, budget_mb=11000.0)
+    writer = _Writer()
+    ok = physical_check_or_refuse(
+        memory, writer, device="xpu", device_ctx=_Card(9000.0), adaptive=True,
+    )
+    check(ok is True, "auto + shortfall: the run proceeds")
+    check(writer.outcomes == [], "no refusal outcome written")
+    check(
+        memory.grant_mb == 9000.0 - ADAPTIVE_MARGIN_MB,
+        f"grant shrank to free minus head-room (got {memory.grant_mb})",
+    )
+    check(
+        memory.budget_mb == memory.grant_mb,
+        f"budget follows the grant down (got {memory.budget_mb})",
+    )
+
+    # Room: nothing is touched.
+    memory = GraphMemory(grant_mb=6000.0, budget_mb=5400.0)
+    ok = physical_check_or_refuse(
+        memory, _Writer(), device="xpu", device_ctx=_Card(11000.0), adaptive=True,
+    )
+    check(ok is True and memory.grant_mb == 6000.0 and memory.budget_mb == 5400.0,
+          "auto + room: grant and budget untouched (never raised either)")
+
+    # Below the graph's own floor: refused, and the message says why.
+    memory = GraphMemory(grant_mb=11000.0, budget_mb=11000.0)
+    writer = _Writer()
+    ok = physical_check_or_refuse(
+        memory, writer, device="xpu", device_ctx=_Card(9000.0),
+        adaptive=True, vram_min_mb=9000.0,
+    )
+    check(ok is False, "free minus margin below vram_min: refused")
+    check(
+        len(writer.outcomes) == 1 and "9000" in (writer.outcomes[0]["error"] or ""),
+        f"the refusal quotes the numbers (got {writer.outcomes!r})",
+    )
+    check(memory.grant_mb == 11000.0, "a refused run's numbers are not changed")
+
+    # Almost nothing free: the absolute floor refuses even with no vram_min.
+    writer = _Writer()
+    ok = physical_check_or_refuse(
+        GraphMemory(grant_mb=11000.0, budget_mb=11000.0), writer, device="xpu",
+        device_ctx=_Card(ADAPTIVE_FLOOR_MB), adaptive=True,
+    )
+    check(ok is False, "less than the floor plus head-room free: refused")
+
+    # A stated budget is exact: the user chose that number.
+    memory = GraphMemory(grant_mb=9000.0, budget_mb=8400.0)
+    writer = _Writer()
+    ok = physical_check_or_refuse(
+        memory, writer, device="xpu", device_ctx=_Card(8000.0), adaptive=False,
+    )
+    check(ok is False and memory.grant_mb == 9000.0,
+          "not adaptive: a shortfall is still a refusal, numbers untouched")
+
+    # shrink_to never raises.
+    memory = GraphMemory(grant_mb=1000.0, budget_mb=900.0)
+    memory.shrink_to(5000.0)
+    check(memory.grant_mb == 1000.0 and memory.budget_mb == 900.0,
+          "shrink_to ignores a larger number")
+
+
+def test_adaptive_flag_travels_in_argv() -> None:
+    print("-- the adaptive flag and the floor reach the child --")
+    from pathlib import Path
+
+    from backend.application.ports.graph_task_gateway import GraphTaskLaunch
+    from backend.infrastructure.graph_task_worker import _build_parser
+
+    args = _build_parser().parse_args([
+        "--execution", "1", "--graph", "g.json", "--events", "e.jsonl",
+        "--memory-adaptive", "--vram-min-mb", "4096",
+    ])
+    check(args.memory_adaptive is True and args.vram_min_mb == 4096.0,
+          f"parsed (got {args.memory_adaptive}, {args.vram_min_mb})")
+    plain = _build_parser().parse_args(
+        ["--execution", "1", "--graph", "g.json", "--events", "e.jsonl"])
+    check(plain.memory_adaptive is False and plain.vram_min_mb == 0.0,
+          "absent flags default to exact + no floor")
+    launch = GraphTaskLaunch(
+        execution_id=1, graph_path=Path("g"), event_path=Path("e"),
+        log_path=Path("l"), memory_adaptive=True, vram_min_mb=2048.0,
+    )
+    check(launch.memory_adaptive and launch.vram_min_mb == 2048.0, "dataclass carries both")
+
+
 def main() -> None:
     test_refused_run_holds_nothing_and_names_the_holder()
     test_crash_between_reserve_and_spawn_releases_then_converges()
@@ -2566,6 +2678,8 @@ def main() -> None:
     test_a_launch_without_a_row_names_its_unknown_memory_numbers()
     test_argv_carries_the_memory_numbers_to_the_child()
     test_physical_check_refuses_shortfall_and_continues_on_unknown()
+    test_auto_budget_adapts_to_the_free_memory_instead_of_refusing()
+    test_adaptive_flag_travels_in_argv()
     test_allocator_backstop_cases_and_their_warnings()
     test_memory_telemetry_writes_frames_on_a_schedule()
     test_memory_events_cross_into_the_event_file()

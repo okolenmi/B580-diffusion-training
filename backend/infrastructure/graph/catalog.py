@@ -15,7 +15,7 @@ from ...application.ports.graph_catalog import (
     NodeInfo,
 )
 from .discovery import NodeRegistry
-from .introspect import introspect_node_class
+from .introspect import introspect_node_class, port_info
 
 
 def domain_of(cls: type) -> str:
@@ -37,6 +37,17 @@ class DiscoveredGraphCatalog(GraphCatalog):
             for cls in classes.values()
         ]
         return CatalogSnapshot(nodes=tuple(nodes), load_errors=errors)
+
+    def resolved_inputs(self, class_name: str, params: dict):
+        classes, _ = self._registry.load()
+        cls = classes.get(class_name)
+        if cls is None:
+            return None
+        try:
+            resolved = cls.resolve_inputs(dict(params))
+        except Exception:  # noqa: BLE001 -- a mid-edit params dict; fall back to the static shape
+            return None
+        return tuple(port_info(p) for p in resolved.values())
 
     def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
         classes, _ = self._registry.load()

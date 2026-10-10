@@ -101,16 +101,12 @@ def test_forget():
 def _record_worker(db_path: str, fingerprint: str, value: float, barrier):
     """Worker that records one peak after the barrier.
 
-    The store is constructed *before* the barrier, deliberately. That
-    order is what keeps the trial a clean test of the write race: each
-    process finishes its own initialisation first, so the only thing
-    they contend on afterwards is the record. Constructing after the
-    barrier instead puts six processes through SqlitePeakStore's
-    "file has no SQLite header yet -> discard it" recovery at the same
-    instant, and one discards another's database -- which showed up as
-    a genuine lost update (stored 1300.0 against a maximum of 1500.0)
-    the moment the order was changed. Construction first, then the
-    barrier, then the write.
+    The store is constructed *before* the barrier so this trial stays a
+    clean test of the *write* race. Construction racing on a file that does
+    not exist yet is a different hazard with its own test below
+    (``test_concurrent_first_construction``): it used to delete the file
+    from under the process creating it, and that was a bug in the store,
+    not something for the test to be arranged around.
 
     The barrier is timed anyway: an untimed wait turns one wedged
     process into an indefinite hang reported only as a bare "TIMED
@@ -322,6 +318,140 @@ def test_reopen_sees_the_measurement():
         assert _store(db).peak_mb("fp1") == 7666.0
 
 
+# -- creating the store is itself a race --------------------------------------
+
+
+def _construct_then_record(db_path: str, value: float, barrier, results):
+    """Construct AFTER the barrier, so every process creates the file at once."""
+    try:
+        barrier.wait(timeout=_BARRIER_TIMEOUT_S)
+        SqlitePeakStore(db_path).record("fp", value)
+        results.put("ok")
+    except Exception as exc:  # noqa: BLE001 -- the error text is the finding
+        results.put(f"{type(exc).__name__}: {exc}")
+
+
+def test_empty_file_is_a_new_database_not_damage():
+    """A zero-length file is what a store looks like while it is being
+    created (``sqlite3.connect`` makes the file, the first commit writes the
+    header). It must survive the recovery check -- same file, same inode --
+    and be usable: unknown for a read, a value after a record."""
+    import os
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        db.touch()
+        inode = os.stat(db).st_ino
+        store = _store(db)
+        assert os.stat(db).st_ino == inode, "an empty file was deleted as 'corrupt'"
+        assert store.peak_mb("fp") is None
+        assert store.record("fp", 7000.0) == 7000.0
+        assert os.stat(db).st_ino == inode
+
+
+def test_file_truncated_to_nothing_reads_as_unknown_then_recovers():
+    """A cache truncated to zero bytes is a miss, not a crash."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        store = _store(db)
+        store.record("fp", 7000.0)
+        db.write_bytes(b"")
+        assert store.peak_mb("fp") is None
+        assert store.known() == {}
+        assert store.record("fp", 3000.0) == 3000.0
+
+
+def test_discard_skips_a_file_a_peer_already_replaced():
+    """Two processes that both saw the same bad file must not both delete
+    it: the second would remove the clean store the first just wrote."""
+    import os
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "peaks.db"
+        db.write_text("garbage, not sqlite")
+        store = SqlitePeakStore.__new__(SqlitePeakStore)
+        store._db_path = db
+        real_stat = os.stat
+
+        def peer_replaces_then_stat(path, *a, **kw):
+            # Between this process's header read and its unlink, a peer
+            # discards the bad file and writes a good one.
+            if str(path) == str(db) and not getattr(peer_replaces_then_stat, "done", False):
+                peer_replaces_then_stat.done = True
+                db.unlink()
+                SqlitePeakStore(db).record("fp", 1234.0)
+            return real_stat(path, *a, **kw)
+
+        os.stat = peer_replaces_then_stat
+        try:
+            assert store._discard_if_not_a_database() is False
+        finally:
+            os.stat = real_stat
+        assert SqlitePeakStore(db).peak_mb("fp") == 1234.0, "the peer's clean store was deleted"
+
+
+def test_connections_are_closed():
+    """Every operation closes its connection (a bare ``with conn:`` only
+    commits, leaving the handle open until garbage collection)."""
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        opened = []
+        real = sqlite3.connect
+
+        class Tracking(sqlite3.Connection):
+            pass
+
+        def tracking_connect(*a, **kw):
+            kw["factory"] = Tracking
+            conn = real(*a, **kw)
+            opened.append(conn)
+            return conn
+
+        sqlite3.connect = tracking_connect
+        try:
+            store = _store(Path(tmp) / "peaks.db")
+            store.record("fp", 1.0)
+            store.peak_mb("fp")
+            store.known()
+            store.forget("fp")
+        finally:
+            sqlite3.connect = real
+        assert opened, "the test did not observe any connection"
+        for conn in opened:
+            try:
+                conn.execute("SELECT 1")
+            except sqlite3.ProgrammingError:
+                continue
+            raise AssertionError("a connection was left open")
+
+
+def test_concurrent_first_construction():
+    """Six processes create the store at the same instant, then record.
+
+    Before the fix this produced ``disk I/O error``, ``no such table`` and
+    lost peaks in most trials (the recovery check deleted the file another
+    process was creating). Every process must finish cleanly and the
+    maximum must be stored, in EVERY trial."""
+    values = [1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0]
+    ctx = multiprocessing.get_context()
+    for trial in range(20):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "peaks.db")  # does not exist yet
+            barrier = ctx.Barrier(len(values))
+            results = ctx.Queue()
+            procs = [
+                ctx.Process(target=_construct_then_record, args=(db_path, v, barrier, results))
+                for v in values
+            ]
+            for p in procs:
+                p.start()
+            outcomes = [results.get(timeout=_BARRIER_TIMEOUT_S) for _ in procs]
+            for p in procs:
+                p.join(timeout=30.0)
+            assert outcomes == ["ok"] * len(values), f"trial {trial}: {sorted(set(outcomes))}"
+            assert SqlitePeakStore(db_path).peak_mb("fp") == max(values), (
+                f"trial {trial}: stored peak lost"
+            )
+
+
 def main() -> None:
     """Run every test in this file, listed by name.
 
@@ -348,6 +478,11 @@ def main() -> None:
         test_known_holds_plain_readable_numbers,
         test_forget_leaves_other_configurations_alone,
         test_reopen_sees_the_measurement,
+        test_empty_file_is_a_new_database_not_damage,
+        test_file_truncated_to_nothing_reads_as_unknown_then_recovers,
+        test_discard_skips_a_file_a_peer_already_replaced,
+        test_connections_are_closed,
+        test_concurrent_first_construction,
     ]
     for test in tests:
         test()

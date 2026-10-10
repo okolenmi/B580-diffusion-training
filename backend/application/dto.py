@@ -23,6 +23,7 @@ from .ports.dataset_library import (
 from .ports.dataset_tasks import DatasetTask
 from .ports.graph_runtime import GraphIssue
 from .ports.graph_library import SavedGraph
+from .ports.template_library import SavedTemplate
 
 # --------------------------------------------------------------------------
 # Use-case inputs / outputs
@@ -380,4 +381,76 @@ class SaveGraphResult:
 
 @dataclass(frozen=True, slots=True)
 class DeleteGraphResult:
+    deleted: bool
+
+
+# --------------------------------------------------------------------------
+# Templates (saved pages / monitor windows)
+
+@dataclass(frozen=True, slots=True)
+class SavedTemplateDTO:
+    """One template row on the wire (``doc`` verbatim as stored)."""
+
+    name: str
+    description: str
+    kind: str
+    doc: dict
+    block_count: int
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SavedTemplateSummaryDTO:
+    """List projection (no document)."""
+
+    name: str
+    description: str
+    kind: str
+    block_count: int
+    node_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+def to_saved_template_dto(saved: SavedTemplate) -> SavedTemplateDTO:
+    return SavedTemplateDTO(
+        name=saved.name,
+        description=saved.description,
+        kind=saved.kind,
+        doc=dict(saved.doc),
+        block_count=saved.block_count,
+        node_count=saved.node_count,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+    )
+
+
+def to_saved_template_summary(saved: SavedTemplate) -> SavedTemplateSummaryDTO:
+    return SavedTemplateSummaryDTO(
+        name=saved.name,
+        description=saved.description,
+        kind=saved.kind,
+        block_count=saved.block_count,
+        node_count=saved.node_count,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SavedTemplateListResult:
+    templates: tuple[SavedTemplateSummaryDTO, ...]
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SaveTemplateResult:
+    template: SavedTemplateDTO
+    created: bool  # True on first save (201), False on replace (200)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteTemplateResult:
     deleted: bool

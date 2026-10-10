@@ -2,7 +2,7 @@
 
 Page routes, deliberately *not* a root mount:
 
-* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/config``,
+* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/templates[/{name}]``, ``/config``,
   ``/datasets``, ``/datasets/{name}``, ``/help`` and ``/settings`` serve
   the page files (monitor/dataset ids live in the URL; the HTML is
   generic and the client script reads it, like the legacy dashboard);
@@ -92,6 +92,16 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
     @app.get("/graph", include_in_schema=False)
     def graph_page() -> FileResponse:
         return FileResponse(static_dir / "graph.html", headers=_NO_CACHE)
+
+    @app.get("/templates", include_in_schema=False)
+    def templates_page() -> FileResponse:
+        return FileResponse(static_dir / "templates.html", headers=_NO_CACHE)
+
+    @app.get("/templates/{name}", include_in_schema=False)
+    def template_detail_page(name: str) -> FileResponse:
+        # One HTML for the list, a page, and a monitor window; the client
+        # script routes on the path (same pattern as /datasets/{name}).
+        return FileResponse(static_dir / "templates.html", headers=_NO_CACHE)
 
     @app.get("/config", include_in_schema=False)
     def config_page() -> FileResponse:

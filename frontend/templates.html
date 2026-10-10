@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Templates</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/templates.css">
+</head>
+<body class="layout-fixed tpl-body">
+    <main class="content-area" id="tpl-main">
+        <header class="page-topbar">
+            <a class="btn btn-secondary btn-small" id="btn-back" href="/templates" hidden>&larr; Templates</a>
+            <h1 id="tpl-title">Templates</h1>
+            <span class="page-sub" id="tpl-sub">Ready-made pages and monitor windows built on your graphs</span>
+        </header>
+
+        <!-- ================= LIST VIEW ================= -->
+        <div class="page-body" id="view-list">
+            <section class="card" id="new-card">
+                <div class="card-header"><span>New from a graph</span></div>
+                <div class="tpl-new">
+                    <label class="tpl-field">
+                        <span>Kind</span>
+                        <select id="new-kind" aria-label="Kind">
+                            <option value="template">Page &mdash; edit values and run</option>
+                            <option value="monitor">Monitor window &mdash; watch a run</option>
+                        </select>
+                    </label>
+                    <label class="tpl-field">
+                        <span>Graph</span>
+                        <select id="new-graph" aria-label="Saved graph"></select>
+                    </label>
+                    <label class="tpl-field tpl-field-grow">
+                        <span>Name</span>
+                        <input id="new-name" type="text" maxlength="120" autocomplete="off"
+                               spellcheck="false" placeholder="e.g. Quick LoRA" aria-label="Template name">
+                    </label>
+                    <button id="btn-new" class="btn btn-start">Create</button>
+                </div>
+                <div class="tpl-new-hint" id="new-hint">
+                    A page starts with the settings the graph's author already filled in and the
+                    live views its nodes offer. Everything else is one click away in Edit mode.
+                </div>
+                <div class="error-box" id="new-error" role="alert" hidden></div>
+            </section>
+
+            <div class="state-box" id="list-state">Loading&hellip;</div>
+            <section id="list-pages" hidden>
+                <h2 class="tpl-h2">Pages</h2>
+                <div class="tpl-grid" id="grid-pages"></div>
+            </section>
+            <section id="list-monitors" hidden>
+                <h2 class="tpl-h2">Monitor windows</h2>
+                <div class="tpl-grid" id="grid-monitors"></div>
+            </section>
+        </div>
+
+        <!-- ================= PAGE VIEW ================= -->
+        <div class="tpl-page" id="view-page" hidden>
+            <div class="tpl-toolbar" id="toolbar">
+                <div class="tpl-seg" role="group" aria-label="Mode">
+                    <button id="mode-use" class="tpl-seg-btn active" aria-pressed="true">Use</button>
+                    <button id="mode-edit" class="tpl-seg-btn" aria-pressed="false">Edit</button>
+                </div>
+                <button id="btn-run" class="btn btn-start btn-small">&#9654; Run</button>
+                <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
+                <span class="tpl-state" id="tpl-state"></span>
+                <span class="tpl-spacer"></span>
+                <button id="btn-popout" class="btn btn-secondary btn-small" hidden
+                        title="Open this window on its own, e.g. on a second screen">Pop out</button>
+                <button id="btn-save" class="btn btn-secondary btn-small"
+                        title="Saves the layout and the values as they are now">Save</button>
+                <button id="btn-delete" class="btn btn-kill btn-small">Delete</button>
+            </div>
+            <div class="error-box" id="page-error" role="alert" hidden></div>
+            <details class="tpl-issues" id="issues" hidden>
+                <summary id="issues-summary"></summary>
+                <ul id="issues-list"></ul>
+            </details>
+
+            <div class="tpl-work">
+                <div class="tpl-board" id="board"></div>
+                <aside class="tpl-tray" id="tray" hidden aria-label="Add blocks">
+                    <div class="tpl-tray-head">
+                        <strong>Add blocks</strong>
+                        <label class="tpl-adv"><input type="checkbox" id="tray-adv"> advanced</label>
+                    </div>
+                    <input id="tray-search" class="cfg-input" type="search" placeholder="Search&hellip;"
+                           aria-label="Search available blocks">
+                    <div id="tray-list"></div>
+                    <div class="tpl-tray-foot">
+                        Columns
+                        <input type="number" id="cols" min="1" max="24" aria-label="Grid columns">
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+    <script type="module" src="/ui/js/templates.js"></script>
+</body>
+</html>

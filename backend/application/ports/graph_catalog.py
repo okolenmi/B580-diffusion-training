@@ -46,6 +46,15 @@ class PortInfo:
     choices: tuple[str, ...] | None = None  # UI hint: closed set -> dropdown
     visible_when: tuple | None = None  # [other_port_name, value(s)] UI hint
     widget_only: bool = False  # UI hint: no wire socket, widget only
+    # Presentation hints for forms built from the node (templates); "" /
+    # False / None = not stated, the consumer derives its own.
+    label: str = ""
+    group: str = ""
+    advanced: bool = False
+    unit: str = ""
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +86,9 @@ class NodeInfo:
     node_kind: str  # Node.NODE_KIND: "static" | "dynamic"
     presets: tuple[PresetInfo, ...] | None  # non-None only when dynamic
     has_diagnostics: bool  # diagnostics() actually overridden, not inherited
+    #: Live-view modules the node declares (``nodes.ui.DisplayModule`` as
+    #: plain dicts -- the catalog never hands a ``nodes`` object upward).
+    modules: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +138,17 @@ class GraphCatalog(ABC):
         ``load_errors``.
         """
         raise NotImplementedError
+
+    def resolved_inputs(
+        self, class_name: str, params: dict
+    ) -> tuple[PortInfo, ...] | None:
+        """The input ports this node really has under ``params`` -- for a
+        node whose port set depends on its widget values
+        (``Node.resolve_inputs``). ``None`` = no answer (unknown class, the
+        node's hook raised, or this catalog does not resolve): the caller
+        falls back to the static ``NodeInfo.inputs``. Not abstract, so a
+        catalog written before templates keeps working."""
+        return None
 
     @abstractmethod
     def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:

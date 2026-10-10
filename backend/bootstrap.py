@@ -32,6 +32,14 @@ from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
 from .application.dataset_task_sweeper import DatasetTaskSweeper
 from .application.event_publisher import EventPublisher
+from .application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
+from .application.use_cases.run_template import RunTemplate
+from .application.use_cases.template_crud import (
+    DeleteTemplate,
+    GetTemplate,
+    ListTemplates,
+    SaveTemplate,
+)
 from .application.services import (
     ApplicationServices,
     AssetServices,
@@ -41,6 +49,7 @@ from .application.services import (
     InstallerServices,
     MonitorServices,
     SettingsServices,
+    TemplateServices,
 )
 from .application.use_cases import (
     ApplyInstallation,
@@ -122,6 +131,7 @@ from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from .infrastructure.persistence.graph_library import SqliteGraphLibrary
+from .infrastructure.persistence.template_library import SqliteTemplateLibrary
 from .infrastructure.persistence.sqlite import SqliteDatabase
 from .application.limits import (
     DEVICE_REFRESH_MIN_SECONDS,
@@ -252,6 +262,7 @@ def build_container(settings: Settings) -> Container:
         memory_ledger=memory_ledger,
     )
     graph_library = SqliteGraphLibrary(database)
+    template_library = SqliteTemplateLibrary(database)
     execution_writer = ExecutionLifecycleWriter(
         clock=clock,
         repository=graph_executions, events=publisher
@@ -305,6 +316,25 @@ def build_container(settings: Settings) -> Container:
         peaks=peak_store,
         resolve_memory_fields=memory_fields_resolver(graph_registry),
     )
+
+    # One instance, shared by the editor's Run and by running a template:
+    # the single-active check lives under this object's lock, so a second
+    # instance would be a second lock and a window in which two graphs
+    # could both pass it.
+    start_execution = StartGraphExecution(
+        executions=graph_executions,
+        writer=execution_writer,
+        runtime=graph_runtime,
+        launcher=graph_supervisor,
+        clock=clock,
+        memory_ledger=memory_ledger,
+        # The same instance the panel previews through: the fingerprint
+        # it computes is what the watcher above files this run's own
+        # reported peaks under, and a preview keyed differently would
+        # quote a peak belonging to some other configuration.
+        peak_source=graph_peak_source.observed,
+    )
+    describe_modules = DescribeGraphModules(catalog=graph_catalog)
 
     services = ApplicationServices(
         config=ConfigServices(
@@ -412,20 +442,7 @@ def build_container(settings: Settings) -> Container:
                 memory_ledger=memory_ledger,
                 peak_source=graph_peak_source.observed,
             ),
-            start_execution=StartGraphExecution(
-                executions=graph_executions,
-                writer=execution_writer,
-                runtime=graph_runtime,
-                launcher=graph_supervisor,
-                clock=clock,
-                memory_ledger=memory_ledger,
-                # The same instance the panel previews through: the
-                # fingerprint it computes is what the watcher above files
-                # this run's own reported peaks under, and a preview
-                # keyed differently would quote a peak belonging to some
-                # other configuration.
-                peak_source=graph_peak_source.observed,
-            ),
+            start_execution=start_execution,
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
@@ -456,6 +473,15 @@ def build_container(settings: Settings) -> Container:
         event_bus=event_bus,
         memory_ledger=memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
+        templates=TemplateServices(
+            describe=describe_modules,
+            resolve=ResolveTemplate(describe=describe_modules, runtime=graph_runtime),
+            save=SaveTemplate(library=template_library),
+            get=GetTemplate(library=template_library),
+            list=ListTemplates(library=template_library),
+            delete=DeleteTemplate(library=template_library),
+            run=RunTemplate(library=template_library, start=start_execution),
+        ),
     )
 
     # Startup sweep: nothing may observe an unfinished row from a dead

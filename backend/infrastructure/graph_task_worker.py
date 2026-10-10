@@ -78,6 +78,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="device MB admission granted this run (absent = unknown)",
     )
+    p.add_argument(
+        "--memory-adaptive",
+        action="store_true",
+        help="the grant is a ceiling (budget was 'auto'): shrink it to the "
+             "card's real free memory instead of refusing",
+    )
+    p.add_argument(
+        "--vram-min-mb",
+        type=float,
+        default=0.0,
+        help="the graph's declared floor; an adaptive run refuses below it",
+    )
     return p
 
 
@@ -157,7 +169,22 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
     return outcome
 
 
-def physical_check_or_refuse(memory, writer, *, device="xpu", device_ctx=None) -> bool:
+#: Head-room an adaptive run leaves below the card's free memory: the
+#: allocator's fragmentation and the driver's own bookkeeping are not in
+#: the free reading's accounting, and a run sized to the last megabyte
+#: dies on the first spike.
+ADAPTIVE_MARGIN_MB = 256.0
+
+#: The least an adaptive run will start with when the graph states no
+#: floor of its own. Below this nothing in this project's graphs does
+#: useful work, and "ran in 600 MB" is a worse report than a refusal.
+ADAPTIVE_FLOOR_MB = 1024.0
+
+
+def physical_check_or_refuse(
+    memory, writer, *, device="xpu", device_ctx=None,
+    adaptive=False, vram_min_mb=0.0,
+) -> bool:
     """MEM-05 #2: can the card really give what admission granted?
 
     The child's check, run after ``GraphMemory`` is built and before
@@ -189,6 +216,32 @@ def physical_check_or_refuse(memory, writer, *, device="xpu", device_ctx=None) -
     from nodes.memory.graph_memory import CHECK_UNKNOWN
 
     check = memory.physical_check(device_ctx)
+    if check.refused and adaptive:
+        # The run asked for "auto": its grant is the most the ledger could
+        # give, not a number the user chose, and the card has less free
+        # than that (the ledger cannot see ComfyUI or the desktop).
+        # Refusing here is what made every default run fail on a shared
+        # card. Shrink to the real free memory, minus head-room, as long
+        # as that still clears the graph's own floor.
+        target = float(check.free_mb) - ADAPTIVE_MARGIN_MB
+        floor = max(float(vram_min_mb or 0.0), ADAPTIVE_FLOOR_MB)
+        if target >= floor:
+            logger.warning(
+                "memory 'auto': %.0f MB granted but only %.0f MB is free; "
+                "running inside %.0f MB",
+                check.grant_mb, check.free_mb, target,
+            )
+            memory.shrink_to(target)
+            return True
+        message = (
+            f"memory: only {check.free_mb:.0f} MB is free on the card "
+            f"({target:.0f} MB after {ADAPTIVE_MARGIN_MB:.0f} MB head-room), "
+            f"below the {floor:.0f} MB this graph needs to start "
+            f"(a foreign process such as ComfyUI or the desktop holds the rest)"
+        )
+        logger.warning("physical memory check refused the run: %s", message)
+        writer.outcome(error=message, results_count=0)
+        return False
     if check.refused:
         message = check.refusal_message()
         logger.warning("physical memory check refused the run: %s", message)
@@ -466,7 +519,8 @@ def main(argv: list[str] | None = None) -> int:
 
         device_ctx = DeviceContext.for_device(graph.memory.device)
         if not physical_check_or_refuse(
-            memory, writer, device=graph.memory.device, device_ctx=device_ctx
+            memory, writer, device=graph.memory.device, device_ctx=device_ctx,
+            adaptive=args.memory_adaptive, vram_min_mb=args.vram_min_mb,
         ):
             return 1
         # MEM-05 #3: the allocator's own cap, best-effort -- a refusal

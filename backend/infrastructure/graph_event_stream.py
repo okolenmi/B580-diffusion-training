@@ -59,6 +59,7 @@ quietly stops reporting.
 from __future__ import annotations
 
 import json
+import time
 import logging
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,12 @@ class ExecutionEventWriter:
         self._write(
             {
                 "kind": EventKind.MEMORY.value,
+                # Stamped here, by the process that took the reading: the
+                # supervisor republishes these as the graph-scope memory
+                # chart, and a replayed history (adoption after a server
+                # restart) must keep the readings' own times, not the time
+                # it was replayed.
+                "t": time.time(),
                 "reserved_mb": reserved_mb,
                 "allocated_mb": allocated_mb,
                 "peak_mb": peak_mb,

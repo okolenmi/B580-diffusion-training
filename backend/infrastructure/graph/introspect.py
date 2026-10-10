@@ -127,7 +127,19 @@ def _port_info(port, *, is_output: bool = False) -> PortInfo:
         ),
         visible_when=None if is_output else port.visible_when,
         widget_only=False if is_output else port.widget_only,
+        label="" if is_output else port.label,
+        group="" if is_output else port.group,
+        advanced=False if is_output else port.advanced,
+        unit="" if is_output else port.unit,
+        minimum=None if is_output else port.minimum,
+        maximum=None if is_output else port.maximum,
+        step=None if is_output else port.step,
     )
+
+
+#: Public name for the one-port conversion (the catalog resolves a node's
+#: params-dependent ports through it).
+port_info = _port_info
 
 
 def _presets(cls: type) -> tuple[PresetInfo, ...] | None:
@@ -171,4 +183,5 @@ def introspect_node_class(cls: type, *, domain: str) -> NodeInfo:
         # Plain function identity: diagnostics() is a regular instance
         # method, so ClassName.method is already the bare function.
         has_diagnostics=cls.diagnostics is not Node.diagnostics,
+        modules=tuple(m.as_dict() for m in cls.MODULES),
     )

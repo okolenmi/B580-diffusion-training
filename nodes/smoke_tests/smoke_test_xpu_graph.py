@@ -160,6 +160,73 @@ def check_capture_is_not_ready_on_cpu():
     print("    PASS")
 
 
+def check_five_cpu_steps_match_eager_training():
+    print("[5 CPU steps through the runner == 5 eager steps: same params]")
+    from nodes.train.loss import masked_per_sample_mse
+
+    def run(use_runner):
+        torch.manual_seed(31)
+        model = _TinyModel()
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        runner = None
+        if use_runner:
+            runner = XPUGraphStepRunner(model, UniformLossWeighting(), "cpu")
+        torch.manual_seed(33)
+        data = [_inputs() for _ in range(5)]
+        for i, (xc, t, ctx, y, target, sigma, mask) in enumerate(data):
+            if use_runner:
+                runner.zero_window()
+                loss, _, how = runner.step(
+                    micro=0, xc=xc, t=t, ctx_emb=ctx, y=y, target=target,
+                    sigma=sigma, mask=mask)
+                check(how == "eager-live", f"CPU must fall back, got {how}")
+            else:
+                opt.zero_grad()
+                pred = model.forward(xc, t, ctx, y)
+                loss = masked_per_sample_mse(pred, target, mask).mean()
+                loss.backward()
+            opt.step()
+        return {k: v.clone() for k, v in model.state_dict().items()}
+
+    a, b = run(False), run(True)
+    check(set(a) == set(b), "param sets differ")
+    worst = max((a[k].float() - b[k].float()).abs().max().item() for k in a)
+    check(worst == 0.0,
+          f"runner training diverged from eager training ({worst:.2e})")
+    print("    PASS")
+
+
+def check_skip_zero_grad_only_with_a_runner():
+    print("[skip_zero_grad=True: LR still updates, grads untouched]")
+    from nodes.train.managed import ZeroGradPhase
+    from nodes.train.schedule import ConstantLRSchedule
+
+    class _Opt:
+        def __init__(self):
+            self.zeroed = 0
+            self.lrs = []
+
+        def update_lr(self, lr):
+            self.lrs.append(lr)
+
+        def zero_grad(self):
+            self.zeroed += 1
+
+    from nodes.train.managed import ManagedStepState
+    opt = _Opt()
+    phase = ZeroGradPhase(opt, ConstantLRSchedule(lr=2e-4), is_fused=False,
+                          grad_accum=1, skip_zero_grad=True)
+    p = torch.nn.Parameter(torch.zeros(2, 2))
+    p.grad = torch.ones(2, 2)
+    st = ManagedStepState(step=0, batch=None, model=None, device="cpu",
+                          micro=0)
+    phase.run(st)
+    check(opt.zeroed == 0, "skip_zero_grad still zeroed")
+    check(opt.lrs == [2e-4], "LR update skipped too")
+    check(bool((p.grad == 1).all()), "phase touched .grad")
+    print("    PASS")
+
+
 def check_main_route_graph_phase_zeroes_steps_and_reports():
     print("[main-route graph phase: zeroes in place, steps, reports loss]")
     from nodes.train.step_pipeline import GraphForwardLossBackwardPhase, StepState
@@ -308,6 +375,8 @@ def main():
     check_dropout_scan_reaches_through_the_facade()
     check_main_route_graph_phase_zeroes_steps_and_reports()
     check_supervised_node_refuses_fused_graph()
+    check_five_cpu_steps_match_eager_training()
+    check_skip_zero_grad_only_with_a_runner()
     check_capture_is_not_ready_on_cpu()
     print()
     print("=" * 60)

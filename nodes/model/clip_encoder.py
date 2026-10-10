@@ -106,19 +106,25 @@ class SDXLClipEncoder:
         # (CLIP.load_sd with full_model=True). Missing keys like logit_scale
         # and text_projection are expected and harmless for SDXL.
         missing, unexpected = self.clip_model.load_state_dict(clip_sd, strict=False)
-        # Filter out expected-but-missing keys (not used by SDXL)
-        _expected_missing = {
-            'clip_l.logit_scale',
-            'clip_l.transformer.text_projection.weight',
-        }
-        missing = [k for k in missing if k not in _expected_missing]
-        # Filter out expected-but-unexpected keys (we add position_ids manually)
-        _expected_unexpected = {'clip_l.transformer.text_model.embeddings.position_ids'}
-        unexpected = [k for k in unexpected if k not in _expected_unexpected]
-        if missing:
-            print(f"    Warning: {len(missing)} CLIP keys missing in checkpoint")
-        if unexpected:
-            print(f"    Warning: {len(unexpected)} unexpected CLIP keys")
+        # Meta-built (see above): the two allowlisted tensors below are the
+        # only ones the checkpoint does not cover, and both are proven
+        # unused -- clip_l.logit_scale (contrastive loss only, never run
+        # here) and clip_l.transformer.text_projection.weight (CLIP-L's
+        # pooled output is computed then discarded: clip.py's
+        # `l_out, _ = self.clip_l.encode(...)`; SDXL uses CLIP-G's pooled).
+        # They get deterministic zeros, not uninitialised memory. Anything
+        # else uncovered raises -- see nodes/model/meta_init.py.
+        from .meta_init import verify_loaded
+        verify_loaded(
+            self.clip_model, missing, unexpected,
+            allow_fill=frozenset({
+                "clip_l.logit_scale",
+                "clip_l.transformer.text_projection.weight",
+            }),
+            allow_unexpected=frozenset({
+                "clip_l.transformer.text_model.embeddings.position_ids",
+            }),
+            owner="SDXLClipModel")
         del clip_sd
 
         # Move to device

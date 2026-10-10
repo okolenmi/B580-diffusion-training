@@ -109,8 +109,8 @@ class ComfyUNetWrapper:
         self.model.to_empty(device="cpu")
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
-        if missing:
-            print(f"    Warning: {len(missing)} missing keys (first: {missing[0]})")
+        from .meta_init import verify_loaded
+        verify_loaded(self.model, missing, unexpected, owner="UNetModel")
         self.model = self.model.to(device=device, dtype=dtype)
 
         if lora_config is not None:

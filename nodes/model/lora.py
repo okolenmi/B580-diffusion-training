@@ -691,3 +691,79 @@ def lora_param_count(registry: List[Tuple[str, nn.Module, str, nn.Module]],
         if _is_adapter_layer(layer, layer_classes):
             total += layer.lora_A.numel() + layer.lora_B.numel()
     return total
+
+
+def lora_module_group(module_key: str) -> str:
+    """Group name for a LoRA module key (without the down/up/alpha suffix),
+    same grouping as lora_forensics.py: time_embed, label_emb, attn_input,
+    attn_middle, attn_output, other_unet, text_encoder, unknown."""
+    if module_key.startswith(("lora_te", "lora_te1", "lora_te2")):
+        return "text_encoder"
+    if not module_key.startswith("lora_unet_"):
+        return "unknown"
+    p = module_key[len("lora_unet_"):]
+    if p.startswith("time_embed"):
+        return "time_embed"
+    if p.startswith("label_emb"):
+        return "label_emb"
+    if "attn" in p or "transformer_blocks" in p:
+        if p.startswith("input_blocks"):
+            return "attn_input"
+        if p.startswith("middle_block"):
+            return "attn_middle"
+        if p.startswith("output_blocks"):
+            return "attn_output"
+    return "other_unet"
+
+
+def lora_health_summary(state_dict: dict) -> dict:
+    """Per-group median ||dW||_F over an exported LoRA state dict (D3).
+
+    dW = (alpha/rank) * block_weight * (B @ A), materialised directly
+    (rank <= 256, tiny -- no trace trick needed); alpha defaults to rank
+    and block_weight to 1.0 when their keys are absent, matching the
+    loader's own defaults. Groups per lora_module_group.
+
+    Warnings (the A1 signatures): attn_output median > 1.8x attn_input
+    median (the attention-only run showed 2.0x); any group median > 5x
+    the attention reference (median of the three attn group medians).
+    Pure function of the state dict -- no model needed, so the saver and
+    offline inspection share it. Unit-tested on synthetic data.
+    """
+    import statistics
+    by_group: dict[str, list] = {}
+    for key, down in state_dict.items():
+        if not key.endswith(_DOWN_SUFFIX):
+            continue
+        mod = key[: -len(_DOWN_SUFFIX)]
+        up = state_dict.get(mod + _UP_SUFFIX)
+        if up is None:
+            continue
+        rank = down.shape[0]
+        alpha = state_dict.get(mod + _ALPHA_SUFFIX)
+        alpha = float(alpha.reshape(-1)[0]) if alpha is not None else float(rank)
+        bw = state_dict.get(mod + ".block_weight")
+        bw = float(bw.reshape(-1)[0]) if bw is not None else 1.0
+        with torch.no_grad():
+            dw = ((alpha / rank) * bw * (up.float() @ down.float())).norm().item()
+        by_group.setdefault(lora_module_group(mod), []).append(dw)
+    groups = {g: {"n": len(v), "median_dW": statistics.median(v)}
+              for g, v in sorted(by_group.items()) if v}
+    warnings = []
+    att = [groups[g]["median_dW"] for g in
+           ("attn_input", "attn_middle", "attn_output") if g in groups]
+    if att:
+        ref = statistics.median(att)
+        if ("attn_input" in groups and "attn_output" in groups and ref > 0
+                and groups["attn_output"]["median_dW"]
+                / max(groups["attn_input"]["median_dW"], 1e-12) > 1.8):
+            warnings.append(
+                "attn_output median is >1.8x attn_input: the output "
+                "projections carry the adaptation (attention-only signature)")
+        for g, s in groups.items():
+            if g not in ("attn_input", "attn_middle", "attn_output") \
+                    and ref > 0 and s["median_dW"] > 5.0 * ref:
+                warnings.append(
+                    f"{g} median is >5x the attention reference: check what "
+                    f"the LoRA put on the global conditioning path")
+    return {"groups": groups, "warnings": warnings}

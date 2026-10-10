@@ -281,6 +281,48 @@ def check_rejects_wrong_model_type():
         print("    PASS")
 
 
+def check_lora_health_summary_on_synthetic_data():
+    print("[health summary: hand-computed medians, both warnings]")
+    import json
+    from nodes.model.lora import (extract_lora_weights, lora_health_summary,
+                                  load_lora_into_model)
+    torch.manual_seed(5)
+
+    def layer_at(name, b_val, rank=2, alpha=4.0, weight=1.0):
+        base = torch.nn.Linear(4, 3)
+        lyr = LoRALinear(base, rank=rank, alpha=alpha, weight=weight)
+        with torch.no_grad():
+            lyr.lora_A.fill_(0.5)
+            lyr.lora_B.fill_(b_val)
+        parent = torch.nn.Module()
+        parent.add_module("m", lyr)
+        return (name, parent, "m", lyr)
+
+    reg = [layer_at("model.diffusion_model.input_blocks.0.attn.to_q", 1.0),
+           layer_at("model.diffusion_model.output_blocks.0.attn.to_q", 4.0),
+           layer_at("model.diffusion_model.time_embed.0", 20.0)]
+    sd = extract_lora_weights(reg)
+    summary = lora_health_summary(sd)
+    # dW per module = (4/2)*1*(B@A): B = b*ones(3,2), A = 0.5*ones(2,4) ->
+    # B@A = b*ones(3,4), ||.||_F = b*sqrt(12), x2 scale.
+    import math
+    att_in = summary["groups"]["attn_input"]["median_dW"]
+    att_out = summary["groups"]["attn_output"]["median_dW"]
+    temb = summary["groups"]["time_embed"]["median_dW"]
+    assert abs(att_in - 2 * 1.0 * math.sqrt(12)) < 1e-3, \
+        f"attn_input median {att_in}, want {2 * math.sqrt(12):.4f}"
+    assert abs(att_out / att_in - 4.0) / 4.0 < 1e-5, \
+        "output/input ratio must be 4.0"
+    assert abs(temb / att_in - 20.0) / 20.0 < 1e-5, \
+        "cond magnitude must be 20x"
+    assert any("1.8x" in w for w in summary["warnings"]), \
+        f"output>input warning missing: {summary['warnings']}"
+    assert any("time_embed" in w and "5x" in w for w in summary["warnings"]), \
+        f"cond-path warning missing: {summary['warnings']}"
+    json.dumps(summary)  # metadata must serialise
+    print("    PASS")
+
+
 def check_block_weight_round_trips_with_forward(tmpdir):
     print("[block_weights: trained strength survives export -> fresh load]")
     from nodes.model.lora import extract_lora_weights, load_lora_into_model
@@ -338,6 +380,7 @@ def main():
             check_contracts()
             check_load_reproduces_the_saved_forward_exactly(tmpdir)
             check_block_weight_round_trips_with_forward(tmpdir)
+            check_lora_health_summary_on_synthetic_data()
             check_dora_round_trip_with_magnitude_reproduces_exactly(tmpdir)
             check_dora_without_magnitude_key_recomputes_it(tmpdir)
             check_dora_alpha_restore_affects_forward(tmpdir)

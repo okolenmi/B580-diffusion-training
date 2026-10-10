@@ -133,7 +133,7 @@ half of the port still expected.
 2. **No `Cache-Control` on pages/assets** -- heuristic freshness served
    stale `style.css` across reloads (observed: `transferSize: 0`).
    Root cause: the M6 static-serving port dropped legacy
-   `server/main.py`'s revalidation middleware (its comment documents a
+   `archive/server/main.py`'s revalidation middleware (its comment documents a
    real mixed-version incident). Fixed by stamping `no-cache` on page
    `FileResponse`s and via a `StaticFiles` subclass for `/ui`;
    `test_pages.py` pins it (pages/assets `no-cache`, `/api` untouched).

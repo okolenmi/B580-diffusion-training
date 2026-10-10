@@ -115,7 +115,7 @@ what "soft install" has to mean for it to be safe.
 
 ### 1. Dependency check, before the server
 
-A `scripts/check_requirements.py` that answers *satisfied / missing /
+A requirements-check script that answers *satisfied / missing /
 optional-missing / wrong-version* per item and exits non-zero on a
 missing one. Report-only at first — see the phasing.
 
@@ -329,7 +329,7 @@ Each step is useful alone and keeps the suite green.
 
 | Phase | What | Why it stands alone |
 |---|---|---|
-| A | `scripts/check_requirements.py`, report only | Turns an unknown into a list. Nothing else depends on it existing yet. |
+| A | a requirements-check script, report only | Turns an unknown into a list. Nothing else depends on it existing yet. |
 | B | `run_server.sh` gates on A | The traceback becomes a sentence. **The single biggest win for the least work.** |
 | C | Opt-in download | Requires B to be trusted. |
 | D | First-run detection; server starts degraded | Needs B and C. |

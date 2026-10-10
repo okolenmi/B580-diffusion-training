@@ -225,6 +225,21 @@ def main() -> None:
               f"{', '.join(_SUITES)}/*/smoke_tests/ (and any extra dirs)")
         sys.exit(1)
 
+    # Repo-relative path references in backticks (scripts/check_doc_refs.py):
+    # fast, CPU-only, no torch needed -- fails the gate before any test
+    # runs rather than after, so a doc-only breakage never costs a GPU run.
+    # Skipped when filtering to specific files, so `run_tests.py <name>`
+    # still means exactly that file.
+    if not filters:
+        print("doc refs: ", end="", flush=True)
+        refs = subprocess.run(
+            [sys.executable, str(_HERE / "scripts" / "check_doc_refs.py")],
+            capture_output=True, text=True)
+        print(refs.stdout.strip().splitlines()[-1] if refs.stdout else "")
+        if refs.returncode != 0:
+            print(refs.stdout)
+            sys.exit(1)
+
     python = resolve_interpreter()
     if python != sys.executable:
         print(f"note: {sys.executable} has no torch -- using {python} instead\n")

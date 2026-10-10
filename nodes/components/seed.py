@@ -1,11 +1,11 @@
 """Deterministic seed derivation for reproducible randomness.
 
-**Moved here from `core/seed.py` on 2026-10-02.** 18 lines, one
+**Moved here from `archive/core/seed.py` on 2026-10-02.** 18 lines, one
 function, no dependencies beyond `hashlib`. It moved because
 `nodes/model/unet_wrapper.py`'s `make_rand_cond()` needs it, and having
 the UNet wrapper depend on `core/` purely for a SHA-256 call would have
 kept the package boundary exactly where the point of this migration was
-to move it. `core/seed.py` stays as a re-export shim, since
+to move it. `archive/core/seed.py` stays as a re-export shim, since
 `manager/builder.py` and both of `core/`'s cache builders use it too.
 
 Placed under `components/` rather than `model/`: this is not about any

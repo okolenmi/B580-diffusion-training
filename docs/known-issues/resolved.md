@@ -263,7 +263,7 @@ by inspection.
   ~11406 MB** -- which reconciles exactly (allocator free-block pool
   ~4.3 GB + ~900 MB desktop baseline + context overhead), and matches
   both the user's own monitoring (11.4/11.9 GB) and the cross-process
-  query. The ~6034 MB in the docs came from `core/train_step.py`'s
+  query. The ~6034 MB in the docs came from `archive/core/train_step.py`'s
   maintenance block running `xpu_empty_cache()` *before* the
   `[vram]` snapshot every 250 micro-steps: `empty_cache()` collapses
   reserved to roughly allocated, so every snapshot the docs quoted was
@@ -347,7 +347,7 @@ by inspection.
   under real pressure every step (via the caching wrapper), covering
   that companion fix from the same session. **Scope caveat kept from
   the original entry:** this exercises the `nodes/` rewrite's offload
-  path, not the `core/trainer.py` path the open "Device lost"
+  path, not the `archive/core/trainer.py` path the open "Device lost"
   report is about -- that relationship stays unconfirmed (see
   [`open.md`](open.md)).
 
@@ -404,7 +404,7 @@ by inspection.
   `p.numel() < 10_000` routes tiny parameters to a path that updates via
   `ws[s:e].add_(..., alpha=-alpha_t)`, which doesn't alias, and was never
   affected; `ForeachXPUAdafactor` never had it at all. Fix: forced
-  a real copy (`.to(dtype=p.dtype, copy=True)`) in both `core/optimizers.py`
+  a real copy (`.to(dtype=p.dtype, copy=True)`) in both `archive/core/optimizers.py`
   locations; covered by
   `nodes/smoke_tests/smoke_test_fused_adafactor_equivalence.py` (which also
   now includes the float32+momentum case the bug had made incomparable),
@@ -452,8 +452,8 @@ by inspection.
   cross-parameter-batching version was a different, bigger problem, and
   `AdafactorOptimizerNode` stayed registered for it as a capability gap
   rather than a broken thing -- until 2026-10-02, when the decision was
-  made to retire the node instead of building the machinery
-  (`nodes/optimizer/adafactor.py` deleted). The reasoning, and the one
+  made to retire the node instead of building the machinery (the old
+  standalone adafactor module deleted). The reasoning, and the one
   unmeasured performance consequence, are recorded in
   `docs/known-issues/open.md`.
 
@@ -541,7 +541,7 @@ by inspection.
   and because the hypothesis it tested turned out to be wrong in an
   instructive way.
 
-  **What was being asked.** `nodes/optimizer/adafactor.py` is deleted, so
+  **What was being asked.** The old standalone adafactor module is deleted, so
   `ComposedAdafactorOptimizerNode` is the only Adafactor node. It was
   retired rather than reimplemented because `ChunkedXPUAdafactor`'s
   tiny-parameter path concatenates every parameter under 10,000 elements

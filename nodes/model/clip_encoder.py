@@ -6,7 +6,7 @@ encodes to (ctx, pooled) tensors, and builds (ctx, y) for the UNet.
 
 CLIP is loaded once, used for conditioning, then unloaded.
 
-**Moved here from `core/clip_encode.py` on 2026-10-02, unchanged.**
+**Moved here from `archive/core/clip_encode.py` on 2026-10-02, unchanged.**
 Text encoding was the last place `nodes/model/` still borrowed a
 `core/` implementation outright -- `SDXLTextEncoderNode.build()` and
 `SDXLArchitecture.build_text_encoder()` both constructed this class, so
@@ -15,7 +15,7 @@ self-contained (torch only, nothing from `core/`), which made this a
 relocation rather than a rewrite, consistent with the project's rule
 that verified code gets wrapped rather than re-derived.
 
-`core/clip_encode.py` is kept as a re-export shim rather than deleted,
+`archive/core/clip_encode.py` is kept as a re-export shim rather than deleted,
 because `core/`'s own trainer, its two cache builders, and
 `manager/builder.py` all construct this class too, and `core/` is still
 the production training path the backend spawns. Point those at this

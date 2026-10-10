@@ -131,7 +131,7 @@ So it is not mistaken for load-bearing by anyone reading the archive:
 **The XPU env ordering was silently wrong.** `backend/cli.py` imported
 `core.xpu_env` under a comment reading "Pure os.environ writes, no torch
 import — safe before any child". The comment was false: importing any
-`core.*` submodule runs `core/__init__.py`, which eagerly re-exported
+`core.*` submodule runs `archive/core/__init__.py`, which eagerly re-exported
 `optimizers` and `unet_wrapper`, so `torch` was loaded two lines *before* the
 SYCL variables were set. `archive/core/__init__.py` is now a lazy PEP 562
 facade and the same import no longer pulls torch. It was probably harmless —

@@ -47,9 +47,9 @@ shipping first in a shape Phase 4 then has to work around.
 
 `choices=T_MODES` off a new `nodes/dataset/timestep_modes.py`.
 That constant is a **deliberate**, documented duplicate of a same-named
-constant added to `core/noise_schedule.py` (where `sample_timestep()`
+constant added to `archive/core/noise_schedule.py` (where `sample_timestep()`
 actually implements those five distributions), not importable from
-there directly -- checked directly, not assumed: `core/__init__.py`
+there directly -- checked directly, not assumed: `archive/core/__init__.py`
 eagerly imported `core.unet_wrapper` (ComfyUI-dependent) and other heavy
 modules, so anything under `core.*` pulls all of that in at import
 time, which is exactly why the original deferral example
@@ -61,7 +61,7 @@ ComfyUI/torch-free at
 import time, and a Port's `choices` is needed at class-definition time
 (module load), where that deferral trick isn't available. `device`
 Ports deliberately did **not** get `choices` -- checked directly
-(`core/comfy_setup.py`), they're `torch.device()`-parsed and accept
+(`archive/core/comfy_setup.py`), they're `torch.device()`-parsed and accept
 indexed variants (`"xpu:0"`) no closed list could enumerate, so they're
 genuinely the open-ended case `choices=None` exists to leave alone, not
 an oversight.

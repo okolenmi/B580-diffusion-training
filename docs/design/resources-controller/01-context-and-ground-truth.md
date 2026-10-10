@@ -48,7 +48,7 @@ in what's actually there rather than guessed at:
   makes "query dtype the instant a resource is attached" cheap enough
   to actually do.
 - **Every edge in the graph is type-checked before any node runs.**
-  `server/graph_executor.py`'s `_is_compatible()` checks every edge
+  `archive/server/graph_executor.py`'s `_is_compatible()` checks every edge
   against `from_cls.OUTPUTS`/`to_cls.INPUTS` -- static, class-level --
   before the topological run starts. An interactive node's shape has to
   be *settled* (concrete `params`, not still-open choices) by the time
@@ -57,10 +57,10 @@ in what's actually there rather than guessed at:
   compatible with "the node's shape depends on a value carried by a
   wire at Run time."
 - **A real, close sibling for the new query endpoint already exists.**
-  `server/asset_paths.py` (`_safe_resolve()`, `browse()`,
+  `archive/server/asset_paths.py` (`_safe_resolve()`, `browse()`,
   `list_options()`) already sandboxes exactly this kind of untrusted,
   network-reachable, `kind`-scoped path access, wired in via
-  `server/routes_nodegraph.py`'s existing `/assets/{kind}/...` family
+  `archive/server/routes_nodegraph.py`'s existing `/assets/{kind}/...` family
   (`browse`, `upload`, `mkdir`). A dtype-inspection endpoint is a
   natural new sibling in that same family and should reuse
   `_safe_resolve()` directly rather than reinvent sandboxing.

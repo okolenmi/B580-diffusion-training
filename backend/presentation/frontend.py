@@ -18,7 +18,7 @@ Page routes, deliberately *not* a root mount:
   answering with the JSON error envelope instead of static 404 HTML.
 
 Every response here carries ``Cache-Control: no-cache`` -- ported from
-``server/main.py``, which documented why: without it the browser applies
+``archive/server/main.py``, which documented why: without it the browser applies
 heuristic freshness (age/10 from Last-Modified), so a plain reload can
 serve yesterday's JS against today's server -- a real mixed-version bug
 hit once in the legacy app (old ``nodegraph.js`` vs new gated widgets).

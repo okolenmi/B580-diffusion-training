@@ -4,14 +4,14 @@ The model is `nodes/model/unet.py`, this project's reimplementation of the
 published SDXL UNet (design doc 12, section 7.3, section A). It used to be
 `comfy.ldm.modules.diffusionmodules.openaimodel.UNetModel`.
 
-**Moved here from `core/unet_wrapper.py` on 2026-10-02.** Unchanged apart
+**Moved here from `archive/core/unet_wrapper.py` on 2026-10-02.** Unchanged apart
 from its imports. `nodes/model/lora_injector.py:228` constructs this
 class for every LoRA path in the graph, so the model the node route
 trains on was living in `core/`; owning it here is what lets the
 `layer_classes` parameter on `inject_lora_into_unet` replace the
 module-global patching that `adapter_injection.py` used to do.
 
-`core/unet_wrapper.py` remains as a re-export shim for `core/`'s and
+`archive/core/unet_wrapper.py` remains as a re-export shim for `core/`'s and
 `manager/`'s own use.
 
 One known gap, unchanged by the move and worth stating plainly since it

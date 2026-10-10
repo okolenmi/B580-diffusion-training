@@ -134,7 +134,7 @@ class TeacherTaskParams:
     """Sampling + prompt options for ``generate_teacher`` (M8e).
 
     Ported from the legacy ``/tasks/start`` ``type="teacher"`` body
-    (``server/routes_datasets.py``), one field per legacy parameter so
+    (``archive/server/routes_datasets.py``), one field per legacy parameter so
     the stored task ``params`` record stays a flat, faithful launch
     payload. ``seed``/``latent_size``/``model_type`` are shared with
     image import in the wire schema but live here for this kind, since

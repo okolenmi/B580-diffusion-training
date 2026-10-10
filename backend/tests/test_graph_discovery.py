@@ -1,7 +1,7 @@
 """Graph discovery tests -- the real nodes/ walk (M4).
 
 Auto-discovery replaces the legacy hand import list
-(``server/nodegraph_registry.py``), so the parity claim is checked
+(``archive/server/nodegraph_registry.py``), so the parity claim is checked
 against reality: every concrete Node under ``nodes/`` is found, zero
 modules fail to import, and the registry caches/refreshes correctly.
 

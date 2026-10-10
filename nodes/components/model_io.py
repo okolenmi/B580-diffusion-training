@@ -10,7 +10,7 @@ predate injection and call per step. It adds no arithmetic of its own --
 every body delegates -- so there is one implementation and
 `smoke_test_diffusion_equivalence.py` covers it.
 
-The predecessor was `core/model_io.py`, whose docstring listed the four
+The predecessor was `archive/core/model_io.py`, whose docstring listed the four
 callers it served (`cache_trajectory`, `cache_random`, `train_step`,
 `train`). Only `manager/builder.py` still calls these; the other three
 were retired with the old trainer, so the module is much smaller than it

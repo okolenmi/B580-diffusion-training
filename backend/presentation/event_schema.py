@@ -23,8 +23,8 @@ dataclass's own fields plus three keys no dataclass declares:
     It is conditional: a healthy frame does not carry it.
 
 Describing only the dataclasses would therefore have produced a schema
-that rejects a real frame, and ``frontend/js/views/run.js`` reads
-``e.nonfinite`` specifically so that a diverged loss renders as an error
+that rejects a real frame, and `frontend/js/lib/value.js` reads
+`e.nonfinite` specifically so that a diverged loss renders as an error
 rather than as a blank.
 
 Generated here, in ``presentation/``, rather than in ``domain/``, because

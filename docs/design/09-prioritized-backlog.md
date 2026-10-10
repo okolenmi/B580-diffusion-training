@@ -599,7 +599,7 @@ missing is a real run:**
   **Built 2026-10-04, optional and off by default: two files, and the two
   modes turned out to be one mechanism.**
   `nodes/memory/device_reservations.py` (the registry, per *device* -- the
-  device is the resource being divided) and `nodes/memory/peak_record.py`
+  device is the resource being divided) and the old peak_record module
   (what previous runs actually peaked at, on disk). 22 + 14 checks.
   (`peak_record.py` removed in MEM-04 #3; its 14 checks now live in
   `backend/tests/test_memory_peak_store.py` against the SQLite store.)
@@ -712,7 +712,8 @@ missing is a real run:**
 - ~~**A tiny-parameter (`< 10,000` element) `ExecutionStrategy` for
   Adafactor's cross-parameter batching case** (11.1)~~ -- **closed
   2026-10-02 by retiring the wrapper instead of building it.**
-  `nodes/optimizer/adafactor.py` is deleted; `ComposedAdafactorOptimizerNode`
+  The old standalone adafactor module is deleted;
+  `ComposedAdafactorOptimizerNode`
   is the only Adafactor node. `ChunkedXPUAdafactor` tied every tiny
   parameter in the optimizer together into one shared clip/EMA state --
   a batching-strategy concern no `Algorithm` can see (by design, see
@@ -733,7 +734,7 @@ missing is a real run:**
   domain can be fully separated from `core/`'s legacy implementation,
   verified equivalent, and the old wrapper retired; text encoding then
   followed on 2026-10-02 (`SDXLClipEncoder` -> `nodes/model/clip_encoder.py`,
-  a relocation, `core/clip_encode.py` kept as a shim for `core/`'s and
+  a relocation, `archive/core/clip_encode.py` kept as a shim for `core/`'s and
   `manager/`'s own use). Three sub-pieces remain, and they are not
   equally hard:
 

@@ -22,7 +22,7 @@ archived trainer can still be run by hand
 
 ## Why this is the state rather than a bug
 
-The `nodes/` pipeline was built to supersede `core/trainer.py`, and it
+The `nodes/` pipeline was built to supersede `archive/core/trainer.py`, and it
 does -- for supervised LoRA. It was never extended to the other three.
 `nodes/train/supervised.py` says so in its own first paragraph: "no
 gradient accumulation, no cyclic/teacher-rollout caching".

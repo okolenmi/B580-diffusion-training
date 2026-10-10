@@ -62,7 +62,7 @@ nothing wired to this Node today changes). `_inject_lora`'s targeting
 logic was never re-derived inside `nodes/` -- it moved there intact.
 
 **Superseded 2026-10-02, and the supersession is the interesting part.**
-This originally worked by *not* touching `core/lora.py` (per the standing
+This originally worked by *not* touching `archive/core/lora.py` (per the standing
 rule) and exploiting a seam instead: `_inject_lora` constructed its
 target layers by calling `LoRALinear(...)`/`LoRAConv2d(...)` as plain
 module-level names, which Python resolves from `core.lora`'s own
@@ -86,7 +86,7 @@ supposed to edit, and it cost more than the edit would have:
   every DoRA and NF4 layer -- the reason
   `reenable_dora_requires_grad()` and `dora_trainable_parameters()` exist.
 
-`core/lora.py` is now `nodes/model/lora.py`, so the rule that forbade
+`archive/core/lora.py` is now `nodes/model/lora.py`, so the rule that forbade
 the edit no longer applies to this file. `_inject_lora` takes
 `layer_classes` as an argument and `adapter_layer_classes()` supplies
 the pair; there is no scope to enter, nothing to restore, nothing

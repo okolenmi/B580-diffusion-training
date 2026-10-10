@@ -3,7 +3,7 @@
 # Deferred (not urgent, revisit later)
 
 - **[2026-09-28] `torch.xpu`'s `pin_memory()` doesn't actually pin on
-  this build -- `core/cache_utils.py`'s parallel pin thread-pool is a
+  this build -- `archive/core/cache_utils.py`'s parallel pin thread-pool is a
   no-op optimization here.** Measured, not assumed: a 4 GB
   `pin_memory()`-ed tensor showed `Locked: 0 kB` in the allocating
   process's `/proc/<pid>/smaps_rollup`, and holding it (same-process or

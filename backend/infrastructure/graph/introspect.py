@@ -1,6 +1,6 @@
 """Reflection: a real ``nodes.core.Node`` subclass -> port ``NodeInfo``.
 
-Ported from ``server/nodegraph_introspect.py`` with three deliberate
+Ported from ``archive/server/nodegraph_introspect.py`` with three deliberate
 changes (see ``docs/design/backend/05-graph-runtime.md`` section 7):
 
 * legacy-class guessing (``introspect_legacy_class``) is dropped

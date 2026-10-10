@@ -53,7 +53,7 @@ Rules that keep it fast and expandable:
 | Gap | Resolution |
 |---|---|
 | Monitor SSE stream | **Port it** (section 4) -- required for the monitor-first slice. **Shipped in M6.** |
-| Run previews (`runs/run_{id}/previews/` manifest + images) | **Drop** (M8 decision): the producer was `core/preview_sampler.py`, which went to `archive/` with the rest of `core/`. |
+| Run previews (`runs/run_{id}/previews/` manifest + images) | **Drop** (M8 decision): the producer was `archive/core/preview_sampler.py`, which went to `archive/` with the rest of `core/`. |
 | Per-run `events` history (`/runs/{id}/events`) | **Drop**: SSE gives live events and the log/DB carry state; a persisted per-event history has no consumer the new frontend needs (the M8b run detail shipped without one). |
 | `/runs/logs/clear` | **Drop**: superseded, then dropped with the route. `DELETE /executions` wipes execution history. |
 | `/files/{kind}` (settings file browser) | **Drop** (M8 decision): the config editor shipped with a path input + datalists and never needed a browser; revisit only if the settings tab's redesign asks for one. |

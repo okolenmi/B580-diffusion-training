@@ -120,7 +120,8 @@ domain ABCs live in each domain's own `handle.py`), including in
 
 The report-key vocabulary on the monitor bus is a producer/consumer
 contract, not a dashboard detail: documented in full in
-[`backend/02-api-reference.md`](backend/02-api-reference.md) section 4,
+[`docs/design/backend/02-api-reference.md`](backend/02-api-reference.md)
+section 4,
 and for the opt-in diagnostic keys in
 [`docs/training-diagnostics.md`](../training-diagnostics.md).
 

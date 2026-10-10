@@ -1,7 +1,7 @@
 """Discovery: walk ``nodes/`` and collect every concrete Node subclass.
 
 Replaces the legacy hand-maintained import list
-(``server/nodegraph_registry.py::_load()`` -- drift bugs happened twice)
+(``archive/server/nodegraph_registry.py::_load()`` -- drift bugs happened twice)
 with a ``pkgutil`` walk. Rules:
 
 * every module under ``nodes.`` except ``smoke_tests`` is imported;

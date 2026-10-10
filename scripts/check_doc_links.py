@@ -5,10 +5,9 @@ this repo before the 2026-10-01 cleanup:
 
 * a markdown link pointing at a file or heading that does not exist --
   these rot silently because nothing ever renders the docs;
-* a source comment or docstring citing ``docs/some/file.md`` that was
-  deleted or renamed, so the comment now points at nothing (there were
-  two: a long-deleted ``docs/CLEANUP_TODO.md`` and an abbreviated
-  ``09-...md`` path).
+* a source comment or docstring citing a docs path that was deleted or
+  renamed, so the comment now points at nothing (there were two at the
+  time: a long-deleted cleanup TODO and an abbreviated design-doc path).
 
 Run:  python scripts/check_doc_links.py [--quiet]
 Gate: part of scripts/full_gate.sh.
@@ -28,7 +27,7 @@ CODE_GLOBS = ("nodes/**/*.py", "core/**/*.py", "manager/**/*.py", "backend/**/*.
               "frontend/**/*.js", "scripts/**/*.py", "scripts/**/*.sh",
               "*.py", "*.sh")
 
-#: ``docs/....md`` in running prose or a comment (optionally with #anchor).
+#: A docs path in running prose or a comment (optionally with #anchor).
 CITATION = re.compile(r"\bdocs/[A-Za-z0-9_./-]*?\.md(?:#[A-Za-z0-9_.-]+)?")
 
 #: [text](target) links, plus bare images.

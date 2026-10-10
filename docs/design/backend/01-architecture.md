@@ -182,7 +182,7 @@ Two invariants: they are registered **after** the API and never under
 `/api/`, so an unknown API path keeps the JSON error envelope instead
 of falling through to the HTML shell; and pages and `/ui/*` assets
 always send `Cache-Control: no-cache` (revalidate on every reload) --
-ported from the legacy `server/main.py` after the visual smoke found
+ported from the legacy `archive/server/main.py` after the visual smoke found
 heuristic freshness serving stale JS. `/api/*` responses are untouched,
 so the SSE streams keep their own semantics. Pinned by
 `test_pages.py`.

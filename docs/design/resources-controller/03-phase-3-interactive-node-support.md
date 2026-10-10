@@ -27,7 +27,7 @@ signal either way). This turns "enumerate all possible shapes" (hard,
 open-ended) into "enumerate `(class, preset)` pairs, each with its own
 fixed required-port list" (exactly as cheap and enumerable as today's
 one-shape-per-class search, just with one more dimension). Concretely:
-`NodeInfo` (`server/nodegraph_introspect.py`) gains a `node_kind:
+`NodeInfo` (`archive/server/nodegraph_introspect.py`) gains a `node_kind:
 "static" | "dynamic"` field -- **real, requested metadata dividing
 default nodes from dynamic-with-presets ones, built to scale past the
 one dynamic node that exists today** -- and, for a dynamic node, a

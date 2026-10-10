@@ -136,7 +136,7 @@ strength 1.0 even when the loss curve looked healthy.
   `on_step`/monitor report at the window's boundary. LR schedules key
   on the optimizer step, so warmup and decay see the same step count
   they would without accumulation. This is a deliberate divergence from
-  legacy `core/train_step.py`, where `steps` counted micro-steps and the
+  legacy `archive/core/train_step.py`, where `steps` counted micro-steps and the
   displayed step/total were batch-position counts -- keeping the old
   meaning would have made `steps` mean different things at K=1 and K>1.
 - **`WarmupLRSchedule` (`nodes/train/schedule.py`): the legacy

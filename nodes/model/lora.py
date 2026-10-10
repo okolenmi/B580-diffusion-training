@@ -1,9 +1,9 @@
 """LoRA (Low-Rank Adaptation): the adapter layers, the injection walk,
 and the timestep gate.
 
-**Moved here from `core/lora.py` on 2026-10-02.** The implementation is
+**Moved here from `archive/core/lora.py` on 2026-10-02.** The implementation is
 unchanged -- only the location, and the two intra-package imports below
-(`core/clip_encode.py`-style relative imports had to become
+(`archive/core/clip_encode.py`-style relative imports had to become
 `nodes.model.*`). What moved is not incidental: `nodes/model/` had been
 *patching this module's `LoRALinear`/`LoRAConv2d` names in place* to
 substitute its own DoRA and NF4 layers (see `adapter_injection.py`),
@@ -12,8 +12,8 @@ time. Owning the file makes that patch unnecessary -- `_inject_lora`
 now takes the layer classes it builds as an explicit argument. See its
 `layer_classes` parameter for what that replaced.
 
-`core/lora.py` remains as a re-export shim: `core/`'s trainer, its two
-cache builders, `manager/builder.py`, and `core/unet_wrapper.py`'s own
+`archive/core/lora.py` remains as a re-export shim: `core/`'s trainer, its two
+cache builders, `manager/builder.py`, and `archive/core/unet_wrapper.py`'s own
 imports all still resolve through it.
 
 The comments throughout are the originals and carry the reasoning that

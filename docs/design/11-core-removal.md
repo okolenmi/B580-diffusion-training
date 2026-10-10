@@ -30,13 +30,13 @@ runs, not about who does the work.
 
 | # | Edge | Resolution |
 |---|---|---|
-| 2 | `TrainingConfig` in `core/config_model.py` | Moved to `nodes/config_model.py`. Not to `backend/`, which was the plan: `backend/` depends on `nodes/` and never the reverse, and the trainer entry point needs the config too -- so a backend-owned module would have been unreachable from `nodes/`. Self-contained (pydantic + stdlib only). |
-| 4 | `core/config_io` | Moved beside it to `nodes/config_io.py`. |
-| 4 | `core/comfy_setup` (`xpu_empty_cache` etc.) | Deleted. `nodes/components/device.py` already had `DeviceContext.for_device("xpu").empty_cache()` -- same `hasattr(torch, "xpu")` guard, and `smoke_test_device_context_equivalence.py` proves the equivalence. The four call sites now use it. |
-| 4 | `core/xpu_env` | Moved to `nodes/xpu_env.py`; called from `backend/cli.py` as it was from `core/cli.py`. |
-| 3 | `manager/`'s eight imports | Three were already shims onto `nodes/` (`clip_encode`, `unet_wrapper`, `seed`) and now point there directly. `core/noise_schedule.py` and `core/model_io.py` became `nodes/components/noise_schedule.py` and `model_io.py` -- thin adapters over `nodes/components/diffusion.py`, whose docstrings already claimed to match them, verified bit-identical here. `core/vae_decode.py` moved to `nodes/model/vae_decode.py`; `nodes/` had no VAE decoder and `manager/`'s LoRA ingestion needs one. `T_MODES` stopped being a documented duplicate of `nodes/dataset/timestep_modes.py` and is now imported. |
+| 2 | `TrainingConfig` (was in the old `core/` tree) | Moved to `nodes/config_model.py`. Not to `backend/`, which was the plan: `backend/` depends on `nodes/` and never the reverse, and the trainer entry point needs the config too -- so a backend-owned module would have been unreachable from `nodes/`. Self-contained (pydantic + stdlib only). |
+| 4 | `config_io` (was `core/`) | Moved beside it to `nodes/config_io.py`. |
+| 4 | `comfy_setup` (`xpu_empty_cache` etc.) | Deleted. `nodes/components/device.py` already had `DeviceContext.for_device("xpu").empty_cache()` -- same `hasattr(torch, "xpu")` guard, and `smoke_test_device_context_equivalence.py` proves the equivalence. The four call sites now use it. |
+| 4 | `xpu_env` (was `core/`) | Moved to `nodes/xpu_env.py`; called from `backend/cli.py` as it was from `archive/core/cli.py`. |
+| 3 | `manager/`'s eight imports | Three were already shims onto `nodes/` (`clip_encode`, `unet_wrapper`, `seed`) and now point there directly. `archive/core/noise_schedule.py` and `archive/core/model_io.py` became `nodes/components/noise_schedule.py` and `model_io.py` -- thin adapters over `nodes/components/diffusion.py`, whose docstrings already claimed to match them, verified bit-identical here. `vae_decode` (was `core/`) moved to `nodes/model/vae_decode.py`; `nodes/` had no VAE decoder and `manager/`'s LoRA ingestion needs one. `T_MODES` stopped being a documented duplicate of `nodes/dataset/timestep_modes.py` and is now imported. |
 | 5 | nine equivalence smoke tests | Not retired. They now import `archive.core.*`, which is the better answer to "retire them deliberately": they are the only evidence the rewrite computes the same numbers, and `core/` being archived is what lets them keep running. |
-| 1 | no `nodes/` entry point | **Not done, and not needed.** Removing the backend's support for `core/` meant removing the route that spawned `python -m core.cli` -- the supervised-subprocess route and its whole run/supervision/reconcile stack -- not writing a replacement trainer. Training is now a graph execution, which `nodes/` already implements. A `nodes/cli.py` would be a new driver for a route that no longer exists. |
+| 1 | no `nodes/` entry point | **Not done, and not needed.** Removing the backend's support for `core/` meant removing the route that spawned `python -m core.cli` -- the supervised-subprocess route and its whole run/supervision/reconcile stack -- not writing a replacement trainer. Training is now a graph execution, which `nodes/` already implements. A nodes-level `cli.py` would be a new driver for a route that no longer exists. |
 
 ### The route that went with it
 
@@ -72,7 +72,7 @@ None of them is the training logic.
 **1. `nodes/` has no entry point.** No `main`, no `if __name__` block, no
 CLI. It is a library that can train and nothing that can be launched — and
 the backend supervises a *subprocess*, so something has to be runnable.
-Today that is `core/cli.py`.
+Today that is `archive/core/cli.py`.
 
 This is the one piece of genuinely new code. The trainer, the optimizers,
 the step pipeline and the saving all exist and are proven by the probe
@@ -81,7 +81,7 @@ graph, runs the loop, writes `log.progress.jsonl` in the shape
 `JsonlProgressSource` reads, and honours stop. The output format is fixed
 by an existing consumer, which is most of the specification.
 
-**2. `TrainingConfig` lives in `core/config_model.py`** (321 lines) and is
+**2. `TrainingConfig` lived in the old `core/` tree** (321 lines) and is
 imported by four `backend/` modules: `domain/value_objects.py`,
 `infrastructure/core_config_inspector.py`, `infrastructure/core_config_files.py`
 and `infrastructure/config_schema.py` — the last of which derives the whole

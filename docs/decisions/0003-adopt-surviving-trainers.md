@@ -46,11 +46,13 @@ point before `stop()` or `kill()` will touch it.
 
 ## What pins it
 
-* `backend/tests/test_start_stop.py::test_reconcile_reads_the_progress_file_of_a_dead_run`
-  — a run that finished while the server was down records *completed*,
-  not failed.
-* `backend/tests/test_start_stop.py` — reconcile is idempotent for an
-  adopted run, and the re-attachment note is recorded in the run's log.
-* `backend/tests/test_training_adapter.py::test_signal_safety` — owns() gates
-  stop/kill for a stranger pid; and a live process that is *not* our
-  trainer is reported as gone rather than watched.
+* `backend/tests/test_graph_execution.py` ("reconcile: the run's own record
+  wins over its absence") — a run that finished while the server was down
+  records *completed*, not failed, with its node results recovered intact.
+  (Previously cited `test_start_stop.py`, removed since; behavior re-verified
+  at the new anchor. The old re-attachment-note claim has no live anchor and
+  is dropped here rather than re-anchored to something untested.)
+* `backend/tests/test_graph_task_gateway.py::test_signals_are_refused_for_a_pid_that_is_not_ours`
+  — owns() gates stop/kill for a stranger pid; and a live process that is
+  *not* our trainer is reported as gone rather than watched. (Previously
+  cited `test_training_adapter.py::test_signal_safety`, removed since.)

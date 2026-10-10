@@ -12,19 +12,18 @@ of the same picture).
 
 `diffusion.py` (`NoiseSchedule`/`Parameterization`/`ModelInputTransform`/
 `DiffusionProcess`) and `device.py` (`DeviceContext`) have landed --
-backlog items 1-2, equivalence-tested against `core.noise_schedule`/
-`core.model_io`/`core.comfy_setup` in
+backlog items 1-2, equivalence-tested against the old `core.noise_schedule`/
+`core.model_io`/`core.comfy_setup` (now `archive/core/`) in
 `nodes/smoke_tests/smoke_test_diffusion_equivalence.py` and
 `smoke_test_device_context_equivalence.py`, and wired into
 `nodes/train/supervised.py`'s `_run_step` in place of the three direct
-`core.*` imports it used to reach for. `core.noise_schedule`/
-`core.model_io`/`core.comfy_setup` themselves are untouched (reference
-material, per the project's existing rule) -- `manager/loader.py` and
-`manager/t_sampling.py` still import them directly (manager's layer, not
-a nodes/ shortcut), and no `nodes/` module reaches for them at module
-load (`nodes/dataset/renoise.py`, which did, was retired together with
-the baked-grid format it existed to correct -- see
-nodes/train/bucket_balance.py's module docstring).
+`core.*` imports it used to reach for. The old modules themselves were
+untouched reference material until `core/` moved to `archive/core/` --
+`manager/loader.py` and `manager/t_sampling.py` import from
+`nodes.components` today, and no `nodes/` module reaches for the
+archive at module load (the old renoise loader, which did reach out,
+was retired together with the baked-grid format it existed to correct
+-- see nodes/train/bucket_balance.py's module docstring).
 
 `layout.py` (`ProjectLayout`) has also landed -- backlog item 8,
 equivalence-tested against `paths.py` in

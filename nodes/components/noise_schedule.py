@@ -8,12 +8,12 @@ cannot be mismatched.
 
 `manager/` predates that and reaches for these as module-level functions.
 Rather than keep a second copy of the maths alive in the tree -- which is
-what `core/noise_schedule.py` was, and which existed only to be migrated
+what `archive/core/noise_schedule.py` was, and which existed only to be migrated
 *to* `diffusion.py` -- these are thin adapters over the objects. Same
 call signatures, one implementation.
 
 Equivalence is not assumed: `smoke_test_diffusion_equivalence.py` proves
-the objects compute what `core/noise_schedule` computed, and this module
+the objects compute what `archive/core/noise_schedule.py` computed, and this module
 adds no arithmetic of its own, so the chain is
 adapter -> object == retired free function.
 

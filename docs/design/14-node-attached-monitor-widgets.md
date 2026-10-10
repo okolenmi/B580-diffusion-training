@@ -148,6 +148,6 @@ change later, so they are the ones to settle first.
 - [`05-coordination-registry-observability.md`](05-coordination-registry-observability.md)
   — why the monitor bus is injected rather than a global, which this
   keeps.
-- [`backend/09-event-contract.md`](backend/09-event-contract.md) — the
+- [`docs/design/backend/09-event-contract.md`](backend/09-event-contract.md) — the
   transport's own gap (no replay), which a widget stream inherits until
   it is fixed.

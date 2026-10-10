@@ -67,6 +67,9 @@ def main() -> int:
                          "conditioning-path embeddings kept (726 with the "
                          "default --target-conditioning-path). Targets A/B from "
                          "lora_targets_and_cond_switch.patch.")
+    ap.add_argument("--progress", type=int, default=0,
+                    help="print one loss line every N steps (flush=True), so a "
+                         "wedged run shows exactly where it stopped. 0 = silent.")
     args = ap.parse_args()
 
     from nodes.core import ExecutionContext
@@ -115,10 +118,18 @@ def main() -> int:
     print(f"training {args.steps} steps, batch {args.batch}, "
           f"rank {args.rank}, alpha {args.alpha}, lr {args.lr} "
           f"({args.schedule}), targets={args.target_modules}, "
-          f"target_conditioning_path={args.target_conditioning_path}")
+          f"target_conditioning_path={args.target_conditioning_path}",
+          flush=True)
+
+    def on_step(step, loss, shape=None):
+        # step_notify calls back as (step, loss[, shape]); unbuffered.
+        if args.progress and isinstance(step, int) and step % args.progress == 0:
+            print(f"  [progress] step {step} loss={loss:.5f} shape={shape}",
+                  flush=True)
+
     SupervisedLoRATrainerNode(ctx).build(
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,
-        lr_schedule=schedule, steps=args.steps, on_step=None, profile=False)
+        lr_schedule=schedule, steps=args.steps, on_step=on_step, profile=False)
 
     path = save_trained_weights(model, f"{args.out}.safetensors")
     print(f"saved LoRA -> {path}")

@@ -399,14 +399,15 @@ deadlock on I/O.
 
 **Bisected 2026-10-10: batch 4 is flat through step 800+** (10.6-10.7 GB,
 no growth, same dataset/rank/seed family) -- no monotonic leak; the wedge
-is specific to sustained ~88%+ VRAM (batch 8 idles at 10.8 of 12.2 GB, so
-any transient spike touches the ceiling). No step overlap is possible
-(single thread, blocking transfers, per-step loss sync -- verified in
-code), so the jump is a within-step transient (conv scratch under
-checkpoint recompute, or an expandable-segments grab). Why the touch
-*hangs* instead of raising OOM is attributed per maintainer to this
-GPU/driver combination (B580 + current stack) -- may be fixed driver-side
-someday; not investigated further here. B arms moved to batch 4
-(compliant: B1 fixes rank/alpha/seed/steps/optimizer/LR, not batch). Do
-NOT run production LoRAs at batch 8 on this card until re-tested after a
-driver update.
+hits sustained VRAM ≳11 GB regardless of batch (batch-8-attention idles
+10.8, batch-4-kohya_plus idles 11.2 — the +78M trainable params cost
+~1 GB sustained, no leak). No step overlap is possible (single thread,
+blocking transfers, per-step loss sync -- verified in code), so the jump
+is a within-step transient at ~88%+ occupancy. Why the touch *hangs*
+instead of raising OOM is attributed per maintainer to this GPU/driver
+combination -- may be fixed driver-side someday; not investigated further
+here. B arms: batch 4 throughout; 722/726 arms additionally unload the
+text encoder after step 10 (cache hits only -- training math identical,
+~1.5 GB freed) to sit in the proven-safe zone. Do NOT run production
+LoRAs near 11+ GB sustained on this card until re-tested after a driver
+update.

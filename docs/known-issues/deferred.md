@@ -45,3 +45,13 @@
   neither `_version` nor `data_ptr`). Graph capture delivers ~2x with
   neither cost. Full numbers in `shapes diversity problem
   2/MEASURED-launch-bound.md` (L5.2 section).
+
+- **[2026-10-10] No `full_bf16` equivalent: optimizer state and LoRA master
+  weights are fp32 (only `state_precision=float32|int8_blockwise` exists for
+  the optimizer's own state; the UNet runs bf16).** Measured consequence on
+  the 12 GB B580: kohya at 512 px dies with `DEVICE_LOST` at rank 64 and
+  rank 32 (~40 steps) but completes 500 steps at rank 16/alpha 16 -- rank
+  gates steps-before-death, so optimizer/gradient memory binds at high
+  rank (evidence in `archive/bad-LoRA-investigation/MEASURED-kohya-on-xpu.md`
+  and `MEASURED-targets-and-schedule.md`). A bf16 master-weights mode would
+  buy headroom at some precision cost; not built, and not free.

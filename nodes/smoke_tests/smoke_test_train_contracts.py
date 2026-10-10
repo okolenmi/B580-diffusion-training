@@ -69,6 +69,24 @@ def main():
     except ValueError:
         pass
 
+    # schedule_summary (C2 effective-LR visibility): the numbers the trainer
+    # prints at build. Cosine to 5% must report ~0.52x (the A1 finding);
+    # constant reports 1.00x with no warning.
+    from nodes.train.schedule import format_schedule_line, schedule_summary
+    cs = schedule_summary(
+        CosineLRScheduleNode().build(lr=1e-4, total_steps=1000)["schedule"], 1000)
+    check(0.50 < cs["mean"] / cs["peak"] < 0.55,
+          f"cosine mean/peak must be ~0.52, got {cs['mean'] / cs['peak']:.3f}")
+    check("WARNING" in format_schedule_line(cs, "T"),
+          "cosine at 0.52x must trigger the <0.7 warning")
+    ks = schedule_summary(const, 1000)
+    check(ks["mean"] == ks["peak"] == 1e-4, "constant mean must equal peak")
+    check("WARNING" not in format_schedule_line(ks, "T"),
+          "constant must not warn")
+    zs = schedule_summary(const, 0)
+    check(zs["mean"] is None and "WARNING" not in format_schedule_line(zs, "T"),
+          "steps=0: peak only, no mean, no warning")
+
     check(UniformLossWeightingNode().build()["weighting"].weight(0.5) == 1.0,
           "uniform weighting should always be 1.0")
     snr = MinSNRLossWeightingNode().build(gamma=5.0)["weighting"]

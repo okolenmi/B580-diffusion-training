@@ -1528,6 +1528,9 @@ class ManagedLoRATrainerNode(TrainerNode):
 
         optimizer_id = describe_optimizer(optimizer)
         print(f"[ManagedLoRATrainerNode] optimizer: {optimizer_id}")
+        from .schedule import format_schedule_line, schedule_summary
+        print(format_schedule_line(
+            schedule_summary(lr_schedule, steps), "ManagedLoRATrainerNode"))
 
         # Sacrificable, not offloadable. `offloadable` would mean "released
         # between uses", which is wrong for the model -- it is used every step,

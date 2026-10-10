@@ -25,6 +25,43 @@ class ConstantLRSchedule(LRSchedule):
         return self.lr
 
 
+def schedule_summary(schedule: LRSchedule, steps: int) -> dict:
+    """Peak/mean LR actually applied over a run -- the number the trainer
+    prints at build (C2), because cosine/poly are not "the LR you typed":
+    cosine to 5% applies ~0.52x the nominal LR, which is exactly the kind
+    of silent undertraining this exists to catch. Sampled numerically so
+    it works for every schedule kind (constant, cosine, warmup-wrapped)
+    without each one re-deriving its own mean. steps <= 0 means the mean
+    is undefined -- peak only, no warning."""
+    peak = schedule.value(0)
+    mean = None
+    if steps > 0:
+        n = min(steps, 1001)
+        idx = [round(i * (steps - 1) / max(n - 1, 1)) for i in range(n)]
+        vals = [schedule.value(s) for s in idx]
+        peak = max(vals)
+        mean = sum(vals) / len(vals)
+    return {"kind": type(schedule).__name__, "peak": peak, "mean": mean,
+            "steps": steps}
+
+
+def format_schedule_line(summary: dict, tag: str) -> str:
+    """One build-time line from a schedule_summary (C2): kind, peak and
+    mean LR over the run, plus the <0.7 warning. One implementation so the
+    two trainer routes cannot drift on the wording or the threshold."""
+    line = (f"[{tag}] LR: {summary['kind']} peak {summary['peak']:.3e} "
+            f"over {summary['steps']} step(s)")
+    if summary["mean"] is not None:
+        line += (f", mean {summary['mean']:.3e} "
+                 f"({summary['mean'] / summary['peak']:.0%} of peak)")
+        if summary["mean"] / summary["peak"] < 0.7:
+            line += (" -- WARNING: the run applies well under the LR you "
+                     "typed; with cosine decay this is expected, with "
+                     "anything else it usually means the schedule, not the "
+                     "LR, is what needs changing")
+    return line
+
+
 class CosineLRSchedule(LRSchedule):
 
     def __init__(self, lr: float, total_steps: int, lr_min_frac: float = 0.05):

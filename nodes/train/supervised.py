@@ -198,6 +198,10 @@ class SupervisedLoRATrainerNode(TrainerNode):
         # shape-based batching to be worth using.
         optimizer_id = describe_optimizer(optimizer)
         print(f"[SupervisedLoRATrainerNode] optimizer: {optimizer_id}")
+        from .schedule import format_schedule_line, schedule_summary
+        print(format_schedule_line(
+            schedule_summary(inputs["lr_schedule"], steps),
+            "SupervisedLoRATrainerNode"))
         print(f"[SupervisedLoRATrainerNode] allocator config env: {allocator_conf_env()}")
         _log_shape_histogram(model.trainable_parameters())
         diffusion_process = inputs.get("diffusion_process") or DiffusionProcess(

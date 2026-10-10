@@ -281,6 +281,55 @@ def check_rejects_wrong_model_type():
         print("    PASS")
 
 
+def check_block_weight_round_trips_with_forward(tmpdir):
+    print("[block_weights: trained strength survives export -> fresh load]")
+    from nodes.model.lora import extract_lora_weights, load_lora_into_model
+    torch.manual_seed(4)
+    base = torch.nn.Linear(8, 6)
+    trained = LoRALinear(base, rank=4, alpha=6.0, weight=2.0)
+    assert abs(trained.scaling - (6.0 / 4) * 2.0) < 1e-9, \
+        "train-time scaling must include the block weight"
+    opt = torch.optim.SGD([trained.lora_A, trained.lora_B], lr=0.5)
+    for _ in range(5):
+        x = torch.randn(4, 8)
+        loss = trained(x).pow(2).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    parent = torch.nn.Module()
+    parent.proj = trained
+    sd = extract_lora_weights([("root.proj", parent, "proj", trained)])
+    assert "root.proj.block_weight" in sd or \
+        any(k.endswith(".block_weight") for k in sd), \
+        "export must carry the block weight"
+    torch.manual_seed(999)
+    fresh_base = torch.nn.Linear(8, 6)
+    fresh_base.weight.data.copy_(base.weight.data)
+    fresh_base.bias.data.copy_(base.bias.data)
+    fresh = LoRALinear(fresh_base, rank=4, alpha=6.0)  # weight defaults to 1.0
+    fresh_parent = torch.nn.Module()
+    fresh_parent.proj = fresh
+    load_lora_into_model([("root.proj", fresh_parent, "proj", fresh)], sd)
+    assert abs(fresh.training_weight - 2.0) < 1e-9, \
+        "load must restore the trained block weight, not the config default"
+    assert abs(fresh.scaling - trained.scaling) < 1e-9, \
+        "loaded scaling must equal the trained scaling"
+    x = torch.randn(10, 8)
+    torch.testing.assert_close(fresh(x), trained(x))
+    # Legacy files without the key keep the old behaviour (config weight).
+    legacy = {k: v for k, v in sd.items() if not k.endswith(".block_weight")}
+    torch.manual_seed(999)
+    legacy_layer = LoRALinear(fresh_base, rank=4, alpha=6.0)
+    legacy_parent = torch.nn.Module()
+    legacy_parent.proj = legacy_layer
+    load_lora_into_model([("root.proj", legacy_parent, "proj", legacy_layer)],
+                         legacy)
+    assert abs(legacy_layer.training_weight - 1.0) < 1e-9 \
+        and abs(legacy_layer.scaling - (6.0 / 4)) < 1e-9, \
+        "legacy file must keep config-weight behaviour"
+    print("    PASS")
+
+
 def main():
     with tempfile.TemporaryDirectory() as td:
         tmpdir = Path(td)
@@ -288,6 +337,7 @@ def main():
         try:
             check_contracts()
             check_load_reproduces_the_saved_forward_exactly(tmpdir)
+            check_block_weight_round_trips_with_forward(tmpdir)
             check_dora_round_trip_with_magnitude_reproduces_exactly(tmpdir)
             check_dora_without_magnitude_key_recomputes_it(tmpdir)
             check_dora_alpha_restore_affects_forward(tmpdir)

@@ -628,6 +628,15 @@ def extract_lora_weights(registry: List[Tuple[str, nn.Module, str, nn.Module]],
         weights[f"{lora_key}{_UP_SUFFIX}"]   = B.detach().cpu().contiguous()
         weights[f"{lora_key}{_ALPHA_SUFFIX}"] = torch.tensor([lora_layer.alpha],
                                                               dtype=torch.float32)
+        # The block weight is part of the trained strength (forward applies
+        # (alpha/rank)*training_weight), so it must round-trip like alpha:
+        # without this key a resume/inference with block_weights set trains
+        # at one strength and applies another. Readers that do not know the
+        # key (ComfyUI, older versions of this loader) ignore it, and loads
+        # of files written before it existed keep the old behaviour (config
+        # weight applies) -- see load_lora_into_model.
+        weights[f"{lora_key}.block_weight"] = torch.tensor(
+            [lora_layer.training_weight], dtype=torch.float32)
     return weights
 
 
@@ -651,7 +660,21 @@ def load_lora_into_model(registry: List[Tuple[str, nn.Module, str, nn.Module]],
                           f"(checkpoint={saved_alpha}, config={lora_layer.alpha}). "
                           f"Using checkpoint value.")
                 lora_layer.alpha = saved_alpha
-                lora_layer.scaling = (saved_alpha / lora_layer.rank) * lora_layer.training_weight
+            # The block weight rides along the same way: a file that carries
+            # it (written by extract_lora_weights above) restores the trained
+            # strength exactly; a file that predates the key keeps the legacy
+            # behaviour (the config's weight applies).
+            block_key = f"{lora_key}.block_weight"
+            if block_key in state_dict:
+                saved_weight = float(state_dict[block_key].item())
+                if abs(saved_weight - lora_layer.training_weight) > 1e-6:
+                    print(f"    [LoRA] {full_name}: block_weight mismatch "
+                          f"(checkpoint={saved_weight}, "
+                          f"config={lora_layer.training_weight}). "
+                          f"Using checkpoint value.")
+                lora_layer.training_weight = saved_weight
+            lora_layer.scaling = ((lora_layer.alpha / lora_layer.rank)
+                                  * lora_layer.training_weight)
 
 
 def merge_lora_into_unet(registry: List[Tuple[str, nn.Module, str, nn.Module]],

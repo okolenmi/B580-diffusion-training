@@ -70,6 +70,16 @@ def main() -> int:
     ap.add_argument("--progress", type=int, default=0,
                     help="print one loss line every N steps (flush=True), so a "
                          "wedged run shows exactly where it stopped. 0 = silent.")
+    ap.add_argument("--unload-encoder-after", type=int, default=0,
+                    help="N > 0: call encoder.unload() after step N (towers to "
+                         "CPU, ~1.5 GB freed). Later steps run on cache hits, "
+                         "which never touch the towers, so training math is "
+                         "identical -- a genuinely new key after unload "
+                         "degrades to a slow CPU encode, never a wrong one. "
+                         "0 (default) = historical resident behaviour. Added "
+                         "for the 722/726 B arms: +78M trainable params push "
+                         "sustained VRAM to ~11.2 GB, where this card wedges "
+                         "instead of raising OOM.")
     args = ap.parse_args()
 
     from nodes.core import ExecutionContext
@@ -126,6 +136,12 @@ def main() -> int:
         if args.progress and isinstance(step, int) and step % args.progress == 0:
             print(f"  [progress] step {step} loss={loss:.5f} shape={shape}",
                   flush=True)
+        if args.unload_encoder_after and step == args.unload_encoder_after:
+            before = encoder.footprint_bytes() if hasattr(
+                encoder, "footprint_bytes") else -1
+            encoder.unload()
+            print(f"  [encoder] unloaded after step {step} "
+                  f"(footprint was {before / 1024 / 1024:.0f} MB)", flush=True)
 
     SupervisedLoRATrainerNode(ctx).build(
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,

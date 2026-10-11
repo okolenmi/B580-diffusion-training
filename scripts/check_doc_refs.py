@@ -68,6 +68,30 @@ _ROOTS = frozenset({
 _UNCHECKED_BARE = frozenset({"core/", "server/"})
 
 
+#: Paths the docs name *before* the file exists, because the task that
+#: writes it is still open. Listed here rather than rewording the docs. An
+#: entry whose file now exists is reported as stale, so the list only
+#: shrinks.
+_PLANNED = frozenset({
+})
+
+
+def _ignored(paths: list[str]) -> set[str]:
+    """Which of `paths` git ignores (runs/, datasets/, backend/data/ ...).
+
+    A path under an ignored directory is a *runtime* location, not a repo
+    reference: it exists on the machine that ran the thing and nowhere else,
+    so resolving it made this gate pass on a developer's box and fail on a
+    fresh clone or CI. The module docstring already said these are scratch,
+    not references; `_ROOTS` listing "datasets" contradicted it."""
+    if not paths:
+        return set()
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "check-ignore", "--stdin"],
+        input="\n".join(paths), capture_output=True, text=True)
+    return set(out.stdout.splitlines())
+
+
 def _candidates(text: str) -> list[str]:
     out = []
     for m in re.finditer(r"`([^`\n]+)`", text):
@@ -104,13 +128,26 @@ def main() -> int:
         except OSError:
             continue
         for cand in _candidates(text):
-            if not _resolve(REPO, cand):
+            if cand in _PLANNED or not _resolve(REPO, cand):
                 bad.setdefault(rel, []).append(cand)
+    everything = sorted({c for found in bad.values() for c in found})
+    ignored = _ignored(everything)
+    stale = sorted(c for c in _PLANNED if (REPO / c).exists())
+    for rel in list(bad):
+        bad[rel] = [c for c in bad[rel] if c not in _PLANNED and c not in ignored]
+        if not bad[rel]:
+            del bad[rel]
+    if stale:
+        print("planned references whose file now exists "
+              "(drop them from _PLANNED in scripts/check_doc_refs.py):")
+        for c in stale:
+            print(f"  {c}")
     if bad:
         print("dead repo-relative references in backticks:")
         for rel in sorted(bad):
             seen = sorted(set(bad[rel]))
             print(f"  {rel}: {', '.join(seen)}")
+    if bad or stale:
         return 1
     print(f"doc refs: {len(tracked)} files scanned, all resolve")
     return 0

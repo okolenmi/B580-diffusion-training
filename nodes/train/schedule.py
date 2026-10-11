@@ -51,7 +51,10 @@ def format_schedule_line(summary: dict, tag: str) -> str:
     two trainer routes cannot drift on the wording or the threshold."""
     line = (f"[{tag}] LR: {summary['kind']} peak {summary['peak']:.3e} "
             f"over {summary['steps']} step(s)")
-    if summary["mean"] is not None:
+    # peak == 0 is a legal schedule (lr 0: a wiring/dry run, and what the
+    # step-pipeline smoke tests use); there is no "fraction of peak" to
+    # report for it, and dividing built a crash into trainer construction.
+    if summary["mean"] is not None and summary["peak"] > 0:
         line += (f", mean {summary['mean']:.3e} "
                  f"({summary['mean'] / summary['peak']:.0%} of peak)")
         if summary["mean"] / summary["peak"] < 0.7:

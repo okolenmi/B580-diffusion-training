@@ -38,7 +38,10 @@ echo "node --check: all modules OK"
 # ruff is treated above -- but a *failing* test is never skipped.
 if command -v node >/dev/null 2>&1; then
   echo "== frontend unit tests =="
-  node --test frontend/tests
+  # The files are listed, not the directory: `node --test <dir>` is the
+  # Node 20 form; Node 22 treats the argument as a module path and fails with
+  # MODULE_NOT_FOUND before running a single test (seen on v22.22.0).
+  node --test frontend/tests/*.test.mjs
 
   # Type-check the lib/ modules. @ts-check and JSDoc are already on them,
   # so this is the step that makes the annotations mean anything instead of

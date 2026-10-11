@@ -334,6 +334,28 @@ _COMFY_MODEL_DIRS = (
 )
 
 
+class ThisInterpreterLayout(WorkspaceLayout):
+    """A layout whose child processes run under the interpreter running the
+    tests.
+
+    `WorkspaceLayout.venv_python` is whatever the machine is configured with
+    (`VENV_PYTHON`, a sibling ../venv, a setting, then plain "python"). The
+    graph-child tests spawn real children through it, so on a machine
+    without that configuration -- a fresh clone, CI, a sandbox -- the child
+    ran under a different Python than the test and refused to start ("needs
+    Python 3.14 or newer; this is 3.13"). The tests then failed on the
+    *child's* absence rather than on anything they check, and the whole
+    end-to-end child path went unexercised there.
+
+    A subclass, not `VENV_PYTHON` in the environment: the environment is
+    process-global and the files here run tests concurrently (see the
+    comment in test_graph_task_gateway on the flake that caused)."""
+
+    @property
+    def venv_python(self) -> str:
+        return sys.executable
+
+
 def use_temporary_comfy_dir(prefix: str = "backend-comfy-") -> Path:
     """Point this process, and any child it spawns, at a throwaway ComfyUI.
 

@@ -50,9 +50,9 @@ from backend.infrastructure.graph_event_stream import (
     ExecutionEventWriter,
 )
 from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
-from backend.infrastructure.workspace import WorkspaceLayout
 from backend.tests.support import (
     FakeClock,
+    ThisInterpreterLayout,
     RecordingEventBus,
     check,
     run_tests_concurrently,
@@ -354,7 +354,7 @@ def test_a_live_child_is_found_by_argv_not_by_a_stored_pid() -> None:
         ' "params": {"value": 1.0}}], "edges": []}',
         encoding="utf-8",
     )
-    gateway = SubprocessGraphTaskGateway(WorkspaceLayout(REPO_ROOT))
+    gateway = SubprocessGraphTaskGateway(ThisInterpreterLayout(REPO_ROOT))
     pid = gateway.spawn(
         GraphTaskLaunch(
             execution_id=ExecutionId(77),
@@ -399,7 +399,7 @@ def test_a_real_child_that_cannot_be_adopted_is_still_reported_running() -> None
         ' "params": {"value": 1.0}}], "edges": []}',
         encoding="utf-8",
     )
-    gateway = SubprocessGraphTaskGateway(WorkspaceLayout(REPO_ROOT))
+    gateway = SubprocessGraphTaskGateway(ThisInterpreterLayout(REPO_ROOT))
     pid = gateway.spawn(
         GraphTaskLaunch(
             execution_id=ExecutionId(88),

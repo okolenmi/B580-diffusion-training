@@ -43,8 +43,8 @@ from backend.infrastructure.graph_event_stream import (
 )
 from backend.infrastructure.graph_task_gateway import SubprocessGraphTaskGateway
 from backend.infrastructure.process_identity import cmdline_mentions
-from backend.infrastructure.workspace import WorkspaceLayout
 from backend.tests.support import (
+    ThisInterpreterLayout,
     check,
     run_tests_concurrently,
     use_temporary_comfy_dir,
@@ -59,7 +59,7 @@ from backend.tests.support import (
 COMFY = use_temporary_comfy_dir(prefix="backend-graph-child-comfy-")
 
 TMP = Path(tempfile.mkdtemp(prefix="backend-graph-child-"))
-GATEWAY = SubprocessGraphTaskGateway(WorkspaceLayout(Path(__file__).resolve().parents[2]))
+GATEWAY = SubprocessGraphTaskGateway(ThisInterpreterLayout(Path(__file__).resolve().parents[2]))
 
 #: Long enough to cover a real child reaching its first write, short
 #: enough that a hung test is a failure rather than a stall.
@@ -305,17 +305,21 @@ def test_child_receives_the_memory_arguments() -> None:
           f"(got {memory_frame})")
     check(memory_frame["budget_mb"] == 6000.0,
           f"the start frame carries the budget (got {memory_frame})")
-    # The case is a property of the installed torch build, not of this
-    # test: this repo's pinned build has the attribute (measured), so
-    # the cap is applied -- and on a build without it the same frame
-    # says "unavailable" instead of pretending.
+    # The case is a property of the installed torch build and of the
+    # machine, not of this test: this repo's pinned build has the
+    # attribute (measured), so the cap is applied -- on a build without it
+    # the same frame says "unavailable" instead of pretending, and on a
+    # machine with no accelerator the device total is unknown, which the
+    # worker reports as "unknown_total" (the correct answer there; this
+    # check used to demand "enforced" and so failed on any CPU-only box).
     import torch
 
-    expected_backstop = (
-        "enforced"
-        if hasattr(torch.xpu, "set_per_process_memory_fraction")
-        else "unavailable"
-    )
+    if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        expected_backstop = "unknown_total"
+    elif hasattr(torch.xpu, "set_per_process_memory_fraction"):
+        expected_backstop = "enforced"
+    else:
+        expected_backstop = "unavailable"
     check(
         memory_frame["backstop"] == expected_backstop,
         f"the start frame says which backstop case happened "
@@ -325,9 +329,15 @@ def test_child_receives_the_memory_arguments() -> None:
     # stops, so the peak the watcher files is the true high-water mark
     # rather than the last interval's.
     memory_frames = [e for e in events if e.kind is EventKind.MEMORY]
+    # The final frame needs device numbers: MemoryTelemetry skips a frame
+    # the device cannot answer (CPU) rather than writing zeros, so a
+    # CPU-only box has the start frame alone. That is the documented
+    # behaviour, not a missing frame.
+    has_device = hasattr(torch, "xpu") and torch.xpu.is_available()
     check(
-        len(memory_frames) >= 2,
-        f"a start frame and a final frame (got {len(memory_frames)})",
+        len(memory_frames) >= (2 if has_device else 1),
+        f"a start frame and, where the device can answer, a final frame "
+        f"(got {len(memory_frames)})",
     )
     final_frame = memory_frames[-1].payload
     check(

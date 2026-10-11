@@ -36,12 +36,26 @@ Still open under it: the B3 far-prompt/size check. If out-of-distribution
 renders show a global shift on 724, flip back to 722 by editing one
 default.
 
-## 3. Real-weights meta-init confirmation (A2 follow-up)
+## 3. ~~Real-weights meta-init confirmation (A2 follow-up)~~ DONE
 
-Tiny-weight CPU proofs exist (`smoke_test_meta_init.py`); the same claim
-on real weights (meta-built UNet/CLIP + checkpoint load + one forward
-vs the eager path) was verified for weights (1680 tensors bit-identical,
-CLIP encodes 0.00e+00) but a real-weights *forward* comparison was never
-run. If you want it: build both ways in one process on CPU fp32 (needs
-~20 GB host RAM free), compare one forward exactly. Say the word and the
-agent will run it here.
+Ran on real SDXL weights (CPU fp32/fp16, `div_4.safetensors`): UNet
+1680/1680 tensors bit-identical, **forward bit-identical (0.000e+00)**,
+and the same after LoRA injection (724 adapters). CLIP encode likewise
+bit-identical; the only 2 differing tensors are the allowlisted-missing
+ones, which the meta route zero-fills by design — and the bit-identical
+encode now *demonstrates* they are unused rather than arguing it in a
+comment. See
+`archive/bad-LoRA-investigation/MEASURED-real-weights-meta-init.md`.
+
+Not covered by that run: non-SDXL checkpoints, and bf16 device forwards.
+
+## 4. Block-weight metadata on real weights (D2 follow-up)
+
+Proven on CPU with the real layer classes and real safetensors I/O
+(`smoke_test_lora_file_format.py`), but never on a LoRA actually trained
+with `block_weighting` set. To confirm: train a short run with
+`block_weighting = "0.5,1.0"`, save, then load the file in diffusers
+(`load_lora_weights`) and in ComfyUI and confirm the weights differ from
+a `1.0` run as the metadata says they should. Until then the
+diffusers-compatibility claim rests on executing its converter against a
+toy state dict, not on a real file.

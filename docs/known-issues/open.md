@@ -221,7 +221,7 @@ activation-checkpointing `fork_rng` hazard did **not** bite — capture
 succeeded with checkpointing ON.
 
 Not built, and the reasons are itemised in
-`shapes diversity problem 2/MEASURED-launch-bound.md`: one graph and one pool
+`archive/shapes diversity problem 2/MEASURED-launch-bound.md`: one graph and one pool
 (~460-520 MB) per shape, the optimizer step not captured, in-place parameter
 updates being load-bearing (an optimizer that replaced `param.data` would leave
 the graph reading freed memory), dropout RNG untested, and static conditioning

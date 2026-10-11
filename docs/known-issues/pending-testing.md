@@ -300,7 +300,7 @@ whether the handle should keep measuring `reserved_mb` (d', above).
 ## Pending
 
 - **[2026-10-07] shape bucketing's default, and *which* multiple — the earlier
-  quality measurement was void.** `shapes diversity problem 2/MEASURED-l2-bucketing.md`.
+  quality measurement was void.** `archive/shapes diversity problem 2/MEASURED-l2-bucketing.md`.
 
   **The first sweep's quality numbers did not stand, and re-running them changed
   the answer.** The managed trainer route's `LossPhase` ignored the bucketing
@@ -492,7 +492,7 @@ many-caption dataset** -- the synthetic set measures plumbing, and a
 31 ms/cold-prompt encode is priced but a real caption distribution's
 effect on the LoRA is not. Confirm with: a captioned dataset, batch 4,
 `--group-by-size-only`, 300+ steps, then renders vs the same run with
-per-caption batches. Ref: `shapes diversity problem 2/STATUS.md` (L4 row).
+per-caption batches. Ref: `archive/shapes diversity problem 2/STATUS.md` (L4 row).
 
 ## L5.3 XPU graph capture (managed route proven, main route not)
 

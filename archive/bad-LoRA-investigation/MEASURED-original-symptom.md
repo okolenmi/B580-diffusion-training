@@ -1,8 +1,8 @@
 # MEASURED: the original symptom (B1/B2/B3) — 200-image rank-64 study
 
-Task item B (`TASK-finalize-lora-defaults-and-docs.md`). Status: **training
-done, numbers done, maintainer render ranking recorded**; contact sheets /
-blur table still open.
+Task item B (the now-removed `TASK-finalize-lora-defaults-and-docs.md`).
+Status: **training done, numbers done, maintainer render ranking
+recorded**; contact sheets / blur table still open.
 Hardware: B580, 12,216 MB. One run at a time (violated twice by
 diagnostic probes -- noted where it matters).
 

@@ -1,5 +1,14 @@
 # STATUS: launch-bound task (L1–L5) — per-item report
 
+> **ARCHIVED 2026-10-11.** The task is closed: every item below is done
+> except L5.2, which is deliberately unbuilt *by measurement* (its result
+> is recorded in `docs/known-issues/deferred.md`), not by neglect. Live
+> follow-ups were moved out of this folder and live in
+> `docs/known-issues/pending-testing.md` (main-route graph parity,
+> `grad_accum>1`, `dropout>0`, L4 quality on a multi-caption dataset).
+> This folder is frozen history: its numbers were true when measured and
+> are kept as the record, not as current guidance.
+
 Task: `TASK-launch-bound.md` in this folder. Hardware throughout: Intel
 Arc B580, 12,216 MB, torch 2.12.1+xpu, SDXL LoRA, managed route,
 dataset `non-square`, unless noted. One run at a time.

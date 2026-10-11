@@ -1,7 +1,7 @@
 """Single-shape XPU graph capture for the managed training step (L5.3).
 
 The step is launch-bound (~22,000 kernel launches at ~48 us each), and the
-feasibility probe (`shapes diversity problem 2/probe_xpu_graph.py`)
+feasibility probe (`archive/shapes diversity problem 2/probe_xpu_graph.py`)
 measured 2.04-2.08x replay vs production eager for forward+backward under
 MATH/EFFICIENT SDPA (FLASH cannot capture -- SYCL limit). This integrates
 that probe into the managed trainer: forward + masked weighted loss +

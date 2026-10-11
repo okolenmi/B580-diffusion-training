@@ -60,4 +60,4 @@ trusting 724 far from the training distribution.
 - `archive/bad-LoRA-investigation/MEASURED-targets-and-schedule.md` (A1)
 - `archive/bad-LoRA-investigation/MEASURED-original-symptom.md` (B, when done)
 - `archive/bad-LoRA-investigation/MEASURED-kohya-on-xpu.md` (kohya on B580)
-- `shapes diversity problem 2/STATUS.md` + `MEASURED-launch-bound.md` (speed)
+- `archive/shapes diversity problem 2/STATUS.md` + `MEASURED-launch-bound.md` (speed)

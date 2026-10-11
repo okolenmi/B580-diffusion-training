@@ -135,7 +135,7 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "(fixed in 0a7f6a2), so every bucketing measurement taken "
                 "before that trained on the padding. Do not read the speedup "
                 "as a free win until a fixed-set evaluation of the fixed loss "
-                "lands in shapes diversity problem 2/MEASURED-l2-bucketing.md. "
+                "lands in archive/shapes diversity problem 2/MEASURED-l2-bucketing.md. "
                 "Off by default because it changes which pixels the loss "
                 "covers and the order samples arrive in. Padded elements are "
                 "excluded from the loss by a mask -- nothing is trained on "

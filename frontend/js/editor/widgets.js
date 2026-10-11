@@ -9,6 +9,13 @@
      list/dict/tuple -> JSON textarea, str/Path -> text.
 
    Commit contract:
+     - while the user types, store(value) writes node.params WITHOUT
+       notifying anyone (no re-render, so focus survives). This is what
+       keeps a half-finished edit alive: a text field only fires `change`
+       on Enter/blur, and a drag, pan or wheel on the canvas neither
+       blurs it nor waits -- the next re-render rebuilds every node body
+       from node.params, and the typed text used to vanish with the old
+       element. `change` still does the real commit below;
      - commit(value) writes node.params (the key is deleted for empty,
        so the declared default applies server-side) and calls
        doc.changed("params", origin) with origin "inspector" |
@@ -55,9 +62,12 @@ function isStructural(doc, node, port) {
  * opts: {doc, node, port, origin, onNote, onRebuild}
  */
 export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
-  const commit = (value, rebuild = false) => {
+  const store = (value) => {
     if (value === undefined || value === null || value === "") delete node.params[port.name];
     else node.params[port.name] = value;
+  };
+  const commit = (value, rebuild = false) => {
+    store(value);
     doc.changed("params", origin);
     if ((rebuild || isStructural(doc, node, port)) && onRebuild) onRebuild();
   };
@@ -67,7 +77,7 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
   };
   const note = onNote || (() => {});
 
-  if (port.path_kind) return pathWidget({ port, current, commit, note });
+  if (port.path_kind) return pathWidget({ port, current, commit, store, note });
 
   if (port.choices && port.choices.length) {
     const sel = document.createElement("select");
@@ -127,6 +137,12 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
       input.placeholder = String(port.default);
     }
     input.title = port.doc || port.name;
+    input.addEventListener("input", () => {
+      // keep a valid half-typed number; an unparsable one waits for `change`
+      const n = port.type === "int" ? parseInt(input.value, 10) : parseFloat(input.value);
+      if (input.value === "") store(undefined);
+      else if (!Number.isNaN(n)) store(n);
+    });
     input.addEventListener("change", () => {
       if (input.value === "") return commit(undefined);
       const n = port.type === "int" ? parseInt(input.value, 10) : parseFloat(input.value);
@@ -149,6 +165,13 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
       ? JSON.stringify(node.params[port.name])
       : raw0;
     input.title = port.doc || `${port.name} (JSON)`;
+    input.addEventListener("input", () => {
+      // only text that is valid JSON right now is kept; the rest is
+      // still being typed, and `change` reports it if it stays invalid
+      const raw = input.value.trim();
+      if (raw === "") return store(undefined);
+      try { store(JSON.parse(raw)); } catch { /* not finished */ }
+    });
     input.addEventListener("change", () => {
       const raw = input.value.trim();
       if (raw === "") return commit(undefined);
@@ -174,6 +197,7 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
     input.placeholder = port.default_repr;
   }
   input.title = port.doc || port.name;
+  input.addEventListener("input", () => store(input.value.trim() || undefined));
   input.addEventListener("change", () => commit(input.value.trim() || undefined));
   return input;
 }
@@ -185,7 +209,7 @@ export function buildWidget({ doc, node, port, origin, onNote, onRebuild }) {
  * does not exist yet. The server sandboxes every path; this side only
  * ever sends names.
  */
-function pathWidget({ port, current, commit, note }) {
+function pathWidget({ port, current, commit, store, note }) {
   const kind = assetKindFor(port.path_kind);
   const row = document.createElement("div");
   row.className = "prow";
@@ -212,6 +236,7 @@ function pathWidget({ port, current, commit, note }) {
       typed.placeholder = port.default_repr;
     }
     typed.title = port.doc || `${port.name} (save path, e.g. sub/name.safetensors)`;
+    typed.addEventListener("input", () => store(typed.value.trim() || undefined));
     typed.addEventListener("change", () => commit(typed.value.trim() || undefined));
     row.appendChild(typed);
   } else {

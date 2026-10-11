@@ -300,9 +300,66 @@ def check_epoch_wrapping_reuses_dataset():
            detail=str(batches_seen))
 
 
+def check_graph_flag_trains_identically_to_eager_on_cpu():
+    print("\n=== use_xpu_graph=True (eager-live fallback on CPU) trains exactly like the eager phases ===")
+    # Capture is XPU-only; on CPU the runner's step() is the eager-live
+    # fallback. That still runs the whole main-route graph wiring -- the
+    # GraphForwardLossBackwardPhase's state keys, OptimizerBeginStepPhase's
+    # skip_zero_grad hand-off, the runner's in-place window zeroing -- which
+    # is what this checks. If the zeroing were lost, each step's gradient
+    # would pile onto the last and the parameters would drift apart.
+    shape = (4, 4, 4)
+    batch_size = 2
+    steps = 4
+    lr = 1e-2
+    gen = torch.Generator().manual_seed(7)
+    x_t = torch.randn(batch_size, *shape, generator=gen)
+    target = torch.randn(batch_size, *shape, generator=gen)
+    t = torch.tensor([300, 700])
+    p_init = torch.randn(*shape, generator=gen)
+
+    class _GraphableModel(_RecordingModel):
+        # The runner's refuse_if_unsupported() scans model.modules() for
+        # active Dropout; this model has none.
+        def modules(self):
+            return iter(())
+
+    def run(use_graph):
+        model = _GraphableModel(p_init)
+        losses = []
+        node = SupervisedLoRATrainerNode()
+        node.context = ExecutionContext()
+        node.build(
+            model=model, optimizer=_SGDOptimizerHandle([model.p], lr=lr),
+            text_encoder=_FakeTextEncoder(),
+            batches=_FixedBatchSource(x_t, target, t, "a test prompt"), steps=steps,
+            lr_schedule=ConstantLRSchedule(lr=lr), loss_weighting=UniformLossWeighting(),
+            diffusion_process=DiffusionProcess(DiscreteLinearNoiseSchedule(),
+                                               EpsParameterization(), KarrasInputScaler()),
+            on_step=lambda step, loss, *rest: losses.append(float(loss)),
+            use_xpu_graph=use_graph,
+        )
+        return model.p.detach().clone(), losses
+
+    p_eager, losses_eager = run(False)
+    p_graph, losses_graph = run(True)
+    record(len(losses_eager) == steps and len(losses_graph) == steps,
+           f"both runs reported {steps} steps",
+           detail=f"{len(losses_eager)} / {len(losses_graph)}")
+    record(torch.equal(p_eager, p_graph),
+           "final parameters are bit-identical with and without the graph flag",
+           detail=f"max diff {(p_eager - p_graph).abs().max().item():.3e}")
+    record(losses_eager == losses_graph,
+           "every step's reported loss is identical",
+           detail=f"{losses_eager} vs {losses_graph}")
+    record(not torch.equal(p_eager, p_init),
+           "and training actually moved the parameter (the comparison is not vacuous)")
+
+
 def main():
     check_step_math_matches_independent_reference()
     check_epoch_wrapping_reuses_dataset()
+    check_graph_flag_trains_identically_to_eager_on_cpu()
 
     print("\n" + "=" * 60)
     if failures:

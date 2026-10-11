@@ -139,8 +139,12 @@ class GraphCatalog(ABC):
         """
         raise NotImplementedError
 
+    # ARG002 (both args): this default impl answers None for every input;
+    # the two parameters exist so every catalog implements the same port.
     def resolved_inputs(
-        self, class_name: str, params: dict
+        self,
+        class_name: str,  # noqa: ARG002 -- port signature, not ours to trim
+        params: dict,  # noqa: ARG002 -- same
     ) -> tuple[PortInfo, ...] | None:
         """The input ports this node really has under ``params`` -- for a
         node whose port set depends on its widget values

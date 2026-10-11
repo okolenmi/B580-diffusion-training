@@ -15,7 +15,7 @@ from ...application.ports.graph_catalog import (
     NodeInfo,
 )
 from .discovery import NodeRegistry
-from .introspect import introspect_node_class, port_info
+from .introspect import as_node_class, introspect_node_class, port_info
 
 
 def domain_of(cls: type) -> str:
@@ -44,7 +44,7 @@ class DiscoveredGraphCatalog(GraphCatalog):
         if cls is None:
             return None
         try:
-            resolved = cls.resolve_inputs(dict(params))
+            resolved = as_node_class(cls).resolve_inputs(dict(params))
         except Exception:  # noqa: BLE001 -- a mid-edit params dict; fall back to the static shape
             return None
         return tuple(port_info(p) for p in resolved.values())

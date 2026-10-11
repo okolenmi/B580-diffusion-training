@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, TypeGuard
 
 from .modules import KINDS, SCOPES
 
@@ -58,7 +58,7 @@ MAX_NODE_ID = 120
 _BLOCK_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
-def _is_int(value: Any) -> bool:
+def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -80,17 +80,7 @@ def validate_template_doc(doc: Any) -> list[str]:
         problems.append(f"columns: must be an integer {MIN_COLUMNS}..{MAX_COLUMNS}, got {columns!r}")
         columns = DEFAULT_COLUMNS
 
-    graph = doc.get("graph")
-    if graph is None and kind == "template":
-        problems.append("graph: a template needs the graph snapshot it runs")
-    if graph is not None:
-        if not isinstance(graph, dict):
-            problems.append("graph: must be an object")
-        else:
-            if not isinstance(graph.get("nodes", []), list):
-                problems.append("graph.nodes: must be a list")
-            if not isinstance(graph.get("edges", []), list):
-                problems.append("graph.edges: must be a list")
+    _validate_graph_section(doc, kind, problems)
 
     source = doc.get("source_graph")
     if source is not None and not isinstance(source, str):
@@ -105,68 +95,116 @@ def validate_template_doc(doc: Any) -> list[str]:
 
     seen: set[str] = set()
     for index, block in enumerate(blocks[:MAX_BLOCKS]):
-        where = f"blocks[{index}]"
-        if not isinstance(block, dict):
-            problems.append(f"{where}: must be an object")
-            continue
-        block_id = block.get("id")
-        if not isinstance(block_id, str) or not _BLOCK_ID.match(block_id):
-            problems.append(f"{where}.id: must match [A-Za-z0-9_-]{{1,40}}, got {block_id!r}")
-        elif block_id in seen:
-            problems.append(f"{where}.id: duplicate id {block_id!r}")
-        else:
-            seen.add(block_id)
-
-        ref = block.get("ref")
-        if not isinstance(ref, dict):
-            problems.append(f"{where}.ref: must be an object")
-        else:
-            scope = ref.get("scope")
-            if scope not in SCOPES:
-                problems.append(f"{where}.ref.scope: {scope!r} is not one of {list(SCOPES)}")
-            if ref.get("kind") not in KINDS:
-                problems.append(f"{where}.ref.kind: {ref.get('kind')!r} is not one of {list(KINDS)}")
-            name = ref.get("name")
-            if not isinstance(name, str) or not name:
-                problems.append(f"{where}.ref.name: must be a non-empty string")
-            node = ref.get("node")
-            if scope == "node":
-                if not isinstance(node, str) or not node or len(node) > MAX_NODE_ID:
-                    problems.append(f"{where}.ref.node: a node block needs a node id")
-            elif scope == "graph" and node is not None:
-                problems.append(f"{where}.ref.node: a graph block has no node")
-
-        for key, low in (("x", 0), ("y", 0), ("w", 1), ("h", 1)):
-            value = block.get(key)
-            if not _is_int(value) or value < low:
-                problems.append(f"{where}.{key}: must be an integer >= {low}, got {value!r}")
-        if _is_int(block.get("x")) and _is_int(block.get("w")) and block["x"] + block["w"] > columns:
-            problems.append(
-                f"{where}: x + w = {block['x'] + block['w']} runs past the {columns}-column grid"
-            )
-        if _is_int(block.get("y")) and block["y"] > MAX_ROWS:
-            problems.append(f"{where}.y: at most {MAX_ROWS}")
-        if _is_int(block.get("h")) and block["h"] > MAX_BLOCK_ROWS:
-            problems.append(f"{where}.h: at most {MAX_BLOCK_ROWS}")
-
-        if "collapsed" in block and not isinstance(block["collapsed"], bool):
-            problems.append(f"{where}.collapsed: must be a boolean")
-        title = block.get("title")
-        if title is not None and (not isinstance(title, str) or len(title) > MAX_TITLE):
-            problems.append(f"{where}.title: a string of at most {MAX_TITLE} characters")
-        options = block.get("options")
-        if options is not None:
-            if not isinstance(options, dict):
-                problems.append(f"{where}.options: must be an object")
-            else:
-                try:
-                    size = len(json.dumps(options))
-                except (TypeError, ValueError):
-                    problems.append(f"{where}.options: must be JSON")
-                else:
-                    if size > MAX_OPTIONS_BYTES:
-                        problems.append(f"{where}.options: at most {MAX_OPTIONS_BYTES} bytes, got {size}")
+        _validate_block(block, index, columns, seen, problems)
     return problems
+
+
+def _validate_graph_section(doc: dict, kind: Any, problems: list[str]) -> None:
+    """The embedded graph snapshot: required for a template, shape-checked.
+
+    Split out of `validate_template_doc` for C901 only; the messages and
+    their order are unchanged.
+    """
+    graph = doc.get("graph")
+    if graph is None:
+        if kind == "template":
+            problems.append("graph: a template needs the graph snapshot it runs")
+        return
+    if not isinstance(graph, dict):
+        problems.append("graph: must be an object")
+        return
+    if not isinstance(graph.get("nodes", []), list):
+        problems.append("graph.nodes: must be a list")
+    if not isinstance(graph.get("edges", []), list):
+        problems.append("graph.edges: must be a list")
+
+
+def _validate_block(
+    block: Any, index: int, columns: int, seen: set[str], problems: list[str]
+) -> None:
+    """Append every problem with one block of `validate_template_doc`'s doc.
+
+    Extracted purely for C901 (the function's own complexity budget);
+    `problems` and `seen` are shared by reference, so the order and the
+    duplicate-id detection are exactly what the inline loop produced.
+    """
+    where = f"blocks[{index}]"
+    if not isinstance(block, dict):
+        problems.append(f"{where}: must be an object")
+        return
+    block_id = block.get("id")
+    if not isinstance(block_id, str) or not _BLOCK_ID.match(block_id):
+        problems.append(f"{where}.id: must match [A-Za-z0-9_-]{{1,40}}, got {block_id!r}")
+    elif block_id in seen:
+        problems.append(f"{where}.id: duplicate id {block_id!r}")
+    else:
+        seen.add(block_id)
+
+    _validate_block_ref(block, where, problems)
+    _validate_block_geometry(block, where, columns, problems)
+    _validate_block_presentation(block, where, problems)
+
+
+def _validate_block_ref(block: dict, where: str, problems: list[str]) -> None:
+    """The `ref` a block points at: scope/kind/name, and node-id rules."""
+    ref = block.get("ref")
+    if not isinstance(ref, dict):
+        problems.append(f"{where}.ref: must be an object")
+        return
+    scope = ref.get("scope")
+    if scope not in SCOPES:
+        problems.append(f"{where}.ref.scope: {scope!r} is not one of {list(SCOPES)}")
+    if ref.get("kind") not in KINDS:
+        problems.append(f"{where}.ref.kind: {ref.get('kind')!r} is not one of {list(KINDS)}")
+    name = ref.get("name")
+    if not isinstance(name, str) or not name:
+        problems.append(f"{where}.ref.name: must be a non-empty string")
+    node = ref.get("node")
+    if scope == "node":
+        if not isinstance(node, str) or not node or len(node) > MAX_NODE_ID:
+            problems.append(f"{where}.ref.node: a node block needs a node id")
+    elif scope == "graph" and node is not None:
+        problems.append(f"{where}.ref.node: a graph block has no node")
+
+
+def _validate_block_geometry(
+    block: dict, where: str, columns: int, problems: list[str]
+) -> None:
+    """Where the block sits: x/y/w/h, the column grid, and the row caps."""
+    for key, low in (("x", 0), ("y", 0), ("w", 1), ("h", 1)):
+        value = block.get(key)
+        if not _is_int(value) or value < low:
+            problems.append(f"{where}.{key}: must be an integer >= {low}, got {value!r}")
+    if _is_int(block.get("x")) and _is_int(block.get("w")) and block["x"] + block["w"] > columns:
+        problems.append(
+            f"{where}: x + w = {block['x'] + block['w']} runs past the {columns}-column grid"
+        )
+    if _is_int(block.get("y")) and block["y"] > MAX_ROWS:
+        problems.append(f"{where}.y: at most {MAX_ROWS}")
+    if _is_int(block.get("h")) and block["h"] > MAX_BLOCK_ROWS:
+        problems.append(f"{where}.h: at most {MAX_BLOCK_ROWS}")
+
+
+def _validate_block_presentation(block: dict, where: str, problems: list[str]) -> None:
+    """The cosmetic fields: collapsed, title, and the options blob."""
+    if "collapsed" in block and not isinstance(block["collapsed"], bool):
+        problems.append(f"{where}.collapsed: must be a boolean")
+    title = block.get("title")
+    if title is not None and (not isinstance(title, str) or len(title) > MAX_TITLE):
+        problems.append(f"{where}.title: a string of at most {MAX_TITLE} characters")
+    options = block.get("options")
+    if options is None:
+        return
+    if not isinstance(options, dict):
+        problems.append(f"{where}.options: must be an object")
+        return
+    try:
+        size = len(json.dumps(options))
+    except (TypeError, ValueError):
+        problems.append(f"{where}.options: must be JSON")
+        return
+    if size > MAX_OPTIONS_BYTES:
+        problems.append(f"{where}.options: at most {MAX_OPTIONS_BYTES} bytes, got {size}")
 
 
 def normalize_template_doc(doc: dict) -> dict:

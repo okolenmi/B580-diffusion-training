@@ -14,7 +14,6 @@ reads the document's blocks, ``apply_values`` returns a new
 
 from __future__ import annotations
 
-from typing import Any
 
 from ..domain.graph import GraphDefinition, GraphNodeSpec
 from ..domain.memory_settings import MemorySettings
@@ -36,6 +35,53 @@ def exposed_fields(doc: dict) -> tuple[set[tuple[str, str]], set[str]]:
         elif ref["name"] in GRAPH_FIELD_BY_NAME:
             graph_fields.add(ref["name"].split(".", 1)[1])
     return node_fields, graph_fields
+
+
+def _apply_node_values(
+    graph: GraphDefinition,
+    node_id: str,
+    ports: object,
+    allowed_nodes: set[tuple[str, str]],
+    problems: list[str],
+) -> dict | None:
+    """One node's port values -> its new params, appending why not.
+
+    `None` means "no answer for this node" (unknown id, or ports not an
+    object) -- the caller then omits it from the new-params map, which is
+    what the inlined loop's `continue` did: the node keeps its own
+    `spec.params` downstream via `new_params.get(n.id, n.params)`, and
+    since `problems` is non-empty the whole graph is returned unchanged
+    anyway.
+
+    Split out of `apply_values` for C901 (its own complexity budget),
+    not for behaviour: the checks, their order, and the exact problem
+    strings are unchanged, so a caller still sees the same list in the
+    same sequence.
+    """
+    spec = graph.node(node_id)
+    if spec is None:
+        problems.append(f"values.nodes.{node_id}: the graph has no such node")
+        return None
+    if not isinstance(ports, dict):
+        problems.append(f"values.nodes.{node_id}: must be an object of port values")
+        return None
+
+    wired = wired_ports(graph.edges, node_id)
+    params = dict(spec.params)
+    for port, value in ports.items():
+        if (node_id, port) not in allowed_nodes:
+            problems.append(
+                f"values.nodes.{node_id}.{port}: this page does not expose that field"
+            )
+        elif port in wired:
+            problems.append(
+                f"values.nodes.{node_id}.{port}: the field is fed by another node"
+            )
+        elif value is None:
+            params.pop(port, None)
+        else:
+            params[port] = value
+    return params
 
 
 def apply_values(
@@ -63,29 +109,9 @@ def apply_values(
 
     new_params: dict[str, dict] = {}
     for node_id, ports in node_values.items():
-        spec = graph.node(node_id)
-        if spec is None:
-            problems.append(f"values.nodes.{node_id}: the graph has no such node")
-            continue
-        if not isinstance(ports, dict):
-            problems.append(f"values.nodes.{node_id}: must be an object of port values")
-            continue
-        wired = wired_ports(graph.edges, node_id)
-        params = dict(spec.params)
-        for port, value in ports.items():
-            if (node_id, port) not in allowed_nodes:
-                problems.append(
-                    f"values.nodes.{node_id}.{port}: this page does not expose that field"
-                )
-            elif port in wired:
-                problems.append(
-                    f"values.nodes.{node_id}.{port}: the field is fed by another node"
-                )
-            elif value is None:
-                params.pop(port, None)
-            else:
-                params[port] = value
-        new_params[node_id] = params
+        applied = _apply_node_values(graph, node_id, ports, allowed_nodes, problems)
+        if applied is not None:
+            new_params[node_id] = applied
 
     memory = graph.memory
     if memory_values:

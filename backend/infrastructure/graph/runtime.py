@@ -44,6 +44,7 @@ from ...application.ports.graph_runtime import (
 from ...domain.graph import GraphDefinition, NodeResult
 from ...domain.modules import node_stream_id
 from .discovery import NodeRegistry
+from .introspect import NodeClass, as_node_class
 
 logger = logging.getLogger(__name__)
 
@@ -205,11 +206,12 @@ class ReflectedGraphRuntime(GraphRuntime):
                     )
                 )
                 continue
+            node_cls = as_node_class(cls)
             resolved_in[node.id] = self._resolve(
-                cls, cls.resolve_inputs, node, issues, "inputs"
+                node_cls, node_cls.resolve_inputs, node, issues, "inputs"
             )
             resolved_out[node.id] = self._resolve(
-                cls, cls.resolve_outputs, node, issues, "outputs"
+                node_cls, node_cls.resolve_outputs, node, issues, "outputs"
             )
 
         # -- pass 2: params vs the resolved input shape -----------------
@@ -429,9 +431,10 @@ class ReflectedGraphRuntime(GraphRuntime):
         nothing" (docs/design/14 problem 2) goes away. A wired monitor
         wins -- the old route keeps working unchanged.
         """
-        if not cls.MODULES or self._monitor_bus is None:
+        node_cls = as_node_class(cls)
+        if not node_cls.MODULES or self._monitor_bus is None:
             return
-        port = cls.INPUTS.get("monitor")
+        port = node_cls.INPUTS.get("monitor")
         if port is None or inputs.get("monitor") is not None:
             return
         inputs["monitor"] = LiveMonitorHandle(node_stream_id(spec.id), self._monitor_bus)
@@ -446,7 +449,7 @@ class ReflectedGraphRuntime(GraphRuntime):
     # Internals
     # ------------------------------------------------------------------
 
-    def _resolve(self, cls: type, hook, node, issues: list[GraphIssue], label: str):
+    def _resolve(self, cls: NodeClass, hook, node, issues: list[GraphIssue], label: str):
         """Call a node's params-aware shape hook; a raise is a validation
         issue, never an exception escaping validate()."""
         try:

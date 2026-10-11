@@ -21,11 +21,40 @@ from __future__ import annotations
 import inspect
 import json
 import re
-from typing import Any
+from typing import Any, ClassVar, Protocol, cast
 
 from nodes.core import Node
 
 from ...application.ports.graph_catalog import NodeInfo, PortInfo, PresetInfo
+
+
+class NodeClass(Protocol):
+    """The declared surface every discoverable node class has.
+
+    A node class reaches us through a registry as a bare `type`, so mypy
+    rejects every attribute a node declares (`INPUTS`, `NODE_KIND`,
+    `resolve_inputs`, ...). This Protocol states that surface once;
+    `as_node_class` is the single cast into it, used wherever a discovered
+    class is read. The members mirror `nodes.core.Node`, which is where
+    they are actually defined -- discovery returns real `Node` subclasses,
+    so this is a description of a fact, not a loosening of the checks.
+    """
+
+    INPUTS: ClassVar[dict]
+    OUTPUTS: ClassVar[dict]
+    NODE_KIND: ClassVar[str]
+    DISPLAY_NAME: ClassVar[str | None]
+    MODULES: ClassVar[tuple]
+
+    def list_presets(cls) -> list: ...
+    def resolve_inputs(cls, params: dict) -> dict: ...
+    def resolve_outputs(cls, params: dict) -> dict: ...
+    def diagnostics(self, inputs: dict) -> dict[str, list[str]]: ...
+
+
+def as_node_class(cls: type) -> NodeClass:
+    """View a discovered class as the node surface (see `NodeClass`)."""
+    return cast("NodeClass", cls)
 
 # Domain vocabulary this project's own class names use that a generic
 # capital-letter split gets wrong -- "ComfyUNetLoRA" would split as
@@ -142,7 +171,7 @@ def _port_info(port, *, is_output: bool = False) -> PortInfo:
 port_info = _port_info
 
 
-def _presets(cls: type) -> tuple[PresetInfo, ...] | None:
+def _presets(cls: NodeClass) -> tuple[PresetInfo, ...] | None:
     """Presets only for dynamic nodes -- the base list_presets() raises
     by design (nodes.core), exactly as legacy guarded it."""
     if cls.NODE_KIND != "dynamic":
@@ -165,6 +194,7 @@ def introspect_node_class(cls: type, *, domain: str) -> NodeInfo:
     """Read DECLARED metadata off a real Node subclass (INPUTS/OUTPUTS
     are real Port objects the author wrote down -- never guessed from a
     constructor signature)."""
+    node = as_node_class(cls)
     doc = (inspect.getdoc(cls) or "").strip().split("\n")[0]
     bases = tuple(
         b.__name__ for b in cls.__mro__[1:] if b.__name__ not in ("object", "ABC")
@@ -176,12 +206,12 @@ def introspect_node_class(cls: type, *, domain: str) -> NodeInfo:
         module=cls.__module__,
         doc=doc,
         bases=bases,
-        inputs=tuple(_port_info(p) for p in cls.INPUTS.values()),
-        outputs=tuple(_port_info(p, is_output=True) for p in cls.OUTPUTS.values()),
-        node_kind=cls.NODE_KIND,
-        presets=_presets(cls),
+        inputs=tuple(_port_info(p) for p in node.INPUTS.values()),
+        outputs=tuple(_port_info(p, is_output=True) for p in node.OUTPUTS.values()),
+        node_kind=node.NODE_KIND,
+        presets=_presets(node),
         # Plain function identity: diagnostics() is a regular instance
         # method, so ClassName.method is already the bare function.
-        has_diagnostics=cls.diagnostics is not Node.diagnostics,
-        modules=tuple(m.as_dict() for m in cls.MODULES),
+        has_diagnostics=node.diagnostics is not Node.diagnostics,
+        modules=tuple(m.as_dict() for m in node.MODULES),
     )

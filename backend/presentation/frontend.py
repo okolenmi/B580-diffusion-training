@@ -32,7 +32,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
@@ -71,6 +74,59 @@ class _UiStaticFiles(StaticFiles):
         return response
 
 
+# (route, html file) for the plain static pages. Path parameters are fine
+# (`/templates/{name}`) -- the handler ignores them and serves the one file.
+_STATIC_PAGES: tuple[tuple[str, str], ...] = (
+    ("/graph", "graph.html"),
+    ("/templates", "templates.html"),
+    ("/templates/{name}", "templates.html"),
+    ("/config", "config.html"),
+    ("/datasets", "datasets.html"),
+    ("/datasets/{name}", "datasets.html"),
+    ("/help", "help.html"),
+    ("/settings", "settings.html"),
+    # The first-run installer. Served unconditionally rather than only when
+    # unconfigured: the page itself checks `/installer/state` and steps aside
+    # with a link to Settings if setup is already done. Redirecting here
+    # instead would make the *page* unreachable after first run, which is a
+    # worse answer than a page that says so -- and this way the address is
+    # something a user can always come back to and read.
+    ("/setup", "setup.html"),
+)
+
+
+def _register_static_page(app: FastAPI, static_dir: Path, route: str, filename: str):
+    """Register one `route -> filename.html` page handler on `app`.
+
+    The handler declares the route's own path parameters by name, because
+    FastAPI resolves those from the signature: a `**kwargs` catch-all would
+    instead read them as query parameters and 422 every `/templates/{name}`.
+    Parameterless routes get a no-argument handler.
+    """
+    params = re.findall(r"{(\w+)}", route)
+    response = lambda: FileResponse(static_dir / filename, headers=_NO_CACHE)  # noqa: E731
+
+    if params:
+        # Build the signature FastAPI introspects: one `name: str` per path
+        # parameter, in the order they appear in the route.
+        namespace: dict[str, Any] = {"__annotations__": {p: str for p in params}}
+        exec(  # noqa: S102 -- fixed shape: `p0, p1: str` names from `params`
+            f"def handler({', '.join(params)}):\n"
+            "    return _response()\n",
+            {"_response": response},
+            namespace,
+        )
+        handler = cast("Callable[..., FileResponse]", namespace["handler"])
+    else:
+        def handler() -> FileResponse:
+            return response()
+
+    handler.__name__ = (
+        "static_page_" + (re.sub(r"\W+", "_", route).strip("_") or "index")
+    )
+    app.get(route, include_in_schema=False)(handler)
+
+
 def register_frontend(app: FastAPI, static_dir: Path) -> None:
     """Attach page routes and the ``/ui`` asset mount if the directory exists."""
     if not static_dir.is_dir():
@@ -89,53 +145,12 @@ def register_frontend(app: FastAPI, static_dir: Path) -> None:
         # the client script reads it (mirrors server/main.py's route).
         return FileResponse(static_dir / "monitor.html", headers=_NO_CACHE)
 
-    @app.get("/graph", include_in_schema=False)
-    def graph_page() -> FileResponse:
-        return FileResponse(static_dir / "graph.html", headers=_NO_CACHE)
-
-    @app.get("/templates", include_in_schema=False)
-    def templates_page() -> FileResponse:
-        return FileResponse(static_dir / "templates.html", headers=_NO_CACHE)
-
-    @app.get("/templates/{name}", include_in_schema=False)
-    def template_detail_page(name: str) -> FileResponse:
-        # One HTML for the list, a page, and a monitor window; the client
-        # script routes on the path (same pattern as /datasets/{name}).
-        return FileResponse(static_dir / "templates.html", headers=_NO_CACHE)
-
-    @app.get("/config", include_in_schema=False)
-    def config_page() -> FileResponse:
-        return FileResponse(static_dir / "config.html", headers=_NO_CACHE)
-
-    @app.get("/datasets", include_in_schema=False)
-    def datasets_page() -> FileResponse:
-        return FileResponse(static_dir / "datasets.html", headers=_NO_CACHE)
-
-    @app.get("/datasets/{name}", include_in_schema=False)
-    def dataset_detail_page(name: str) -> FileResponse:
-        # One HTML for list + detail; views/datasets.js routes on the path.
-        return FileResponse(static_dir / "datasets.html", headers=_NO_CACHE)
-
-    @app.get("/help", include_in_schema=False)
-    def help_page() -> FileResponse:
-        # Structured placeholder (M8d); no client script beyond the shell.
-        return FileResponse(static_dir / "help.html", headers=_NO_CACHE)
-
-    @app.get("/settings", include_in_schema=False)
-    def settings_page() -> FileResponse:
-        return FileResponse(static_dir / "settings.html", headers=_NO_CACHE)
-
-    @app.get("/setup", include_in_schema=False)
-    def setup_page() -> FileResponse:
-        """The first-run installer.
-
-        Served unconditionally rather than only when unconfigured: the
-        page itself checks `/installer/state` and steps aside with a link to
-        Settings if setup is already done. Redirecting here instead would
-        make the *page* unreachable after first run, which is a worse
-        answer than a page that says so -- and this way the address is
-        something a user can always come back to and read.
-        """
-        return FileResponse(static_dir / "setup.html", headers=_NO_CACHE)
+    # The remaining pages are one static HTML each, so they are registered
+    # from a table instead of ten near-identical functions. Order is the
+    # table's order (route registration order is the OpenAPI listing
+    # order). Several paths deliberately share one file: the client script
+    # routes on the path (same pattern as /datasets/{name}).
+    for route, filename in _STATIC_PAGES:
+        _register_static_page(app, static_dir, route, filename)
 
     app.mount("/ui", _UiStaticFiles(directory=static_dir), name="ui")

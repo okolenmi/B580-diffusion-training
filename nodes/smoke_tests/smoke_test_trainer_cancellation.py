@@ -146,6 +146,9 @@ def check_cancel_before_first_step_trains_zero_steps():
     )
     assert result["model"] is model
     assert model.calls == 0, f"expected zero forward calls, got {model.calls}"
+    done = node.context.reported_completion
+    assert done is not None and done.unfinished and done.step == 0 and done.total == 100, (
+        f"a stop before the first step must report unfinished at step 0 of 100; got {done}")
     print("    PASS")
 
 
@@ -189,8 +192,16 @@ def check_cancel_mid_run_stops_but_keeps_progress():
     # must be exactly the number of steps that actually finished.
     assert ends[0]["step"] == model.calls, (
         f"run_end step {ends[0]['step']} != completed steps {model.calls}")
+    # The completion protocol (nodes/core.py): the stop is reported to
+    # whatever consumes the model, with the real step count, so a saver can
+    # write the partial LoRA out instead of the stop discarding it.
+    done = node.context.reported_completion
+    assert done is not None and done.unfinished, (
+        f"a stopped run must report an unfinished completion; got {done}")
+    assert (done.step, done.total, done.reason) == (model.calls, 100, "stopped"), (
+        f"unfinished completion must carry the completed step count; got {done}")
     print(f"    PASS: stopped after {model.calls} steps, not all 100; "
-          f"run_end {ends[0]}")
+          f"run_end {ends[0]}; reported {done.as_dict()}")
 
 
 def check_no_cancel_event_runs_normally():
@@ -204,6 +215,10 @@ def check_no_cancel_event_runs_normally():
         lr_schedule=ConstantLRSchedule(lr=1e-4), loss_weighting=UniformLossWeighting(),
     )
     assert model.calls == 7
+    assert node.context.reported_completion is None, (
+        "a run that finished reports nothing -- complete is the default, and an "
+        f"unfinished report here would make a saver rename a finished LoRA; got "
+        f"{node.context.reported_completion}")
     print("    PASS")
 
 

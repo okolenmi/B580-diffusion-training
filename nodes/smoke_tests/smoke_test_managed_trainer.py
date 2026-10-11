@@ -1027,6 +1027,44 @@ def check_intermediate_save_writes_numbered_checkpoints():
     print("    PASS")
 
 
+def check_stop_reports_unfinished_with_the_completed_step_count():
+    import threading
+
+    print("[a stop between steps reports an unfinished completion carrying the "
+          "number of optimizer steps actually completed (and a finished run "
+          "reports nothing), so a saver can name and keep the partial LoRA]")
+
+    def run(stop_after_step_index):
+        events: list = []
+        cancel = threading.Event()
+        node = ManagedLoRATrainerNode()
+        node.context = ExecutionContext(cancel_event=cancel)
+        model = _FakeModel(events)
+        trainer = SimpleNamespace(unet=model, clip=_FakeTextEncoder(events))
+
+        def on_step(step, _loss):
+            if step == stop_after_step_index:
+                cancel.set()
+
+        node.build(
+            trainer=trainer, batches=_FiniteBatches(),
+            optimizer=_recording_optimizer(events, fused=False),
+            lr_schedule=ConstantLRSchedule(lr=1e-4),
+            loss_weighting=UniformLossWeighting(), steps=10,
+            resource_control=_FakeResourceControl(events), grad_accum=2,
+            on_step=on_step)
+        return node.context.reported_completion
+
+    done = run(stop_after_step_index=2)  # steps 0,1,2 completed -> 3 done
+    check(done is not None and done.unfinished,
+          f"a stopped run reports unfinished; got {done}")
+    check((done.step, done.total, done.reason) == (3, 10, "stopped"),
+          f"carrying completed steps (3) of 10, reason 'stopped'; got {done}")
+    check(run(stop_after_step_index=None) is None,
+          "a run that finished reports nothing (complete is the default)")
+    print("    PASS")
+
+
 def check_monitor_reports_once_per_optimizer_step_with_t_buckets():
     from nodes.monitor.handle import MonitorHandle
 
@@ -1102,6 +1140,7 @@ def main():
     check_grad_clip_applies_once_per_optimizer_step()
     check_build_rejects_invalid_training_shapes()
     check_intermediate_save_writes_numbered_checkpoints()
+    check_stop_reports_unfinished_with_the_completed_step_count()
     check_monitor_reports_once_per_optimizer_step_with_t_buckets()
     print()
     print("=" * 60)

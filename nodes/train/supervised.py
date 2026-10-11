@@ -313,6 +313,7 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 if monitor is not None:
                     monitor.report({"type": "run_end", "step": step,
                                     "cancelled": True, "t": time.time()})
+                self._report_stopped(step, steps)
                 result = {"model": model}
                 self.validate_outputs(result)
                 return result

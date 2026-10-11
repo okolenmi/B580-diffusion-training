@@ -1654,6 +1654,7 @@ class ManagedLoRATrainerNode(TrainerNode):
                 if monitor is not None:
                     monitor.report({"type": "run_end", "step": step,
                                     "cancelled": True, "t": time.time()})
+                self._report_stopped(step, steps)
                 return {"model": model}
             for micro in range(grad_accum):
                 state = ManagedStepState(step=step, batch=None, model=model,

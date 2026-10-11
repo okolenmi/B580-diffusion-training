@@ -7,7 +7,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Callable, ClassVar
 
-from ..core import Node, Port
+from ..core import Completion, Node, Port
 from ..dataset.handle import TrainingBatchSource
 from ..model.handle import TrainableModel
 from ..model.text_encoder import TextEncoder
@@ -107,6 +107,19 @@ class TrainerNode(Node):
                          doc="Optional callback(step, loss) -- for programmatic use "
                              "(tests, scripts); `monitor` above is the graph-editor path."),
     }
+
+    def _report_stopped(self, step: int, total_steps: int) -> None:
+        """A stop between steps: say so to whatever consumes the model.
+
+        The model returned after a stop is valid -- trained for ``step`` of
+        ``total_steps`` optimizer steps -- and this is how that fact reaches
+        the nodes after it (nodes/core.py Completion): a saver can then
+        write it out, named for the step it reached, instead of the stop
+        discarding the work. Both trainer routes call this at the same
+        place, so the wording and the numbers cannot drift apart.
+        """
+        self.report_completion(Completion.unfinished_at(
+            step=step, total=total_steps, reason="stopped"))
 
     @abstractmethod
     def build(self, **inputs) -> dict[str, TrainableModel]:

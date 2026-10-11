@@ -80,12 +80,21 @@ def _load_dora_layers(registry, state_dict: dict) -> None:
             layer.load_lora_weights(A, B)
 
         alpha_key = f"{key}.alpha"
+        block_key = f"{key}.block_weight"
+        saved_alpha = layer.alpha
         if alpha_key in state_dict:
             saved_alpha = state_dict[alpha_key].item()
             if abs(saved_alpha - layer.alpha) > 1e-6:
                 print(f"    [DoRA] {full_name}: alpha mismatch "
                       f"(source={saved_alpha}, config={layer.alpha}). "
                       f"Using source value.")
+        if block_key in state_dict:
+            # lora.load_lora_into_model skips DoRA layers, so without this the
+            # trained block weight was restored for plain LoRA only and a DoRA
+            # run resumed at the configured weight instead.
+            from .lora import _set_layer_training_weight
+            _set_layer_training_weight(layer, float(state_dict[block_key].item()))
+        if alpha_key in state_dict or block_key in state_dict:
             layer.restore_alpha(saved_alpha)
 
 
@@ -154,7 +163,7 @@ class LoRACheckpointLoaderNode(LoRAInjectorNode):
 
     def build(self, **inputs) -> dict[str, TrainableModel]:
         self.validate_inputs(inputs)
-        from safetensors.torch import load_file
+        from .lora_file import load_lora_state_dict
 
         model = inputs["model"]
         if not isinstance(model, ComfyUNetTrainableModel):
@@ -165,7 +174,7 @@ class LoRACheckpointLoaderNode(LoRAInjectorNode):
 
         layout = inputs.get("project_layout") or ProjectLayout.from_paths_module()
         resolved = layout.resolve_safe_model_path(inputs["relative_path"], "lora")
-        state_dict = load_file(str(resolved))
+        state_dict = load_lora_state_dict(resolved)
 
         load_lora_into_registry(model.raw.lora_registry, state_dict, source_description=str(resolved))
 

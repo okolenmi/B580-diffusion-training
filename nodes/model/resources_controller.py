@@ -343,6 +343,8 @@ class LoRASDXLPreset(ResourcePreset):
 
         from safetensors.torch import load_file
 
+        from .lora_file import load_lora_state_dict
+
         layout = ProjectLayout.from_paths_module()
         checkpoint_sd = load_file(str(layout.resolve_safe_model_path(
             inputs["checkpoint_path"], "checkpoint")))
@@ -352,12 +354,12 @@ class LoRASDXLPreset(ResourcePreset):
             "frozen_lora_strength", self.inputs["frozen_lora_strength"].default)
         if frozen_lora:
             _lora_validator(frozen_lora_path)
-            frozen_lora_sd = load_file(str(layout.resolve_safe_model_path(frozen_lora_path, "lora")))
+            frozen_lora_sd = load_lora_state_dict(layout.resolve_safe_model_path(frozen_lora_path, "lora"))
 
         continue_lora_sd = None
         if continue_training:
             _lora_validator(continue_lora_path)
-            continue_lora_sd = load_file(str(layout.resolve_safe_model_path(continue_lora_path, "lora")))
+            continue_lora_sd = load_lora_state_dict(layout.resolve_safe_model_path(continue_lora_path, "lora"))
 
         unet_dtype = inputs.get("unet_dtype", self.inputs["unet_dtype"].default)
         if unet_dtype == "inherited":

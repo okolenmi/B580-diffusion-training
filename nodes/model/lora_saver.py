@@ -74,7 +74,12 @@ def save_trained_weights(model: TrainedWeightsExportable, relative_path: str,
     # the file metadata so a weak/odd LoRA is visible at save time rather
     # than after a long render session. Never blocks the save -- a summary
     # that fails to compute must not lose the weights.
-    metadata = None
+    from .lora_file import split_block_weights
+    # The per-module block weights are lifted out of the tensors and into the
+    # file's metadata (lora_file.py: a stray tensor key makes diffusers
+    # refuse the whole file). The summary is computed on the full dict, which
+    # still needs them.
+    file_tensors, metadata = split_block_weights(state_dict)
     try:
         from .lora import lora_health_summary
         import json
@@ -85,14 +90,14 @@ def save_trained_weights(model: TrainedWeightsExportable, relative_path: str,
         print(f"  [LoRA health] {rows}")
         for w in summary["warnings"]:
             print(f"  [LoRA health] WARNING: {w}")
-        metadata = {"lora_health": json.dumps(summary)}
+        metadata["lora_health"] = json.dumps(summary)
     except Exception as exc:  # noqa: BLE001 -- weights matter, the summary doesn't
         print(f"  [LoRA health] skipped ({type(exc).__name__}: {exc})")
     layout = layout or ProjectLayout.from_paths_module()
     resolved = layout.resolve_safe_model_path(relative_path, "lora")
     resolved.parent.mkdir(parents=True, exist_ok=True)
     tmp = resolved.with_suffix(resolved.suffix + ".tmp")
-    save_file(state_dict, str(tmp), metadata=metadata)
+    save_file(file_tensors, str(tmp), metadata=metadata or None)
     tmp.replace(resolved)
     return str(resolved)
 

@@ -260,7 +260,7 @@ def check_main_route_graph_phase_zeroes_steps_and_reports():
 
 
 def check_supervised_node_refuses_fused_graph():
-    print("[main-route node: fused optimizer + graph flag refused at build]")
+    print("[main-route node: fused optimizer / gate + graph flag refused at build]")
     from nodes.core import ExecutionContext
     from nodes.optimizer.handle import FusedOptimizerHandle
     from nodes.train.schedule import ConstantLRSchedule
@@ -311,19 +311,28 @@ def check_supervised_node_refuses_fused_graph():
         def trainable_parameters(self):
             return [torch.zeros(2, 2)]
 
-    node = SupervisedLoRATrainerNode()
-    node.context = ExecutionContext()
-    try:
-        node.build(model=_FakeModel(), batches=iter([]),
-                   optimizer=_FakeFused(), text_encoder=object(),
-                   lr_schedule=ConstantLRSchedule(lr=1e-4), steps=1,
-                   use_xpu_graph=True)
-    except ValueError as e:
-        check("fused" in str(e),
-              f"refusal must name the fused optimizer; got: {e}")
-        print("    PASS")
-        return
-    check(False, "fused optimizer + use_xpu_graph built without refusal")
+    def refusal(**extra):
+        node = SupervisedLoRATrainerNode()
+        node.context = ExecutionContext()
+        try:
+            node.build(model=_FakeModel(), batches=iter([]),
+                       optimizer=_FakeFused(), text_encoder=object(),
+                       lr_schedule=ConstantLRSchedule(lr=1e-4), steps=1,
+                       use_xpu_graph=True, **extra)
+        except ValueError as e:
+            return str(e)
+        return None
+
+    msg = refusal()
+    check(msg is not None and "fused" in msg,
+          f"refusal must name the fused optimizer; got: {msg}")
+    # The LoRA gate is a module-level tensor the forward reads; a captured
+    # graph freezes it. The refusal comes first and names the gate, so it
+    # is independent of which optimizer is wired.
+    msg = refusal(gate_enabled=True)
+    check(msg is not None and "gate_enabled" in msg,
+          f"gate + graph must be refused naming gate_enabled; got: {msg}")
+    print("    PASS")
 
 
 class _FacadeModel:

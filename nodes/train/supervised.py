@@ -211,7 +211,19 @@ class SupervisedLoRATrainerNode(TrainerNode):
         use_xpu_graph: bool = inputs.get(
             "use_xpu_graph", self.INPUTS["use_xpu_graph"].default)
         graph_runner = None
+        gate_enabled: bool = inputs.get(
+            "gate_enabled", self.INPUTS["gate_enabled"].default)
         if use_xpu_graph:
+            if gate_enabled:
+                raise ValueError(
+                    "use_xpu_graph is incompatible with gate_enabled: the LoRA "
+                    "timestep gate is a module-level tensor that the LoRA forward "
+                    "reads (nodes/model/lora.py _current_gate), and a captured "
+                    "graph freezes whatever it was at capture -- replay steps "
+                    "would read a stale or freed gate (or none at all, if it was "
+                    "unset when captured) and train at the wrong strength "
+                    "silently. Turn the gate off with graph capture, or capture "
+                    "off with the gate.")
             if is_fused:
                 raise ValueError(
                     "use_xpu_graph is incompatible with a fused optimizer: its "

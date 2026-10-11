@@ -970,6 +970,9 @@ def check_build_rejects_invalid_training_shapes():
     expect_valueerror({"_fused": True, "grad_clip_max_norm": 1.0}, "fused")
     expect_valueerror({"_fused": True, "use_xpu_graph": True}, "fused")
     expect_valueerror({"use_xpu_graph": True, "grad_accum": 2}, "grad_accum")
+    # The gate is a module-level tensor read inside the forward; a captured
+    # graph would freeze it. Refused loudly, with the gate named.
+    expect_valueerror({"use_xpu_graph": True, "gate_enabled": True}, "gate_enabled")
     expect_valueerror({"save_every_n_steps": 1, "save_prefix": "   "}, "save_prefix")
     print("    PASS")
 

@@ -507,3 +507,27 @@ its own 200-step parity run:
 --shape-bucket-multiple 32 --budget 11500 --batch 2 --use-xpu-graph`
 against the same without the flag. Also unproven: grad_accum>1 under
 capture on either route (refused until the parity run exists).
+
+## LoRA block weights travel in the file's metadata (CPU-proven, not on real weights)
+
+Built 2026-10-11. A LoRA's strength is `(alpha / rank) * block_weight`, and
+the weight now round-trips: it is carried as a per-module `.block_weight`
+tensor in memory and written to the safetensors **metadata**
+(`block_weights`, JSON) rather than as tensors, because diffusers' own
+kohya converter raises on any leftover key (executed on 0.41.0's
+`_convert_non_diffusers_lora_to_diffusers` with a toy state dict:
+three tensors convert, adding `.block_weight` raises). Proven on CPU with
+the real layer classes and real safetensors I/O
+(`smoke_test_lora_file_format.py`): plain LoRA and DoRA, all three
+extractors, the file holds only the four suffixes readers consume, and the
+weight survives save -> file -> load.
+
+**Not proven:** (1) a LoRA trained on the B580 with `block_weighting` set,
+saved, and loaded into diffusers and ComfyUI -- the converter claim above
+is executed code, but loading a *real* file there was not done, and
+ComfyUI's loader was not read. (2) That external tools apply the trained
+strength: they read `alpha / rank` and know nothing of the metadata, so a
+LoRA trained at block weight w behaves at strength 1 in them. Baking the
+weight into the tensors (as the phase-split combine already does) would
+make it portable but changes what `lora_continue_from` restores; decide
+before relying on block weights outside this project.

@@ -124,11 +124,11 @@ first).
 | `GET /monitor/{stream}/stream` | existing SSE; now also `node:<id>` and `graph:run` |
 
 Error codes `template_not_found`, `template_invalid`,
-`templates_unavailable` are in `backend/02-api-reference.md`.
+`templates_unavailable` are in `docs/design/backend/02-api-reference.md`.
 
 ## Frontend
 
-Pure, unit-tested modules (`node --test frontend/tests`):
+Pure, unit-tested modules (`node --test frontend/tests/*.test.mjs`):
 `board/layout.js` (grid with push-down and compaction, move/resize/collapse,
 keyboard nudge), `board/model.js` (the tray, auto-fill from a graph, field
 values in the draft graph, what Run will send, dirty detection),
@@ -209,4 +209,4 @@ what the ledger knows about, and the load peak was not measured; the
 
 - [`14-node-attached-monitor-widgets.md`](14-node-attached-monitor-widgets.md)
   — the proposal this implements.
-- [`backend/09-event-contract.md`](backend/09-event-contract.md).
+- [`docs/design/backend/09-event-contract.md`](backend/09-event-contract.md).

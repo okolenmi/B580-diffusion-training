@@ -1,7 +1,9 @@
-# Decision note: LoRA training defaults for new runs (C3 — awaiting approval)
+# Decision note: LoRA training defaults for new runs (C3 — APPROVED (b), landed 2026-10-11)
 
-Status: **proposed, not implemented. Do not change any default until the
-maintainer approves one option below.**
+Status: **approved option (b), implemented.** New graphs/configs without
+stored values default to constant LR + `kohya_default` + cond path off
+(arm-5 configuration). Saved runs keep stored values. `kohya_plus`
+opt-in pending B3. See `CHANGELOG.md`.
 
 ## What B established (evidence, not argument)
 

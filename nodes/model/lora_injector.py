@@ -295,19 +295,24 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         ),
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
         "target_modules": Port(
-            name="target_modules", type=Any, required=False, default=None,
-            doc="Which Linear layers get an adapter. None / \"attention\" (historical "
+            name="target_modules", type=Any, required=False, default="kohya_default",
+            doc="Which Linear layers get an adapter. \"attention\" (the pre-C3 "
                 "default): to_q, to_k, to_v, to_out.0 (560 modules on SDXL). "
-                "\"kohya_default\": also ff.net.0.proj, ff.net.2, proj_in, proj_out "
-                "(722, what kohya sd-scripts adapts). \"kohya_plus\": same UNet set "
-                "with the conditioning-path embeddings kept (726 with the default "
+                "\"kohya_default\" (default since C3): also ff.net.0.proj, "
+                "ff.net.2, proj_in, proj_out (722, what kohya sd-scripts adapts; "
+                "best renders in the B study). \"kohya_plus\": same UNet set "
+                "with the conditioning-path embeddings kept (726 with "
                 "target_conditioning_path=True). Or a comma-separated list of "
-                "layer-name suffixes. (Before this was wired it was ignored.)"),
+                "layer-name suffixes. Saved graphs keep their stored value; "
+                "only new graphs take the default."),
         "target_conditioning_path": Port(
-            name="target_conditioning_path", type=bool, required=False, default=True,
-            doc="True (historical default): also adapt time_embed.* and label_emb.* "
-                "(+4 modules on SDXL, 564 total). False: attention only (560), the "
-                "kohya/diffusers default. A/B switch for LoRA quality debugging.",
+            name="target_conditioning_path", type=bool, required=False, default=False,
+            doc="True: also adapt time_embed.* and label_emb.* (+4 modules on "
+                "SDXL). False (default since C3): attention/FF only, the "
+                "kohya/diffusers default -- the B study's best arm was "
+                "kohya_default with the cond path off (722). Pre-C3 default "
+                "was True (564 with attention). Saved graphs keep their "
+                "stored value. A/B switch retained for quality debugging.",
         ),
         "use_checkpoint": Port(
             name="use_checkpoint", type=bool, required=False, default=True,
@@ -355,7 +360,8 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
             scaling_policy=inputs.get("scaling_policy"),
             dropout=inputs.get("dropout", self.INPUTS["dropout"].default),
-            target_modules=inputs.get("target_modules"),
+            target_modules=inputs.get(
+                "target_modules", self.INPUTS["target_modules"].default),
             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
             adapter_strategy=inputs.get("adapter_strategy"),
             frozen_weight_store_factory=inputs.get("frozen_weight_store"),

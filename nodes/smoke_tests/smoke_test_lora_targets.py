@@ -22,22 +22,28 @@ def check(condition: bool, message: str):
 
 
 def check_config_defaults_and_mapping():
-    print("[config: new keys parse, default to current behaviour, mapped]")
+    print("[config: C3 defaults (constant/kohya_default/cond-off), old values parse, mapped]")
     from nodes.config_model import CommonSettings, LoRATuning
     t = LoRATuning()
-    check(t.target_modules == "attention",
-          f"default preset must stay attention, got {t.target_modules!r}")
-    check(t.target_conditioning_path is True,
-          "cond path must default on (historical behaviour)")
+    check(t.target_modules == "kohya_default",
+          f"C3 default preset must be kohya_default, got {t.target_modules!r}")
+    check(t.target_conditioning_path is False,
+          "cond path must default off since C3 (arm-5 configuration)")
     c = CommonSettings()
-    check(c.lr_schedule == "cosine",
-          f"schedule default must stay cosine, got {c.lr_schedule!r}")
-    c2 = CommonSettings.model_validate({"lr_schedule": "constant"})
-    check(c2.lr_schedule == "constant", "constant must parse")
+    check(c.lr_schedule == "constant",
+          f"C3 schedule default must be constant, got {c.lr_schedule!r}")
     t2 = LoRATuning.model_validate({"target_modules": "kohya_plus",
                                     "target_conditioning_path": False})
     check(t2.target_modules == "kohya_plus"
           and t2.target_conditioning_path is False, "preset off-combo parse")
+    t_old = LoRATuning.model_validate({"target_modules": "attention",
+                                       "target_conditioning_path": True})
+    check(t_old.target_modules == "attention"
+          and t_old.target_conditioning_path is True,
+          "old stored values must still parse (saved runs keep theirs)")
+    c_old = CommonSettings.model_validate({"lr_schedule": "cosine"})
+    check(c_old.lr_schedule == "cosine",
+          "old stored cosine must still parse")
     try:
         LoRATuning.model_validate({"target_modules": "everything"})
     except Exception:
@@ -49,6 +55,18 @@ def check_config_defaults_and_mapping():
           == "tuning.target_modules", "flat mapping for target_modules")
     check(FLAT_TO_SECTION_MAP.get("lora_target_conditioning_path")
           == "tuning.target_conditioning_path", "flat mapping for cond path")
+    print("    PASS")
+
+
+def check_node_port_defaults():
+    print("[node Ports default to the C3 arm-5 configuration]")
+    from nodes.model.lora_injector import ComfyUNetLoRANode
+    tm = ComfyUNetLoRANode.INPUTS["target_modules"].default
+    cp = ComfyUNetLoRANode.INPUTS["target_conditioning_path"].default
+    check(tm == "kohya_default",
+          f"target_modules Port default must be kohya_default, got {tm!r}")
+    check(cp is False,
+          "target_conditioning_path Port default must be False since C3")
     print("    PASS")
 
 
@@ -82,6 +100,7 @@ def check_preset_module_counts():
 
 def main():
     check_config_defaults_and_mapping()
+    check_node_port_defaults()
     check_preset_module_counts()
     print()
     print("=" * 60)

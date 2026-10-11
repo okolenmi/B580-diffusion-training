@@ -306,6 +306,7 @@ def extract_combined_weights(registry) -> dict:
     import torch
 
     from .dora_layer import DoRAConv2d, DoRALinear
+    from .lora import layer_training_weight
 
     weights = {}
     for full_name, _parent, _attr, layer in registry:
@@ -317,6 +318,11 @@ def extract_combined_weights(registry) -> dict:
             weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
             weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
             weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
+            # Same key lora.extract_lora_weights writes: this is the path the
+            # graph route saves through, and without it the trained block
+            # weight is dropped (D2 only reached the other extractor).
+            weights[f"{key}.block_weight"] = torch.tensor(
+                [layer_training_weight(layer)], dtype=torch.float32)
             if is_dora:
                 weights[f"{key}.dora_scale"] = root.magnitude.detach().cpu().contiguous()
             continue
@@ -340,6 +346,11 @@ def extract_combined_weights(registry) -> dict:
         weights[f"{key}.lora_down.weight"] = A_cat.detach().cpu().contiguous()
         weights[f"{key}.lora_up.weight"] = B_scaled_cat.detach().cpu().contiguous()
         weights[f"{key}.alpha"] = torch.tensor([float(A_cat.shape[0])], dtype=torch.float32)
+        # Each generation's own scaling (block weight included) is already
+        # baked into B above and alpha == rank, so the effective strength is
+        # exactly 1: say so, or a loader would re-apply the *config's* weight
+        # on top of the baked one.
+        weights[f"{key}.block_weight"] = torch.tensor([1.0], dtype=torch.float32)
     return weights
 
 
@@ -359,6 +370,7 @@ def extract_own_generation_weights(registry) -> dict:
     import torch
 
     from .dora_layer import DoRAConv2d, DoRALinear
+    from .lora import layer_training_weight
 
     weights = {}
     for full_name, _parent, _attr, layer in registry:
@@ -367,6 +379,8 @@ def extract_own_generation_weights(registry) -> dict:
         weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
         weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
         weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
+        weights[f"{key}.block_weight"] = torch.tensor(
+            [layer_training_weight(layer)], dtype=torch.float32)
         if isinstance(layer, (DoRALinear, DoRAConv2d)):
             weights[f"{key}.dora_scale"] = layer.magnitude.detach().cpu().contiguous()
     return weights

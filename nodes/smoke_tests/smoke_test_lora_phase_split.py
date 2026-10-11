@@ -363,6 +363,10 @@ def check_end_to_end_node():
         "lora_unet_root_proj.lora_down.weight",
         "lora_unet_root_proj.lora_up.weight",
         "lora_unet_root_proj.alpha",
+        # extract_own_generation_weights writes the block weight like every
+        # extractor does (nodes/model/lora_file.py moves it to the file's
+        # metadata on save), so a saved phase file restores its strength.
+        "lora_unet_root_proj.block_weight",
     }
     # model.trained_state_dict() now reflects the combined (post-split) stack
     full = model.trained_state_dict()

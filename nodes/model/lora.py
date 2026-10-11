@@ -633,6 +633,41 @@ def _is_adapter_layer(layer, layer_classes) -> bool:
     return isinstance(layer, tuple(layer_classes))
 
 
+def layer_training_weight(layer) -> float:
+    """The block weight an adapter layer trains at, for any layer kind.
+
+    `LoRALinear`/`LoRAConv2d` keep it as `training_weight`. A `DoRA*` layer
+    wraps a LoRA layer and keeps it on `_lora`; the NF4 layers and the
+    phase-split generations never stored it, only the product
+    `scaling == (alpha / rank) * weight`, so it is recovered from that.
+    One accessor, so save and load cannot disagree about which layers have
+    the attribute (the first version read `layer.training_weight` and raised
+    AttributeError on a DoRA layer)."""
+    direct = getattr(layer, "training_weight", None)
+    if direct is not None:
+        return float(direct)
+    inner = getattr(layer, "_lora", None)
+    wrapped = getattr(inner, "training_weight", None)
+    if wrapped is not None:
+        return float(wrapped)
+    alpha = getattr(layer, "alpha", 0.0)
+    rank = getattr(layer, "rank", 0)
+    scaling = getattr(layer, "scaling", None)
+    if scaling is not None and alpha and rank:
+        return float(scaling) * rank / float(alpha)
+    return 1.0
+
+
+def _set_layer_training_weight(layer, weight: float) -> None:
+    """Counterpart of `layer_training_weight`: the weight lands where the
+    layer's own code reads it (a DoRA layer's `restore_alpha` reads
+    `_lora.training_weight`)."""
+    layer.training_weight = weight
+    inner = getattr(layer, "_lora", None)
+    if inner is not None:
+        inner.training_weight = weight
+
+
 def extract_lora_weights(registry: List[Tuple[str, nn.Module, str, nn.Module]],
                          layer_classes=None
                          ) -> Dict[str, torch.Tensor]:
@@ -654,7 +689,7 @@ def extract_lora_weights(registry: List[Tuple[str, nn.Module, str, nn.Module]],
         # of files written before it existed keep the old behaviour (config
         # weight applies) -- see load_lora_into_model.
         weights[f"{lora_key}.block_weight"] = torch.tensor(
-            [lora_layer.training_weight], dtype=torch.float32)
+            [layer_training_weight(lora_layer)], dtype=torch.float32)
     return weights
 
 
@@ -685,14 +720,14 @@ def load_lora_into_model(registry: List[Tuple[str, nn.Module, str, nn.Module]],
             block_key = f"{lora_key}.block_weight"
             if block_key in state_dict:
                 saved_weight = float(state_dict[block_key].item())
-                if abs(saved_weight - lora_layer.training_weight) > 1e-6:
+                current = layer_training_weight(lora_layer)
+                if abs(saved_weight - current) > 1e-6:
                     print(f"    [LoRA] {full_name}: block_weight mismatch "
-                          f"(checkpoint={saved_weight}, "
-                          f"config={lora_layer.training_weight}). "
+                          f"(checkpoint={saved_weight}, config={current}). "
                           f"Using checkpoint value.")
-                lora_layer.training_weight = saved_weight
+                _set_layer_training_weight(lora_layer, saved_weight)
             lora_layer.scaling = ((lora_layer.alpha / lora_layer.rank)
-                                  * lora_layer.training_weight)
+                                  * layer_training_weight(lora_layer))
 
 
 def merge_lora_into_unet(registry: List[Tuple[str, nn.Module, str, nn.Module]],
@@ -763,7 +798,13 @@ def lora_health_summary(state_dict: dict) -> dict:
         bw = state_dict.get(mod + ".block_weight")
         bw = float(bw.reshape(-1)[0]) if bw is not None else 1.0
         with torch.no_grad():
-            dw = ((alpha / rank) * bw * (up.float() @ down.float())).norm().item()
+            # Conv adapters carry 4-D tensors (down: rank,in,kh,kw; up:
+            # out,rank,1,1); the delta's norm is that of the flattened
+            # product, and `@` on the 4-D tensors raised, which skipped the
+            # whole summary for any Conv2d LoRA (target_all / block weights).
+            dw = ((alpha / rank) * bw
+                  * (up.float().reshape(up.shape[0], -1)
+                     @ down.float().reshape(rank, -1))).norm().item()
         by_group.setdefault(lora_module_group(mod), []).append(dw)
     groups = {g: {"n": len(v), "median_dW": statistics.median(v)}
               for g, v in sorted(by_group.items()) if v}

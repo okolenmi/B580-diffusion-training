@@ -189,6 +189,25 @@ export class GraphDoc {
     return payload;
   }
 
+  /** Everything needed to rebuild the canvas exactly, for the browser-side
+      draft (editor/draft.js). Unlike the run payload this keeps params that
+      are empty-looking or fed by a wire, verbatim: a draft that dropped
+      them would hand back a different graph than the one that was open. */
+  toDraft() {
+    const layout = {};
+    const nodes = [...this.nodes.values()].map((n) => {
+      layout[n.id] = { x: n.x, y: n.y };
+      return { id: n.id, class_name: n.class_name, params: { ...n.params } };
+    });
+    return {
+      format: 1,
+      nodes,
+      edges: this.edges.map((e) => ({ ...e })),
+      layout,
+      memory: { ...this.memory },
+    };
+  }
+
   toLibraryPayload(description = "") {
     const run = this.toRunPayload();
     const layout = {};

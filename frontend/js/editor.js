@@ -27,6 +27,7 @@ import { Palette } from "./editor/palette.js";
 import { Executions } from "./editor/executions.js";
 import { Library } from "./editor/library.js";
 import { GraphSettings } from "./editor/settings.js";
+import { createDraftSaver, readDraft } from "./editor/draft.js";
 import { describeRefusal, panelModel } from "./lib/memory_panel.js";
 
 
@@ -247,8 +248,11 @@ async function boot() {
     box.append(line);
   }
   let memoryTimer = 0;
+  // Installed after the restore below; until then changes are not saved.
+  let draftSaver = null;
 
   doc.onChange = (reason, origin) => {
+    if (draftSaver) draftSaver.notify();
     if (reason === "memory") {
       // A budget edit changes "will it fit", not the canvas.
       clearTimeout(memoryTimer);
@@ -289,6 +293,25 @@ async function boot() {
 
   // infinite plane: open on the origin circle at the viewport center
   canvas.centerOn(0, 0);
+
+  // The canvas is a working draft that outlives a reload: restore the one
+  // this browser kept, then start keeping it. (Saved graphs live in the
+  // library; this is only "what was on the canvas".)
+  const draft = readDraft();
+  if (draft) {
+    doc.load(draft);
+    canvas.frameAll();
+    const first = doc.nodes.keys().next();
+    if (!first.done) canvas.selectNode(first.value);
+    log(`Restored your last canvas (${doc.size} node${doc.size === 1 ? "" : "s"}) from this browser.`);
+  }
+  draftSaver = createDraftSaver(doc);
+  // typed-but-unconfirmed field text is already in doc (see widgets.js), so
+  // a final write here captures it
+  window.addEventListener("pagehide", () => draftSaver.flush());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") draftSaver.flush();
+  });
 
   // executions + library
   const executions = new Executions(el("exec-list"), canvas, {

@@ -166,6 +166,40 @@ def test_async_bus_behavior():
     asyncio.run(_async_checks())
 
 
+async def _replay_longer_than_the_live_backlog_cap():
+    import monitor_bus as mb
+    bus = MonitorBus()
+    n = mb.QUEUE_MAX * 4 + 7  # a few thousand steps: any ordinary run
+    for i in range(n):
+        bus.report("long", {"step": i})
+    # Before the fix this raised asyncio.QueueFull out of subscribe().
+    q = bus.subscribe("long")
+    check(q.qsize() == n,
+          f"a subscriber to {n} stored frames gets all of them replayed (got {q.qsize()})")
+    first = q.get_nowait()
+    check(first == 'data: {"step": 0}\n\n', f"in order, from the oldest (got {first!r})")
+
+    # The live backlog stays bounded for a client that then stops reading:
+    # the cap is QUEUE_MAX above the replay, not unlimited.
+    while not q.empty():
+        q.get_nowait()
+    bus.unsubscribe("long", q)
+    q = bus.subscribe("long")
+    replayed = q.qsize()
+    for i in range(n, n + mb.QUEUE_MAX * 3):
+        bus.report("long", {"step": i})
+    await asyncio.sleep(0.05)  # let the loop run the call_soon_threadsafe puts
+    check(q.qsize() <= replayed + mb.QUEUE_MAX,
+          f"a stalled subscriber stays bounded (replay {replayed} + cap {mb.QUEUE_MAX}, "
+          f"got {q.qsize()})")
+    check(q.qsize() == replayed + mb.QUEUE_MAX,
+          f"and it did fill to the cap, dropping the oldest reports (got {q.qsize()})")
+
+
+def test_replay_longer_than_the_live_backlog_cap_does_not_raise():
+    asyncio.run(_replay_longer_than_the_live_backlog_cap())
+
+
 def test_report_never_raises_into_the_caller():
     """docs 08 N-08: report() runs json.dumps on the *calling* thread,
     which is the training step. An unserializable value (a tensor, a
@@ -266,6 +300,7 @@ def main():
     test_a_second_build_against_the_same_monitor_id_clears_the_first_runs_history()
     test_clear_broadcasts_to_a_live_subscriber()
     test_async_bus_behavior()
+    test_replay_longer_than_the_live_backlog_cap_does_not_raise()
     test_report_never_raises_into_the_caller()
     test_a_live_subscriber_sees_the_frames_after_a_bad_one()
     test_unserializable_frames_warn_once_not_per_frame()

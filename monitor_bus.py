@@ -95,11 +95,21 @@ class MonitorBus:
         handler) -- captures the loop on first use, same as SSEManager."""
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
-        for item in self._history[monitor_id]:
-            payload = self._encode(item)
-            if payload is not None:
-                q.put_nowait(payload)
+        # The replay is not "backlog": it is the whole stored history,
+        # up to HISTORY_LIMIT frames, and it must fit. A queue capped at
+        # QUEUE_MAX alone raised QueueFull out of this method as soon as
+        # a stream had stored more than QUEUE_MAX frames -- i.e. on every
+        # (re)connect after a run of more than 512 steps -- which killed
+        # the SSE response, and the browser reconnected into the same
+        # failure forever (seen as a monitor that stayed empty on the
+        # second run, and the server logging the exception repeatedly).
+        # So the cap is QUEUE_MAX *above* the replay: a client that
+        # stalls afterwards is still bounded, by the documented amount.
+        history = tuple(self._history[monitor_id])
+        replay = [p for p in map(self._encode, history) if p is not None]
+        q: asyncio.Queue = asyncio.Queue(maxsize=len(replay) + QUEUE_MAX)
+        for payload in replay:
+            q.put_nowait(payload)
         self._subscribers[monitor_id].append(q)
         return q
 

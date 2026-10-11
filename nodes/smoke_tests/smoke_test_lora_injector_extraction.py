@@ -183,7 +183,7 @@ def check_node_thin_wrapper_resolves_port_defaults_correctly():
     check("model" in result, result)
     call = rec.wrapper_calls[0]
     check(call["device"] == "xpu" and call["use_checkpoint"] is True, call)
-    # C3 defaults: an unwired node builds the arm-5 configuration
+    # C3 defaults: an unwired node builds the default configuration
     # (kohya_label = 724, cond off), not the historical attention+cond.
     from nodes.model.lora import TARGETS_KOHYA_LABEL
     check(call["lora_config"] == LoRAConfig(rank=64, alpha=1.0, dropout=0.0,

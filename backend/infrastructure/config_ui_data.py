@@ -85,15 +85,16 @@ EXTRAS: dict[str, ExtraDef] = {
  'group': '0. LAUNCH',
  'subgroup': 'Method-Specific Settings'},
     'tuning.target_modules': {'label': 'LoRA Target Modules',
- 'help': 'Which Linear layers get an adapter. attention (560 UNet modules, default); '
-         'kohya_default (722: adds feed-forward/projection linears, what kohya adapts); '
-         'kohya_plus (726: also keeps the time/label embedding modules). '
-         'CAUTION: kohya_plus renders best on captionless data but bakes dataset '
-         'constants into the global conditioning path -- see the B3 check.',
+ 'help': 'Which Linear layers get an adapter. kohya_label (724, default): kohya\'s set '
+         '(722: attention plus the feed-forward/projection linears) plus label_emb -- '
+         'the best-rendering arm of the B study. attention (560: attention only); '
+         'kohya_default (722: no cond path); kohya_plus (726: also keeps time_embed, '
+         'which measured WORSE than label_emb, so it stays opt-in).',
  'group': '0. LAUNCH',
  'subgroup': 'Method-Specific Settings',
  'choice_labels': {'attention': 'Attention only (560)',
                    'kohya_default': 'Kohya default (722)',
+                   'kohya_label': 'Kohya + label_emb (724, default)',
                    'kohya_plus': 'Kohya plus embeddings (726)'}},
     'tuning.target_conditioning_path': {'label': 'Adapt Conditioning Path',
  'help': 'Also adapt time_embed.* and label_emb.* (+4 modules). On with attention '

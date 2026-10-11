@@ -167,14 +167,16 @@ class LoRATuning(BaseModel):
     dropout: float = Field(default=0.0, ge=0.0, le=0.9)
     lora_output: str = Field(default="", description="Path to save trained LoRA weights")
     target_all: bool = Field(default=False, description="If True, inject LoRA into every Linear/Conv2d in weighted blocks (Full LoRA).")
-    target_modules: Literal["attention", "kohya_default", "kohya_plus"] = Field(
-        default="kohya_default",
-        description="Which Linear layers get an adapter. 'attention' (default): to_q/to_k/to_v/"
-                    "to_out.0 (560 UNet modules). 'kohya_default': also ff.net.0.proj, ff.net.2, "
-                    "proj_in, proj_out (722 -- what kohya sd-scripts adapts). 'kohya_plus': same "
-                    "UNet set with the conditioning-path embeddings kept (726 with default "
-                    "target_conditioning_path). See the kohya_plus render evidence before "
-                    "changing this from the default.")
+    target_modules: Literal["attention", "kohya_default", "kohya_label", "kohya_plus"] = Field(
+        default="kohya_label",
+        description="Which Linear layers get an adapter. 'kohya_label' (default): kohya's set "
+                    "(to_q/to_k/to_v/to_out.0, ff.net.0.proj, ff.net.2, proj_in, proj_out = 722) "
+                    "plus label_emb (724) -- the best-rendering arm of the B study. 'attention': "
+                    "attention only (560). 'kohya_default': the 722 set with no cond path (722). "
+                    "'kohya_plus': the same UNet set with the conditioning-path embeddings kept "
+                    "(726 with target_conditioning_path=True); time_embed measured worse than "
+                    "label_emb, so it stays opt-in. See "
+                    "archive/bad-LoRA-investigation/MEASURED-original-symptom.md.")
     target_conditioning_path: bool = Field(
         default=False,
         description="Also adapt time_embed.* and label_emb.* (+4 modules). True (default) keeps "

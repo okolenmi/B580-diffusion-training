@@ -184,10 +184,10 @@ def check_node_thin_wrapper_resolves_port_defaults_correctly():
     call = rec.wrapper_calls[0]
     check(call["device"] == "xpu" and call["use_checkpoint"] is True, call)
     # C3 defaults: an unwired node builds the arm-5 configuration
-    # (kohya_default, cond off), not the historical attention+cond.
-    from nodes.model.lora import TARGETS_KOHYA_DEFAULT
+    # (kohya_label = 724, cond off), not the historical attention+cond.
+    from nodes.model.lora import TARGETS_KOHYA_LABEL
     check(call["lora_config"] == LoRAConfig(rank=64, alpha=1.0, dropout=0.0,
-                                            target_modules=list(TARGETS_KOHYA_DEFAULT),
+                                            target_modules=list(TARGETS_KOHYA_LABEL),
                                             target_conditioning_path=False),
           call["lora_config"])
 
@@ -202,10 +202,10 @@ def check_node_thin_wrapper_resolves_port_defaults_correctly():
     check(call2["device"] == "cpu", call2["device"])
     check(call2["use_checkpoint"] is False, call2["use_checkpoint"])
     # Explicit values flow through; unwired target ports take the C3
-    # defaults (kohya_default, cond off), same as the check above.
-    from nodes.model.lora import TARGETS_KOHYA_DEFAULT
+    # defaults (kohya_label = 724, cond off), same as the check above.
+    from nodes.model.lora import TARGETS_KOHYA_LABEL
     check(call2["lora_config"] == LoRAConfig(rank=16, alpha=4.0, dropout=0.0,
-                                             target_modules=list(TARGETS_KOHYA_DEFAULT),
+                                             target_modules=list(TARGETS_KOHYA_LABEL),
                                              target_conditioning_path=False),
           call2["lora_config"])
     print("    PASS")

@@ -295,26 +295,30 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
         ),
         "dropout": Port(name="dropout", type=float, required=False, default=0.0),
         "target_modules": Port(
-            name="target_modules", type=Any, required=False, default="kohya_default",
-            doc="Which Linear layers get an adapter. \"attention\" (the pre-C3 "
-                "default): to_q, to_k, to_v, to_out.0 (560 modules on SDXL). "
-                "\"kohya_default\" (default since C3): also ff.net.0.proj, "
-                "ff.net.2, proj_in, proj_out (722, what kohya sd-scripts adapts; "
-                "best renders in the B study). \"kohya_plus\": same UNet set "
-                "with the conditioning-path embeddings kept (726 with "
-                "target_conditioning_path=True). Comma-joined preset+patterns "
-                "(\"kohya_default,label_emb\" = 724) isolates one cond tower. "
-                "Or a comma-separated list of "
-                "layer-name suffixes. Saved graphs keep their stored value; "
-                "only new graphs take the default."),
+            name="target_modules", type=Any, required=False, default="kohya_label",
+            doc="Which Linear layers get an adapter. \"kohya_label\" (default "
+                "since 2026-10-11): kohya's 722 set (to_q/to_k/to_v/to_out.0, "
+                "ff.net.0.proj, ff.net.2, proj_in, proj_out) plus label_emb "
+                "(724) -- the best-rendering arm of the B study. \"attention\": "
+                "the pre-C3 default, attention only (560). \"kohya_default\": "
+                "the 722 set with no cond path (722). \"kohya_plus\": same UNet "
+                "set with the conditioning-path embeddings kept (726 with "
+                "target_conditioning_path=True) -- time_embed measured worse "
+                "than label_emb, so it stays opt-in. Comma-joined "
+                "preset+patterns (\"kohya_default,label_emb\") is the 724 form. "
+                "Or a comma-separated list of layer-name suffixes. Saved "
+                "graphs keep their stored value; only new graphs take the "
+                "default."),
         "target_conditioning_path": Port(
             name="target_conditioning_path", type=bool, required=False, default=False,
             doc="True: also adapt time_embed.* and label_emb.* (+4 modules on "
-                "SDXL). False (default since C3): attention/FF only, the "
-                "kohya/diffusers default -- the B study's best arm was "
-                "kohya_default with the cond path off (722). Pre-C3 default "
-                "was True (564 with attention). Saved graphs keep their "
-                "stored value. A/B switch retained for quality debugging.",
+                "SDXL). False (default since C3): no cond path -- "
+                "time_embed measured worse than label_emb in the B study "
+                "(726 < 724 with label held constant), so it stays opt-in. "
+                "label_emb alone is the default via the kohya_label preset. "
+                "Pre-C3 default was True (564 with attention). Saved graphs "
+                "keep their stored value. A/B switch retained for quality "
+                "debugging.",
         ),
         "use_checkpoint": Port(
             name="use_checkpoint", type=bool, required=False, default=True,

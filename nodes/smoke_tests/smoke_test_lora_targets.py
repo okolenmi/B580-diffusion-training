@@ -22,13 +22,13 @@ def check(condition: bool, message: str):
 
 
 def check_config_defaults_and_mapping():
-    print("[config: C3 defaults (constant/kohya_default/cond-off), old values parse, mapped]")
+    print("[config: defaults (constant/kohya_label/cond-off), old values parse, mapped]")
     from nodes.config_model import CommonSettings, LoRATuning
     t = LoRATuning()
-    check(t.target_modules == "kohya_default",
-          f"C3 default preset must be kohya_default, got {t.target_modules!r}")
+    check(t.target_modules == "kohya_label",
+          f"default preset must be kohya_label (724), got {t.target_modules!r}")
     check(t.target_conditioning_path is False,
-          "cond path must default off since C3 (arm-5 configuration)")
+          "cond path must default off (time_embed measured worse than label_emb)")
     c = CommonSettings()
     check(c.lr_schedule == "constant",
           f"C3 schedule default must be constant, got {c.lr_schedule!r}")
@@ -36,6 +36,11 @@ def check_config_defaults_and_mapping():
                                     "target_conditioning_path": False})
     check(t2.target_modules == "kohya_plus"
           and t2.target_conditioning_path is False, "preset off-combo parse")
+    # The arm-5 config (722) must remain expressible as a stored value:
+    # graphs and configs written before this default change keep theirs.
+    t5 = LoRATuning.model_validate({"target_modules": "kohya_default"})
+    check(t5.target_modules == "kohya_default",
+          "the previous default must still parse as a stored value")
     t_old = LoRATuning.model_validate({"target_modules": "attention",
                                        "target_conditioning_path": True})
     check(t_old.target_modules == "attention"
@@ -59,19 +64,19 @@ def check_config_defaults_and_mapping():
 
 
 def check_node_port_defaults():
-    print("[node Ports default to the C3 arm-5 configuration]")
+    print("[node Ports default to the 724 configuration]")
     from nodes.model.lora_injector import ComfyUNetLoRANode
     tm = ComfyUNetLoRANode.INPUTS["target_modules"].default
     cp = ComfyUNetLoRANode.INPUTS["target_conditioning_path"].default
-    check(tm == "kohya_default",
-          f"target_modules Port default must be kohya_default, got {tm!r}")
+    check(tm == "kohya_label",
+          f"target_modules Port default must be kohya_label, got {tm!r}")
     check(cp is False,
-          "target_conditioning_path Port default must be False since C3")
+          "target_conditioning_path Port default must stay False")
     print("    PASS")
 
 
 def check_preset_module_counts():
-    print("[presets on meta SDXL UNet: 564 / 560 / 726 / 722]")
+    print("[presets on meta SDXL UNet: 564 / 560 / 726 / 724 / 722]")
     from nodes.model.lora import LoRAConfig, inject_lora_into_unet
     from nodes.model.unet import UNetModel
     from nodes.model.unet_wrapper import ComfyUNetWrapper as W
@@ -82,6 +87,8 @@ def check_preset_module_counts():
              ("attention", False, 560),
              ("kohya_default", True, 726),
              ("kohya_default", False, 722),
+             ("kohya_label", True, 726),
+             ("kohya_label", False, 724),
              ("kohya_plus", True, 726)]
     for preset, cond, want in cases:
         # Fresh model per case: injection wraps Linear layers in place, so a

@@ -134,6 +134,15 @@ def compute_lora_gate(t: torch.Tensor, train_low: float, train_high: float,
 TARGETS_ATTENTION = ["to_q", "to_k", "to_v", "to_out.0"]
 TARGETS_KOHYA_DEFAULT = TARGETS_ATTENTION + ["ff.net.0.proj", "ff.net.2", "proj_in", "proj_out"]
 TARGETS_KOHYA_PLUS = list(TARGETS_KOHYA_DEFAULT)
+#: The 722 set plus `label_emb` alone (724 modules with the conditioning
+#: path off). The B study's arm 6 -- constant LR, rank 64/alpha 48,
+#: test2 -- rendered best of six arms of the maintainer's own judgement
+#: (backgrounds most detailed, dataset vibe best represented), and the
+#: isolation reads: label_emb helps (724 > 722), time_embed hurts
+#: (726 < 724 with label held constant). Because it is the *default for
+#: new runs* (C3, 2026-10-11), it is a named preset rather than the
+#: comma-joined "kohya_default,label_emb" string it started as.
+TARGETS_KOHYA_LABEL = TARGETS_KOHYA_DEFAULT + ["label_emb"]
 
 
 @dataclass
@@ -156,15 +165,16 @@ class LoRAConfig:
             self.target_modules = list(TARGETS_ATTENTION)
         elif isinstance(self.target_modules, str):
             # Convenience for graph/UI ports, which carry strings: a preset name
-            # ("attention", "kohya_default", "kohya_plus"), a comma-separated
-            # pattern list, or preset+extras joined by "," ("kohya_default,
-            # label_emb" = the 722 set plus label_emb alone = 724, for the
-            # time-vs-label isolation run).
+            # ("attention", "kohya_default", "kohya_plus", "kohya_label"), a
+            # comma-separated pattern list, or preset+extras joined by ","
+            # ("kohya_default,label_emb" = the 722 set plus label_emb alone =
+            # 724, the time-vs-label isolation form behind "kohya_label").
             # "kohya_plus" resolves to the same UNet patterns as
             # "kohya_default"; the "+" is target_conditioning_path keeping
             # time_embed.*/label_emb.*: 726 modules on SDXL instead of 722.
             presets = {"attention": TARGETS_ATTENTION, "kohya_default": TARGETS_KOHYA_DEFAULT,
-                       "kohya_plus": TARGETS_KOHYA_PLUS}
+                       "kohya_plus": TARGETS_KOHYA_PLUS,
+                       "kohya_label": TARGETS_KOHYA_LABEL}
             raw = self.target_modules.strip()
             if raw in presets:
                 self.target_modules = list(presets[raw])

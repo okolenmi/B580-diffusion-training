@@ -163,7 +163,8 @@ def main() -> int:
     ap.add_argument("--lora", action="append", default=[],
                     help="label=path of a LoRA to score; repeatable")
     ap.add_argument("--target-modules", default="attention",
-                    choices=["attention", "kohya_default", "kohya_plus"],
+                    choices=["attention", "kohya_default", "kohya_plus",
+                             "kohya_default,label_emb"],
                     help="injection target set: must COVER every scored "
                          "file's keys (load refuses partial). Use "
                          "kohya_default + cond path on (726) to score "

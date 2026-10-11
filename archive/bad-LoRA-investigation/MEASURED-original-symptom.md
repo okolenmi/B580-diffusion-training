@@ -25,6 +25,7 @@ identical) to sit under the wedge zone; arms 1-2 kept resident.
 | `B_arm3_cosine_plus` | cosine | kohya_plus | 726 | 170.9M |
 | `B_arm4_const_plus` | constant | kohya_plus | 726 | 170.9M |
 | `B_arm5_const_722` | constant | kohya_default, cond off | 722 | ~170M |
+| `B_arm6_const_724` | constant | kohya_default + label_emb only | 724 | ~170M |
 
 ## Forensics (median |dW|, scale 0.75)
 
@@ -35,26 +36,31 @@ identical) to sit under the wedge zone; arms 1-2 kept resident.
 | 3 cosine/plus | 0.163 | 0.165 | 0.250 | 1.54 | 0.20 | 0.64/1.19 ⚠ label >5x |
 | 4 const/plus | 0.359 | 0.348 | 0.424 | **1.18** | 0.39 | 0.97/1.04 |
 | 5 const/722 | 0.396 | 0.389 | 0.429 | **1.08** | 0.45 | — |
+| 6 const/724 | 0.412 | 0.444 | 0.465 | 1.13 | 0.48 | label 1.73, no time |
 
 Two readings: (a) constant roughly doubles trained magnitude vs cosine
 at the same nominal LR (the 0.52x schedule effect, reproduced at scale);
-(b) the output/input balance predicts the maintainer's render ranking
-exactly: 1.08 < 1.18 < 1.35.
+(b) the output/input balance predicts the ranked order for the
+schedule/targets arms (1.08 < 1.18 < 1.35) but NOT the label isolation:
+724 renders above 722 at 1.13 vs 1.08 -- balance is a useful heuristic,
+not the mechanism.
 
 ## Maintainer render ranking (ComfyUI, recorded 2026-10-11)
 
-1. **arm 5 (kohya_default, 722)** -- best on this dataset.
-2. **arm 4 (kohya_plus, 726)** -- second.
-3. **arm 2 (constant attention)** -- third.
-(Cosine arms unranked against these; constant-attn placing third implies
-constant beats cosine as in A1.)
+1. **arm 6 (724: 722 + label_emb, no time_embed)** -- best; backgrounds
+   most detailed, dataset vibe best represented.
+2. **arm 5 (kohya_default, 722)**.
+3. **arm 4 (kohya_plus, 726)**.
+4. **arm 2 (constant attention)**.
+(Cosine arms unranked against these; constant-attn placing fourth
+implies constant beats cosine as in A1.)
 
-Maintainer hypothesis: `time_embed` is riskier to adapt than `label_emb`
-("timing is serious, labels less so -- may be wrong"). Evidence on the
-table: label_emb medians exceed time_embed in 3 of 4 cond-carrying arms
-(arm2 is the exception, 1.41 > 1.32), and arm 3's 5x warning fires on
-label_emb. The data leans label, not time -- flagged, not settled; the
-B3 far-prompt/size comparison (checklist) would separate them.
+Isolation reading (all constant, rank 64, test2 -- but seeds unset, so
+batch order differs per arm; noted): label_emb helps (724 > 722),
+time_embed hurts (726 < 724 with label held constant). The maintainer's
+timing hypothesis is confirmed by isolation. Corollary: arm 3's 5x
+label_emb warning was guilt by association -- arm 6 runs label_emb at
+1.73 with no warning and renders best; the damaging tower was time.
 
 ## B2 per-t holdout (unseen images)
 
@@ -76,6 +82,7 @@ holds): 0.52540 / 0.30790 / 0.20590 / 0.09391 / 0.02803 / 0.00693.
 | 3 cosine/plus | +5.57 | +4.89 | +4.87 | +6.12 | +6.70 | +18.34 |
 | 4 const/plus | +5.79 | +5.40 | +5.40 | +6.61 | +6.81 | +19.53 |
 | 5 const/722 | +4.77 | +5.25 | +5.36 | +6.17 | +6.80 | +19.31 |
+| 6 const/724 | +5.81 | +5.60 | +5.51 | +5.88 | +6.98 | +19.21 |
 
 Absolute terms (high-t base is 0.00693, so ~19% is ~0.0013; mid-t base
 0.2059, ~5% is ~0.01).

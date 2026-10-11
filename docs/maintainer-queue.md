@@ -25,12 +25,18 @@ Needed back: the contact sheets (or the images), the blur table, and one
 verdict word per arm (*cured / partly / not cured*). Only you can judge
 the collage; the agent must not declare it fixed.
 
-## 2. C3 defaults approval (blocked on 1)
+## 2. C3 follow-up: should new-run defaults move to 724? (decided: see below)
 
-After B4 is written, a one-page note in `docs/decisions/` will propose
-defaults for *new* runs: keep (cosine+attention), constant+kohya_default,
-or constant+kohya_plus. Your call; existing graphs/configs keep stored
-values regardless.
+C3 was approved and landed as (b): constant + kohya_default, cond off
+(`CHANGELOG.md`, `docs/decisions/0006-lora-defaults.md`). Since then the
+arm-6 isolation run showed 722 + label_emb alone (724) renders best of
+all six arms. Question for you: move new-run defaults to
+constant + `kohya_default,label_emb` + cond off (724), or keep (b) and
+leave label_emb opt-in? Evidence for the move: best renders, label_emb
+at 1.73 with no health warning, diffusers loads the keys. Against:
+one dataset, seeds unset across arms, far-field B3 check still open.
+`B_arm6_const_724.safetensors` (+ step-250/500/750 checkpoints) is in
+ComfyUI loras for your own comparison.
 
 ## 3. Real-weights meta-init confirmation (A2 follow-up)
 

@@ -162,6 +162,14 @@ def main() -> int:
     ap.add_argument("--device", default="xpu")
     ap.add_argument("--lora", action="append", default=[],
                     help="label=path of a LoRA to score; repeatable")
+    ap.add_argument("--target-modules", default="attention",
+                    choices=["attention", "kohya_default", "kohya_plus"],
+                    help="injection target set: must COVER every scored "
+                         "file's keys (load refuses partial). Use "
+                         "kohya_default + cond path on (726) to score "
+                         "560/722/726 files side by side.")
+    ap.add_argument("--target-conditioning-path", type=lambda s: s.lower() != "false",
+                    default=True)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     CHECKPOINT = args.checkpoint
@@ -204,7 +212,9 @@ def main() -> int:
         alpha = args.alpha
         model = build_lora_injected_unet(
             weights=weights, device=args.device, dtype=dtype,
-            rank=rank, alpha=alpha, use_checkpoint=False)
+            rank=rank, alpha=alpha, use_checkpoint=False,
+            target_modules=args.target_modules,
+            target_conditioning_path=args.target_conditioning_path)
         model.eval()
         if path is not None:
             sd = load_file(path)

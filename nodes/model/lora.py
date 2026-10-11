@@ -156,17 +156,26 @@ class LoRAConfig:
             self.target_modules = list(TARGETS_ATTENTION)
         elif isinstance(self.target_modules, str):
             # Convenience for graph/UI ports, which carry strings: a preset name
-            # ("attention", "kohya_default", "kohya_plus") or a comma-separated
-            # pattern list.
+            # ("attention", "kohya_default", "kohya_plus"), a comma-separated
+            # pattern list, or preset+extras joined by "," ("kohya_default,
+            # label_emb" = the 722 set plus label_emb alone = 724, for the
+            # time-vs-label isolation run).
             # "kohya_plus" resolves to the same UNet patterns as
-            # "kohya_default"; the "+" is target_conditioning_path (default
-            # True) keeping time_embed.*/label_emb.*: 726 modules on SDXL
-            # instead of 722.
+            # "kohya_default"; the "+" is target_conditioning_path keeping
+            # time_embed.*/label_emb.*: 726 modules on SDXL instead of 722.
             presets = {"attention": TARGETS_ATTENTION, "kohya_default": TARGETS_KOHYA_DEFAULT,
                        "kohya_plus": TARGETS_KOHYA_PLUS}
             raw = self.target_modules.strip()
-            self.target_modules = (list(presets[raw]) if raw in presets
-                                   else [t.strip() for t in raw.split(",") if t.strip()])
+            if raw in presets:
+                self.target_modules = list(presets[raw])
+            else:
+                expanded: list[str] = []
+                for tok in (t.strip() for t in raw.split(",") if t.strip()):
+                    if tok in presets:
+                        expanded.extend(presets[tok])
+                    else:
+                        expanded.append(tok)
+                self.target_modules = expanded
             if not self.target_modules:
                 raise ValueError("target_modules string selected no patterns")
 
@@ -525,13 +534,22 @@ def _inject_lora(model: nn.Module, config: LoRAConfig, prefix: str = "",
             if any(full_name == pat or full_name.endswith("." + pat)
                    for pat in config.target_modules):
                 is_target = True
-            # Extra blocks: time_embed and label_emb use segment-boundary match
-            elif config.target_conditioning_path and (
-                    _segment_match(full_name, "time_embed")
-                    or full_name.startswith("time_embed.")
-                    or _segment_match(full_name, "label_emb")
-                    or full_name.startswith("label_emb.")):
-                is_target = True
+            # Extra blocks: time_embed and label_emb use segment-boundary match.
+            # Each fires on the flag OR on being named explicitly in
+            # target_modules (so "kohya_default,label_emb" adapts label_emb
+            # alone with the flag off -- 724 modules -- isolating label vs
+            # time conditioning without a third flag).
+            if not is_target:
+                time_hit = (_segment_match(full_name, "time_embed")
+                            or full_name.startswith("time_embed."))
+                label_hit = (_segment_match(full_name, "label_emb")
+                             or full_name.startswith("label_emb."))
+                explicit = set(config.target_modules or ())
+                if ((config.target_conditioning_path or "time_embed" in explicit)
+                        and time_hit) or \
+                   ((config.target_conditioning_path or "label_emb" in explicit)
+                        and label_hit):
+                    is_target = True
             
             # Support targeting ANY linear/conv layer inside a block that has weighting
             # ONLY if target_all is enabled.

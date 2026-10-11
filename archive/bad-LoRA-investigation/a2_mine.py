@@ -58,14 +58,18 @@ def main() -> int:
                          "actually trains. A/B switch from "
                          "conditioning_path_switch.patch.")
     ap.add_argument("--target-modules", default="attention",
-                    choices=["attention", "kohya_default", "kohya_plus"],
+                    choices=["attention", "kohya_default", "kohya_plus",
+                             "kohya_default,label_emb"],
                     help="attention (default): to_q/to_k/to_v/to_out.0 only (560 "
                          "modules + cond path = 564). kohya_default: also "
                          "ff.net.0.proj, ff.net.2, proj_in, proj_out (722 + cond "
                          "path), matching what kohya sd-scripts' default SDXL "
                          "LoRA adapts. kohya_plus: same UNet set with the "
                          "conditioning-path embeddings kept (726 with the "
-                         "default --target-conditioning-path). Targets A/B from "
+                         "default --target-conditioning-path). "
+                         "kohya_default,label_emb (724): 722 plus label_emb "
+                         "alone (cond path off) -- isolates label-vs-time "
+                         "conditioning. Targets A/B from "
                          "lora_targets_and_cond_switch.patch.")
     ap.add_argument("--progress", type=int, default=0,
                     help="print one loss line every N steps (flush=True), so a "
@@ -80,6 +84,12 @@ def main() -> int:
                          "for the 722/726 B arms: +78M trainable params push "
                          "sustained VRAM to ~11.2 GB, where this card wedges "
                          "instead of raising OOM.")
+    ap.add_argument("--save-every", type=int, default=0,
+                    help="save a checkpoint LoRA every N steps as "
+                         "<out>_stepNNNNN.safetensors (plus the final save). "
+                         "Killed runs keep their last checkpoint instead of "
+                         "nothing -- added after arm 3 died at step 350 "
+                         "unsaved. 0 = final save only.")
     ap.add_argument("--prewarm-unload", action="store_true",
                     help="Encode every distinct (prompt, bucket shape) in the "
                          "dataset up front at the training batch size, then "
@@ -175,6 +185,10 @@ def main() -> int:
         if args.progress and isinstance(step, int) and step % args.progress == 0:
             print(f"  [progress] step {step} loss={loss:.5f} shape={shape}",
                   flush=True)
+        if args.save_every and isinstance(step, int) and step > 0 \
+                and step % args.save_every == 0:
+            ckpt = save_trained_weights(model, f"{args.out}_step{step:05d}.safetensors")
+            print(f"  [checkpoint] step {step} -> {ckpt}", flush=True)
         if args.unload_encoder_after and step == args.unload_encoder_after:
             before = encoder.footprint_bytes() if hasattr(
                 encoder, "footprint_bytes") else -1

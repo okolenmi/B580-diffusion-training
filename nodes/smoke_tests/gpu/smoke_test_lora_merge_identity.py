@@ -332,9 +332,20 @@ def main() -> int:
                f"source builds: {sorted(wanted & their_suffixes)}",
                None)
 
-        ours = {k.rsplit(".", 1)[-1] for k in exported}
+        # What comfyi actually reads is the SAVED FILE's keys, not the
+        # in-memory export dict: per-module `.block_weight` entries are
+        # deliberately split out into the safetensors *metadata* by
+        # lora_file.split_block_weights (D2), so they never reach a
+        # tensor key. Asserting on `exported` tested a dict that is one
+        # step upstream of the contract and so failed on a key the file
+        # does not contain -- verified on a real 2166-key saved LoRA,
+        # whose only suffixes are 'alpha' and 'weight'. So this splits the
+        # in-memory dict exactly as the saver does, and asserts on that.
+        from nodes.model.lora_file import split_block_weights
+        file_tensors, _file_metadata = split_block_weights(exported)
+        ours = {k.rsplit(".", 1)[-1] for k in file_tensors}
         record(ours <= their_suffixes,
-               f"and every exported key ends in one of them "
+               f"and every key that reaches the file ends in one of them "
                f"({len(ours)} distinct suffixes: {sorted(ours)}); anything "
                f"else comfyi's loader would silently not read",
                None)

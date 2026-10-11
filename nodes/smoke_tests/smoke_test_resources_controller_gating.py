@@ -38,10 +38,21 @@ def check(condition: bool, message: str):
 def _process(inputs: dict):
     fake_dtypes = {"unet": MagicMock(dtype="bf16"), "clip": MagicMock(dtype="fp16"),
                    "vae": MagicMock(dtype="fp32")}
+    # safetensors.safe_open is stubbed as well as load_file: the LoRA
+    # loader (nodes/model/lora_file.py) reads the file's *metadata* through
+    # safe_open on top of load_file's tensors, so patching only load_file
+    # left a real open() of the resolved fake path behind -- which raised
+    # FileNotFoundError and failed this test for a reason that has nothing
+    # to do with the gating under test. The metadata comes back empty,
+    # which is the same "no block weights recorded" case load_file's {}
+    # already stood for.
+    empty_meta = MagicMock()
+    empty_meta.__enter__.return_value.metadata.return_value = {}
     with patch("nodes.model.resources_controller._inspect_checkpoint", return_value=fake_dtypes), \
          patch("nodes.model.resources_controller.ProjectLayout") as MockLayout, \
          patch("nodes.model.resources_controller.SDXL_LoRATrainingResources") as MockResources, \
-         patch("safetensors.torch.load_file", return_value={}):
+         patch("safetensors.torch.load_file", return_value={}), \
+         patch("safetensors.safe_open", return_value=empty_meta):
         MockLayout.from_paths_module.return_value.resolve_safe_model_path.return_value = (
             "/fake/ckpt.safetensors")
         preset = LoRASDXLPreset()

@@ -273,7 +273,7 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
     #: importing torch or instantiating anything. See
     #: backend/application/memory_fingerprint.py.
     memory_fields: ClassVar[tuple[str, ...]] = (
-        "model", "rank", "checkpointing",
+        "model", "rank", "checkpointing", "target_modules", "target_conditioning_path",
     )
 
     INPUTS: ClassVar[dict[str, Port]] = {

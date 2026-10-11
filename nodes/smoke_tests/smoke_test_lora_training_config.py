@@ -57,7 +57,8 @@ def check_contracts():
     check(not getattr(LoRATrainingConfigNode, "__abstractmethods__", None),
           "must be concretely instantiable")
     check(set(LoRATrainingConfigNode.INPUTS) ==
-          {"resources", "rank", "alpha", "unet_weight_store", "use_checkpoint", "cache_text_encoder"},
+          {"resources", "rank", "alpha", "target_modules", "target_conditioning_path",
+           "unet_weight_store", "use_checkpoint", "cache_text_encoder"},
           LoRATrainingConfigNode.INPUTS)
     check(set(LoRATrainingConfigNode.OUTPUTS) == {"trainer"}, LoRATrainingConfigNode.OUTPUTS)
     print("    PASS")

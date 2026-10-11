@@ -51,6 +51,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from ..core import Node, Port
+from .lora_injector import ComfyUNetLoRANode
 from .lora_training_resources import (
     LoRATrainingResources,
     LoRATrainingSkeleton,
@@ -102,7 +103,7 @@ class LoRATrainingConfigNode(Node):
     #: importing torch or instantiating anything. See
     #: backend/application/memory_fingerprint.py.
     memory_fields: ClassVar[tuple[str, ...]] = (
-        "rank", "checkpointing",
+        "rank", "checkpointing", "target_modules", "target_conditioning_path",
     )
 
     INPUTS: ClassVar[dict[str, Port]] = {
@@ -128,6 +129,16 @@ class LoRATrainingConfigNode(Node):
                 "alpha changes the effective strength proportionally -- e.g. lowering "
                 "rank to 32 while leaving alpha at 64 doubles the scale to 2.0.",
         ),
+        # The SAME ports, not copies: which layers get an adapter is one decision
+        # with one default, whichever route builds the injection. This node used
+        # to have neither, so it injected with build_lora_injected_unet()'s bare
+        # function defaults (attention only, plus time_embed and label_emb: 564
+        # modules) while ComfyUNetLoRANode's port default had moved to
+        # kohya_label (724) -- the documented best arm of the B study. A graph
+        # built through the Resources Controller silently trained a different,
+        # measurably worse-ranked target set than the one the docs describe.
+        "target_modules": ComfyUNetLoRANode.INPUTS["target_modules"],
+        "target_conditioning_path": ComfyUNetLoRANode.INPUTS["target_conditioning_path"],
         "unet_weight_store": Port(
             name="unet_weight_store", type=str, required=False, default="bf16",
             choices=_UNET_WEIGHT_STORE_CHOICES,
@@ -218,6 +229,10 @@ class LoRATrainingConfigNode(Node):
             alpha=inputs.get("alpha", self.INPUTS["alpha"].default),
             frozen_weight_store_factory=weight_store_factory,
             use_checkpoint=inputs.get("use_checkpoint", self.INPUTS["use_checkpoint"].default),
+            target_modules=inputs.get(
+                "target_modules", self.INPUTS["target_modules"].default),
+            target_conditioning_path=inputs.get(
+                "target_conditioning_path", self.INPUTS["target_conditioning_path"].default),
         )
 
         if inputs.get("cache_text_encoder", self.INPUTS["cache_text_encoder"].default):

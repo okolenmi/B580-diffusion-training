@@ -75,6 +75,59 @@ def check_node_port_defaults():
     print("    PASS")
 
 
+def check_resources_route_passes_the_targets_through():
+    print("[Resources Controller route: the 724 default reaches the injector]")
+    # The managed route builds its adapter through LoRATrainingConfigNode, which
+    # had no target ports and so injected with the injector function's bare
+    # defaults (attention + time_embed + label_emb = 564), not the documented
+    # kohya_label (724). Captured at the call that matters, with the real
+    # node and the real from_resources() path; only the (heavy) injector is stubbed.
+    import nodes.model.lora_injector as injector
+    from nodes.core import ExecutionContext
+    from nodes.model.lora_training_config import LoRATrainingConfigNode
+    from nodes.model.lora_training_resources import SDXL_LoRATrainingResources
+
+    class _Captured(Exception):
+        pass
+
+    def run(**extra):
+        seen = {}
+
+        def fake(weights, **kw):
+            seen.update(kw)
+            raise _Captured
+
+        real = injector.build_lora_injected_unet
+        injector.build_lora_injected_unet = fake
+        try:
+            res = SDXL_LoRATrainingResources.__new__(SDXL_LoRATrainingResources)
+            res.unet_sd, res.vae_sd, res.clip = {}, {}, object()
+            res.continue_lora_sd, res._device = None, "cpu"
+            try:
+                LoRATrainingConfigNode(ExecutionContext()).build(resources=res, **extra)
+            except _Captured:
+                pass
+        finally:
+            injector.build_lora_injected_unet = real
+        return seen
+
+    seen = run()
+    check(seen.get("target_modules") == "kohya_label",
+          f"default target_modules must reach the injector as kohya_label, got "
+          f"{seen.get('target_modules', '<not passed>')!r}")
+    check(seen.get("target_conditioning_path") is False,
+          f"default cond path must reach the injector as False, got "
+          f"{seen.get('target_conditioning_path', '<not passed>')!r}")
+    seen = run(target_modules="attention", target_conditioning_path=True)
+    check(seen.get("target_modules") == "attention"
+          and seen.get("target_conditioning_path") is True,
+          "an explicit choice must be passed through unchanged")
+    for field in ("target_modules", "target_conditioning_path"):
+        check(field in LoRATrainingConfigNode.memory_fields,
+              f"{field} changes the peak VRAM and must be a memory field")
+    print("    PASS")
+
+
 def check_preset_module_counts():
     print("[presets on meta SDXL UNet: 564 / 560 / 726 / 724 / 722]")
     from nodes.model.lora import LoRAConfig, inject_lora_into_unet
@@ -108,6 +161,7 @@ def check_preset_module_counts():
 def main():
     check_config_defaults_and_mapping()
     check_node_port_defaults()
+    check_resources_route_passes_the_targets_through()
     check_preset_module_counts()
     print()
     print("=" * 60)

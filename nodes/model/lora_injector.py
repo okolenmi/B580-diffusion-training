@@ -302,7 +302,9 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "ff.net.2, proj_in, proj_out (722, what kohya sd-scripts adapts; "
                 "best renders in the B study). \"kohya_plus\": same UNet set "
                 "with the conditioning-path embeddings kept (726 with "
-                "target_conditioning_path=True). Or a comma-separated list of "
+                "target_conditioning_path=True). Comma-joined preset+patterns "
+                "(\"kohya_default,label_emb\" = 724) isolates one cond tower. "
+                "Or a comma-separated list of "
                 "layer-name suffixes. Saved graphs keep their stored value; "
                 "only new graphs take the default."),
         "target_conditioning_path": Port(

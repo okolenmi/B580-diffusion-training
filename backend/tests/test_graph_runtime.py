@@ -424,4 +424,164 @@ check(
     "no memory wired: context.memory is None and the node survives",
 )
 
+# ==========================================================================
+# The completion protocol -- a stop keeps what ran, and only the nodes that
+# exist to handle a partial result still run (nodes/core.py Completion)
+# ==========================================================================
+
+from nodes.core import COMPLETE, Completion, Node, Port  # noqa: E402
+from backend.infrastructure.graph.discovery import NodeRegistry  # noqa: E402
+
+_seen: list[tuple[str, Completion]] = []
+
+
+class _StopsMidway(Node):
+    """Plays a trainer that is stopped: sets the cancel flag, reports it."""
+
+    OUTPUTS = {"value": Port(name="value", type=float)}
+
+    def build(self):
+        self.context.cancel_event.set()
+        self.report_completion(Completion.unfinished_at(step=7, total=10))
+        return {"value": 1.5}
+
+
+class _FinishesNormally(Node):
+    OUTPUTS = {"value": Port(name="value", type=float)}
+
+    def build(self):
+        return {"value": 2.5}
+
+
+class _Keeper(Node):
+    """Plays a saver: opts in, and records what its input carried."""
+
+    ACCEPTS_UNFINISHED = True
+    INPUTS = {"value": Port(name="value", type=float)}
+    OUTPUTS = {"seen": Port(name="seen", type=str)}
+
+    def build(self, value):
+        _seen.append((type(self).__name__, self.upstream_completion("value")))
+        return {"seen": "ok"}
+
+
+class _Plain(Node):
+    """Passes its input through; does not opt in to partial results."""
+
+    INPUTS = {"value": Port(name="value", type=float)}
+    OUTPUTS = {"value": Port(name="value", type=float)}
+
+    def build(self, value):
+        return {"value": value}
+
+
+class _AcceptingPassThrough(_Plain):
+    """Opts in but reports nothing of its own: must inherit."""
+
+    ACCEPTS_UNFINISHED = True
+
+
+class _TwoInputKeeper(_Keeper):
+    INPUTS = {"value": Port(name="value", type=float),
+              "other": Port(name="other", type=float)}
+
+    def build(self, value, other):
+        _seen.append(("value", self.upstream_completion("value")))
+        _seen.append(("other", self.upstream_completion("other")))
+        return {"seen": "ok"}
+
+
+_protocol_runtime = ReflectedGraphRuntime(
+    NodeRegistry(scan=lambda: ({c.__name__: c for c in (
+        _StopsMidway, _FinishesNormally, _Keeper, _Plain, _AcceptingPassThrough,
+        _TwoInputKeeper)}, ())),
+    memory_releaser=lambda: None,
+)
+
+
+def _run_protocol(graph):
+    _seen.clear()
+    return _protocol_runtime.execute(graph, cancel_event=threading.Event())
+
+
+def _ids(outcome):
+    return [r.node_id for r in outcome.results]
+
+
+# 1. stop -> saver: the saver still runs and is told how far it got.
+out = _run_protocol(make(
+    node("a_train", "_StopsMidway"), node("b_save", "_Keeper"),
+    edges=[edge("a_train", "value", "b_save", "value")]))
+check(out.error is None and _ids(out) == ["a_train", "b_save"],
+      f"a stop still runs the node that handles partial results (got {_ids(out)})")
+check(len(_seen) == 1 and _seen[0][1].unfinished
+      and (_seen[0][1].step, _seen[0][1].total) == (7, 10),
+      f"and it is told the result is unfinished, at step 7 of 10 (got {_seen})")
+
+# 2. A node that did not opt in is skipped after a stop, and so is anything
+# that needed its output -- even a node that did opt in.
+out = _run_protocol(make(
+    node("a_train", "_StopsMidway"), node("b_plain", "_Plain"), node("c_save", "_Keeper"),
+    edges=[edge("a_train", "value", "b_plain", "value"),
+           edge("b_plain", "value", "c_save", "value")]))
+check(_ids(out) == ["a_train"] and not _seen,
+      f"a plain node in between is skipped, and the saver behind it has no input "
+      f"to read (got {_ids(out)})")
+
+# 3. A node that opted in but is wired to a *finished* result does not run
+# after a stop: there is nothing partial for it to handle, and a stop means
+# no more work.
+out = _run_protocol(make(
+    node("a_train", "_StopsMidway"), node("b_other", "_FinishesNormally"),
+    node("c_keep", "_Keeper"),
+    edges=[edge("b_other", "value", "c_keep", "value")]))
+check(_ids(out) == ["a_train"] and not _seen,
+      f"after a stop a node fed only by finished results does not run (got {_ids(out)})")
+
+# 4. Unfinished passes through a node that opts in and says nothing of its
+# own, so the saver behind it still learns the truth.
+out = _run_protocol(make(
+    node("a_train", "_StopsMidway"), node("b_pass", "_AcceptingPassThrough"),
+    node("c_save", "_Keeper"),
+    edges=[edge("a_train", "value", "b_pass", "value"),
+           edge("b_pass", "value", "c_save", "value")]))
+check(_ids(out) == ["a_train", "b_pass", "c_save"],
+      f"a pass-through that opts in keeps the chain running (got {_ids(out)})")
+check(len(_seen) == 1 and _seen[0][1].unfinished and _seen[0][1].step == 7,
+      f"and the unfinished state is inherited through it (got {_seen})")
+
+# 5. No stop: a saver sees a complete result and the run is unchanged.
+out = _run_protocol(make(
+    node("a_src", "_FinishesNormally"), node("b_save", "_Keeper"),
+    edges=[edge("a_src", "value", "b_save", "value")]))
+check(_ids(out) == ["a_src", "b_save"] and _seen[0][1] == COMPLETE,
+      f"without a stop nothing changes: complete in, everything runs (got {_seen})")
+
+# 6. Completion is per input, not per graph: a saver wired to a finished
+# source on one port and to the stopped trainer on another sees each port's own
+# state (the trainer is what makes it run after the stop at all).
+out = _run_protocol(make(
+    node("a_src", "_FinishesNormally"), node("b_train", "_StopsMidway"),
+    node("c_save", "_TwoInputKeeper"),
+    edges=[edge("a_src", "value", "c_save", "value"),
+           edge("b_train", "value", "c_save", "other")]))
+check(_ids(out) == ["a_src", "b_train", "c_save"],
+      f"a saver with one partial input runs after the stop (got {_ids(out)})")
+by_port = {port: c.unfinished for port, c in _seen}
+check(by_port == {"value": False, "other": True},
+      f"and each port reports its own input's state (got {by_port})")
+
+# 7. Completion is validated where it is made.
+for bad in ("done", ""):
+    try:
+        Completion(bad)
+        check(False, f"Completion({bad!r}) must be refused")
+    except ValueError:
+        pass
+try:
+    _Plain().report_completion("unfinished")  # a string, not a Completion
+    check(False, "report_completion must refuse a non-Completion")
+except TypeError:
+    pass
+
 finish()

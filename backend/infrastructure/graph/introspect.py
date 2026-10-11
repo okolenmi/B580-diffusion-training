@@ -45,6 +45,7 @@ class NodeClass(Protocol):
     NODE_KIND: ClassVar[str]
     DISPLAY_NAME: ClassVar[str | None]
     MODULES: ClassVar[tuple]
+    ACCEPTS_UNFINISHED: ClassVar[bool]
 
     def list_presets(cls) -> list: ...
     def resolve_inputs(cls, params: dict) -> dict: ...

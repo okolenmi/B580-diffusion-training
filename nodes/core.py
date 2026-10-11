@@ -179,6 +179,70 @@ class NodePreset:
                     )
 
 
+@dataclass(frozen=True)
+class Completion:
+    """How finished a node's outputs are -- the one thing that travels
+    between nodes besides the output values themselves.
+
+    Outputs are plain objects (a model, a path, a number) and say nothing
+    about *how they came to be*. Most of the time that is fine: a node
+    that ran produced what it was asked for. A stopped training run is the
+    case it is not fine for: the trainer returns the model it has so far
+    (a normal, valid model, just with fewer steps than planned), and
+    whatever consumes that model -- a saver above all -- needs to know it
+    is not looking at the finished article, and how far it got.
+
+    Two states, deliberately: ``complete`` (the default for every node
+    that says nothing) and ``unfinished``. ``step``/``total`` say how far
+    an unfinished result got (optimizer steps done / planned); ``reason``
+    is a short word for why ("stopped"). All three are optional.
+
+    **How it moves** (docs/design/16-node-completion-protocol.md):
+
+    * A node *reports* its own state with ``self.report_completion(...)``;
+      not reporting means ``complete``... unless an input was unfinished,
+      in which case the runtime passes the first unfinished upstream state
+      through, so a conversion node between a stopped trainer and a saver
+      does not have to know about any of this.
+    * A node *reads* what its inputs carried with
+      ``self.upstream_completion("<input port>")``.
+    * After a stop, the runtime keeps going only for nodes that declare
+      ``ACCEPTS_UNFINISHED = True`` and have at least one unfinished input
+      -- the nodes whose job is to do something with a partial result.
+      Everything else is skipped, as it always was.
+    """
+
+    state: str = "complete"
+    step: int | None = None
+    total: int | None = None
+    reason: str | None = None
+
+    COMPLETE_STATE: ClassVar[str] = "complete"
+    UNFINISHED_STATE: ClassVar[str] = "unfinished"
+
+    def __post_init__(self):
+        if self.state not in (self.COMPLETE_STATE, self.UNFINISHED_STATE):
+            raise ValueError(
+                f"Completion.state must be 'complete' or 'unfinished', got {self.state!r}")
+
+    @property
+    def unfinished(self) -> bool:
+        return self.state == self.UNFINISHED_STATE
+
+    @classmethod
+    def unfinished_at(cls, step: int | None = None, total: int | None = None,
+                      reason: str | None = "stopped") -> "Completion":
+        return cls(cls.UNFINISHED_STATE, step=step, total=total, reason=reason)
+
+    def as_dict(self) -> dict:
+        return {"state": self.state, "step": self.step,
+                "total": self.total, "reason": self.reason}
+
+
+#: What a node's output carries when nothing says otherwise.
+COMPLETE = Completion()
+
+
 class ExecutionContext:
     """Infrastructure a Node's build() may need beyond its declared Ports
     -- e.g. MonitorNode's live-data bus. Constructed once per graph run
@@ -209,9 +273,50 @@ class ExecutionContext:
         # spawn that carried no memory numbers) -- the same contract as
         # monitor_bus: the consumer checks, the node survives.
         self.memory = memory
+        # The completion protocol (see Completion). Both are per *node*, not
+        # per run: the runtime hands each node its own scoped() copy, so one
+        # node's report can never be mistaken for another's. A context used
+        # directly (a test, a node built alone) simply has no upstream and
+        # records whatever the node reports.
+        self._upstream: dict[str, Completion] = {}
+        self._reported: Completion | None = None
 
     def should_cancel(self) -> bool:
         return self.cancel_event is not None and self.cancel_event.is_set()
+
+    def scoped(self, upstream: dict[str, Completion] | None = None) -> "ExecutionContext":
+        """A copy for one node: same bus, cancel event and memory (the
+        shared run infrastructure, by reference), but its own completion
+        state -- what its inputs carried, and what it reports."""
+        import copy
+
+        clone = copy.copy(self)
+        clone._upstream = dict(upstream or {})
+        clone._reported = None
+        return clone
+
+    def upstream_completion(self, port: str) -> Completion:
+        """What the node wired to input ``port`` reported (``COMPLETE`` for
+        an input that was not wired, or whose source said nothing)."""
+        return self._upstream.get(port, COMPLETE)
+
+    def any_upstream_unfinished(self) -> Completion | None:
+        """The first unfinished upstream state, in the order the runtime
+        listed the inputs, or None."""
+        for completion in self._upstream.values():
+            if completion.unfinished:
+                return completion
+        return None
+
+    def report_completion(self, completion: Completion) -> None:
+        """Called by the node being built; read back by the runtime."""
+        if not isinstance(completion, Completion):
+            raise TypeError(f"report_completion needs a Completion, got {type(completion).__name__}")
+        self._reported = completion
+
+    @property
+    def reported_completion(self) -> Completion | None:
+        return self._reported
 
 
 class Node(ABC):
@@ -284,6 +389,14 @@ class Node(ABC):
     # not where it travels.
     MODULES: ClassVar[tuple[DisplayModule, ...]] = ()
 
+    # After a user stop, the runtime skips every node that has not run yet
+    # -- except nodes that set this and are wired to an unfinished result
+    # (see Completion): the nodes whose job is to do something with a
+    # partial output, like saving it. A node that sets it must read
+    # self.upstream_completion(...) and decide for itself what to do with
+    # what it gets; running with a partial input is its responsibility.
+    ACCEPTS_UNFINISHED: ClassVar[bool] = False
+
     @classmethod
     def list_presets(cls) -> list[NodePreset]:
         """Only meaningful when NODE_KIND == "dynamic" -- see
@@ -326,6 +439,14 @@ class Node(ABC):
 
     def __init__(self, context: ExecutionContext | None = None):
         self.context = context or ExecutionContext()
+
+    def upstream_completion(self, port: str) -> Completion:
+        """How finished the value on input ``port`` is (see Completion)."""
+        return self.context.upstream_completion(port)
+
+    def report_completion(self, completion: Completion) -> None:
+        """Say how finished this node's own outputs are (see Completion)."""
+        self.context.report_completion(completion)
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

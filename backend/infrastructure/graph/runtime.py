@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from nodes.core import ExecutionContext
+from nodes.core import COMPLETE, Completion, ExecutionContext
 from nodes.monitor.handle import LiveMonitorHandle
 
 from ...application.ports.graph_runtime import (
@@ -373,22 +373,36 @@ class ReflectedGraphRuntime(GraphRuntime):
             memory=self._memory,
         )
         outputs_by_node: dict[str, dict] = {}
+        completion_by_node: dict[str, Completion] = {}
         results: list[NodeResult] = []
         try:
             for node_id in order:
-                if cancel_event.is_set():
-                    break  # stop requested; whatever ran so far is reported
                 spec = graph.node(node_id)
                 cls = classes[spec.class_name]
+                edges_in = graph.edges_to(node_id)
+                # What each wired input carries beyond its value: the
+                # completion protocol (nodes/core.py Completion). A source
+                # that never ran has no entry -- see the stop rule below.
+                upstream = {
+                    edge.to_port: completion_by_node.get(edge.from_node, COMPLETE)
+                    for edge in edges_in
+                }
+                if cancel_event.is_set() and not self._runs_after_stop(
+                        cls, edges_in, upstream, outputs_by_node):
+                    # Stop requested: the node does not run. Not a `break`:
+                    # a later node may still be one that exists to handle a
+                    # partial result (a saver), and it is judged on its own.
+                    continue
                 inputs = dict(spec.params)
-                for edge in graph.edges_to(node_id):
+                for edge in edges_in:
                     inputs[edge.to_port] = outputs_by_node[edge.from_node][edge.from_port]
 
                 self._attach_module_stream(cls, spec, inputs)
 
                 started = time.monotonic()
+                node_context = context.scoped(upstream)
                 try:
-                    outputs = cls(context).build(**inputs)
+                    outputs = cls(node_context).build(**inputs)
                     described = {k: _describe(v) for k, v in outputs.items()}
                 except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome
                     result = NodeResult(
@@ -403,6 +417,14 @@ class ReflectedGraphRuntime(GraphRuntime):
                     return GraphOutcome(results=tuple(results), error=result.error)
 
                 outputs_by_node[node_id] = outputs  # real objects feed the next node
+                # A node that says nothing inherits the first unfinished
+                # state among its inputs, so a pass-through node between a
+                # stopped trainer and its saver need know nothing of this.
+                completion_by_node[node_id] = (
+                    node_context.reported_completion
+                    or node_context.any_upstream_unfinished()
+                    or COMPLETE
+                )
                 result = NodeResult(
                     node_id=node_id,
                     ok=True,
@@ -420,6 +442,23 @@ class ReflectedGraphRuntime(GraphRuntime):
                 self.release_memory()
             except Exception:  # noqa: BLE001 -- cleanup is best-effort
                 logger.exception("device memory release after a graph run failed")
+
+    @staticmethod
+    def _runs_after_stop(cls: type, edges_in, upstream: dict, outputs_by_node: dict) -> bool:
+        """After a stop, does this not-yet-run node still run?
+
+        Only a node that declared ``ACCEPTS_UNFINISHED`` and is wired to a
+        result that is actually unfinished -- and whose every source did
+        run, so it has values to read. Anything else is skipped exactly as
+        before the completion protocol existed: a stop means "no more work",
+        and the one thing that is not more work is not losing what was
+        already done.
+        """
+        if not as_node_class(cls).ACCEPTS_UNFINISHED:
+            return False
+        if not any(c.unfinished for c in upstream.values()):
+            return False
+        return all(edge.from_node in outputs_by_node for edge in edges_in)
 
     def _attach_module_stream(self, cls: type, spec, inputs: dict) -> None:
         """Give a node that declares live views somewhere to report them.

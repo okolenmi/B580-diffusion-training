@@ -1331,7 +1331,10 @@ class ManagedLoRATrainerNode(TrainerNode):
                 "monitoring stay eager. Default False = the three eager "
                 "phases, unchanged. Refused with fused optimizers (their "
                 "update fires inside backward hooks, uncapturable) and with "
-                "any active Dropout (replay would freeze the RNG); the model "
+                "any active Dropout (replay would freeze the RNG), with "
+                "gate_enabled (the gate is a module-level tensor a capture "
+                "freezes) and with probe_grad_alignment (the probe frees "
+                "every .grad, which a replay never re-attaches); the model "
                 "is pinned resident for the run (a mid-run offload would "
                 "leave replays reading freed memory).",
         ),
@@ -1504,6 +1507,17 @@ class ManagedLoRATrainerNode(TrainerNode):
                     "unset when captured) and train at the wrong strength "
                     "silently. Turn the gate off with graph capture, or capture "
                     "off with the gate.")
+            if probe_every > 0 and probe_grad_alignment:
+                raise ValueError(
+                    "use_xpu_graph is incompatible with probe_grad_alignment: the "
+                    "alignment probe leaves every parameter's .grad as None "
+                    "(nodes/train/t_probe.py alignment()), but a replay writes "
+                    "gradients into the buffers captured at capture time and "
+                    "never re-attaches them -- the optimizer would then see no "
+                    "gradients and silently stop training after the first probe "
+                    "point while the loss kept being reported. Use the "
+                    "forward-only probe (probe_grad_alignment=False) with graph "
+                    "capture, or capture off with the alignment probe.")
             if is_fused:
                 raise ValueError(
                     "use_xpu_graph is incompatible with a fused optimizer: its "

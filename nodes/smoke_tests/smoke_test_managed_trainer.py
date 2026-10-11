@@ -973,6 +973,10 @@ def check_build_rejects_invalid_training_shapes():
     # The gate is a module-level tensor read inside the forward; a captured
     # graph would freeze it. Refused loudly, with the gate named.
     expect_valueerror({"use_xpu_graph": True, "gate_enabled": True}, "gate_enabled")
+    # The alignment probe frees every .grad; a replay never re-attaches the
+    # captured buffers, so the optimizer would silently see no gradients.
+    expect_valueerror({"use_xpu_graph": True, "probe_every_n_steps": 5,
+                       "probe_grad_alignment": True}, "probe_grad_alignment")
     expect_valueerror({"save_every_n_steps": 1, "save_prefix": "   "}, "save_prefix")
     print("    PASS")
 

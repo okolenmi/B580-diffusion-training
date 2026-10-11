@@ -91,8 +91,9 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 "for +1.5 GB). Same runner and contract as the managed "
                 "route -- optimizer step stays in its own phase, unchanged. "
                 "Default False = the eager phases, unchanged. Refused with "
-                "fused optimizers and active Dropout; the model is never "
-                "offloaded on this route, so no pinning needed.",
+                "fused optimizers, active Dropout and gate_enabled (the gate "
+                "is a module-level tensor a capture freezes); the model is "
+                "never offloaded on this route, so no pinning needed.",
         ),
         "profile": Port(
             name="profile", type=bool, required=False, default=False,

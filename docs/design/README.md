@@ -25,6 +25,7 @@ docstrings now carry the "what"; these files carry the "why".
 | 15 | [`12-installer-and-comfy-decoupling.md`](12-installer-and-comfy-decoupling.md) | **Design, not built.** Why the install has to start before the server does, and the measured cost of dropping ComfyUI: 9 modules, 5,081 lines, GPL-3.0. Read before changing anything about install order or the ComfyUI dependency. |
 | 16 | [`14-node-attached-monitor-widgets.md`](14-node-attached-monitor-widgets.md) | **Built (see 15).** Monitor as node-attached widgets the user composes into a window, instead of one flat blob per `monitor_id`: what today's shape costs, why the trainer's report and the dashboard's key list are the real coupling, and the five questions to settle before code. |
 | 17 | [`15-graph-modules-and-templates.md`](15-graph-modules-and-templates.md) | **Built.** Modules (editable fields, live views, graph-scope settings) and the Templates tab: pages and monitor windows as boards of blocks over a graph, use/edit modes, the answers to doc 14's five questions, graph settings and the adaptive memory budget, and what was verified how. |
+| 18 | [`16-node-completion-protocol.md`](16-node-completion-protocol.md) | **Built.** How a node says "this output is partial", and why Stop now keeps the run: the side channel, the five rules after a stop, the saver's `_step<N>` file and `save_unfinished`, and the 15 s stop-grace limit. |
 
 The seven design goals every choice here is checked against live in the
 root [`README.md`](../../README.md)'s Goals section.

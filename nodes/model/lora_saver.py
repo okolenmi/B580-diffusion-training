@@ -102,7 +102,29 @@ def save_trained_weights(model: TrainedWeightsExportable, relative_path: str,
     return str(resolved)
 
 
+def unfinished_path(relative_path: str, step: int | None) -> str:
+    """`style/lora.safetensors` -> `style/lora_step5555.safetensors`.
+
+    The step goes before the suffix and after the whole stem, so the file
+    sorts next to the finished one and is obviously a snapshot of the same
+    run. Only the final path component changes -- the directory part is
+    left exactly as given, because it still has to pass
+    resolve_safe_model_path's sandbox check unmodified. An unknown step
+    (a producer that did not say) is named ``_unfinished`` rather than
+    guessing a number."""
+    from pathlib import PurePosixPath
+
+    path = PurePosixPath(relative_path)
+    tag = f"_step{step}" if step is not None else "_unfinished"
+    return str(path.with_name(f"{path.stem}{tag}{path.suffix}"))
+
+
 class LoRACheckpointSaverNode(CheckpointSaverNode):
+
+    # After a user stop this is one of the nodes that still runs, to save
+    # what training had reached (nodes/core.py Completion). It decides what
+    # to do with it: see save_unfinished and build().
+    ACCEPTS_UNFINISHED: ClassVar[bool] = True
 
     INPUTS: ClassVar[dict[str, Port]] = {
         "model": Port(
@@ -119,6 +141,14 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
                 "from the graph editor over the network, so it's sandboxed to the "
                 "configured directory regardless of what's typed here.",
         ),
+        "save_unfinished": Port(
+            name="save_unfinished", type=bool, required=False, default=True,
+            doc="When the run was stopped before it finished, still save what training "
+                "had reached -- to the same path with `_step<N>` added to the file name "
+                "(`lora.safetensors` -> `lora_step5555.safetensors`), so it never "
+                "replaces or is mistaken for a finished LoRA. Off = a stop saves nothing "
+                "here. Has no effect on a run that finished.",
+        ),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
@@ -134,8 +164,35 @@ class LoRACheckpointSaverNode(CheckpointSaverNode):
                 f"LoRACheckpointSaverNode needs a TrainedWeightsExportable "
                 f"(a trained model or a phase-split snapshot), got {type(model).__name__}."
             )
+        relative_path = inputs["relative_path"]
+        completion = self.upstream_completion("model")
+        if completion.unfinished:
+            save_unfinished = inputs.get(
+                "save_unfinished", self.INPUTS["save_unfinished"].default)
+            where = (f"step {completion.step}" if completion.step is not None
+                     else "an unknown step")
+            if completion.total is not None:
+                where += f" of {completion.total}"
+            if not save_unfinished:
+                print(f"[LoRACheckpointSaverNode] the run stopped at {where}; "
+                      f"save_unfinished is off, nothing saved")
+                result = {"saved_path": ""}
+                self.validate_outputs(result)
+                return result
+            if completion.step == 0:
+                # Stopped before the first optimizer step: the adapter is
+                # still its initial (zero-effect) self. A file of that is
+                # not progress, and would only look like one.
+                print("[LoRACheckpointSaverNode] the run stopped before its first "
+                      "step; nothing trained, nothing saved")
+                result = {"saved_path": ""}
+                self.validate_outputs(result)
+                return result
+            relative_path = unfinished_path(relative_path, completion.step)
+            print(f"[LoRACheckpointSaverNode] the run stopped at {where}; "
+                  f"saving the unfinished LoRA as {relative_path}")
         saved_path = save_trained_weights(
-            model, inputs["relative_path"], inputs.get("project_layout"))
+            model, relative_path, inputs.get("project_layout"))
 
         result = {"saved_path": saved_path}
         self.validate_outputs(result)

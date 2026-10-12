@@ -131,6 +131,18 @@ def main() -> int:
                          "occupied, before any after-N unload could fire.")
     args = ap.parse_args()
 
+    # SYCL / oneDNN runtime env, BEFORE torch is imported. This harness is
+    # run as a bare script, so it bypasses nodes/cli.py and backend/cli.py --
+    # the two entry points that call set_xpu_perf_env_vars(). Without it the
+    # oneDNN primitive cache is at its 1024 default, which cannot hold the
+    # primitives a UNet needs per latent shape, so every shape TRANSITION
+    # re-creates them: measured 3.85x revisit/steady and 0.488 steps/s at
+    # 1024 against 0.99x and 0.599 at 2048, on `non-square` (44 shapes),
+    # peak host RSS byte-identical. That is the "GPU pauses" symptom on a
+    # multi-shape dataset, and it is free to fix. See nodes/xpu_env.py.
+    from nodes.xpu_env import set_xpu_perf_env_vars
+    set_xpu_perf_env_vars()
+
     from nodes.core import ExecutionContext
     from nodes.model.checkpoint_loader import SafetensorsCheckpointNode
     from nodes.model.lora_injector import ComfyUNetLoRANode

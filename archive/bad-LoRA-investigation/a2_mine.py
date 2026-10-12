@@ -247,12 +247,28 @@ def main() -> int:
     # loss_t_low/mid/high (nodes/train/loss.py) for the monitor chart, and
     # a t_bucket with no samples in this step is absent rather than zero.
     ema = None
-    per_t: dict[str, float] = {}
+    steps_path = (Path("runs") / f"{args.out}_steps.jsonl") if args.out else None
+    if steps_path is not None:
+        steps_path.parent.mkdir(parents=True, exist_ok=True)
+        steps_path.write_text("", encoding="utf-8")   # fresh run, not an append
+    print(f"  [steps jsonl] {steps_path}", flush=True)
 
     def on_step(step, loss, shape=None, t_buckets=None):
         # step_notify calls back as (step, loss[, shape][, t_buckets=...]).
         nonlocal ema
         ema = loss if ema is None else ema * args.ema + loss * (1 - args.ema)
+        # EVERY step goes to the JSONL, not just the --progress ones: trend
+        # analysis needs dense samples. At --progress 100 a 1000-step run
+        # yields ten points, and a segmentation over ten noisy points fits
+        # noise -- measured, R2=0.03 on arm6, which says "no signal" rather
+        # than "no progress". loss_trend.py reads this file.
+        if steps_path is not None and isinstance(step, int):
+            import json as _json
+            row = {"step": step, "loss": loss, "ema": ema, "shape": shape}
+            if t_buckets:
+                row.update({k: t_buckets[k] for k in t_buckets})
+            with open(steps_path, "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(row) + "\n")
         if args.progress and isinstance(step, int) and step % args.progress == 0:
             print(f"  [progress] step {step} loss={loss:.5f} "
                   f"ema={ema:.5f} shape={shape}", flush=True)

@@ -162,6 +162,15 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("regex", TRAINING,
                 "CLIP's tokenizer word splitter -- \\p{L} and \\p{N}, which "
                 "the standard library's re does not have", never_install=True),
+    # Optional: only the auto-caption node's local "transformers" backend
+    # imports it, lazily, when that backend is built -- so absence costs that
+    # one feature and a clear error naming `pip install transformers`, not an
+    # import failure anywhere. approx_mb is None: the wheel is small, the model
+    # it then downloads is the real size and is not a package.
+    Requirement("transformers", OPTIONAL,
+                "the auto-caption node's local image-to-text backend "
+                "(manager/captioning.py); imported only when that backend is used",
+                never_install=True),
 )
 
 #: What a fresh venv for this project alone would have to install. The

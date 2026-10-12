@@ -63,3 +63,22 @@ strength. They must look **different** — `BW_armB_weighted` was trained
 with `input_blocks.7:0.25` and `middle_block:1.0`, so its mid-UNet
 contribution is deliberately a quarter strength. If the two renders are
 identical, the weight is not reaching the file and this is a fail.
+
+## 5. Does varied conditioning fix the CLIP_L-only break? (new tools, untested on weights)
+
+Built, unit-tested on CPU, never run on real weights or hardware: the caption
+pool, the conditioning blend and the auto-caption node (CHANGELOG 2026-10-12).
+To run the experiment on a captionless dataset such as `test2`:
+
+1. Auto-caption it (`AutoCaptionNode`, `limit` ~10 first to look at what the
+   model writes; needs `transformers` and a one-time model download).
+2. Train the same recipe three more times from the CAPTION_div4_724 control:
+   (a) real captions only, (b) + `CaptionPoolNode` (`parts`, `n 2..4`,
+   `variants` 4; set the source's `shape_bucket_multiple` to 8), (c) + a
+   `ConditioningBlendNode` at `keep 0.5..1.0` on the trainer.
+3. Render each with the CLIP_L-only prompt on `div_4`, same seed.
+
+Verdict wanted per arm: *CLIP_L-only renders sane / still psychedelic*. The
+agent must not call it fixed. Open choices only you can make: BLIP base vs a
+tagger for this data, and whether (c) should replace caption dropout.
+

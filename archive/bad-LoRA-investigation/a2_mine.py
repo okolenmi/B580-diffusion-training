@@ -91,6 +91,14 @@ def main() -> int:
                          "and without it and confirm the weighted file "
                          "replays the trained strength in an outside reader "
                          "(the weight is folded into the exported alpha).")
+    ap.add_argument("--keep-incomplete-batches", action="store_true",
+                    help="train on the short (prompt,size) groups too, as smaller "
+                         "batches. REQUIRED for any multi-caption dataset: the "
+                         "loader groups by (prompt, size), so with few distinct "
+                         "captions most samples sit in groups smaller than a "
+                         "batch and are silently never trained on (measured on "
+                         "multi-caption, 8 captions, batch 4: only 28 of 273 "
+                         "samples used per epoch).")
     ap.add_argument("--checkpoint", default="div_4.safetensors",
                     help="base checkpoint filename (ComfyUI checkpoints dir). "
                          "div_4 by default; divA for the base-model isolation "
@@ -137,7 +145,8 @@ def main() -> int:
     from nodes.dataset.managed import ManagedDatasetSourceNode
     batches = ManagedDatasetSourceNode(ctx).build(
         dataset_root=args.dataset, batch_size=args.batch, shuffle=True,
-        keep_incomplete_batches=False, shape_bucket_multiple=0)["batches"]
+        keep_incomplete_batches=args.keep_incomplete_batches,
+        shape_bucket_multiple=0)["batches"]
 
     if args.schedule == "constant":
         schedule = ConstantLRScheduleNode(ctx).build(lr=args.lr)["schedule"]

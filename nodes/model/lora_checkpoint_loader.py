@@ -92,8 +92,14 @@ def _load_dora_layers(registry, state_dict: dict) -> None:
             # lora.load_lora_into_model skips DoRA layers, so without this the
             # trained block weight was restored for plain LoRA only and a DoRA
             # run resumed at the configured weight instead.
+            #
+            # The saved alpha is the EFFECTIVE one (alpha*weight -- see
+            # lora_phases.extract_combined_weights), so restore_alpha must
+            # NOT also apply the weight or the strength comes back squared
+            # (a 2.0 weight landed at 6.0 instead of 3.0). Neutralise it to
+            # 1.0 here; the reported per-module weight is folded into alpha.
             from .lora import _set_layer_training_weight
-            _set_layer_training_weight(layer, float(state_dict[block_key].item()))
+            _set_layer_training_weight(layer, 1.0)
         if alpha_key in state_dict or block_key in state_dict:
             layer.restore_alpha(saved_alpha)
 

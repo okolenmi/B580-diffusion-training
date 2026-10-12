@@ -176,8 +176,12 @@ def check_a_trained_weight_survives_the_file(tmp: Path):
         load_lora_into_registry(fresh_registry, state, source_description=out)
 
         x = torch.randn(7, 8)
-        if cls is LoRALinear:
-            assert abs(fresh.training_weight - 2.0) < 1e-9, fresh.training_weight
+        # What must hold is the STRENGTH and the forward, not the per-layer
+        # weight report: the file now carries the effective alpha
+        # (6.0*2.0), so the loaded layer's scaling is alpha/rank with
+        # training_weight neutralised rather than (6.0/4)*2.0 recomputed
+        # from a 2.0 weight. Both spellings give the same number, and the
+        # forward below is what actually pins it.
         assert abs(fresh.scaling - (6.0 / 4) * 2.0) < 1e-6, (cls.__name__, fresh.scaling)
         torch.testing.assert_close(fresh(x), trained(x), rtol=1e-4, atol=1e-5)
     print("    PASS")
@@ -234,6 +238,87 @@ def check_a_zero_lr_schedule_still_builds_its_summary_line():
     print("    PASS")
 
 
+def check_the_file_replays_training_for_an_outsider_who_ignores_the_metadata():
+    print("[an outside reader (ComfyUI/diffusers: delta = B@A * alpha/rank, "
+          "metadata ignored) reproduces the trained delta exactly]")
+    from nodes.model.lora import LoRAConfig, inject_lora_into_unet
+    torch.manual_seed(0)
+    for weight in (0.5, 1.0, 2.0):
+        cfg = LoRAConfig(rank=4, alpha=4.0, block_weights={"down": weight},
+                         target_modules="to_q", target_conditioning_path=False)
+
+        class Down(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.to_q = nn.Linear(8, 8)
+
+        class Root(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.down, self.up = Down(), Down()
+
+        model = Root()
+        registry = inject_lora_into_unet(model, cfg)
+        layer = [l for n, _, _, l in registry if n == "down.to_q"][0]
+        with torch.no_grad():  # lora_B starts at zero, so give it real values
+            layer.lora_A.normal_(0, 0.1)
+            layer.lora_B.normal_(0, 0.1)
+        trained_delta = (layer.lora_B @ layer.lora_A) * layer.scaling
+
+        state = extract_lora_weights(registry)
+        key = next(k for k in state if k.endswith(".alpha") and "down" in k)
+        alpha = float(state[key].detach())
+        up = state[key.replace(".alpha", ".lora_up.weight")]
+        down = state[key.replace(".alpha", ".lora_down.weight")]
+        # Exactly what comfyi/weight_adapter builds; `.block_weight` is not
+        # a tensor any outsider reads, so this is the whole contract.
+        outsider_delta = (up @ down) * (alpha / cfg.rank)
+        torch.testing.assert_close(outsider_delta, trained_delta,
+                                   rtol=1e-5, atol=1e-6,
+                                   msg=lambda m: f"weight={weight}: {m}")
+        assert abs(alpha - cfg.alpha * weight) < 1e-6, (alpha, cfg.alpha * weight)
+    print("    PASS")
+
+
+def check_our_own_loader_does_not_apply_the_weight_twice():
+    print("[a file carrying both effective alpha and .block_weight reloads at "
+          "the trained scaling, not alpha*w^2]")
+    from nodes.model.lora import LoRAConfig, inject_lora_into_unet, load_lora_into_model
+    torch.manual_seed(0)
+
+    def build():
+        cfg = LoRAConfig(rank=4, alpha=4.0, block_weights={"down": 0.5},
+                         target_modules="to_q", target_conditioning_path=False)
+
+        class Down(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.to_q = nn.Linear(8, 8)
+
+        class Root(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.down, self.up = Down(), Down()
+
+        model = Root()
+        return cfg, inject_lora_into_unet(model, cfg)
+
+    cfg, registry = build()
+    layer = [l for n, _, _, l in registry if n == "down.to_q"][0]
+    with torch.no_grad():
+        layer.lora_A.normal_(0, 0.1)
+        layer.lora_B.normal_(0, 0.1)
+    before = layer.scaling
+    state = extract_lora_weights(registry)
+    _, reloaded = build()
+    load_lora_into_model(reloaded, state)
+    layer2 = [l for n, _, _, l in reloaded if n == "down.to_q"][0]
+    assert abs(before - layer2.scaling) < 1e-9, (before, layer2.scaling)
+    torch.testing.assert_close(layer2.lora_A, layer.lora_A)
+    torch.testing.assert_close(layer2.lora_B, layer.lora_B)
+    print("    PASS")
+
+
 def main():
     check_every_layer_kind_reports_its_weight()
     check_all_three_extractors_agree_for_an_unsplit_layer()
@@ -242,6 +327,8 @@ def main():
     check_a_file_from_before_the_field_keeps_the_configured_weight()
     check_health_summary_handles_conv_adapters()
     check_a_zero_lr_schedule_still_builds_its_summary_line()
+    check_the_file_replays_training_for_an_outsider_who_ignores_the_metadata()
+    check_our_own_loader_does_not_apply_the_weight_twice()
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         try:

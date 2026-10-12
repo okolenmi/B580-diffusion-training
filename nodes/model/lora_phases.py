@@ -317,10 +317,16 @@ def extract_combined_weights(registry) -> dict:
             A, B, _scaling = chain[0]
             weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
             weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
-            weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
-            # Same key lora.extract_lora_weights writes: this is the path the
-            # graph route saves through, and without it the trained block
-            # weight is dropped (D2 only reached the other extractor).
+            # EFFECTIVE alpha = alpha * block_weight (see
+            # lora.extract_lora_weights): an outside reader rebuilds the
+            # delta as (B@A)*(alpha/rank) and cannot see `.block_weight`,
+            # so writing the nominal alpha here would apply a 0.5-weighted
+            # module at full strength. This single-generation branch is the
+            # one the graph route actually saves through, so it is the one
+            # the strength bug reached.
+            weights[f"{key}.alpha"] = torch.tensor(
+                [float(layer.alpha) * layer_training_weight(layer)],
+                dtype=torch.float32)
             weights[f"{key}.block_weight"] = torch.tensor(
                 [layer_training_weight(layer)], dtype=torch.float32)
             if is_dora:
@@ -378,7 +384,12 @@ def extract_own_generation_weights(registry) -> dict:
         key = lora_key(full_name)
         weights[f"{key}.lora_down.weight"] = A.detach().cpu().contiguous()
         weights[f"{key}.lora_up.weight"] = B.detach().cpu().contiguous()
-        weights[f"{key}.alpha"] = torch.tensor([float(layer.alpha)], dtype=torch.float32)
+        # EFFECTIVE alpha, same reason as in extract_combined_weights: an
+        # outside reader sees only alpha/rank, so the block weight has to be
+        # folded in for the file to replay the trained strength.
+        weights[f"{key}.alpha"] = torch.tensor(
+            [float(layer.alpha) * layer_training_weight(layer)],
+            dtype=torch.float32)
         weights[f"{key}.block_weight"] = torch.tensor(
             [layer_training_weight(layer)], dtype=torch.float32)
         if isinstance(layer, (DoRALinear, DoRAConv2d)):

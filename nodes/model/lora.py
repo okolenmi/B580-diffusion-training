@@ -689,7 +689,23 @@ def extract_lora_weights(registry: List[Tuple[str, nn.Module, str, nn.Module]],
         A, B = lora_layer.get_lora_weights()
         weights[f"{lora_key}{_DOWN_SUFFIX}"] = A.detach().cpu().contiguous()
         weights[f"{lora_key}{_UP_SUFFIX}"]   = B.detach().cpu().contiguous()
-        weights[f"{lora_key}{_ALPHA_SUFFIX}"] = torch.tensor([lora_layer.alpha],
+        # EFFECTIVE alpha = alpha * block_weight, not the nominal one.
+        #
+        # A reader (ComfyUI, diffusers, peft -- i.e. everything outside this
+        # project) reconstructs the delta as `(lora_B @ lora_A) * (alpha /
+        # rank)`. Training applied `(alpha / rank) * training_weight`
+        # (`LoRALinear.forward`). Writing the nominal alpha therefore made
+        # every external reader apply the delta `1/training_weight` times
+        # too strongly: measured exactly, a 0.5 block weight came back at
+        # 2x the strength it was trained at.
+        #
+        # `alpha` is the one strength field every LoRA reader already
+        # honours, so folding the weight into it is what makes the file
+        # mean the same thing everywhere. The `.block_weight` key below is
+        # kept as well -- this project's own loader needs it to restore
+        # per-module weights for a *resume* (see load_lora_into_model).
+        effective_alpha = lora_layer.alpha * layer_training_weight(lora_layer)
+        weights[f"{lora_key}{_ALPHA_SUFFIX}"] = torch.tensor([effective_alpha],
                                                               dtype=torch.float32)
         # The block weight is part of the trained strength (forward applies
         # (alpha/rank)*training_weight), so it must round-trip like alpha:
@@ -716,6 +732,9 @@ def load_lora_into_model(registry: List[Tuple[str, nn.Module, str, nn.Module]],
             lora_layer.load_lora_weights(state_dict[A_key], state_dict[B_key])
             # Restore the alpha/scaling from the checkpoint so that a run resumed
             # with a different alpha in the config still uses the trained scaling.
+            block_key = f"{lora_key}.block_weight"
+            saved_weight = (float(state_dict[block_key].item())
+                            if block_key in state_dict else None)
             if alpha_key in state_dict:
                 saved_alpha = state_dict[alpha_key].item()
                 if abs(saved_alpha - lora_layer.alpha) > 1e-6:
@@ -723,19 +742,24 @@ def load_lora_into_model(registry: List[Tuple[str, nn.Module, str, nn.Module]],
                           f"(checkpoint={saved_alpha}, config={lora_layer.alpha}). "
                           f"Using checkpoint value.")
                 lora_layer.alpha = saved_alpha
-            # The block weight rides along the same way: a file that carries
-            # it (written by extract_lora_weights above) restores the trained
-            # strength exactly; a file that predates the key keeps the legacy
-            # behaviour (the config's weight applies).
-            block_key = f"{lora_key}.block_weight"
-            if block_key in state_dict:
-                saved_weight = float(state_dict[block_key].item())
+            if saved_weight is not None:
+                # The file carries the EFFECTIVE alpha (already
+                # alpha*weight -- see extract_lora_weights), so the weight
+                # is folded into the alpha we just restored. Leaving
+                # training_weight at its trained value would apply it a
+                # second time (alpha*w/rank * w) and make a resume train
+                # at w^2 the strength it was trained at, so it is
+                # neutralised here. `saved_weight` is still recorded on the
+                # layer for anything that reports the per-module weight.
                 current = layer_training_weight(lora_layer)
                 if abs(saved_weight - current) > 1e-6:
-                    print(f"    [LoRA] {full_name}: block_weight mismatch "
-                          f"(checkpoint={saved_weight}, config={current}). "
-                          f"Using checkpoint value.")
-                _set_layer_training_weight(lora_layer, saved_weight)
+                    print(f"    [LoRA] {full_name}: block_weight differs "
+                          f"(checkpoint={saved_weight}, config={current}); the "
+                          f"file's alpha already includes it.")
+                _set_layer_training_weight(lora_layer, 1.0)
+            # A file that predates the `.block_weight` key carries the
+            # NOMINAL alpha, so the config's weight still applies (the
+            # legacy behaviour, kept so old files load unchanged).
             lora_layer.scaling = ((lora_layer.alpha / lora_layer.rank)
                                   * layer_training_weight(lora_layer))
 

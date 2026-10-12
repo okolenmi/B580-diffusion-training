@@ -151,12 +151,35 @@ def check_unknown_key_degrades_not_breaks():
     print("    PASS: falls back to a real (if now CPU-side) call rather than failing")
 
 
+def check_warm_respects_the_cache_cap():
+    print("[warm_and_unload encodes only what the cache can retain, not the full key set]")
+    from nodes.model.text_encoder_prewarm import (
+        Discovery, StopReason, warm_and_unload)
+    inner = _CountingEncoder()
+    cached = CachingTextEncoder(inner, max_entries=2)
+    keys = frozenset({(f"prompt {i}", 1, 512, 512, 1) for i in range(4)})
+    discovery = Discovery(keys=keys, batches_seen=4, prompts_found=4,
+                          reason=StopReason.COMPLETED)
+    warm_and_unload(cached, discovery)
+    # Without the cap this encodes all 4 and the LRU evicts the warm's own
+    # head while the tail is still encoding -- measured 38 encodes for an
+    # 8-entry cache through the managed route's pre-wrapped path. The
+    # retained set is the alphabetical head either way; the cap only cuts
+    # waste, never changes which keys training can hit.
+    check_warm = len(inner.prompt_calls)
+    assert check_warm == 2, \
+        f"expected exactly the 2 retainable prompts encoded, got {check_warm}"
+    assert inner.unloaded, "must still unload after the capped warm"
+    print("    PASS")
+
+
 def main():
     check_contracts()
     check_warms_exactly_the_keys_training_will_request()
     check_unloads_after_warming()
     check_post_warmup_calls_are_free()
     check_unknown_key_degrades_not_breaks()
+    check_warm_respects_the_cache_cap()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

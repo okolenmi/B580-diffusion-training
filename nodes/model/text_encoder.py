@@ -275,8 +275,23 @@ class SDXLTextEncoder(TextEncoder):
         its cost; this method shouldn't force one on every single call
         on its own account. Confirmed via profiling this was a real,
         measurable, previously-invisible cost, not a theoretical one --
-        see docs/known-issues/pending-testing.md's entry on this."""
-        self._device_before_offload = self._encoder.device
+        see docs/known-issues/pending-testing.md's entry on this.
+
+        Records the device only when nothing is recorded yet -- the
+        same guard unload() uses, and missing here until measured
+        otherwise. unload() leaves the encoder on CPU *with* "xpu"
+        recorded (that is what lets a later reload() bring it back),
+        and a per-step release() on that already-CPU encoder reaches
+        this method: recording "cpu" then would clobber the unload
+        record, and every later miss would reload() to "cpu" -- a no-op
+        that strands the encoder on the host, so each miss encodes on
+        CPU (~2-6 s measured on the B580) instead of the device (~30 ms)
+        while the residency accounting keeps reporting it managed.
+        Measured sequence: unload (before_offload=xpu) -> release ->
+        offload (before_offload=cpu, the clobber) -> ensure_loaded ->
+        reload to cpu -> 6115 ms CPU miss encode at reserved=0."""
+        if self._device_before_offload is None:
+            self._device_before_offload = self._encoder.device
         self._encoder.clip_model = self._encoder.clip_model.cpu()
         if self._encoder._embedder is not None:
             self._encoder._embedder = self._encoder._embedder.cpu()

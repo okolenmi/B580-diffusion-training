@@ -157,11 +157,45 @@ def check_footprint_bytes_is_zero_while_unloaded_too():
     print("    PASS")
 
 
+def check_offload_after_unload_keeps_the_unload_remembered_device():
+    """offload() on an already-unloaded (CPU) encoder must not clobber
+    unload()'s device record with "cpu".
+
+    The production sequence: prewarm warms then unload()s CLIP (record:
+    "xpu", encoder on CPU), and on a tight budget the controller
+    releases text_encoder every step -- release() reaches offload()
+    while the encoder is already on CPU. An unguarded record here
+    overwrote "xpu" with "cpu", so the next miss's ensure_loaded()
+    reload()ed to "cpu" -- a no-op stranding the encoder on the host,
+    and every later miss encoded on CPU (~2-6 s measured on the B580
+    with real weights) instead of the device (~30 ms), while residency
+    accounting kept reporting it managed. Same guard unload() itself
+    uses; reload() consumes the record, so nothing stale accumulates.
+    """
+    print("[offload() after unload() keeps the unload-remembered device, "
+          "does not record \"cpu\" over it]")
+    stub = _UnloadableStub()  # starts on "xpu", like a real loaded CLIP
+    encoder = SDXLTextEncoder(stub)
+    encoder.unload()
+    check(encoder._device_before_offload == "xpu",
+          f"sanity: unload() must record xpu, got {encoder._device_before_offload}")
+    encoder.offload()  # the per-step release path on an already-CPU encoder
+    check(encoder._device_before_offload == "xpu",
+          f"offload() must not overwrite unload()'s record with cpu, got "
+          f"{encoder._device_before_offload}")
+    check(stub.device == "cpu", "offload() itself must still have completed")
+    encoder.reload(device="cpu")  # completes on CPU; the remembered value is the point
+    check(encoder._device_before_offload is None,
+          "reload() must consume the record, not leave it stale")
+    print("    PASS")
+
+
 def main():
     check_offload_moves_to_cpu_without_calling_unload_or_gc_or_empty_cache()
     check_reload_restores_the_remembered_device()
     check_footprint_bytes_is_zero_while_offloaded()
     check_footprint_bytes_is_zero_while_unloaded_too()
+    check_offload_after_unload_keeps_the_unload_remembered_device()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

@@ -360,7 +360,15 @@ def warm_and_unload(cached: CachingTextEncoder, discovery: Discovery) -> int:
     prompt_keys = sorted({(p, bs) for p, bs, _, _, _ in keys})
     resolution_keys = sorted({(h, w, n) for _, _, h, w, n in keys})
     capacity = prompt_capacity()
-    warmable = prompt_keys[:capacity]
+    # Never warm more than the cache itself can retain. A pre-wrapped
+    # cache (ManagedLoRATrainerNode keeps LoRATrainingConfigNode's
+    # cache_text_encoder wrap, with its own smaller max_entries) would
+    # otherwise encode the full warmable set and LRU-evict its own head
+    # while the tail is still encoding -- measured: 38 encodes for an
+    # 8-entry cache, 30 of them evicted before training started. The
+    # retained set is the alphabetical head either way; the cap only
+    # cuts waste, it never changes which keys training can hit.
+    warmable = prompt_keys[:max(1, min(capacity, cached.max_entries))]
     skipped = len(prompt_keys) - len(warmable)
     # Prompt half first, so a truncated warm still fills the cache rather
     # than spending its budget on resolution keys. (Both halves are cached
@@ -453,11 +461,17 @@ def warm_and_unload(cached: CachingTextEncoder, discovery: Discovery) -> int:
             flush=True,
         )
     if skipped:
+        # Two caps can bind: the host-RAM budget (capacity) or the cache's
+        # own max_entries (a pre-wrapped smaller cache). Name the one that
+        # did -- "raise the budget" is wrong advice when the cache is full.
+        binding = (f"the cache's own max_entries ({cached.max_entries:,})"
+                   if len(prompt_keys) > cached.max_entries
+                   else f"the {PREWARM_HOST_RAM_BUDGET_BYTES / 1024 ** 3:.0f} GB "
+                        f"host-RAM budget ({capacity:,} entries at "
+                        f"{PREWARM_BYTES_PER_PROMPT_ENTRY // 1024} KB each)")
         print(
             f"  [prewarm] WARNING: {skipped} of {len(prompt_keys)} distinct "
-            f"prompt(s) did NOT fit the {PREWARM_HOST_RAM_BUDGET_BYTES / 1024 ** 3:.0f} GB "
-            f"host-RAM budget ({capacity:,} entries at "
-            f"{PREWARM_BYTES_PER_PROMPT_ENTRY // 1024} KB each) and were not "
+            f"prompt(s) did NOT fit {binding} and were not "
             f"warmed. They will be cache misses on first use: correct, and it "
             f"re-loads CLIP at ~790 ms each (364 load + 30 encode + 396 evict, "
             f"measured) rather than the {marginal:.0f} ms a warm one costs. "

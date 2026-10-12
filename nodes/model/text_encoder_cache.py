@@ -109,6 +109,15 @@ class CachingTextEncoder(TextEncoder):
         """
         return bool(getattr(self._inner, "batching_available", lambda: False)())
 
+    @property
+    def max_entries(self) -> int:
+        """Per-cache entry cap, one each for the prompt and resolution
+        halves. Read by the warm pass (nodes/model/text_encoder_prewarm.py)
+        so it encodes only what the cache can actually retain -- warming
+        past this is pure waste: the LRU evicts the warm's own head while
+        the tail is still encoding."""
+        return self._max_entries
+
     def warm_prompts(self, prompts, batch_size: int = 1) -> int:
         """Encode a batch of prompts into the cache. Returns how many.
 

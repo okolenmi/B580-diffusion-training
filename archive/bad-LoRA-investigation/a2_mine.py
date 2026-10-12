@@ -58,7 +58,7 @@ def main() -> int:
                          "actually trains. A/B switch from "
                          "conditioning_path_switch.patch.")
     ap.add_argument("--target-modules", default="attention",
-                    choices=["attention", "kohya_default", "kohya_plus",
+                    choices=["attention", "kohya_default", "kohya_plus", "kohya_label",
                              "kohya_default,label_emb"],
                     help="attention (default): to_q/to_k/to_v/to_out.0 only (560 "
                          "modules + cond path = 564). kohya_default: also "
@@ -84,6 +84,13 @@ def main() -> int:
                          "for the 722/726 B arms: +78M trainable params push "
                          "sustained VRAM to ~11.2 GB, where this card wedges "
                          "instead of raising OOM.")
+    ap.add_argument("--block-weighting", default="",
+                    help="per-block strength multipliers, "
+                         "'input_blocks.7:0.25,middle_block:1.0'. Blank = "
+                         "off. Added for the D2 end-to-end check: train with "
+                         "and without it and confirm the weighted file "
+                         "replays the trained strength in an outside reader "
+                         "(the weight is folded into the exported alpha).")
     ap.add_argument("--save-every", type=int, default=0,
                     help="save a checkpoint LoRA every N steps as "
                          "<out>_stepNNNNN.safetensors (plus the final save). "
@@ -134,7 +141,8 @@ def main() -> int:
     model = ComfyUNetLoRANode(ctx).build(
         weights=weights, rank=args.rank, alpha=args.alpha,
         use_checkpoint=True, target_modules=args.target_modules,
-        target_conditioning_path=args.target_conditioning_path)["model"]
+        target_conditioning_path=args.target_conditioning_path,
+        block_weights=args.block_weighting or None)["model"]
     encoder = CachingTextEncoderNode(ctx).build(
         encoder=SDXLTextEncoderNode(ctx).build(weights=weights)["encoder"]
     )["encoder"]

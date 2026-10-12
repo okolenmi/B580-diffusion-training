@@ -522,12 +522,31 @@ the real layer classes and real safetensors I/O
 extractors, the file holds only the four suffixes readers consume, and the
 weight survives save -> file -> load.
 
-**Not proven:** (1) a LoRA trained on the B580 with `block_weighting` set,
-saved, and loaded into diffusers and ComfyUI -- the converter claim above
-is executed code, but loading a *real* file there was not done, and
-ComfyUI's loader was not read. (2) That external tools apply the trained
-strength: they read `alpha / rank` and know nothing of the metadata, so a
-LoRA trained at block weight w behaves at strength 1 in them. Baking the
-weight into the tensors (as the phase-split combine already does) would
-make it portable but changes what `lora_continue_from` restores; decide
-before relying on block weights outside this project.
+**Resolved 2026-10-11 (D2).** Point (2) below was a real defect and is
+now fixed. External tools read `alpha / rank` and know nothing of the
+metadata, so a LoRA trained at block weight w was applied at strength
+**1/w** by every outside reader: measured, a 0.5 weight came back at 2x
+the trained strength, and a 2.0 weight reloaded at 6.0 instead of 3.0
+(alpha 12/rank 4). The export now writes the **effective** alpha
+(`alpha * weight`) -- alpha being the one strength field every reader
+already honours -- at all three export sites, and both loaders neutralise
+`training_weight` so the weight is not applied twice on resume. Verified
+numerically for weights 0.5/1.0/2.0 on LoRA and DoRA through the real
+save path: an outside reader's `(B@A)*(alpha/rank)` now equals the
+trained delta exactly.
+
+`block_weighting` was additionally a **dead key**: it parsed and
+validated in `config_model.py`, was labelled in the UI data, and nothing
+read it -- no parser for the string, absent from `FLAT_TO_SECTION_MAP`,
+and no Port on the injector node. It now has `lora.parse_block_weights`
+and a `block_weights` node Port (default None = off, so no existing
+graph changes). Verified on the real SDXL UNet: `"input_blocks.7:0.25"`
+gives that block's 20 adapters weight 0.25 with neighbours at 1.0.
+
+**Still not proven:** a LoRA actually trained on the B580 with
+`block_weighting` set and then opened in ComfyUI's own loader. The
+numerical claim is proven (an outside reader's formula reproduces the
+trained delta); what is unverified is ComfyUI's actual render path
+matching that formula, and diffusers loading a real weighted file. Also
+still open: the config key is not wired into a config->graph build path
+(the broader `open.md` deadness item).

@@ -49,13 +49,17 @@ comment. See
 
 Not covered by that run: non-SDXL checkpoints, and bf16 device forwards.
 
-## 4. Block-weight metadata on real weights (D2 follow-up)
+## 4. ~~Block-weight metadata on real weights (D2 follow-up)~~ DONE (the
+strength half); render check is yours
 
-Proven on CPU with the real layer classes and real safetensors I/O
-(`smoke_test_lora_file_format.py`), but never on a LoRA actually trained
-with `block_weighting` set. To confirm: train a short run with
-`block_weighting = "0.5,1.0"`, save, then load the file in diffusers
-(`load_lora_weights`) and in ComfyUI and confirm the weights differ from
-a `1.0` run as the metadata says they should. Until then the
-diffusers-compatibility claim rests on executing its converter against a
-toy state dict, not on a real file.
+The defect is fixed and proven numerically: the export writes the
+effective alpha (`alpha * weight`), so an outside reader's
+`(B@A)*(alpha/rank)` reproduces the trained delta exactly for weights
+0.5/1.0/2.0 on LoRA and DoRA. Two LoRAs were trained to exercise it
+(`BW_armA_plain`, `BW_armB_weighted` in ComfyUI `models/loras/`).
+
+What only you can confirm: open **both** in ComfyUI at the same seed and
+strength. They must look **different** — `BW_armB_weighted` was trained
+with `input_blocks.7:0.25` and `middle_block:1.0`, so its mid-UNet
+contribution is deliberately a quarter strength. If the two renders are
+identical, the weight is not reaching the file and this is a fail.

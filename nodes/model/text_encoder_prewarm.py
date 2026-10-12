@@ -253,6 +253,17 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
         # count in the key is how many rows that size fills, matching
         # TextEncoder.encode_per_sample()'s grouping.
         prompt_key = (batch["prompt"], batch["x_t"].shape[0])
+        # The prompt keys training will actually request. A uniform batch
+        # asks for (prompt, batch_size); a batch of *mixed* captions (caption
+        # dropout, a caption pool, group_by_size_only) goes through
+        # encode_per_sample_prompts, which asks for one (prompt, 1) per
+        # distinct caption -- keys the old single `prompt_key` never named,
+        # so every one of them was a cache miss that re-loaded CLIP.
+        batch_prompts = batch.get("prompts")
+        if batch_prompts is not None and len(set(batch_prompts)) > 1:
+            request_keys = [(p, 1) for p in dict.fromkeys(batch_prompts)]
+        else:
+            request_keys = [prompt_key]
         valid_mask = batch.get("valid_mask")
         if valid_mask is None:
             sizes = [(batch["x_t"].shape[2] * 8, batch["x_t"].shape[3] * 8,
@@ -275,16 +286,16 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
         # "Stale" is now per *batch*, not per key: a bucketed batch asks for
         # several sizes at once, and a batch that introduced a new size is
         # not stale no matter how many of its sizes were repeats.
-        fresh = [s for s in sizes
-                 if (prompt_key[0], prompt_key[1], s[0], s[1], s[2])
-                 not in unique_keys]
+        fresh = [(rk, s) for rk in request_keys for s in sizes
+                 if (rk[0], rk[1], s[0], s[1], s[2]) not in unique_keys]
         if fresh:
-            for h, w, n in sizes:
-                unique_keys.add((prompt_key[0], prompt_key[1], h, w, n))
+            for rk in request_keys:
+                for h, w, n in sizes:
+                    unique_keys.add((rk[0], rk[1], h, w, n))
             stale_batches = 0
         else:
             stale_batches += 1
-        prompt_keys.add(prompt_key)
+        prompt_keys.update(request_keys)
         threshold = None
         if stop_after_no_new_prompts is not None:
             threshold = max(stop_after_no_new_prompts,
@@ -292,6 +303,17 @@ def discover_dataset_keys(dataset: TrainingBatchSource,
         if threshold is not None and stale_batches >= threshold:
             reason = StopReason.NO_NEW_PROMPTS
             break
+
+    # Prompts a pass over the source may not show (a caption pool's cached
+    # variants: one epoch draws one of K per image). Asked after the loop so
+    # the source has loaded its data; paired with the resolution keys already
+    # found, since the prompt half of the cache is keyed without them.
+    universe = list(getattr(dataset, "prompt_universe", lambda: [])())
+    if universe and unique_keys:
+        _, _, h, w, n = next(iter(unique_keys))
+        for p in universe:
+            unique_keys.add((p, 1, h, w, n))
+            prompt_keys.add((p, 1))
 
     if reason is StopReason.MAX_BATCHES:
         logger.warning(

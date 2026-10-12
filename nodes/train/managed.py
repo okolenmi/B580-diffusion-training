@@ -488,8 +488,10 @@ class EncodeConditioningPhase(ManagedStepPhase):
     def __init__(self, text_encoder: TextEncoder, resource_control: ResourceControlHandle,
                  controller: "AdaptiveResidencyController",
                  device_ctx: Optional[DeviceContext] = None, profile: bool = False,
-                 ensure_loaded_before_encode: bool = True):
+                 ensure_loaded_before_encode: bool = True, blend=None):
         self._text_encoder = text_encoder
+        # Optional ConditioningBlend (nodes/train/conditioning_blend.py).
+        self._blend = blend
         self._resource_control = resource_control
         self._controller = controller
         self._device_ctx = device_ctx
@@ -513,7 +515,7 @@ class EncodeConditioningPhase(ManagedStepPhase):
         ctx_emb, y = encode_with_true_sizes(
             self._text_encoder, batch["prompt"], x_t.shape[0], x_t,
             state.extras.get("valid_mask"),
-            prompts=batch.get("prompts"))
+            prompts=batch.get("prompts"), blend=self._blend)
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         if self._controller.should_release("text_encoder"):
@@ -1414,6 +1416,7 @@ class ManagedLoRATrainerNode(TrainerNode):
             DiscreteLinearNoiseSchedule(), EpsParameterization(), KarrasInputScaler())
         loss_weighting = inputs.get("loss_weighting") or UniformLossWeighting()
         bucket_balance = inputs.get("bucket_balance")  # None = no rebalancing
+        conditioning_blend = inputs.get("conditioning_blend")  # None = captions as stored
         profile: bool = inputs.get("profile", self.INPUTS["profile"].default)
         empty_cache_every_n_steps: int = inputs.get(
             "empty_cache_every_n_steps", self.INPUTS["empty_cache_every_n_steps"].default)
@@ -1456,6 +1459,11 @@ class ManagedLoRATrainerNode(TrainerNode):
             )
             prewarm = discover_dataset_keys(
                 batches, max_batches=MAX_DISCOVERY_BATCHES)
+            if conditioning_blend is not None and conditioning_blend.active:
+                # The blend asks for the empty prompt too; warm it so the
+                # first blended step is not a miss that re-loads CLIP.
+                from .conditioning_blend import with_blank_prompt
+                prewarm = with_blank_prompt(prewarm)
             prewarm_keys = prewarm.keys
             if isinstance(text_encoder, CachingTextEncoder):
                 # LoRATrainingConfigNode's cache_text_encoder wrap already in place
@@ -1614,7 +1622,8 @@ class ManagedLoRATrainerNode(TrainerNode):
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
             EncodeConditioningPhase(text_encoder, resource_control, controller,
                                      device_ctx=device_ctx, profile=profile,
-                                     ensure_loaded_before_encode=not prewarm_text_encoder),
+                                     ensure_loaded_before_encode=not prewarm_text_encoder,
+                                     blend=conditioning_blend),
             ZeroGradPhase(optimizer, lr_schedule, is_fused, grad_accum=grad_accum,
                           skip_zero_grad=graph_runner is not None),
             *( [GraphForwardLossBackwardPhase(

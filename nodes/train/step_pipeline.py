@@ -254,8 +254,11 @@ class EncodeConditioningPhase(StepPhase):
     implementing this same contract (two encode() calls, cond and
     uncond), not a branch inside this one."""
 
-    def __init__(self, text_encoder: TextEncoder):
+    def __init__(self, text_encoder: TextEncoder, blend=None):
         self._text_encoder = text_encoder
+        # Optional ConditioningBlend (nodes/train/conditioning_blend.py);
+        # None or an inactive one leaves the encode untouched.
+        self._blend = blend
 
     def run(self, state: StepState) -> StepState:
         import torch
@@ -270,7 +273,7 @@ class EncodeConditioningPhase(StepPhase):
         ctx_emb, y = encode_with_true_sizes(
             self._text_encoder, batch["prompt"], x_t.shape[0], x_t,
             state.extras.get("valid_mask"),
-            prompts=batch.get("prompts"))
+            prompts=batch.get("prompts"), blend=self._blend)
         state.extras["ctx_emb"] = ctx_emb.to(device=state.device, dtype=torch.bfloat16)
         state.extras["y"] = y.to(device=state.device, dtype=torch.bfloat16)
         return state

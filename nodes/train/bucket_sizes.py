@@ -74,7 +74,7 @@ def true_sizes_from_mask(valid_mask, downscale: int = 8) -> list[tuple[int, int]
 
 def encode_with_true_sizes(text_encoder, prompt: str, batch_size: int,
                            x_t, valid_mask, downscale: int = 8,
-                           prompts: list[str] | None = None):
+                           prompts: list[str] | None = None, blend=None):
     """(ctx, y) for a batch, describing each sample's *true* extent.
 
     The one-call form when there is nothing to correct -- no mask, so no
@@ -106,10 +106,27 @@ def encode_with_true_sizes(text_encoder, prompt: str, batch_size: int,
                 "per-sample sizes are unrecoverable without the mask, so this "
                 "batch cannot be conditioned. Size-only grouping requires "
                 "shape bucketing (which always ships a mask).")
-        return text_encoder.encode(prompt, batch_size=batch_size,
-                                   height=x_t.shape[2] * downscale,
-                                   width=x_t.shape[3] * downscale)
-    sizes = true_sizes_from_mask(valid_mask, downscale=downscale)
-    if prompts is not None and len(set(prompts)) > 1:
-        return text_encoder.encode_per_sample_prompts(prompts, sizes)
-    return text_encoder.encode_per_sample(prompt, batch_size, sizes)
+        sizes = [(x_t.shape[2] * downscale, x_t.shape[3] * downscale)] * batch_size
+        ctx, y = text_encoder.encode(prompt, batch_size=batch_size,
+                                     height=sizes[0][0], width=sizes[0][1])
+    else:
+        sizes = true_sizes_from_mask(valid_mask, downscale=downscale)
+        if prompts is not None and len(set(prompts)) > 1:
+            ctx, y = text_encoder.encode_per_sample_prompts(prompts, sizes)
+        else:
+            ctx, y = text_encoder.encode_per_sample(prompt, batch_size, sizes)
+    if blend is not None and blend.active:
+        ctx, y = _blend_with_blank(text_encoder, blend, ctx, y, sizes)
+    return ctx, y
+
+
+def _blend_with_blank(text_encoder, blend, ctx, y, sizes):
+    """Mix a batch's conditioning toward the empty prompt's (see
+    nodes/train/conditioning_blend.py). The blank is requested through
+    `encode_per_sample_prompts` -- one ``("", 1)`` cache key whatever the
+    batch size -- with the same per-sample sizes, so its resolution rows
+    equal the caption's and only the text part moves."""
+    from .conditioning_blend import BLANK_PROMPT
+    ctx0, y0 = text_encoder.encode_per_sample_prompts(
+        [BLANK_PROMPT] * len(sizes), sizes)
+    return blend.mix(ctx, y, ctx0, y0, blend.draw(len(sizes)))

@@ -23,7 +23,8 @@ class ManagedDatasetLoader:
                  keep_incomplete: bool = False,
                  shape_bucket_multiple: int = 0,
                  group_by_size_only: bool = False,
-                 caption_dropout: float = 0.0):
+                 caption_dropout: float = 0.0,
+                 caption_pool=None):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
@@ -80,6 +81,20 @@ class ManagedDatasetLoader:
                 f"caption_dropout must be in 0..1, got {caption_dropout}")
         self.caption_dropout = float(caption_dropout)
         self._caption_pool: list[str] = []
+        # A manager.caption_pool.CaptionPool (duck-typed, like bucket_balance:
+        # manager/ does not import nodes/): every sample is trained on a prompt
+        # built from several of the dataset's real captions instead of its own
+        # one. Applied in _merge_samples, so a batch's prompts can differ --
+        # the same mixed-caption batch caption_dropout produces, and it needs
+        # the same thing: a valid_mask to recover per-sample sizes from.
+        self.caption_pool = caption_pool
+        if caption_pool is not None and self.shape_bucket_multiple <= 1:
+            raise ValueError(
+                "a caption pool needs shape_bucket_multiple > 1: it gives one "
+                "batch several different captions, and conditioning such a "
+                "batch needs the valid_mask that only a bucketed run ships "
+                "(nodes/train/bucket_sizes.py). Set the multiple to e.g. 8; "
+                "a dataset of one size just gets all-ones masks.")
         if group_by_size_only and self.shape_bucket_multiple <= 1:
             raise ValueError(
                 "group_by_size_only=True needs shape_bucket_multiple > 1: "
@@ -476,6 +491,8 @@ class ManagedDatasetLoader:
     def _merge_samples(self, samples: list) -> Dict:
         """Merge individual samples into a single batched dict."""
         prompts = [s["prompt"] for s in samples]
+        if self.caption_pool is not None and self.caption_pool.active:
+            prompts = [self.caption_pool.prompt_for(s["pool_index"]) for s in samples]
         if self.caption_dropout > 0.0:
             prompts = self._apply_caption_dropout(prompts)
         out = {
@@ -529,21 +546,32 @@ class ManagedDatasetLoader:
                 out[i] = random.choice(pool)
         return out
 
-    def __iter__(self) -> Iterator[Dict]:
-        """Iterate over samples, yielding batches of batch_size with shared prompt and size.
+    def _ensure_samples(self) -> None:
+        """Load the samples once, and do the per-dataset setup that depends
+        on them (caption pool, caption-dropout pool).
 
-        Implements a bucketing strategy:
-        1. Groups all samples into buckets by (prompt, neg_prompt, size).
-        2. Shuffles samples within each bucket.
-        3. Forms full batches from buckets.
-        4. Groups batches of the same shape into 'clumps' (e.g. 4 batches of same shape).
-        5. Shuffles the clumps to maintain global randomness while minimizing
-           expensive GPU kernel switches between different shapes.
+        One place, reached from both __iter__ and __len__: __len__ also
+        materializes the samples, and when this setup lived only in __iter__
+        a len() before the first iteration left the pools unbuilt -- caption
+        dropout then silently did nothing and a caption pool stayed inactive.
         """
         if self._samples is None:
             print("  [DataLoader] Loading dataset into RAM...")
             self._samples = self._load_all_samples()
             print(f"  [DataLoader] {len(self._samples)} samples loaded.")
+            if self.caption_pool is not None:
+                for i, sample in enumerate(self._samples):
+                    sample["pool_index"] = i
+                if self.caption_pool.prepare(
+                        [sample["prompt"] for sample in self._samples]):
+                    print(f"  [DataLoader] caption pool: "
+                          f"{len(self.caption_pool.universe()) or 'unbounded'} "
+                          f"distinct prompt(s) over {len(self._samples)} sample(s).")
+                else:
+                    print("  [DataLoader] WARNING: caption pool needs at least two "
+                          "distinct non-empty captions in the dataset and found "
+                          "fewer, so it is a no-op and every image keeps its own "
+                          "caption. Caption the dataset first (auto-caption node).")
             if self.caption_dropout > 0.0:
                 self._caption_pool = sorted(
                     {s["prompt"] for s in self._samples})
@@ -555,6 +583,28 @@ class ManagedDatasetLoader:
                           f"no-op. A dataset with one caption leaves "
                           f"cross-attention unconstrained -- see the loader's "
                           f"caption_dropout note.")
+
+    def prompt_universe(self) -> list[str]:
+        """Every prompt a caption pool can serve, for the text-encoder
+        prewarm (nodes/model/text_encoder_prewarm.py). Empty when there is no
+        pool, it is a no-op, or it draws fresh prompts (not enumerable)."""
+        if self.caption_pool is None:
+            return []
+        self._ensure_samples()
+        return self.caption_pool.universe()
+
+    def __iter__(self) -> Iterator[Dict]:
+        """Iterate over samples, yielding batches of batch_size with shared prompt and size.
+
+        Implements a bucketing strategy:
+        1. Groups all samples into buckets by (prompt, neg_prompt, size).
+        2. Shuffles samples within each bucket.
+        3. Forms full batches from buckets.
+        4. Groups batches of the same shape into 'clumps' (e.g. 4 batches of same shape).
+        5. Shuffles the clumps to maintain global randomness while minimizing
+           expensive GPU kernel switches between different shapes.
+        """
+        self._ensure_samples()
 
         # 1. Group by key (prompt, neg_prompt, size) -- or by size bucket
         # alone under group_by_size_only (L4), so one batch can carry
@@ -695,6 +745,5 @@ class ManagedDatasetLoader:
         is the same cache __iter__/_load_all_samples populate, so calling
         __len__ before iterating does not cause a second disk read.
         """
-        if self._samples is None:
-            self._samples = self._load_all_samples()
+        self._ensure_samples()
         return len(self._samples)

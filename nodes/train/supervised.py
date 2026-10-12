@@ -278,7 +278,8 @@ class SupervisedLoRATrainerNode(TrainerNode):
                 gate_train_low=inputs.get("gate_train_low", self.INPUTS["gate_train_low"].default),
                 gate_train_high=inputs.get("gate_train_high", self.INPUTS["gate_train_high"].default),
                 gate_width=inputs.get("gate_width", self.INPUTS["gate_width"].default)),
-            EncodeConditioningPhase(inputs["text_encoder"]),
+            EncodeConditioningPhase(inputs["text_encoder"],
+                                    blend=inputs.get("conditioning_blend")),
             OptimizerBeginStepPhase(optimizer, inputs["lr_schedule"], is_fused,
                                     skip_zero_grad=graph_runner is not None),
             *( [GraphForwardLossBackwardPhase(graph_runner)]

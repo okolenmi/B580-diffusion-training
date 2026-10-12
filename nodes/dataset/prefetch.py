@@ -124,6 +124,9 @@ class PrefetchingBatchSource(TrainingBatchSource):
     def invalidate(self) -> None:
         self._inner.invalidate()
 
+    def prompt_universe(self) -> list[str]:
+        return self._inner.prompt_universe()
+
 
 class PrefetchingBatchSourceNode(DataSourceNode):
     """Wraps a TrainingBatchSource so the next batch's host-side prep

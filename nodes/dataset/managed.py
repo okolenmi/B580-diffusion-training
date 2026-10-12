@@ -13,6 +13,7 @@ from typing import Any, ClassVar, Iterator
 from ..core import Port
 from ..components.layout import ProjectLayout
 from ..train.bucket_balance import BucketBalance
+from .caption_pool import CaptionPoolSettings
 from .handle import TrainingBatchSource
 from .node import DataSourceNode
 from .timestep_modes import T_MODES_TRAIN_TIME
@@ -31,6 +32,9 @@ class ManagedDatasetBatchSource(TrainingBatchSource):
 
     def invalidate(self) -> None:
         self._loader.invalidate_cache()
+
+    def prompt_universe(self) -> list[str]:
+        return self._loader.prompt_universe()
 
 
 class ManagedDatasetSourceNode(DataSourceNode):
@@ -178,6 +182,15 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "grouping, unchanged. Conditioning is assembled per sample "
                 "(one text-encode per distinct caption, cache-served), so a "
                 "mixed batch costs nothing extra in steady state."),
+        "caption_pool": Port(
+            name="caption_pool", type=CaptionPoolSettings, required=False, default=None,
+            doc="Optional -- wire a Caption Pool node's output here to train each "
+                "image on a prompt built from several of the dataset's real captions "
+                "(manager/caption_pool.py), re-drawn per epoch from a bounded cached "
+                "set so the text-encoder prewarm still works. Needs "
+                "shape_bucket_multiple > 1 (batches then carry mixed captions) and at "
+                "least two distinct non-empty captions in the dataset; None = every "
+                "image keeps its own caption, unchanged."),
         "project_layout": Port(
             name="project_layout", type=ProjectLayout, required=False, default=None,
             doc="None = ProjectLayout.from_paths_module() -- see nodes/components/layout.py.",
@@ -230,6 +243,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "group_by_size_only", self.INPUTS["group_by_size_only"].default),
             caption_dropout=inputs.get(
                 "caption_dropout", self.INPUTS["caption_dropout"].default),
+            caption_pool=(inputs["caption_pool"].build()
+                          if inputs.get("caption_pool") is not None else None),
         )
         # Size the oneDNN primitive cache to this dataset's shape count
         # (nodes/xpu_env.py's own docstring for why it belongs here).

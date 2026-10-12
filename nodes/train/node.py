@@ -15,6 +15,7 @@ from ..monitor.handle import MonitorHandle
 from ..ui import DisplayModule, Series
 from ..optimizer.handle import OptimizerHandle
 from .bucket_balance import BucketBalance
+from .conditioning_blend import ConditioningBlend
 from .loss import LossWeighting
 from .schedule import LRSchedule
 
@@ -122,6 +123,12 @@ class TrainerNode(Node):
                 "changes no arithmetic). None = today's behavior, bit-identical. The "
                 "same balance object can also be wired into the dataset source node "
                 "for t_mode='adaptive' sampling -- either side alone, or both."),
+        "conditioning_blend": Port(
+            name="conditioning_blend", type=ConditioningBlend, required=False, default=None,
+            doc="Optional -- wire a Conditioning Blend node's output here to train on "
+                "ctx = p*ctx(caption) + (1-p)*ctx(\"\") with p drawn per sample per step "
+                "(nodes/train/conditioning_blend.py). None, or the node at its default "
+                "keep range 1.0..1.0, = captions exactly as stored, bit-identical."),
         "monitor": Port(name="monitor", type=MonitorHandle, required=False, default=None,
                          doc="Optional -- wire a MonitorNode here (e.g. "
                              "TrainingProgressMonitorNode) for a live step/loss/lr feed, "

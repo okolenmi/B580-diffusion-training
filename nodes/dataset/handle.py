@@ -19,3 +19,11 @@ class TrainingBatchSource(ABC):
     @abstractmethod
     def invalidate(self) -> None:
         """Drop any cached samples; next iteration reloads from source."""
+
+    def prompt_universe(self) -> list[str]:
+        """Every prompt this source can serve that one pass over it might not
+        show -- the text-encoder prewarm warms these too. Concrete, and empty,
+        because most sources serve exactly the prompts one pass shows; a
+        source that draws from a bounded pool of prompts (a caption pool)
+        overrides it."""
+        return []

@@ -110,6 +110,34 @@ Other route differences still open: batch 8 vs 4, managed route
 direct route, and `cache_text_encoder: false` (so the towers are
 re-run every step rather than warmed once).
 
+## The base checkpoints are different models
+
+`divA.safetensors` vs `div_4.safetensors`, tensor by tensor:
+
+| component | tensors | differing | max abs diff |
+|---|---|---|---|
+| UNet (`model.diffusion_model.*`) | 1680 | **1656** | 0.4648 |
+| CLIP-L (`conditioner.embedders.0.*`) | 197 | **190** | 0.1797 |
+| CLIP-G (`conditioner.embedders.1.*`) | 390 | **390** | 1.7471 |
+| VAE (`first_stage_model.*`) | 248 | **0** | 0.0000 |
+
+So divA is a finetune with its **own UNet and its own text encoders**,
+sharing only the VAE. Every study-arm LoRA was trained on `div_4`;
+TestAes was trained on `divA`. A LoRA trained against one set of text
+encoders is being applied against a different set at render time, which
+is exactly the class of mismatch that shows up as conditioning damage.
+
+This is the maintainer's own read too ("you trained on div_4. That's the
+biggest difference"), and it is being tested rather than assumed: see
+`runs/BASEMAP_divA.log` for the reciprocal arm — the study harness
+training on `divA` with TestAes's rank/alpha/steps, so the base model is
+the only thing that changed from a LoRA known to survive CLIP-L-only.
+
+Note the asymmetry this does *not* explain: CLIP-G is the *more*
+diverged encoder (max 1.75 vs 0.18), yet the reported failure is
+CLIP-L-specific. That remains unexplained, and is the reason the base
+model is being treated as the leading hypothesis rather than the answer.
+
 ## Still unresolved
 
 None of the above explains a *CLIP_L-specific* failure, and three

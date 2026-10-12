@@ -91,6 +91,12 @@ def main() -> int:
                          "and without it and confirm the weighted file "
                          "replays the trained strength in an outside reader "
                          "(the weight is folded into the exported alpha).")
+    ap.add_argument("--checkpoint", default="div_4.safetensors",
+                    help="base checkpoint filename (ComfyUI checkpoints dir). "
+                         "div_4 by default; divA for the base-model isolation "
+                         "run -- divA and div_4 share a VAE but differ in "
+                         "1656/1680 UNet tensors and in BOTH text encoders "
+                         "(190/197 CLIP-L, 390/390 CLIP-G).")
     ap.add_argument("--save-every", type=int, default=0,
                     help="save a checkpoint LoRA every N steps as "
                          "<out>_stepNNNNN.safetensors (plus the final save). "
@@ -126,7 +132,7 @@ def main() -> int:
     # which are ComfyUI's own models/ subdirs). An absolute path raises
     # "Invalid relative path". Useful side effect: the LoRA lands directly
     # in ComfyUI's loras/ folder, so there is nothing to copy afterwards.
-    weights = SafetensorsCheckpointNode(ctx).build(path="div_4.safetensors")["weights"]
+    weights = SafetensorsCheckpointNode(ctx).build(path=args.checkpoint)["weights"]
 
     from nodes.dataset.managed import ManagedDatasetSourceNode
     batches = ManagedDatasetSourceNode(ctx).build(

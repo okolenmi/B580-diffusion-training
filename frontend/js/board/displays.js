@@ -16,8 +16,9 @@
 import { LossChart } from "../lib/loss_chart.js";
 import {
   barsOf, chartRows, decimate, formatDuration, formatValue, progressOf,
-  referenceLines, scalarOf, seriesFor, textOf,
+  referenceLines, rowsToCsv, scalarOf, seriesFor, textOf,
 } from "./series.js";
+import { COUNTS, ViewWindow, rowsForWindow } from "./view.js";
 
 /** Points a chart is asked to draw. More than the plot has pixels for is
     wasted work; decimate() keeps the extremes so it is never a lie. */
@@ -33,13 +34,55 @@ const div = (cls, text) => {
 /* ---- chart --------------------------------------------------------------- */
 
 function chartDisplay({ module, state }) {
+  const wrap = div("bd-chart-wrap");
+
+  // ---- controls: the old Monitor page's window / freeze / export ----
+  const bar = div("bd-chart-bar");
+  const freeze = document.createElement("button");
+  freeze.type = "button";
+  freeze.className = "bd-btn bd-freeze";
+  freeze.textContent = "Freeze";
+  freeze.title = "Hold the picture where it is while the run continues";
+  const counts = div("bd-counts");
+  const countButtons = COUNTS.map((value) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bd-btn bd-count";
+    b.textContent = value === "all" ? "All" : String(value);
+    b.title = value === "all"
+      ? "Every record (no panning)" : `Window of the last ${value} records`;
+    b.addEventListener("click", () => { view.setCount(value, xs); update(); });
+    counts.append(b);
+    return [b, value];
+  });
+  const readout = div("bd-window", "—");
+  const csv = document.createElement("button");
+  csv.type = "button";
+  csv.className = "bd-btn bd-csv";
+  csv.textContent = "CSV";
+  csv.title = "Download every record this view holds as CSV";
+  bar.append(freeze, counts, readout, csv);
+
   const root = div("bd-chart");
   const canvas = document.createElement("canvas");
   canvas.className = "bd-canvas";
   root.append(canvas);
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.className = "bd-slider";
+  slider.min = "0"; slider.max = "0"; slider.value = "0"; slider.step = "1";
+  slider.title = "Scroll back through the run (needs a window size other than All)";
+  wrap.append(bar, root, slider);
+
+  const view = new ViewWindow();
+  let xs = [];
   let chart = null;
   let signature = "";
+  let lastCount = 0;
   const hidden = new Map(); // series key -> hidden, survives a rebuild
+  const trend = module.scale !== "linear"; // the loss-like chart: is it getting better?
+  const smoothWindow = module.scale === "linear" ? 3 : 24;
 
   const build = (list) => {
     if (chart) {
@@ -52,24 +95,86 @@ function chartDisplay({ module, state }) {
       })),
       maxPoints: MAX_DRAWN_ROWS + 8,
       scale: module.scale === "linear" ? "linear" : "symlog",
-      smoothWindow: module.scale === "linear" ? 3 : 24,
+      smoothWindow,
+      trend,
       xLabel: module.x === "t" ? "t (s)" : "Step",
     });
     signature = list.map((s) => `${s.key}:${s.color}`).join("|");
   };
 
+  const syncControls = (v) => {
+    for (const [b, value] of countButtons) b.classList.toggle("active", value === view.count);
+    freeze.textContent = v.frozen ? "Resume" : "Freeze";
+    freeze.classList.toggle("is-on", v.frozen);
+    slider.disabled = v.sliderDisabled;
+    if (!view.dragging) {
+      slider.max = String(v.maxIdx);
+      slider.value = String(v.startIdx);
+    }
+    if (v.first === null) readout.textContent = "—";
+    else {
+      const unit = module.x === "t" ? "s" : "";
+      readout.textContent = `${module.x === "t" ? "t " : "steps "}${formatValue(v.first)}–${formatValue(v.last)}${unit}`
+        + (v.last < v.latest ? ` / ${formatValue(v.latest)}` : "");
+    }
+  };
+
+  function update() {
+    const list = seriesFor(module, state);
+    if (!list.length) {
+      // Nothing to draw -- which is also what a `clear` leaves behind. Return
+      // without touching the canvas and the PREVIOUS run's curve stays up until
+      // the new run's first report (minutes, while the model loads).
+      if (chart) chart.reset();
+      xs = [];
+      lastCount = 0;
+      view.restart();
+      syncControls(view.apply(xs));
+      return;
+    }
+    if (!chart || signature !== list.map((s) => `${s.key}:${s.color}`).join("|")) build(list);
+    const keys = list.map((s) => s.key);
+    const all = chartRows(state, module, keys);
+    if (all.length < lastCount) view.restart(); // fewer records than before: a new run
+    lastCount = all.length;
+    xs = all.map((r) => r.x);
+    const v = view.apply(xs);
+    const shown = rowsForWindow(all, v.range, smoothWindow * 3);
+    const rows = decimate(shown, MAX_DRAWN_ROWS, keys);
+    chart.reset();
+    for (const r of rows) chart.addPoint(r.x, r.values);
+    chart.setViewRange(v.range);
+    chart.setReferenceLines(referenceLines(module, state));
+    syncControls(v);
+  }
+
+  freeze.addEventListener("click", () => { view.toggleFreeze(xs); update(); });
+  slider.addEventListener("pointerdown", () => {
+    view.setDragging(true, parseInt(slider.max, 10) || 0);
+  });
+  const release = () => { view.setDragging(false); update(); };
+  slider.addEventListener("pointerup", release);
+  slider.addEventListener("pointercancel", release);
+  slider.addEventListener("change", release);
+  slider.addEventListener("input", () => {
+    view.pan(parseInt(slider.value, 10) || 0, xs);
+    update();
+  });
+  csv.addEventListener("click", () => {
+    if (!state.rows.length) return;
+    const blob = new Blob([rowsToCsv(state.rows)], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${module.name || "chart"}-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
   return {
-    el: root,
-    update() {
-      const list = seriesFor(module, state);
-      if (!list.length) return;
-      if (!chart || signature !== list.map((s) => `${s.key}:${s.color}`).join("|")) build(list);
-      const keys = list.map((s) => s.key);
-      const rows = decimate(chartRows(state, module, keys), MAX_DRAWN_ROWS, keys);
-      chart.reset();
-      for (const r of rows) chart.addPoint(r.x, r.values);
-      chart.setReferenceLines(referenceLines(module, state));
-    },
+    el: wrap,
+    update,
     destroy() { if (chart) chart.destroy(); },
   };
 }

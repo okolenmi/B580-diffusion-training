@@ -220,6 +220,27 @@ export function decimate(rows, maxRows, keys) {
   return [...keep].sort((a, b) => a - b).map((i) => rows[i]);
 }
 
+/** Every record the stream holds as CSV (what the old Monitor page exported):
+    one row per report, a column per key in first-seen order, a missing or
+    non-finite value left EMPTY -- a gap stays a gap, it is never written as 0. */
+export function rowsToCsv(rows) {
+  const keys = [];
+  const seen = new Set();
+  for (const { frame } of rows) {
+    for (const k of Object.keys(frame)) {
+      if (!seen.has(k)) { seen.add(k); keys.push(k); }
+    }
+  }
+  const cell = (v) => {
+    if (typeof v === "number") return Number.isFinite(v) ? String(v) : "";
+    if (typeof v === "string") return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    return "";
+  };
+  const lines = [keys.join(",")];
+  for (const { frame } of rows) lines.push(keys.map((k) => cell(frame[k])).join(","));
+  return lines.join("\n") + "\n";
+}
+
 /** Reference lines: the latest value of `reference_key`, if the stream has
     shown one. */
 export function referenceLines(module, state) {

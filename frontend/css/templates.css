@@ -169,7 +169,24 @@
 .bd-block[data-kind="display"] .bd-body { padding: 6px 8px; display: flex; flex-direction: column; }
 /* ...and `hidden` (a collapsed block) must still win over that display rule. */
 .bd-block .bd-body[hidden] { display: none; }
+.bd-chart-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 .bd-chart { flex: 1; min-height: 0; position: relative; }
+/* window / freeze / export: the old Monitor page's chart controls */
+.bd-chart-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; }
+.bd-counts { display: flex; gap: 3px; }
+.bd-btn {
+  font-family: var(--font-mono); font-size: 11px; padding: 2px 8px;
+  background: var(--surface-alt); color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+}
+.bd-btn:hover { color: var(--text); border-color: var(--accent); }
+.bd-count.active { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+.bd-freeze { min-width: 64px; text-align: center; }
+.bd-freeze.is-on { color: #ffb300; border-color: #ffb300; }
+.bd-window { font-family: var(--font-mono); color: var(--text-dim); white-space: nowrap; margin-left: auto; }
+.bd-csv { margin-left: 2px; }
+.bd-slider { display: block; width: 100%; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.bd-slider:disabled { opacity: 0.4; cursor: default; }
 .bd-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 .bd-scalar { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 0; }

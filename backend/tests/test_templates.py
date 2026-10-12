@@ -159,7 +159,8 @@ check(Port(name="p", type=int).advanced is False and Port(name="p", type=int).la
 
 from nodes.train.node import TrainerNode  # noqa: E402
 names = [m.name for m in TrainerNode.MODULES]
-check(names == ["progress", "loss", "lr", "grad_norm", "vram", "timing"],
+check(names == ["progress", "loss", "lr", "grad_norm", "vram", "timing",
+                  "loss_now", "loss_by_t", "vram_peak"],
       f"the trainer declares its live views (got {names})")
 vram = next(m for m in TrainerNode.MODULES if m.name == "vram")
 check(vram.reference_key == "vram_budget_mb" and "vram_reserved_mb" in [s.key for s in vram.series],

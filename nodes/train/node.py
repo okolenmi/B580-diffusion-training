@@ -74,6 +74,30 @@ class TrainerNode(Node):
             series=(Series("step_total_ms", "step total", "#cfd8dc", "ms"),),
             doc="Per-phase milliseconds (present when TRAIN_STEP_TIMING=1).",
         ),
+        # The readouts the old Monitor page had beside its chart: the newest
+        # loss, the loss per timestep third as bars, and the VRAM high-water
+        # mark. Appended, not inserted: a saved page refers to a module by
+        # (node, name), and the order of this tuple is not part of that.
+        DisplayModule(
+            name="loss_now", kind="scalar", title="Loss (latest)", size=(3, 2),
+            series=(Series("loss", "loss", "#6c8cff"),),
+            doc="The most recent step's loss.",
+        ),
+        DisplayModule(
+            name="loss_by_t", kind="bars", title="Loss by timestep", size=(6, 3),
+            series=(
+                Series("loss_t_low", "t low", "#4caf50"),
+                Series("loss_t_mid", "t mid", "#ffb300"),
+                Series("loss_t_high", "t high", "#ff5252"),
+            ),
+            doc="Latest loss over the low / mid / high third of the timestep "
+                "range (a third no sample hit is absent, not zero).",
+        ),
+        DisplayModule(
+            name="vram_peak", kind="scalar", title="VRAM peak", size=(3, 2),
+            series=(Series("vram_peak_reserved_mb", "peak reserved", "#ff9800", "MB"),),
+            doc="Highest reserved device memory the run has reached.",
+        ),
     )
 
     OUTPUTS: ClassVar[dict[str, Port]] = {

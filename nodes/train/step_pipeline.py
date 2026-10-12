@@ -561,6 +561,21 @@ class MonitoringPhase(CacheThrashMixin, StepPhase):
         self._bucket_balance = bucket_balance
         self._baseline_mem: Optional[dict[str, float]] = None
 
+    def _t_buckets(self, state: StepState) -> dict:
+        """loss_t_low/mid/high for this step, for an on_step callback.
+
+        The same numbers the monitor chart draws (t_bucket_losses over the
+        detached per-sample MSE), handed to on_step as well. A raw per-step
+        loss averages every timestep, so a run whose low-t and high-t
+        thirds move in opposite directions looks flat; a callback cannot
+        see that from the scalar, and these were already being computed
+        one line further down for the monitor. A bucket with no samples in
+        this step is ABSENT, not zero -- a batch-4 step often does not
+        cover all three thirds.
+        """
+        return t_bucket_losses(state.extras.get("per_sample_loss"),
+                               state.extras.get("t"))
+
     def run(self, state: StepState) -> StepState:
         loss_value = float(state.extras["loss"].item())
         lr = state.extras["lr"]
@@ -584,7 +599,8 @@ class MonitoringPhase(CacheThrashMixin, StepPhase):
             if latent_shape is not None and len(latent_shape) >= 2:
                 shape = f"{int(latent_shape[-2])}x{int(latent_shape[-1])}"
 
-        notify_step(self._on_step, state.step, loss_value, shape)
+        notify_step(self._on_step, state.step, loss_value, shape,
+                  t_buckets=self._t_buckets(state))
         self._cache_thrash_observe(shape)
 
         timing = state.extras.get("timing_ms")

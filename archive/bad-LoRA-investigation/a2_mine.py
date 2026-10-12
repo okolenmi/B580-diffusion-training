@@ -91,6 +91,13 @@ def main() -> int:
                          "and without it and confirm the weighted file "
                          "replays the trained strength in an outside reader "
                          "(the weight is folded into the exported alpha).")
+    ap.add_argument("--ema", type=float, default=0.9,
+                    help="EMA coefficient for the smoothed loss printed "
+                         "alongside the raw one (0.9 = 10-step window). A "
+                         "raw per-step loss mixes every timestep and swings "
+                         "2-5x between adjacent steps at batch 4, which "
+                         "makes a converging run and a diverging one look "
+                         "the same.")
     ap.add_argument("--shape-bucket", type=int, default=0,
                     help="shape bucketing multiple (0 = off, the default). On a "
                          "multi-shape dataset, OFF means every step has a "
@@ -226,11 +233,35 @@ def main() -> int:
           f"target_conditioning_path={args.target_conditioning_path}",
           flush=True)
 
-    def on_step(step, loss, shape=None):
-        # step_notify calls back as (step, loss[, shape]); unbuffered.
+    # Smoothed loss, plus the low/mid/high-t split.
+    #
+    # A raw per-step loss is nearly unreadable for judging a run: it is a
+    # single number mixing every timestep, and with batch 4 and a random t
+    # draw per step it swings by 2-5x between adjacent steps. That is why
+    # CAPTION_div4's trace could be read either as "converged to 0.05 then
+    # diverged" or as "noisy but fine" -- the EMA is what separates those,
+    # and it is the same smoothing any training log deserves.
+    #
+    # The per-t split matters because the three thirds are not equally hard
+    # and a mean hides which one is moving: the trainer already computes
+    # loss_t_low/mid/high (nodes/train/loss.py) for the monitor chart, and
+    # a t_bucket with no samples in this step is absent rather than zero.
+    ema = None
+    per_t: dict[str, float] = {}
+
+    def on_step(step, loss, shape=None, t_buckets=None):
+        # step_notify calls back as (step, loss[, shape][, t_buckets=...]).
+        nonlocal ema
+        ema = loss if ema is None else ema * args.ema + loss * (1 - args.ema)
         if args.progress and isinstance(step, int) and step % args.progress == 0:
-            print(f"  [progress] step {step} loss={loss:.5f} shape={shape}",
-                  flush=True)
+            print(f"  [progress] step {step} loss={loss:.5f} "
+                  f"ema={ema:.5f} shape={shape}", flush=True)
+            if t_buckets:
+                row = " ".join(f"{k.replace('loss_t_', '')}={t_buckets[k]:.4f}"
+                               for k in ("loss_t_low", "loss_t_mid", "loss_t_high")
+                               if k in t_buckets)
+                if row:
+                    print(f"  [by-t]      step {step} {row}", flush=True)
         if args.save_every and isinstance(step, int) and step > 0 \
                 and step % args.save_every == 0:
             ckpt = save_trained_weights(model, f"{args.out}_step{step:05d}.safetensors")
@@ -250,7 +281,7 @@ def main() -> int:
             print(f"  [encoder] unloaded after step {step} "
                   f"(footprint was {before / 1024 / 1024:.0f} MB)", flush=True)
 
-    SupervisedLoRATrainerNode(ctx).build(
+    trainer = SupervisedLoRATrainerNode(ctx).build(
         model=model, batches=batches, optimizer=optimizer, text_encoder=encoder,
         lr_schedule=schedule, steps=args.steps, on_step=on_step, profile=False)
 

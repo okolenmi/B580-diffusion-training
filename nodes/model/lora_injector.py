@@ -202,6 +202,7 @@ def build_lora_injected_unet(
     adapter_strategy: AdapterStrategy | None = None,
     frozen_weight_store_factory=None,
     target_conditioning_path: bool = True,
+    block_weights=None,
 ) -> ComfyUNetTrainableModel:
     """The real construction logic `ComfyUNetLoRANode.build()` runs --
     extracted so there's exactly one implementation, not one now and a
@@ -228,7 +229,7 @@ def build_lora_injected_unet(
 
     from .adapter_injection import adapter_layer_classes, reenable_dora_requires_grad
     from .adapter_strategy import PlainLoRAAdapter
-    from .lora import LoRAConfig
+    from .lora import LoRAConfig, parse_block_weights
     from .unet_wrapper import ComfyUNetWrapper
 
     adapter_strategy = adapter_strategy or PlainLoRAAdapter()
@@ -242,6 +243,7 @@ def build_lora_injected_unet(
         dropout=dropout,
         target_modules=target_modules,
         target_conditioning_path=target_conditioning_path,
+        block_weights=parse_block_weights(block_weights),
     )
     wrapper = ComfyUNetWrapper(
         weights.unet_sd,
@@ -309,6 +311,17 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
                 "Or a comma-separated list of layer-name suffixes. Saved "
                 "graphs keep their stored value; only new graphs take the "
                 "default."),
+        "block_weights": Port(
+            name="block_weights", type=Any, required=False, default=None,
+            doc="Per-block strength multipliers, e.g. "
+                "\"input_blocks.0:0.5,middle_block:1.0\" (parsed by "
+                "lora.parse_block_weights; a dict works too). A matched "
+                "block's adapter is scaled by its weight, so 0.5 halves "
+                "its contribution. The weight is folded into the exported "
+                "alpha, so ComfyUI/diffusers apply the trained strength "
+                "without knowing this key exists. Blank = every block at "
+                "1.0. Keys that match no injected layer are reported as a "
+                "warning, not silently ignored."),
         "target_conditioning_path": Port(
             name="target_conditioning_path", type=bool, required=False, default=False,
             doc="True: also adapt time_embed.* and label_emb.* (+4 modules on "
@@ -373,6 +386,8 @@ class ComfyUNetLoRANode(LoRAInjectorNode):
             frozen_weight_store_factory=inputs.get("frozen_weight_store"),
             target_conditioning_path=inputs.get(
                 "target_conditioning_path", self.INPUTS["target_conditioning_path"].default),
+            block_weights=inputs.get(
+                "block_weights", self.INPUTS["block_weights"].default),
         )
         result = {"model": model}
         self.validate_outputs(result)

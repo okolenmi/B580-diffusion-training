@@ -158,11 +158,41 @@ def check_preset_module_counts():
     print("    PASS")
 
 
+def check_block_weighting_is_parseable_and_reachable():
+    print("[block_weighting: the config string parses, and the injector node "
+          "actually accepts it -- it was a dead key until now]")
+    from nodes.model.lora import parse_block_weights
+    assert parse_block_weights(None) is None, "unset means off, not an empty dict"
+    assert parse_block_weights("") is None
+    parsed = parse_block_weights("input_blocks.0:0.5,middle_block:1.0")
+    assert parsed == {"input_blocks.0": 0.5, "middle_block": 1.0}, parsed
+    assert parse_block_weights({"a": 0.5}) == {"a": 0.5}, "an already-parsed dict passes"
+    # A typo must fail loudly rather than look applied.
+    for bad in ("input_blocks.0", "input_blocks.0:abc", ":0.5", "x:-1"):
+        try:
+            parse_block_weights(bad)
+        except ValueError:
+            pass
+        else:
+            check(False, f"malformed block_weighting {bad!r} was accepted")
+    # Reachability: the string form must reach LoRAConfig, not just parse.
+    from nodes.model.lora_injector import ComfyUNetLoRANode, build_lora_injected_unet
+    import inspect
+    assert "block_weights" in ComfyUNetLoRANode.INPUTS, \
+        "the injector node has no block_weights Port"
+    assert "block_weights" in inspect.signature(build_lora_injected_unet).parameters, \
+        "build_lora_injected_unet cannot take block_weights"
+    assert ComfyUNetLoRANode.INPUTS["block_weights"].default is None, \
+        "default must be off"
+    print("    PASS")
+
+
 def main():
     check_config_defaults_and_mapping()
     check_node_port_defaults()
     check_resources_route_passes_the_targets_through()
     check_preset_module_counts()
+    check_block_weighting_is_parseable_and_reachable()
     print()
     print("=" * 60)
     print("SMOKE TEST: ALL CHECKS PASSED")

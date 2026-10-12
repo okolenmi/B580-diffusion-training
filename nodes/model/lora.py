@@ -488,6 +488,50 @@ def _segment_match(full_name: str, block_id: str) -> bool:
     return full_name == block_id or full_name.startswith(block_id + ".")
 
 
+def parse_block_weights(spec: str | dict | None) -> dict[str, float] | None:
+    """The `block_weighting` config string -> `LoRAConfig.block_weights`.
+
+    Accepts `"input_blocks.0:0.5,middle_block:1.0"` (comma-separated
+    `block_id:weight` pairs; `block_id` is any UNet module-path prefix, so
+    `input_blocks.3` weights everything under that block) or an already
+    parsed dict, which is returned as-is. `None`/empty -> None, meaning
+    "no weighting", which is what every run used before this existed.
+
+    Returns None rather than an empty dict so callers can distinguish
+    "off" from "parsed but empty", and raises ValueError on a malformed
+    pair instead of silently dropping it -- a typo'd block id would
+    otherwise look like it had been applied.
+    """
+    if spec is None or spec == "":
+        return None
+    if isinstance(spec, dict):
+        return {str(k): float(v) for k, v in spec.items()}
+    out: dict[str, float] = {}
+    for part in str(spec).split(","):
+        token = part.strip()
+        if not token:
+            continue
+        block_id, sep, weight = token.rpartition(":")
+        if not sep:
+            raise ValueError(
+                f"block_weighting: {token!r} is not 'block_id:weight' "
+                f"(e.g. 'input_blocks.0:0.5,middle_block:1.0')")
+        block_id = block_id.strip()
+        try:
+            value = float(weight)
+        except ValueError:
+            raise ValueError(
+                f"block_weighting: {token!r} has a non-numeric weight "
+                f"{weight!r}") from None
+        if not block_id:
+            raise ValueError(f"block_weighting: {token!r} has an empty block id")
+        if value < 0:
+            raise ValueError(
+                f"block_weighting: {block_id} has a negative weight {value}")
+        out[block_id] = value
+    return out or None
+
+
 #: The layers `_inject_lora` builds by default: plain LoRA on a frozen
 #: bf16 base. Any (linear_cls, conv_cls) pair with the same constructor
 #: signature works -- that is the seam `nodes/model/adapter_strategy.py`

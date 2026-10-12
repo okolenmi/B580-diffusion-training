@@ -155,6 +155,19 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "printed at the first epoch). True = keep those samples as smaller batches "
                 "so every image is trained every epoch; the cost is extra batch shapes "
                 "(one more per resolution), which can add a one-time kernel-warmup stall."),
+        "caption_dropout": Port(
+            name="caption_dropout", type=float, required=False, default=0.0,
+            doc="Probability of replacing a sample's caption with another "
+                "caption from the same dataset. 0.0 (default) = off. Set this "
+                "on a dataset whose captions do not vary -- especially an "
+                "all-empty one. With a constant caption every step presents "
+                "the same conditioning, a cross-attention projection gets zero "
+                "gradient, and its key/query/value weights are left "
+                "unconstrained rather than trained; the LoRA then breaks the "
+                "moment conditioning changes at render. Substituting a caption "
+                "the image does not have teaches the adapter to be "
+                "conditioning-invariant, which is what a style LoRA must be. "
+                "Needs the dataset to hold at least two distinct captions."),
         "group_by_size_only": Port(
             name="group_by_size_only", type=bool, required=False, default=False,
             doc="L4: form batches per size bucket alone, so one batch can carry "
@@ -215,6 +228,8 @@ class ManagedDatasetSourceNode(DataSourceNode):
                 "shape_bucket_multiple", self.INPUTS["shape_bucket_multiple"].default),
             group_by_size_only=inputs.get(
                 "group_by_size_only", self.INPUTS["group_by_size_only"].default),
+            caption_dropout=inputs.get(
+                "caption_dropout", self.INPUTS["caption_dropout"].default),
         )
         # Size the oneDNN primitive cache to this dataset's shape count
         # (nodes/xpu_env.py's own docstring for why it belongs here).

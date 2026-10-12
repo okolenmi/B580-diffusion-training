@@ -22,7 +22,8 @@ class ManagedDatasetLoader:
                  bucket_balance=None, t_values: str = "",
                  keep_incomplete: bool = False,
                  shape_bucket_multiple: int = 0,
-                 group_by_size_only: bool = False):
+                 group_by_size_only: bool = False,
+                 caption_dropout: float = 0.0):
         self.root = dataset_root
         self.db_path = dataset_root / "metadata.db"
         self.shuffle = shuffle
@@ -54,6 +55,31 @@ class ManagedDatasetLoader:
         # batch cannot collate, and the conditioning has no mask to recover
         # per-sample sizes from -- so it is a config error, not a fallback.
         self.group_by_size_only = group_by_size_only
+        # Caption dropout: with this probability a sample's caption is
+        # replaced by another caption from the same dataset, so the run sees
+        # varied conditioning even when the stored captions do not vary.
+        #
+        # Why it exists: a dataset whose captions are all empty (or all one
+        # string) presents a CONSTANT (ctx, y) every step. A cross-attention
+        # projection W_k.c whose input never changes gets zero gradient from
+        # any loss-dependent path, so its key/query/value projections are
+        # never shaped to interpret a context at all -- they are
+        # unconstrained, not underfit. The resulting LoRA then falls apart
+        # the moment conditioning changes at render time (measured: the
+        # CLIP-L-only conditioning, which moves the context LEAST, 0.081
+        # from the training value, was the worst case). Substituting a
+        # caption the image does not match is the point: it teaches the
+        # adapter to be conditioning-INVARIANT, which is what a style LoRA
+        # has to be, and it needs no new images and no curation.
+        #
+        # 0.0 = off (default; no existing run changes behaviour). It
+        # deliberately does NOT blank the caption -- an empty caption is
+        # exactly the degenerate value this is here to stop relying on.
+        if not 0.0 <= caption_dropout <= 1.0:
+            raise ValueError(
+                f"caption_dropout must be in 0..1, got {caption_dropout}")
+        self.caption_dropout = float(caption_dropout)
+        self._caption_pool: list[str] = []
         if group_by_size_only and self.shape_bucket_multiple <= 1:
             raise ValueError(
                 "group_by_size_only=True needs shape_bucket_multiple > 1: "
@@ -447,15 +473,22 @@ class ManagedDatasetLoader:
             out["valid_mask"] = valid_mask
         return out
 
-    @staticmethod
-    def _merge_samples(samples: list) -> Dict:
+    def _merge_samples(self, samples: list) -> Dict:
         """Merge individual samples into a single batched dict."""
+        prompts = [s["prompt"] for s in samples]
+        if self.caption_dropout > 0.0:
+            prompts = self._apply_caption_dropout(prompts)
         out = {
             "x_t": torch.cat([s["x_t"] for s in samples], dim=0),
             "target": torch.cat([s["target"] for s in samples], dim=0),
             "t": torch.tensor([s["t"] for s in samples]),
-            "prompt": samples[0]["prompt"],
-            "prompts": [s["prompt"] for s in samples],
+            # `prompt` is the batch-wide caption and `prompts` the per-sample
+            # list. After dropout they can genuinely differ, so both are
+            # read off the same list -- the trainers route on whether
+            # `prompts` is mixed (encode_with_true_sizes), and a stale
+            # `prompt` would make the two conditioning paths disagree.
+            "prompt": prompts[0],
+            "prompts": prompts,
             "neg_prompt": samples[0]["neg_prompt"],
             "seed": samples[0]["seed"],
             "metadata": samples[0]["metadata"],
@@ -473,6 +506,29 @@ class ManagedDatasetLoader:
                 [s["valid_mask"] for s in samples], dim=0)
         return out
 
+    def _apply_caption_dropout(self, prompts: list) -> list:
+        """Replace some captions with others from the same dataset.
+
+        Substitutes a caption the image does not have, which is the whole
+        point: the adapter has to learn a transformation that does not
+        depend on the caption describing the image. Random choice from the
+        dataset's own distinct captions, so nothing new is introduced and
+        the tokens stay in-distribution for the tokenizer.
+
+        A dataset with fewer than two distinct captions cannot benefit --
+        there is nothing to substitute -- so this returns the input
+        unchanged rather than pretending to work, and the caller warns.
+        """
+        import random
+        pool = self._caption_pool
+        if len(pool) < 2:
+            return list(prompts)
+        out = list(prompts)
+        for i, p in enumerate(out):
+            if random.random() < self.caption_dropout:
+                out[i] = random.choice(pool)
+        return out
+
     def __iter__(self) -> Iterator[Dict]:
         """Iterate over samples, yielding batches of batch_size with shared prompt and size.
 
@@ -488,6 +544,17 @@ class ManagedDatasetLoader:
             print("  [DataLoader] Loading dataset into RAM...")
             self._samples = self._load_all_samples()
             print(f"  [DataLoader] {len(self._samples)} samples loaded.")
+            if self.caption_dropout > 0.0:
+                self._caption_pool = sorted(
+                    {s["prompt"] for s in self._samples})
+                if len(self._caption_pool) < 2:
+                    print(f"  [DataLoader] WARNING: caption_dropout="
+                          f"{self.caption_dropout} but the dataset has "
+                          f"{len(self._caption_pool)} distinct caption(s), so "
+                          f"there is nothing to substitute and dropout is a "
+                          f"no-op. A dataset with one caption leaves "
+                          f"cross-attention unconstrained -- see the loader's "
+                          f"caption_dropout note.")
 
         # 1. Group by key (prompt, neg_prompt, size) -- or by size bucket
         # alone under group_by_size_only (L4), so one batch can carry

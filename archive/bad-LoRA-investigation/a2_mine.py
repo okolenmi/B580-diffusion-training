@@ -91,6 +91,16 @@ def main() -> int:
                          "and without it and confirm the weighted file "
                          "replays the trained strength in an outside reader "
                          "(the weight is folded into the exported alpha).")
+    ap.add_argument("--shape-bucket", type=int, default=0,
+                    help="shape bucketing multiple (0 = off, the default). On a "
+                         "multi-shape dataset, OFF means every step has a "
+                         "different tensor shape, which is where the GPU "
+                         "pauses come from. L2 measured x32 at 1.50x steps/s "
+                         "with peak memory unchanged and holdout MSE within "
+                         "noise of the unbucketed control, so it is the "
+                         "default worth using on any multi-resolution set "
+                         "(archive/shapes diversity problem 2/"
+                         "MEASURED-l2-bucketing.md).")
     ap.add_argument("--keep-incomplete-batches", action="store_true",
                     help="train on the short (prompt,size) groups too, as smaller "
                          "batches. REQUIRED for any multi-caption dataset: the "
@@ -146,7 +156,8 @@ def main() -> int:
     batches = ManagedDatasetSourceNode(ctx).build(
         dataset_root=args.dataset, batch_size=args.batch, shuffle=True,
         keep_incomplete_batches=args.keep_incomplete_batches,
-        shape_bucket_multiple=0)["batches"]
+        group_by_size_only=args.shape_bucket > 1,
+        shape_bucket_multiple=args.shape_bucket)["batches"]
 
     if args.schedule == "constant":
         schedule = ConstantLRScheduleNode(ctx).build(lr=args.lr)["schedule"]

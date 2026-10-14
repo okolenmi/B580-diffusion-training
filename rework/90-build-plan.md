@@ -21,6 +21,25 @@ windows, no old-port compatibility, no template or saved-graph conversion, no
 parity gates between old and new.** Anything in plans 10 to 80 that says otherwise
 is superseded by this file (each plan carries a note pointing here).
 
+## 0.1 Owner answers (2026-10-14) - DECIDED
+
+1. The old app does **not** need to keep working during the build. Consequence: no
+   v2 routes beside v1; `backend/` is edited **in place** at the point it switches
+   to `next/graph` (phase 6). Until then the old app simply stays as it is in git.
+2. A new dataset format is fine; old datasets will be regenerated from real images.
+3. Math spot checks: dropped as a separate item. Tests are **classified by region**
+   (graph core, families, data, engine, editor, backend), each region with its own
+   checks, plus the one acceptance test.
+4. Optimizers and quantization: **kept**, moved with comments cleaned (not rewritten).
+5. Phases 0 to 2 first, then a pause for the owner's review. Start approved.
+6. Save points: deliver a patch regularly (the sandbox is emptied after 1 to 2 days of
+   inactivity). Side tasks (checking plan claims against code) are not a focus now.
+7. Node identity and edges use **`uid` only** (the editable display name is `title`).
+   Decided while building `graph/` because no compatibility is needed.
+8. One resolve hook, `Node.resolve(params) -> Resolution`, replaces the pair
+   `resolve_inputs/resolve_outputs` of plans 30 and 41 (one header read answers
+   both). Plans keep their wording; `contracts/resolve.md` is authoritative.
+
 ## 1. What disappears from the earlier plans
 
 | Dropped | Was in |
@@ -69,7 +88,7 @@ repo/
 |---|---|---|
 | `nodes/` | **parallel rewrite** in `next/` | owner's request; 41% comments; structure issues from the audits |
 | `manager/` (ingest, loader, 2.9k lines) | rewritten into `next/data/` | the dataset design changes (per-VAE cache, prompt table, events) so it is not a move |
-| `backend/` (26k lines, layered, tested) | **keep and extend**; add a thin v2 graph adapter over `next/graph` | its layering is the best-structured part of the repo; the graph validator and runtime logic move into `next/graph` because they are node-contract code |
+| `backend/` (26k lines, layered, tested) | **keep and extend in place**; at phase 6 its graph layer switches to `next/graph` (no v2 routes, decision 0.1-1) | its layering is the best-structured part of the repo; the graph validator and runtime logic move into `next/graph` because they are node-contract code |
 | `frontend/js` (10k lines) | **editor modules rewritten in a parallel folder** (`frontend/js/graph2/`, page `graph2.html`); the rest untouched | plan 30 changes the render model (incremental), so it is not a patch; other pages are unaffected |
 | `docs/` | rewritten at the swap from the plans; old design docs move to `archive/` | |
 
@@ -126,7 +145,7 @@ Each phase ends with something checkable. "Check" lists what runs **here**.
 | 3 | General and SDXL (torch) | `general/{clip,vae,adapters,schedules}`, `sdxl/{denoiser,conditioning,latents,objective,adapters,memory}`, conditioning cache, `Conditioner`, adapter plan and injection | with torch on CPU: tiny random SDXL-shaped model, forward, LoRA inject/save/load round trip |
 | 4 | Data | `next/data`: library, per-VAE latent cache, prompt table and stages, bucketer, batcher with epoch barrier and `PromptsChanged`, prefetch, `Noiser`, ingest; dataset nodes | synthetic images and a tiny random VAE: epochs, event order, tag swap |
 | 5 | Engine and training nodes | `engine/step`, `engine/runtime` (residency, memory admission, block swap, capture, profiler), `ObjectiveNode`, optimizers, savers, probes, the single trainer | a 5-step run of a tiny model on CPU through the headless runner |
-| 6 | Server and editor (parallel track from phase 1) | backend v2 graph adapter (catalog, validate, resolve, run, library), settings dialog, `graph2` editor: incremental render, groups, collapse with pins, node states, multi ports, dynamic ports, event wires | `node --test` for pure editor logic; backend tests for the adapter; visual smoke script |
+| 6 | Server and editor (parallel track from phase 1) | `backend/` edited in place to use `next/graph` (catalog, validate, resolve, run, library; decision 0.1-1), settings dialog, `graph2` editor: incremental render, groups, collapse with pins, node states, multi ports, dynamic ports, event wires | `node --test` for pure editor logic; backend tests for the adapter; visual smoke script |
 | 7 | Views and starters | `views` in the graph, monitor/page boards, starters (SDXL LoRA, Anima LoRA), per-run metrics | starters validate and run headless |
 | 8 | Anima family | kits, fingerprints, flow-matching objective, block swap, key scheme | tiny random Anima-shaped weights on CPU; real header and run are the owner's |
 | 9 | Acceptance and swap | the big test (section 6); old trees to `archive/`; `next/*` promoted; docs rewritten | the big test; owner's B580 run |
@@ -174,7 +193,7 @@ in phase 1; the plans give the substance, the contracts give the exact JSON:
 1. Big test green here; the owner runs both starters on the B580.
 2. `git mv nodes archive/nodes_v1`, same for `manager/` and the old graph routes;
    `next/*` to the root; `graph.html` replaced by `graph2.html`.
-3. Backend v1 graph routes removed; v2 becomes `/api/v1`.
+3. The backend's graph layer already runs on `next/graph` since phase 6.
 4. Docs regenerated from the plans; the plans move to `docs/design/`.
 
 Rollback: git. (There are no users to protect, which is the point of the decision.)
@@ -210,9 +229,9 @@ Rollback: git. (There are no users to protect, which is the point of the decisio
 
 | # | Decision | Recommendation |
 |---|---|---|
-| B1 | Old app during the build | Keep it working until the swap (new tree has its own runner and v2 routes) |
+| B1 | Old app during the build | DECIDED: need not keep working; backend edited in place in phase 6 |
 | B2 | New tree location | `next/` with relative imports; promoted at the swap |
-| B3 | Backend | Extend in place; thin v2 adapter; graph core in `next/graph` |
+| B3 | Backend | Extend in place; graph core in `next/graph` |
 | B4 | Editor | Parallel `graph2` folder and page |
 | B5 | Datasets | New format directly; old datasets are re-ingested or discarded |
 | B6 | Testing | One acceptance test, cheap structural checks, optional math spot checks |
@@ -221,17 +240,11 @@ Rollback: git. (There are no users to protect, which is the point of the decisio
 
 ## 11. Open questions for the owner
 
-1. **Must the old app keep working while I build?** My default is yes (you can keep
-   training with it). If not, the build is simpler: I would edit `backend/` in place
-   and skip the v2 adapter.
-2. Do you want the **math spot checks** (a few old-versus-new numeric comparisons) or
-   strictly only the one big test?
-3. May I keep the **optimizers and quantization code** as `keep` (moved with comments
-   cleaned) unless triage finds structural problems? They were not flagged in the
-   audits, and rewriting numerics costs the most for the least gain.
-4. Is a **new dataset format** (images + captions, per-VAE latent caches; old
-   datasets re-ingested) acceptable? It follows from plan 50 and from dropping
-   compatibility.
-5. Will you **supply a real Anima header** (and later a short real run) for phase 8?
-6. The estimate in section 8 is long. Do you want phases 0 to 2 first (about one
-   window, all checkable here) and a review before the heavy phases?
+Answered 2026-10-14: old app, dataset format, spot checks, optimizers, phase order
+(section 0.1). Still open:
+
+1. Will you supply, for phase 8, a real Anima safetensors **header** (a script that
+   extracts it without weights will be provided) and later one short real run?
+2. May the editor work run beside the Python phases when work spans several sessions,
+   or strictly one phase at a time? (Default: beside, after the catalog contract is
+   frozen.)

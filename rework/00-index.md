@@ -76,7 +76,9 @@ is assigned.
 | 16 | Build plan (parallel tree; replaced the migration plan) | `90-build-plan.md` | draft 1 |
 | 17 | Porting ledger (generated, triage still `?`) | `PORTING.md` | skeleton |
 | 18 | Consistency pass 1 (names, compatibility purge, open questions) | all | done; repeat after owner answers |
-| 19 | Phase 0 of the build: `contracts/`, glossary, import-check | `contracts/`, scripts | **blocked on owner's go** |
+| 19 | Phase 0: `contracts/`, import-check, comment-lint, `next/` skeleton | `contracts/`, `scripts/` | in progress |
+| 20 | Phase 1: `next/graph` | `next/graph/` | todo |
+| 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | todo; then pause for review |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.
@@ -106,23 +108,20 @@ Earlier map of parts and misplaced logic: the "Node graph component map" doc
 Collected from every plan (each plan's own section has the context). **Blocking** =
 needed before the build starts; the rest can be answered when that area is reached.
 
-### Blocking (answer these first)
+### Answered 2026-10-14
 
-1. (90) Must the old app keep working while I build? Default yes (v2 routes beside
-   it); if no, I edit `backend/` in place and skip the adapter.
-2. (90) Math spot checks (a few old-versus-new numbers) or only the one big test?
-3. (90) Keep optimizers and quantization as "moved, comments cleaned" unless triage
-   finds structural problems?
-4. (50, 90) New dataset format (images + captions, per-VAE latent caches; old
-   datasets re-ingested)?
-5. (90) Do phases 0 to 2 first (pure Python, checkable here) and then pause for your
-   review before the heavy phases?
-6. (40) Is `families/` as a top-level package acceptable (the rewrite moves much of
-   `nodes/model/`)?
-7. (10) Explicit dashed event wires, or events addressable by name without wires?
-8. (10) Tag swap before the next epoch begins (barrier), or may it lag one epoch?
-9. (80) Comment policy (measurements to `docs/known-issues`, no history in code), and
-   the import-boundary check required from the first commit?
+Old app need not keep working; new dataset format fine; tests classified by region
+(no separate spot checks); optimizers and quantization kept with comments cleaned;
+phases 0 to 2 first then review (start approved). Recorded in `90-build-plan.md`
+section 0.1.
+
+### Blocking (answer before the heavy phases)
+
+1. (40) Is `families/` as a top-level package acceptable?
+2. (10) Explicit dashed event wires, or events addressable by name without wires?
+3. (10) Tag swap before the next epoch begins (barrier), or may it lag one epoch?
+4. (80) Comment policy (measurements to `docs/known-issues`, no history in code), and
+   the import-boundary check required from the first commit (done in phase 0)?
 
 ### Per area (can wait)
 

@@ -1,4 +1,4 @@
-"""Self-checks for next/families/general/adapters (CPU, tiny layers).
+"""Self-checks for adapters: layers (temporary) and the plan, injection and file round trips (signal).
 
     python -m next.tests.check_adapters
 """
@@ -12,6 +12,15 @@ from torch import nn
 from ..families.general.adapters.gate import TimestepGate, compute_gate
 from ..families.general.adapters.layers import AdaptedConv2d, AdaptedLinear
 from ..families.general.adapters.scaling import scaling_factor
+import tempfile
+
+from ..families.api.adapters import GroupOverride, TrainableSelection, plan_adapter
+from ..families.general.adapters.inject import descriptors_from_model
+from ..families.general.adapters.schemes import load_checked, read_adapter, save_adapter
+from ..families.general.ldm_unet.unet import UNetModel
+from ..families.sdxl.adapters import LAYOUT, SCHEMES, inject_denoiser
+from ..families.sdxl.denoiser import SDXL_UNET_CONFIG, SDXLDenoiser, build_unet
+from .check_sdxl import TINY_UNET
 from .support import check, raises, run
 
 
@@ -89,5 +98,60 @@ def layer_cases():
     check(isinstance(drop.dropout, nn.Dropout), "dropout is used when asked for")
 
 
+def sdxl_plan_and_injection():
+    meta = build_unet()
+    descriptors = descriptors_from_model(meta)
+    count = lambda sel: len(plan_adapter(LAYOUT, descriptors, sel, 8, 8).modules)  # noqa: E731
+    check(count(TrainableSelection()) == 722, f"default selection is the 722 modules of the old kohya default ({count(TrainableSelection())})")
+    check(count(TrainableSelection(groups=("attn_self", "attn_cross", "ff", "transformer_proj", "label_emb"))) == 724, "plus label_emb is 724")
+    check(count(TrainableSelection(groups=tuple(g.name for g in LAYOUT.groups()))) == 726, "plus time_embed is 726")
+    shapes = {"model.diffusion_model." + k: tuple(v.shape) for k, v in meta.state_dict().items()}
+    from ..families.api.adapters import descriptors_from_shapes
+    from_header = plan_adapter(LAYOUT, descriptors_from_shapes(shapes, "model.diffusion_model."), TrainableSelection(), 8, 8)
+    check(from_header == plan_adapter(LAYOUT, descriptors, TrainableSelection(), 8, 8), "a plan from key names equals a plan from the model")
+    sel = TrainableSelection(groups=("attn_cross",), exclude=(r".*\.attn2\.to_k",), regions={"input_blocks": None})
+    chosen = plan_adapter(LAYOUT, descriptors, sel, 8, 8).modules
+    check(chosen and all(m.group == "attn_cross" and "to_k" not in m.path and not m.path.startswith("input_blocks") for m in chosen),
+          "exclude wins, a region set off removes its modules")
+    only_conv = plan_adapter(LAYOUT, descriptors, TrainableSelection(groups=(), include=(r"input_blocks\.0\.0",)), 8, 8).modules
+    check([m.group for m in only_conv] == ["custom"], "a pattern can add a module no group covers")
+    raises(ValueError, lambda: plan_adapter(LAYOUT, descriptors, TrainableSelection(groups=("nope",)), 8, 8), "unknown group lists valid ones", "attn_self")
+    tuned = plan_adapter(LAYOUT, descriptors, TrainableSelection(per_group={"ff": GroupOverride(rank=2, lr_mult=0.5)}), 8, 8)
+    check({m.rank for m in tuned.modules if m.group == "ff"} == {2} and {m.rank for m in tuned.modules if m.group == "attn_self"} == {8},
+          "per-group rank override")
+
+    torch.manual_seed(0)
+    den = SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    with torch.no_grad():
+        before = den(x, t, c, y)
+    part = inject_denoiser(den, TrainableSelection(per_group={"ff": GroupOverride(lr_mult=0.1)}), rank=4, alpha=4.0)
+    with torch.no_grad():
+        check(torch.allclose(den(x, t, c, y), before, atol=1e-5), "a fresh adapter leaves the model's output unchanged")
+    trainable = {id(p) for p in part.trainable_parameters()}
+    check(trainable == {id(p) for p in den.parameters() if p.requires_grad} and len(trainable) == 2 * len(part.plan.modules),
+          "only adapter factors train")
+    groups = part.param_groups(lr=1e-4)
+    check({g["name"] for g in groups} == {"attn_self", "attn_cross", "ff@0.1", "transformer_proj"}
+          and next(g for g in groups if g["group"] == "ff")["lr"] == 1e-5, "optimizer groups follow group and lr multiplier")
+    with torch.no_grad():
+        for layer in part.layers.values():
+            layer.lora_B.normal_(std=0.1)
+        trained = den(x, t, c, y)
+    for name, scheme in SCHEMES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            save_adapter(f"{tmp}/a.safetensors", scheme.export(part), {"family": "sdxl", "scheme": name})
+            tensors, meta_out = read_adapter(f"{tmp}/a.safetensors")
+        report = load_checked(scheme, part, tensors)
+        check(report.matched == len(part.layers) and not report.missing and not report.unexpected and meta_out["scheme"] == name,
+              f"{name} file round-trips onto the same layers")
+    with torch.no_grad():
+        check(torch.allclose(den(x, t, c, y), trained, atol=1e-5), "loading an exported file restores the trained output")
+    dora = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=2, alpha=2.0, kind="dora")
+    raises(ValueError, lambda: SCHEMES["kohya"].export(dora), "kohya refuses DoRA instead of writing a wrong file", "native")
+    check(any(k.endswith(".magnitude") for k in SCHEMES["native"].export(dora)), "native holds DoRA magnitudes")
+    raises(ValueError, lambda: load_checked(SCHEMES["kohya"], part, {"other.weight": torch.zeros(1)}), "a file matching nothing is refused", "no layer matched")
+
+
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases)
+    run(scaling_and_gate, layer_cases, sdxl_plan_and_injection)

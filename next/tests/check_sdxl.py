@@ -17,6 +17,8 @@ from ..families.general.clip.model import CLIPConfig, CLIPTextTower
 from ..families.general.embeddings import timestep_embedding
 from ..families.sdxl.conditioning import (SDXLConditioning, SDXLConditioningKit, SDXLTextEncoder, load_text_encoder,
                                           size_embedding)
+from ..families.general.ldm_unet.unet import UNetModel
+from ..families.sdxl.denoiser import SDXLDenoiser, load_denoiser
 from .check_families_torch import to_openclip
 from .support import check, raises, run
 
@@ -126,5 +128,50 @@ def loading_cases():
         raises(ValueError, lambda: load_text_encoder(bad, tokenizer, configs=(L_CFG, G_CFG)), "layer count mismatch is refused", "layers")
 
 
+TINY_UNET = {
+    "in_channels": 4, "out_channels": 4, "model_channels": 32, "num_res_blocks": [1, 1, 1], "channel_mult": [1, 2, 4],
+    "num_head_channels": 8, "transformer_depth": [0, 0, 1, 1, 2, 2], "transformer_depth_middle": 2,
+    "transformer_depth_output": [0, 0, 0, 1, 1, 1, 2, 2, 2], "context_dim": 48, "use_linear_in_transformer": True,
+    "num_classes": "sequential", "adm_in_channels": 40,
+}
+
+
+def denoiser_cases():
+    torch.manual_seed(0)
+    model = UNetModel(**TINY_UNET)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    den = SDXLDenoiser(model, dtype=torch.float32)
+    out = den(x, t, c, y)
+    check(out.shape == x.shape, "UNet keeps the latent shape")
+    check(den(x.double(), t.long(), c.half(), y.half()).dtype == torch.float32, "the wrapper casts mixed input dtypes")
+    raises(ValueError, lambda: model(x, t, c, None), "class-conditional model needs y", "class-conditional")
+    calls = []
+
+    def checkpointer(fn, inputs, params):
+        calls.append(1)
+        return fn(*inputs)
+
+    den.set_checkpointer(checkpointer)
+    den(x, t, c, y)
+    check(len(calls) == 11, f"every residual block goes through the checkpointer ({len(calls)})")
+    den.set_checkpointer(None)
+    before = len(calls)
+    den(x, t, c, y)
+    check(len(calls) == before, "removing the checkpointer restores direct calls")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/unet.safetensors"
+        save_file({"model.diffusion_model." + k: v.contiguous() for k, v in model.state_dict().items()}, path)
+        part = make_part("sdxl", path, PartInfo(PartKind.DENOISER, "denoiser", "model.diffusion_model.", 0, "F32", 0, {}))
+        loaded = load_denoiser(part, dtype=torch.float32, config=TINY_UNET)
+        check(torch.allclose(loaded(x, t, c, y), out, atol=1e-6), "a UNet loaded from a prefixed file matches the original")
+        bad = {k: v for k, v in model.state_dict().items() if k != "out.2.bias"}
+        save_file({"model.diffusion_model." + k: v.contiguous() for k, v in bad.items()}, path)
+        raises(ValueError, lambda: load_denoiser(part, dtype=torch.float32, config=TINY_UNET), "a UNet with a missing key is refused", "missing")
+    den.train()
+    loss = den(x, t, c, y).square().mean()
+    loss.backward()
+    check(all(p.grad is not None for p in den.parameters()), "gradients reach every parameter")
+
+
 if __name__ == "__main__":
-    run(conditioning_ops, encoder_cases, loading_cases)
+    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases)

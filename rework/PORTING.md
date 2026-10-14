@@ -20,10 +20,10 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `manager/storage.py` | 172 | 14 | next/data/ (triage) | ? | todo |
 | `manager/t_sampling.py` | 172 | 47 | next/data/ (triage) | ? | todo |
 | `nodes/components/device.py` | 320 | 40 | next/engine/runtime/ | ? | todo |
-| `nodes/components/diffusion.py` | 169 | 26 | next/families/general/schedules/ | ? | todo |
+| `nodes/components/diffusion.py` | 169 | 26 | next/families/general/schedules/ddpm.py | rewrite | done |
 | `nodes/components/layout.py` | 118 | 55 | next/ (triage) | ? | todo |
 | `nodes/components/model_io.py` | 83 | 46 | next/families/general/safetensors_io | ? | todo |
-| `nodes/components/noise_schedule.py` | 95 | 38 | next/families/general/schedules/ | ? | todo |
+| `nodes/components/noise_schedule.py` | 95 | 38 | next/families/general/schedules/timesteps.py | rewrite | done |
 | `nodes/components/seed.py` | 32 | 78 | next/ (triage) | ? | todo |
 | `nodes/config_io.py` | 292 | 20 | next/ (triage) | ? | todo |
 | `nodes/config_model.py` | 338 | 14 | next/ (triage) | ? | todo |
@@ -45,15 +45,15 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/ (memory, admission) | ? | todo |
 | `nodes/model/adapter_injection.py` | 160 | 72 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/attention.py` | 354 | 42 | next/families/general/ or sdxl/denoiser/ | ? | todo |
+| `nodes/model/attention.py` | 354 | 42 | next/families/general/ldm_unet/attention.py | rewrite | done (bit-identical) |
 | `nodes/model/attention_checkpointing.py` | 227 | 78 | next/engine/runtime/ | ? | todo |
 | `nodes/model/block_profiler.py` | 214 | 60 | next/engine/runtime/profiler | ? | todo |
 | `nodes/model/checkpoint.py` | 312 | 50 | next/engine/runtime/ | ? | todo |
 | `nodes/model/checkpoint_loader.py` | 61 | 26 | next/nodes/model/load_model.py | rewrite | done (detection only; tensor loading is phase 4) |
 | `nodes/model/checkpoint_placement.py` | 92 | 54 | next/engine/runtime/ | ? | todo |
-| `nodes/model/clip.py` | 554 | 40 | next/families/general/clip/ | ? | todo |
-| `nodes/model/clip_encoder.py` | 331 | 50 | next/families/general/clip/ | ? | todo |
-| `nodes/model/clip_state_dict.py` | 176 | 49 | next/families/general/clip/ | ? | todo |
+| `nodes/model/clip.py` | 554 | 40 | next/families/general/clip/model.py | rewrite | done (bit-identical) |
+| `nodes/model/clip_encoder.py` | 331 | 50 | next/families/sdxl/conditioning.py | rewrite | done |
+| `nodes/model/clip_state_dict.py` | 176 | 49 | next/families/general/clip/checkpoint.py | rewrite | done |
 | `nodes/model/dora_layer.py` | 319 | 46 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/frozen_weight_store.py` | 44 | 41 | next/families/general/ | ? | todo |
 | `nodes/model/gradient_checkpointing.py` | 150 | 78 | next/engine/runtime/ | ? | todo |
@@ -80,13 +80,13 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/text_encoder.py` | 346 | 50 | next/families/general/ + sdxl/conditioning | ? | todo |
 | `nodes/model/text_encoder_cache.py` | 367 | 54 | next/families/general/ + sdxl/conditioning | ? | todo |
 | `nodes/model/text_encoder_prewarm.py` | 537 | 55 | next/families/general/ + sdxl/conditioning | ? | todo |
-| `nodes/model/timestep_embedding.py` | 115 | 61 | next/families/sdxl/denoiser/ | ? | todo |
-| `nodes/model/tokenizer.py` | 459 | 41 | next/families/general/clip/ | ? | todo |
+| `nodes/model/timestep_embedding.py` | 115 | 61 | next/families/general/embeddings.py | rewrite | done |
+| `nodes/model/tokenizer.py` | 459 | 41 | next/families/general/clip/tokenizer.py | rewrite | done (synthetic vocab parity) |
 | `nodes/model/trainer_parameters.py` | 47 | 36 | next/ (triage) | ? | todo |
-| `nodes/model/unet.py` | 490 | 30 | next/families/sdxl/denoiser/ | ? | todo |
-| `nodes/model/unet_wrapper.py` | 266 | 34 | next/families/sdxl/denoiser/ | ? | todo |
-| `nodes/model/vae.py` | 449 | 24 | next/families/general/vae/ | ? | todo |
-| `nodes/model/vae_decode.py` | 215 | 51 | next/families/general/vae/ | ? | todo |
+| `nodes/model/unet.py` | 490 | 30 | next/families/general/ldm_unet/unet.py | rewrite | done (bit-identical) |
+| `nodes/model/unet_wrapper.py` | 266 | 34 | next/families/sdxl/denoiser.py | rewrite | done (LoRA part goes to adapters) |
+| `nodes/model/vae.py` | 449 | 24 | next/families/general/vae/autoencoder.py | rewrite | done (bit-identical) |
+| `nodes/model/vae_decode.py` | 215 | 51 | next/families/general/vae/codec.py | rewrite | done |
 | `nodes/monitor/handle.py` | 32 | 34 | dropped (views, plan 60) | ? | todo |
 | `nodes/monitor/node.py` | 31 | 3 | dropped (views, plan 60) | ? | todo |
 | `nodes/monitor/training_progress.py` | 33 | 33 | dropped (views, plan 60) | ? | todo |

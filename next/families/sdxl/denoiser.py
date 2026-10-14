@@ -1,0 +1,70 @@
+"""The SDXL UNet: its configuration, loading from a checkpoint slice, and a callable that casts inputs."""
+
+from __future__ import annotations
+
+import torch
+from torch import Tensor, nn
+
+from ..api.parts import ModelPart
+from ..general.ldm_unet.unet import Checkpointer, UNetModel
+from ..general.tensors import read_prefixed
+
+SDXL_UNET_CONFIG = {
+    "in_channels": 4, "out_channels": 4, "model_channels": 320,
+    "num_res_blocks": [2, 2, 2], "channel_mult": [1, 2, 4], "num_head_channels": 64,
+    "transformer_depth": [0, 0, 2, 2, 10, 10], "transformer_depth_middle": 10,
+    "transformer_depth_output": [0, 0, 0, 2, 2, 2, 10, 10, 10], "context_dim": 2048,
+    "use_linear_in_transformer": True, "num_classes": "sequential", "adm_in_channels": 2816,
+}
+
+
+class SDXLDenoiser:
+    """Wraps the UNet so callers pass latents, a float timestep, ``ctx`` and ``y`` in any dtype."""
+
+    def __init__(self, model: UNetModel, device="cpu", dtype: torch.dtype = torch.bfloat16):
+        self.model, self.device, self.dtype = model, torch.device(device), dtype
+        self.model.to(device=self.device, dtype=dtype)
+
+    def __call__(self, x_t: Tensor, timestep: Tensor, context: Tensor, y: Tensor) -> Tensor:
+        return self.model(x_t.to(self.dtype), timestep.to(torch.float32), context.to(self.dtype), y.to(self.dtype))
+
+    def parameters(self):
+        return self.model.parameters()
+
+    def state_dict(self):
+        return self.model.state_dict()
+
+    def train(self, mode: bool = True) -> "SDXLDenoiser":
+        self.model.train(mode)
+        return self
+
+    def eval(self) -> "SDXLDenoiser":
+        return self.train(False)
+
+    def to(self, device=None, dtype: torch.dtype | None = None) -> "SDXLDenoiser":
+        self.model.to(device=device, dtype=dtype)
+        if device is not None:
+            self.device = torch.device(device)
+        if dtype is not None:
+            self.dtype = dtype
+        return self
+
+    def set_checkpointer(self, checkpointer: Checkpointer | None) -> None:
+        self.model.set_checkpointer(checkpointer)
+
+
+def build_unet(config: dict | None = None) -> UNetModel:
+    with torch.device("meta"):
+        return UNetModel(**(config or SDXL_UNET_CONFIG))
+
+
+def load_denoiser(part: ModelPart, *, device="cpu", dtype: torch.dtype = torch.bfloat16,
+                  config: dict | None = None) -> SDXLDenoiser:
+    """Build the UNet from the ``denoiser`` part of a Load Model node. Missing or unexpected keys are an error."""
+    state = read_prefixed(part.source.path, part.source.prefix, dtype=dtype)
+    model: nn.Module = build_unet(config)
+    result = model.load_state_dict(state, strict=False, assign=True)
+    if result.missing_keys or result.unexpected_keys:
+        raise ValueError(f"UNet weights do not fit: {len(result.missing_keys)} missing (e.g. {result.missing_keys[:2]}), "
+                         f"{len(result.unexpected_keys)} unexpected (e.g. {result.unexpected_keys[:2]})")
+    return SDXLDenoiser(model, device, dtype)

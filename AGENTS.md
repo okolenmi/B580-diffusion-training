@@ -3,7 +3,7 @@
 ## What matters
 1. **Do not "overtest".** Tests usage should have sense. Don't run them when unnecessary (for example, after docs edit) 
 2. **Do not simplify the goals.** Good result after a long time wins over fast simple solutions without much future.
-3. **OOP approach is recommended.** Avoid any "spagetti code". Separeted functional independent classes is a better 
+3. **OOP approach is recommended.** Avoid any "spaghetti code". Separeted functional independent classes is a better 
    approach if you know what you are doing. Medium efforts in this direction.
 
 ## Tests: keep it clean

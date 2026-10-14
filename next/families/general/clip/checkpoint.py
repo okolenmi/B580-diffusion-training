@@ -19,10 +19,11 @@ _BLOCK = {
     "attn.out_proj": "self_attn.out_proj",
 }
 _QKV = ("q_proj", "k_proj", "v_proj")
+_IGNORED = ("position_ids", "logit_scale")
 
 
 def to_tower_state(tensors: MutableMapping[str, Tensor], layout: str, layers: int) -> dict[str, Tensor]:
-    """Rename ``tensors`` (keys relative to the part's prefix) for ``CLIPTextTower``. The input is not modified.
+    """Rename ``tensors`` (keys relative to the part's prefix) for ``CLIPTextTower``. The input is not modified. Buffers the tower does not have (``position_ids``, ``logit_scale``) are dropped.
 
     * ``hf``: already in the tower's names.
     * ``hf_nested``: the tower sits under ``transformer.``, which is dropped.
@@ -31,7 +32,7 @@ def to_tower_state(tensors: MutableMapping[str, Tensor], layout: str, layers: in
     """
     if layout not in LAYOUTS:
         raise ValueError(f"unknown CLIP layout {layout!r}; choose from {LAYOUTS}")
-    src = dict(tensors)
+    src = {k: v for k, v in tensors.items() if not k.endswith(_IGNORED)}
     if layout == "hf":
         return src
     if layout == "hf_nested":

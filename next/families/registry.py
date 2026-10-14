@@ -27,6 +27,18 @@ def matchers() -> dict[str, Matcher]:
     return {fid: fingerprint(fid).match for fid in FAMILY_IDS}
 
 
+def get_family(family_id: str) -> Any:
+    """The family object (``FAMILY`` of ``families.<id>.family``), imported on first use."""
+    if family_id not in FAMILY_IDS:
+        raise KeyError(f"unknown family {family_id!r}")
+    try:
+        return importlib.import_module(_module_name(family_id, "family")).FAMILY
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.endswith(f"{family_id}.family"):
+            raise NotImplementedError(f"the {family_id} family can be detected but is not implemented yet") from None
+        raise
+
+
 def list_families() -> list[dict]:
     return [{"id": fid, "label": fingerprint(fid).LABEL} for fid in FAMILY_IDS]
 

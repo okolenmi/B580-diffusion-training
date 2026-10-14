@@ -78,7 +78,8 @@ is assigned.
 | 18 | Consistency pass 1 (names, compatibility purge, open questions) | all | done; repeat after owner answers |
 | 19 | Phase 0: `contracts/`, import-check, comment-lint, `next/` skeleton | `contracts/`, `scripts/` | done |
 | 20 | Phase 1: `next/graph` | `next/graph/` | done (91 checks) |
-| 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | done (64 checks); PAUSED for owner review |
+| 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | done; reviewed and pushed |
+| 22 | Phase 3: general + SDXL families (schedules, VAE, CLIP, tokenizer, conditioning, UNet, adapters, family object) | `next/families/general`, `next/families/sdxl` | done except: conditioning cache and prewarm (move to phase 4 with the prompt table), adapter phases and model nodes (phase 5, they need the engine runtime), NF4 weight store (phase 5) |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.

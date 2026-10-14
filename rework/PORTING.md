@@ -43,8 +43,8 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/memory/manager.py` | 206 | 54 | next/engine/runtime/ (memory, admission) | ? | todo |
 | `nodes/memory/profile.py` | 84 | 68 | next/engine/runtime/ (memory, admission) | ? | todo |
 | `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/model/adapter_injection.py` | 160 | 72 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/ | ? | todo |
+| `nodes/model/adapter_injection.py` | 160 | 72 | next/families/general/adapters/inject.py | drop | done |
+| `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/layers.py | drop | done (kind flag replaces strategy classes) |
 | `nodes/model/attention.py` | 354 | 42 | next/families/general/ldm_unet/attention.py | rewrite | done (bit-identical) |
 | `nodes/model/attention_checkpointing.py` | 227 | 78 | next/engine/runtime/ | ? | todo |
 | `nodes/model/block_profiler.py` | 214 | 60 | next/engine/runtime/profiler | ? | todo |
@@ -54,19 +54,19 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/clip.py` | 554 | 40 | next/families/general/clip/model.py | rewrite | done (bit-identical) |
 | `nodes/model/clip_encoder.py` | 331 | 50 | next/families/sdxl/conditioning.py | rewrite | done |
 | `nodes/model/clip_state_dict.py` | 176 | 49 | next/families/general/clip/checkpoint.py | rewrite | done |
-| `nodes/model/dora_layer.py` | 319 | 46 | next/families/general/adapters/ | ? | todo |
+| `nodes/model/dora_layer.py` | 319 | 46 | next/families/general/adapters/layers.py | rewrite | done |
 | `nodes/model/frozen_weight_store.py` | 44 | 41 | next/families/general/ | ? | todo |
 | `nodes/model/gradient_checkpointing.py` | 150 | 78 | next/engine/runtime/ | ? | todo |
 | `nodes/model/handle.py` | 171 | 44 | next/families/api/ (ModelPart) | rewrite | done (parts.py) |
-| `nodes/model/lora.py` | 906 | 40 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/lora_checkpoint_loader.py` | 189 | 35 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/lora_file.py` | 102 | 41 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/lora_gate.py` | 39 | 64 | next/families/general/adapters/ | ? | todo |
+| `nodes/model/lora.py` | 906 | 40 | next/families/general/adapters/{layers,gate,inject}.py + api/adapters.py | rewrite | done (layers, injection, selection; phases/health summary pending) |
+| `nodes/model/lora_checkpoint_loader.py` | 189 | 35 | next/families/general/adapters/schemes.py + node (phase 5) | rewrite | schemes done, node pending |
+| `nodes/model/lora_file.py` | 102 | 41 | next/families/general/adapters/schemes.py | rewrite | done |
+| `nodes/model/lora_gate.py` | 39 | 64 | next/families/general/adapters/gate.py | rewrite | done |
 | `nodes/model/lora_injector.py` | 394 | 35 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/lora_merge.py` | 74 | 46 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/lora_phases.py` | 531 | 48 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/lora_saver.py` | 199 | 38 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/lora_scaling.py` | 60 | 55 | next/families/general/adapters/ | ? | todo |
+| `nodes/model/lora_saver.py` | 199 | 38 | next/families/general/adapters/schemes.py + node (phase 5) | rewrite | schemes done, node pending |
+| `nodes/model/lora_scaling.py` | 60 | 55 | next/families/general/adapters/scaling.py | rewrite | done |
 | `nodes/model/lora_training_config.py` | 244 | 39 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/lora_training_resources.py` | 450 | 56 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/meta_init.py` | 57 | 44 | next/families/general/ | ? | todo |

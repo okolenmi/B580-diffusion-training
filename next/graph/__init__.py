@@ -8,7 +8,7 @@ from .document import FORMAT, Edge, GraphDoc, GraphFormatError, NodeSpec, new_ui
 from .events import (CheckpointDue, EpochEnding, EpochStarted, EventContext, EventHub, EventType, MemoryPressure,
                      PromptsChanged, RunStarted, RunStopped, StepFinished, StopRequested)
 from .modules import DisplayModule, Series
-from .node import COMPLETE, Completion, ExecutionContext, Node, Resolution, is_field
+from .node import COMPLETE, Completion, Environment, ExecutionContext, Node, Resolution, is_field
 from .ports import DynamicShape, EventIn, EventOut, Group, Port
 from .registry import NodeRegistry
 from .resolve import resolve_node

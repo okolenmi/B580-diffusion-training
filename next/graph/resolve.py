@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .catalog import port_info
-from .node import Resolution
+from .node import Environment, Resolution
 from .registry import NodeRegistry
 
 
@@ -20,12 +20,12 @@ def resolution_dict(res: Resolution) -> dict:
     }
 
 
-def resolve_node(registry: NodeRegistry, class_name: str, params: dict) -> dict:
+def resolve_node(registry: NodeRegistry, class_name: str, params: dict, env: Environment | None = None) -> dict:
     """The JSON answer for one node. Raises KeyError for an unknown class; never for bad params."""
     classes, _ = registry.load()
     cls = classes[class_name]
     try:
-        res = cls.resolve(dict(params))
+        res = cls.resolve(dict(params), env)
     except Exception as exc:  # noqa: BLE001 -- editing in progress must not crash the server
         res = Resolution("error", dict(cls.INPUTS), dict(cls.OUTPUTS),
                          message=f"{type(exc).__name__}: {exc}")

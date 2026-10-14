@@ -76,9 +76,9 @@ is assigned.
 | 16 | Build plan (parallel tree; replaced the migration plan) | `90-build-plan.md` | draft 1 |
 | 17 | Porting ledger (generated, triage still `?`) | `PORTING.md` | skeleton |
 | 18 | Consistency pass 1 (names, compatibility purge, open questions) | all | done; repeat after owner answers |
-| 19 | Phase 0: `contracts/`, import-check, comment-lint, `next/` skeleton | `contracts/`, `scripts/` | in progress |
-| 20 | Phase 1: `next/graph` | `next/graph/` | todo |
-| 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | todo; then pause for review |
+| 19 | Phase 0: `contracts/`, import-check, comment-lint, `next/` skeleton | `contracts/`, `scripts/` | done |
+| 20 | Phase 1: `next/graph` | `next/graph/` | done (91 checks) |
+| 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | done (64 checks); PAUSED for owner review |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.

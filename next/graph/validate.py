@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .document import UID_PATTERN, Edge, GraphDoc
-from .node import Node, Resolution
+from .node import Environment, Node, Resolution
 from .ports import Port, type_name, types_compatible
 from .registry import NodeRegistry
 from .settings import SettingsRegistry
@@ -89,7 +89,8 @@ def literal_mismatch(port_type: Any, value: Any) -> bool:
     return not isinstance(value, port_type)
 
 
-def validate(doc: GraphDoc, registry: NodeRegistry, settings: SettingsRegistry | None = None) -> Validation:
+def validate(doc: GraphDoc, registry: NodeRegistry, settings: SettingsRegistry | None = None,
+             env: Environment | None = None) -> Validation:
     result = Validation()
     issues = result.issues
     classes, _ = registry.load()
@@ -114,7 +115,7 @@ def validate(doc: GraphDoc, registry: NodeRegistry, settings: SettingsRegistry |
             continue
         cls_of[spec.uid] = cls
         try:
-            res = cls.resolve(dict(spec.params))
+            res = cls.resolve(dict(spec.params), env)
         except Exception as exc:  # noqa: BLE001 -- the node's bug becomes an issue
             add(ERROR, "shape_resolution_failed",
                 f"{spec.class_name}.resolve raised {type(exc).__name__}: {exc}", uid=spec.uid)

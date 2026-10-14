@@ -1,7 +1,7 @@
 # Contract: shape resolution
 
 Implements plan 41 sections 2, 6, 7 and plan 30 section 6.3. Python:
-`next/graph/resolve.py`, hook `Node.resolve(params, ctx) -> Resolution`.
+`next/graph/resolve.py`, hook `Node.resolve(params, env) -> Resolution` (`env` is the `Environment`: named machine services such as the model library; may be absent).
 
 A node whose ports depend on its params declares `DYNAMIC = DynamicShape(depends_on,
 debounce_ms)` and overrides `resolve`. All other nodes use the default, which returns

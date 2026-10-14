@@ -27,7 +27,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/components/seed.py` | 32 | 78 | next/ (triage) | ? | todo |
 | `nodes/config_io.py` | 292 | 20 | next/ (triage) | ? | todo |
 | `nodes/config_model.py` | 338 | 14 | next/ (triage) | ? | todo |
-| `nodes/core.py` | 568 | 52 | next/graph/ | ? | todo |
+| `nodes/core.py` | 568 | 52 | next/graph/ | rewrite | done |
 | `nodes/dataset/auto_caption.py` | 112 | 11 | next/data/ + nodes/data/ | ? | todo |
 | `nodes/dataset/caption_pool.py` | 104 | 9 | next/data/ + nodes/data/ | ? | todo |
 | `nodes/dataset/handle.py` | 29 | 24 | next/data/ + nodes/data/ | ? | todo |
@@ -49,7 +49,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/attention_checkpointing.py` | 227 | 78 | next/engine/runtime/ | ? | todo |
 | `nodes/model/block_profiler.py` | 214 | 60 | next/engine/runtime/profiler | ? | todo |
 | `nodes/model/checkpoint.py` | 312 | 50 | next/engine/runtime/ | ? | todo |
-| `nodes/model/checkpoint_loader.py` | 61 | 26 | next/families/general/safetensors_io + nodes/load_model | ? | todo |
+| `nodes/model/checkpoint_loader.py` | 61 | 26 | next/nodes/model/load_model.py | rewrite | done (detection only; tensor loading is phase 4) |
 | `nodes/model/checkpoint_placement.py` | 92 | 54 | next/engine/runtime/ | ? | todo |
 | `nodes/model/clip.py` | 554 | 40 | next/families/general/clip/ | ? | todo |
 | `nodes/model/clip_encoder.py` | 331 | 50 | next/families/general/clip/ | ? | todo |
@@ -57,7 +57,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/dora_layer.py` | 319 | 46 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/frozen_weight_store.py` | 44 | 41 | next/families/general/ | ? | todo |
 | `nodes/model/gradient_checkpointing.py` | 150 | 78 | next/engine/runtime/ | ? | todo |
-| `nodes/model/handle.py` | 171 | 44 | next/families/api/ (ModelPart) | ? | todo |
+| `nodes/model/handle.py` | 171 | 44 | next/families/api/ (ModelPart) | rewrite | done (parts.py) |
 | `nodes/model/lora.py` | 906 | 40 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/lora_checkpoint_loader.py` | 189 | 35 | next/families/general/adapters/ | ? | todo |
 | `nodes/model/lora_file.py` | 102 | 41 | next/families/general/adapters/ | ? | todo |
@@ -72,7 +72,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/meta_init.py` | 57 | 44 | next/families/general/ | ? | todo |
 | `nodes/model/nf4_lora_layer.py` | 179 | 40 | next/families/general/adapters/ or quantization/ | ? | todo |
 | `nodes/model/nf4_weight_store.py` | 221 | 53 | next/families/general/adapters/ or quantization/ | ? | todo |
-| `nodes/model/node.py` | 53 | 2 | next/graph/ | ? | todo |
+| `nodes/model/node.py` | 53 | 2 | next/graph/ | rewrite | done |
 | `nodes/model/parameters.py` | 35 | 26 | next/ (triage) | ? | todo |
 | `nodes/model/resource_inspection.py` | 149 | 38 | next/families/general/safetensors_io + sdxl/fingerprint | ? | todo |
 | `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/ | ? | todo |
@@ -129,5 +129,5 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/train/supervised.py` | 361 | 17 | dropped (one trainer) | ? | todo |
 | `nodes/train/t_probe.py` | 362 | 31 | next/engine/ or nodes/train/ (triage) | ? | todo |
 | `nodes/train/xpu_graph_step.py` | 336 | 32 | next/engine/runtime/capture | ? | todo |
-| `nodes/ui.py` | 185 | 40 | next/graph/ (field/display descriptors) | ? | todo |
+| `nodes/ui.py` | 185 | 40 | next/graph/ (field/display descriptors) | rewrite | done |
 | `nodes/xpu_env.py` | 284 | 65 | next/ (triage) | ? | todo |

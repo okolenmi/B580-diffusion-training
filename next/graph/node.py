@@ -57,15 +57,34 @@ class Completion:
 COMPLETE = Completion()
 
 
+@dataclass(frozen=True)
+class Environment:
+    """What the machine offers, supplied by the composition root: named services such as the model
+    library. Graph code never looks inside; nodes ask for a service by name."""
+
+    services: dict = field(default_factory=dict, hash=False, compare=False)
+
+    def service(self, name: str) -> Any:
+        try:
+            return self.services[name]
+        except KeyError:
+            raise LookupError(f"no {name!r} service is configured") from None
+
+    def has(self, name: str) -> bool:
+        return name in self.services
+
+
 class ExecutionContext:
     """Run-wide infrastructure handed to every node. ``scoped`` gives one node its own copy."""
 
     def __init__(self, *, cancel_event: threading.Event | None = None, reporter: Reporter | None = None,
-                 settings: Settings | None = None, events: EventHub | None = None, runtime: Any = None):
+                 settings: Settings | None = None, events: EventHub | None = None, runtime: Any = None,
+                 env: Environment | None = None):
         self.cancel_event = cancel_event
         self.reporter = reporter
         self.events = events
         self.runtime = runtime
+        self.env = env or Environment()
         self._settings = settings if settings is not None else SettingsRegistry().snapshot()
         self.settings: SettingsView | Settings = self._settings
         self.uid: str = ""
@@ -156,7 +175,7 @@ class Node(ABC):
         return self.context.uid
 
     @classmethod
-    def resolve(cls, params: dict, ctx: ExecutionContext | None = None) -> Resolution:
+    def resolve(cls, params: dict, env: Environment | None = None) -> Resolution:
         """Editing-time shape. Default: the static ports. Dynamic nodes override."""
         return Resolution("ready", dict(cls.INPUTS), dict(cls.OUTPUTS))
 

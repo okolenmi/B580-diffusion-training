@@ -166,7 +166,7 @@ class DynamicNode(Node):
     DYNAMIC = DynamicShape(depends_on=("file",))
 
     @classmethod
-    def resolve(cls, params, ctx=None):
+    def resolve(cls, params, env=None):
         name = params.get("file") or ""
         if name == "ambiguous":
             return Resolution("needs_choice", dict(cls.INPUTS), {}, choices={"file": ("a", "b")},

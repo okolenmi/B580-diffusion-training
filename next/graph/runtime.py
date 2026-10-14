@@ -11,7 +11,7 @@ from typing import Any, Callable, Protocol
 
 from .document import GraphDoc
 from .events import EventError, EventHub, RunStopped, Reporter, StopRequested, Wire
-from .node import COMPLETE, Completion, ExecutionContext, Node
+from .node import COMPLETE, Completion, Environment, ExecutionContext, Node
 from .registry import NodeRegistry
 from .settings import SettingsRegistry
 from .validate import Validation, validate
@@ -72,9 +72,10 @@ class GraphRunner:
     app_defaults: dict = field(default_factory=dict)
     releaser: Callable[[], None] = _default_releaser
     runtime_factory: Callable[[ExecutionContext], Any] | None = None
+    env: Environment | None = None
 
     def validate(self, doc: GraphDoc) -> Validation:
-        return validate(doc, self.registry, self._settings())
+        return validate(doc, self.registry, self._settings(), self.env)
 
     def _settings(self) -> SettingsRegistry:
         if self.settings_registry is None:
@@ -96,7 +97,7 @@ class GraphRunner:
         hub = EventHub(self.reporter, ranks={uid: i for i, uid in enumerate(order)})
         hub.set_stop_callback(lambda ev: cancel.set())
         self._wire_events(doc, classes, hub)
-        context = ExecutionContext(cancel_event=cancel, reporter=self.reporter, settings=settings, events=hub)
+        context = ExecutionContext(cancel_event=cancel, reporter=self.reporter, settings=settings, events=hub, env=self.env)
         if self.runtime_factory is not None:
             context.runtime = self.runtime_factory(context)
 

@@ -9,7 +9,14 @@ import random
 
 import torch
 
+import json
+import tempfile
+
+from ..families.general.clip import tokenizer as tok
+from ..families.general.clip.checkpoint import to_tower_state
+from ..families.general.clip.model import CLIPConfig, CLIPTextTower
 from ..families.general.schedules import flow, timesteps
+from ..families.general.tensors import read_prefixed
 from ..families.general.schedules.ddpm import (DiffusionProcess, DiscreteSchedule, EpsParameterization,
                                                VPredParameterization, ZeroTerminalSNRSchedule, scale_input)
 from ..families.general.vae.autoencoder import SDXL_DDCONFIG, AutoencoderKL
@@ -73,5 +80,90 @@ def vae():
     raises(ValueError, lambda: VAECodec.kl_from_state_dict(broken, cfg, 4, spec), "weights that do not fit are refused", "missing")
 
 
+def to_openclip(state: dict, layers: int) -> dict:
+    """Tower names rewritten as an openclip file would spell them."""
+    out = {"positional_embedding": state["text_model.embeddings.position_embedding.weight"],
+           "token_embedding.weight": state["text_model.embeddings.token_embedding.weight"],
+           "ln_final.weight": state["text_model.final_layer_norm.weight"],
+           "ln_final.bias": state["text_model.final_layer_norm.bias"],
+           "text_projection": state["text_projection.weight"].t().contiguous()}
+    for i in range(layers):
+        b, d = f"transformer.resblocks.{i}.", f"text_model.encoder.layers.{i}."
+        for old, new in (("ln_1", "layer_norm1"), ("ln_2", "layer_norm2"), ("mlp.c_fc", "mlp.fc1"),
+                         ("mlp.c_proj", "mlp.fc2"), ("attn.out_proj", "self_attn.out_proj")):
+            for suf in ("weight", "bias"):
+                out[f"{b}{old}.{suf}"] = state[f"{d}{new}.{suf}"]
+        for suf in ("weight", "bias"):
+            out[f"{b}attn.in_proj_{suf}"] = torch.cat([state[f"{d}self_attn.{n}.{suf}"] for n in ("q_proj", "k_proj", "v_proj")])
+    return out
+
+
+def clip_tower():
+    cfg = CLIPConfig(hidden=32, intermediate=64, heads=4, layers=3, activation="quick_gelu", vocab=100, eos_id=99)
+    tower = CLIPTextTower(cfg).eval()
+    tokens = torch.randint(0, 90, (3, 77))
+    tokens[:, 0] = 98
+    tokens[0, 4:] = 99
+    tokens[1, 9] = 99
+    tokens[2, 30] = 99
+    with torch.no_grad():
+        hidden, pooled = tower(tokens)
+        h_last, _ = tower(tokens, layer=-1)
+        h_normed, _ = tower(tokens, layer=-2, norm_hidden=True)
+    check(hidden.shape == (3, 77, 32) and pooled.shape == (3, 32), "tower outputs hidden state and pooled vector")
+    check(not torch.allclose(hidden, h_last) and not torch.allclose(hidden, h_normed), "layer and final-norm choices change the output")
+    tokens2 = tokens.clone()
+    tokens2[0, 60] = 7
+    with torch.no_grad():
+        _, pooled2 = tower(tokens2)
+    check(torch.allclose(pooled, pooled2) and pooled.shape[0] == 3, "pooling reads the first EOS position, not the padding after it")
+    with torch.no_grad():
+        later, _ = tower(tokens2)
+    check(torch.allclose(hidden[0, :60], later[0, :60], atol=1e-5), "attention is causal")
+    raises(ValueError, lambda: tower(tokens, layer=-9), "layer out of range", "out of range")
+    state = tower.state_dict()
+    converted = to_tower_state(to_openclip(state, 3), "openclip", 3)
+    check(set(converted) == set(state) and all(torch.equal(converted[k], state[k]) for k in state),
+          "openclip key translation round-trips (fused qkv, transposed projection)")
+    nested = to_tower_state({"transformer." + k: v for k, v in state.items()}, "hf_nested", 3)
+    check(set(nested) == set(state), "nested layout drops the transformer prefix")
+    raises(ValueError, lambda: to_tower_state({}, "nope", 1), "unknown layout", "nope")
+    with tempfile.TemporaryDirectory() as tmp:
+        from safetensors.torch import save_file
+        save_file({"te.a.weight": torch.ones(2), "te.b.weight": torch.zeros(2), "other.x": torch.ones(1)}, f"{tmp}/f.safetensors")
+        got = read_prefixed(f"{tmp}/f.safetensors", "te.", exclude=("b.",), dtype=torch.float16)
+        check(list(got) == ["a.weight"] and got["a.weight"].dtype == torch.float16, "read_prefixed slices, excludes and casts")
+
+
+def clip_tokenizer():
+    with tempfile.TemporaryDirectory() as tmp:
+        chars = sorted(set(tok.bytes_to_unicode().values()))
+        vocab: dict[str, int] = {}
+        for c in chars:
+            vocab[c] = len(vocab)
+            vocab[c + "</w>"] = len(vocab)
+        merges = ["#version: 0.2", "c a", "ca t</w>"]
+        for m in merges[1:]:
+            a, b = m.split(" ")
+            vocab[a + b] = len(vocab)
+        with open(f"{tmp}/vocab.json", "w") as f:
+            json.dump(vocab, f)
+        with open(f"{tmp}/merges.txt", "w") as f:
+            f.write("\n".join(merges) + "\n")
+        t = tok.CLIPTokenizer(tmp)
+        out = t.tokenize("cat")
+        check(len(out["l"]) == 1 and len(out["l"][0]) == 77 and out["l"][0][0] == tok.CLIP_BOS, "one section of 77 starting with BOS")
+        check(out["l"][0][2] == tok.CLIP_EOS and out["l"][0][-1] == tok.CLIP_EOS, "CLIP-L pads with EOS")
+        check(out["g"][0][2] == tok.CLIP_EOS and out["g"][0][-1] == 0, "CLIP-G pads with 0")
+        check(out["l"][0][1] == vocab["cat</w>"], "merges apply")
+        check(len(t.tokenize("cat " * 100)["l"]) > 1, "long prompts become several sections")
+        check(all(len(s) == 77 for s in t.tokenize("cat " * 100)["g"]), "every section is full length")
+        check(t.tokenize("")["l"][0][1] == tok.CLIP_EOS, "empty prompt is BOS then EOS")
+        check(t.tokenize("(cat)") != t.tokenize("cat"), "parentheses are text, not weights")
+        raises(FileNotFoundError, lambda: tok.CLIPTokenizer(tmp + "/nowhere"), "missing vocabulary is a clear error", "expected")
+        check(sorted(tok.bytes_to_unicode()) == list(range(256)) and len(set(tok.bytes_to_unicode().values())) == 256,
+              "byte alphabet is a bijection")
+
+
 if __name__ == "__main__":
-    run(schedules, flow_and_timesteps, vae)
+    run(schedules, flow_and_timesteps, vae, clip_tower, clip_tokenizer)

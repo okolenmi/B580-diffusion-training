@@ -1,5 +1,6 @@
 # Local folders
 __pycache__/
+assets/
 datasets/
 runs/
 archive/server/data/

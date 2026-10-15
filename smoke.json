@@ -1,0 +1,212 @@
+[
+ {
+  "status": "INFO",
+  "name": "torch",
+  "detail": "2.12.1+xpu"
+ },
+ {
+  "status": "PASS",
+  "name": "torch.xpu available",
+  "detail": ""
+ },
+ {
+  "status": "INFO",
+  "name": "device",
+  "detail": "Intel(R) Arc(TM) B580 Graphics",
+  "total_gb": 11.9
+ },
+ {
+  "status": "INFO",
+  "name": "environment finished",
+  "detail": "",
+  "seconds": 0.1
+ },
+ {
+  "status": "PASS",
+  "name": "detection ok",
+  "detail": ""
+ },
+ {
+  "status": "PASS",
+  "name": "family is sdxl",
+  "detail": "sdxl"
+ },
+ {
+  "status": "PASS",
+  "name": "checkpoint holds denoiser, both CLIPs and VAE",
+  "detail": "",
+  "roles": [
+   "clip_g",
+   "clip_l",
+   "denoiser",
+   "vae"
+  ]
+ },
+ {
+  "status": "INFO",
+  "name": "detect checkpoint finished",
+  "detail": "",
+  "seconds": 0.0
+ },
+ {
+  "status": "INFO",
+  "name": "vocabulary folder",
+  "detail": "/home/okolenmi/Desktop/B580-diffusion-training/assets/clip_tokenizer"
+ },
+ {
+  "status": "PASS",
+  "name": "BOS ... EOS padded to 77",
+  "detail": "",
+  "length": 77
+ },
+ {
+  "status": "PASS",
+  "name": "a long prompt becomes several sections",
+  "detail": "",
+  "sections": 4
+ },
+ {
+  "status": "INFO",
+  "name": "tokenizer finished",
+  "detail": "",
+  "seconds": 0.1
+ },
+ {
+  "status": "PASS",
+  "name": "fp16 encodings are finite",
+  "detail": ""
+ },
+ {
+  "status": "PASS",
+  "name": "encoding shapes (1,77,2048) and (1,1280)",
+  "detail": "",
+  "shape": [
+   1,
+   77,
+   2048
+  ]
+ },
+ {
+  "status": "INFO",
+  "name": "fp16 towers",
+  "detail": "",
+  "peak_gb": 1.53
+ },
+ {
+  "status": "PASS",
+  "name": "fp16 on device agrees with fp32 on CPU",
+  "detail": "",
+  "worst_relative_error": 0.00219
+ },
+ {
+  "status": "PASS",
+  "name": "fp32 batched equals one at a time",
+  "detail": "",
+  "relative_error": 0.0,
+  "batch": 64
+ },
+ {
+  "status": "INFO",
+  "name": "text encoder finished",
+  "detail": "",
+  "seconds": 5.6
+ },
+ {
+  "status": "INFO",
+  "name": "vae encode",
+  "detail": "",
+  "seconds": 0.54,
+  "peak_gb": 2.47
+ },
+ {
+  "status": "PASS",
+  "name": "latent shape",
+  "detail": "",
+  "shape": [
+   1,
+   4,
+   64,
+   64
+  ]
+ },
+ {
+  "status": "PASS",
+  "name": "latents finite",
+  "detail": ""
+ },
+ {
+  "status": "INFO",
+  "name": "latent statistics (scaled; real photos give std near 1)",
+  "detail": "",
+  "mean": 0.2535213232040405,
+  "std": 0.9438168406486511
+ },
+ {
+  "status": "PASS",
+  "name": "encode then decode reproduces the image",
+  "detail": "",
+  "psnr_db": 26.5
+ },
+ {
+  "status": "INFO",
+  "name": "vae finished",
+  "detail": "",
+  "seconds": 1.5
+ },
+ {
+  "status": "INFO",
+  "name": "unet loaded (bf16)",
+  "detail": "",
+  "peak_gb": 6.73
+ },
+ {
+  "status": "PASS",
+  "name": "forward output finite, input-shaped",
+  "detail": ""
+ },
+ {
+  "status": "INFO",
+  "name": "adapter",
+  "detail": "",
+  "modules": 722,
+  "trainable_params": 42557440
+ },
+ {
+  "status": "PASS",
+  "name": "loss finite after steps",
+  "detail": "",
+  "loss": 0.328458309173584
+ },
+ {
+  "status": "INFO",
+  "name": "training step",
+  "detail": "",
+  "seconds_first": 3.18,
+  "seconds_steady": 0.66,
+  "peak_gb": 9.68
+ },
+ {
+  "status": "INFO",
+  "name": "unet forward and backward with LoRA finished",
+  "detail": "",
+  "seconds": 9.5
+ },
+ {
+  "status": "PASS",
+  "name": "latent cache encodes every image",
+  "detail": "",
+  "encoded": 2
+ },
+ {
+  "status": "PASS",
+  "name": "batcher serves finite batches",
+  "detail": "",
+  "batches": 1
+ },
+ {
+  "status": "INFO",
+  "name": "dataset chain on real VAE finished",
+  "detail": "",
+  "seconds": 0.6
+ }
+]

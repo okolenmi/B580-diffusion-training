@@ -5,11 +5,8 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 
-import torch
-
-from ...families.general.adapters.gate import TimestepGate, compute_gate
 from .loss import LossWeighting, per_sample_mse
 from .state import Inputs, StepState
 
@@ -39,20 +36,11 @@ class FetchBatch(StepPhase):
             state.batch = next(self._iterator)
 
 
-class GateWindow:
-    """The timestep range an adapter is trained on; outside it the adapter fades out."""
-
-    def __init__(self, low: float, high: float, width: float):
-        self.low, self.high, self.width = low, high, width
-
-    def gate(self, t: torch.Tensor) -> torch.Tensor:
-        return compute_gate(t, self.low, self.high, self.width)
-
-
 class PrepareInputs(StepPhase):
     """Batch tensors to the device and the adapter gate for this batch's timesteps."""
 
-    def __init__(self, gate: TimestepGate | None = None, window: GateWindow | None = None):
+    def __init__(self, gate: Any = None, window: Any = None):
+        """``gate`` has ``set(tensor | None)``; ``window`` has ``gate(t) -> tensor`` (see the adapters' ``GateWindow``)."""
         self._gate, self._window = gate, window
 
     def run(self, state: StepState) -> None:

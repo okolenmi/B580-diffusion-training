@@ -9,7 +9,7 @@ from typing import Callable, Iterable
 from ...graph.events import StepFinished
 from ..optim.handle import FusedOptimizer, Optimizer
 from .loss import LossWeighting, thirds_of_range
-from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, GateWindow, Loss, Pipeline, PrepareInputs, Timed)
+from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, Timed)
 from .schedule import LRSchedule
 from .state import StepState
 
@@ -31,7 +31,7 @@ class Trainer:
 
     def __init__(self, *, batches: Iterable[dict], denoiser, conditioner, optimizer: Optimizer, schedule: LRSchedule,
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
-                 gate_window: GateWindow | None = None, emit: Callable[[StepFinished], None] | None = None,
+                 gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False):
         if accumulation < 1 or steps < 0:

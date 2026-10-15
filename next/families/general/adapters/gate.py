@@ -22,6 +22,16 @@ def compute_gate(t: Tensor, train_low: float, train_high: float, width: float) -
     return torch.sigmoid(distance / max(width, 1e-6))
 
 
+class GateWindow:
+    """The timestep range an adapter is trained on; outside it the adapter fades out."""
+
+    def __init__(self, low: float, high: float, width: float):
+        self.low, self.high, self.width = low, high, width
+
+    def gate(self, t: Tensor) -> Tensor:
+        return compute_gate(t, self.low, self.high, self.width)
+
+
 class TimestepGate:
     def __init__(self) -> None:
         self.value: Tensor | None = None

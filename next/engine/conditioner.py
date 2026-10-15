@@ -22,7 +22,7 @@ class Conditioner:
         return self.cache.warm(prompts, size)
 
     def on_prompts_changed(self, event: PromptsChanged, universe: set[str], size: tuple[int, int] | None = None) -> None:
-        """Forget what the new prompts no longer use, then encode what they do."""
+        """Drop cached prompts outside ``universe``, then encode the ones that are missing."""
         self.cache.retain(universe)
         self.cache.warm(sorted(universe), size)
 

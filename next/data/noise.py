@@ -39,7 +39,7 @@ class Noiser:
         self.objective, self.policy = objective, policy
 
     def __call__(self, x0: Tensor, generator: torch.Generator) -> dict[str, Tensor]:
-        """``x_t`` (network input), ``t``, ``target`` and ``sigma`` for a batch of clean latents."""
+        """``x_t`` (network input), ``t``, ``target``, ``sigma`` and ``t_frac`` (t as a fraction of the objective's range)."""
         n = x0.shape[0]
         if self.policy.values:
             pick = torch.randint(0, len(self.policy.values), (n,), generator=generator)
@@ -49,4 +49,5 @@ class Noiser:
             t = self.objective.sample_t(n, self.policy.mode, self.low, self.high, generator)
         noise = torch.randn(x0.shape, generator=generator, dtype=x0.dtype)
         x_t, target, sigma = self.objective.noisy(x0, noise, t)
-        return {"x_t": x_t, "t": t, "target": target, "sigma": sigma}
+        t_frac = (t.float() - self.low) / max(float(self.high - self.low), 1e-12)
+        return {"x_t": x_t, "t": t, "target": target, "sigma": sigma, "t_frac": t_frac}

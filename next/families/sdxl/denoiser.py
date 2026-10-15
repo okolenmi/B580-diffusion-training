@@ -28,6 +28,10 @@ class SDXLDenoiser:
     def __call__(self, x_t: Tensor, timestep: Tensor, context: Tensor, y: Tensor) -> Tensor:
         return self.model(x_t.to(self.dtype), timestep.to(torch.float32), context.to(self.dtype), y.to(self.dtype))
 
+    def predict(self, x_t: Tensor, timestep: Tensor, conditioning) -> Tensor:
+        """The family-neutral entry point: noisy input, timesteps and an SDXL conditioning in, prediction out."""
+        return self(x_t, timestep, conditioning.ctx, conditioning.y)
+
     def parameters(self):
         return self.model.parameters()
 

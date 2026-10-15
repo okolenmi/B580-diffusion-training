@@ -53,8 +53,8 @@ class SDXLDenoiser:
             self.dtype = dtype
         return self
 
-    def set_checkpointer(self, checkpointer: Checkpointer | None) -> None:
-        self.model.set_checkpointer(checkpointer)
+    def set_checkpointer(self, checkpointer: Checkpointer | None, attention_fraction: float = 1.0) -> None:
+        self.model.set_checkpointer(checkpointer, attention_fraction)
 
 
 def build_unet(config: dict | None = None) -> UNetModel:

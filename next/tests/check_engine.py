@@ -26,7 +26,9 @@ from ..engine.optim.algorithms import AdamW
 from ..engine.optim.handle import FusedOptimizer, Optimizer, ParamGroup
 from ..engine.optim.state import Int8BlockStore
 from ..engine.step.loss import MinSNR, Uniform, per_sample_mse
+from ..engine.runtime.checkpointing import ActivationCheckpointer
 from ..engine.step.schedule import Constant, Cosine, Warmup
+from ..engine.step.state import StepState
 from ..engine.step.trainer import Trainer
 from ..families.api.adapters import TrainableSelection
 from ..families.general.ldm_unet.unet import UNetModel
@@ -127,6 +129,21 @@ def main() -> None:
         plain.run(), fused.run()
         gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a2.trainable_parameters()))
         check(gap < 1e-6, f"fused and plain optimizers give the same adapters (max gap {gap:.1e})")
+
+    print("activation checkpointing")
+    grads = {}
+    for label, fraction in (("off", None), ("all", 1.0), ("half", 0.5)):
+        tmp2 = Path(tempfile.mkdtemp())
+        trainer, adapted, denoiser, *_ = rig(tmp2, steps=1)
+        if fraction is not None:
+            denoiser.set_checkpointer(ActivationCheckpointer(), fraction)
+        state = StepState(0, 0, "cpu")
+        for phase in trainer.pipeline.phases[:5]:
+            phase.run(state)
+        state.loss.backward()
+        grads[label] = torch.cat([p.grad.flatten() for p in adapted.trainable_parameters()])
+    check(torch.allclose(grads["off"], grads["all"], atol=1e-6) and torch.allclose(grads["off"], grads["half"], atol=1e-6),
+          "checkpointed gradients equal plain ones (all blocks and half of the attention blocks)")
 
     print("loss, schedules, optimizer state")
     sigma = torch.tensor([0.1, 1.0, 10.0])

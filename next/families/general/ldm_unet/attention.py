@@ -72,8 +72,15 @@ class BasicTransformerBlock(nn.Module):
         self.attn2 = CrossAttention(dim, n_heads, d_head, dropout, context_dim)
         self.norm1, self.norm2, self.norm3 = nn.LayerNorm(dim), nn.LayerNorm(dim), nn.LayerNorm(dim)
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
+        self.checkpointer = None
 
     def forward(self, x, context=None):
+        if self.checkpointer is None:
+            return self._forward(x, context)
+        inputs = (x,) if context is None else (x, context)
+        return self.checkpointer(lambda *args: self._forward(*args), inputs, self.parameters())
+
+    def _forward(self, x, context=None):
         x = self.attn1(self.norm1(x)) + x
         x = self.attn2(self.norm2(x), context=context) + x
         return self.ff(self.norm3(x)) + x

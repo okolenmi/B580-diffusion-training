@@ -2,7 +2,7 @@
 ``time_embed``, ``label_emb``) match the published checkpoints.
 
 Gradient checkpointing is not implemented here. ``UNetModel.set_checkpointer`` accepts a callable
-``checkpointer(fn, inputs, params)`` that residual blocks use to run their forward; ``None`` runs it directly.
+``checkpointer(fn, inputs, params)`` that residual and transformer blocks use to run their forward; ``None`` runs it directly.
 The training runtime supplies the callable, so this module stays free of runtime concerns.
 """
 
@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from ..embeddings import timestep_embedding
-from .attention import SpatialTransformer
+from .attention import BasicTransformerBlock, SpatialTransformer
 
 Checkpointer = Callable[[Callable[..., Any], tuple, Iterable[nn.Parameter]], Any]
 
@@ -181,10 +181,21 @@ class UNetModel(nn.Module):
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
         self.out = nn.Sequential(nn.GroupNorm(32, ch), nn.SiLU(), nn.Conv2d(model_channels, out_channels, 3, padding=1))
 
-    def set_checkpointer(self, checkpointer: Checkpointer | None) -> None:
+    def set_checkpointer(self, checkpointer: Checkpointer | None, attention_fraction: float = 1.0) -> None:
+        """Residual blocks and a share of the transformer blocks run through ``checkpointer`` (``None`` turns it off).
+
+        ``attention_fraction`` in [0, 1] picks that share, spread evenly through the network: 1 checkpoints every
+        transformer block, 0.5 every other one, 0 none.
+        """
+        if not 0.0 <= attention_fraction <= 1.0:
+            raise ValueError(f"attention_fraction must be in [0, 1], got {attention_fraction}")
+        blocks = [m for m in self.modules() if isinstance(m, BasicTransformerBlock)]
         for module in self.modules():
             if isinstance(module, ResBlock):
                 module.checkpointer = checkpointer
+        for index, block in enumerate(blocks):
+            chosen = int((index + 1) * attention_fraction) > int(index * attention_fraction)
+            block.checkpointer = checkpointer if chosen else None
 
     def forward(self, x, timesteps, context=None, y=None):
         if (y is not None) != (self.num_classes is not None):

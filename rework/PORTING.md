@@ -10,15 +10,15 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | old file | lines | comment % | planned destination | triage | state |
 |---|---|---|---|---|---|
 | `manager/__init__.py` | 3 | 0 | next/data/ (triage) | ? | todo |
-| `manager/builder.py` | 724 | 21 | next/data/ingest | ? | todo |
-| `manager/caption_pool.py` | 137 | 32 | next/data/ (triage) | ? | todo |
+| `manager/builder.py` | 724 | 21 | next/data/{images,latent_cache,library}.py | rewrite | done (teacher/trajectory generation dropped; VAE encode lives in the latent cache) |
+| `manager/caption_pool.py` | 137 | 32 | next/data/prompts.py (CaptionPool stage) | rewrite | done (variants dropped; draws derive from seed, epoch, image) |
 | `manager/captioning.py` | 244 | 23 | next/data/ (triage) | ? | todo |
-| `manager/dataset.py` | 265 | 18 | next/data/ (triage) | ? | todo |
-| `manager/db.py` | 379 | 11 | next/data/ (triage) | ? | todo |
-| `manager/loader.py` | 749 | 39 | next/data/ (batching, Noiser) | ? | todo |
+| `manager/dataset.py` | 265 | 18 | next/data/{library,store}.py | rewrite | done |
+| `manager/db.py` | 379 | 11 | next/data/library.py | rewrite | done (new schema) |
+| `manager/loader.py` | 749 | 39 | next/data/{batcher,bucketing,noise}.py | rewrite | done (no prompt grouping; mixed-prompt batches) |
 | `manager/preview.py` | 57 | 14 | next/data/ (triage) | ? | todo |
-| `manager/storage.py` | 172 | 14 | next/data/ (triage) | ? | todo |
-| `manager/t_sampling.py` | 172 | 47 | next/data/ (triage) | ? | todo |
+| `manager/storage.py` | 172 | 14 | next/data/latent_cache.py | rewrite | done (safetensors shards per VAE id) |
+| `manager/t_sampling.py` | 172 | 47 | next/data/noise.py + family objective | rewrite | done |
 | `nodes/components/device.py` | 320 | 40 | next/engine/runtime/ | ? | todo |
 | `nodes/components/diffusion.py` | 169 | 26 | next/families/general/schedules/ddpm.py | rewrite | done |
 | `nodes/components/layout.py` | 118 | 55 | next/ (triage) | ? | todo |
@@ -29,12 +29,12 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/config_model.py` | 338 | 14 | next/ (triage) | ? | todo |
 | `nodes/core.py` | 568 | 52 | next/graph/ | rewrite | done |
 | `nodes/dataset/auto_caption.py` | 112 | 11 | next/data/ + nodes/data/ | ? | todo |
-| `nodes/dataset/caption_pool.py` | 104 | 9 | next/data/ + nodes/data/ | ? | todo |
+| `nodes/dataset/caption_pool.py` | 104 | 9 | next/nodes/dataset/prompts.py | rewrite | done |
 | `nodes/dataset/handle.py` | 29 | 24 | next/data/ + nodes/data/ | ? | todo |
-| `nodes/dataset/managed.py` | 305 | 15 | next/data/ + nodes/data/ | ? | todo |
+| `nodes/dataset/managed.py` | 305 | 15 | next/nodes/dataset/* | rewrite | done (split into chain nodes) |
 | `nodes/dataset/node.py` | 21 | 5 | next/data/ + nodes/data/ | ? | todo |
-| `nodes/dataset/prefetch.py` | 157 | 45 | next/data/ + nodes/data/ | ? | todo |
-| `nodes/dataset/timestep_modes.py` | 51 | 92 | next/data/ + nodes/data/ | ? | todo |
+| `nodes/dataset/prefetch.py` | 157 | 45 | next/data/prefetch.py | rewrite | done (worker lives in the batcher; no separate node) |
+| `nodes/dataset/timestep_modes.py` | 51 | 92 | next/nodes/dataset/batching.py (Noiser node) | rewrite | done |
 | `nodes/memory/control_handle.py` | 489 | 70 | next/engine/runtime/ (memory, admission) | ? | todo |
 | `nodes/memory/coordinator.py` | 115 | 43 | next/engine/runtime/ (memory, admission) | ? | todo |
 | `nodes/memory/device_reservations.py` | 282 | 59 | next/engine/runtime/ (memory, admission) | ? | todo |
@@ -78,8 +78,8 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/ | ? | todo |
 | `nodes/model/sdxl_architecture.py` | 71 | 62 | next/families/sdxl/ | ? | todo |
 | `nodes/model/text_encoder.py` | 346 | 50 | next/families/general/ + sdxl/conditioning | ? | todo |
-| `nodes/model/text_encoder_cache.py` | 367 | 54 | next/families/general/ + sdxl/conditioning | ? | todo |
-| `nodes/model/text_encoder_prewarm.py` | 537 | 55 | next/families/general/ + sdxl/conditioning | ? | todo |
+| `nodes/model/text_encoder_cache.py` | 367 | 54 | next/data/conditioning_cache.py | rewrite | partial (RAM cache done; disk spill and prewarm driver wait for the engine) |
+| `nodes/model/text_encoder_prewarm.py` | 537 | 55 | next/data/conditioning_cache.py | rewrite | partial (warm/retain done; driving it from PromptsChanged is phase 5) |
 | `nodes/model/timestep_embedding.py` | 115 | 61 | next/families/general/embeddings.py | rewrite | done |
 | `nodes/model/tokenizer.py` | 459 | 41 | next/families/general/clip/tokenizer.py | rewrite | done (synthetic vocab parity) |
 | `nodes/model/trainer_parameters.py` | 47 | 36 | next/ (triage) | ? | todo |

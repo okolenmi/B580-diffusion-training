@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import torch
 from torch import Tensor
 
 from ..general.schedules.ddpm import (PARAMETERIZATIONS, DiffusionProcess, DiscreteSchedule, ZeroTerminalSNRSchedule,
                                       scale_input)
-from ..general.schedules.timesteps import MODES as TIMESTEP_MODES
+from ..general.schedules.timesteps import MODES as TIMESTEP_MODES, sample_timesteps
 
 
 class SDXLObjective:
@@ -21,6 +22,13 @@ class SDXLObjective:
             raise ValueError(f"unknown parameterization {parameterization!r}; choose from {self.parameterizations}")
         schedule = ZeroTerminalSNRSchedule() if zero_terminal_snr else DiscreteSchedule()
         self.process = DiffusionProcess(schedule, PARAMETERIZATIONS[parameterization]())
+
+    @property
+    def t_range(self) -> tuple[int, int]:
+        return 0, self.steps - 1
+
+    def sample_t(self, n: int, mode: str, low: int, high: int, generator: torch.Generator | None = None) -> Tensor:
+        return sample_timesteps(n, mode, low, high, generator)
 
     def noisy(self, x0: Tensor, noise: Tensor, t: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """(network input, regression target, sigma) for integer timesteps ``t``."""

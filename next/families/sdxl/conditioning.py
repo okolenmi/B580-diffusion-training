@@ -159,6 +159,10 @@ class SDXLConditioningKit:
         sizes = sizes or [self.default_size] * len(prompts)
         return [self.encoder.assemble(t, s) for t, s in zip(texts, sizes)]
 
+    @staticmethod
+    def stack(items: Sequence[SDXLConditioning]) -> SDXLConditioning:
+        return SDXLConditioning.stack(items)
+
     def blank(self, size=None) -> SDXLConditioning:
         return self.encode([""], [tuple(size) if size is not None else self.default_size])[0]
 

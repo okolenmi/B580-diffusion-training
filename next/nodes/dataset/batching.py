@@ -1,0 +1,107 @@
+"""Bucketer, Noiser and Batcher: how samples are grouped, noised and served."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...data.batcher import Batcher
+from ...data.bucketing import BucketPolicy, padding_stats
+from ...data.noise import Noiser, TimestepPolicy
+from ...families.api.parts import DenoiserPart
+from ...families.registry import get_family
+from ...graph import EventOut, Group, Node, Port
+from ...graph.events import EpochEnding, EpochStarted, PromptsChanged
+from .handles import LatentSet, PromptTable
+
+
+class BucketerNode(Node):
+    DISPLAY_NAME = "Bucketer"
+    CATEGORY = "Dataset"
+    INPUTS = {
+        "latents": Port("latents", LatentSet),
+        "multiple": Port("multiple", int, required=False, default=1, minimum=1, unit="latent px",
+                         doc="Round every latent side up to this multiple and pad; 1 keeps shapes as they are."),
+        "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
+                                doc="Train on a short last batch of a group instead of dropping it (when shuffling)."),
+    }
+    OUTPUTS = {"buckets": Port("buckets", BucketPolicy)}
+
+    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
+        latents = inputs.get("latents")
+        if latents is None:
+            return {}
+        stats = padding_stats(list(latents.shapes.values()), inputs.get("multiple") or 1)
+        if stats["samples"] and stats["padded_samples"]:
+            return {"multiple": [f"{stats['padded_samples']}/{stats['samples']} samples padded; mean padding "
+                                 f"{stats['pad_mean']:.0%}, worst {stats['pad_max']:.0%}"]}
+        return {}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        return {"buckets": BucketPolicy(inputs.get("multiple") or 1, bool(inputs.get("keep_incomplete")))}
+
+
+class NoiserNode(Node):
+    DISPLAY_NAME = "Noiser"
+    CATEGORY = "Dataset"
+    GROUPS = (Group("timesteps", "Timesteps"),)
+    INPUTS = {
+        "denoiser": Port("denoiser", DenoiserPart, doc="Tells which family's objective to use."),
+        "parameterization": Port("parameterization", str, required=False, default="eps", choices=("eps", "v")),
+        "zero_terminal_snr": Port("zero_terminal_snr", bool, required=False, default=False,
+                                  doc="Rescale the schedule so the last step is pure noise (v-prediction)."),
+        "mode": Port("mode", str, required=False, default="uniform", group="timesteps",
+                     choices=("uniform", "low", "mid", "high", "logit")),
+        "low": Port("low", float, required=False, default=None, group="timesteps", doc="Smallest timestep; empty = objective's."),
+        "high": Port("high", float, required=False, default=None, group="timesteps", doc="Largest timestep; empty = objective's."),
+        "values": Port("values", str, required=False, default="", group="timesteps", advanced=True,
+                       doc="Comma-separated timesteps to choose from instead of a distribution."),
+    }
+    OUTPUTS = {"noiser": Port("noiser", Noiser)}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        family = get_family(inputs["denoiser"].family_id)
+        objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
+        values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
+        policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values)
+        return {"noiser": Noiser(objective, policy)}
+
+
+class BatcherNode(Node):
+    DISPLAY_NAME = "Batcher"
+    CATEGORY = "Dataset"
+    GROUPS = (Group("batching", "Batching"), Group("worker", "Worker", collapsed=True))
+    INPUTS = {
+        "latents": Port("latents", LatentSet),
+        "prompts": Port("prompts", PromptTable),
+        "noiser": Port("noiser", Noiser),
+        "buckets": Port("buckets", BucketPolicy, required=False),
+        "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="batching"),
+        "shuffle": Port("shuffle", bool, required=False, default=True, group="batching"),
+        "seed": Port("seed", int, required=False, default=0, minimum=0, group="batching",
+                     doc="One number for data order, padding offsets, timesteps and noise."),
+        "start_epoch": Port("start_epoch", int, required=False, default=0, minimum=0, group="batching",
+                            doc="Epoch to start from when resuming; prompts and data order follow from it."),
+        "prefetch": Port("prefetch", int, required=False, default=2, minimum=1, group="worker",
+                         doc="Batches prepared ahead of the training step."),
+    }
+    OUTPUTS = {"batches": Port("batches", Batcher, doc="Iterable of batches; one pass is one epoch.")}
+    EVENTS_OUT = {
+        "epoch_started": EventOut(EpochStarted, doc="Before the epoch's prompts are computed; handlers may edit captions."),
+        "epoch_ending": EventOut(EpochEnding, doc="After the last batch has been handed out."),
+        "prompts_changed": EventOut(PromptsChanged, doc="The active prompts differ from the previous epoch's."),
+    }
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        buckets = inputs.get("buckets") or BucketPolicy()
+        port = {EpochStarted: "epoch_started", EpochEnding: "epoch_ending", PromptsChanged: "prompts_changed"}
+        emit = lambda event: self.emit(port[type(event)], event)  # noqa: E731
+        prompts: PromptTable = inputs["prompts"]
+        prompts.listener = emit
+        batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
+                          shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
+                          multiple=buckets.multiple, seed=inputs.get("seed") or 0, depth=inputs.get("prefetch") or 2,
+                          start_epoch=inputs.get("start_epoch") or 0, emit=emit)
+        return {"batches": batcher}

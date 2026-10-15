@@ -79,7 +79,8 @@ is assigned.
 | 19 | Phase 0: `contracts/`, import-check, comment-lint, `next/` skeleton | `contracts/`, `scripts/` | done |
 | 20 | Phase 1: `next/graph` | `next/graph/` | done (91 checks) |
 | 21 | Phase 2: families API, detection, Load Model | `next/families/api`, `next/nodes/` | done; reviewed and pushed |
-| 22 | Phase 3: general + SDXL families (schedules, VAE, CLIP, tokenizer, conditioning, UNet, adapters, family object) | `next/families/general`, `next/families/sdxl` | done except: conditioning cache and prewarm (move to phase 4 with the prompt table), adapter phases and model nodes (phase 5, they need the engine runtime), NF4 weight store (phase 5) |
+| 22 | Phase 3: general + SDXL families (schedules, VAE, CLIP, tokenizer, conditioning, UNet, adapters, family object) | `next/families/general`, `next/families/sdxl` | done except: adapter phases and model nodes (phase 5, they need the engine runtime), NF4 weight store (phase 5) |
+| 23 | Phase 4: data (library, per-VAE latent cache, prompt stages, bucketing, batcher with epoch barrier, noiser, conditioning cache) and dataset nodes | `next/data`, `next/nodes/dataset` | done; unverified on XPU. Not ported: auto-caption (`manager/captioning.py`, `nodes/dataset/auto_caption.py`), dataset preview, prewarm driver (phase 5) |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.

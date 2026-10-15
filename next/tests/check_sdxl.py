@@ -153,7 +153,11 @@ def denoiser_cases():
 
     den.set_checkpointer(checkpointer)
     den(x, t, c, y)
-    check(len(calls) == 11, f"every residual block goes through the checkpointer ({len(calls)})")
+    check(len(calls) == 23, f"every residual and transformer block goes through the checkpointer ({len(calls)})")
+    calls.clear()
+    den.set_checkpointer(checkpointer, 0.0)
+    den(x, t, c, y)
+    check(len(calls) == 11, f"attention_fraction 0 leaves only the residual blocks ({len(calls)})")
     den.set_checkpointer(None)
     before = len(calls)
     den(x, t, c, y)

@@ -7,6 +7,7 @@ archive/server/data/
 backend/data/
 converter/__pycache__/
 manager/__pycache__/
+output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

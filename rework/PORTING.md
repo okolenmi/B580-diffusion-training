@@ -19,7 +19,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `manager/preview.py` | 57 | 14 | next/data/ (triage) | ? | todo |
 | `manager/storage.py` | 172 | 14 | next/data/latent_cache.py | rewrite | done (safetensors shards per VAE id) |
 | `manager/t_sampling.py` | 172 | 47 | next/data/noise.py + family objective | rewrite | done |
-| `nodes/components/device.py` | 320 | 40 | next/engine/runtime/ | ? | todo |
+| `nodes/components/device.py` | 320 | 40 | next/engine/devices.py | rewrite | partial (memory and sync done; allocator-conf report and per-process fraction pending) |
 | `nodes/components/diffusion.py` | 169 | 26 | next/families/general/schedules/ddpm.py | rewrite | done |
 | `nodes/components/layout.py` | 118 | 55 | next/ (triage) | ? | todo |
 | `nodes/components/model_io.py` | 83 | 46 | next/families/general/safetensors_io | ? | todo |
@@ -130,4 +130,4 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/train/t_probe.py` | 362 | 31 | next/engine/ or nodes/train/ (triage) | ? | todo |
 | `nodes/train/xpu_graph_step.py` | 336 | 32 | next/engine/runtime/capture | ? | todo |
 | `nodes/ui.py` | 185 | 40 | next/graph/ (field/display descriptors) | rewrite | done |
-| `nodes/xpu_env.py` | 284 | 65 | next/ (triage) | ? | todo |
+| `nodes/xpu_env.py` | 284 | 65 | next/engine/xpu_env.py | rewrite | done (measurements in rework/71-memory.md) |

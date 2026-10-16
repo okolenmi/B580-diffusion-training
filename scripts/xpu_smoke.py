@@ -25,6 +25,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from next.engine.xpu_env import set_perf_env  # noqa: E402
+
+set_perf_env()
+
 import torch  # noqa: E402
 
 from next.families.api.adapters import TrainableSelection  # noqa: E402

@@ -6,6 +6,11 @@
 3. **OOP approach is recommended.** Avoid any "spaghetti code". Separeted functional independent classes is a better 
    approach if you know what you are doing. Medium efforts in this direction.
 
+4. **The previous implementation is good.** `nodes/`, `manager/`, `backend/` and `docs/` hold a polished,
+   hardware-tested system (memory levers, B580 findings, known issues). Only its structure was messy. Before
+   writing or "investigating" anything performance- or memory-related, read what the old code and `docs/` already
+   say, and port that knowledge; do not rediscover it by testing again.
+
 ## Tests: keep it clean
 - Remove what is already useles or have almost no value. Don't be "sentimental" about it.
 - It's recommended to group tests somehow, or at least write purpose of a test in docstring at top.

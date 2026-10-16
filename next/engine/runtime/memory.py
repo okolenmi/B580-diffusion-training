@@ -49,9 +49,10 @@ class ResidencyManager:
     """Knows every resident, measures the card the way the driver sees it, and reacts between steps.
 
     Reaction is deliberately between steps: what is already allocated cannot be taken back mid-step, so the
-    manager measures after a step and, when the card is tighter than the policy allows, applies the next lever
-    for the following steps. Levers go from cheap to costly: empty the allocator cache every step, then park
-    residents (offloaded after each step, reloaded before the next) from the lowest rank up.
+    manager measures after a step and, when the card is tighter than the policy allows, parks one more resident for
+    the following steps (offloaded after each step, reloaded before the next), smallest first because the size is
+    the transfer cost. Parking is never undone, so the run does not flip between resident and parked. The
+    allocator cache is emptied only once something has been released: before that there is nothing to give back.
     """
 
     accelerator: Accelerator
@@ -65,7 +66,7 @@ class ResidencyManager:
         self.last_used_mb: float | None = None
         self.last_stats: dict[str, float] = {}
         self._pressure_noted = 0.0
-        self.empty_cache_every = self.policy.empty_cache_every
+        self.empty_cache_every = self.policy.empty_cache_every  # applies once something is released
         self.steps_seen = 0
         self.trace: list[dict] = []
 
@@ -165,7 +166,8 @@ class ResidencyManager:
                 entry.resident.offload()
                 entry.away = moved = True
         self.accelerator.reset_peak()
-        if moved or (self.empty_cache_every and self.steps_seen % self.empty_cache_every == 0):
+        released = moved or any(e.parked or e.away for e in self._entries.values())
+        if released and self.empty_cache_every and self.steps_seen % self.empty_cache_every == 0:
             self.accelerator.empty_cache()
 
     def _react(self, step: int, used: float) -> None:
@@ -183,16 +185,15 @@ class ResidencyManager:
         self._escalate()
 
     def _escalate(self) -> None:
-        if self.empty_cache_every != 1:
-            self.empty_cache_every = 1
-            self._note("lever", name="empty the allocator cache every step")
+        """Park the cheapest resident to move (smallest footprint) that is not parked yet; once parked, it stays parked."""
+        movable = [(e.resident.footprint_bytes(), name, e) for name, e in self._entries.items()
+                   if not e.pinned and not e.parked and e.resident.footprint_bytes() > 0]
+        if not movable:
+            self._note("lever", name="none left")
             return
-        for name, entry in sorted(self._entries.items(), key=lambda kv: kv[1].rank):
-            if not entry.pinned and not entry.parked and entry.resident.footprint_bytes() > 0:
-                entry.parked = True
-                self._note("lever", name=f"park {name} between steps")
-                return
-        self._note("lever", name="none left")
+        _, name, entry = min(movable, key=lambda item: item[:2])
+        entry.parked = True
+        self._note("lever", name=f"park {name} between steps")
 
     def _note(self, event: str, **fields: Any) -> None:
         record: Mapping[str, Any] = {"event": event, **fields}

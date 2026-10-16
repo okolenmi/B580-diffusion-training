@@ -81,24 +81,28 @@ def limits():
 def pressure():
     device = FakeDevice(ours=9000)
     model, encoder, opt = Blob(device, 5000), Blob(device, 1000), Blob(device, 3000)
-    m = manager(device, limit_mb=11000, empty_cache_every=0, safety_margin=0.1, calibration_steps=3)
+    m = manager(device, limit_mb=11000, safety_margin=0.1, calibration_steps=3)
     m.register("model", model, rank=10, pinned=True)
     m.register("encoder", encoder, rank=0)
     m.register("optimizer", opt, rank=1)
     m.start()
     m.after_step(0)  # 9600 MB in use, ceiling 9900: fine
-    check(m.empty_cache_every == 0 and not [t for t in m.trace if t["event"] in ("lever", "pressure")], "no reaction below the ceiling")
+    check(not [t for t in m.trace if t["event"] in ("lever", "pressure")] and device.cache_emptied == 0,
+          "no reaction and no cache emptying while everything fits")
     device.ours = 9600
     m.after_step(1)
-    check(m.empty_cache_every == 1, "first lever: empty the allocator cache every step")
-    m.after_step(2)
-    check(encoder.on_device is False and m.trace[-1]["name"] == "park encoder between steps", "second lever parks the lowest-ranked resident")
-    check(device.cache_emptied >= 1, "the cache was emptied after the step")
-    m.before_step(3)
+    check(encoder.on_device is False and opt.on_device and m.trace[-1]["name"] == "park encoder between steps",
+          "under pressure the resident that is cheapest to move is parked first")
+    check(device.cache_emptied == 1, "the cache is emptied once something has been released")
+    m.before_step(2)
     check(encoder.on_device, "a parked resident comes back before the next step")
     device.ours = 9600
+    m.after_step(2)
+    check(opt.on_device is False and encoder.on_device is False, "still under pressure: the next one is parked as well")
+    m.before_step(3)
+    device.ours = 9600
     m.after_step(3)
-    check(not [t for t in m.trace if t["event"] == "lever"][2:], "after calibration no further lever is pulled")
+    check(len([t for t in m.trace if t["event"] == "lever"]) == 2, "after calibration no further lever is pulled")
     check(model.on_device, "a pinned resident never moves")
     device.ours = 11500
     raises(MemoryBudgetExceeded, lambda: m.after_step(4), "going over a strict budget stops the run", "budget")
@@ -210,6 +214,36 @@ def sampling():
               f"the sampler logs labelled device memory several times a second ({len(rows) - 1} rows)")
 
 
+def xpu_environment():
+    import os
+
+    from ..engine import xpu_env
+
+    check(xpu_env.capacity_for_shapes(44) == 2048 and xpu_env.capacity_for_shapes(100) == 3500
+          and xpu_env.capacity_for_shapes(None) is None and xpu_env.capacity_for_shapes(0) is None,
+          "the primitive cache is sized to the shape count, never below the default, and unknown counts get no number")
+    saved = {k: os.environ.pop(k, None) for k in (xpu_env.CACHE_VAR,)}
+    try:
+        xpu_env._explicit = False
+        xpu_env.set_perf_env()
+        check(os.environ[xpu_env.CACHE_VAR] == "2048" and xpu_env.size_cache_for_shapes(100) == 3500 and os.environ[xpu_env.CACHE_VAR] == "3500",
+              "the default capacity grows to fit a dataset's shapes")
+        os.environ[xpu_env.CACHE_VAR] = "512"
+        xpu_env._explicit = False
+        xpu_env.set_perf_env()
+        check(xpu_env.size_cache_for_shapes(100) == 512 and os.environ[xpu_env.CACHE_VAR] == "512", "an exported capacity is kept even when too small")
+        os.environ[xpu_env.CACHE_VAR] = "0"
+        xpu_env._explicit = False
+        xpu_env.set_perf_env()
+        check(os.environ[xpu_env.CACHE_VAR] == "2048", "an unusable exported capacity falls back to the default")
+    finally:
+        xpu_env._explicit = False
+        for key, value in saved.items():
+            os.environ.pop(key, None)
+            if value is not None:
+                os.environ[key] = value
+
+
 def training():
     with tempfile.TemporaryDirectory() as raw:
         device = FakeDevice(ours=5000)
@@ -218,8 +252,8 @@ def training():
         trainer, *_ = rig(Path(raw), steps=2, residency=m)
         trainer.emit = lambda e, log=[]: log.append(e)
         trainer.run()
-        check(device.cache_emptied == 2 and m.steps_seen == 2, "the trainer calls the manager around every step")
+        check(m.steps_seen == 2 and device.cache_emptied == 0, "the trainer calls the manager around every step; nothing released, so no cache emptying")
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, breakdown, on_demand_encoders, sampling, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, breakdown, on_demand_encoders, sampling, xpu_environment, training)

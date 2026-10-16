@@ -24,6 +24,7 @@ from pathlib import Path
 from . import starters
 from .data.store import DatasetStore
 from .engine.devices import Accelerator, resolve_device
+from .engine.xpu_env import set_perf_env
 from .engine.runtime.factory import make_runtime
 from .engine.runtime.sampler import MemorySampler
 from .families.api.library import ModelLibrary
@@ -129,6 +130,7 @@ def _run(doc, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    set_perf_env()
     parser = argparse.ArgumentParser(prog="python -m next.run")
     sub = parser.add_subparsers(dest="command", required=True)
     ingest = sub.add_parser("ingest", help="register a folder of images (and sidecar captions) as a dataset")

@@ -22,3 +22,17 @@ predicts out-of-memory; the allocator's own peak understates it.
 NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`); per-block checkpoint placement from measured block costs
 (old `block_profiler`, `checkpoint_placement`); block swap; activation offload to the host; graph capture; oneDNN
 primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
+
+## Carried over from the old implementation (measured on the B580, `nodes/xpu_env.py`, `docs/known-issues/open.md`)
+
+* A new latent shape costs about 3.85 s the first time it reaches the GPU (kernel and primitive creation). With
+  oneDNN's default primitive cache (1024 entries) a shape that comes back also costs that much again; with 2048 it
+  costs the normal step time. The requirement is about 29-35 primitives per distinct latent shape, the cache is a
+  ceiling that costs no memory, so `size_cache_for_shapes` sizes it from the dataset. First sightings cannot be cached
+  across runs; fewer distinct shapes (bucketing with a multiple above 1) is the only lever. A short test run on a
+  mixed-aspect dataset is therefore dominated by first sightings and looks much slower than a long run.
+* The SYCL variables in `engine/xpu_env.py` keep the kernel cache in memory and avoid stalls; the entry points
+  (`next/run.py`, `scripts/xpu_smoke.py`) set them before anything touches the device.
+* "1024" means the **short side** is 1024 px. The long side keeps the aspect ratio, up to `max_aspect` times the base
+  (2048 by default) and longer images are split into several crops. A 2:3 photo is therefore 1024x1536, about 1.5 times
+  the pixels of a square 1024, and its activations are larger by the same factor. Lower the base to lower memory.

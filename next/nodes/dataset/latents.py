@@ -10,6 +10,7 @@ from ...data.ids import vae_identity
 from ...data.images import CROP_MODES, SizePolicy
 from ...data.latent_cache import LatentCache
 from ...engine.devices import Accelerator, resolve_dtype
+from ...engine.xpu_env import size_cache_for_shapes
 from ...families.api.header import read_header
 from ...families.api.parts import VAEPart
 from ...families.registry import get_family
@@ -73,7 +74,9 @@ class LatentCacheNode(Node):
             if stats.skipped:
                 skipped = True
                 self.context.report("warning", {"node": self.uid, "skipped": stats.skipped[:20]})
-        return {"latents": cache.view(images, policy, skip_missing=skipped)}
+        view = cache.view(images, policy, skip_missing=skipped)
+        size_cache_for_shapes(len(set(view.shapes.values())))
+        return {"latents": view}
 
 
 def fit_batch(wanted: int, base: int, dtype: torch.dtype, accelerator: Accelerator) -> int:

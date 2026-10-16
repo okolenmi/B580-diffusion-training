@@ -112,6 +112,9 @@ class SDXLTextEncoder:
         for tower in (self.clip_l, self.clip_g):
             tower.to(self.device)
 
+    def modules(self) -> tuple[torch.nn.Module, torch.nn.Module]:
+        return self.clip_l, self.clip_g
+
     @property
     def tower_dtype(self) -> torch.dtype:
         return self.clip_g.text_model.final_layer_norm.weight.dtype

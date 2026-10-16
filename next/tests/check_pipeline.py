@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from ..data.store import DatasetStore
+from ..engine.runtime.factory import make_runtime
 from ..graph import Edge, GraphDoc, GraphRunner, NodeRegistry, NodeSpec
 from ..graph.node import Environment
 from ..nodes.conditioning import conditioner
@@ -79,7 +80,7 @@ class Trace:
 def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None):
     cancel = threading.Event()
     trace = Trace(stop_after, cancel)
-    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}))
+    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}), runtime_factory=make_runtime)
     with ExitStack() as stack:
         for module in (conditioner, inject_adapter, latents, batching):
             stack.enter_context(mock.patch.object(module, "get_family", lambda _id: TinyFamily()))

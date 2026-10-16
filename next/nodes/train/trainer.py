@@ -44,12 +44,17 @@ class DiffusionTrainerNode(Node):
         self.validate_inputs(inputs)
         model: TrainableDenoiser = inputs["model"]
         accelerator = Accelerator(model.device)
+        residency = getattr(self.context.runtime, "residency", None)
+        if residency is not None:
+            residency.register("model", model, rank=10, pinned=True)
+            residency.register("optimizer", inputs["optimizer"], rank=1)
+            residency.start()
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
                           steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")))
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

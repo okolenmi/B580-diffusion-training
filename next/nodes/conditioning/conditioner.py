@@ -10,6 +10,7 @@ from ...data.conditioning_cache import ConditioningCache
 from ...data.prompts import PromptTable
 from ...engine.conditioner import Conditioner
 from ...engine.devices import resolve_device, resolve_dtype
+from ...engine.runtime.residents import ModulesResident
 from ...families.api.parts import ModelPart
 from ...families.registry import get_family
 from ...graph import EventIn, Group, Node, Port
@@ -43,6 +44,9 @@ class ConditionerNode(Node):
         dtype = resolve_dtype(self.context.settings.get("precision.encoders"), torch.float16)
         out = resolve_dtype(self.context.settings.get("precision.autocast"), torch.bfloat16) if self.context.settings.get("precision.autocast") != "off" else torch.float32
         self.encoder = family.load_text_encoder(parts, device=device, dtype=dtype, out_dtype=out)
+        residency = getattr(self.context.runtime, "residency", None)
+        if residency is not None and hasattr(self.encoder, "modules"):
+            residency.register(f"encoder {self.uid}", ModulesResident(self.encoder.modules(), self.encoder.to, device), rank=0)
         cache = ConditioningCache(family.conditioning_kit(self.encoder), max_bytes=(inputs.get("cache_mb") or 4096) << 20)
         self.conditioner = Conditioner(cache, device, out)
         self.prompts, self.release = inputs.get("prompts"), inputs.get("release_encoders", True)

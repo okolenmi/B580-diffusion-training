@@ -33,11 +33,11 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False):
+                 timed: bool = False, residency=None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
-        self.device, self.emit, self.should_stop = device, emit, should_stop
+        self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._fused = isinstance(optimizer, FusedOptimizer)
         phases = [FetchBatch(batches), PrepareInputs(gate, gate_window), EncodeConditioning(conditioner),
                   Forward(denoiser), Loss(weighting), Backward(accumulation)]
@@ -57,6 +57,8 @@ class Trainer:
     def _step(self, step: int) -> float:
         started = time.perf_counter()
         lr = self.schedule.value(step)
+        if self.residency is not None:
+            self.residency.before_step(step)
         self.optimizer.set_lr(lr)
         if self._fused:
             self.optimizer.begin_step(self.accumulation)
@@ -74,7 +76,11 @@ class Trainer:
         if not self._fused:
             self.optimizer.step()
         loss = float(sum(losses) / len(losses))
+        if self.residency is not None:
+            self.residency.after_step(step)
         metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, **timing}
+        if self.residency is not None and self.residency.last_used_mb is not None:
+            metrics["device_mb"] = self.residency.last_used_mb
         for name in {n for t in thirds for n in t}:
             values = [t[name] for t in thirds if name in t]
             metrics[name] = sum(values) / len(values)

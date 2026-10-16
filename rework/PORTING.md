@@ -35,14 +35,14 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/dataset/node.py` | 21 | 5 | next/data/ + nodes/data/ | ? | todo |
 | `nodes/dataset/prefetch.py` | 157 | 45 | next/data/prefetch.py | rewrite | done (worker lives in the batcher; no separate node) |
 | `nodes/dataset/timestep_modes.py` | 51 | 92 | next/nodes/dataset/batching.py (Noiser node) | rewrite | done |
-| `nodes/memory/control_handle.py` | 489 | 70 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/coordinator.py` | 115 | 43 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/device_reservations.py` | 282 | 59 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/graph_memory.py` | 661 | 46 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/handle.py` | 82 | 66 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/manager.py` | 206 | 54 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/profile.py` | 84 | 68 | next/engine/runtime/ (memory, admission) | ? | todo |
-| `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/ (memory, admission) | ? | todo |
+| `nodes/memory/control_handle.py` | 489 | 70 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/coordinator.py` | 115 | 43 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/device_reservations.py` | 282 | 59 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/graph_memory.py` | 661 | 46 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/handle.py` | 82 | 66 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/manager.py` | 206 | 54 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| `nodes/memory/profile.py` | 84 | 68 | next/engine/runtime/profiler | rewrite | todo |
+| `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
 | `nodes/model/adapter_injection.py` | 160 | 72 | next/families/general/adapters/inject.py | drop | done |
 | `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/layers.py | drop | done (kind flag replaces strategy classes) |
 | `nodes/model/attention.py` | 354 | 42 | next/families/general/ldm_unet/attention.py | rewrite | done (bit-identical) |
@@ -75,7 +75,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/node.py` | 53 | 2 | next/graph/ | rewrite | done |
 | `nodes/model/parameters.py` | 35 | 26 | next/ (triage) | ? | todo |
 | `nodes/model/resource_inspection.py` | 149 | 38 | next/families/general/safetensors_io + sdxl/fingerprint | ? | todo |
-| `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/ | ? | todo |
+| `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/memory.py | rewrite | done |
 | `nodes/model/sdxl_architecture.py` | 71 | 62 | next/families/sdxl/ | ? | todo |
 | `nodes/model/text_encoder.py` | 346 | 50 | next/families/general/ + sdxl/conditioning | ? | todo |
 | `nodes/model/text_encoder_cache.py` | 367 | 54 | next/data/conditioning_cache.py | rewrite | partial (RAM cache done; disk spill and prewarm driver wait for the engine) |

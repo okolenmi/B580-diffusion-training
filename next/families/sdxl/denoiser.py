@@ -35,6 +35,9 @@ class SDXLDenoiser:
     def parameters(self):
         return self.model.parameters()
 
+    def module(self) -> nn.Module:
+        return self.model
+
     def state_dict(self):
         return self.model.state_dict()
 

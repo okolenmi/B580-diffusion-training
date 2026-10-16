@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .optim.handle import ParamGroup
-from .runtime.residents import DeviceResident
+from .runtime.residents import DeviceResident, module_bytes
 
 
 @dataclass
@@ -33,7 +33,7 @@ class TrainableDenoiser(DeviceResident):
         return [ParamGroup(g["params"], g["lr_mult"], g["name"]) for g in self.adapted.param_groups()]
 
     def footprint_bytes(self) -> int:
-        return sum(p.numel() * p.element_size() for p in self.denoiser.parameters() if p.device.type != "cpu")
+        return module_bytes(self.denoiser.module())
 
     def offload(self) -> None:
         self.denoiser.to("cpu")

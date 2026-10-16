@@ -66,12 +66,12 @@ def limits():
     device = FakeDevice(ours=2000)
     m = manager(device)
     m.start()
-    check(m.limit_mb == 12000 - 600, f"auto budget is the card minus other processes ({m.limit_mb})")
-    raises(MemoryBudgetExceeded, manager(device, limit_mb=12000).start, "a budget the card cannot give is refused", "can give")
+    check(m.limit_mb == 12000, f"auto budget is the whole card, other programs included in what is measured ({m.limit_mb})")
+    raises(MemoryBudgetExceeded, manager(device, limit_mb=13000).start, "a budget above the card is refused", "card has")
     raises(MemoryBudgetExceeded, manager(device, floor_mb=11500).start, "a floor above what is free is refused", "floor")
-    loose = manager(device, limit_mb=12000, strict=False)
+    loose = manager(device, limit_mb=9000, strict=False)
     loose.start()
-    check(loose.limit_mb == 12000, "a non-strict budget is taken as given")
+    check(loose.limit_mb == 9000, "an explicit budget is taken as given")
     cpu = ResidencyManager(type("Cpu", (), {"memory": lambda self: {}, "empty_cache": lambda self: None, "reset_peak": lambda self: None})(), MemoryPolicy())
     cpu.start()
     cpu.after_step(0)
@@ -115,7 +115,34 @@ def making_room():
     check(moved == ["encoder"] and not encoder.on_device and opt.on_device, f"makes room by moving the lowest rank first ({moved})")
     m.restore(moved)
     check(encoder.on_device, "restore brings residents back")
-    raises(MemoryBudgetExceeded, lambda: m.make_room(5000, "huge"), "refuses when even moving everything movable is not enough", "do not fit")
+    raises(MemoryBudgetExceeded, lambda: m.make_room(6000, "huge"), "refuses when even moving everything movable is not enough", "do not fit")
+
+
+def room_by_physical_limit():
+    """With plenty of card left, making room must not refuse because the safety margin is crossed."""
+    device = FakeDevice(total=11930, foreign=4300, ours=5600)
+    model = Blob(device, 5000)
+    m = manager(device)
+    m.register("model", model, rank=10, pinned=True)
+    m.start()
+    check(m.make_room(1560, "load the text encoders") == [], "1.5 GB fit in the 2 GB left, so nothing moves and nothing is refused")
+    raises(MemoryBudgetExceeded, lambda: m.make_room(2500, "too much"), "past the card's total it is refused", "do not fit")
+
+
+def footprints():
+    import torch
+
+    class Frozen(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("frozen", torch.zeros(1000, dtype=torch.bfloat16))
+            self.adapter = torch.nn.Parameter(torch.zeros(500))
+            self.on_meta = torch.nn.Parameter(torch.empty(10_000, device="meta"))
+
+    from ..engine.runtime.residents import module_bytes
+    check(module_bytes(Frozen(), on_device_only=False) == 1000 * 2 + 500 * 4,
+          "frozen weights kept as buffers count toward a module's size and meta tensors do not")
+    check(module_bytes(Frozen()) == 0, "on the host nothing counts as on the device")
 
 
 def breakdown():
@@ -168,6 +195,21 @@ def on_demand_encoders():
     check(kit.cache_key("p") if hasattr(enc, "cache_key") else True, "other kit calls pass through")
 
 
+def sampling():
+    import time
+
+    from ..engine.runtime.sampler import COLUMNS, MemorySampler
+
+    with tempfile.TemporaryDirectory() as raw:
+        path = Path(raw) / "m.csv"
+        with MemorySampler(FakeDevice(ours=3000), path, interval=0.01) as sampler:
+            sampler.label = "step 3"
+            time.sleep(0.1)
+        rows = path.read_text().strip().splitlines()
+        check(rows[0] == ",".join(COLUMNS) and len(rows) > 3 and rows[-1].split(",")[1] == "step 3" and rows[-1].split(",")[-1] == "3600.0",
+              f"the sampler logs labelled device memory several times a second ({len(rows) - 1} rows)")
+
+
 def training():
     with tempfile.TemporaryDirectory() as raw:
         device = FakeDevice(ours=5000)
@@ -180,4 +222,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, breakdown, on_demand_encoders, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, breakdown, on_demand_encoders, sampling, training)

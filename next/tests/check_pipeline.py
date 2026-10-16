@@ -9,6 +9,8 @@ agree with each other and with the runtime: ports, event wiring and order, stopp
 
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import tempfile
 import threading
@@ -18,7 +20,9 @@ from unittest import mock
 
 from .. import starters
 from ..data.store import DatasetStore
+from ..engine.devices import Accelerator
 from ..engine.runtime.factory import make_runtime
+from ..run import NodeTrace
 from ..graph import GraphDoc, GraphRunner, NodeRegistry
 from ..graph.node import Environment
 from ..nodes.conditioning import conditioner
@@ -58,7 +62,9 @@ class Trace:
 def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None):
     cancel = threading.Event()
     trace = Trace(stop_after, cancel)
-    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}), runtime_factory=make_runtime)
+    node_trace = NodeTrace(doc, Accelerator("cpu"), None)
+    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}), runtime_factory=make_runtime,
+                         observer=node_trace)
     with ExitStack() as stack:
         for module in (conditioner, inject_adapter, latents, batching):
             stack.enter_context(mock.patch.object(module, "get_family", lambda _id: TinyFamily()))
@@ -78,7 +84,10 @@ def full_run():
         library.ingest(folder)
         library.close()
 
-        validation, outcome, trace = execute(store, graph(tmp, steps=4))
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            validation, outcome, trace = execute(store, graph(tmp, steps=4))
+        check(len(printed.getvalue().strip().splitlines()) == 16, "the command line reports every finished node")
         check(validation.ok, f"the graph validates ({[i.message for i in validation.errors][:2]})")
         check(outcome.ok and not outcome.stopped, f"the run finishes ({outcome.error})")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))

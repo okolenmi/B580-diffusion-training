@@ -7,20 +7,25 @@
 
 ``--file`` is relative to ``<models>/checkpoints`` when that folder exists, otherwise to ``--models`` itself.
 ``--set key=value`` overrides a graph setting (for example ``--set memory.vram_max_mb=9000``). Memory is printed as
-the breakdown the residency manager reports; the lines are the monitor's data.
+the breakdown the residency manager reports; the lines are the monitor's data. Every finished node prints its duration
+and the card's memory; ``--memory-log run.csv`` also samples memory four times a second against what the run is doing.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
 from . import starters
 from .data.store import DatasetStore
+from .engine.devices import Accelerator, resolve_device
 from .engine.runtime.factory import make_runtime
+from .engine.runtime.sampler import MemorySampler
 from .families.api.library import ModelLibrary
 from .graph import GraphRunner, NodeRegistry, parse
 from .graph.node import Environment
@@ -31,12 +36,15 @@ class Console:
 
     def __init__(self, verbose: bool):
         self.verbose = verbose
+        self.sampler: MemorySampler | None = None
 
     def report(self, stream: str, frame: dict) -> None:
         if stream == "memory":
             self._memory(frame)
         elif frame.get("name") == "step_finished":
             self._step(frame["summary"])
+            if self.sampler is not None:
+                self.sampler.label = f"step {frame['summary']['step'] + 1}"
         elif stream == "warning" or self.verbose:
             print(f"[{stream}] {json.dumps(frame, default=str)}", flush=True)
 
@@ -79,14 +87,43 @@ def _settings(pairs: list[str] | None) -> dict:
     return out
 
 
+class NodeTrace:
+    """One line per finished node: how long it took and where the card's memory stood, plus the sampler's label."""
+
+    def __init__(self, doc, accelerator: Accelerator, sampler: MemorySampler | None):
+        self.names = {spec.uid: spec.class_name for spec in doc.nodes}
+        self.accelerator, self.sampler = accelerator, sampler
+        self.t0 = time.monotonic()
+
+    def node_state(self, uid: str, state: str, detail: dict) -> None:
+        if self.sampler is not None:
+            self.sampler.label = f"{self.names.get(uid, uid)} {state}"
+
+    def node_done(self, result) -> None:
+        stats = self.accelerator.memory()
+        memory = (f"  allocated {stats['allocated']:.0f}, reserved {stats['reserved']:.0f}, device {stats['device_used']:.0f} MB"
+                  if "device_used" in stats and "allocated" in stats and "reserved" in stats else "")
+        print(f"[{time.monotonic() - self.t0:6.1f}s] {self.names.get(result.uid, result.uid)}: {result.duration_ms / 1000:.1f}s{memory}", flush=True)
+
+    def run(self, state: str, error: str | None) -> None:
+        pass
+
+
 def _run(doc, args) -> int:
-    runner = GraphRunner(NodeRegistry.default(), reporter=Console(args.verbose), env=_environment(args), runtime_factory=make_runtime)
+    device = resolve_device(doc.settings.get("device.default", "auto"))
+    accelerator = Accelerator(device)
+    console = Console(args.verbose)
+    sampler = MemorySampler(accelerator, args.memory_log) if args.memory_log else None
+    trace = NodeTrace(doc, accelerator, sampler)
+    runner = GraphRunner(NodeRegistry.default(), reporter=console, env=_environment(args), runtime_factory=make_runtime, observer=trace)
     validation = runner.validate(doc)
     for issue in validation.issues:
         print(f"{issue.severity}: {issue.code}: {issue.message}")
     if not validation.ok:
         return 1
-    outcome = runner.run(doc)
+    console.sampler = sampler
+    with (sampler if sampler is not None else contextlib.nullcontext()):
+        outcome = runner.run(doc)
     print("run:", "ok" if outcome.ok else f"failed: {outcome.error}", "(stopped)" if outcome.stopped else "")
     return 0 if outcome.ok else 1
 
@@ -104,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--datasets", required=True)
         p.add_argument("--set", action="append", metavar="KEY=VALUE", help="graph setting")
         p.add_argument("--verbose", action="store_true")
+        p.add_argument("--memory-log", metavar="FILE.csv", help="sample device memory four times a second, labelled by node and step")
         if name == "graph":
             p.add_argument("graph")
         else:

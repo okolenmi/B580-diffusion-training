@@ -79,18 +79,21 @@ class ResidencyManager:
         return stats.get("device_used")
 
     def start(self) -> None:
-        """Settle the limit. Refuses early when the card cannot give what was asked for."""
+        """Settle the limit. Refuses early when the card cannot give what was asked for.
+
+        Every number here is the driver's view of the whole card, other programs included: that is what runs out.
+        """
         stats = self.accelerator.memory()
         if "device_total" not in stats:
             self.limit_mb = self.policy.limit_mb
             return
-        free_for_us = stats["device_total"] - (stats["device_used"] - stats.get("reserved", 0.0))
-        if self.policy.floor_mb and free_for_us < self.policy.floor_mb:
-            raise MemoryBudgetExceeded(f"only {free_for_us:.0f} MB are free for this run; the floor is {self.policy.floor_mb:.0f} MB")
-        if self.policy.limit_mb is not None and self.policy.strict and self.policy.limit_mb > free_for_us:
-            raise MemoryBudgetExceeded(f"the budget is {self.policy.limit_mb:.0f} MB but the card can give {free_for_us:.0f} MB")
-        self.limit_mb = self.policy.limit_mb if self.policy.limit_mb is not None else free_for_us
-        self._note("limit", limit_mb=round(self.limit_mb))
+        total, free = stats["device_total"], stats["device_total"] - stats["device_used"]
+        if self.policy.floor_mb and free < self.policy.floor_mb:
+            raise MemoryBudgetExceeded(f"only {free:.0f} MB are free on the card; the floor is {self.policy.floor_mb:.0f} MB")
+        if self.policy.limit_mb is not None and self.policy.limit_mb > total:
+            raise MemoryBudgetExceeded(f"the budget is {self.policy.limit_mb:.0f} MB but the card has {total:.0f} MB")
+        self.limit_mb = self.policy.limit_mb if self.policy.limit_mb is not None else total
+        self._note("limit", limit_mb=round(self.limit_mb), in_use_mb=round(stats["device_used"]))
 
     @property
     def ceiling_mb(self) -> float | None:
@@ -114,7 +117,7 @@ class ResidencyManager:
         return {name: round(e.resident.footprint_bytes() / MB, 1) for name, e in self._entries.items()}
 
     def make_room(self, mb: float, why: str) -> list[str]:
-        """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling."""
+        """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling; refuse past the limit."""
         moved: list[str] = []
         for name, entry in sorted(self._entries.items(), key=lambda kv: kv[1].rank):
             used = self.used_mb()
@@ -129,9 +132,9 @@ class ResidencyManager:
         used = self.used_mb()
         if moved:
             self._note("evict", why=why, moved=moved)
-        if used is not None and self.ceiling_mb is not None and used + mb > self.ceiling_mb:
-            raise MemoryBudgetExceeded(f"{why}: {mb:.0f} MB do not fit ({used:.0f} MB in use, ceiling {self.ceiling_mb:.0f} MB; "
-                                       f"residents {self.summary()})")
+        if used is not None and self.limit_mb is not None and used + mb > self.limit_mb:
+            raise MemoryBudgetExceeded(f"{why}: {mb:.0f} MB do not fit ({used:.0f} MB in use of {self.limit_mb:.0f} MB; "
+                                       f"{self.breakdown()})")
         return moved
 
     def restore(self, names: list[str]) -> None:

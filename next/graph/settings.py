@@ -85,8 +85,8 @@ _PRECISIONS = ("auto", "bf16", "fp16", "fp32")
 CORE_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("memory.vram_max_mb", "VRAM budget", "float", AUTO, allow_auto=True, unit="MB",
                 minimum=256, step=256, group="Memory",
-                doc="Most device memory this run may use. 'auto' is whatever is free at start, with "
-                    "head-room; a number is exact and the run is refused if the card cannot give it."),
+                doc="Most device memory in use on the card, as the driver reports it (other programs included). "
+                    "'auto' is the whole card, with head-room kept by the safety margin; a number above the card is refused."),
     SettingSpec("memory.vram_min_mb", "VRAM floor", "float", 0, unit="MB", minimum=0, step=256,
                 group="Memory", advanced=True, doc="Refuse to start when less than this is free. 0 is no floor."),
     SettingSpec("memory.strict", "Strict budget", "bool", True, group="Memory", advanced=True,

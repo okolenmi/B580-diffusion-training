@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 import torch
 
-from ..data.conditioning_cache import ConditioningCache
+from ..data.conditioning_cache import ConditioningCache, Size
 from ..families.api.conditioning import Conditioning
 from ..graph.events import PromptsChanged
 
@@ -15,16 +15,16 @@ class Conditioner:
     def __init__(self, cache: ConditioningCache, device: str | torch.device = "cpu", dtype: torch.dtype = torch.bfloat16):
         self.cache, self.device, self.dtype = cache, device, dtype
 
-    def encode(self, prompts: Sequence[str], size: tuple[int, int] | None = None) -> Conditioning:
-        return self.cache.get(prompts, size).to(self.device, self.dtype)
+    def encode(self, prompts: Sequence[str], sizes: Sequence[Size] | Size | None = None) -> Conditioning:
+        return self.cache.get(prompts, sizes).to(self.device, self.dtype)
 
-    def warm(self, prompts: Sequence[str], size: tuple[int, int] | None = None) -> int:
-        return self.cache.warm(prompts, size)
+    def warm(self, prompts: Sequence[str]) -> int:
+        return self.cache.warm(prompts)
 
-    def on_prompts_changed(self, event: PromptsChanged, universe: set[str], size: tuple[int, int] | None = None) -> None:
+    def on_prompts_changed(self, event: PromptsChanged, universe: set[str]) -> None:
         """Drop cached prompts outside ``universe``, then encode the ones that are missing."""
         self.cache.retain(universe)
-        self.cache.warm(sorted(universe), size)
+        self.cache.warm(sorted(universe))
 
 
 class BlendedConditioner(Conditioner):
@@ -37,10 +37,10 @@ class BlendedConditioner(Conditioner):
         self.partners, self.probability, self.segments = list(partners), probability, segments
         self.generator = generator or torch.Generator().manual_seed(0)
 
-    def encode(self, prompts: Sequence[str], size: tuple[int, int] | None = None) -> Conditioning:
-        base = super().encode(prompts, size)
+    def encode(self, prompts: Sequence[str], sizes: Sequence[Size] | Size | None = None) -> Conditioning:
+        base = super().encode(prompts, sizes)
         picks = torch.randint(0, len(self.partners), (len(prompts),), generator=self.generator).tolist()
-        other = super().encode([self.partners[i] for i in picks], size)
+        other = super().encode([self.partners[i] for i in picks], sizes)
         p = (torch.rand(len(prompts), generator=self.generator) < self.probability).float()
         return base.blend(other, p.to(self.device), self.segments)
 

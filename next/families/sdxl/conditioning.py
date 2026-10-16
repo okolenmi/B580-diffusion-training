@@ -79,6 +79,12 @@ class TextEncoding:
     ctx: Tensor
     pooled: Tensor
 
+    def to(self, device=None, dtype=None) -> "TextEncoding":
+        return TextEncoding(self.ctx.to(device=device, dtype=dtype), self.pooled.to(device=device, dtype=dtype))
+
+    def nbytes(self) -> int:
+        return self.ctx.numel() * self.ctx.element_size() + self.pooled.numel() * self.pooled.element_size()
+
 
 def size_embedding(height: int, width: int, crop: tuple[int, int] = (0, 0),
                    target: tuple[int, int] | None = None, device="cpu") -> Tensor:
@@ -98,6 +104,12 @@ class SDXLTextEncoder:
         self.device, self.out_dtype, self.batch_size = torch.device(device), out_dtype, batch_size
         for tower in (clip_l, clip_g):
             tower.eval().requires_grad_(False)
+            tower.to(self.device)
+
+    def to(self, device) -> None:
+        """Move both towers (to ``"cpu"`` to free the accelerator once everything is cached)."""
+        self.device = torch.device(device)
+        for tower in (self.clip_l, self.clip_g):
             tower.to(self.device)
 
     @property
@@ -151,20 +163,28 @@ class SDXLConditioningKit:
     def __init__(self, encoder: SDXLTextEncoder, default_size: tuple[int, int] = (1024, 1024)):
         self.encoder, self.default_size = encoder, default_size
 
-    def cache_key(self, prompt: str, size=None) -> tuple:
-        return ("sdxl", prompt, tuple(size) if size is not None else self.default_size)
+    def cache_key(self, prompt: str) -> tuple:
+        return ("sdxl", prompt)
+
+    def encode_text(self, prompts: Sequence[str]) -> list[TextEncoding]:
+        """The size-independent part, the thing worth caching."""
+        return self.encoder.encode_text(prompts)
+
+    def assemble(self, text: TextEncoding, size: tuple[int, int] | None = None) -> SDXLConditioning:
+        """Join cached text with the size embedding of one image (``size`` is height, width)."""
+        return self.encoder.assemble(text, tuple(size) if size is not None else self.default_size)
 
     def encode(self, prompts: Sequence[str], sizes: Sequence[tuple[int, int]] | None = None) -> list[SDXLConditioning]:
-        texts = self.encoder.encode_text(prompts)
-        sizes = sizes or [self.default_size] * len(prompts)
-        return [self.encoder.assemble(t, s) for t, s in zip(texts, sizes)]
+        texts = self.encode_text(prompts)
+        sizes = sizes or [None] * len(prompts)
+        return [self.assemble(t, s) for t, s in zip(texts, sizes)]
 
     @staticmethod
     def stack(items: Sequence[SDXLConditioning]) -> SDXLConditioning:
         return SDXLConditioning.stack(items)
 
     def blank(self, size=None) -> SDXLConditioning:
-        return self.encode([""], [tuple(size) if size is not None else self.default_size])[0]
+        return self.encode([""], [size])[0]
 
     def bytes_per_prompt(self, sections: int = 1) -> int:
         itemsize = torch.empty((), dtype=self.encoder.out_dtype).element_size()

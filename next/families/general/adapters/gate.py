@@ -9,27 +9,14 @@ from __future__ import annotations
 import contextlib
 from typing import Iterator
 
-import torch
 from torch import Tensor
+
+from ...api.adapters import GateWindow
 
 
 def compute_gate(t: Tensor, train_low: float, train_high: float, width: float) -> Tensor:
-    """Sigmoid of the signed distance from the training range: positive depth inside, negative distance outside.
-    ``width`` sets how soft the edge is (timestep units)."""
-    t = t.float()
-    inside = torch.minimum(t - train_low, train_high - t)
-    distance = torch.where(t < train_low, t - train_low, torch.where(t > train_high, train_high - t, inside))
-    return torch.sigmoid(distance / max(width, 1e-6))
-
-
-class GateWindow:
-    """The timestep range an adapter is trained on; outside it the adapter fades out."""
-
-    def __init__(self, low: float, high: float, width: float):
-        self.low, self.high, self.width = low, high, width
-
-    def gate(self, t: Tensor) -> Tensor:
-        return compute_gate(t, self.low, self.high, self.width)
+    """See ``GateWindow.gate``."""
+    return GateWindow(train_low, train_high, width).gate(t)
 
 
 class TimestepGate:

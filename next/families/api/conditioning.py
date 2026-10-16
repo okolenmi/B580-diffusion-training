@@ -24,7 +24,13 @@ class Conditioning(Protocol):
 
 
 class ConditioningKit(Protocol):
-    def cache_key(self, prompt: str, size: Any = None) -> Hashable: ...
+    def cache_key(self, prompt: str) -> Hashable: ...
+
+    def encode_text(self, prompts: Sequence[str]) -> list[Any]:
+        """The size-independent encodings worth caching; each has ``to(device, dtype)`` and ``nbytes()``."""
+
+    def assemble(self, text: Any, size: Any = None) -> Conditioning:
+        """One conditioning from a cached text encoding and the image size it is for."""
 
     def encode(self, prompts: Sequence[str], sizes: Sequence[Any] | None = None) -> list[Conditioning]: ...
 

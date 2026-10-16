@@ -1,0 +1,79 @@
+"""The trainer and its trigger."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...data.batcher import Batcher
+from ...engine.conditioner import Conditioner
+from ...engine.devices import Accelerator
+from ...engine.handles import TrainableDenoiser
+from ...engine.optim.handle import Optimizer
+from ...engine.step.loss import LossWeighting
+from ...engine.step.schedule import LRSchedule
+from ...engine.step.trainer import Trainer
+from ...graph import Completion, EventIn, EventOut, Group, Node, Port
+from ...graph.events import CheckpointDue, StepFinished
+
+
+class DiffusionTrainerNode(Node):
+    DISPLAY_NAME = "Diffusion Trainer"
+    CATEGORY = "Training"
+    READS_SETTINGS = ("device.default",)
+    GROUPS = (Group("loop", "Loop"), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
+    INPUTS = {
+        "batches": Port("batches", Batcher),
+        "model": Port("model", TrainableDenoiser),
+        "conditioner": Port("conditioner", Conditioner),
+        "optimizer": Port("optimizer", Optimizer),
+        "schedule": Port("schedule", LRSchedule),
+        "weighting": Port("weighting", LossWeighting),
+        "steps": Port("steps", int, required=False, default=1000, minimum=1, group="loop", doc="Optimizer steps."),
+        "accumulation": Port("accumulation", int, required=False, default=1, minimum=1, group="loop",
+                             doc="Batches per optimizer step; their gradients average."),
+        "start_step": Port("start_step", int, required=False, default=0, minimum=0, group="loop",
+                           doc="Step to start from when resuming (the schedule and the logs continue from it)."),
+        "timing": Port("timing", bool, required=False, default=False, group="diagnostics",
+                       doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
+    }
+    OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="The model after training (or after stopping).")}
+    EVENTS_OUT = {"step_finished": EventOut(StepFinished, doc="After every optimizer step.")}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        model: TrainableDenoiser = inputs["model"]
+        accelerator = Accelerator(model.device)
+        trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
+                          optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
+                          steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
+                          gate=model.gate, gate_window=model.gate_window,
+                          emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")))
+        start = inputs.get("start_step") or 0
+        result = trainer.run(start)
+        if result.stopped:
+            self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
+        return {"model": model}
+
+
+class EveryNStepsNode(Node):
+    """Turns step events into checkpoint-due events."""
+
+    DISPLAY_NAME = "Every N Steps"
+    CATEGORY = "Training"
+    INPUTS = {"every": Port("every", int, default=250, minimum=1, doc="Emit after every this many optimizer steps."),
+              "at_end": Port("at_end", bool, required=False, default=True, doc="Also emit on the last step.")}
+    OUTPUTS = {"interval": Port("interval", int)}
+    EVENTS_IN = {"step": EventIn(StepFinished, handler="on_step")}
+    EVENTS_OUT = {"due": EventOut(CheckpointDue)}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        self.every, self.at_end = inputs["every"], inputs.get("at_end", True)
+        return {"interval": self.every}
+
+    def on_step(self, event: StepFinished, ctx) -> None:
+        if event.step % self.every == 0:
+            ctx.emit("due", CheckpointDue(event.step, f"every {self.every} steps"))
+        elif self.at_end and event.step == event.total:
+            ctx.emit("due", CheckpointDue(event.step, "last step"))

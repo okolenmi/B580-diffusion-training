@@ -92,8 +92,8 @@ def encoder_cases():
         check(cond[0].y.shape == (1, 2816) and cond[0].y.dtype == torch.float32, "y is (1, 2816) float32")
         check(not torch.equal(cond[0].y[:, 1280:], cond[1].y[:, 1280:]) and torch.allclose(cond[0].y[:, :1280], enc.encode_text(["cat"])[0].pooled.float(), atol=1e-5),
               "sizes change only the size half of y")
-        check(kit.cache_key("cat", (832, 1216)) != kit.cache_key("cat", (1024, 1024)) and kit.cache_key("cat") == kit.cache_key("cat", (1024, 1024)),
-              "cache key includes the size, defaulting to the kit's")
+        check(kit.cache_key("cat") != kit.cache_key("dog") and torch.equal(kit.assemble(kit.encode_text(["cat"])[0]).y, kit.encode(["cat"])[0].y),
+              "the cache key is the prompt alone; assembling with no size uses the kit's default")
         check(kit.blank().ctx.shape == (1, 77, 2048) and kit.bytes_per_prompt() == 77 * 2048 * 4 + 2816 * 4, "blank and bytes per prompt")
         check(torch.equal(enc.encode_text([""])[0].ctx, kit.blank().ctx), "blank is the empty prompt")
 

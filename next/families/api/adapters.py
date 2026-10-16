@@ -43,6 +43,22 @@ class TrainableSelection:
 
 
 @dataclass(frozen=True)
+class GateWindow:
+    """The timestep range an adapter is trained on; outside it the adapter fades out. ``width`` (timestep units)
+    sets how soft the edge is."""
+
+    low: float
+    high: float
+    width: float
+
+    def gate(self, t):
+        """Sigmoid of the signed distance to the nearest edge: positive depth inside, negative distance outside.
+        Works on any tensor type (only ``float``, ``minimum`` and ``sigmoid`` are used)."""
+        t = t.float()
+        return ((t - self.low).minimum(self.high - t) / max(self.width, 1e-6)).sigmoid()
+
+
+@dataclass(frozen=True)
 class ModuleDescriptor:
     """What the planner needs to know about a layer: its path, its kind and its shape."""
 

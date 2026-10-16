@@ -58,7 +58,7 @@ class EncodeConditioning(StepPhase):
         self._conditioner = conditioner
 
     def run(self, state: StepState) -> None:
-        state.conditioning = self._conditioner.encode(state.batch["prompts"], state.batch["size_px"])
+        state.conditioning = self._conditioner.encode(state.batch["prompts"], state.batch["sizes_px"])
 
 
 class Forward(StepPhase):

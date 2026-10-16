@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..general.adapters import schemes as scheme_io
 from . import adapters, conditioning, denoiser, latents, objective
 
 FAMILY_ID = "sdxl"
@@ -21,6 +22,9 @@ class SDXLFamily:
     load_vae = staticmethod(latents.load_vae)
     plan_from_header = staticmethod(adapters.plan_from_header)
     inject_denoiser = staticmethod(adapters.inject_denoiser)
+    save_adapter = staticmethod(scheme_io.save_adapter)
+    read_adapter = staticmethod(scheme_io.read_adapter)
+    load_checked = staticmethod(scheme_io.load_checked)
 
 
 FAMILY = SDXLFamily()

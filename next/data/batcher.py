@@ -72,12 +72,14 @@ class Batcher:
         height, width = shape
         x0 = torch.zeros(len(ids), int(self.latents.spec["channels"]), height, width)
         valid = torch.zeros(len(ids), 1, height, width)
+        true_sizes = []
         for k, sample in enumerate(ids):
             latent = self.latents.get(sample)
             h, w = latent.shape[-2:]
             top = rng.randint(0, height - h) if height > h else 0
             left = rng.randint(0, width - w) if width > w else 0
             x0[k, :, top:top + h, left:left + w] = latent
+            true_sizes.append((h * self._factor, w * self._factor))
             valid[k, :, top:top + h, left:left + w] = 1.0
         batch = self.noiser(x0, generator)
         batch.update({
@@ -85,7 +87,7 @@ class Batcher:
             "prompts": [texts[image_of(s)] for s in ids],
             "epoch": epoch,
             "prompts_version": version,
-            "size_px": (height * self._factor, width * self._factor),
+            "sizes_px": true_sizes,
         })
         if self.multiple > 1 and bool((valid == 0).any()):
             batch["valid_mask"] = valid

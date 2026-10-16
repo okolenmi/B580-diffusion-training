@@ -32,7 +32,7 @@ from ..engine.step.state import StepState
 from ..engine.step.trainer import Trainer
 from ..families.api.adapters import TrainableSelection
 from ..families.general.ldm_unet.unet import UNetModel
-from ..families.sdxl.conditioning import SDXLConditioning
+from ..families.sdxl.conditioning import SDXLConditioning, TextEncoding
 from ..families.sdxl.denoiser import SDXLDenoiser
 from ..families.sdxl.family import FAMILY
 from ..families.sdxl.latents import LATENTS
@@ -46,15 +46,18 @@ from .support import check, run
 class FakeKit:
     """Deterministic embeddings per prompt in the tiny UNet's widths."""
 
-    def cache_key(self, prompt, size=None):
-        return ("fake", prompt, tuple(size) if size else None)
+    def cache_key(self, prompt):
+        return ("fake", prompt)
 
-    def encode(self, prompts, sizes=None):
+    def encode_text(self, prompts):
         out = []
         for p in prompts:
             g = torch.Generator().manual_seed(abs(hash(p)) % 2**31)
-            out.append(SDXLConditioning(torch.randn(1, 5, 48, generator=g), torch.randn(1, 40, generator=g)))
+            out.append(TextEncoding(torch.randn(1, 5, 48, generator=g), torch.randn(1, 40, generator=g)))
         return out
+
+    def assemble(self, text, size=None):
+        return SDXLConditioning(text.ctx, text.pooled)
 
     def stack(self, items):
         return SDXLConditioning.stack(items)

@@ -19,7 +19,7 @@
   "status": "INFO",
   "name": "environment finished",
   "detail": "",
-  "seconds": 0.1
+  "seconds": 0.9
  },
  {
   "status": "PASS",
@@ -90,7 +90,11 @@
   "status": "INFO",
   "name": "fp16 towers",
   "detail": "",
-  "peak_gb": 1.53
+  "peak_allocated_gb": 1.53,
+  "peak_reserved_gb": 1.65,
+  "reserved_gb": 1.65,
+  "device_used_gb": 2.71,
+  "device_total_gb": 11.93
  },
  {
   "status": "PASS",
@@ -109,14 +113,18 @@
   "status": "INFO",
   "name": "text encoder finished",
   "detail": "",
-  "seconds": 5.6
+  "seconds": 10.2
  },
  {
   "status": "INFO",
   "name": "vae encode",
   "detail": "",
-  "seconds": 0.54,
-  "peak_gb": 2.47
+  "seconds": 0.71,
+  "peak_allocated_gb": 4.36,
+  "peak_reserved_gb": 4.54,
+  "reserved_gb": 4.54,
+  "device_used_gb": 5.61,
+  "device_total_gb": 11.93
  },
  {
   "status": "PASS",
@@ -125,8 +133,8 @@
   "shape": [
    1,
    4,
-   64,
-   64
+   128,
+   128
   ]
  },
  {
@@ -138,26 +146,30 @@
   "status": "INFO",
   "name": "latent statistics (scaled; real photos give std near 1)",
   "detail": "",
-  "mean": 0.2535213232040405,
-  "std": 0.9438168406486511
+  "mean": 0.21817496418952942,
+  "std": 0.938778817653656
  },
  {
   "status": "PASS",
   "name": "encode then decode reproduces the image",
   "detail": "",
-  "psnr_db": 26.5
+  "psnr_db": 29.0
  },
  {
   "status": "INFO",
   "name": "vae finished",
   "detail": "",
-  "seconds": 1.5
+  "seconds": 2.7
  },
  {
   "status": "INFO",
   "name": "unet loaded (bf16)",
   "detail": "",
-  "peak_gb": 6.73
+  "peak_allocated_gb": 6.73,
+  "peak_reserved_gb": 7.02,
+  "reserved_gb": 7.02,
+  "device_used_gb": 8.24,
+  "device_total_gb": 11.93
  },
  {
   "status": "PASS",
@@ -175,21 +187,25 @@
   "status": "PASS",
   "name": "loss finite after steps",
   "detail": "",
-  "loss": 0.328458309173584
+  "loss": 0.308036208152771
  },
  {
   "status": "INFO",
-  "name": "training step",
+  "name": "training step (checkpointed)",
   "detail": "",
-  "seconds_first": 3.18,
-  "seconds_steady": 0.66,
-  "peak_gb": 9.68
+  "seconds_first": 3.65,
+  "seconds_steady": 0.96,
+  "peak_allocated_gb": 8.02,
+  "peak_reserved_gb": 8.74,
+  "reserved_gb": 8.74,
+  "device_used_gb": 10.06,
+  "device_total_gb": 11.93
  },
  {
   "status": "INFO",
   "name": "unet forward and backward with LoRA finished",
   "detail": "",
-  "seconds": 9.5
+  "seconds": 19.4
  },
  {
   "status": "PASS",
@@ -207,6 +223,6 @@
   "status": "INFO",
   "name": "dataset chain on real VAE finished",
   "detail": "",
-  "seconds": 0.6
+  "seconds": 2.0
  }
 ]

@@ -1,10 +1,11 @@
 """Run the new trainer from the command line, with the real model library and dataset store.
 
     python -m next.run ingest --datasets D:/datasets my_set D:/images
-    python -m next.run sdxl-lora --models D:/models --datasets D:/datasets --file checkpoints/sdxl_base.safetensors \\
+    python -m next.run sdxl-lora --models D:/models --datasets D:/datasets --file sdxl_base.safetensors \\
         --dataset my_set --output D:/out --resolution 1024 --batch 2 --rank 16 --steps 200
     python -m next.run graph graph.json --models D:/models --datasets D:/datasets
 
+``--file`` is relative to ``<models>/checkpoints`` when that folder exists, otherwise to ``--models`` itself.
 ``--set key=value`` overrides a graph setting (for example ``--set memory.vram_max_mb=9000``). Memory is printed as
 the breakdown the residency manager reports; the lines are the monitor's data.
 """
@@ -61,8 +62,9 @@ def _environment(args) -> Environment:
         services["datasets"] = DatasetStore(args.datasets)
     if getattr(args, "models", None):
         root = Path(args.models)
-        folders = {scope: [root / scope] for scope in ("checkpoints", "vae", "loras", "text_encoders") if (root / scope).is_dir()}
-        services["models"] = ModelLibrary(folders or {"checkpoints": [root]})
+        folders = {scope: [root / scope] for scope in ("vae", "loras", "text_encoders") if (root / scope).is_dir()}
+        folders["checkpoints"] = [root / "checkpoints" if (root / "checkpoints").is_dir() else root]
+        services["models"] = ModelLibrary(folders)
     return Environment(services=services)
 
 
@@ -105,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "graph":
             p.add_argument("graph")
         else:
-            p.add_argument("--file", required=True, help="checkpoint relative to <models>/checkpoints")
+            p.add_argument("--file", required=True, help="checkpoint file, relative to the checkpoints folder (or to --models when it has no checkpoints subfolder)")
             p.add_argument("--dataset", required=True)
             p.add_argument("--output", required=True)
             p.add_argument("--name", default="lora")

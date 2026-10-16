@@ -100,14 +100,35 @@ class LatentCache:
 
     def build(self, images: ImageSet, policy: SizePolicy, encoder: Encoder, *, batch_size: int = 4,
               progress: Callable[[int, int], None] | None = None,
-              should_stop: Callable[[], bool] | None = None) -> BuildStats:
-        """Encode every image that has no entry for ``policy``; safe to interrupt and run again."""
+              should_stop: Callable[[], bool] | None = None,
+              recover: Callable[[], None] | None = None) -> BuildStats:
+        """Encode every image that has no entry for ``policy``; safe to interrupt and run again.
+
+        When the device runs out of memory the batch is halved and retried (``recover`` runs first, to give back
+        cached memory); only a single image that still does not fit is an error.
+        """
         todo = self.missing(images, policy)
         skipped: list[tuple[str, str]] = []
         pending: list[tuple[str, torch.Tensor]] = []  # (sample, uint8 CHW)
         crops_of: dict[str, int] = {}
         out: dict[str, torch.Tensor] = {}
         finished = {"images": 0, "samples": 0}
+        limit = [batch_size]
+
+        def encode(chunk: list[tuple[str, torch.Tensor]]) -> torch.Tensor:
+            try:
+                return encoder.encode(torch.stack([c[1] for c in chunk])).to("cpu", torch.float16)
+            except (torch.OutOfMemoryError, RuntimeError) as exc:
+                if not isinstance(exc, torch.OutOfMemoryError) and "out of memory" not in str(exc).lower():
+                    raise
+                if recover is not None:
+                    recover()
+                if len(chunk) == 1:
+                    raise RuntimeError(f"one {chunk[0][1].shape[-1]}x{chunk[0][1].shape[-2]} image does not fit on the device "
+                                       f"for encoding; lower the size, or encode on the CPU") from exc
+                limit[0] = max(1, len(chunk) // 2)
+                half = len(chunk) // 2
+                return torch.cat([encode(chunk[:half]), encode(chunk[half:])])
 
         def flush_batches(force: bool) -> None:
             by_shape: dict[tuple[int, int], list[tuple[str, torch.Tensor]]] = {}
@@ -115,9 +136,9 @@ class LatentCache:
                 by_shape.setdefault(tuple(item[1].shape[-2:]), []).append(item)
             rest = []
             for group in by_shape.values():
-                while len(group) >= batch_size or (force and group):
-                    chunk, group = group[:batch_size], group[batch_size:]
-                    latents = encoder.encode(torch.stack([c[1] for c in chunk])).to("cpu", torch.float16)
+                while len(group) >= limit[0] or (force and group):
+                    chunk, group = group[:limit[0]], group[limit[0]:]
+                    latents = encode(chunk)
                     out.update({c[0]: latents[k] for k, c in enumerate(chunk)})
                 rest += group
             pending[:] = rest

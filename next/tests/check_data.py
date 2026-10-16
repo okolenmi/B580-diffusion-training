@@ -160,6 +160,41 @@ def main() -> None:
         check(vae_identity(read_header(a), "first_stage_model.", LATENTS)
               != vae_identity(read_header(b), "first_stage_model.", LATENTS),
               "same layout, different weights: different identity")
+        memory_pressure(tmp / "pressure")
+
+
+class TightEncoder(FakeEncoder):
+    """Runs out of memory for more than ``room`` images at a time, like a card that is nearly full."""
+
+    def __init__(self, room: int):
+        self.room, self.calls = room, []
+
+    def encode(self, images):
+        self.calls.append(len(images))
+        if len(images) > self.room:
+            raise torch.OutOfMemoryError("XPU out of memory")
+        return super().encode(images)
+
+
+def memory_pressure(tmp: Path) -> None:
+    print("encoding under memory pressure")
+    folder = tmp / "images"
+    folder.mkdir(parents=True)
+    make_images(folder)
+    images = ImageLibrary(tmp / "lib.sqlite")
+    images.ingest(folder)
+    snapshot = images.snapshot()
+    policy = SizePolicy(base=64, mode="fit", multiple=8)
+    reference = LatentCache(tmp / "ref", "v", LATENTS)
+    reference.build(snapshot, policy, FakeEncoder(), batch_size=4)
+    cache, tight, recovered = LatentCache(tmp / "tight", "v", LATENTS), TightEncoder(room=1), []
+    stats = cache.build(snapshot, policy, tight, batch_size=4, recover=lambda: recovered.append(1))
+    got, want = cache.view(snapshot, policy), reference.view(snapshot, policy)
+    same = got.samples == want.samples and all(torch.equal(got.get(s), want.get(s)) for s in got.samples)
+    check(stats.encoded_images == 6 and same and recovered, "an out-of-memory encode is halved down to what fits, with the same latents")
+    check(set(tight.calls[-4:]) == {1}, f"once a size is known to fit it is kept ({tight.calls})")
+    raises(RuntimeError, lambda: LatentCache(tmp / "never", "v", LATENTS).build(snapshot, policy, TightEncoder(room=0), batch_size=2),
+           "one image that never fits is an error that says so", "does not fit")
 
 
 class LatentSpecLike:

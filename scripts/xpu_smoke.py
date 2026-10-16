@@ -1,11 +1,11 @@
 """One-shot hardware check of the new pipeline on real SDXL weights (run on the Intel Arc machine).
 
-    python scripts/xpu_smoke.py --models D:/models --file checkpoints/sdxl_base.safetensors
+    python scripts/xpu_smoke.py --models D:/models --file sdxl_base.safetensors
     python scripts/xpu_smoke.py ... --device cpu          # slow, to separate "wrong" from "XPU-specific"
     python scripts/xpu_smoke.py ... --images D:/some/images --resolution 1024 --report smoke.json
 
-``--models`` is a folder that holds a ``checkpoints`` subfolder (or pass ``--scope`` for another one) with an
-all-in-one SDXL checkpoint. Each step prints PASS/FAIL/INFO with numbers; send the whole output back. A failed
+``--models`` is a folder that holds a ``checkpoints`` subfolder (or the checkpoints themselves when there is none);
+``--file`` is relative to that checkpoints folder, so ``sdxl_base.safetensors``, not ``checkpoints/sdxl_base.safetensors``. Each step prints PASS/FAIL/INFO with numbers; send the whole output back. A failed
 step does not stop the others, except that later steps need the earlier loads. Peak memory and timings are
 reported because they are the point of the exercise. Nothing is written except the optional report and a
 temporary latent cache.

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from ...data.ids import vae_identity
 from ...data.images import CROP_MODES, SizePolicy
 from ...data.latent_cache import LatentCache
-from ...engine.devices import Accelerator
+from ...engine.devices import Accelerator, resolve_dtype
 from ...families.api.header import read_header
 from ...families.api.parts import VAEPart
 from ...families.registry import get_family
@@ -21,6 +23,7 @@ class LatentCacheNode(Node):
     DISPLAY_NAME = "Latent Cache"
     CATEGORY = "Dataset"
     GROUPS = (Group("size", "Size policy"), Group("encode", "Encoding", collapsed=True))
+    READS_SETTINGS = ("precision.vae",)
     INPUTS = {
         "images": Port("images", ImageSet),
         "vae": Port("vae", VAEPart),
@@ -53,21 +56,33 @@ class LatentCacheNode(Node):
         skipped = False
         if todo:
             device = _device(inputs.get("device") or "auto")
-            codec = family.load_vae(part, device=device)
+            dtype = resolve_dtype(self.context.settings.get("precision.vae"), torch.float32)
+            codec = family.load_vae(part, device=device, dtype=dtype)
+            accelerator = Accelerator(device)
             try:
-                stats = cache.build(images, policy, codec, batch_size=inputs.get("batch_size") or 4,
+                stats = cache.build(images, policy, codec, batch_size=fit_batch(inputs.get("batch_size") or 4, policy.base, dtype, accelerator),
+                                    recover=accelerator.empty_cache,
                                     progress=lambda done, total: self.context.report(
                                         "cache_progress", {"node": self.uid, "done": done, "total": total}),
                                     should_stop=self.context.should_cancel)
             finally:
                 codec.release()
-                Accelerator(device).empty_cache()
+                accelerator.empty_cache()
             if stats.stopped:
                 raise RuntimeError("Latent Cache: stopped before every image was encoded; run again to continue")
             if stats.skipped:
                 skipped = True
                 self.context.report("warning", {"node": self.uid, "skipped": stats.skipped[:20]})
         return {"latents": cache.view(images, policy, skip_missing=skipped)}
+
+
+def fit_batch(wanted: int, base: int, dtype: torch.dtype, accelerator: Accelerator) -> int:
+    """Images per encode that fit in the memory left: the encoder's activations take about 4 KB per pixel in fp32."""
+    free = accelerator.memory()
+    if "device_total" not in free:
+        return wanted
+    per_image = base * base * 4096 * dtype.itemsize / 4
+    return max(1, min(wanted, int((free["device_total"] - free["device_used"]) * 2**20 * 0.7 // per_image)))
 
 
 def _device(choice: str) -> str:

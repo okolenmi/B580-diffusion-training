@@ -59,21 +59,21 @@ def step(name):
 
 class Device:
     def __init__(self, name: str):
+        from next.engine.devices import Accelerator
+
         self.name = name
         self.module = getattr(torch, name, None) if name != "cpu" else None
+        self.accel = Accelerator(name)
 
     def sync(self) -> None:
-        if self.module is not None and hasattr(self.module, "synchronize"):
-            self.module.synchronize()
+        self.accel.synchronize()
 
     def reset_peak(self) -> None:
-        if self.module is not None and hasattr(self.module, "reset_peak_memory_stats"):
-            self.module.reset_peak_memory_stats()
+        self.accel.reset_peak()
 
-    def peak_gb(self) -> float | None:
-        if self.module is not None and hasattr(self.module, "max_memory_allocated"):
-            return round(self.module.max_memory_allocated() / 2**30, 2)
-        return None
+    def memory(self) -> dict:
+        """GB: peak live tensors, peak held by the allocator, and the driver's view of the card."""
+        return {f"{key}_gb": round(value / 1024, 2) for key, value in self.accel.memory().items()}
 
     def free(self) -> None:
         gc.collect()
@@ -156,7 +156,7 @@ def text_encoder(parts, dev: Device):
           "fp16 encodings are finite")
     check(tuple(one_by_one[0].ctx.shape) == (1, 77, 2048) and tuple(one_by_one[0].pooled.shape) == (1, 1280),
           "encoding shapes (1,77,2048) and (1,1280)", shape=list(one_by_one[0].ctx.shape))
-    record("INFO", "fp16 towers", peak_gb=dev.peak_gb())
+    record("INFO", "fp16 towers", **dev.memory())
     ref = family.load_text_encoder(parts, device="cpu", dtype=torch.float32)
     full = ref.encode_text(prompts)
     worst = 0.0
@@ -184,7 +184,7 @@ def vae(parts, images, dev: Device, resolution: int):
     started = time.time()
     latents = codec.encode(batch[:1])
     dev.sync()
-    record("INFO", "vae encode", seconds=round(time.time() - started, 2), peak_gb=dev.peak_gb())
+    record("INFO", "vae encode", seconds=round(time.time() - started, 2), **dev.memory())
     check(tuple(latents.shape) == (1, 4, resolution // 8, resolution // 8), "latent shape", shape=list(latents.shape))
     check(bool(torch.isfinite(latents).all()), "latents finite")
     record("INFO", "latent statistics (scaled; real photos give std near 1)", mean=latents.mean().item(),
@@ -197,13 +197,13 @@ def vae(parts, images, dev: Device, resolution: int):
 
 
 @step("unet forward and backward with LoRA")
-def unet(parts, cond, dev: Device, resolution: int, rank: int):
+def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool):
     from next.families.sdxl.objective import SDXLObjective
 
     family = get_family("sdxl")
     dev.reset_peak()
     denoiser = family.load_denoiser(parts["denoiser"], device=dev.name, dtype=torch.bfloat16)
-    record("INFO", "unet loaded (bf16)", peak_gb=dev.peak_gb())
+    record("INFO", "unet loaded (bf16)", **dev.memory())
     latent = resolution // 8
     x0 = torch.randn(1, 4, latent, latent)
     objective = SDXLObjective()
@@ -216,6 +216,10 @@ def unet(parts, cond, dev: Device, resolution: int, rank: int):
         out = denoiser(x_t, tt, ctx, y)
     check(out.shape == x_t.shape and bool(torch.isfinite(out.float()).all()), "forward output finite, input-shaped")
     adapted = family.inject_denoiser(denoiser, TrainableSelection(), rank=rank, alpha=float(rank))
+    if checkpoint:
+        from next.engine.runtime.checkpointing import ActivationCheckpointer
+
+        denoiser.set_checkpointer(ActivationCheckpointer(), 1.0)
     params = adapted.trainable_parameters()
     record("INFO", "adapter", modules=len(adapted.layers), trainable_params=sum(p.numel() for p in params))
     optimizer = torch.optim.AdamW(params, lr=1e-5)
@@ -233,8 +237,8 @@ def unet(parts, cond, dev: Device, resolution: int, rank: int):
         dev.sync()
         times.append(time.time() - started)
     check(bool(torch.isfinite(loss)), "loss finite after steps", loss=loss.item())
-    record("INFO", "training step", seconds_first=round(times[0], 2), seconds_steady=round(times[-1], 2),
-           peak_gb=dev.peak_gb())
+    record("INFO", "training step" + (" (checkpointed)" if checkpoint else ""), seconds_first=round(times[0], 2), seconds_steady=round(times[-1], 2),
+           **dev.memory())
     del denoiser, adapted, optimizer
     dev.free()
 
@@ -283,6 +287,7 @@ def main() -> int:
     parser.add_argument("--images", help="folder of real images (a few are used)")
     parser.add_argument("--resolution", type=int, default=1024)
     parser.add_argument("--rank", type=int, default=16)
+    parser.add_argument("--checkpoint", action="store_true", help="recompute activations in the UNet step (what the trainer does)")
     parser.add_argument("--report", help="write the results as JSON here")
     args = parser.parse_args()
 
@@ -299,7 +304,7 @@ def main() -> int:
             cond = half.assemble(per_prompt[0], (args.resolution, args.resolution))
             del half
             dev.free()
-            unet(parts, cond, dev, args.resolution, args.rank)
+            unet(parts, cond, dev, args.resolution, args.rank, args.checkpoint)
         if codec is not None:
             dataset_chain(codec, images, dev, args.resolution)
     failed = [r["name"] for r in RESULTS if r["status"] == "FAIL"]

@@ -37,7 +37,8 @@ class DiffusionTrainerNode(Node):
                        doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="The model after training (or after stopping).")}
-    EVENTS_OUT = {"step_finished": EventOut(StepFinished, doc="After every optimizer step.")}
+    EVENTS_OUT = {"step_finished": EventOut(StepFinished, doc="After every optimizer step."),
+                  "ended": EventOut(CheckpointDue, doc="Once when training ends, finished or stopped: wire it to a saver for the final file.")}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
@@ -51,6 +52,7 @@ class DiffusionTrainerNode(Node):
                           synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")))
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
+        self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
@@ -61,19 +63,16 @@ class EveryNStepsNode(Node):
 
     DISPLAY_NAME = "Every N Steps"
     CATEGORY = "Training"
-    INPUTS = {"every": Port("every", int, default=250, minimum=1, doc="Emit after every this many optimizer steps."),
-              "at_end": Port("at_end", bool, required=False, default=True, doc="Also emit on the last step.")}
+    INPUTS = {"every": Port("every", int, default=250, minimum=1, doc="Emit after every this many optimizer steps.")}
     OUTPUTS = {"interval": Port("interval", int)}
     EVENTS_IN = {"step": EventIn(StepFinished, handler="on_step")}
     EVENTS_OUT = {"due": EventOut(CheckpointDue)}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        self.every, self.at_end = inputs["every"], inputs.get("at_end", True)
+        self.every = inputs["every"]
         return {"interval": self.every}
 
     def on_step(self, event: StepFinished, ctx) -> None:
         if event.step % self.every == 0:
             ctx.emit("due", CheckpointDue(event.step, f"every {self.every} steps"))
-        elif self.at_end and event.step == event.total:
-            ctx.emit("due", CheckpointDue(event.step, "last step"))

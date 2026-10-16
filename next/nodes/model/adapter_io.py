@@ -1,4 +1,4 @@
-"""Save and load adapter files. Saving is an event subscriber: wire a trigger's ``due`` to it."""
+"""Save and load adapter files. Saving is an event subscriber: wire a trigger's ``due`` and the trainer's ``ended`` to it."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 from ...engine.handles import TrainableDenoiser
 from ...graph import EventIn, Node, Port
-from ...graph.events import CheckpointDue, RunStopped
+from ...graph.events import CheckpointDue
 
 _SERVICE = "models"
 
@@ -22,11 +22,9 @@ class SaveAdapterNode(Node):
         "name": Port("name", str, required=False, default="adapter", doc="File name stem; the step is appended."),
         "format": Port("format", str, required=False, default="kohya",
                        doc="File format (key naming scheme). Choices depend on the model's family: kohya, native."),
-        "save_final": Port("save_final", bool, required=False, default=True, doc="Also save when the run ends or is stopped."),
     }
     OUTPUTS = {"saved": Port("saved", int, doc="Files written so far (0 at build time).")}
-    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint"),
-                 "stopped": EventIn(RunStopped, handler="on_stopped")}
+    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint")}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
@@ -38,7 +36,7 @@ class SaveAdapterNode(Node):
         if not scheme.can_write(self.model.kind):
             raise ValueError(f"Save Adapter: the {scheme.name} format cannot hold {self.model.kind} weights; pick another format")
         self.scheme, self.directory = scheme, inputs.get("directory") or "output/adapters"
-        self.stem, self.save_final, self.written, self.last_step = inputs.get("name") or "adapter", inputs.get("save_final", True), [], 0
+        self.stem, self.written = inputs.get("name") or "adapter", []
         return {"saved": 0}
 
     def _write(self, label: str, step: int) -> str:
@@ -52,12 +50,7 @@ class SaveAdapterNode(Node):
         return path
 
     def on_checkpoint(self, event: CheckpointDue, ctx) -> None:
-        self.last_step = event.step
         self._write(f"step{event.step:06d}", event.step)
-
-    def on_stopped(self, event: RunStopped, ctx) -> None:
-        if self.save_final and getattr(self, "model", None) is not None and getattr(self.model, "adapted", None) is not None:
-            self._write("final", self.last_step)
 
 
 class LoadAdapterNode(Node):

@@ -35,6 +35,9 @@ class TinyText:
     def __init__(self):
         self.device = "cpu"
 
+    def modules(self):
+        return ()
+
     def to(self, device):
         self.device = str(device)
         return self

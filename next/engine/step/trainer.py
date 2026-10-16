@@ -80,7 +80,9 @@ class Trainer:
             self.residency.after_step(step)
         metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, **timing}
         if self.residency is not None and self.residency.last_used_mb is not None:
-            metrics["device_mb"] = self.residency.last_used_mb
+            stats = self.residency.last_stats
+            metrics.update(device_mb=self.residency.last_used_mb, live_mb=stats.get("allocated", 0.0),
+                           step_peak_mb=stats.get("peak_allocated", 0.0), reserved_mb=stats.get("reserved", 0.0))
         for name in {n for t in thirds for n in t}:
             values = [t[name] for t in thirds if name in t]
             metrics[name] = sum(values) / len(values)

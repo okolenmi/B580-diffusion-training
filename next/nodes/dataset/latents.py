@@ -7,6 +7,7 @@ from typing import Any
 from ...data.ids import vae_identity
 from ...data.images import CROP_MODES, SizePolicy
 from ...data.latent_cache import LatentCache
+from ...engine.devices import Accelerator
 from ...families.api.header import read_header
 from ...families.api.parts import VAEPart
 from ...families.registry import get_family
@@ -51,7 +52,8 @@ class LatentCacheNode(Node):
         todo = cache.missing(images, policy)
         skipped = False
         if todo:
-            codec = family.load_vae(part, device=_device(inputs.get("device") or "auto"))
+            device = _device(inputs.get("device") or "auto")
+            codec = family.load_vae(part, device=device)
             try:
                 stats = cache.build(images, policy, codec, batch_size=inputs.get("batch_size") or 4,
                                     progress=lambda done, total: self.context.report(
@@ -59,6 +61,7 @@ class LatentCacheNode(Node):
                                     should_stop=self.context.should_cancel)
             finally:
                 codec.release()
+                Accelerator(device).empty_cache()
             if stats.stopped:
                 raise RuntimeError("Latent Cache: stopped before every image was encoded; run again to continue")
             if stats.skipped:

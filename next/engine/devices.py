@@ -50,7 +50,7 @@ class Accelerator:
             self.module.reset_peak_memory_stats()
 
     def memory(self) -> dict[str, float]:
-        """Megabytes: peak live tensors, peak and current memory held by the allocator, and what the driver reports in use.
+        """Megabytes: peak live tensors, peak and current memory held by the allocator, live tensors, and what the driver reports in use.
 
         The allocator keeps freed blocks and the driver adds kernel workspaces and the context, so
         only ``device_used`` predicts an out-of-memory error.
@@ -60,7 +60,7 @@ class Accelerator:
         if self.module is None:
             return out
         for key, name in (("peak_allocated", "max_memory_allocated"), ("peak_reserved", "max_memory_reserved"),
-                          ("reserved", "memory_reserved")):
+                          ("reserved", "memory_reserved"), ("allocated", "memory_allocated")):
             if hasattr(self.module, name):
                 out[key] = round(getattr(self.module, name)() / 2**20, 1)
         if hasattr(self.module, "mem_get_info"):

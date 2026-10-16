@@ -63,6 +63,7 @@ class ResidencyManager:
         self.limit_mb: float | None = None
         self.peak_used_mb = 0.0
         self.last_used_mb: float | None = None
+        self.last_stats: dict[str, float] = {}
         self._pressure_noted = 0.0
         self.empty_cache_every = self.policy.empty_cache_every
         self.steps_seen = 0
@@ -94,6 +95,20 @@ class ResidencyManager:
     @property
     def ceiling_mb(self) -> float | None:
         return None if self.limit_mb is None else self.limit_mb * (1 - self.policy.safety_margin)
+
+    def breakdown(self, stats: Mapping[str, float] | None = None) -> dict[str, float]:
+        """Where the card's memory is, in MB, for the monitor: each resident, other live tensors, the step's activation
+        peak, free blocks the allocator keeps, and what the driver holds outside the allocator."""
+        stats = stats if stats is not None else self.accelerator.memory()
+        out = dict(self.summary())
+        if "allocated" not in stats:
+            return out
+        out["other live"] = max(stats["allocated"] - sum(out.values()), 0.0)
+        out["activation peak"] = max(stats.get("peak_allocated", stats["allocated"]) - stats["allocated"], 0.0)
+        out["allocator cache"] = max(stats.get("reserved", 0.0) - stats["allocated"], 0.0)
+        if "device_used" in stats:
+            out["outside allocator"] = max(stats["device_used"] - stats.get("reserved", 0.0), 0.0)
+        return {name: round(value, 1) for name, value in out.items()}
 
     def summary(self) -> dict[str, float]:
         return {name: round(e.resident.footprint_bytes() / MB, 1) for name, e in self._entries.items()}
@@ -133,15 +148,21 @@ class ResidencyManager:
 
     def after_step(self, step: int) -> None:
         self.steps_seen += 1
-        used = self.last_used_mb = self.used_mb()
+        stats = self.accelerator.memory()
+        used = self.last_used_mb = stats.get("device_used")
+        self.last_stats = stats
         if used is not None:
+            if self.steps_seen == 1 or used > self.peak_used_mb * 1.01:
+                self._note("breakdown", step=step + 1, used_mb=round(used), parts=self.breakdown(stats))
             self.peak_used_mb = max(self.peak_used_mb, used)
             self._react(step, used)
+        moved = False
         for entry in self._entries.values():
             if entry.parked and not entry.away:
                 entry.resident.offload()
-                entry.away = True
-        if self.empty_cache_every and self.steps_seen % self.empty_cache_every == 0:
+                entry.away = moved = True
+        self.accelerator.reset_peak()
+        if moved or (self.empty_cache_every and self.steps_seen % self.empty_cache_every == 0):
             self.accelerator.empty_cache()
 
     def _react(self, step: int, used: float) -> None:

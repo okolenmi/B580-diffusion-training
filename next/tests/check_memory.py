@@ -12,7 +12,8 @@ import tempfile
 from pathlib import Path
 
 from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager
-from ..engine.runtime.residents import DeviceResident
+from ..engine.runtime.encoders import OnDemandKit
+from ..engine.runtime.residents import DeviceResident, ModulesResident
 from .check_engine import rig
 from .support import check, raises, run
 
@@ -22,9 +23,14 @@ class FakeDevice:
 
     def __init__(self, total=12000.0, foreign=600.0, ours=0.0):
         self.total, self.foreign, self.ours, self.cache_emptied = total, foreign, ours, 0
+        self.slack = self.spike = 0.0  # allocator cache beyond live tensors; activation peak above live tensors
 
     def memory(self):
-        return {"device_total": self.total, "device_used": self.foreign + self.ours, "reserved": self.ours}
+        return {"device_total": self.total, "device_used": self.foreign + self.ours + self.slack, "reserved": self.ours + self.slack,
+                "allocated": self.ours, "peak_allocated": self.ours + self.spike}
+
+    def reset_peak(self):
+        pass
 
     def empty_cache(self):
         self.cache_emptied += 1
@@ -66,7 +72,7 @@ def limits():
     loose = manager(device, limit_mb=12000, strict=False)
     loose.start()
     check(loose.limit_mb == 12000, "a non-strict budget is taken as given")
-    cpu = ResidencyManager(type("Cpu", (), {"memory": lambda self: {}, "empty_cache": lambda self: None})(), MemoryPolicy())
+    cpu = ResidencyManager(type("Cpu", (), {"memory": lambda self: {}, "empty_cache": lambda self: None, "reset_peak": lambda self: None})(), MemoryPolicy())
     cpu.start()
     cpu.after_step(0)
     check(cpu.limit_mb is None and cpu.used_mb() is None, "without driver numbers the manager measures nothing and never interferes")
@@ -81,7 +87,7 @@ def pressure():
     m.register("optimizer", opt, rank=1)
     m.start()
     m.after_step(0)  # 9600 MB in use, ceiling 9900: fine
-    check(m.empty_cache_every == 0 and not m.trace[1:], "no reaction below the ceiling")
+    check(m.empty_cache_every == 0 and not [t for t in m.trace if t["event"] in ("lever", "pressure")], "no reaction below the ceiling")
     device.ours = 9600
     m.after_step(1)
     check(m.empty_cache_every == 1, "first lever: empty the allocator cache every step")
@@ -112,6 +118,56 @@ def making_room():
     raises(MemoryBudgetExceeded, lambda: m.make_room(5000, "huge"), "refuses when even moving everything movable is not enough", "do not fit")
 
 
+def breakdown():
+    device = FakeDevice(ours=8000)
+    device.slack, device.spike = 700.0, 1500.0
+    model, opt = Blob(device, 5000), Blob(device, 600)
+    m = manager(device, limit_mb=11000)
+    m.register("model", model, rank=10, pinned=True)
+    m.register("optimizer", opt, rank=1)
+    m.start()
+    parts = m.breakdown()
+    check(parts == {"model": 5000.0, "optimizer": 600.0, "other live": 2400.0, "activation peak": 1500.0, "allocator cache": 700.0,
+                    "outside allocator": 600.0}, f"every megabyte on the card is attributed to a source ({parts})")
+    m.after_step(0)
+    check(m.trace[-1]["event"] == "breakdown" and m.trace[-1]["parts"] == parts, "the first step reports the breakdown for the monitor")
+
+
+class FakeEncoder:
+    def __init__(self, device: FakeDevice):
+        self.device, self.moves, self.encoded = device, [], 0
+
+    def move(self, where):
+        self.moves.append(where)
+        self.device.ours += 1000 if where != "cpu" else -1000
+
+    def encode_text(self, prompts):
+        self.encoded += 1
+        return list(prompts)
+
+
+def on_demand_encoders():
+    device = FakeDevice(ours=5000)
+    enc = FakeEncoder(device)
+    resident = ModulesResident([], enc.move, "xpu")
+    resident.size_bytes = lambda: 1000 * MB
+    kit = OnDemandKit(enc, resident, device)
+    kit.encode_text(["a"])
+    check(enc.moves == ["xpu", "cpu"] and device.ours == 5000 and device.cache_emptied == 1,
+          f"encoders visit the device to encode and leave, freeing the cache ({enc.moves})")
+    with kit.session():
+        kit.encode_text(["a"])
+        kit.encode_text(["b"])
+    check(enc.moves == ["xpu", "cpu", "xpu", "cpu"], "one session is one round trip however many encodes it holds")
+    kit.hold = True
+    kit.encode_text(["c"])
+    kit.encode_text(["d"])
+    check(enc.moves[-1] == "xpu" and enc.moves.count("xpu") == 3, "held encoders stay on the device")
+    kit.release()
+    check(device.ours == 5000, "release brings the device back to where it was")
+    check(kit.cache_key("p") if hasattr(enc, "cache_key") else True, "other kit calls pass through")
+
+
 def training():
     with tempfile.TemporaryDirectory() as raw:
         device = FakeDevice(ours=5000)
@@ -124,4 +180,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, training)
+    run(limits, pressure, making_room, breakdown, on_demand_encoders, training)

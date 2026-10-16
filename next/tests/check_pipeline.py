@@ -16,9 +16,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
+from .. import starters
 from ..data.store import DatasetStore
 from ..engine.runtime.factory import make_runtime
-from ..graph import Edge, GraphDoc, GraphRunner, NodeRegistry, NodeSpec
+from ..graph import GraphDoc, GraphRunner, NodeRegistry
 from ..graph.node import Environment
 from ..nodes.conditioning import conditioner
 from ..nodes.dataset import batching, latents
@@ -28,37 +29,14 @@ from .pipeline_nodes import TinyFamily
 from .support import check, run
 
 REGISTRY = NodeRegistry(packages=("next.nodes", "next.tests.pipeline_nodes"))
-NODES = ["TinyModelSource", "DatasetLibraryNode", "LatentCacheNode", "CaptionsNode", "TagSwapNode", "BucketerNode", "NoiserNode",
-         "BatcherNode", "ConditionerNode", "InjectAdapterNode", "AdamWNode", "ConstantLRNode", "LossWeightingNode",
-         "DiffusionTrainerNode", "EveryNStepsNode", "SaveAdapterNode"]
+SETTINGS = {"device.default": "cpu", "precision.denoiser": "fp32", "precision.encoders": "fp32", "precision.autocast": "off"}
 
 
-def uid(index: int) -> str:
-    return "n_" + "abcdefghijklmnop"[index] * 6
-
-
-def graph(tmp: Path, steps: int, params: dict[str, dict] | None = None) -> GraphDoc:
-    params = params or {}
-    base = {
-        0: {"file": str(tmp / "model.safetensors")}, 1: {"dataset": "toy"}, 2: {"dataset": "toy", "base": 64, "mode": "fit", "batch_size": 2},
-        5: {"multiple": 1, "keep_incomplete": True}, 7: {"batch_size": 2, "seed": 3}, 9: {"rank": 4, "alpha": 4.0}, 10: {"lr": 1e-3},
-        11: {"lr": 1e-3}, 12: {"kind": "min_snr"}, 13: {"steps": steps}, 14: {"every": 2},
-        15: {"directory": str(tmp / "out"), "name": "toy"},
-    }
-    for key, value in (params or {}).items():
-        base.setdefault(int(key), {}).update(value)
-    specs = tuple(NodeSpec(uid(i), cls, base.get(i, {})) for i, cls in enumerate(NODES))
-    wires = [(0, "vae", 2, "vae"), (1, "images", 2, "images"), (1, "images", 3, "images"), (3, "prompts", 4, "prompts"),
-             (2, "latents", 5, "latents"), (0, "denoiser", 6, "denoiser"), (2, "latents", 7, "latents"), (4, "prompts", 7, "prompts"),
-             (6, "noiser", 7, "noiser"), (5, "buckets", 7, "buckets"), (0, "clip_l", 8, "encoders"), (0, "clip_g", 8, "encoders"),
-             (4, "prompts", 8, "prompts"), (0, "denoiser", 9, "denoiser"), (9, "model", 10, "model"), (7, "batches", 13, "batches"),
-             (9, "model", 13, "model"), (8, "conditioner", 13, "conditioner"), (10, "optimizer", 13, "optimizer"),
-             (11, "schedule", 13, "schedule"), (12, "weighting", 13, "weighting"), (9, "model", 15, "model")]
-    events = [(7, "prompts_changed", 8, "prompts_changed"), (13, "step_finished", 14, "step"), (14, "due", 15, "checkpoint"),
-              (13, "ended", 15, "checkpoint")]
-    edge = lambda w: Edge(uid(w[0]), w[1], uid(w[2]), w[3])  # noqa: E731
-    return GraphDoc(specs, tuple(map(edge, wires)), tuple(map(edge, events)),
-                    {"device.default": "cpu", "precision.denoiser": "fp32", "precision.encoders": "fp32", "precision.autocast": "off"})
+def graph(tmp: Path, steps: int) -> GraphDoc:
+    return starters.sdxl_lora(model="", dataset="toy", output=str(tmp / "out"), name="toy", resolution=64, batch_size=2, steps=steps,
+                              lr=1e-3, rank=4, save_every=2, settings=SETTINGS,
+                              source=("TinyModelSource", {"file": str(tmp / "model.safetensors")}),
+                              overrides={"latents": {"batch_size": 2}, "buckets": {"multiple": 1}, "batcher": {"seed": 3}})
 
 
 class Trace:

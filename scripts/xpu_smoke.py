@@ -197,20 +197,22 @@ def vae(parts, images, dev: Device, resolution: int):
 
 
 @step("unet forward and backward with LoRA")
-def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool):
+def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool, batch: int):
     from next.families.sdxl.objective import SDXLObjective
 
     family = get_family("sdxl")
+    dev.free()
+    record("INFO", "before loading the UNet (everything else released)", **dev.memory())
     dev.reset_peak()
     denoiser = family.load_denoiser(parts["denoiser"], device=dev.name, dtype=torch.bfloat16)
     record("INFO", "unet loaded (bf16)", **dev.memory())
     latent = resolution // 8
-    x0 = torch.randn(1, 4, latent, latent)
+    x0 = torch.randn(batch, 4, latent, latent)
     objective = SDXLObjective()
-    t = torch.tensor([500])
+    t = torch.full((batch,), 500)
     x_t, target, _sigma = objective.noisy(x0, torch.randn_like(x0), t)
-    ctx = cond.ctx.to(dev.name, torch.bfloat16)
-    y = cond.y.to(dev.name, torch.bfloat16)
+    ctx = cond.ctx.to(dev.name, torch.bfloat16).expand(batch, -1, -1).contiguous()
+    y = cond.y.to(dev.name, torch.bfloat16).expand(batch, -1).contiguous()
     x_t, tt = x_t.to(dev.name, torch.bfloat16), t.to(dev.name)
     with torch.no_grad():
         out = denoiser(x_t, tt, ctx, y)
@@ -224,21 +226,33 @@ def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool)
     record("INFO", "adapter", modules=len(adapted.layers), trainable_params=sum(p.numel() for p in params))
     optimizer = torch.optim.AdamW(params, lr=1e-5)
     times = []
+    record("INFO", "adapter injected", **dev.memory())
     for i in range(4):
-        if i == 3:
+        last = i == 3
+        if last:
             dev.reset_peak()
         dev.sync()
         started = time.time()
         pred = denoiser(x_t, tt, ctx, y)
         loss = torch.nn.functional.mse_loss(pred.float(), target.to(dev.name).float())
+        if last:
+            dev.sync()
+            record("INFO", "after forward", **dev.memory())
         loss.backward()
+        if last:
+            dev.sync()
+            record("INFO", "after backward", **dev.memory())
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         dev.sync()
         times.append(time.time() - started)
+        if last:
+            record("INFO", "after optimizer step", **dev.memory())
+            dev.free()
+            record("INFO", "after emptying the cache", **dev.memory())
     check(bool(torch.isfinite(loss)), "loss finite after steps", loss=loss.item())
     record("INFO", "training step" + (" (checkpointed)" if checkpoint else ""), seconds_first=round(times[0], 2), seconds_steady=round(times[-1], 2),
-           **dev.memory())
+           batch=batch)
     del denoiser, adapted, optimizer
     dev.free()
 
@@ -287,6 +301,7 @@ def main() -> int:
     parser.add_argument("--images", help="folder of real images (a few are used)")
     parser.add_argument("--resolution", type=int, default=1024)
     parser.add_argument("--rank", type=int, default=16)
+    parser.add_argument("--batch", type=int, default=1, help="batch size of the UNet step")
     parser.add_argument("--checkpoint", action="store_true", help="recompute activations in the UNet step (what the trainer does)")
     parser.add_argument("--report", help="write the results as JSON here")
     args = parser.parse_args()
@@ -304,7 +319,7 @@ def main() -> int:
             cond = half.assemble(per_prompt[0], (args.resolution, args.resolution))
             del half
             dev.free()
-            unet(parts, cond, dev, args.resolution, args.rank, args.checkpoint)
+            unet(parts, cond, dev, args.resolution, args.rank, args.checkpoint, args.batch)
         if codec is not None:
             dataset_chain(codec, images, dev, args.resolution)
     failed = [r["name"] for r in RESULTS if r["status"] == "FAIL"]

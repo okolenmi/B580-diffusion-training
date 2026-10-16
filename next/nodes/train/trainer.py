@@ -48,6 +48,7 @@ class DiffusionTrainerNode(Node):
         if residency is not None:
             residency.register("model", model, rank=10, pinned=True)
             residency.register("optimizer", inputs["optimizer"], rank=1)
+            accelerator.empty_cache()
             residency.start()
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],

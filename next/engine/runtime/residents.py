@@ -39,6 +39,10 @@ class ModulesResident(DeviceResident):
     def footprint_bytes(self) -> int:
         return sum(p.numel() * p.element_size() for m in self.modules for p in m.parameters() if p.device.type != "cpu")
 
+    def size_bytes(self) -> int:
+        """What the modules take wherever they are: the room needed to bring them to the device."""
+        return sum(p.numel() * p.element_size() for m in self.modules for p in m.parameters())
+
     def offload(self) -> None:
         self.move("cpu")
 

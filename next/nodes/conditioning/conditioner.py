@@ -9,7 +9,8 @@ import torch
 from ...data.conditioning_cache import ConditioningCache
 from ...data.prompts import PromptTable
 from ...engine.conditioner import Conditioner
-from ...engine.devices import resolve_device, resolve_dtype
+from ...engine.devices import Accelerator, resolve_device, resolve_dtype
+from ...engine.runtime.encoders import OnDemandKit
 from ...engine.runtime.residents import ModulesResident
 from ...families.api.parts import ModelPart
 from ...families.registry import get_family
@@ -27,7 +28,7 @@ class ConditionerNode(Node):
         "prompts": Port("prompts", PromptTable, required=False,
                         doc="When wired, every prompt of the coming epoch is encoded as soon as the epoch's prompts are known."),
         "release_encoders": Port("release_encoders", bool, required=False, default=True, group="cache",
-                                 doc="Move the encoders off the device once the whole prompt set is cached."),
+                                 doc="Keep the encoders on the host and bring them to the device only to encode (wire prompts so the whole set is encoded up front)."),
         "cache_mb": Port("cache_mb", int, required=False, default=4096, minimum=64, unit="MB", group="cache"),
     }
     OUTPUTS = {"conditioner": Port("conditioner", Conditioner)}
@@ -43,19 +44,23 @@ class ConditionerNode(Node):
         device = resolve_device(self.context.settings.get("device.default"))
         dtype = resolve_dtype(self.context.settings.get("precision.encoders"), torch.float16)
         out = resolve_dtype(self.context.settings.get("precision.autocast"), torch.bfloat16) if self.context.settings.get("precision.autocast") != "off" else torch.float32
-        self.encoder = family.load_text_encoder(parts, device=device, dtype=dtype, out_dtype=out)
+        self.encoder = family.load_text_encoder(parts, device="cpu", dtype=dtype, out_dtype=out)
+        accelerator = Accelerator(device)
         residency = getattr(self.context.runtime, "residency", None)
-        if residency is not None and hasattr(self.encoder, "modules"):
-            residency.register(f"encoder {self.uid}", ModulesResident(self.encoder.modules(), self.encoder.to, device), rank=0)
-        cache = ConditioningCache(family.conditioning_kit(self.encoder), max_bytes=(inputs.get("cache_mb") or 4096) << 20)
+        resident = ModulesResident(self.encoder.modules(), self.encoder.to, device)
+        if residency is not None:
+            residency.register(f"encoders {self.uid}", resident, pinned=True)  # the kit moves them; listed for the memory breakdown
+        self.kit = OnDemandKit(family.conditioning_kit(self.encoder), resident, accelerator, residency)
+        cache = ConditioningCache(self.kit, max_bytes=(inputs.get("cache_mb") or 4096) << 20)
         self.conditioner = Conditioner(cache, device, out)
         self.prompts, self.release = inputs.get("prompts"), inputs.get("release_encoders", True)
+        self.kit.hold = not self.release
         return {"conditioner": self.conditioner}
 
     def on_prompts_changed(self, event: PromptsChanged, ctx) -> None:
         if self.prompts is None:
             return
         universe = self.prompts.universe()
-        self.conditioner.on_prompts_changed(event, universe)
-        if self.release and self.conditioner.cache.fits(len(universe)):
-            self.encoder.to("cpu")
+        self.kit.hold = not self.release or not self.conditioner.cache.fits(len(universe))
+        with self.kit.session():
+            self.conditioner.on_prompts_changed(event, universe)

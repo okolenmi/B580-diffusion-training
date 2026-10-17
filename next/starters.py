@@ -40,7 +40,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("latents", "LatentCacheNode", dataset=dataset, base=resolution, mode="fit")
     b.add("captions", "CaptionsNode")
     b.add("tag_swap", "TagSwapNode")
-    b.add("buckets", "BucketerNode", keep_incomplete=True)
+    b.add("buckets", "BucketerNode", multiple=4, keep_incomplete=True)  # 32 px: few shapes, padded and masked
     b.add("noiser", "NoiserNode")
     b.add("batcher", "BatcherNode", batch_size=batch_size)
     b.add("conditioner", "ConditionerNode")

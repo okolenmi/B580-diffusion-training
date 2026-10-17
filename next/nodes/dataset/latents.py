@@ -35,9 +35,9 @@ class LatentCacheNode(Node):
                      doc="fit keeps aspect ratio (long images become several crops); the others make squares."),
         "max_aspect": Port("max_aspect", float, required=False, default=2.0, minimum=1.0, group="size",
                            visible_when=("mode", "fit"), doc="Longest allowed side as a multiple of the base."),
-        "step": Port("step", int, required=False, default=64, minimum=8, step=8, unit="px", group="size",
-                     doc="Every side is cut down to a multiple of this. Fewer distinct sizes mean fewer kernels to compile "
-                         "(each new size costs seconds, in the encoder and again in training) and less scattered memory; 64 is the usual step."),
+        "step": Port("step", int, required=False, default=8, minimum=8, step=8, unit="px", group="size",
+                     doc="Every side is cut down to a multiple of this (8 loses at most 7 px). Prefer fewer distinct shapes through the "
+                         "Bucketer, which pads and masks instead of cutting."),
         "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="encode",
                            doc="Images encoded at once. One is usually fastest overall: the device is busy either way, and every "
                                "distinct batch size compiles its own kernels."),
@@ -51,7 +51,7 @@ class LatentCacheNode(Node):
         family = get_family(part.family_id)
         spec = family.latent_spec
         policy = SizePolicy(base=inputs.get("base") or 1024, mode=inputs.get("mode") or "fit",
-                            multiple=int(inputs.get("step") or 64), max_aspect=inputs.get("max_aspect") or 2.0)
+                            multiple=int(inputs.get("step") or 8), max_aspect=inputs.get("max_aspect") or 2.0)
         if policy.multiple % int(spec.spatial_factor):
             raise ValueError(f"Latent Cache: step {policy.multiple} must be a multiple of the VAE's factor {spec.spatial_factor}")
         images: ImageSet = inputs["images"]

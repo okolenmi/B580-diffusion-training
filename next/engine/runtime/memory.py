@@ -52,8 +52,11 @@ class ResidencyManager:
     manager measures after a step and, when the card is tighter than the policy allows, parks one more resident for
     the following steps (offloaded after each step, reloaded before the next), smallest first because the size is
     the transfer cost. Parking is never undone, so the run does not flip between resident and parked. The
-    allocator cache is emptied only once something has been released: before that there is nothing to give back.
+    allocator cache is emptied once something has been released, and also whenever the cache itself crowds the card
+    past the ceiling (it costs a synchronise, so only then).
     """
+
+    MIN_TRIM_MB = 256.0
 
     accelerator: Accelerator
     policy: MemoryPolicy = field(default_factory=MemoryPolicy)
@@ -180,6 +183,16 @@ class ResidencyManager:
         released = moved or any(e.parked or e.away for e in self._entries.values())
         if released and self.empty_cache_every and self.steps_seen % self.empty_cache_every == 0:
             self.accelerator.empty_cache()
+        elif used is not None and self._cache_crowds_card(stats):
+            self.accelerator.empty_cache()
+            self._note("trim", step=step + 1, cached_mb=round(stats["reserved"] - stats["allocated"]), used_mb=round(used))
+
+    def _cache_crowds_card(self, stats: Mapping[str, float]) -> bool:
+        """Cached blocks are free to give back, but memory the driver hands out outside the allocator (kernel and
+        primitive scratch for a new shape) cannot make the allocator release them: it fails while the cache sits on the card."""
+        if self.limit_mb is None or "reserved" not in stats or "allocated" not in stats:
+            return False
+        return stats["device_used"] > self.ceiling_mb and stats["reserved"] - stats["allocated"] > self.MIN_TRIM_MB
 
     def _react(self, step: int, used: float) -> None:
         """``used`` is the step's need (see ``need_mb``)."""

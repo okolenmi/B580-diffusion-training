@@ -14,7 +14,7 @@ predicts out-of-memory; the allocator's own peak understates it.
 | Frozen weights in bf16, loaded straight to the device (meta construction, no fp32 copy) | none | `families/sdxl/denoiser.py` |
 | Activation checkpointing: residual blocks always, transformer blocks by `attention_fraction` | recompute of the chosen blocks | `engine/runtime/checkpointing.py` |
 | Fused optimizer (no gradient pile-up), grouped updates, int8 optimizer state | small | `engine/optim` |
-| Allocator cache emptied every step (setting), and after any offload | small | `ResidencyManager` |
+| Allocator cache emptied after any offload, and whenever cached blocks push the card past the ceiling (the driver's own allocations for a new shape cannot make the allocator release them) | one synchronise, only when needed | `ResidencyManager` |
 | Pressure levers between steps: cache every step, then park residents (offload after the step, reload before the next) | one transfer per parked resident per step | `ResidencyManager` |
 
 ## Open (port or build when measurement says it pays)

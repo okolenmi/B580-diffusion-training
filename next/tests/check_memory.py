@@ -159,6 +159,11 @@ def cached_blocks_are_not_pressure():
     m.after_step(0)
     check(m.need_mb(device.memory()) == 9600 + 0 and not [t for t in m.trace if t["event"] in ("pressure", "lever")] and opt.on_device,
           "a card that looks full only because the allocator keeps free blocks is not under pressure")
+    check(device.cache_emptied == 1 and m.trace[-1]["event"] == "trim" and opt.on_device,
+          "it hands the cached blocks back instead, since the driver cannot reclaim them for its own allocations")
+    device.slack, device.cache_emptied = 100.0, 0
+    m.after_step(1)
+    check(device.cache_emptied == 0, "a card with little cached is left alone")
 
 
 def breakdown():

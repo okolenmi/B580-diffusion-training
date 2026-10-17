@@ -35,8 +35,12 @@ class LatentCacheNode(Node):
                      doc="fit keeps aspect ratio (long images become several crops); the others make squares."),
         "max_aspect": Port("max_aspect", float, required=False, default=2.0, minimum=1.0, group="size",
                            visible_when=("mode", "fit"), doc="Longest allowed side as a multiple of the base."),
-        "batch_size": Port("batch_size", int, required=False, default=4, minimum=1, group="encode",
-                           doc="Images encoded at once."),
+        "step": Port("step", int, required=False, default=64, minimum=8, step=8, unit="px", group="size",
+                     doc="Every side is cut down to a multiple of this. Fewer distinct sizes mean fewer kernels to compile "
+                         "(each new size costs seconds, in the encoder and again in training) and less scattered memory; 64 is the usual step."),
+        "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="encode",
+                           doc="Images encoded at once. One is usually fastest overall: the device is busy either way, and every "
+                               "distinct batch size compiles its own kernels."),
         "device": Port("device", str, required=False, default="auto", choices=("auto", "cpu", "xpu"), group="encode"),
     }
     OUTPUTS = {"latents": Port("latents", LatentSet, doc="Latents for the images under this size policy.")}
@@ -47,7 +51,9 @@ class LatentCacheNode(Node):
         family = get_family(part.family_id)
         spec = family.latent_spec
         policy = SizePolicy(base=inputs.get("base") or 1024, mode=inputs.get("mode") or "fit",
-                            multiple=int(spec.spatial_factor), max_aspect=inputs.get("max_aspect") or 2.0)
+                            multiple=int(inputs.get("step") or 64), max_aspect=inputs.get("max_aspect") or 2.0)
+        if policy.multiple % int(spec.spatial_factor):
+            raise ValueError(f"Latent Cache: step {policy.multiple} must be a multiple of the VAE's factor {spec.spatial_factor}")
         images: ImageSet = inputs["images"]
         header = read_header(part.source.path)
         identity = vae_identity(header, part.source.prefix, spec)
@@ -57,11 +63,14 @@ class LatentCacheNode(Node):
         skipped = False
         if todo:
             device = _device(inputs.get("device") or "auto")
+            residency = getattr(self.context.runtime, "residency", None)
+            if residency is not None:
+                residency.ensure_started()
             dtype = resolve_dtype(self.context.settings.get("precision.vae"), torch.float32)
             codec = family.load_vae(part, device=device, dtype=dtype)
             accelerator = Accelerator(device)
             try:
-                stats = cache.build(images, policy, codec, batch_size=fit_batch(inputs.get("batch_size") or 4, policy.base, dtype, accelerator),
+                stats = cache.build(images, policy, codec, batch_size=fit_batch(inputs.get("batch_size") or 1, policy.base, dtype, accelerator),
                                     recover=accelerator.empty_cache,
                                     progress=lambda done, total: self.context.report(
                                         "cache_progress", {"node": self.uid, "done": done, "total": total}),

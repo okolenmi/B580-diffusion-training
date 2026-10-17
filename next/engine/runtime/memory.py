@@ -89,6 +89,7 @@ class ResidencyManager:
         self.trace: list[dict] = []
         self.planner = StepPlanner()
         self._planned: tuple[float, int] | None = None  # live memory and pixel count the coming step was planned with
+        self._started = False
         self._outside_mb = 0.0  # what the allocator cap currently assumes the driver holds outside it
         self._cap_mb: float | None = None
 
@@ -144,6 +145,9 @@ class ResidencyManager:
 
         Every number here is the driver's view of the whole card, other programs included: that is what runs out.
         """
+        if self._started:
+            return
+        self._started = True
         stats = self.accelerator.memory()
         if "device_total" not in stats:
             self.limit_mb = self.policy.limit_mb
@@ -213,6 +217,11 @@ class ResidencyManager:
                    parts=self.breakdown(stats))
         if self._cap_mb is not None:
             self._cap(self._outside_mb + self.OUTSIDE_SLACK_MB, stats)
+
+    def ensure_started(self) -> None:
+        """Nodes that bring anything to the device before training call this first, so the allocator is capped
+        and room is made from the first allocation on."""
+        self.start()
 
     @property
     def ceiling_mb(self) -> float | None:

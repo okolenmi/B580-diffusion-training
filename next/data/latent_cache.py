@@ -25,6 +25,7 @@ from safetensors.torch import save_file
 from .ids import image_of, sample_id, spec_fields
 from .images import SizePolicy, load_crops
 from .library import ImageSet
+from .prefetch import Prefetch
 
 SHARD_SAMPLES = 256
 INDEX = "index.sqlite"
@@ -147,22 +148,30 @@ class LatentCache:
                 finished["samples"] += len(out)
                 out.clear()
 
-        for n, image_id in enumerate(todo, 1):
-            if should_stop and should_stop():
-                flush_batches(True)
-                return BuildStats(finished["images"], finished["samples"], skipped, stopped=True)
+        def load(image_id: str):
             try:
-                crops = load_crops(images.paths[image_id], policy)
-            except Exception as exc:
-                skipped.append((images.paths[image_id], f"{type(exc).__name__}: {exc}"))
-                continue
-            crops_of[image_id] = len(crops)
-            for k, crop in enumerate(crops):
-                pending.append((sample_id(image_id, k), torch.from_numpy(crop.copy()).permute(2, 0, 1).contiguous()))
-            finished["images"] += 1
-            flush_batches(False)
-            if progress:
-                progress(n, len(todo))
+                return image_id, load_crops(images.paths[image_id], policy), None
+            except Exception as exc:  # noqa: BLE001 - reported as a skipped image
+                return image_id, None, exc
+
+        loader = Prefetch(lambda: map(load, todo), depth=8)  # decoding runs ahead while the device encodes
+        try:
+            for n, (image_id, crops, error) in enumerate(loader, 1):
+                if should_stop and should_stop():
+                    flush_batches(True)
+                    return BuildStats(finished["images"], finished["samples"], skipped, stopped=True)
+                if error is not None:
+                    skipped.append((images.paths[image_id], f"{type(error).__name__}: {error}"))
+                    continue
+                crops_of[image_id] = len(crops)
+                for k, crop in enumerate(crops):
+                    pending.append((sample_id(image_id, k), torch.from_numpy(crop.copy()).permute(2, 0, 1).contiguous()))
+                finished["images"] += 1
+                flush_batches(False)
+                if progress:
+                    progress(n, len(todo))
+        finally:
+            loader.close()
         flush_batches(True)
         return BuildStats(finished["images"], finished["samples"], skipped)
 

@@ -37,7 +37,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     src_class, src_params = source or ("LoadModelNode", {"file": model})
     b.add("model", src_class, **src_params)
     b.add("images", "DatasetLibraryNode", dataset=dataset)
-    b.add("latents", "LatentCacheNode", dataset=dataset, base=resolution, mode="fit", batch_size=4)
+    b.add("latents", "LatentCacheNode", dataset=dataset, base=resolution, mode="fit")
     b.add("captions", "CaptionsNode")
     b.add("tag_swap", "TagSwapNode")
     b.add("buckets", "BucketerNode", keep_incomplete=True)

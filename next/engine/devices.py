@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from .driver_memory import DriverMemory
+
 DTYPES = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
 
@@ -30,6 +32,7 @@ class Accelerator:
     def __init__(self, device: str):
         self.device = device
         self.module = getattr(torch, device.split(":")[0], None) if device != "cpu" else None
+        self._driver = DriverMemory()
 
     def synchronize(self) -> None:
         if self.module is not None and hasattr(self.module, "synchronize"):
@@ -62,11 +65,14 @@ class Accelerator:
         return True
 
     def memory(self) -> dict[str, float]:
-        """Megabytes: peak live tensors, peak and current memory held by the allocator, live tensors, and what the driver reports in use.
+        """Megabytes, by what each number counts (missing values are omitted):
 
-        The allocator keeps freed blocks and the driver adds kernel workspaces and the context, so
-        only ``device_used`` predicts an out-of-memory error.
-        Call it before ``empty_cache``, while the step's blocks are still held. Missing values are omitted.
+        ``allocated``/``peak_allocated``: live tensors now and since the last reset. ``reserved``: held by the caching
+        allocator, ``active`` of it in blocks in use and ``split_free`` in free pieces between them (those stay
+        while a neighbour lives; only whole free segments can be returned). ``process``: everything this process holds
+        on the card, the allocator included. ``device_used``: the driver's view of the whole card, other programs
+        included; it is what runs out, so it is what predicts an out-of-memory error.
+        Call it before ``empty_cache``, while the step's blocks are still held.
         """
         out: dict[str, float] = {}
         if self.module is None:
@@ -75,6 +81,17 @@ class Accelerator:
                           ("reserved", "memory_reserved"), ("allocated", "memory_allocated")):
             if hasattr(self.module, name):
                 out[key] = round(getattr(self.module, name)() / 2**20, 1)
+        if hasattr(self.module, "memory_stats"):
+            try:
+                stats = self.module.memory_stats()
+                for key, name in (("active", "active_bytes.all.current"), ("split_free", "inactive_split_bytes.all.current")):
+                    if name in stats:
+                        out[key] = round(stats[name] / 2**20, 1)
+                for key, name in (("segments", "segment.all.current"), ("alloc_retries", "num_alloc_retries")):
+                    if name in stats:
+                        out[key] = float(stats[name])
+            except Exception:  # noqa: BLE001 - statistics are optional detail
+                pass
         if hasattr(self.module, "mem_get_info"):
             try:
                 free, total = self.module.mem_get_info()
@@ -82,4 +99,7 @@ class Accelerator:
                 out["device_total"] = round(total / 2**20, 1)
             except Exception:  # noqa: BLE001 - older builds lack the call for some devices
                 pass
+            process = self._driver.resident_mb()
+            if process is not None and "device_used" in out:
+                out["process"] = min(process, out["device_used"])
         return out

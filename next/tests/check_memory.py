@@ -30,16 +30,23 @@ class FakeDevice:
         self.total, self.foreign, self.ours, self.cache_emptied = total, foreign, ours, 0
         self.slack = self.spike = 0.0  # allocator cache beyond live tensors; activation peak above live tensors
         self.caps: list[float] = []
+        self.own_outside = self.stuck = 0.0  # this process's memory outside the allocator; free pieces the cache cannot return
+        self.reports_process = self.releasing = False
 
     def memory(self):
-        return {"device_total": self.total, "device_used": self.foreign + self.ours + self.slack, "reserved": self.ours + self.slack,
-                "allocated": self.ours, "peak_allocated": self.ours + self.spike}
+        out = {"device_total": self.total, "device_used": self.foreign + self.ours + self.slack + self.own_outside,
+               "reserved": self.ours + self.slack, "allocated": self.ours, "peak_allocated": self.ours + self.spike}
+        if self.reports_process:
+            out |= {"process": self.ours + self.slack + self.own_outside, "split_free": self.stuck}
+        return out
 
     def reset_peak(self):
         pass
 
     def empty_cache(self):
         self.cache_emptied += 1
+        if self.releasing:
+            self.slack = self.stuck
 
     def synchronize(self):
         pass
@@ -246,6 +253,38 @@ def claims_and_ledger():
           "settling hands the cache back once the persistent claims are placed, and publishes the ledger")
 
 
+def attribution():
+    from ..engine.driver_memory import DriverMemory, parse_fdinfo
+
+    device = FakeDevice(ours=5000, foreign=1300)
+    device.reports_process, device.releasing = True, True
+    device.slack, device.stuck, device.own_outside, device.spike = 1500.0, 300.0, 900.0, 800.0
+    m = manager(device)
+    m.claim("model", Blob(device, 4800), purpose="weights", pinned=True)
+    parts = m.breakdown()
+    check(parts == {"model": 4800.0, "unclaimed live": 200.0, "allocator free, returnable": 1200.0, "allocator free, stuck": 300.0,
+                    "outside allocator (ours)": 900.0, "other programs": 1300.0} and sum(parts.values()) == device.memory()["device_used"],
+          f"when the kernel reports this process's share, outside memory is split into ours and other programs ({parts})")
+    m.start()
+    cap = next(t for t in m.trace if t["event"] == "allocator_cap")
+    check(cap["ours_outside_mb"] == 900 and cap["other_programs_mb"] == 1300 and cap["why"] == "start" and cap["limit_mb"] == 12000,
+          "the cap event names each term that went into it")
+    m.give_back("test")
+    note = m.trace[-1]
+    check(note["event"] == "cache_returned" and note["returned_mb"] == 1200 and note["card_freed_mb"] == 1200 and note["ours_outside_mb"] == 0,
+          "a cache release says what it returned and whether the card's other users moved in")
+    device.slack = 5000.0
+    check(m.returnable_mb(device.memory()) == 4700, "only whole free segments count as returnable, not pieces between live blocks")
+    check(parse_fdinfo("drm-driver:\txe\ndrm-pdev:\t0000:03:00.0\ndrm-client-id:\t7\ndrm-resident-vram0:\t2048 KiB\ndrm-resident-gtt:\t5 KiB\n") ==
+          (("0000:03:00.0", "7"), 2 * MB) and parse_fdinfo("pos:\t0\nflags:\t02\n") is None, "a handle's resident device memory is read, other handles are ignored")
+    with tempfile.TemporaryDirectory() as folder:
+        for name, client in (("3", 7), ("4", 7), ("5", 8)):
+            (Path(folder) / name).write_text(f"drm-pdev:\tx\ndrm-client-id:\t{client}\ndrm-resident-vram0:\t{client - 6} MiB\n")
+        (Path(folder) / "6").write_text("pos:\t0\n")
+        check(DriverMemory(folder).resident_mb() == 3.0 and DriverMemory(Path(folder) / "none").resident_mb() is None,
+              "handles of one client are counted once, and a system without the statistic gives None")
+
+
 def planning():
     check(chunk_sizes(7, 3) == [3, 2, 2] and chunk_sizes(4, 1) == [4], "a batch splits into near-equal chunks")
     planner = StepPlanner()
@@ -292,8 +331,8 @@ def breakdown():
     m.claim("optimizer", opt, rank=1, purpose="test")
     m.start()
     parts = m.breakdown()
-    check(parts == {"model": 5000.0, "optimizer": 600.0, "unclaimed live": 2400.0, "activation peak": 1500.0, "allocator free blocks": 700.0,
-                    "outside allocator": 600.0}, f"every megabyte on the card is attributed to a source ({parts})")
+    check(parts == {"model": 5000.0, "optimizer": 600.0, "unclaimed live": 2400.0, "allocator free blocks": 700.0, "outside allocator": 600.0}
+          and sum(parts.values()) == device.memory()["device_used"], f"every megabyte on the card is attributed to exactly one source ({parts})")
     m.after_step(0)
     check(m.trace[-1]["event"] == "breakdown" and m.trace[-1]["parts"] == parts, "the first step reports the breakdown for the monitor")
 
@@ -347,7 +386,7 @@ def sampling():
             sampler.label = "step 3"
             time.sleep(0.1)
         rows = path.read_text().strip().splitlines()
-        check(rows[0] == ",".join(COLUMNS) and len(rows) > 3 and rows[-1].split(",")[1] == "step 3" and rows[-1].split(",")[-1] == "3600.0",
+        check(rows[0] == ",".join(COLUMNS) and len(rows) > 3 and rows[-1].split(",")[1] == "step 3" and rows[-1].split(",")[5] == "3600.0",
               f"the sampler logs labelled device memory several times a second ({len(rows) - 1} rows)")
 
 
@@ -393,4 +432,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, on_demand_encoders, sampling, xpu_environment, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, on_demand_encoders, sampling, xpu_environment, training)

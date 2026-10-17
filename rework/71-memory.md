@@ -15,7 +15,7 @@ predicts out-of-memory; the allocator's own peak understates it.
 | Activation checkpointing: residual blocks always, transformer blocks by `attention_fraction` | recompute of the chosen blocks | `engine/runtime/checkpointing.py` |
 | Fused optimizer (no gradient pile-up), grouped updates, int8 optimizer state | small | `engine/optim` |
 | Allocator cache emptied after any offload, and whenever cached blocks push the card past the ceiling (the driver's own allocations for a new shape cannot make the allocator release them) | one synchronise, only when needed | `ResidencyManager` |
-| Memory is claimed by name and purpose (`claim`); the ledger lists every claim, what no claim covers, the step's activation peak, the allocator's free blocks and what lives outside it | none | `ResidencyManager.claim/ledger` |
+| Memory is claimed by name and purpose (`claim`); the ledger lists every claim, what no claim covers, the allocator's free memory (returnable segments vs pieces stuck between live blocks), this process's memory outside the allocator and other programs; each row is one slice of `device_used` | none | `ResidencyManager.claim/ledger` |
 | Long-lived tensors are placed first (weights, adapter factors, optimizer state, gradients held and zeroed in place) and the cache is handed back once (`settle`), so no step allocates between them and the allocator can return whole segments | none | `Optimizer.hold_grads`, `ResidencyManager.settle` |
 | A probe (one sample of the largest shape, nothing applied) measures the cost of a latent pixel before step 1; each step's peak keeps it current; a batch predicted not to fit runs as the fewest equal chunks whose gradients add up to the batch's | a split batch runs in more, smaller passes | `StepPlanner`, `Trainer._probe`, `Trainer._window` |
 | The starter's Bucketer pads every latent to a multiple of 32 px and the loss is masked there (old implementation's method): the model sees a few dozen shapes instead of hundreds, nothing is cut away, peak memory is that of the padded shape | some extra compute in the padding | Bucketer node, `Batcher` |
@@ -58,3 +58,13 @@ they live in memory for the epoch. A route that generates prompts of its own (a 
 `Prompt(text, Lifetime.FLEETING)`. Not kept: noise and timesteps (they are the randomness), activations (every update
 changes them), kernel compilations (oneDNN does not persist them; the SYCL disk cache measured 2%), converted model files
 (disk to disk).
+
+## Reading the ledger
+
+Every row of the ledger is a separate slice of what the driver reports, so the rows add up to `device_used`.
+"Ours" and "other programs" are separated with the kernel's per-client statistics (`/proc/self/fdinfo`, the DRM
+`drm-resident-vram*` keys); where the kernel does not report them the single row "outside allocator" says so. The
+events that explain a change in the card's memory: `allocator_cap` (names each term of the cap), `cache_returned` (what
+an `empty_cache` returned, and whether the card's free memory rose by as much or other users took it), `cost` and
+`breakdown` (outside memory split, segment count, allocator cache flushes). `--memory-log` adds `process_mb`,
+`active_mb`, `split_free_mb`, `segments` and `alloc_retries` columns.

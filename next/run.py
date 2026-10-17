@@ -59,8 +59,10 @@ class Console:
     @staticmethod
     def _memory(frame: dict) -> None:
         if frame["event"] == "breakdown":
-            parts = "  ".join(f"{name} {mb:.0f}" for name, mb in frame["parts"].items())
-            print(f"memory (MB) at step {frame['step']}: {parts}", flush=True)
+            retries = "" if frame.get("alloc_retries") is None else f", allocator cache flushes {frame['alloc_retries']:.0f} in {frame['segments']:.0f} segments"
+            print(f"memory (MB) at step {frame['step']}: needs {frame['need_mb']}, peak live {frame['peak_mb']}, card {frame['used_mb']}{retries}", flush=True)
+            for name, mb in frame["parts"].items():
+                print(f"  {mb:8.0f}  {name}", flush=True)
         elif frame["event"] == "claims":
             print("memory claims (MB):", flush=True)
             for row in frame["rows"]:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..devices import Accelerator
 
-COLUMNS = ("seconds", "label", "allocated_mb", "reserved_mb", "peak_allocated_mb", "device_used_mb")
+COLUMNS = ("seconds", "label", "allocated_mb", "reserved_mb", "peak_allocated_mb", "device_used_mb", "process_mb", "active_mb", "split_free_mb", "segments", "alloc_retries")
 
 
 class MemorySampler:
@@ -36,6 +36,7 @@ class MemorySampler:
         while not self._stop.wait(self.interval):
             stats = self.accelerator.memory()
             row = (round(time.monotonic() - self._t0, 2), self.label.replace(",", ";"), stats.get("allocated", ""), stats.get("reserved", ""),
-                   stats.get("peak_allocated", ""), stats.get("device_used", ""))
+                   stats.get("peak_allocated", ""), stats.get("device_used", ""), stats.get("process", ""), stats.get("active", ""), stats.get("split_free", ""), stats.get("segments", ""),
+                   stats.get("alloc_retries", ""))
             self._file.write(",".join(map(str, row)) + "\n")
             self._file.flush()

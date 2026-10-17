@@ -49,7 +49,7 @@ class ConditionerNode(Node):
         residency = getattr(self.context.runtime, "residency", None)
         resident = ModulesResident(self.encoder.modules(), self.encoder.to, device)
         if residency is not None:
-            residency.register(f"encoders {self.uid}", resident, pinned=True)  # the kit moves them; listed for the memory breakdown
+            residency.claim(f"encoders {self.uid}", resident, pinned=True, purpose="text encoders; on the host except while prompts are encoded")
         self.kit = OnDemandKit(family.conditioning_kit(self.encoder), resident, accelerator, residency)
         cache = ConditioningCache(self.kit, max_bytes=(inputs.get("cache_mb") or 4096) << 20)
         self.conditioner = Conditioner(cache, device, out)

@@ -13,6 +13,9 @@ from pathlib import Path
 
 import torch
 
+from ..engine.optim.algorithms import AdamW
+from ..engine.optim.handle import Optimizer, ParamGroup
+from ..engine.runtime.planner import StepPlanner, chunk_sizes
 from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager, is_out_of_memory
 from ..engine.runtime.encoders import OnDemandKit
 from ..engine.runtime.residents import DeviceResident, ModulesResident
@@ -89,9 +92,9 @@ def pressure():
     device = FakeDevice(ours=9000)
     model, encoder, opt = Blob(device, 5000), Blob(device, 1000), Blob(device, 3000)
     m = manager(device, limit_mb=11000, safety_margin=0.1, calibration_steps=3)
-    m.register("model", model, rank=10, pinned=True)
-    m.register("encoder", encoder, rank=0)
-    m.register("optimizer", opt, rank=1)
+    m.claim("model", model, rank=10, pinned=True, purpose="test")
+    m.claim("encoder", encoder, rank=0, purpose="test")
+    m.claim("optimizer", opt, rank=1, purpose="test")
     m.start()
     m.after_step(0)  # 9600 MB in use, ceiling 9900: fine
     check(not [t for t in m.trace if t["event"] in ("lever", "pressure")] and device.cache_emptied == 0,
@@ -120,7 +123,7 @@ def making_room():
     model, encoder, opt = Blob(device, 5000), Blob(device, 1000), Blob(device, 3000)
     m = manager(device, limit_mb=11000)
     for name, blob, rank, pinned in (("model", model, 10, True), ("encoder", encoder, 0, False), ("optimizer", opt, 1, False)):
-        m.register(name, blob, rank=rank, pinned=pinned)
+        m.claim(name, blob, rank=rank, pinned=pinned, purpose="test")
     m.start()
     moved = m.make_room(800, "decode a preview")
     check(moved == ["encoder"] and not encoder.on_device and opt.on_device, f"makes room by moving the lowest rank first ({moved})")
@@ -134,7 +137,7 @@ def room_by_physical_limit():
     device = FakeDevice(total=11930, foreign=4300, ours=5600)
     model = Blob(device, 5000)
     m = manager(device)
-    m.register("model", model, rank=10, pinned=True)
+    m.claim("model", model, rank=10, pinned=True, purpose="test")
     m.start()
     check(m.make_room(1560, "load the text encoders") == [], "1.5 GB fit in the 2 GB left, so nothing moves and nothing is refused")
     raises(MemoryBudgetExceeded, lambda: m.make_room(2500, "too much"), "past the card's total it is refused", "do not fit")
@@ -161,7 +164,7 @@ def cached_blocks_are_not_pressure():
     device.slack, device.spike = 2800.0, 1000.0  # 11400 MB in the driver's view, of which 2800 is reclaimable cache
     opt = Blob(device, 600)
     m = manager(device, safety_margin=0.1)
-    m.register("optimizer", opt)
+    m.claim("optimizer", opt, purpose="test")
     m.start()
     m.after_step(0)
     check(m.need_mb(device.memory()) == 9600 + 0 and not [t for t in m.trace if t["event"] in ("pressure", "lever")] and opt.on_device,
@@ -221,12 +224,63 @@ def out_of_memory_retry():
             return [p.detach().clone() for p in adapted.trainable_parameters()], calls[0], m, failure, len(events)
 
     clean, calls, _, _, _ = run_with()
-    again, calls_again, m, failure, steps = run_with(fail_on_call=2)
-    check(failure is None and steps == 2 and calls_again == calls + 2 and all(torch.equal(a, b) for a, b in zip(clean, again)),
-          "a window that runs out of memory is run again on the same batches and ends exactly where an undisturbed run does")
+    again, calls_again, m, failure, steps = run_with(fail_on_call=3)
+    check(failure is None and steps == 2 and calls_again > calls and all(torch.allclose(a, b, atol=1e-4) for a, b in zip(clean, again)),
+          "a window that runs out of memory is run again, in chunks, on the same batches and ends where an undisturbed run does")
     check(any(t["event"] == "out_of_memory" for t in m.trace) and m.accelerator.cache_emptied >= 1, "the manager is told, with the memory by source")
     _, _, _, failure, _ = run_with(fail_on_call=1, error=RuntimeError("shape mismatch"))
     check(isinstance(failure, RuntimeError) and "shape mismatch" in str(failure), "other errors are not retried")
+
+
+def claims_and_ledger():
+    device = FakeDevice(ours=8000)
+    device.slack, device.spike = 700.0, 1500.0
+    m = manager(device, limit_mb=12000)
+    raises(ValueError, lambda: m.claim("x", Blob(device, 1), purpose=" "), "a claim without a stated purpose is refused", "what the memory is for")
+    m.claim("model", Blob(device, 5000), purpose="weights", pinned=True)
+    rows = {r["name"]: r for r in m.ledger()}
+    check(rows["model"]["purpose"] == "weights" and rows["unclaimed live"]["mb"] == 3000 and rows["allocator free blocks"]["mb"] == 700,
+          "the ledger lists each claim with its purpose, and what no claim covers")
+    m.settle()
+    check(device.cache_emptied == 1 and m.trace[-1]["event"] == "claims" and m.trace[-1]["rows"] == m.ledger(),
+          "settling hands the cache back once the persistent claims are placed, and publishes the ledger")
+
+
+def planning():
+    check(chunk_sizes(7, 3) == [3, 2, 2] and chunk_sizes(4, 1) == [4], "a batch splits into near-equal chunks")
+    planner = StepPlanner()
+    check(planner.chunks(4, 1000, 5000, 9000) == [4], "nothing is split before a cost is known")
+    planner.learn(5000, 6000, 1000)  # one megabyte per pixel
+    planner.learn(5000, 5500, 1000)
+    check(planner.mb_per_unit == 1.0, "the dearest recent step sets the cost")
+    check(planner.chunks(2, 1000, 5000, 9000) == [2] and planner.chunks(6, 1000, 5000, 9000) == [3, 3],
+          "a batch is split into the fewest chunks whose predicted peak fits the budget")
+    check(planner.chunks(3, 1000, 5000, 5100) == [1, 1, 1], "and into single samples when only those can fit")
+    device = FakeDevice(ours=5000)
+    device.spike = 1000.0
+    m = manager(device, limit_mb=12000)
+    m.start()
+    with m.measuring(1000):
+        pass
+    check(abs(m.planner.mb_per_unit - 1.0) < 1e-9 and m.trace[-1]["event"] == "cost", "a probe measures the cost of a pixel from its peak")
+    check(m.plan(6, 1000) == [3, 3] and any(t["event"] == "split" for t in m.trace), "the controller plans a split before the step and says so")
+    m.after_step(0)
+    check(m.planner.mb_per_unit >= 1.0, "the step's own peak keeps the cost current")
+
+
+def persistent_first():
+    a, b = torch.nn.Parameter(torch.ones(4, 4)), torch.nn.Parameter(torch.ones(4, 4))
+    opt = Optimizer(AdamW(weight_decay=0.0), [ParamGroup([a, b])], 1e-1)
+    opt.hold_grads()
+    place = a.grad.data_ptr()
+    check(a.grad is not None and b.grad is not None, "held gradients exist before any step")
+    for _ in range(2):
+        opt.zero_grad()
+        (a * 2).sum().backward()
+        opt.step()
+    check(a.grad.data_ptr() == place, "gradients are zeroed in place, so no step allocates them again")
+    check(bool((a != 1).any()) and bool((b == 1).all()), "a parameter the backward did not reach is still left alone")
+    opt.release()
 
 
 def breakdown():
@@ -234,11 +288,11 @@ def breakdown():
     device.slack, device.spike = 700.0, 1500.0
     model, opt = Blob(device, 5000), Blob(device, 600)
     m = manager(device, limit_mb=12000)
-    m.register("model", model, rank=10, pinned=True)
-    m.register("optimizer", opt, rank=1)
+    m.claim("model", model, rank=10, pinned=True, purpose="test")
+    m.claim("optimizer", opt, rank=1, purpose="test")
     m.start()
     parts = m.breakdown()
-    check(parts == {"model": 5000.0, "optimizer": 600.0, "other live": 2400.0, "activation peak": 1500.0, "allocator cache": 700.0,
+    check(parts == {"model": 5000.0, "optimizer": 600.0, "unclaimed live": 2400.0, "activation peak": 1500.0, "allocator free blocks": 700.0,
                     "outside allocator": 600.0}, f"every megabyte on the card is attributed to a source ({parts})")
     m.after_step(0)
     check(m.trace[-1]["event"] == "breakdown" and m.trace[-1]["parts"] == parts, "the first step reports the breakdown for the monitor")
@@ -336,4 +390,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, allocator_cap, out_of_memory_retry, breakdown, on_demand_encoders, sampling, xpu_environment, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, on_demand_encoders, sampling, xpu_environment, training)

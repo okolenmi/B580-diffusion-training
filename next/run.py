@@ -61,6 +61,10 @@ class Console:
         if frame["event"] == "breakdown":
             parts = "  ".join(f"{name} {mb:.0f}" for name, mb in frame["parts"].items())
             print(f"memory (MB) at step {frame['step']}: {parts}", flush=True)
+        elif frame["event"] == "claims":
+            print("memory claims (MB):", flush=True)
+            for row in frame["rows"]:
+                print(f"  {row['mb']:8.0f}  {row['name']:<22} {row['purpose']}", flush=True)
         else:
             print(f"memory: {json.dumps(frame, default=str)}", flush=True)
 

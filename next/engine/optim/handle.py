@@ -9,13 +9,14 @@ at a time (lowest temporary memory), anything between trades the two.
 from __future__ import annotations
 
 import gc
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Sequence
 
 import torch
 from torch import Tensor, nn
 
-from ..runtime.residents import DeviceResident
+from ..runtime.residents import DeviceResident, PinnedTensors
 from .algorithms import Algorithm
 from .state import Float32Store, StateStore
 
@@ -62,6 +63,9 @@ class Optimizer(DeviceResident):
         self.stacks: list[_Stack] = []
         self._lr = lr
         self._offloaded = False
+        self._holds_grads = False
+        self._touched: set[int] = set()
+        self._grad_hooks: list = []
         for group in groups:
             self._add(group, group_size)
         if not self.stacks:
@@ -90,12 +94,43 @@ class Optimizer(DeviceResident):
     def set_lr(self, lr: float) -> None:
         self._lr = lr
 
+    def hold_grads(self) -> PinnedTensors:
+        """Allocate every gradient once, now, and zero it in place from then on. Gradients created inside a step
+        land between the step's activation blocks and keep those segments from being given back; allocated up front
+        they sit with the other long-lived tensors. Parameters the backward did not reach are recorded so ``step``
+        still skips them, as it does when gradients are dropped."""
+        if not self._holds_grads:
+            for p in self.params:
+                p.grad = torch.zeros_like(p)
+                self._grad_hooks.append(p.register_post_accumulate_grad_hook(lambda q: self._touched.add(id(q))))
+            self._holds_grads = True
+        return PinnedTensors(lambda: [p.grad for p in self.params])
+
     def zero_grad(self) -> None:
         for p in self.params:
-            p.grad = None
+            if self._holds_grads:
+                p.grad = torch.zeros_like(p) if p.grad is None else p.grad.zero_()
+            else:
+                p.grad = None
+        self._touched.clear()
+
+    def discard_grads(self) -> None:
+        """Forget whatever gradients a failed pass left behind."""
+        self.zero_grad()
+
+    @contextmanager
+    def suspended(self):
+        """Backward passes inside change no parameter: only ``step`` applies gradients, and the caller drops them."""
+        try:
+            yield
+        finally:
+            self.discard_grads()
+
+    def _has_grad(self, p: nn.Parameter) -> bool:
+        return p.grad is not None and (not self._holds_grads or id(p) in self._touched)
 
     def _clip(self) -> None:
-        grads = [p.grad for p in self.params if p.grad is not None]
+        grads = [p.grad for p in self.params if self._has_grad(p)]
         if not grads:
             return
         total = torch.linalg.vector_norm(torch.stack([torch.linalg.vector_norm(g.float()) for g in grads]))
@@ -112,7 +147,7 @@ class Optimizer(DeviceResident):
         deltas: list[Tensor] = []
         decays: list = []
         for stack in self.stacks:
-            live = [i for i, p in enumerate(stack.params) if p.grad is not None]
+            live = [i for i, p in enumerate(stack.params) if self._has_grad(p)]
             if not live:
                 continue
             state = self.store.checkout(stack.state)
@@ -156,6 +191,9 @@ class Optimizer(DeviceResident):
         self._offloaded = False
 
     def release(self) -> None:
+        for hook in self._grad_hooks:
+            hook.remove()
+        self._grad_hooks.clear()
         self.stacks = []
         gc.collect()
 
@@ -216,6 +254,24 @@ class FusedOptimizer(Optimizer):
 
     def zero_grad(self) -> None:
         pass
+
+    def hold_grads(self) -> PinnedTensors:
+        return PinnedTensors(lambda: ())  # each gradient is applied and dropped as soon as it exists
+
+    def discard_grads(self) -> None:
+        for p in self.params:
+            p.grad = None
+
+    @contextmanager
+    def suspended(self):
+        """Backward passes inside change nothing: gradients pile up for the caller to drop (the memory probe)."""
+        saved = (self._sub_steps, self._seen, self._in_backward)
+        self._sub_steps, self._seen, self._in_backward = 2**62, 0, False
+        try:
+            yield
+        finally:
+            self._sub_steps, self._seen, self._in_backward = saved
+            self.discard_grads()
 
     def release(self) -> None:
         for hook in self._hooks:

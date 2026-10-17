@@ -46,9 +46,12 @@ class DiffusionTrainerNode(Node):
         accelerator = Accelerator(model.device)
         residency = getattr(self.context.runtime, "residency", None)
         if residency is not None:
-            residency.register("model", model, rank=10, pinned=True)
-            residency.register("optimizer", inputs["optimizer"], rank=1)
-            accelerator.empty_cache()
+            residency.claim("model", model, rank=10, pinned=True,
+                            purpose="frozen weights, adapter factors and whatever else the denoiser keeps")
+            residency.claim("optimizer", inputs["optimizer"], rank=1, purpose="optimizer state (moments), one set per adapter factor")
+            residency.claim("gradients", inputs["optimizer"].hold_grads(), pinned=True,
+                            purpose="adapter gradients, allocated once and zeroed in place so no step allocates between them")
+            residency.settle()
             residency.start()
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],

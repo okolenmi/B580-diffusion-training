@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import gc
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from ...graph.settings import AUTO
 from ..devices import Accelerator
+from .planner import StepPlanner
 from .residents import DeviceResident
 
 MB = 2**20
@@ -48,6 +50,7 @@ class MemoryPolicy:
 @dataclass
 class _Entry:
     resident: DeviceResident
+    purpose: str
     rank: int
     pinned: bool
     parked: bool = False  # offloaded after every step, reloaded before the next
@@ -84,12 +87,42 @@ class ResidencyManager:
         self.empty_cache_every = self.policy.empty_cache_every  # applies once something is released
         self.steps_seen = 0
         self.trace: list[dict] = []
+        self.planner = StepPlanner()
+        self._planned: tuple[float, int] | None = None  # live memory and pixel count the coming step was planned with
         self._outside_mb = 0.0  # what the allocator cap currently assumes the driver holds outside it
         self._cap_mb: float | None = None
 
-    def register(self, name: str, resident: DeviceResident, *, rank: int = 0, pinned: bool = False) -> None:
-        """Lower ranks move off the device first; pinned residents never move."""
-        self._entries[name] = _Entry(resident, rank, pinned)
+    def claim(self, name: str, resident: DeviceResident, *, purpose: str, rank: int = 0, pinned: bool = False) -> None:
+        """Every part of a run that keeps memory on the device says what it keeps and why. Lower ranks move off the
+        device first; pinned claims never move."""
+        if not purpose.strip():
+            raise ValueError(f"the claim {name!r} must say what the memory is for")
+        self._entries[name] = _Entry(resident, purpose, rank, pinned)
+
+    def ledger(self, stats: Mapping[str, float] | None = None) -> list[dict]:
+        """Every megabyte the card holds, by claim and then by what no claim covers; the monitor shows these rows."""
+        stats = stats if stats is not None else self.accelerator.memory()
+        rows = [{"name": name, "mb": round(e.resident.footprint_bytes() / MB, 1), "purpose": e.purpose}
+                for name, e in self._entries.items()]
+        if "allocated" in stats:
+            claimed = sum(r["mb"] for r in rows)
+            rows.append({"name": "unclaimed live", "mb": round(max(stats["allocated"] - claimed, 0.0), 1),
+                         "purpose": "live tensors no claim covers (inputs and outputs of the step in flight, cached prompts, leftovers)"})
+            rows.append({"name": "activation peak", "mb": round(max(stats.get("peak_allocated", stats["allocated"]) - stats["allocated"], 0.0), 1),
+                         "purpose": "what the last step needed above the live tensors"})
+            rows.append({"name": "allocator free blocks", "mb": round(max(stats.get("reserved", 0.0) - stats["allocated"], 0.0), 1),
+                         "purpose": "memory the allocator keeps for reuse; given back when the card needs it"})
+            if "device_used" in stats:
+                rows.append({"name": "outside allocator", "mb": round(max(stats["device_used"] - stats.get("reserved", 0.0), 0.0), 1),
+                             "purpose": "driver and other programs: context, kernels, primitives, the desktop"})
+        return rows
+
+    def settle(self) -> None:
+        """Once every persistent claim is in place: drop the garbage of loading and give back the cache, so what the
+        run keeps for good sits together and the steps' transient blocks form the rest."""
+        gc.collect()
+        self.accelerator.empty_cache()
+        self._note("claims", rows=self.ledger())
 
     def used_mb(self) -> float | None:
         """Device memory in use as the driver sees it (other processes and the allocator's cache included)."""
@@ -144,6 +177,32 @@ class ResidencyManager:
         if measured > self._outside_mb or self.steps_seen == self.policy.calibration_steps:
             self._cap(measured, stats)
 
+    def budget_mb(self) -> float | None:
+        """What live and transient tensors together may reach: the allocator's cap."""
+        return self._cap_mb
+
+    def plan(self, count: int, units_per_sample: int) -> list[int]:
+        """Sizes of the chunks a batch of ``count`` samples (each ``units_per_sample`` latent pixels) runs as."""
+        floor = self.accelerator.memory().get("allocated", 0.0)
+        sizes = self.planner.chunks(count, units_per_sample, floor, self.budget_mb())
+        units = max(sizes) * units_per_sample
+        self._planned = (floor, max(units, self._planned[1])) if self._planned else (floor, units)
+        if len(sizes) > 1:
+            self._note("split", samples=count, chunks=sizes, predicted_mb=round(self.planner.predicted_peak_mb(floor, count * units_per_sample) or 0),
+                       budget_mb=round(self.budget_mb() or 0))
+        return sizes
+
+    @contextmanager
+    def measuring(self, units: int):
+        """Run something whose peak says what ``units`` latent pixels cost (the probe), leaving no trace in the peak."""
+        self.accelerator.reset_peak()
+        floor = self.accelerator.memory().get("allocated", 0.0)
+        yield
+        stats = self.accelerator.memory()
+        self.planner.learn(floor, stats.get("peak_allocated", floor), units)
+        self.accelerator.reset_peak()
+        self._note("cost", mb_per_megapixel=round((self.planner.mb_per_unit or 0.0) * 2**20, 1), floor_mb=round(floor))
+
     def recover(self, step: int, error: BaseException) -> None:
         """After an out-of-memory error: drop what the failed step held, give the cache back, and assume the driver
         needs more room from here on."""
@@ -160,18 +219,8 @@ class ResidencyManager:
         return None if self.limit_mb is None else self.limit_mb * (1 - self.policy.safety_margin)
 
     def breakdown(self, stats: Mapping[str, float] | None = None) -> dict[str, float]:
-        """Where the card's memory is, in MB, for the monitor: each resident, other live tensors, the step's activation
-        peak, free blocks the allocator keeps, and what the driver holds outside the allocator."""
-        stats = stats if stats is not None else self.accelerator.memory()
-        out = dict(self.summary())
-        if "allocated" not in stats:
-            return out
-        out["other live"] = max(stats["allocated"] - sum(out.values()), 0.0)
-        out["activation peak"] = max(stats.get("peak_allocated", stats["allocated"]) - stats["allocated"], 0.0)
-        out["allocator cache"] = max(stats.get("reserved", 0.0) - stats["allocated"], 0.0)
-        if "device_used" in stats:
-            out["outside allocator"] = max(stats["device_used"] - stats.get("reserved", 0.0), 0.0)
-        return {name: round(value, 1) for name, value in out.items()}
+        """The ledger as ``{name: megabytes}``."""
+        return {row["name"]: row["mb"] for row in self.ledger(stats)}
 
     def summary(self) -> dict[str, float]:
         return {name: round(e.resident.footprint_bytes() / MB, 1) for name, e in self._entries.items()}
@@ -221,6 +270,9 @@ class ResidencyManager:
             self.peak_used_mb = max(self.peak_used_mb, used)
             self._follow_outside(stats)
             self._react(step, need)
+        if self._planned is not None and "peak_allocated" in stats:
+            self.planner.learn(self._planned[0], stats["peak_allocated"], self._planned[1])
+            self._planned = None
         moved = False
         for entry in self._entries.values():
             if entry.parked and not entry.away:

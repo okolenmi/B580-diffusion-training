@@ -58,3 +58,22 @@ class ModulesResident(DeviceResident):
 
     def release(self) -> None:
         self.modules = ()
+
+
+class PinnedTensors(DeviceResident):
+    """Tensors that stay where they are; listed so the memory ledger accounts for them."""
+
+    def __init__(self, tensors: Callable[[], Iterable[Tensor | None]]):
+        self._tensors = tensors
+
+    def footprint_bytes(self) -> int:
+        return tensor_bytes(t for t in self._tensors() if t is not None and t.device.type != "cpu")
+
+    def offload(self) -> None:
+        raise RuntimeError("these tensors are pinned to the device")
+
+    def reload(self, device: str | None = None) -> None:
+        pass
+
+    def release(self) -> None:
+        self._tensors = lambda: ()

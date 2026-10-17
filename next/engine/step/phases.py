@@ -22,34 +22,28 @@ class StepPhase(ABC):
 
 
 class FetchBatch(StepPhase):
-    """Next batch; when an epoch ends the batcher announces it and a fresh pass starts here.
-
-    The batches of the current window are kept so a window that ran out of memory can be run again on the same data.
-    """
+    """Next batch; when an epoch ends the batcher announces it and a fresh pass starts here."""
 
     def __init__(self, batches: Iterable[dict]):
         self._batches = batches
         self._iterator: Iterator[dict] = iter(batches)
-        self._window: list[dict] = []
-        self._replay: list[dict] = []
+        self._peeked: list[dict] = []
 
-    def begin_window(self) -> None:
-        self._window, self._replay = [], []
+    def peek(self) -> dict:
+        """The batch the next ``run`` will deliver, without consuming it."""
+        if not self._peeked:
+            self._peeked.append(self._next())
+        return self._peeked[0]
 
-    def rewind(self) -> None:
-        self._replay, self._window = list(self._window), []
-
-    def run(self, state: StepState) -> None:
-        if self._replay:
-            state.batch = self._replay.pop(0)
-            self._window.append(state.batch)
-            return
+    def _next(self) -> dict:
         try:
-            state.batch = next(self._iterator)
+            return next(self._iterator)
         except StopIteration:
             self._iterator = iter(self._batches)
-            state.batch = next(self._iterator)
-        self._window.append(state.batch)
+            return next(self._iterator)
+
+    def run(self, state: StepState) -> None:
+        state.batch = self._peeked.pop() if self._peeked else self._next()
 
 
 class PrepareInputs(StepPhase):
@@ -103,7 +97,7 @@ class Backward(StepPhase):
         self._scale = 1.0 / accumulation
 
     def run(self, state: StepState) -> None:
-        (state.loss * self._scale).backward()
+        (state.loss * (self._scale * state.scale)).backward()
 
 
 class Timed(StepPhase):

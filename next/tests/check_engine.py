@@ -141,7 +141,8 @@ def main() -> None:
         if fraction is not None:
             denoiser.set_checkpointer(ActivationCheckpointer(), fraction)
         state = StepState(0, 0, "cpu")
-        for phase in trainer.pipeline.phases[:5]:
+        trainer._fetch.run(state)
+        for phase in trainer.pipeline.phases[:4]:
             phase.run(state)
         state.loss.backward()
         grads[label] = torch.cat([p.grad.flatten() for p in adapted.trainable_parameters()])

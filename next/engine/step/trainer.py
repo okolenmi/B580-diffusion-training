@@ -7,13 +7,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+import torch
+
 from ...graph.events import StepFinished
 from ..optim.handle import FusedOptimizer, Optimizer
 from ..runtime.memory import MemoryBudgetExceeded, is_out_of_memory
+from ..runtime.planner import chunk_sizes
 from .loss import LossWeighting, thirds_of_range
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, Timed)
 from .schedule import LRSchedule
-from .state import StepState
+from .state import StepState, split_batch
 
 
 @dataclass
@@ -30,9 +33,10 @@ class Trainer:
     ``emit`` receives a ``StepFinished`` after every optimizer step; ``should_stop`` is polled between steps, so
     stopping always leaves the adapters at a step boundary.
 
-    A step that runs out of memory is run again once on the same batches after the memory it held is given back,
-    as long as no update has been applied yet: a new shape asks the driver for kernels, which can fail while the
-    allocator still caches blocks of the old shapes.
+    With a memory controller the run starts with a probe (one sample of the largest shape, gradients dropped) so
+    the cost of a pixel is known before the first step, and every batch the controller predicts will not fit runs as
+    chunks whose gradients add up to the whole batch's. A step that runs out of memory anyway is run again once, in
+    twice as many chunks, after the memory it held is given back, as long as no update has been applied yet.
     """
 
     OOM_RETRIES = 1
@@ -47,14 +51,19 @@ class Trainer:
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._fused = isinstance(optimizer, FusedOptimizer)
+        self._batches = batches
         self._fetch = FetchBatch(batches)
-        phases = [self._fetch, PrepareInputs(gate, gate_window), EncodeConditioning(conditioner),
-                  Forward(denoiser), Loss(weighting), Backward(accumulation)]
+        phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), Forward(denoiser), Loss(weighting),
+                  Backward(accumulation)]
+        fetch = self._fetch
         if timed:
             phases = [Timed(p, synchronize or (lambda: None)) for p in phases]
+            fetch = Timed(fetch, synchronize or (lambda: None))
+        self._fetch_phase = fetch
         self.pipeline = Pipeline(phases)
 
     def run(self, start: int = 0) -> RunResult:
+        self._probe()
         last = None
         step = start
         for step in range(start, self.steps):
@@ -63,18 +72,35 @@ class Trainer:
             last = self._step(step)
         return RunResult(max(self.steps - start, 0), self.steps, last)
 
+    def _probe(self) -> None:
+        """One sample of the largest shape through forward and backward, changing nothing: what a pixel costs."""
+        make = getattr(self._batches, "probe_batch", None)
+        if self.residency is None or make is None or self.steps == 0:
+            return
+        batch = make(self._fetch.peek())
+        units = batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
+        with self.residency.measuring(units), self.optimizer.suspended():
+            self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
+
     def _step(self, step: int) -> float:
         started = time.perf_counter()
         lr = self.schedule.value(step)
         if self.residency is not None:
             self.residency.before_step(step)
         self.optimizer.set_lr(lr)
-        self._fetch.begin_window()
+        fetched = []
+        timing: dict[str, float] = {}
+        for micro in range(self.accumulation):
+            state = StepState(step, micro, self.device)
+            self._fetch_phase.run(state)
+            fetched.append(state.batch)
+            for label, ms in state.timing_ms.items():
+                timing[label] = timing.get(label, 0.0) + ms
         for attempt in range(self.OOM_RETRIES + 1):
             self._committed = False
             failure = None
             try:
-                losses, thirds, timing = self._window(step)
+                losses, thirds, spent = self._window(step, fetched, attempt)
                 break
             except Exception as error:  # noqa: BLE001 - narrowed just below
                 if self._committed or attempt == self.OOM_RETRIES or not is_out_of_memory(error):
@@ -84,6 +110,8 @@ class Trainer:
                     raise explained from error
                 failure = error
             self._recover(step, failure)
+        for label, ms in spent.items():
+            timing[label] = timing.get(label, 0.0) + ms
         loss = float(sum(losses) / len(losses))
         if self.residency is not None:
             self.residency.after_step(step)
@@ -99,27 +127,44 @@ class Trainer:
             self.emit(StepFinished(step + 1, self.steps, metrics))
         return loss
 
-    def _window(self, step: int) -> tuple[list, list, dict]:
-        """The ``accumulation`` micro-steps and the update. Past the point where an update may have been applied,
-        ``_committed`` says a failure cannot be run again."""
+    def _chunks(self, batch: dict, attempt: int) -> list[int]:
+        x = batch["x_t"]
+        count = x.shape[0]
+        sizes = self.residency.plan(count, x.shape[-2] * x.shape[-1]) if self.residency is not None else [count]
+        if attempt and len(sizes) < count:
+            sizes = chunk_sizes(count, min(count, len(sizes) * 2))
+        return sizes
+
+    def _window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
+        """The window's micro-steps, each as one or more chunks, and the update. Past the point where an update may
+        have been applied, ``_committed`` says a failure cannot be run again."""
+        plans = [(batch, self._chunks(batch, attempt)) for batch in fetched]
+        passes = sum(len(sizes) for _, sizes in plans)
         if self._fused:
-            self.optimizer.begin_step(self.accumulation)
+            self.optimizer.begin_step(passes)
         else:
             self.optimizer.zero_grad()
         losses, thirds, timing = [], [], {}
-        for micro in range(self.accumulation):
-            state = StepState(step, micro, self.device)
-            try:
-                self.pipeline.run(state)
-            except BaseException:
-                self._committed = self._fused and micro + 1 == self.accumulation and state.phase == "backward"
-                raise
-            losses.append(state.loss.detach())
-            thirds.append(thirds_of_range(state.per_sample, state.inputs.t_frac))
-            for label, ms in state.timing_ms.items():
-                timing[label] = timing.get(label, 0.0) + ms
-            if self._fused and micro + 1 < self.accumulation:
-                self.optimizer.next_pass()
+        done = 0
+        for micro, (batch, sizes) in enumerate(plans):
+            total, loss, per_sample, fractions = sum(sizes), 0.0, [], []
+            for part, size in zip(split_batch(batch, sizes), sizes):
+                state = StepState(step, micro, self.device, batch=part, scale=size / total)
+                try:
+                    self.pipeline.run(state)
+                except BaseException:
+                    self._committed = self._fused and done + 1 == passes and state.phase == "backward"
+                    raise
+                loss = loss + state.loss.detach() * state.scale
+                per_sample.append(state.per_sample.detach())
+                fractions.append(state.inputs.t_frac.detach().flatten().float().cpu())
+                for label, ms in state.timing_ms.items():
+                    timing[label] = timing.get(label, 0.0) + ms
+                done += 1
+                if self._fused and done < passes:
+                    self.optimizer.next_pass()
+            losses.append(loss)
+            thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
         if not self._fused:
             self._committed = True
             self.optimizer.step()
@@ -127,10 +172,7 @@ class Trainer:
 
     def _recover(self, step: int, error: BaseException) -> None:
         error.__traceback__ = None  # its frames hold the failed step's tensors
-        self.optimizer.zero_grad()
-        for p in self.optimizer.params:
-            p.grad = None
-        self._fetch.rewind()
+        self.optimizer.discard_grads()
         if self.residency is not None:
             self.residency.recover(step, error)
         else:
@@ -140,5 +182,6 @@ class Trainer:
         """Out-of-memory errors say where the card's memory was; anything else passes through unchanged."""
         if self.residency is None or not is_out_of_memory(error):
             return error
+        rows = ", ".join(f"{r['name']} {r['mb']:.0f}" for r in self.residency.ledger())
         return MemoryBudgetExceeded(f"step {step + 1} ran out of memory ({str(error).splitlines()[0] if str(error) else type(error).__name__}); "
-                                    f"memory by source: {self.residency.breakdown()}")
+                                    f"MB by claim: {rows}")

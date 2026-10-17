@@ -22,18 +22,34 @@ class StepPhase(ABC):
 
 
 class FetchBatch(StepPhase):
-    """Next batch; when an epoch ends the batcher announces it and a fresh pass starts here."""
+    """Next batch; when an epoch ends the batcher announces it and a fresh pass starts here.
+
+    The batches of the current window are kept so a window that ran out of memory can be run again on the same data.
+    """
 
     def __init__(self, batches: Iterable[dict]):
         self._batches = batches
         self._iterator: Iterator[dict] = iter(batches)
+        self._window: list[dict] = []
+        self._replay: list[dict] = []
+
+    def begin_window(self) -> None:
+        self._window, self._replay = [], []
+
+    def rewind(self) -> None:
+        self._replay, self._window = list(self._window), []
 
     def run(self, state: StepState) -> None:
+        if self._replay:
+            state.batch = self._replay.pop(0)
+            self._window.append(state.batch)
+            return
         try:
             state.batch = next(self._iterator)
         except StopIteration:
             self._iterator = iter(self._batches)
             state.batch = next(self._iterator)
+        self._window.append(state.batch)
 
 
 class PrepareInputs(StepPhase):
@@ -114,5 +130,6 @@ class Pipeline:
 
     def run(self, state: StepState) -> StepState:
         for phase in self.phases:
+            state.phase = phase.label
             phase.run(state)
         return state

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -14,6 +15,15 @@ MB = 2**20
 
 class MemoryBudgetExceeded(RuntimeError):
     pass
+
+
+OOM_MARKERS = ("out of memory", "out_of_resources", "out_of_device_memory", "out of device memory")
+
+
+def is_out_of_memory(error: BaseException) -> bool:
+    """True for the allocator's error and for the driver's own refusals, which arrive as plain runtime errors."""
+    return isinstance(error, MemoryError) or type(error).__name__ == "OutOfMemoryError" or \
+        (isinstance(error, RuntimeError) and any(marker in str(error).lower() for marker in OOM_MARKERS))
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,8 @@ class ResidencyManager:
     """
 
     MIN_TRIM_MB = 256.0
+    OUTSIDE_HEADROOM_MB = 1024.0  # first guess for what the driver still takes outside the allocator (kernels, primitives)
+    OUTSIDE_SLACK_MB = 512.0      # kept free beyond what is measured outside the allocator
 
     accelerator: Accelerator
     policy: MemoryPolicy = field(default_factory=MemoryPolicy)
@@ -72,6 +84,8 @@ class ResidencyManager:
         self.empty_cache_every = self.policy.empty_cache_every  # applies once something is released
         self.steps_seen = 0
         self.trace: list[dict] = []
+        self._outside_mb = 0.0  # what the allocator cap currently assumes the driver holds outside it
+        self._cap_mb: float | None = None
 
     def register(self, name: str, resident: DeviceResident, *, rank: int = 0, pinned: bool = False) -> None:
         """Lower ranks move off the device first; pinned residents never move."""
@@ -108,6 +122,38 @@ class ResidencyManager:
             raise MemoryBudgetExceeded(f"the budget is {self.policy.limit_mb:.0f} MB but the card has {total:.0f} MB")
         self.limit_mb = self.policy.limit_mb if self.policy.limit_mb is not None else total
         self._note("limit", limit_mb=round(self.limit_mb), in_use_mb=round(stats["device_used"]))
+        self._cap(max(stats["device_used"] - stats.get("reserved", 0.0), 0.0) + self.OUTSIDE_HEADROOM_MB, stats)
+
+    def _cap(self, outside_mb: float, stats: Mapping[str, float]) -> None:
+        """Keep the allocator below the limit minus what lives outside it. Past that line it frees its cached blocks
+        instead of letting them crowd out the driver, whose allocations (a new shape's kernels) it cannot satisfy."""
+        if self.limit_mb is None:
+            return
+        cap = max(self.limit_mb - outside_mb, stats.get("allocated", 0.0) + self.OUTSIDE_SLACK_MB)
+        if self._cap_mb is not None and abs(cap - self._cap_mb) < 128:
+            return
+        if self.accelerator.cap_allocator(cap):
+            self._outside_mb, self._cap_mb = outside_mb, cap
+            self._note("allocator_cap", cap_mb=round(cap), outside_mb=round(outside_mb))
+
+    def _follow_outside(self, stats: Mapping[str, float]) -> None:
+        """The outside share grows as new shapes bring kernels, and the cap follows it down; once calibrated it is set from what was measured."""
+        if "device_used" not in stats or "reserved" not in stats or self._cap_mb is None:
+            return
+        measured = max(stats["device_used"] - stats["reserved"], 0.0) + self.OUTSIDE_SLACK_MB
+        if measured > self._outside_mb or self.steps_seen == self.policy.calibration_steps:
+            self._cap(measured, stats)
+
+    def recover(self, step: int, error: BaseException) -> None:
+        """After an out-of-memory error: drop what the failed step held, give the cache back, and assume the driver
+        needs more room from here on."""
+        gc.collect()
+        self.accelerator.empty_cache()
+        stats = self.accelerator.memory()
+        self._note("out_of_memory", step=step + 1, error=str(error).splitlines()[0][:160] if str(error) else type(error).__name__,
+                   parts=self.breakdown(stats))
+        if self._cap_mb is not None:
+            self._cap(self._outside_mb + self.OUTSIDE_SLACK_MB, stats)
 
     @property
     def ceiling_mb(self) -> float | None:
@@ -173,6 +219,7 @@ class ResidencyManager:
             if self.steps_seen == 1 or used > self.peak_used_mb * 1.01:
                 self._note("breakdown", step=step + 1, used_mb=round(used), need_mb=round(need), parts=self.breakdown(stats))
             self.peak_used_mb = max(self.peak_used_mb, used)
+            self._follow_outside(stats)
             self._react(step, need)
         moved = False
         for entry in self._entries.values():

@@ -122,9 +122,11 @@ class AdaptedLinear(AdaptedLayer):
 
     def forward(self, x: Tensor) -> Tensor:
         base = F.linear(x, self.frozen_weight, self.base_bias)
-        raw = (self.dropout(x).to(self.lora_A.dtype) @ self.lora_A.T) @ self.lora_B.T
+        down = self.dropout(x).to(self.lora_A.dtype) @ self.lora_A.T
         if self.kind == "lora":
-            return base + self._gated(raw * self.scaling).to(base.dtype)
+            # the small factor takes the scale: one full-size multiply fewer per layer
+            return base + self._gated(down @ (self.lora_B.T * self.scaling)).to(base.dtype)
+        raw = down @ self.lora_B.T
         scale = (self.magnitude / self._weight_norm().detach()).to(x.dtype).view(1, -1)
         no_bias = base - self.base_bias if self.base_bias is not None else base
         update = (scale - 1) * no_bias + scale * raw.to(base.dtype) * self.scaling

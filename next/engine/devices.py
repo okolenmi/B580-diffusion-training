@@ -49,6 +49,18 @@ class Accelerator:
         if self.module is not None and hasattr(self.module, "reset_peak_memory_stats"):
             self.module.reset_peak_memory_stats()
 
+    def cap_allocator(self, mb: float) -> bool:
+        """Limit what the caching allocator may hold to ``mb``. At the limit it gives back its free blocks before it
+        fails, which is what keeps cached memory from starving the driver's own allocations. False when unsupported."""
+        if self.module is None or not hasattr(self.module, "set_per_process_memory_fraction") or not hasattr(self.module, "mem_get_info"):
+            return False
+        try:
+            total = self.module.mem_get_info()[1] / 2**20
+            self.module.set_per_process_memory_fraction(min(max(mb / total, 0.01), 1.0))
+        except Exception:  # noqa: BLE001 - a build that cannot cap simply runs uncapped
+            return False
+        return True
+
     def memory(self) -> dict[str, float]:
         """Megabytes: peak live tensors, peak and current memory held by the allocator, live tensors, and what the driver reports in use.
 

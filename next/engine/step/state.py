@@ -30,3 +30,4 @@ class StepState:
     loss: Tensor | None = None
     per_sample: Tensor | None = None
     timing_ms: dict[str, float] = field(default_factory=dict)
+    phase: str = ""  # the phase running (or that failed)

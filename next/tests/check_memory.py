@@ -11,7 +11,9 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager
+import torch
+
+from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager, is_out_of_memory
 from ..engine.runtime.encoders import OnDemandKit
 from ..engine.runtime.residents import DeviceResident, ModulesResident
 from .check_engine import rig
@@ -24,6 +26,7 @@ class FakeDevice:
     def __init__(self, total=12000.0, foreign=600.0, ours=0.0):
         self.total, self.foreign, self.ours, self.cache_emptied = total, foreign, ours, 0
         self.slack = self.spike = 0.0  # allocator cache beyond live tensors; activation peak above live tensors
+        self.caps: list[float] = []
 
     def memory(self):
         return {"device_total": self.total, "device_used": self.foreign + self.ours + self.slack, "reserved": self.ours + self.slack,
@@ -37,6 +40,10 @@ class FakeDevice:
 
     def synchronize(self):
         pass
+
+    def cap_allocator(self, mb):
+        self.caps.append(mb)
+        return True
 
 
 class Blob(DeviceResident):
@@ -166,6 +173,62 @@ def cached_blocks_are_not_pressure():
     check(device.cache_emptied == 0, "a card with little cached is left alone")
 
 
+def allocator_cap():
+    device = FakeDevice(ours=5000, foreign=1200)
+    m = manager(device, calibration_steps=2)
+    m.start()
+    check(device.caps == [12000 - 1200 - m.OUTSIDE_HEADROOM_MB], f"the allocator is capped below the card by what lives outside it plus headroom ({device.caps})")
+    device.foreign = 1500  # less than guessed: the cap relaxes at calibration
+    m.after_step(0)
+    m.after_step(1)
+    check(device.caps[-1] == 12000 - 1500 - m.OUTSIDE_SLACK_MB, f"after calibration the cap is set from what was measured ({device.caps})")
+    device.foreign = 2400
+    m.after_step(2)
+    check(device.caps[-1] == 12000 - 2400 - m.OUTSIDE_SLACK_MB, "it follows the outside share down when new shapes need more")
+    device.foreign = 2000
+    before = len(device.caps)
+    m.after_step(3)
+    check(len(device.caps) == before, "and does not loosen again")
+    m.recover(3, RuntimeError("out of memory"))
+    check(device.caps[-1] == 12000 - 2400 - 2 * m.OUTSIDE_SLACK_MB and m.trace[-1]["event"] == "allocator_cap"
+          and any(t["event"] == "out_of_memory" for t in m.trace), "after an out-of-memory error the driver is given more room")
+    check(is_out_of_memory(RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES")) and is_out_of_memory(RuntimeError("XPU out of memory. Tried"))
+          and not is_out_of_memory(RuntimeError("shape mismatch")), "driver refusals count as out of memory, other errors do not")
+
+
+def out_of_memory_retry():
+    def run_with(fail_on_call=None, error=RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES"), **extra):
+        with tempfile.TemporaryDirectory() as raw:
+            device = FakeDevice(ours=5000)
+            m = manager(device, limit_mb=11000)
+            m.start()
+            trainer, adapted, denoiser, _, events, _ = rig(Path(raw), steps=2, accumulation=2, residency=m, **extra)
+            calls = [0]
+            original = denoiser.predict
+
+            def predict(*args):
+                calls[0] += 1
+                if calls[0] == fail_on_call:
+                    raise error
+                return original(*args)
+
+            denoiser.predict = predict
+            try:
+                trainer.run()
+                failure = None
+            except Exception as caught:  # noqa: BLE001
+                failure = caught
+            return [p.detach().clone() for p in adapted.trainable_parameters()], calls[0], m, failure, len(events)
+
+    clean, calls, _, _, _ = run_with()
+    again, calls_again, m, failure, steps = run_with(fail_on_call=2)
+    check(failure is None and steps == 2 and calls_again == calls + 2 and all(torch.equal(a, b) for a, b in zip(clean, again)),
+          "a window that runs out of memory is run again on the same batches and ends exactly where an undisturbed run does")
+    check(any(t["event"] == "out_of_memory" for t in m.trace) and m.accelerator.cache_emptied >= 1, "the manager is told, with the memory by source")
+    _, _, _, failure, _ = run_with(fail_on_call=1, error=RuntimeError("shape mismatch"))
+    check(isinstance(failure, RuntimeError) and "shape mismatch" in str(failure), "other errors are not retried")
+
+
 def breakdown():
     device = FakeDevice(ours=8000)
     device.slack, device.spike = 700.0, 1500.0
@@ -273,4 +336,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, breakdown, on_demand_encoders, sampling, xpu_environment, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, allocator_cap, out_of_memory_retry, breakdown, on_demand_encoders, sampling, xpu_environment, training)

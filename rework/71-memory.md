@@ -15,6 +15,9 @@ predicts out-of-memory; the allocator's own peak understates it.
 | Activation checkpointing: residual blocks always, transformer blocks by `attention_fraction` | recompute of the chosen blocks | `engine/runtime/checkpointing.py` |
 | Fused optimizer (no gradient pile-up), grouped updates, int8 optimizer state | small | `engine/optim` |
 | Allocator cache emptied after any offload, and whenever cached blocks push the card past the ceiling (the driver's own allocations for a new shape cannot make the allocator release them) | one synchronise, only when needed | `ResidencyManager` |
+| Allocator capped at the limit minus what the driver holds outside it (measured, plus headroom for a new shape's kernels); at the cap the allocator gives back its free blocks before failing. The old `apply_allocator_backstop` did the same | none | `ResidencyManager._cap`, `Accelerator.cap_allocator` |
+| A step that runs out of memory is run again once on the same batches after cache and garbage are released, while no update has been applied; the cap then leaves more room for the driver | one repeated step | `Trainer._step`, `ResidencyManager.recover` |
+| LoRA's small factor takes the scale, not the full-size branch output | one full-size multiply per layer | `adapters/layers.py` |
 | Pressure levers between steps: cache every step, then park residents (offload after the step, reload before the next) | one transfer per parked resident per step | `ResidencyManager` |
 
 ## Open (port or build when measurement says it pays)

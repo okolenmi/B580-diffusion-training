@@ -79,6 +79,16 @@ class ResidencyManager:
         stats = self.accelerator.memory()
         return stats.get("device_used")
 
+    @staticmethod
+    def need_mb(stats: Mapping[str, float]) -> float | None:
+        """What the step needs that cannot be given back: its peak live tensors plus what the driver holds outside the
+        allocator. Free blocks the allocator keeps are left out because it releases them when an allocation would fail."""
+        if "device_used" not in stats:
+            return None
+        if "peak_allocated" not in stats or "reserved" not in stats:
+            return stats["device_used"]
+        return stats["peak_allocated"] + max(stats["device_used"] - stats["reserved"], 0.0)
+
     def start(self) -> None:
         """Settle the limit. Refuses early when the card cannot give what was asked for.
 
@@ -155,11 +165,12 @@ class ResidencyManager:
         stats = self.accelerator.memory()
         used = self.last_used_mb = stats.get("device_used")
         self.last_stats = stats
+        need = self.need_mb(stats)
         if used is not None:
             if self.steps_seen == 1 or used > self.peak_used_mb * 1.01:
-                self._note("breakdown", step=step + 1, used_mb=round(used), parts=self.breakdown(stats))
+                self._note("breakdown", step=step + 1, used_mb=round(used), need_mb=round(need), parts=self.breakdown(stats))
             self.peak_used_mb = max(self.peak_used_mb, used)
-            self._react(step, used)
+            self._react(step, need)
         moved = False
         for entry in self._entries.values():
             if entry.parked and not entry.away:
@@ -171,10 +182,11 @@ class ResidencyManager:
             self.accelerator.empty_cache()
 
     def _react(self, step: int, used: float) -> None:
+        """``used`` is the step's need (see ``need_mb``)."""
         if self.limit_mb is None:
             return
         if used > self.limit_mb and self.policy.strict:
-            raise MemoryBudgetExceeded(f"step {step + 1}: {used:.0f} MB in use is over the {self.limit_mb:.0f} MB budget "
+            raise MemoryBudgetExceeded(f"step {step + 1}: {used:.0f} MB needed is over the {self.limit_mb:.0f} MB budget "
                                        f"(residents {self.summary()})")
         if used <= self.ceiling_mb or self.steps_seen > self.policy.calibration_steps:
             if used > self.ceiling_mb and used > self._pressure_noted:

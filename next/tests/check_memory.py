@@ -149,11 +149,23 @@ def footprints():
     check(module_bytes(Frozen()) == 0, "on the host nothing counts as on the device")
 
 
+def cached_blocks_are_not_pressure():
+    device = FakeDevice(ours=8000)
+    device.slack, device.spike = 2800.0, 1000.0  # 11400 MB in the driver's view, of which 2800 is reclaimable cache
+    opt = Blob(device, 600)
+    m = manager(device, safety_margin=0.1)
+    m.register("optimizer", opt)
+    m.start()
+    m.after_step(0)
+    check(m.need_mb(device.memory()) == 9600 + 0 and not [t for t in m.trace if t["event"] in ("pressure", "lever")] and opt.on_device,
+          "a card that looks full only because the allocator keeps free blocks is not under pressure")
+
+
 def breakdown():
     device = FakeDevice(ours=8000)
     device.slack, device.spike = 700.0, 1500.0
     model, opt = Blob(device, 5000), Blob(device, 600)
-    m = manager(device, limit_mb=11000)
+    m = manager(device, limit_mb=12000)
     m.register("model", model, rank=10, pinned=True)
     m.register("optimizer", opt, rank=1)
     m.start()
@@ -256,4 +268,4 @@ def training():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, breakdown, on_demand_encoders, sampling, xpu_environment, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, breakdown, on_demand_encoders, sampling, xpu_environment, training)

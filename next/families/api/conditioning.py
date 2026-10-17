@@ -29,6 +29,12 @@ class ConditioningKit(Protocol):
     def encode_text(self, prompts: Sequence[str]) -> list[Any]:
         """The size-independent encodings worth caching; each has ``to(device, dtype)`` and ``nbytes()``."""
 
+    def dump_text(self, text: Any) -> dict[str, Any]:
+        """The tensors of a cached text encoding, by name, for a disk store."""
+
+    def load_text(self, tensors: dict[str, Any]) -> Any:
+        """The text encoding ``dump_text`` made these tensors from."""
+
     def assemble(self, text: Any, size: Any = None) -> Conditioning:
         """One conditioning from a cached text encoding and the image size it is for."""
 

@@ -56,6 +56,12 @@ class FakeKit:
             out.append(TextEncoding(torch.randn(1, 5, 48, generator=g), torch.randn(1, 40, generator=g)))
         return out
 
+    def dump_text(self, text):
+        return {"ctx": text.ctx, "pooled": text.pooled}
+
+    def load_text(self, tensors):
+        return TextEncoding(tensors["ctx"], tensors["pooled"])
+
     def assemble(self, text, size=None):
         return SDXLConditioning(text.ctx, text.pooled)
 

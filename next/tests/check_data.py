@@ -204,5 +204,43 @@ class LatentSpecLike:
         self.channels = channels
 
 
+def prompt_lifetimes_and_store() -> None:
+    """Prompts say how long they are worth keeping; only stable ones reach the disk store, and a second run reads them."""
+    from ..data.conditioning_cache import ConditioningCache
+    from ..data.conditioning_store import ConditioningStore
+    from ..data.prompts import CaptionDropout, Lifetime, Prompt, PromptTable, TagShuffle, lifetime_of
+    from .check_engine import FakeKit
+
+    tmp = Path(tempfile.mkdtemp())
+    base = {"a": "red, round, small", "b": "blue, square, big", "c": "green, flat, wide"}
+    plain = PromptTable(base)
+    plain.set_epoch(0)
+    check(all(lifetime_of(t) is Lifetime.STABLE for t in plain.snapshot()[1].values()), "base captions are stable")
+    shuffled = PromptTable(base, (TagShuffle(),), seed=3)
+    shuffled.set_epoch(0)
+    kinds = {t: lifetime_of(t) for t in shuffled.snapshot()[1].values()}
+    check(any(k is Lifetime.FLEETING for k in kinds.values()) and all(isinstance(t, str) for t in kinds),
+          "a shuffled caption is fleeting, and still an ordinary string")
+    drop = PromptTable(base, (CaptionDropout(p=1.0, mode="empty"),))
+    drop.set_epoch(0)
+    check(all(lifetime_of(t) is Lifetime.STABLE for t in drop.snapshot()[1].values()), "dropout draws from a few results and stays stable")
+    check(lifetime_of("plain str") is Lifetime.STABLE and Prompt("x", Lifetime.FLEETING) == "x", "a plain str counts as stable and a Prompt equals its text")
+
+    kit = FakeKit()
+    store = ConditioningStore(tmp / "cond", "ident", kit)
+    first = ConditioningCache(kit, store=store)
+    prompts = [Prompt("keep me"), Prompt("let go", Lifetime.FLEETING)]
+    check(first.warm(prompts) == 2 and len(store) == 1, "only the stable prompt is written to disk")
+    second = ConditioningCache(kit, store=ConditioningStore(tmp / "cond", "ident", kit))
+    check(second.warm(prompts) == 1 and second.loaded == 1, "a later run reads the stable prompt and encodes only the fleeting one")
+    a, b = first.get(["keep me"]), second.get(["keep me"])
+    check(torch.equal(a.ctx, b.ctx) and torch.equal(a.y, b.y), "what comes back from disk is what was stored")
+    other = ConditioningCache(kit, store=ConditioningStore(tmp / "cond", "other-encoder", kit))
+    check(other.warm(prompts) == 2, "another encoder identity never reads these entries")
+    small = ConditioningStore(tmp / "small", "ident", kit, max_bytes=1)
+    ConditioningCache(kit, store=small).warm(prompts)
+    check(small.full and len(small) == 0, "a full store stops writing and says so; the run continues from memory")
+
+
 if __name__ == "__main__":
-    run(main)
+    run(main, prompt_lifetimes_and_store)

@@ -189,6 +189,12 @@ class SDXLConditioningKit:
     def blank(self, size=None) -> SDXLConditioning:
         return self.encode([""], [size])[0]
 
+    def dump_text(self, text: TextEncoding) -> dict[str, Tensor]:
+        return {"ctx": text.ctx, "pooled": text.pooled}
+
+    def load_text(self, tensors: dict[str, Tensor]) -> TextEncoding:
+        return TextEncoding(tensors["ctx"], tensors["pooled"])
+
     def bytes_per_prompt(self, sections: int = 1) -> int:
         itemsize = torch.empty((), dtype=self.encoder.out_dtype).element_size()
         return 77 * sections * (L_WIDTH + G_WIDTH) * itemsize + (G_WIDTH + 6 * SIZE_WIDTH) * 4

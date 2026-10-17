@@ -324,6 +324,9 @@ def on_demand_encoders():
         kit.encode_text(["a"])
         kit.encode_text(["b"])
     check(enc.moves == ["xpu", "cpu", "xpu", "cpu"], "one session is one round trip however many encodes it holds")
+    with kit.session():
+        pass
+    check(enc.moves == ["xpu", "cpu", "xpu", "cpu"], "a session that encodes nothing never loads the encoders")
     kit.hold = True
     kit.encode_text(["c"])
     kit.encode_text(["d"])

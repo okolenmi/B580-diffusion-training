@@ -3,6 +3,9 @@
 The cache holds conditionings on the CPU (the text encoders can then leave the device) and is bounded
 by bytes. ``warm`` encodes only what is missing, in batches; ``retain`` drops entries whose prompt no
 longer occurs, which is what a ``PromptsChanged`` event asks for.
+
+With a ``store``, encodings of STABLE prompts are read from disk when present and written after being computed;
+FLEETING prompts (see ``prompts.Lifetime``) live in memory only, for as long as their epoch needs them.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from collections import OrderedDict
 from typing import Any, Callable, Iterable, Sequence
 
 from ..families.api.conditioning import Conditioning, ConditioningKit
+from .conditioning_store import ConditioningStore
+from .prompts import Lifetime, lifetime_of
 
 Size = tuple[int, int]
 
@@ -18,8 +23,10 @@ Size = tuple[int, int]
 class ConditioningCache:
     """Caches the kit's size-independent text encodings; the per-image size is joined in when a batch asks."""
 
-    def __init__(self, kit: ConditioningKit, *, max_bytes: int = 4 << 30, batch_size: int = 16):
-        self.kit, self.max_bytes, self.batch_size = kit, max_bytes, batch_size
+    def __init__(self, kit: ConditioningKit, *, max_bytes: int = 4 << 30, batch_size: int = 16,
+                 store: ConditioningStore | None = None):
+        self.kit, self.max_bytes, self.batch_size, self.store = kit, max_bytes, batch_size, store
+        self.loaded = 0  # entries read from the store instead of encoded
         self._items: "OrderedDict[Any, tuple[str, Any]]" = OrderedDict()
         self._bytes = 0
 
@@ -35,12 +42,25 @@ class ConditioningCache:
         return prompts * self.kit.bytes_per_prompt() <= self.max_bytes
 
     def warm(self, prompts: Iterable[str], progress: Callable[[int, int], None] | None = None) -> int:
-        """Encode every prompt not yet cached; returns how many were encoded."""
+        """Make every prompt available; returns how many had to be encoded (the rest came from memory or the store)."""
         todo = [p for p in dict.fromkeys(prompts) if self.kit.cache_key(p) not in self._items]
+        if self.store is not None:
+            missing = []
+            for prompt in todo:
+                text = self.store.get(prompt) if lifetime_of(prompt) is Lifetime.STABLE else None
+                if text is None:
+                    missing.append(prompt)
+                else:
+                    self._put(self.kit.cache_key(prompt), prompt, text)
+                    self.loaded += 1
+            todo = missing
         for start in range(0, len(todo), self.batch_size):
             chunk = todo[start:start + self.batch_size]
-            for prompt, text in zip(chunk, self.kit.encode_text(chunk)):
-                self._put(self.kit.cache_key(prompt), prompt, text.to("cpu"))
+            encoded = [t.to("cpu") for t in self.kit.encode_text(chunk)]
+            for prompt, text in zip(chunk, encoded):
+                self._put(self.kit.cache_key(prompt), prompt, text)
+            if self.store is not None:
+                self.store.put_many([(p, t) for p, t in zip(chunk, encoded) if lifetime_of(p) is Lifetime.STABLE])
             if progress:
                 progress(min(start + self.batch_size, len(todo)), len(todo))
         return len(todo)

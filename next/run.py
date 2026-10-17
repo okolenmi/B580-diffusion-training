@@ -165,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--fused", action="store_true")
             p.add_argument("--save-every", type=int, default=250)
             p.add_argument("--no-checkpointing", action="store_true")
+            p.add_argument("--persist-conditioning", action="store_true",
+                           help="keep text encodings of stable prompts on disk next to the dataset's latents")
             p.add_argument("--dump", help="write the graph here instead of running it")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -182,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-                                 checkpointing=not args.no_checkpointing, settings=_settings(args.set))
+                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning,
+                                 settings=_settings(args.set))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")
             return 0

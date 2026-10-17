@@ -44,3 +44,17 @@ primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
 * "1024" means the **short side** is 1024 px. The long side keeps the aspect ratio, up to `max_aspect` times the base
   (2048 by default) and longer images are split into several crops. A 2:3 photo is therefore 1024x1536, about 1.5 times
   the pixels of a square 1024, and its activations are larger by the same factor. Lower the base to lower memory.
+
+## What is kept between runs, and what is not
+
+| Kept | Where | Condition |
+|---|---|---|
+| Latents of the images | dataset folder, keyed by VAE and size policy | always |
+| Text encodings of *stable* prompts (`Lifetime.STABLE`: captions of the set, dropout results) | dataset folder, `conditioning/`, one file per encoder identity | optional (`persist`), bounded by `max_disk_mb`; stops writing when full |
+
+Prompts carry their lifetime (`data.prompts.Prompt` is a `str` with a `lifetime`): a stage that draws from a large space
+(`TagShuffle`, `TagSwap`, `CaptionPool`) makes the prompts it changes FLEETING, and those never reach the disk, though
+they live in memory for the epoch. A route that generates prompts of its own (a classifier, a blend) hands out
+`Prompt(text, Lifetime.FLEETING)`. Not kept: noise and timesteps (they are the randomness), activations (every update
+changes them), kernel compilations (oneDNN does not persist them; the SYCL disk cache measured 2%), converted model files
+(disk to disk).

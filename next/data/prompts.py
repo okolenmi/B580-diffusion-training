@@ -13,11 +13,35 @@ import random
 import re
 from collections import Counter
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, Mapping, Protocol
 
 from ..graph.events import PromptsChanged
 from .ids import image_of
 from .library import split_tags
+
+
+class Lifetime(Enum):
+    """How long a prompt's text is likely to be worth remembering."""
+
+    STABLE = "stable"      # a caption of the set, or one of very few variants: worth keeping across runs
+    FLEETING = "fleeting"  # one draw from a large space (shuffles, pools): unlikely to come back
+
+
+class Prompt(str):
+    """Prompt text that says how long it is worth remembering. It is a ``str`` everywhere else, so every
+    consumer that ignores lifetimes keeps working; a plain ``str`` counts as stable."""
+
+    lifetime: Lifetime
+
+    def __new__(cls, text: str, lifetime: Lifetime = Lifetime.STABLE) -> "Prompt":
+        obj = super().__new__(cls, text)
+        obj.lifetime = lifetime
+        return obj
+
+
+def lifetime_of(prompt: str) -> Lifetime:
+    return getattr(prompt, "lifetime", Lifetime.STABLE)
 
 
 @dataclass(frozen=True)
@@ -31,6 +55,9 @@ class Context:
 
 
 class Stage(Protocol):
+    lifetime: Lifetime
+    """FLEETING when the stage's outputs come from a space too large to repeat, STABLE when they come from a few."""
+
     def apply(self, text: str, ctx: Context) -> str: ...
 
 
@@ -47,6 +74,7 @@ class CaptionPool:
     mode: str = "captions"
     include_own: bool = True
     dividers: str = ".,"
+    lifetime = Lifetime.FLEETING
 
     def __post_init__(self) -> None:
         if self.mode not in ("captions", "parts"):
@@ -80,6 +108,7 @@ class CaptionDropout:
 
     p: float = 0.1
     mode: str = "substitute"
+    lifetime = Lifetime.STABLE  # the result is the caption itself, another caption of the set, or nothing
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.p <= 1.0:
@@ -104,6 +133,7 @@ class TagSwap:
 
     mode: str = "random"
     keep_first: int = 0
+    lifetime = Lifetime.FLEETING  # one variant per tag of every caption: the set of variants is large
 
     def __post_init__(self) -> None:
         if self.mode not in ("random", "walk"):
@@ -126,6 +156,7 @@ class TagShuffle:
 
     keep_first: int = 0
     drop: float = 0.0
+    lifetime = Lifetime.FLEETING
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.drop < 1.0:
@@ -168,12 +199,14 @@ class PromptTable:
     def __len__(self) -> int:
         return len(self._base)
 
-    def _compute(self, image_id: str, epoch: int) -> str:
-        text = self._base.get(image_id, "")
+    def _compute(self, image_id: str, epoch: int) -> Prompt:
+        text, fleeting = self._base.get(image_id, ""), False
         for position, stage in enumerate(self.stages):
             rng = random.Random(f"{self.seed}:{position}:{epoch}:{image_id}")
-            text = stage.apply(text, Context(image_id, epoch, rng, self._distinct))
-        return text
+            changed = stage.apply(text, Context(image_id, epoch, rng, self._distinct))
+            fleeting = fleeting or (changed != text and getattr(stage, "lifetime", Lifetime.STABLE) is Lifetime.FLEETING)
+            text = changed
+        return Prompt(text, Lifetime.FLEETING if fleeting else Lifetime.STABLE)
 
     def set_epoch(self, epoch: int) -> int:
         """Recompute every prompt for ``epoch``; returns how many differ from the previous epoch's."""

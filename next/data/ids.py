@@ -44,14 +44,20 @@ def vae_identity(header: HeaderIndex, prefix: str, spec: Any, probes: int = 3) -
     ``probes`` tensors spread over the sorted key list are hashed too. The file is read only for
     those tensors.
     """
+    return weights_identity(header, prefix, spec_fields(spec), probes)
+
+
+def weights_identity(header: HeaderIndex, prefix: str, spec: Any, probes: int = 3) -> str:
+    """Hash of the layout under ``prefix``, a few of its weights, and ``spec`` (anything JSON-able that changes the
+    meaning of what is computed from them)."""
     import torch
     from safetensors import safe_open
 
     keys = sorted(k for k in header.entries if k.startswith(prefix))
     if not keys:
-        raise ValueError(f"no tensors under prefix {prefix!r}: not a VAE of this file")
+        raise ValueError(f"no tensors under prefix {prefix!r} in this file")
     layout = [(k[len(prefix):], list(header.entries[k].shape), header.entries[k].dtype) for k in keys]
-    digest = hashlib.sha256(json.dumps({"layout": layout, "spec": spec_fields(spec)}, sort_keys=True).encode())
+    digest = hashlib.sha256(json.dumps({"layout": layout, "spec": spec}, sort_keys=True).encode())
     picks = sorted({keys[i * (len(keys) - 1) // max(probes - 1, 1)] for i in range(probes)})
     with safe_open(header.path, framework="pt") as handle:
         for key in picks:

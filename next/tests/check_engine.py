@@ -178,5 +178,43 @@ def main() -> None:
     check(opt.footprint_bytes() == held, "reloaded state steps again with the same footprint")
 
 
+def time_balance():
+    from ..engine.step.balance import TimeBalance
+
+    def feed(balance, reports):
+        for low, mid, high in reports:
+            balance.observe({"loss_t_low": low, "loss_t_mid": mid, "loss_t_high": high})
+        return balance
+
+    off = feed(TimeBalance("off", warmup_reports=2), [(0.2, 0.1, 0.05)] * 3)
+    check(off.weights_for(torch.rand(4)) is None and off.third_probabilities() is None, "mode off only tracks: no weights, no sampling bias")
+    norm = feed(TimeBalance("normalize", warmup_reports=2), [(0.2, 0.1, 0.05)] * 3)
+    w = norm.weights
+    check(abs(sum(w.values()) / 3 - 1) < 1e-6 and w["loss_t_high"] > w["loss_t_mid"] > w["loss_t_low"],
+          "normalize gives the third with the smallest loss the largest weight, with mean 1")
+    early = feed(TimeBalance("normalize", warmup_reports=5), [(0.2, 0.1, 0.05)] * 3)
+    check(early.weights_for(torch.rand(4)) is None, "nothing is weighted before a third has a baseline")
+    speed = feed(TimeBalance("speed", warmup_reports=2, eta=1.0), [(0.2, 0.1, 0.1)] * 2 + [(0.2, 0.1, 0.05)] * 6)
+    check(speed.weights["loss_t_low"] > speed.weights["loss_t_high"], "speed gives weight to the third that descends slower than the rest")
+    dro = feed(TimeBalance("dro", warmup_reports=2, dro_lambda=5.0), [(0.2, 0.1, 0.1)] * 2 + [(0.4, 0.1, 0.1)] * 80)
+    check(max(dro.weights, key=dro.weights.get) == "loss_t_low", "dro puts the weight on the third furthest above its baseline")
+    frac = torch.tensor([0.1, 0.5, 0.9, 1.0])
+    check(torch.allclose(norm.weights_for(frac), torch.tensor([w["loss_t_low"], w["loss_t_mid"], w["loss_t_high"], w["loss_t_high"]])),
+          "each sample takes the weight of the third its timestep falls in")
+    biased = feed(TimeBalance("off", warmup_reports=2, sample_bias=1.0), [(0.2, 0.1, 0.1)] * 2 + [(0.4, 0.1, 0.1)] * 80)
+    probs = biased.third_probabilities()
+    check(probs is not None and abs(sum(probs) - 1) < 1e-9 and probs[0] > probs[1] == probs[2], "sampling leans towards the third that is behind")
+    noiser = Noiser(SDXLObjective(), balance=biased)
+    drawn = noiser(torch.zeros(4000, 4, 4, 4), torch.Generator().manual_seed(1))["t_frac"]
+    share = [(drawn < 1 / 3).float().mean().item(), ((drawn >= 1 / 3) & (drawn < 2 / 3)).float().mean().item()]
+    check(abs(share[0] - probs[0]) < 0.04 and abs(share[1] - probs[1]) < 0.04, f"the Noiser draws thirds with those chances ({share})")
+    with tempfile.TemporaryDirectory() as raw:
+        balance = TimeBalance("speed", warmup_reports=1)
+        trainer, *_, events, _ = rig(Path(raw), steps=3, balance=balance)
+        trainer.run()
+        keys = {k for e in events for k in e.metrics}
+        check(any(k.startswith("weight_t_") for k in keys), "a run with a balance reports the weights it applied")
+
+
 if __name__ == "__main__":
-    run(main)
+    run(main, time_balance)

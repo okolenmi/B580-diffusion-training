@@ -10,6 +10,7 @@ from ...engine.devices import Accelerator
 from ...engine.handles import TrainableDenoiser
 from ...engine.optim.handle import Optimizer
 from ...engine.runtime.density import CheckpointDensity
+from ...engine.step.balance import TimeBalance
 from ...engine.step.loss import LossWeighting
 from ...engine.step.schedule import LRSchedule
 from ...engine.step.trainer import Trainer
@@ -29,6 +30,7 @@ class DiffusionTrainerNode(Node):
         "optimizer": Port("optimizer", Optimizer),
         "schedule": Port("schedule", LRSchedule),
         "weighting": Port("weighting", LossWeighting),
+        "balance": Port("balance", TimeBalance, required=False, doc="Weights the loss by how each third of the timestep range is doing."),
         "steps": Port("steps", int, required=False, default=1000, minimum=1, group="loop", doc="Optimizer steps."),
         "accumulation": Port("accumulation", int, required=False, default=1, minimum=1, group="loop",
                              doc="Batches per optimizer step; their gradients average."),
@@ -65,7 +67,7 @@ class DiffusionTrainerNode(Node):
                           steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, density=density, task=self.context.task)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, density=density, balance=inputs.get("balance"), task=self.context.task)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

@@ -28,7 +28,7 @@ class _Builder:
 def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", resolution: int = 1024, batch_size: int = 1,
               accumulation: int = 1, steps: int = 1000, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
-              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0,
+              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, time_balance: str = "off", balance_sampling: float = 0.0,
               settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
@@ -65,6 +65,9 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
                 ("adapter", "model", "saver", "model")]
     b.events += [("batcher", "prompts_changed", "conditioner", "prompts_changed"), ("trainer", "step_finished", "trigger", "step"),
                  ("trigger", "due", "saver", "checkpoint"), ("trainer", "ended", "saver", "checkpoint")]
+    if time_balance != "off" or balance_sampling > 0:
+        b.add("balance", "TimeBalanceNode", mode=time_balance, sample_bias=balance_sampling)
+        b.wires += [("balance", "balance", "trainer", "balance"), ("balance", "balance", "noiser", "balance")]
     for node, params in (overrides or {}).items():
         next(p for n, _, p in b.nodes if n == node).update(params)
     return b.doc(settings or {})

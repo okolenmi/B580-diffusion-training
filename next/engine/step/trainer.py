@@ -46,17 +46,18 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None, density=None, task: Callable[[str], ContextManager] | None = None):
+                 timed: bool = False, residency=None, density=None, balance=None, task: Callable[[str], ContextManager] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
+        self._balance = balance
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
         self._task = task or (lambda title: contextlib.nullcontext())
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
         self._fetch = FetchBatch(batches)
-        phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), Forward(denoiser), Loss(weighting),
+        phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), Forward(denoiser), Loss(weighting, balance),
                   Backward(accumulation)]
         fetch = self._fetch
         if timed:
@@ -143,6 +144,9 @@ class Trainer:
         for name in {n for t in thirds for n in t}:
             values = [t[name] for t in thirds if name in t]
             metrics[name] = sum(values) / len(values)
+        if self._balance is not None:
+            self._balance.observe(metrics)
+            metrics.update({name.replace("loss_t_", "weight_t_"): w for name, w in self._balance.weights.items()})
         if self.emit is not None:
             self.emit(StepFinished(step + 1, self.steps, metrics))
         return loss

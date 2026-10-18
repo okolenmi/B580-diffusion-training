@@ -116,8 +116,8 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/primitive/values.py` | 72 | 8 | next/nodes/primitive/ | ? | todo |
 | `nodes/quantization.py` | 57 | 56 | next/ (triage) | ? | todo |
 | `nodes/resource_budget.py` | 44 | 75 | next/ (triage) | ? | todo |
-| `nodes/train/bucket_balance.py` | 456 | 36 | next/data/ + nodes/data/ | ? | todo |
-| `nodes/train/bucket_sizes.py` | 132 | 56 | next/data/ + nodes/data/ | ? | todo |
+| `nodes/train/bucket_balance.py` | 456 | 36 | next/engine/step/balance.py + nodes/train/weighting.py (Time Balance) | rewrite | done (thirds of the timestep range as `loss_t_*`; modes off/normalize/speed/dro; sampling bias read by the Noiser) |
+| `nodes/train/bucket_sizes.py` | 132 | 56 | next/data/batcher.py (`sizes_px`) | rewrite | done (the batch carries each sample's true size, so conditioning describes the real extent) |
 | `nodes/train/cache_thrash.py` | 194 | 36 | next/engine/ or nodes/train/ (triage) | ? | todo |
 | `nodes/train/conditioning_blend.py` | 160 | 38 | next/nodes/conditioning/ | ? | todo |
 | `nodes/train/loss.py` | 208 | 28 | next/engine/step/loss.py + nodes/train/weighting.py | rewrite | done |

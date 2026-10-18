@@ -7,6 +7,7 @@ from typing import Any
 from ...data.batcher import Batcher
 from ...data.bucketing import BucketPolicy, padding_stats
 from ...data.noise import Noiser, TimestepPolicy
+from ...engine.step.balance import TimeBalance
 from ...families.api.parts import DenoiserPart
 from ...families.registry import get_family
 from ...graph import EventOut, Group, Node, Port
@@ -61,6 +62,7 @@ class NoiserNode(Node):
                      choices=("uniform", "low", "mid", "high", "logit")),
         "low": Port("low", float, required=False, default=None, group="timesteps", doc="Smallest timestep; empty = objective's."),
         "high": Port("high", float, required=False, default=None, group="timesteps", doc="Largest timestep; empty = objective's."),
+        "balance": Port("balance", TimeBalance, required=False, doc="Steers the draw towards the thirds of the range that are behind."),
         "values": Port("values", str, required=False, default="", group="timesteps", advanced=True,
                        doc="Comma-separated timesteps to choose from instead of a distribution."),
     }
@@ -72,7 +74,7 @@ class NoiserNode(Node):
         objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values)
-        return {"noiser": Noiser(objective, policy)}
+        return {"noiser": Noiser(objective, policy, inputs.get("balance"))}
 
 
 class BatcherNode(Node):

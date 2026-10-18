@@ -86,7 +86,9 @@ class Console:
         where = f"  [{shape[0]}x{shape[1]}x{shape[2]}{' new' if fresh else ''}]" if None not in shape else ""
         memory = f"  device {m['device_mb']:.0f} MB (live {m['live_mb']:.0f}, step peak {m['step_peak_mb']:.0f}, cached {m['reserved_mb']:.0f})" \
             if "device_mb" in m else ""
-        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{where}{memory}", flush=True)
+        weights = "  weights " + "/".join(f"{m[k]:.2f}" for k in ("weight_t_low", "weight_t_mid", "weight_t_high") if k in m) \
+            if "weight_t_low" in m or "weight_t_mid" in m or "weight_t_high" in m else ""
+        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{where}{weights}{memory}", flush=True)
 
     @staticmethod
     def _memory(frame: dict) -> None:
@@ -223,6 +225,10 @@ def main(argv: list[str] | None = None) -> int:
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--batch-area", type=float, default=0.0,
                            help="samples above this many times the base resolution's area (e.g. 1.5) run one at a time instead of in a full batch; 0 = no limit")
+            p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro"),
+                           help="weight the loss by how each third of the timestep range is improving")
+            p.add_argument("--balance-sampling", type=float, default=0.0,
+                           help="draw timesteps more often from the thirds that are behind (power of loss/baseline; needs tracking, 1 is a start)")
             p.add_argument("--dump", help="write the graph here instead of running it")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -241,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
                                  checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area,
+                                 time_balance=args.time_balance, balance_sampling=args.balance_sampling,
                                  settings=_settings(args.set), overrides=_overrides(args.param))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")

@@ -81,13 +81,14 @@ class Forward(StepPhase):
 
 
 class Loss(StepPhase):
-    def __init__(self, weighting: LossWeighting):
-        self._weighting = weighting
+    def __init__(self, weighting: LossWeighting, balance=None):
+        self._weighting, self._balance = weighting, balance
 
     def run(self, state: StepState) -> None:
         i = state.inputs
         state.per_sample = per_sample_mse(state.prediction, i.target, i.mask)
-        state.loss = self._weighting.apply(state.per_sample, i.sigma)
+        extra = None if self._balance is None else self._balance.weights_for(i.t_frac)
+        state.loss = self._weighting.apply(state.per_sample, i.sigma, extra)
 
 
 class Backward(StepPhase):

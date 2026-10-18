@@ -22,7 +22,7 @@ class TimestepPolicy:
 
 
 class Noiser:
-    def __init__(self, objective: Objective, policy: TimestepPolicy = TimestepPolicy()):
+    def __init__(self, objective: Objective, policy: TimestepPolicy = TimestepPolicy(), balance=None):
         if policy.mode not in objective.timestep_modes:
             raise ValueError(f"timestep mode {policy.mode!r} is not offered by this objective; "
                              f"choose from {tuple(objective.timestep_modes)}")
@@ -36,7 +36,7 @@ class Noiser:
         bad = [v for v in policy.values if not low <= v <= high]
         if bad:
             raise ValueError(f"timestep values {bad} lie outside [{low}, {high}]")
-        self.objective, self.policy = objective, policy
+        self.objective, self.policy, self.balance = objective, policy, balance  # balance: steers the draw towards lagging thirds
 
     def __call__(self, x0: Tensor, generator: torch.Generator) -> dict[str, Tensor]:
         """``x_t`` (network input), ``t``, ``target``, ``sigma`` and ``t_frac`` (t as a fraction of the objective's range)."""
@@ -44,6 +44,11 @@ class Noiser:
         if self.policy.values:
             pick = torch.randint(0, len(self.policy.values), (n,), generator=generator)
             t = torch.tensor(self.policy.values)[pick]
+            t = t.round().long() if self._integer else t.float()
+        elif self.balance is not None and (shares := self.balance.third_probabilities()) is not None:
+            third = torch.multinomial(torch.tensor(shares), n, replacement=True, generator=generator)
+            frac = (third + torch.rand(n, generator=generator)) / 3
+            t = self.low + frac * (self.high - self.low)
             t = t.round().long() if self._integer else t.float()
         else:
             t = self.objective.sample_t(n, self.policy.mode, self.low, self.high, generator)

@@ -35,8 +35,10 @@ class LossWeighting(ABC):
     def weight(self, sigma: Tensor) -> Tensor:
         """One weight per sample from its noise level (k-diffusion sigma, so SNR is ``1 / sigma**2``)."""
 
-    def apply(self, per_sample: Tensor, sigma: Tensor) -> Tensor:
-        return (per_sample * self.weight(sigma.float().flatten().to(per_sample.device))).mean()
+    def apply(self, per_sample: Tensor, sigma: Tensor, extra: Tensor | None = None) -> Tensor:
+        """Mean of the weighted losses; ``extra`` is one more per-sample multiplier (the time balance's)."""
+        weighted = per_sample * self.weight(sigma.float().flatten().to(per_sample.device))
+        return (weighted if extra is None else weighted * extra.to(weighted.device)).mean()
 
 
 class Uniform(LossWeighting):

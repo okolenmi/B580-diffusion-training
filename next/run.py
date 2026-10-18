@@ -6,7 +6,7 @@
     python -m next.run graph graph.json --models D:/models --datasets D:/datasets
 
 ``--file`` is relative to ``<models>/checkpoints`` when that folder exists, otherwise to ``--models`` itself.
-``--set key=value`` overrides a graph setting (for example ``--set memory.vram_max_mb=9000``). Memory is printed as
+``--set key=value`` overrides a graph setting (for example ``--set memory.vram_max_mb=9000``); ``--param node.port=value`` sets a node's parameter in the starter graph (``--param adapter.attention_fraction=0.5``). Memory is printed as
 the breakdown the residency manager reports; the lines are the monitor's data. Every finished node prints its duration
 and the card's memory; ``--memory-log run.csv`` also samples memory four times a second against what the run is doing.
 """
@@ -115,6 +115,22 @@ def _environment(args) -> Environment:
     return Environment(services=services)
 
 
+def _overrides(pairs: list[str] | None) -> dict[str, dict]:
+    """``--param node.port=value`` pairs as ``{node: {port: value}}``; values are JSON when they parse, text otherwise."""
+    out: dict[str, dict] = {}
+    for pair in pairs or []:
+        target, _, raw = pair.partition("=")
+        node, _, port = target.partition(".")
+        if not node or not port:
+            raise SystemExit(f"--param wants node.port=value, got {pair!r}")
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = raw
+        out.setdefault(node, {})[port] = value
+    return out
+
+
 def _settings(pairs: list[str] | None) -> dict:
     out = {}
     for pair in pairs or []:
@@ -180,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--models", required=True)
         p.add_argument("--datasets", required=True)
         p.add_argument("--set", action="append", metavar="KEY=VALUE", help="graph setting")
+        p.add_argument("--param", action="append", metavar="NODE.PORT=VALUE",
+                       help="a node's parameter by the node's name in the starter (for example adapter.attention_fraction=0.5)")
         p.add_argument("--verbose", action="store_true")
         p.add_argument("--memory-log", metavar="FILE.csv", help="sample device memory four times a second, labelled by node and step")
         if name == "graph":
@@ -223,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
                                  checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area,
-                                 settings=_settings(args.set))
+                                 settings=_settings(args.set), overrides=_overrides(args.param))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")
             return 0

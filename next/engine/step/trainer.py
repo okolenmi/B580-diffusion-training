@@ -115,7 +115,9 @@ class Trainer:
         loss = float(sum(losses) / len(losses))
         if self.residency is not None:
             self.residency.after_step(step)
-        metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, **timing}
+        height, width = fetched[-1]["x_t"].shape[-2:]
+        metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, "batch": len(fetched[-1]["samples"]),
+                   "latent_h": height, "latent_w": width, **timing}
         if self.residency is not None and self.residency.last_used_mb is not None:
             stats = self.residency.last_stats
             metrics.update(device_mb=self.residency.last_used_mb, live_mb=stats.get("allocated", 0.0),

@@ -38,6 +38,7 @@ class Console:
     def __init__(self, verbose: bool):
         self.verbose = verbose
         self.sampler: MemorySampler | None = None
+        self.shapes_seen: set[tuple] = set()
 
     def report(self, stream: str, frame: dict) -> None:
         if stream == "memory":
@@ -53,12 +54,15 @@ class Console:
         elif stream == "warning" or self.verbose:
             print(f"[{stream}] {json.dumps(frame, default=str)}", flush=True)
 
-    @staticmethod
-    def _step(summary: dict) -> None:
+    def _step(self, summary: dict) -> None:
         m = summary["metrics"]
+        shape = (m.get("batch"), m.get("latent_h"), m.get("latent_w"))
+        fresh = shape not in self.shapes_seen
+        self.shapes_seen.add(shape)
+        where = f"  [{shape[0]}x{shape[1]}x{shape[2]}{' new' if fresh else ''}]" if None not in shape else ""
         memory = f"  device {m['device_mb']:.0f} MB (live {m['live_mb']:.0f}, step peak {m['step_peak_mb']:.0f}, cached {m['reserved_mb']:.0f})" \
             if "device_mb" in m else ""
-        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{memory}", flush=True)
+        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{where}{memory}", flush=True)
 
     @staticmethod
     def _memory(frame: dict) -> None:

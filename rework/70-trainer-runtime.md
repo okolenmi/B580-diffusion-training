@@ -81,6 +81,17 @@ Phases (fixed order), each family-agnostic:
 
 `Completion` (Stop keeps what ran) and cooperative cancel are unchanged.
 
+## 3.1 Diagnostics and balance built on the step
+
+* **Time probe** (`engine/step/probe.py`, Trainer node `probe_every`, `probe_items`, `probe_points`): fixed training samples, noise
+  and timesteps in each third of the range, run with the adapter live and gated to zero (the base model). `probe_rel_t_*` above 1 means
+  the adapter made that third worse than not using it; `probe_drift_t_*` is how far the prediction moved. The record before the first
+  update is the reference. It cannot show quality on other content (the samples are training images).
+* **Time balance** (`engine/step/balance.py`, Time Balance node, wired to the Trainer for loss weights and to the Noiser for
+  sampling): follows the loss of the low, middle and high third of the range against each third's own baseline; modes `normalize`,
+  `speed`, `dro` weight the loss, `sample_bias` draws timesteps more often from the thirds that are behind.
+* **Checkpoint tuning** (Trainer node `tune_checkpointing`): see 71-memory.md.
+
 ## 4. The runtime layer (`ctx.runtime`)
 
 Configured by graph settings (plan 20), not by ports.

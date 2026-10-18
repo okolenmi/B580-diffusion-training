@@ -38,6 +38,11 @@ class Noiser:
             raise ValueError(f"timestep values {bad} lie outside [{low}, {high}]")
         self.objective, self.policy, self.balance = objective, policy, balance  # balance: steers the draw towards lagging thirds
 
+    def t_at(self, fraction: Tensor) -> Tensor:
+        """Timesteps at the given fractions of this noiser's range (rounded when the objective counts in integers)."""
+        t = self.low + fraction * (self.high - self.low)
+        return t.round().long() if self._integer else t.float()
+
     def __call__(self, x0: Tensor, generator: torch.Generator) -> dict[str, Tensor]:
         """``x_t`` (network input), ``t``, ``target``, ``sigma`` and ``t_frac`` (t as a fraction of the objective's range)."""
         n = x0.shape[0]
@@ -47,9 +52,7 @@ class Noiser:
             t = t.round().long() if self._integer else t.float()
         elif self.balance is not None and (shares := self.balance.third_probabilities()) is not None:
             third = torch.multinomial(torch.tensor(shares), n, replacement=True, generator=generator)
-            frac = (third + torch.rand(n, generator=generator)) / 3
-            t = self.low + frac * (self.high - self.low)
-            t = t.round().long() if self._integer else t.float()
+            t = self.t_at((third + torch.rand(n, generator=generator)) / 3)
         else:
             t = self.objective.sample_t(n, self.policy.mode, self.low, self.high, generator)
         noise = torch.randn(x0.shape, generator=generator, dtype=x0.dtype)

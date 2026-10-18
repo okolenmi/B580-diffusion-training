@@ -12,6 +12,7 @@ from ...engine.optim.handle import Optimizer
 from ...engine.runtime.density import CheckpointDensity
 from ...engine.step.balance import TimeBalance
 from ...engine.step.loss import LossWeighting
+from ...engine.step.probe import TimeProbe
 from ...engine.step.schedule import LRSchedule
 from ...engine.step.trainer import Trainer
 from ...graph import Completion, EventIn, EventOut, Group, Node, Port
@@ -39,6 +40,14 @@ class DiffusionTrainerNode(Node):
         "tune_checkpointing": Port("tune_checkpointing", bool, required=False, default=False, group="loop",
                                    doc="Before step 1, measure what the card allows and recompute fewer transformer blocks in backward "
                                        "(faster steps) as long as the largest batch still fits the memory budget."),
+        "probe_every": Port("probe_every", int, required=False, default=0, minimum=0, group="diagnostics",
+                            doc="Every N steps, measure whether the adapter makes any third of the timestep range worse than the "
+                                "frozen model on fixed training samples (probe_rel_t_*: above 1 is worse; 0 = off). Costs a few "
+                                "batch-1 forwards each time."),
+        "probe_items": Port("probe_items", int, required=False, default=2, minimum=1, group="diagnostics",
+                            doc="Training samples the probe keeps (the first ones seen)."),
+        "probe_points": Port("probe_points", int, required=False, default=2, minimum=1, group="diagnostics",
+                             doc="Fixed timesteps per third of the range."),
         "timing": Port("timing", bool, required=False, default=False, group="diagnostics",
                        doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
     }
@@ -62,12 +71,18 @@ class DiffusionTrainerNode(Node):
         density = None
         if inputs.get("tune_checkpointing") and residency is not None and model.checkpointer is not None:
             density = (CheckpointDensity(residency.planner), model)
+        probe = None
+        if inputs.get("probe_every"):
+            batches: Batcher = inputs["batches"]
+            probe = TimeProbe(denoiser=model.denoiser, conditioner=inputs["conditioner"], gate=model.gate, noiser=batches.noiser,
+                              item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
+                              items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed)
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
                           steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, density=density, balance=inputs.get("balance"), task=self.context.task)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, density=density, balance=inputs.get("balance"), probe=probe, task=self.context.task)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

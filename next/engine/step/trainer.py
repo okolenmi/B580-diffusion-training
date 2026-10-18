@@ -46,12 +46,13 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None, density=None, balance=None, task: Callable[[str], ContextManager] | None = None):
+                 timed: bool = False, residency=None, density=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._balance = balance
+        self._time_probe = probe
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
         self._task = task or (lambda title: contextlib.nullcontext())
         self._fused = isinstance(optimizer, FusedOptimizer)
@@ -115,6 +116,13 @@ class Trainer:
             fetched.append(state.batch)
             for label, ms in state.timing_ms.items():
                 timing[label] = timing.get(label, 0.0) + ms
+        probe_metrics: dict[str, float] = {}
+        if self._time_probe is not None:
+            first = not self._time_probe.ready
+            for batch in fetched:
+                self._time_probe.capture(batch)
+            if first and self._time_probe.ready:
+                probe_metrics = self._time_probe.run()  # before the first update: the reference record
         for attempt in range(self.OOM_RETRIES + 1):
             self._committed = False
             failure = None
@@ -144,6 +152,9 @@ class Trainer:
         for name in {n for t in thirds for n in t}:
             values = [t[name] for t in thirds if name in t]
             metrics[name] = sum(values) / len(values)
+        if self._time_probe is not None and not probe_metrics and self._time_probe.due(step):
+            probe_metrics = self._time_probe.run()
+        metrics.update(probe_metrics)
         if self._balance is not None:
             self._balance.observe(metrics)
             metrics.update({name.replace("loss_t_", "weight_t_"): w for name, w in self._balance.weights.items()})

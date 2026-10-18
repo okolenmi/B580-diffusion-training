@@ -13,7 +13,7 @@ from typing import Callable, Iterator
 import torch
 
 from ..graph.events import EpochEnding, EpochStarted, EventType
-from .bucketing import Plan, make_plan, padding_stats
+from .bucketing import Plan, bucket_map, make_plan, padding_stats
 from .latent_cache import LatentSet
 from .noise import Noiser
 from .prefetch import Prefetch
@@ -57,6 +57,21 @@ class Batcher:
     def largest_units(self) -> int:
         """Latent pixels of the largest batch of the run (samples times the padded area)."""
         return max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+
+    def clean_item(self, sample: str) -> tuple[torch.Tensor, torch.Tensor | None, tuple[int, int]]:
+        """A sample as the model sees it when nothing is random: its latent centred in its bucket shape, the validity
+        mask (None without padding) and its true size in pixels."""
+        latent = self.latents.get(sample)
+        h, w = latent.shape[-2:]
+        height, width = bucket_map(self.latents.shapes.values(), self.multiple, self.max_shapes)[(h, w)]
+        top, left = (height - h) // 2, (width - w) // 2
+        x0 = torch.zeros(1, latent.shape[0], height, width)
+        x0[0, :, top:top + h, left:left + w] = latent
+        mask = None
+        if (height, width) != (h, w):
+            mask = torch.zeros(1, 1, height, width)
+            mask[..., top:top + h, left:left + w] = 1.0
+        return x0, mask, (h * self._factor, w * self._factor)
 
     def probe_batch(self, like: dict) -> dict:
         """One sample at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s

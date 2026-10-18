@@ -216,5 +216,27 @@ def time_balance():
         check(any(k.startswith("weight_t_") for k in keys), "a run with a balance reports the weights it applied")
 
 
+def time_probe():
+    from ..engine.step.probe import TimeProbe
+
+    with tempfile.TemporaryDirectory() as raw:
+        trainer, adapted, denoiser, _, events, _ = rig(Path(raw), steps=4)
+        batcher = trainer._batches
+        probe = TimeProbe(denoiser=denoiser, conditioner=trainer.pipeline.phases[1]._conditioner, gate=adapted.gate, noiser=batcher.noiser,
+                          item_of=batcher.clean_item, device="cpu", every=2, items=2, points=2, seed=3)
+        trainer._time_probe = probe
+        trainer.run()
+        with_probe = [e for e in events if "probe_worst_rel" in e.metrics]
+        check([e.step for e in with_probe] == [1, 2, 4] and probe.ready,
+              f"the probe runs before the first update and then every N steps ({[e.step for e in with_probe]})")
+        first, second = probe.run(), probe.run()
+        check(first == second and set(first) >= {"probe_rel_t_low", "probe_rel_t_mid", "probe_rel_t_high", "probe_drift_t_mid", "probe_worst_rel"},
+              "the same samples, noise and timesteps give the same record every time")
+        check(first["probe_worst_rel"] == max(first[f"probe_rel_t_{t}"] for t in ("low", "mid", "high")) and first["probe_drift_t_low"] > 0,
+              "the worst ratio is the largest of the thirds and a trained adapter has moved the prediction")
+        x0, mask, size = batcher.clean_item(batcher.latents.samples[0])
+        check(x0.shape[0] == 1 and (mask is None or mask.shape[-2:] == x0.shape[-2:]), "a probe item is one sample in its bucket shape, with a mask when padded")
+
+
 if __name__ == "__main__":
-    run(main, time_balance)
+    run(main, time_balance, time_probe)

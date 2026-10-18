@@ -285,6 +285,32 @@ def attribution():
               "handles of one client are counted once, and a system without the statistic gives None")
 
 
+def checkpoint_density():
+    from ..engine.runtime.density import CheckpointDensity
+
+    def run_with(budget, cost=lambda share: 0.2 + 0.4 * (1 - share)):
+        tuner, seen = CheckpointDensity(StepPlanner()), []
+
+        def measure(share):
+            seen.append(share)
+            return cost(share)
+
+        return tuner.choose(measure, 1.0, 5000, 1000, budget), seen
+
+    chosen, seen = run_with(budget=20000)
+    check(chosen == 0.0 and seen[-1] == 0.0, f"with room for everything no block is checkpointed, and the model is left at that share ({seen})")
+    chosen, _ = run_with(budget=5500 + CheckpointDensity.RESERVE_MB)
+    check(chosen == 0.5, f"the share goes down as far as the largest batch still fits ({chosen})")
+    chosen, seen = run_with(budget=5200)
+    check(chosen == 1.0 and seen == [1.0], "when even full checkpointing does not fit nothing more is measured")
+    chosen, seen = run_with(budget=5600 + CheckpointDensity.RESERVE_MB, cost=lambda share: 0.2 + 0.4 * (1 - share) + (0.2 if share == 0.25 else 0))
+    check(chosen == 0.5 and seen == [1.0, 0.5, 0.25, 0.5], f"a share that measures dearer than predicted is given up for the next one ({seen})")
+    planner = StepPlanner()
+    planner.learn(5000, 6000, 1000)
+    planner.reset()
+    check(planner.mb_per_unit is None, "the planner can forget costs measured at another share")
+
+
 def planning():
     check(chunk_sizes(7, 3) == [3, 2, 2] and chunk_sizes(4, 1) == [4], "a batch splits into near-equal chunks")
     planner = StepPlanner()
@@ -431,5 +457,37 @@ def training():
         check(m.steps_seen == 2 and device.cache_emptied == 0, "the trainer calls the manager around every step; nothing released, so no cache emptying")
 
 
+def tuned_checkpointing():
+    from ..engine.runtime.checkpointing import ActivationCheckpointer
+    from ..engine.runtime.density import CheckpointDensity
+    from ..families.general.ldm_unet.attention import BasicTransformerBlock
+
+    class Handle:
+        checkpoint_share = 1.0
+
+        def __init__(self, device):
+            self.denoiser, self.device = None, device
+
+        def set_checkpoint_share(self, share):
+            self.denoiser.set_checkpointer(ActivationCheckpointer(), share)
+            self.checkpoint_share = share
+            self.device.spike = 200.0 + 100.0 * (1 - share)  # fewer recomputed blocks keep more activations
+
+    with tempfile.TemporaryDirectory() as raw:
+        device = FakeDevice(ours=5000)
+        device.spike = 200.0
+        m = manager(device, limit_mb=11000)
+        m.start()
+        handle = Handle(device)
+        trainer, _, denoiser, *_ = rig(Path(raw), steps=1, residency=m, density=(CheckpointDensity(m.planner), handle))
+        handle.denoiser = denoiser
+        trainer.emit = lambda e: None
+        trainer.run()
+        blocks = [b for b in denoiser.model.modules() if isinstance(b, BasicTransformerBlock)]
+        check(handle.checkpoint_share == 0.0 and all(b.checkpointer is None for b in blocks) and m.planner.mb_per_unit is not None
+              and any(t["event"] == "checkpoint_share" and t["share"] == 0.0 for t in m.trace),
+              "the trainer lowers the checkpointed share to what the budget allows, applies it to the network and reports it")
+
+
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, on_demand_encoders, sampling, xpu_environment, training)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing)

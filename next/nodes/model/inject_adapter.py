@@ -88,11 +88,14 @@ class InjectAdapterNode(Node):
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
-        if inputs.get("checkpointing", True):
-            denoiser.set_checkpointer(ActivationCheckpointer(), inputs.get("attention_fraction", 1.0))
+        checkpointer = ActivationCheckpointer() if inputs.get("checkpointing", True) else None
+        share = inputs.get("attention_fraction", 1.0)
+        if checkpointer is not None:
+            denoiser.set_checkpointer(checkpointer, share)
         window = None
         if inputs.get("gate"):
             window = GateWindow(inputs.get("gate_low", 0.0), inputs.get("gate_high", 999.0), inputs.get("gate_width", 100.0))
         plan = adapted.plan.to_json()
         return {"model": TrainableDenoiser(family, part, denoiser, adapted, device, rank, alpha, inputs.get("kind") or "lora",
-                                           selection, window, info=plan)}
+                                           selection, window, info=plan,
+                                           checkpointer=checkpointer, checkpoint_share=share)}

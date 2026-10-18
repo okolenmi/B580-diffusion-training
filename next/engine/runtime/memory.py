@@ -246,15 +246,18 @@ class ResidencyManager:
 
     @contextmanager
     def measuring(self, units: int):
-        """Run something whose peak says what ``units`` latent pixels cost (the probe), leaving no trace in the peak."""
+        """Run something whose peak says what ``units`` latent pixels cost (the probe), leaving no trace in the peak.
+        Yields a dict that holds ``cost`` (megabytes per pixel) once the block has run."""
         self.accelerator.reset_peak()
         floor = self.accelerator.memory().get("allocated", 0.0)
-        yield
+        result: dict[str, float] = {}
+        yield result
         stats = self.accelerator.memory()
         self.planner.learn(floor, stats.get("peak_allocated", floor), units)
+        result["cost"] = max(stats.get("peak_allocated", floor) - floor, 0.0) / units if units else 0.0
         self.accelerator.reset_peak()
         own, other = self.outside(stats) if "device_used" in stats else (None, 0.0)
-        self._note("cost", mb_per_megapixel=round((self.planner.mb_per_unit or 0.0) * 2**20, 1), floor_mb=round(floor),
+        self._note("cost", mb_per_megapixel=round(result["cost"] * 2**20, 1), floor_mb=round(floor),
                    peak_mb=round(stats.get("peak_allocated", floor)), ours_outside_mb=None if own is None else round(own),
                    other_programs_mb=round(other))
 
@@ -379,6 +382,9 @@ class ResidencyManager:
         _, name, entry = min(movable, key=lambda item: item[:2])
         entry.parked = True
         self._note("lever", name=f"park {name} between steps")
+
+    def note(self, event: str, **fields: Any) -> None:
+        self._note(event, **fields)
 
     def _note(self, event: str, **fields: Any) -> None:
         record: Mapping[str, Any] = {"event": event, **fields}

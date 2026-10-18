@@ -22,13 +22,13 @@ predicts out-of-memory; the allocator's own peak understates it.
 | Latent Cache encodes one image at a time with exact sizes (a `step` setting, default 8, can cut sides further), the controller is started by the first node that uses the device, and images are decoded on a background thread: every distinct shape and batch size compiles kernels on one CPU thread (seconds each, GPU idle), and encoder activations of a big batch fill the card | none | Latent Cache node, `LatentCache.build` |
 | Allocator capped at the limit minus what the driver holds outside it (measured, plus headroom for a new shape's kernels); at the cap the allocator gives back its free blocks before failing. The old `apply_allocator_backstop` did the same | none | `ResidencyManager._cap`, `Accelerator.cap_allocator` |
 | A step that runs out of memory is run again once on the same batches after cache and garbage are released, while no update has been applied; the cap then leaves more room for the driver | one repeated step | `Trainer._step`, `ResidencyManager.recover` |
+| Trainer option `tune_checkpointing` (off by default): before step 1 the probe is run at the starting share of checkpointed transformer blocks and at half of it, the cost per pixel is extended linearly, and the share goes down in quarters as far as the largest batch of the run still fits the allocator cap minus a reserve; each share picked is measured before it is kept. Fewer recomputed blocks means fewer launches (the step is launch-bound), at the price of activations | up to a third of the recompute, as far as memory allows | `CheckpointDensity`, `Trainer._probe` |
 | LoRA's small factor takes the scale, not the full-size branch output | one full-size multiply per layer | `adapters/layers.py` |
 | Pressure levers between steps: cache every step, then park residents (offload after the step, reload before the next) | one transfer per parked resident per step | `ResidencyManager` |
 
 ## Open (port or build when measurement says it pays)
 
-NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`); per-block checkpoint placement from measured block costs
-(old `block_profiler`, `checkpoint_placement`); block swap; activation offload to the host; graph capture; oneDNN
+NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`; measured on the B580 as 16-20% slower for 180-1361 MB, so only where memory is the binding constraint); per-block checkpoint placement from measured block costs (old `block_profiler`, `checkpoint_placement`; the share chosen by `CheckpointDensity` spreads evenly instead); block swap; activation offload to the host; graph capture; oneDNN
 primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
 
 ## Carried over from the old implementation (measured on the B580, `nodes/xpu_env.py`, `docs/known-issues/open.md`)

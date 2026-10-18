@@ -54,6 +54,10 @@ class Batcher:
                 "batch_shapes": len({(len(ids), *shape) for ids, shape in plan.batches}), "batches": len(plan),
                 "padding_mean": round(stats["pad_mean"], 3), "padding_worst": round(stats["pad_max"], 3)}
 
+    def largest_units(self) -> int:
+        """Latent pixels of the largest batch of the run (samples times the padded area)."""
+        return max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+
     def probe_batch(self, like: dict) -> dict:
         """One sample at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
         first sample: what a memory probe runs through the model."""

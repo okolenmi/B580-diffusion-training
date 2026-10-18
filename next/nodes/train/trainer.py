@@ -9,6 +9,7 @@ from ...engine.conditioner import Conditioner
 from ...engine.devices import Accelerator
 from ...engine.handles import TrainableDenoiser
 from ...engine.optim.handle import Optimizer
+from ...engine.runtime.density import CheckpointDensity
 from ...engine.step.loss import LossWeighting
 from ...engine.step.schedule import LRSchedule
 from ...engine.step.trainer import Trainer
@@ -33,6 +34,9 @@ class DiffusionTrainerNode(Node):
                              doc="Batches per optimizer step; their gradients average."),
         "start_step": Port("start_step", int, required=False, default=0, minimum=0, group="loop",
                            doc="Step to start from when resuming (the schedule and the logs continue from it)."),
+        "tune_checkpointing": Port("tune_checkpointing", bool, required=False, default=False, group="loop",
+                                   doc="Before step 1, measure what the card allows and recompute fewer transformer blocks in backward "
+                                       "(faster steps) as long as the largest batch still fits the memory budget."),
         "timing": Port("timing", bool, required=False, default=False, group="diagnostics",
                        doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
     }
@@ -53,12 +57,15 @@ class DiffusionTrainerNode(Node):
                             purpose="adapter gradients, allocated once and zeroed in place so no step allocates between them")
             residency.settle()
             residency.start()
+        density = None
+        if inputs.get("tune_checkpointing") and residency is not None and model.checkpointer is not None:
+            density = (CheckpointDensity(residency.planner), model)
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
                           steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, task=self.context.task)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing")), residency=residency, density=density, task=self.context.task)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

@@ -24,6 +24,14 @@ class TrainableDenoiser(DeviceResident):
     selection: Any = None
     gate_window: Any = None
     info: dict = field(default_factory=dict)
+    checkpointer: Any = None  # what recomputes activations in backward; None when checkpointing is off
+    checkpoint_share: float = 1.0  # share of the transformer blocks that use it
+
+    def set_checkpoint_share(self, share: float) -> None:
+        if self.checkpointer is None:
+            raise ValueError("this denoiser was built without checkpointing")
+        self.denoiser.set_checkpointer(self.checkpointer, share)
+        self.checkpoint_share = share
 
     @property
     def gate(self):

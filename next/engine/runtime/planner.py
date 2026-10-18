@@ -28,6 +28,9 @@ class StepPlanner:
         """Megabytes per latent pixel of the most demanding recent step (a unit is one pixel of one sample)."""
         return max(self._costs) if self._costs else None
 
+    def reset(self) -> None:
+        self._costs.clear()
+
     def learn(self, floor_mb: float, peak_mb: float, units: int) -> None:
         if units > 0 and peak_mb > floor_mb:
             self._costs.append((peak_mb - floor_mb) / units)

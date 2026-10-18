@@ -128,6 +128,6 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/train/step_pipeline.py` | 750 | 45 | next/engine/step/{trainer,phases,state}.py | rewrite | done (graph capture, probes and swap wait for the memory runtime) |
 | `nodes/train/supervised.py` | 361 | 17 | dropped (one trainer) | drop | done |
 | `nodes/train/t_probe.py` | 362 | 31 | next/engine/step/probe.py + Trainer node ports `probe_*` | rewrite | done (forward probe, adapter vs gated-to-zero base on fixed samples, noise and timesteps; gradient alignment `gc_*` not ported) |
-| `nodes/train/xpu_graph_step.py` | 336 | 32 | next/engine/runtime/capture | ? | todo |
+| `nodes/train/xpu_graph_step.py` | 336 | 32 | next/engine/step/graphed.py | rewrite | done (CPU-verified with a fake graph API; XPU unverified; same refusals, shared pool, capture at micro-step 0 after 3 eager sightings, held gradients, optimizer `touch`)|
 | `nodes/ui.py` | 185 | 40 | next/graph/ (field/display descriptors) | rewrite | done |
 | `nodes/xpu_env.py` | 284 | 65 | next/engine/xpu_env.py | rewrite | done (measurements in rework/71-memory.md) |

@@ -118,6 +118,18 @@ class Optimizer(DeviceResident):
         """Forget whatever gradients a failed pass left behind."""
         self.zero_grad()
 
+    def touched(self) -> frozenset[int]:
+        """Which parameters the backward since the last ``zero_grad`` reached."""
+        return frozenset(self._touched)
+
+    def touch(self, ids: frozenset[int]) -> None:
+        """Record parameters reached by a backward that ran as a replayed device graph, whose hooks do not run."""
+        self._touched.update(ids)
+
+    @property
+    def holds_grads(self) -> bool:
+        return self._holds_grads
+
     @contextmanager
     def suspended(self):
         """Backward passes inside change no parameter: only ``step`` applies gradients, and the caller drops them."""

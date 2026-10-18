@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 import torch
+from torch import nn
 
 from ...engine.devices import resolve_device, resolve_dtype
 from ...engine.handles import TrainableDenoiser
@@ -88,7 +89,8 @@ class InjectAdapterNode(Node):
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
-        checkpointer = ActivationCheckpointer() if inputs.get("checkpointing", True) else None
+        deterministic = not any(isinstance(m, nn.Dropout) and m.p > 0 for m in denoiser.module().modules())
+        checkpointer = ActivationCheckpointer(preserve_rng=not deterministic) if inputs.get("checkpointing", True) else None
         share = inputs.get("attention_fraction", 1.0)
         if checkpointer is not None:
             denoiser.set_checkpointer(checkpointer, share)
@@ -98,4 +100,4 @@ class InjectAdapterNode(Node):
         plan = adapted.plan.to_json()
         return {"model": TrainableDenoiser(family, part, denoiser, adapted, device, rank, alpha, inputs.get("kind") or "lora",
                                            selection, window, info=plan,
-                                           checkpointer=checkpointer, checkpoint_share=share)}
+                                           checkpointer=checkpointer, checkpoint_share=share, deterministic=deterministic)}

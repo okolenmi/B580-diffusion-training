@@ -62,7 +62,7 @@ start, about 1.5 GB after the first forward/backward, creeping by ~4 MB per new 
 | Allocator mode | env `PYTORCH_ALLOC_CONF=expandable_segments:True` | Could reduce stuck fragmentation. | Not known to work on XPU. | untested |
 
 Not built (old tree had them, see `rework/71-memory.md`): NF4 frozen weights (measured 16-20% slower for
-180-1361 MB), block swap to host, activation offload, graph capture (~500 MB pool per shape, 2x speed).
+180-1361 MB), block swap to host, activation offload.
 
 ## 2. Speed
 
@@ -79,6 +79,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 | Latent encode batch | `latents.batch_size` (default 1) | Each distinct batch size compiles its own kernels; 1 is usually fastest overall. | - | verified (old tree) |
 | Prefetch | `batcher.prefetch` (default 2) | Batches built ahead of the step. | Host memory. | verified |
 | Fused/grouped optimizer | `fused`, `foreach`, `group_size` 0 | Fewer launches in the update (0 = all same-shaped at once). | `fused` no clipping. | untested |
+| Graph replay | `--graph` / `trainer.graph=true`, `trainer.graph_shapes` (8) | After a shape has been seen 3 times (eagerly) its forward + loss + backward is captured as a device graph and replayed: about 2x faster steps in the old measurements (launch-bound step), +37% steps/s end to end. Graphs share one memory pool, so the cost is the largest graph (old tree: ~0.5-1.5 GB), not the sum. Uses the memory-efficient attention kernel (flash cannot be captured). | Needs: no dropout, no timestep gate, non-fused optimizer (all refused loudly); chunked batches, the probe, and shapes past `graph_shapes` run eagerly. Count shapes with `max_shapes`: each graph is a capture (seconds). Competes with `tune_checkpointing` for the same spare VRAM. | untested |
 | Timing | `trainer.timing=true` | Per-phase times; synchronizes, so it slows a bit. Turn off for speed. | - | untested |
 
 ## 3. Quality and training behaviour
@@ -137,7 +138,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 ## 7. Declared but not implemented
 
 These graph settings exist in the registry and appear in the editor, but nothing reads them yet:
-`runtime.graph_capture`, `runtime.block_swap`, `memory.ram_max_mb`. Setting them changes nothing.
+`runtime.graph_capture` (use the trainer's `graph` port instead), `runtime.block_swap`, `memory.ram_max_mb`. Setting them changes nothing.
 Read by code: `memory.vram_max_mb`, `memory.vram_min_mb`, `memory.strict`, `device.default`, `precision.*`,
 `runtime.residency.safety_margin`, `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
 `runtime.profile` (turns the trainer's `timing` on), `conditioning.cache_mb` (size of the encoded-prompt cache,
@@ -146,4 +147,4 @@ needed instead of up front), `seed.base` (nodes with an empty seed derive theirs
 them at 0).
 
 Planned ports (see `rework/PORTING.md`): gradient alignment, conditioning blend, auto caption, block profiler,
-graph capture, NF4, LoRA merge.
+NF4, LoRA merge.

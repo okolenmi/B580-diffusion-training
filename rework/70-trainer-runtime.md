@@ -101,7 +101,7 @@ Configured by graph settings (plan 20), not by ports.
 | `ResidencyManager` | knows every `DeviceResident` (parts, encoders, optimizer state), their offloadable flag and footprint; decides what is on the device now; calibration on real peaks, safety margin, escalation | `AdaptiveResidencyController`, `ResourceControlHandle` wiring, `VRAMBudgetControllerNode`, the residency ports |
 | `Memory` | the graph's budget (`GraphMemory`, exists) and the ledger bridge | `resource_control` port |
 | `BlockSwap` | holds N denoiser blocks on the host, brought in per block, using `family.memory.blocks()` | new (needed for Anima; the sd-scripts guide's main lever) |
-| `Capture` | graph capture on/off and its constraints | `use_xpu_graph` port |
+| `Capture` | graph capture on/off and its constraints | trainer `graph`, `graph_shapes` ports; `GraphedCompute` phase replaces forward/loss/backward |
 | `Profiler` | phase timings, per-phase memory | `profile`, `profile_memory_per_phase` |
 
 * Residents **register themselves** when created (a loaded part, an encoder, the

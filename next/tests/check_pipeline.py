@@ -36,9 +36,9 @@ REGISTRY = NodeRegistry(packages=("next.nodes", "next.tests.pipeline_nodes"))
 SETTINGS = {"device.default": "cpu", "precision.denoiser": "fp32", "precision.encoders": "fp32", "precision.autocast": "off"}
 
 
-def graph(tmp: Path, steps: int) -> GraphDoc:
+def graph(tmp: Path, steps: int, captured: bool = False) -> GraphDoc:
     return starters.sdxl_lora(model="", dataset="toy", output=str(tmp / "out"), name="toy", resolution=64, batch_size=2, steps=steps,
-                              lr=1e-3, rank=4, save_every=2, settings=SETTINGS,
+                              lr=1e-3, rank=4, save_every=2, settings=SETTINGS, graph=captured,
                               source=("TinyModelSource", {"file": str(tmp / "model.safetensors")}),
                               overrides={"latents": {"batch_size": 2}, "buckets": {"multiple": 1}, "batcher": {"seed": 3}})
 
@@ -102,6 +102,12 @@ def full_run():
         check(stopped.ok and stopped.stopped, f"a stop request ends the run cleanly ({stopped.error})")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
         check(saved == ["toy_step000002.safetensors", "toy_step000003.safetensors"], f"the stopped run still saves where it stopped ({saved})")
+
+        shutil.rmtree(tmp / "out")
+        _, graphed, trace = execute(store, graph(tmp, steps=3, captured=True))
+        said = [f for s, f in trace.frames if s == "graph"]
+        check(graphed.ok and trace.steps() == 3 and said and "cannot capture" in said[0]["why"],
+              f"a graph run on a device that cannot capture trains eagerly and says so ({graphed.error}, {said[:1]})")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ predicts out-of-memory; the allocator's own peak understates it.
 
 ## Open (port or build when measurement says it pays)
 
-NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`; measured on the B580 as 16-20% slower for 180-1361 MB, so only where memory is the binding constraint); per-block checkpoint placement from measured block costs (old `block_profiler`, `checkpoint_placement`; the share chosen by `CheckpointDensity` spreads evenly instead); block swap; activation offload to the host; graph capture; oneDNN
+NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`; measured on the B580 as 16-20% slower for 180-1361 MB, so only where memory is the binding constraint); per-block checkpoint placement from measured block costs (old `block_profiler`, `checkpoint_placement`; the share chosen by `CheckpointDensity` spreads evenly instead); block swap; activation offload to the host; oneDNN
 primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
 
 ## Carried over from the old implementation (measured on the B580, `nodes/xpu_env.py`, `docs/known-issues/open.md`)

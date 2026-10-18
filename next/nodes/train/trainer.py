@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from ...data.batcher import Batcher
 from ...engine.conditioner import Conditioner
 from ...engine.devices import Accelerator
 from ...engine.handles import TrainableDenoiser
-from ...engine.optim.handle import Optimizer
+from ...engine.optim.handle import FusedOptimizer, Optimizer
 from ...engine.runtime.density import CheckpointDensity
 from ...engine.step.balance import TimeBalance
+from ...engine.step.graphed import GraphedCompute
 from ...engine.step.loss import LossWeighting
 from ...engine.step.probe import TimeProbe
 from ...engine.step.schedule import LRSchedule
@@ -23,7 +26,7 @@ class DiffusionTrainerNode(Node):
     DISPLAY_NAME = "Diffusion Trainer"
     CATEGORY = "Training"
     READS_SETTINGS = ("device.default", "runtime.profile")
-    GROUPS = (Group("loop", "Loop"), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
+    GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     INPUTS = {
         "batches": Port("batches", Batcher),
         "model": Port("model", TrainableDenoiser),
@@ -48,6 +51,13 @@ class DiffusionTrainerNode(Node):
                             doc="Training samples the probe keeps (the first ones seen)."),
         "probe_points": Port("probe_points", int, required=False, default=2, minimum=1, group="diagnostics",
                              doc="Fixed timesteps per third of the range."),
+        "graph": Port("graph", bool, required=False, default=False, group="speed",
+                      doc="Replay forward and backward from a captured device graph once a shape has been seen a few times: "
+                          "about twice as fast per step where the step is bound by kernel launches. Costs memory for the graph "
+                          "(shared by the shapes) and needs no dropout, no gate and no fused optimizer. Shapes that cannot be "
+                          "captured keep running eagerly."),
+        "graph_shapes": Port("graph_shapes", int, required=False, default=8, minimum=1, group="speed", visible_when=("graph", True),
+                             doc="Most shapes that get a graph; the rest run eagerly."),
         "timing": Port("timing", bool, required=False, default=False, group="diagnostics",
                        doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
     }
@@ -77,18 +87,38 @@ class DiffusionTrainerNode(Node):
             probe = TimeProbe(denoiser=model.denoiser, conditioner=inputs["conditioner"], gate=model.gate, noiser=batches.noiser,
                               item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
                               items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed)
+        graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
                           steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, balance=inputs.get("balance"), probe=probe, task=self.context.task)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
+
+
+    def _graph_factory(self, inputs: dict, model: TrainableDenoiser, accelerator: Accelerator):
+        """What the Trainer calls with the eager phases to get the phase that replays a captured graph; refuses the
+        configurations a replay would silently get wrong."""
+        optimizer = inputs["optimizer"]
+        GraphedCompute.refuse_unless_capturable(model, optimizer, isinstance(optimizer, FusedOptimizer))
+        xpu = getattr(torch, "xpu", None)
+        capturable = accelerator.device.split(":")[0] == "xpu" and hasattr(xpu, "XPUGraph")
+        if not capturable:
+            self.context.report("graph", {"node": self.uid, "active": False, "why": "this device cannot capture graphs"})
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+        # The flash kernel cannot be captured; the memory-efficient one keeps the attention matrix out of the graph's memory
+        attentions = [lambda b=b: sdpa_kernel(b) for b in (SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH)]
+        return lambda eager: GraphedCompute(eager=eager, denoiser=model.denoiser, weighting=inputs["weighting"], balance=inputs.get("balance"),
+                                            optimizer=optimizer, accumulation=inputs.get("accumulation", 1),
+                                            graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
+                                            max_graphs=inputs.get("graph_shapes") or 8, attentions=attentions,
+                                            say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
 
 
 class EveryNStepsNode(Node):

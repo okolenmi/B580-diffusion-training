@@ -26,6 +26,7 @@ class TrainableDenoiser(DeviceResident):
     info: dict = field(default_factory=dict)
     checkpointer: Any = None  # what recomputes activations in backward; None when checkpointing is off
     checkpoint_share: float = 1.0  # share of the transformer blocks that use it
+    deterministic: bool = False  # no layer draws random numbers in the forward (dropout off), so a step can be captured
 
     def set_checkpoint_share(self, share: float) -> None:
         if self.checkpointer is None:

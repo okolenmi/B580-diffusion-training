@@ -4,6 +4,9 @@ The block's forward runs without storing activations; in backward it runs again 
 and autocast settings, and gradients flow to the block's inputs and to those of its parameters that require
 grad (an adapter's factors, not the frozen base weights). Parameters are passed through the autograd function
 as arguments so the graph stays connected even when no input requires grad.
+
+Saving and restoring the random state costs reads of the device's generator and is only needed when the block draws
+random numbers (dropout); ``preserve_rng=False`` skips it, which also lets a captured device graph contain the block.
 """
 
 from __future__ import annotations
@@ -41,11 +44,13 @@ def _device_rng(tensors: list[Tensor]) -> tuple[str | None, list[int], list[Tens
 
 class _Recompute(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, run, count, *args):
+    def forward(ctx, run, count, preserve_rng, *args):
         ctx.run, ctx.inputs, ctx.params = run, list(args[:count]), list(args[count:])
         ctx.autocast_device, ctx.autocast_kwargs = _autocast_state(ctx.inputs)
-        ctx.cpu_rng = torch.get_rng_state()
-        ctx.rng_kind, ctx.rng_devices, ctx.rng_states = _device_rng(ctx.inputs)
+        ctx.preserve_rng = preserve_rng
+        if preserve_rng:
+            ctx.cpu_rng = torch.get_rng_state()
+            ctx.rng_kind, ctx.rng_devices, ctx.rng_states = _device_rng(ctx.inputs)
         with torch.no_grad():
             return run(*ctx.inputs)
 
@@ -54,12 +59,14 @@ class _Recompute(torch.autograd.Function):
         inputs = [x.detach().requires_grad_(x.is_floating_point()) for x in ctx.inputs]
         autocast = (torch.autocast(device_type=ctx.autocast_device, **ctx.autocast_kwargs)
                     if ctx.autocast_device else contextlib.nullcontext())
-        with torch.random.fork_rng(devices=ctx.rng_devices, device_type=ctx.rng_kind or "cpu"):
-            torch.set_rng_state(ctx.cpu_rng)
-            if ctx.rng_devices:
-                module = getattr(torch, ctx.rng_kind)
-                for index, state in zip(ctx.rng_devices, ctx.rng_states):
-                    module.set_rng_state(state, index)
+        with (torch.random.fork_rng(devices=ctx.rng_devices, device_type=ctx.rng_kind or "cpu") if ctx.preserve_rng
+              else contextlib.nullcontext()):
+            if ctx.preserve_rng:
+                torch.set_rng_state(ctx.cpu_rng)
+                if ctx.rng_devices:
+                    module = getattr(torch, ctx.rng_kind)
+                    for index, state in zip(ctx.rng_devices, ctx.rng_states):
+                        module.set_rng_state(state, index)
             with torch.enable_grad(), autocast:
                 outputs = ctx.run(*[x.view_as(x) for x in inputs])
         wanted = [x for x in inputs if x.requires_grad] + [p for p in ctx.params if p.requires_grad]
@@ -69,11 +76,14 @@ class _Recompute(torch.autograd.Function):
         input_grads = tuple(next(found, None) if x.requires_grad else None for x in inputs)
         param_grads = tuple(next(found, None) if p.requires_grad else None for p in ctx.params)
         del ctx.inputs, ctx.params
-        return (None, None) + input_grads + param_grads
+        return (None, None, None) + input_grads + param_grads
 
 
 class ActivationCheckpointer:
     """Callable with the ``(fn, inputs, params)`` shape the UNet's ``set_checkpointer`` expects."""
 
+    def __init__(self, preserve_rng: bool = True):
+        self.preserve_rng = preserve_rng
+
     def __call__(self, fn: Callable[..., Any], inputs: tuple, params: Iterable[nn.Parameter]) -> Any:
-        return _Recompute.apply(fn, len(inputs), *inputs, *tuple(params))
+        return _Recompute.apply(fn, len(inputs), self.preserve_rng, *inputs, *tuple(params))

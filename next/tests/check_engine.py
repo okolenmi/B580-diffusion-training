@@ -9,8 +9,10 @@ state offload and quantized-state round trips.
 
 from __future__ import annotations
 
+import contextlib
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -25,6 +27,7 @@ from ..engine.conditioner import Conditioner
 from ..engine.optim.algorithms import AdamW
 from ..engine.optim.handle import FusedOptimizer, Optimizer, ParamGroup
 from ..engine.optim.state import Int8BlockStore
+from ..engine.step.graphed import GraphedCompute, GraphRefused
 from ..engine.step.loss import MinSNR, Uniform, per_sample_mse
 from ..engine.runtime.checkpointing import ActivationCheckpointer
 from ..engine.step.schedule import Constant, Cosine, Warmup
@@ -40,7 +43,7 @@ from ..families.sdxl.objective import SDXLObjective
 from ..graph.events import StepFinished
 from .check_data import FakeEncoder, make_images
 from .check_sdxl import TINY_UNET
-from .support import check, run
+from .support import check, raises, run
 
 
 class FakeKit:
@@ -72,7 +75,7 @@ class FakeKit:
         return 5 * 48 * 4 + 40 * 4
 
 
-def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3, **extra):
+def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3, graph_api=None, **extra):
     folder = tmp / "images"
     if not folder.exists():
         folder.mkdir(parents=True)
@@ -99,10 +102,73 @@ def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3
     groups = [ParamGroup(g["params"], g["lr_mult"]) for g in adapted.param_groups()]
     optimizer = (FusedOptimizer if fused else Optimizer)(AdamW(weight_decay=0.0), groups, 1e-3)
     events: list = []
+    graph = None
+    if graph_api is not None:
+        optimizer.hold_grads()
+        graph = lambda eager: GraphedCompute(eager=eager, denoiser=denoiser, weighting=Uniform(), balance=None, optimizer=optimizer,  # noqa: E731
+                                             accumulation=accumulation, graph_api=graph_api, synchronize=lambda: None, say=lambda text: None)
     trainer = Trainer(batches=batcher, denoiser=denoiser, conditioner=Conditioner(ConditioningCache(FakeKit()), dtype=torch.float32),
                       optimizer=optimizer, schedule=Constant(1e-3), weighting=Uniform(), steps=steps, accumulation=accumulation,
-                      gate=adapted.gate, emit=events.append, **extra)
+                      gate=adapted.gate, emit=events.append, graph=graph, **extra)
+    if graph_api is not None:
+        graph_api.owner = trainer.graphed
     return trainer, adapted, denoiser, base, events, optimizer
+
+
+class FakeGraphs:
+    """Stands in for torch.xpu's graph API: a capture runs the computation once, a replay runs it again on the same
+    static buffers and writes the outputs the capture handed out."""
+
+    def __init__(self, fail: bool = False):
+        self.fail, self.owner = fail, None
+
+    def graph_pool_handle(self):
+        return "pool"
+
+    def XPUGraph(self):  # noqa: N802 - the device API's name
+        return _FakeGraph(self)
+
+    @contextlib.contextmanager
+    def graph(self, graph, pool=None):
+        if self.fail:
+            raise RuntimeError("capture is not available")
+        yield
+
+
+class _FakeGraph:
+    def __init__(self, api: FakeGraphs):
+        self.api = api
+
+    def replay(self):
+        slot = next(s for s in self.api.owner._slots.values() if s.graph is self)
+        loss, per_sample = self.api.owner._compute(slot.statics)
+        slot.loss.copy_(loss)
+        slot.per_sample.copy_(per_sample)
+
+
+def graphed():
+    print("graph replay")
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        eager, a1, *_ = rig(tmp / "a", steps=12)
+        api = FakeGraphs()
+        replayed, a2, *_ = rig(tmp / "b", steps=12, graph_api=api)
+        eager.run(), replayed.run()
+        gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a2.trainable_parameters()))
+        check(replayed.graphed.captures >= 1 and replayed.graphed.replays >= 1,
+              f"shapes seen often enough are captured and replayed ({replayed.graphed.captures} graphs, {replayed.graphed.replays} replays)")
+        check(gap < 1e-5, f"replayed steps train the same adapters as eager ones (max gap {gap:.1e})")
+        broken, a3, *_ = rig(tmp / "c", steps=12, graph_api=FakeGraphs(fail=True))
+        broken.run()
+        gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a3.trainable_parameters()))
+        check(broken.graphed.captures == 0 and gap < 1e-5, "a capture that fails leaves the shape running eagerly with the same result")
+    model, optimizer = SimpleNamespace(deterministic=True, gate=None, gate_window=None), SimpleNamespace(holds_grads=True)
+    refuse = GraphedCompute.refuse_unless_capturable
+    refuse(model, optimizer, False)
+    for label, args in (("a fused optimizer", (model, optimizer, True)), ("gradients that are not held", (model, SimpleNamespace(holds_grads=False), False)),
+                        ("a forward with dropout", (SimpleNamespace(deterministic=False, gate=None, gate_window=None), optimizer, False)),
+                        ("a per-batch gate", (SimpleNamespace(deterministic=True, gate=object(), gate_window=object()), optimizer, False))):
+        raises(GraphRefused, lambda args=args: refuse(*args), f"{label} is refused")
 
 
 def main() -> None:
@@ -141,19 +207,20 @@ def main() -> None:
 
     print("activation checkpointing")
     grads = {}
-    for label, fraction in (("off", None), ("all", 1.0), ("half", 0.5)):
+    for label, fraction in (("off", None), ("all", 1.0), ("half", 0.5), ("quiet", 1.0)):
         tmp2 = Path(tempfile.mkdtemp())
         trainer, adapted, denoiser, *_ = rig(tmp2, steps=1)
         if fraction is not None:
-            denoiser.set_checkpointer(ActivationCheckpointer(), fraction)
+            denoiser.set_checkpointer(ActivationCheckpointer(preserve_rng=label != "quiet"), fraction)
         state = StepState(0, 0, "cpu")
         trainer._fetch.run(state)
         for phase in trainer.pipeline.phases[:4]:
             phase.run(state)
         state.loss.backward()
         grads[label] = torch.cat([p.grad.flatten() for p in adapted.trainable_parameters()])
-    check(torch.allclose(grads["off"], grads["all"], atol=1e-6) and torch.allclose(grads["off"], grads["half"], atol=1e-6),
-          "checkpointed gradients equal plain ones (all blocks and half of the attention blocks)")
+    check(torch.allclose(grads["off"], grads["all"], atol=1e-6) and torch.allclose(grads["off"], grads["half"], atol=1e-6)
+          and torch.allclose(grads["off"], grads["quiet"], atol=1e-6),
+          "checkpointed gradients equal plain ones (all blocks, half of the attention blocks, and without saving the random state)")
 
     print("loss, schedules, optimizer state")
     sigma = torch.tensor([0.1, 1.0, 10.0])
@@ -239,4 +306,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, time_probe)
+    run(main, time_balance, time_probe, graphed)

@@ -36,6 +36,12 @@ class SDXLConditioning:
     def to(self, device=None, dtype=None) -> "SDXLConditioning":
         return SDXLConditioning(self.ctx.to(device=device, dtype=dtype), self.y.to(device=device))
 
+    def tensors(self) -> list[Tensor]:
+        return [self.ctx, self.y]
+
+    def map(self, fn) -> "SDXLConditioning":
+        return SDXLConditioning(fn(self.ctx), fn(self.y))
+
     def index(self, i) -> "SDXLConditioning":
         if isinstance(i, int):
             i = slice(i, i + 1)

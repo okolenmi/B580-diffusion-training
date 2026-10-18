@@ -15,7 +15,7 @@ from ..optim.handle import FusedOptimizer, Optimizer
 from ..runtime.memory import MemoryBudgetExceeded, is_out_of_memory
 from ..runtime.planner import chunk_sizes
 from .loss import LossWeighting, thirds_of_range
-from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, Timed)
+from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
 from .state import StepState, split_batch
 
@@ -46,7 +46,8 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None, density=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None):
+                 timed: bool = False, residency=None, density=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
+                 graph: Callable[[list[StepPhase]], StepPhase] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -58,8 +59,9 @@ class Trainer:
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
         self._fetch = FetchBatch(batches)
-        phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), Forward(denoiser), Loss(weighting, balance),
-                  Backward(accumulation)]
+        compute: list[StepPhase] = [Forward(denoiser), Loss(weighting, balance), Backward(accumulation)]
+        self.graphed = graph(compute) if graph is not None else None  # replaces the three phases above, which it falls back to
+        phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), *([self.graphed] if self.graphed else compute)]
         fetch = self._fetch
         if timed:
             phases = [Timed(p, synchronize or (lambda: None)) for p in phases]
@@ -149,6 +151,8 @@ class Trainer:
             stats = self.residency.last_stats
             metrics.update(device_mb=self.residency.last_used_mb, live_mb=stats.get("allocated", 0.0),
                            step_peak_mb=stats.get("peak_allocated", 0.0), reserved_mb=stats.get("reserved", 0.0))
+        if self.graphed is not None:
+            metrics.update(graph_replays=self.graphed.replays, graphs=self.graphed.captures)
         for name in {n for t in thirds for n in t}:
             values = [t[name] for t in thirds if name in t]
             metrics[name] = sum(values) / len(values)

@@ -94,3 +94,12 @@ Run the prefix with `--set seed.base=5`, then twice with the same value, then wi
 - `prewarm=false`: no "Encoding prompts" task before training; the encoders run on first use (first steps slower), training still works with `release_encoders` on.
 - `--param trainer.timing=false --set runtime.profile=true` prints the per-phase timings.
 Pass: all three behave as described.
+
+## 15. Graph replay
+Add `--graph` (batch 2, 200 steps), then the same run without it for comparison; a second run with `--max-shapes 4`.
+- Console prints `[graph] captured shape (...)` after about 4 sightings of a shape, and steps show `graphs N (R replays)`.
+- Replayed steps are clearly faster than eager steps of the same shape (old tree: ~2x for forward+backward).
+- Loss curves of the two runs agree closely (old parity: max parameter gap ~3e-3 after 200 steps; the attention kernel differs from eager, so not identical).
+- Peak/`device_used` rises by the graph pool (0.5-1.5 GB); check it stays under the card with your other settings; if it does not, lower `trainer.graph_shapes` or drop `--graph`.
+- Failure cases worth reporting: `[graph] capture of shape ... failed (...)` (note the message), a loss frozen at one value (outputs not refreshed), a crash at step 4-5.
+Pass: faster steps, similar loss, no crash. `--fused` or dropout with `--graph` must refuse with a clear message.

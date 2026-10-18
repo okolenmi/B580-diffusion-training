@@ -14,6 +14,12 @@ class Conditioning(Protocol):
 
     def to(self, device: Any = None, dtype: Any = None) -> "Conditioning": ...
 
+    def tensors(self) -> list[Any]:
+        """Every tensor it holds, in a fixed order."""
+
+    def map(self, fn: Any) -> "Conditioning":
+        """The same conditioning with ``fn`` applied to each tensor, in the order ``tensors`` lists them."""
+
     def index(self, i: Any) -> "Conditioning": ...
 
     def blend(self, other: "Conditioning", p: Any, segments: Sequence[str] | None = None) -> "Conditioning": ...

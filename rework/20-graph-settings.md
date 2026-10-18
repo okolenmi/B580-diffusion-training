@@ -88,7 +88,7 @@ class SettingSpec:
 | Runtime | `runtime.residency.safety_margin`, `runtime.residency.calibration_steps` | managed trainer ports | plan 70 |
 | Runtime | `runtime.empty_cache_every_n_steps` | trainer ports | the knob involved in the prewarm OOM |
 | Runtime | `runtime.block_swap` | new | count of blocks held on host, validated against the family's block layout (Anima needs it) |
-| Runtime | `runtime.profile`, `runtime.profile_memory` | `profile*` ports | |
+| Runtime | `runtime.profile` | trainer `timing` port starts from it | per-phase memory is the ledger (plan 71), so there is no `profile_memory` setting |
 | Conditioning | `conditioning.cache_mb`, `conditioning.prewarm` | `prewarm_text_encoder`, `prompt_capacity()` | plan 42 |
 | Reproducibility | `seed.base` | per-node seeds | a node seed left empty derives from `seed.base` and the node id, so one number reproduces the whole graph |
 

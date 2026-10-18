@@ -80,6 +80,7 @@ class NoiserNode(Node):
 class BatcherNode(Node):
     DISPLAY_NAME = "Batcher"
     CATEGORY = "Dataset"
+    READS_SETTINGS = ("seed.base",)
     GROUPS = (Group("batching", "Batching"), Group("worker", "Worker", collapsed=True))
     INPUTS = {
         "latents": Port("latents", LatentSet),
@@ -88,8 +89,8 @@ class BatcherNode(Node):
         "buckets": Port("buckets", BucketPolicy, required=False),
         "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="batching"),
         "shuffle": Port("shuffle", bool, required=False, default=True, group="batching"),
-        "seed": Port("seed", int, required=False, default=0, minimum=0, group="batching",
-                     doc="One number for data order, padding offsets, timesteps and noise."),
+        "seed": Port("seed", int, required=False, minimum=0, group="batching",
+                     doc="One number for data order, padding offsets, timesteps and noise; empty derives it from the graph's base seed."),
         "start_epoch": Port("start_epoch", int, required=False, default=0, minimum=0, group="batching",
                             doc="Epoch to start from when resuming; prompts and data order follow from it."),
         "prefetch": Port("prefetch", int, required=False, default=2, minimum=1, group="worker",
@@ -111,7 +112,7 @@ class BatcherNode(Node):
         prompts.listener = emit
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
-                          multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, seed=inputs.get("seed") or 0, depth=inputs.get("prefetch") or 2,
+                          multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
                           start_epoch=inputs.get("start_epoch") or 0, emit=emit)
         self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

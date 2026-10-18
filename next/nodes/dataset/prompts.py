@@ -15,18 +15,19 @@ class CaptionsNode(Node):
 
     DISPLAY_NAME = "Captions"
     CATEGORY = "Dataset"
+    READS_SETTINGS = ("seed.base",)
     INPUTS = {
         "images": Port("images", ImageSet),
         "channel": Port("channel", str, required=False, default="text", choices=CHANNELS),
-        "seed": Port("seed", int, required=False, default=0, minimum=0,
-                     doc="Seeds every stage after this node; the same seed gives the same prompts in every epoch."),
+        "seed": Port("seed", int, required=False, minimum=0,
+                     doc="Seeds every stage after this node; the same seed gives the same prompts in every epoch. Empty derives it from the graph's base seed."),
     }
     OUTPUTS = {"prompts": Port("prompts", PromptTable)}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         return {"prompts": PromptTable.from_images(inputs["images"], inputs.get("channel") or "text",
-                                                   seed=inputs.get("seed") or 0)}
+                                                   seed=self.derived_seed(inputs.get("seed")))}
 
 
 class _StageNode(Node):

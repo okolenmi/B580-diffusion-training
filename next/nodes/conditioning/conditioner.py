@@ -19,13 +19,16 @@ from ...families.api.header import read_header
 from ...families.api.parts import ModelPart
 from ...families.registry import get_family
 from ...graph import EventIn, Group, Node, Port
+from ...graph.settings import AUTO
 from ...graph.events import PromptsChanged
+
+DEFAULT_CACHE_MB = 4096
 
 
 class ConditionerNode(Node):
     DISPLAY_NAME = "Conditioner"
     CATEGORY = "Conditioning"
-    READS_SETTINGS = ("device.default", "precision.encoders", "precision.autocast")
+    READS_SETTINGS = ("device.default", "precision.encoders", "precision.autocast", "conditioning.cache_mb", "conditioning.prewarm")
     GROUPS = (Group("cache", "Cache", collapsed=True),)
     INPUTS = {
         "encoders": Port("encoders", ModelPart, multi=True, doc="The text-encoder parts of the model family (wire each)."),
@@ -40,7 +43,8 @@ class ConditionerNode(Node):
                         doc="The dataset whose folder holds the cache."),
         "max_disk_mb": Port("max_disk_mb", int, required=False, default=4096, minimum=16, unit="MB", group="cache",
                             visible_when=("persist", True), doc="The store stops writing here; the run carries on from memory."),
-        "cache_mb": Port("cache_mb", int, required=False, default=4096, minimum=64, unit="MB", group="cache"),
+        "cache_mb": Port("cache_mb", int, required=False, minimum=64, unit="MB", group="cache",
+                         doc="Host memory for encoded prompts; empty follows the conditioning.cache_mb setting (auto: 4096)."),
     }
     OUTPUTS = {"conditioner": Port("conditioner", Conditioner)}
     EVENTS_IN = {"prompts_changed": EventIn(PromptsChanged, handler="on_prompts_changed")}
@@ -69,11 +73,17 @@ class ConditionerNode(Node):
                 raise ValueError("Conditioner: persist needs the dataset whose folder holds the cache")
             store = ConditioningStore(self.context.env.service("datasets").caches(inputs["dataset"]) / "conditioning",
                                       self._identity(parts, dtype, out), self.kit, max_bytes=(inputs.get("max_disk_mb") or 4096) << 20)
-        cache = ConditioningCache(self.kit, max_bytes=(inputs.get("cache_mb") or 4096) << 20, store=store)
+        cache = ConditioningCache(self.kit, max_bytes=self._cache_mb(inputs) << 20, store=store)
         self.conditioner = Conditioner(cache, device, out)
         self.prompts, self.release = inputs.get("prompts"), inputs.get("release_encoders", True)
         self.kit.hold = not self.release
         return {"conditioner": self.conditioner}
+
+    def _cache_mb(self, inputs: dict) -> int:
+        if inputs.get("cache_mb"):
+            return int(inputs["cache_mb"])
+        setting = self.context.settings.get("conditioning.cache_mb")
+        return DEFAULT_CACHE_MB if setting in (None, AUTO) else int(setting)
 
     @staticmethod
     def _identity(parts: dict[str, ModelPart], dtype: torch.dtype, out: torch.dtype) -> str:
@@ -86,6 +96,9 @@ class ConditionerNode(Node):
         if self.prompts is None:
             return
         universe = self.prompts.universe()
+        if not self.context.settings.get("conditioning.prewarm"):
+            self.conditioner.cache.retain(universe)
+            return
         self.kit.hold = not self.release or not self.conditioner.cache.fits(len(universe))
         with self.kit.session(), self.context.task("Encoding prompts", total=len(universe)):
             self.conditioner.on_prompts_changed(event, universe)

@@ -99,7 +99,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 | Padding and masks | `buckets.multiple` | Pad latents up to a multiple, loss masked on pad; no pixels cut. | verified |
 | Shapes | `latents.mode=fit|center_crop|pad|stretch`, `max_aspect`, `step` | How images become latents; `fit` keeps aspect, cutting at most `step-1` px. | verified |
 | Captions | nodes `Captions` (`channel` text/tags/desc), `TagShuffle` (`keep_first`, `drop`), `TagSwap` (`random`/`walk`), `CaptionPool` (`n_min`, `n_max`, `dividers`), `CaptionDropout` (`p`, `substitute`/`empty`) | Prompt variety per epoch; all seeded by `captions.seed`, so epochs repeat identically per seed. | verified (basic) |
-| Seeds | `batcher.seed`, `captions.seed` | Data order, padding offsets, timesteps, noise. | verified |
+| Seeds | `--set seed.base=N`, or `batcher.seed`, `captions.seed` | Data order, padding offsets, timesteps, noise. A node seed left empty derives from the base and the node id. | untested (base) |
 | Resume | `trainer.start_step`, `batcher.start_epoch`, `LoadAdapter` | Schedule, data order and prompts continue from there. | untested |
 
 ## 4. Data and shapes
@@ -137,11 +137,13 @@ So: fewer launches, fewer new shapes, fewer syncs.
 ## 7. Declared but not implemented
 
 These graph settings exist in the registry and appear in the editor, but nothing reads them yet:
-`runtime.graph_capture`, `runtime.block_swap`, `runtime.profile`, `runtime.profile_memory`,
-`conditioning.cache_mb`, `conditioning.prewarm`, `memory.ram_max_mb`, `seed.base`. Setting them changes nothing.
-Also `conditioner.cache_mb` (port) is unread.
+`runtime.graph_capture`, `runtime.block_swap`, `memory.ram_max_mb`. Setting them changes nothing.
 Read by code: `memory.vram_max_mb`, `memory.vram_min_mb`, `memory.strict`, `device.default`, `precision.*`,
-`runtime.residency.safety_margin`, `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`.
+`runtime.residency.safety_margin`, `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
+`runtime.profile` (turns the trainer's `timing` on), `conditioning.cache_mb` (size of the encoded-prompt cache,
+auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewarm` (off = encode prompts when first
+needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
+them at 0).
 
 Planned ports (see `rework/PORTING.md`): gradient alignment, conditioning blend, auto caption, block profiler,
 graph capture, NF4, LoRA merge.

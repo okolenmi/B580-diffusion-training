@@ -115,16 +115,14 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("runtime.block_swap", "Blocks held on the host", "int", 0, minimum=0, group="Runtime",
                 advanced=True, doc="Denoiser blocks kept in host memory and brought in per block."),
     SettingSpec("runtime.profile", "Profile steps", "bool", False, group="Runtime", advanced=True,
-                doc="Time each phase of the step."),
-    SettingSpec("runtime.profile_memory", "Profile memory per phase", "bool", False, group="Runtime",
-                advanced=True, doc="Record memory after each phase (slower)."),
+                doc="Time each phase of the step (the trainer's timing port starts from it)."),
     SettingSpec("conditioning.cache_mb", "Conditioning cache", "float", AUTO, allow_auto=True, unit="MB",
                 minimum=0, group="Conditioning", advanced=True,
                 doc="Size of the encoded-prompt cache; 'auto' derives it from the budget."),
     SettingSpec("conditioning.prewarm", "Prewarm encoder cache", "bool", True, group="Conditioning",
                 doc="Encode the prompts before training starts."),
     SettingSpec("seed.base", "Base seed", "int", -1, minimum=-1, group="Reproducibility",
-                doc="Nodes with an empty seed derive theirs from this and their uid. -1 picks a random base."),
+                doc="Nodes with an empty seed derive theirs from this and their uid. -1 leaves them at 0, so every run sees the same order and noise."),
 )
 
 

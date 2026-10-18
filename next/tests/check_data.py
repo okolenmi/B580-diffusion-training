@@ -130,7 +130,7 @@ def main() -> None:
 
         print("nodes")
         from ..families.api.parts import PartInfo, PartKind, make_part
-        from ..graph import ExecutionContext, Environment
+        from ..graph import ExecutionContext, Environment, SettingsRegistry
         from ..data.store import DatasetStore
         from ..nodes.dataset.batching import BatcherNode, BucketerNode, NoiserNode
         from ..nodes.dataset.images import DatasetLibraryNode
@@ -141,11 +141,16 @@ def main() -> None:
         lib.ingest(tmp / "images")
         lib.close()
         ctx = ExecutionContext(env=Environment({"datasets": store}))
-        node = lambda cls: cls(ctx.scoped("n", (), cls.__name__))  # noqa: E731
+        node = lambda cls: cls(ctx.scoped("n", cls.READS_SETTINGS, cls.__name__))  # noqa: E731
         got = node(DatasetLibraryNode).build(dataset="demo")["images"]
         check(len(got) == 6, "Dataset Library node returns the set")
         table = node(TagSwapNode).build(prompts=node(CaptionsNode).build(images=got, seed=1)["prompts"])["prompts"]
         check(len(table.stages) == 1, "stage node appends to the table")
+        seeded = lambda base, uid: ExecutionContext(settings=SettingsRegistry().snapshot({"seed.base": base})).scoped(  # noqa: E731
+            uid, ("seed.base",), "n")
+        derive = lambda base, uid, value=None: CaptionsNode(seeded(base, uid)).derived_seed(value)  # noqa: E731
+        check(derive(-1, "a") == 0 and derive(7, "a") == derive(7, "a") != derive(7, "b") != derive(8, "b") and derive(7, "a", 3) == 3,
+              "a node seed left empty is 0 without a base, else derived from base and node id; an explicit seed wins")
         info = PartInfo(PartKind.DENOISER, "denoiser", "", 1, "F16", 1)
         noiser = node(NoiserNode).build(denoiser=make_part("sdxl", "x.safetensors", info), parameterization="v")["noiser"]
         buckets = node(BucketerNode).build(latents=latents, multiple=1)["buckets"]

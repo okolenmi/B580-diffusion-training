@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import inspect
 import threading
 import time
@@ -229,6 +230,16 @@ class Node(ABC):
 
     def upstream_completion(self, port: str) -> Completion:
         return self.context.upstream_completion(port)
+
+    def derived_seed(self, value: int | None) -> int:
+        """A node's own seed when set; otherwise one derived from ``seed.base`` and this node's id, so one number
+        reproduces a whole graph while no two nodes share a stream. Without a base the derived seed is 0."""
+        if value is not None:
+            return int(value)
+        base = int(self.context.settings.get("seed.base"))
+        if base < 0:
+            return 0
+        return int.from_bytes(hashlib.sha256(f"{base}:{self.uid}".encode()).digest()[:4], "big")
 
     def report_completion(self, completion: Completion) -> None:
         self.context.report_completion(completion)

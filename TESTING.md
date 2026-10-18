@@ -87,3 +87,10 @@ Pass: all train; report peak/step time.
 `PYTORCH_ALLOC_CONF=expandable_segments:True` before the prefix.
 - Either an allocator warning (not supported: stop, nothing to fix) or lower `split_free_mb`/`segments` in the csv.
 Pass: tell me which.
+
+## 14. Settings that became real
+Run the prefix with `--set seed.base=5`, then twice with the same value, then with `--set conditioning.prewarm=false`.
+- Same `seed.base` twice: identical first-epoch batch order and step-1 loss; another base: different order.
+- `prewarm=false`: no "Encoding prompts" task before training; the encoders run on first use (first steps slower), training still works with `release_encoders` on.
+- `--param trainer.timing=false --set runtime.profile=true` prints the per-phase timings.
+Pass: all three behave as described.

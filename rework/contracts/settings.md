@@ -24,7 +24,7 @@ Core keys (initial; see plan 20 section 4 for meaning): `memory.vram_max_mb`,
 `precision.denoiser`, `precision.encoders`, `precision.vae`, `precision.autocast`,
 `runtime.graph_capture`, `runtime.residency.safety_margin`,
 `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
-`runtime.block_swap`, `runtime.profile`, `runtime.profile_memory`,
+`runtime.block_swap`, `runtime.profile`,
 `conditioning.cache_mb`, `conditioning.prewarm`, `seed.base`.
 
 Access: `ctx.settings.get("device.default")` returns the resolved value of an immutable

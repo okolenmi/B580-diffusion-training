@@ -222,15 +222,16 @@ def batch_area_limit():
 
     from ..data.bucketing import make_plan
 
-    shapes = {f"s{i}": (10, 10) for i in range(8)} | {f"m{i}": (14, 10) for i in range(4)} | {f"b{i}": (20, 10) for i in range(3)} | {"x": (40, 10)}
-    plan = make_plan(shapes, batch_size=4, full_batch_area=100, shuffle=False, keep_incomplete=True, rng=random.Random(0))
-    sizes = {shape: sorted({len(ids) for ids, s in plan.batches if s == shape}) for _, shape in plan.batches}
-    check(sizes == {(10, 10): [4], (14, 10): [2], (20, 10): [1, 2], (40, 10): [1]},
-          f"a batch of 4 halves at up to twice the area, and keeps shrinking with the area down to one sample ({sizes})")
-    three = make_plan({f"a{i}": (14, 10) for i in range(3)}, batch_size=3, full_batch_area=100, shuffle=False, keep_incomplete=True, rng=random.Random(0))
-    check([len(ids) for ids, _ in three.batches] == [1, 1, 1], "a batch of 3 goes to 1, not to 2")
-    plain = make_plan(shapes, batch_size=4, shuffle=False, keep_incomplete=True, rng=random.Random(0))
-    check(max(len(ids) for ids, _ in plain.batches) == 4, "without a limit batches stay full")
+    def size_of(h: int, w: int, batch: int) -> int:
+        plan = make_plan({f"a{i}": (h, w) for i in range(batch)}, batch_size=batch, full_batch_area=96 * 96, shuffle=False, keep_incomplete=True,
+                         rng=random.Random(0))
+        return len(plan.batches[0][0])
+
+    check([size_of(96, 96, 4), size_of(96, 100, 4), size_of(96, 144, 4), size_of(96, 193, 4), size_of(96, 400, 4)] == [4, 3, 2, 1, 1],
+          "a batch holds as many samples as fit the pixel budget of the full batch, rounded down, and at least one")
+    check(size_of(96, 120, 2) == 1 and size_of(96, 96, 2) == 2 and size_of(96, 150, 3) == 1, "small batches follow the same rule")
+    plain = make_plan({f"a{i}": (96, 400) for i in range(4)}, batch_size=4, shuffle=False, keep_incomplete=True, rng=random.Random(0))
+    check(len(plain.batches[0][0]) == 4, "without a limit batches stay full")
 
 
 def prompt_lifetimes_and_store() -> None:

@@ -25,8 +25,8 @@ class BucketerNode(Node):
                            doc="At most this many padded shapes: the cheapest ones are merged into a common size until it holds. "
                                "Every shape the model meets for the first time costs seconds and driver memory; 0 keeps them all."),
         "batch_area": Port("batch_area", float, required=False, default=0.0, minimum=0.0, unit="x base area",
-                           doc="Samples up to this many times the area of the base resolution's square run in full batches; a sample k times "
-                               "bigger (rounded up) runs in batches k times smaller, down to one. Bounds the memory a step can take. 0 = no limit."),
+                           doc="Samples up to this many times the area of the base resolution's square run in full batches; a batch holds at "
+                               "most batch size times that area in total, so bigger samples run in smaller batches, down to one. Bounds the memory a step can take. 0 = no limit."),
         "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
                                 doc="Train on a short last batch of a group instead of dropping it (when shuffling)."),
     }

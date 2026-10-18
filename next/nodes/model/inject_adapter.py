@@ -83,9 +83,11 @@ class InjectAdapterNode(Node):
                                        include=parse_list(inputs.get("include", "")),
                                        exclude=parse_list(inputs.get("exclude", "")))
         rank, alpha = inputs.get("rank") or 16, float(inputs.get("alpha") if inputs.get("alpha") is not None else 16.0)
-        denoiser = family.load_denoiser(part, device=device, dtype=dtype)
-        adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
-                                         policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
+        with self.context.task("Loading the denoiser"):
+            denoiser = family.load_denoiser(part, device=device, dtype=dtype)
+        with self.context.task("Injecting the adapter"):
+            adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
+                                             policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
         if inputs.get("checkpointing", True):
             denoiser.set_checkpointer(ActivationCheckpointer(), inputs.get("attention_fraction", 1.0))
         window = None

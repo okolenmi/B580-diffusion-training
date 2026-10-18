@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import time
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable, ContextManager, Iterable
 
 import torch
 
@@ -45,11 +46,12 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None):
+                 timed: bool = False, residency=None, task: Callable[[str], ContextManager] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
+        self._task = task or (lambda title: contextlib.nullcontext())
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
         self._fetch = FetchBatch(batches)
@@ -79,7 +81,7 @@ class Trainer:
             return
         batch = make(self._fetch.peek())
         units = batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
-        with self.residency.measuring(units), self.optimizer.suspended():
+        with self._task("Measuring what a pixel costs"), self.residency.measuring(units), self.optimizer.suspended():
             self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
 
     def _step(self, step: int) -> float:

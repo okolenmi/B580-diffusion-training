@@ -39,6 +39,8 @@ class Console:
         self.verbose = verbose
         self.sampler: MemorySampler | None = None
         self.shapes_seen: set[tuple] = set()
+        self._labels: list[str] = []
+        self._progress_at = 0.0
 
     def report(self, stream: str, frame: dict) -> None:
         if stream == "memory":
@@ -47,12 +49,34 @@ class Console:
             self._step(frame["summary"])
             if self.sampler is not None:
                 self.sampler.label = f"step {frame['summary']['step'] + 1}"
+        elif stream == "task":
+            self._task(frame)
         elif stream == "buckets":
             print(f"data: {frame['samples']} samples, {frame['shapes_in']} latent shapes -> {frame['bucket_shapes']} padded shapes "
                   f"({frame['batch_shapes']} with short batches) in {frame['batches']} batches; padding mean {frame['padding_mean']:.0%}, "
                   f"worst {frame['padding_worst']:.0%}", flush=True)
         elif stream == "warning" or self.verbose:
             print(f"[{stream}] {json.dumps(frame, default=str)}", flush=True)
+
+    def _task(self, frame: dict) -> None:
+        """Named stretches of work: their titles label the memory log, and long ones print their progress."""
+        title, state = frame["title"], frame["state"]
+        count = f" {frame['done']}/{frame['total']}" if frame["total"] else ""
+        if state == "started":
+            self._labels.append(self.sampler.label if self.sampler else "")
+            if self.sampler is not None:
+                self.sampler.label = title
+            print(f"{title}{' (' + str(frame['total']) + ')' if frame['total'] else ''} ...", flush=True)
+        elif state == "progress":
+            now = time.monotonic()
+            if now - self._progress_at >= 10.0:
+                self._progress_at = now
+                print(f"  {title}:{count}", flush=True)
+        else:
+            if self.sampler is not None and self._labels:
+                self.sampler.label = self._labels.pop()
+            if frame["seconds"] >= 1.0:
+                print(f"  {title}: {frame['seconds']:.1f} s{'' if frame['ok'] else ' (failed)'}", flush=True)
 
     def _step(self, summary: dict) -> None:
         m = summary["metrics"]
@@ -179,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="keep text encodings of stable prompts on disk next to the dataset's latents")
             p.add_argument("--max-shapes", type=int, default=16,
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
+            p.add_argument("--batch-area", type=float, default=0.0,
+                           help="samples above this many times the base resolution's area (e.g. 1.5) run one at a time instead of in a full batch; 0 = no limit")
             p.add_argument("--dump", help="write the graph here instead of running it")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -196,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes,
+                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area,
                                  settings=_settings(args.set))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")

@@ -297,5 +297,33 @@ def dynamic_and_catalog():
     check(len(text) > 1000 and info["ConstNode"]["display_name"] == "Const", "display names are derived")
 
 
+def named_tasks():
+    from ..graph import ExecutionContext
+
+    class Frames:
+        def __init__(self):
+            self.frames = []
+
+        def report(self, stream, frame):
+            self.frames.append((stream, frame))
+
+    reporter = Frames()
+    context = ExecutionContext(reporter=reporter).scoped("n_task", (), "test")
+    with context.task("Encoding", total=3) as task:
+        task.update(1)
+        task.update(3)
+    states = [f["state"] for s, f in reporter.frames if s == "task"]
+    check(states[0] == "started" and states[-1] == "finished" and all(f["node"] == "n_task" and f["title"] == "Encoding" for _, f in reporter.frames),
+          "a task reports that it started and finished, under its title and its node")
+    check(reporter.frames[-1][1]["done"] == 3 and reporter.frames[-1][1]["ok"] is True and len(states) <= 4, "progress is throttled but the last count always arrives")
+    try:
+        with context.task("Failing"):
+            raise ValueError("x")
+    except ValueError:
+        pass
+    check(reporter.frames[-1][1]["ok"] is False, "a task that raised says so, and the error still propagates")
+    ExecutionContext().task("quiet").__enter__()  # a context without a reporter ignores tasks
+
+
 if __name__ == "__main__":
-    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog)
+    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog, named_tasks)

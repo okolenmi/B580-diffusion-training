@@ -6,6 +6,7 @@ import copy
 import dataclasses
 import inspect
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +75,42 @@ class Environment:
         return name in self.services
 
 
+class Task:
+    """A stretch of work worth a name: ``with context.task("Encoding latents", total=n) as task: task.update(done)``.
+
+    The reporter gets ``task`` frames (started, progress, finished), so any monitor can show what a long node is doing
+    without the node knowing how it is shown. Progress frames are throttled; the first and last always go out.
+    """
+
+    INTERVAL_S = 0.5
+
+    def __init__(self, context: "ExecutionContext", title: str, total: int | None):
+        self.context, self.title, self.total, self.done = context, title, total, 0
+        self._started = self._last = 0.0
+
+    def _frame(self, state: str, **extra: Any) -> None:
+        self.context.report("task", {"node": self.context.uid, "title": self.title, "state": state, "done": self.done,
+                                     "total": self.total, **extra})
+
+    def __enter__(self) -> "Task":
+        self._started = self._last = time.monotonic()
+        self._frame("started")
+        return self
+
+    def update(self, done: int, total: int | None = None) -> None:
+        self.done = done
+        if total is not None:
+            self.total = total
+        now = time.monotonic()
+        if now - self._last >= self.INTERVAL_S:
+            self._last = now
+            self._frame("progress")
+
+    def __exit__(self, kind, error, trace) -> bool:
+        self._frame("finished", seconds=round(time.monotonic() - self._started, 2), ok=kind is None)
+        return False
+
+
 class ExecutionContext:
     """Run-wide infrastructure handed to every node. ``scoped`` gives one node its own copy."""
 
@@ -124,6 +161,9 @@ class ExecutionContext:
     def report(self, stream: str, frame: dict) -> None:
         if self.reporter is not None:
             self.reporter.report(stream, frame)
+
+    def task(self, title: str, total: int | None = None) -> Task:
+        return Task(self, title, total)
 
 
 @dataclass(frozen=True)

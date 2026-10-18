@@ -67,14 +67,14 @@ class LatentCacheNode(Node):
             if residency is not None:
                 residency.ensure_started()
             dtype = resolve_dtype(self.context.settings.get("precision.vae"), torch.float32)
-            codec = family.load_vae(part, device=device, dtype=dtype)
+            with self.context.task("Loading the VAE"):
+                codec = family.load_vae(part, device=device, dtype=dtype)
             accelerator = Accelerator(device)
             try:
-                stats = cache.build(images, policy, codec, batch_size=fit_batch(inputs.get("batch_size") or 1, policy.base, dtype, accelerator),
-                                    recover=accelerator.empty_cache,
-                                    progress=lambda done, total: self.context.report(
-                                        "cache_progress", {"node": self.uid, "done": done, "total": total}),
-                                    should_stop=self.context.should_cancel)
+                with self.context.task("Encoding latents", total=len(todo)) as task:
+                    stats = cache.build(images, policy, codec, batch_size=fit_batch(inputs.get("batch_size") or 1, policy.base, dtype, accelerator),
+                                        recover=accelerator.empty_cache, progress=lambda done, total: task.update(done, total),
+                                        should_stop=self.context.should_cancel)
             finally:
                 codec.release()
                 accelerator.empty_cache()

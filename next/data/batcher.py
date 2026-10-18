@@ -23,7 +23,7 @@ from .ids import image_of
 
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
-                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, seed: int = 0,
+                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, seed: int = 0,
                  depth: int = 2, pin: bool = False, start_epoch: int = 0,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
@@ -33,13 +33,15 @@ class Batcher:
         self.latents, self.prompts, self.noiser = latents, prompts, noiser
         self.batch_size, self.shuffle, self.keep_incomplete = batch_size, shuffle, keep_incomplete
         self.multiple, self.max_shapes, self.seed, self.depth, self.pin = multiple, max_shapes, seed, depth, pin
+        self.batch_area = batch_area
         self.epoch = start_epoch
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
+        self.full_batch_area = int(batch_area * (latents.policy.base // self._factor) ** 2)
         self.plan_for(start_epoch)  # an impossible configuration fails now, not on the first step
 
     def plan_for(self, epoch: int) -> Plan:
-        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes,
+        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes, full_batch_area=self.full_batch_area,
                          shuffle=self.shuffle, keep_incomplete=self.keep_incomplete,
                          rng=random.Random(f"{self.seed}:plan:{epoch}"))
 

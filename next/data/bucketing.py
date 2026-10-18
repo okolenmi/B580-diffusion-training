@@ -67,9 +67,13 @@ class Plan:
         return len(self.batches)
 
 
-def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multiple: int = 1, max_shapes: int = 0, shuffle: bool,
-              keep_incomplete: bool, rng: random.Random) -> Plan:
-    """Group by bucket shape, cut into batches, and (when shuffling) order them in same-shape clumps."""
+def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multiple: int = 1, max_shapes: int = 0, full_batch_area: int = 0,
+              shuffle: bool, keep_incomplete: bool, rng: random.Random) -> Plan:
+    """Group by bucket shape, cut into batches, and (when shuffling) order them in same-shape clumps.
+
+    A shape whose area is ``k`` times ``full_batch_area`` (rounded up; 0 means no limit) runs batches ``k`` times
+    smaller, at least one sample: 4 becomes 2 at up to twice the area, 3 becomes 1.
+    """
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
     target = bucket_map(shapes.values(), multiple, max_shapes)
@@ -81,9 +85,10 @@ def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multipl
     for shape, members in groups.items():
         if shuffle:
             rng.shuffle(members)
-        for start in range(0, len(members), batch_size):
-            chunk = members[start:start + batch_size]
-            if len(chunk) < batch_size and shuffle and not keep_incomplete:
+        size = max(1, batch_size // -(-shape[0] * shape[1] // full_batch_area)) if full_batch_area else batch_size
+        for start in range(0, len(members), size):
+            chunk = members[start:start + size]
+            if len(chunk) < size and shuffle and not keep_incomplete:
                 dropped += len(chunk)
                 continue
             batches.append((tuple(chunk), shape))
@@ -131,3 +136,4 @@ class BucketPolicy:
     multiple: int = 1
     keep_incomplete: bool = False
     max_shapes: int = 0
+    batch_area: float = 0.0  # multiples of the base resolution's area a sample may take and still run in a full batch; 0 = no limit

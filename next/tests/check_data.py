@@ -217,6 +217,22 @@ def shape_limit():
     check(bucket_map([(8, 8), (8, 8)], 4, 3) == {(8, 8): (8, 8)}, "a limit above the shape count changes nothing")
 
 
+def batch_area_limit():
+    import random
+
+    from ..data.bucketing import make_plan
+
+    shapes = {f"s{i}": (10, 10) for i in range(8)} | {f"m{i}": (14, 10) for i in range(4)} | {f"b{i}": (20, 10) for i in range(3)} | {"x": (40, 10)}
+    plan = make_plan(shapes, batch_size=4, full_batch_area=100, shuffle=False, keep_incomplete=True, rng=random.Random(0))
+    sizes = {shape: sorted({len(ids) for ids, s in plan.batches if s == shape}) for _, shape in plan.batches}
+    check(sizes == {(10, 10): [4], (14, 10): [2], (20, 10): [1, 2], (40, 10): [1]},
+          f"a batch of 4 halves at up to twice the area, and keeps shrinking with the area down to one sample ({sizes})")
+    three = make_plan({f"a{i}": (14, 10) for i in range(3)}, batch_size=3, full_batch_area=100, shuffle=False, keep_incomplete=True, rng=random.Random(0))
+    check([len(ids) for ids, _ in three.batches] == [1, 1, 1], "a batch of 3 goes to 1, not to 2")
+    plain = make_plan(shapes, batch_size=4, shuffle=False, keep_incomplete=True, rng=random.Random(0))
+    check(max(len(ids) for ids, _ in plain.batches) == 4, "without a limit batches stay full")
+
+
 def prompt_lifetimes_and_store() -> None:
     """Prompts say how long they are worth keeping; only stable ones reach the disk store, and a second run reads them."""
     from ..data.conditioning_cache import ConditioningCache
@@ -256,4 +272,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, prompt_lifetimes_and_store)

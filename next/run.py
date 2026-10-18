@@ -46,6 +46,10 @@ class Console:
             self._step(frame["summary"])
             if self.sampler is not None:
                 self.sampler.label = f"step {frame['summary']['step'] + 1}"
+        elif stream == "buckets":
+            print(f"data: {frame['samples']} samples, {frame['shapes_in']} latent shapes -> {frame['bucket_shapes']} padded shapes "
+                  f"({frame['batch_shapes']} with short batches) in {frame['batches']} batches; padding mean {frame['padding_mean']:.0%}, "
+                  f"worst {frame['padding_worst']:.0%}", flush=True)
         elif stream == "warning" or self.verbose:
             print(f"[{stream}] {json.dumps(frame, default=str)}", flush=True)
 
@@ -169,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--no-checkpointing", action="store_true")
             p.add_argument("--persist-conditioning", action="store_true",
                            help="keep text encodings of stable prompts on disk next to the dataset's latents")
+            p.add_argument("--max-shapes", type=int, default=16,
+                           help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--dump", help="write the graph here instead of running it")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -186,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning,
+                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes,
                                  settings=_settings(args.set))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")

@@ -84,7 +84,7 @@ channels). Inputs: component-map doc, `docs/design/backend/04-dataset-format.md`
 | `LatentCacheNode` | `images: ImageSet`, `vae: VAEPart`; group **Size policy**: base resolution, bucket multiple (from `LatentSpec.pixel_multiple`), crop mode; group **Cache**: reuse, rebuild | **new**; absorbs the VAE-encode step of `manager/builder.py` |
 | `AutoCaptionNode` | adds `output_channel` | exists |
 | `CaptionPoolNode`, `CaptionDropoutNode` (new node, was a port), `TagSwapNode` (new), `TagShuffleNode` (new) | each takes a `PromptTable` and returns one with a stage appended | `CaptionPool` exists; the rest new |
-| `BucketerNode` | `latents`, group **Buckets**: `shape_bucket_multiple`, `group_by_size_only`, `keep_incomplete_batches`; input `bucket_balance` | part of the source node |
+| `BucketerNode` | `latents`, group **Buckets**: `shape_bucket_multiple`, `max_shapes` (merges the cheapest shapes until at most this many remain; each new shape costs kernel compilation and driver memory), `group_by_size_only`, `keep_incomplete_batches`; input `bucket_balance` | part of the source node |
 | `BatcherNode` | `latents`, `prompts`, `plan`, `noiser`; group **Batching**: `batch_size`, `shuffle`, `seed`; event outs `epoch_ending`, `epoch_started` | part of the source node + loader |
 | `PrefetchNode` | exists | |
 

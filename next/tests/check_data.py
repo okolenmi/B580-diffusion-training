@@ -204,6 +204,19 @@ class LatentSpecLike:
         self.channels = channels
 
 
+def shape_limit():
+    from ..data.bucketing import bucket_map, padding_stats
+
+    shapes = [(12 + 4 * i, 20 + 4 * j) for i in range(5) for j in range(5)] * 2 + [(12, 12)]
+    free = bucket_map(shapes, 4)
+    check(len(set(free.values())) == 25 + 1 and all(free[s] == s for s in shapes), "without a limit, shapes keep their own padded size")
+    few = bucket_map(shapes, 4, 6)
+    check(len(set(few.values())) == 6 and all(b[0] >= s[0] and b[1] >= s[1] for s, b in few.items()), "a limit merges shapes, and every sample still fits in its bucket")
+    stats = padding_stats(shapes, 4, 6)
+    check(stats["shapes_out"] == 6 and stats["pad_mean"] < 0.3, f"merging the cheapest pairs first keeps the padding small ({stats['pad_mean']:.0%})")
+    check(bucket_map([(8, 8), (8, 8)], 4, 3) == {(8, 8): (8, 8)}, "a limit above the shape count changes nothing")
+
+
 def prompt_lifetimes_and_store() -> None:
     """Prompts say how long they are worth keeping; only stable ones reach the disk store, and a second run reads them."""
     from ..data.conditioning_cache import ConditioningCache
@@ -243,4 +256,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, prompt_lifetimes_and_store)
+    run(main, shape_limit, prompt_lifetimes_and_store)

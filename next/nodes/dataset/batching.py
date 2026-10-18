@@ -21,6 +21,9 @@ class BucketerNode(Node):
         "latents": Port("latents", LatentSet),
         "multiple": Port("multiple", int, required=False, default=1, minimum=1, unit="latent px",
                          doc="Round every latent side up to this multiple and pad; 1 keeps shapes as they are."),
+        "max_shapes": Port("max_shapes", int, required=False, default=0, minimum=0,
+                           doc="At most this many padded shapes: the cheapest ones are merged into a common size until it holds. "
+                               "Every shape the model meets for the first time costs seconds and driver memory; 0 keeps them all."),
         "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
                                 doc="Train on a short last batch of a group instead of dropping it (when shuffling)."),
     }
@@ -30,7 +33,7 @@ class BucketerNode(Node):
         latents = inputs.get("latents")
         if latents is None:
             return {}
-        stats = padding_stats(list(latents.shapes.values()), inputs.get("multiple") or 1)
+        stats = padding_stats(list(latents.shapes.values()), inputs.get("multiple") or 1, inputs.get("max_shapes") or 0)
         if stats["samples"] and stats["padded_samples"]:
             return {"multiple": [f"{stats['padded_samples']}/{stats['samples']} samples padded; mean padding "
                                  f"{stats['pad_mean']:.0%}, worst {stats['pad_max']:.0%}"]}
@@ -38,7 +41,7 @@ class BucketerNode(Node):
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        return {"buckets": BucketPolicy(inputs.get("multiple") or 1, bool(inputs.get("keep_incomplete")))}
+        return {"buckets": BucketPolicy(inputs.get("multiple") or 1, bool(inputs.get("keep_incomplete")), inputs.get("max_shapes") or 0)}
 
 
 class NoiserNode(Node):
@@ -102,6 +105,7 @@ class BatcherNode(Node):
         prompts.listener = emit
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
-                          multiple=buckets.multiple, seed=inputs.get("seed") or 0, depth=inputs.get("prefetch") or 2,
+                          multiple=buckets.multiple, max_shapes=buckets.max_shapes, seed=inputs.get("seed") or 0, depth=inputs.get("prefetch") or 2,
                           start_epoch=inputs.get("start_epoch") or 0, emit=emit)
+        self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

@@ -13,7 +13,7 @@ from typing import Callable, Iterator
 import torch
 
 from ..graph.events import EpochEnding, EpochStarted, EventType
-from .bucketing import Plan, bucket_shape, make_plan
+from .bucketing import Plan, make_plan, padding_stats
 from .latent_cache import LatentSet
 from .noise import Noiser
 from .prefetch import Prefetch
@@ -23,7 +23,7 @@ from .ids import image_of
 
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
-                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, seed: int = 0,
+                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, seed: int = 0,
                  depth: int = 2, pin: bool = False, start_epoch: int = 0,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
@@ -32,16 +32,25 @@ class Batcher:
                              f"the prompt table must be built from the same images")
         self.latents, self.prompts, self.noiser = latents, prompts, noiser
         self.batch_size, self.shuffle, self.keep_incomplete = batch_size, shuffle, keep_incomplete
-        self.multiple, self.seed, self.depth, self.pin = multiple, seed, depth, pin
+        self.multiple, self.max_shapes, self.seed, self.depth, self.pin = multiple, max_shapes, seed, depth, pin
         self.epoch = start_epoch
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
         self.plan_for(start_epoch)  # an impossible configuration fails now, not on the first step
 
     def plan_for(self, epoch: int) -> Plan:
-        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple,
+        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes,
                          shuffle=self.shuffle, keep_incomplete=self.keep_incomplete,
                          rng=random.Random(f"{self.seed}:plan:{epoch}"))
+
+    def shape_summary(self) -> dict:
+        """What the model will see: distinct input shapes (batch size included, as a short batch is a shape of its own)
+        and how much of the bucketed area is padding."""
+        plan = self.plan_for(self.epoch)
+        stats = padding_stats(list(self.latents.shapes.values()), self.multiple, self.max_shapes)
+        return {"samples": stats["samples"], "shapes_in": stats["shapes_in"], "bucket_shapes": stats["shapes_out"],
+                "batch_shapes": len({(len(ids), *shape) for ids, shape in plan.batches}), "batches": len(plan),
+                "padding_mean": round(stats["pad_mean"], 3), "padding_worst": round(stats["pad_max"], 3)}
 
     def probe_batch(self, like: dict) -> dict:
         """One sample at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s

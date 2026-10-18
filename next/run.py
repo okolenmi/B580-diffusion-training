@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--max-shapes", type=int, default=16,
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--batch-area", type=float, default=0.0,
-                           help="samples above this many times the base resolution's area (e.g. 1.5) run one at a time instead of in a full batch; 0 = no limit")
+                           help="a batch holds at most batch size times this many base-resolution areas in total (e.g. 1.5), so bigger samples run in smaller batches; 0 = no limit")
             p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro"),
                            help="weight the loss by how each third of the timestep range is improving")
             p.add_argument("--balance-sampling", type=float, default=0.0,

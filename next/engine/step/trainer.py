@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import math
 import time
 from dataclasses import dataclass
 from typing import Callable, ContextManager, Iterable
@@ -87,12 +88,22 @@ class Trainer:
         batch = make(self._fetch.peek())
         units = batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
 
+        starting = self._density[1].checkpoint_share if self._density is not None else None
+
         def measure(share: float | None = None) -> float:
             if share is not None:
                 self._density[1].set_checkpoint_share(share)
                 self.residency.planner.reset()
-            with self._task("Measuring what a pixel costs"), self.residency.measuring(units) as result, self.optimizer.suspended():
-                self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
+            try:
+                with self._task("Measuring what a pixel costs"), self.residency.measuring(units) as result, self.optimizer.suspended():
+                    self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
+            except Exception as error:  # noqa: BLE001 - narrowed just below
+                if share is None or share == starting or not is_out_of_memory(error):
+                    raise
+                error.__traceback__ = None  # a share that stores too much to fit says so by costing more than any budget
+                gc.collect()
+                self.residency.give_back("a checkpoint share that did not fit")
+                return math.inf
             return result["cost"]
 
         budget = self.residency.budget_mb()
@@ -163,6 +174,9 @@ class Trainer:
         if self._balance is not None:
             self._balance.observe(metrics)
             metrics.update({name.replace("loss_t_", "weight_t_"): w for name, w in self._balance.weights.items()})
+            shares = self._balance.third_probabilities()
+            if shares is not None:
+                metrics.update(zip(("draw_t_low", "draw_t_mid", "draw_t_high"), shares))
         if self.emit is not None:
             self.emit(StepFinished(step + 1, self.steps, metrics))
         return loss

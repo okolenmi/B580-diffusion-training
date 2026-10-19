@@ -12,32 +12,22 @@ python -m next.run sdxl-lora --models <models> --datasets <datasets> --file <che
 
 Run each test from the same start (fresh process). Unless said otherwise only the listed flag changes.
 
-## 3. Shape count vs padding
-Max shapes 8 gives 11 new shapes with batch size 4 (leftover shapes) - 7% mean padding. Feels ok. 49 and 0 have no differences - 2% mean.
+## 4. Auto checkpoint share, with a tight budget (retest)
+Your run: unbounded budget kept share 1.0 (10.3 GB at batch 3, 512); batch 1 at 512 chose 0.75 and was faster (1040 -> 970 ms).
+With `--set memory.vram_max_mb=10240` it died before step 1: the tuner tried a lower share, which stores more activations, and that
+measuring run hit the cap. Fixed: a share whose measuring run runs out of memory now counts as too expensive.
+Rerun the 10240 case (batch 3, 512).
+- Expect: no crash before step 1; `checkpoint_share` event (probably 1.0 or 0.75); the step lines then run, with chunk markers if the planner splits batches.
+Pass: it trains. Fail: paste the console lines and the csv.
 
-## 4. Auto checkpoint share
-memory: {"event": "checkpoint_share", "share": 1.0, "of_blocks": "transformer"} - 10.3GB usage at final steps (batch 3, res 512)
-With limit `--set memory.vram_max_mb=10240` it's failing before first step:
-  Measuring what a pixel costs: 5.1 s
-Measuring what a pixel costs ...
-[  11.1s] DiffusionTrainerNode: 7.2s  allocated 8105, reserved 8124, device 9881 MB
-run: failed: OutOfMemoryError: XPU out of memory. Tried to allocate 40.00 MiB. GPU 0 has a total capacity of 11.93 GiB of which 2.28 GiB is free. 7.97 GiB allowed; Of the allocated memory 7.92 GiB is allocated by PyTorch, and 18.56 MiB is reserved by PyTorch but unallocated. Please use `empty_cache` to release all unoccupied cached memory. 
-
-Tested with 512 res 1 batch (0.75 share). It's faster. 1040ms->970ms
-
-## 5. Time balance
-Run `--time-balance normalize`, then `speed`, then `dro` (100+ steps each; weights start after 10 reports per third).
-normalize: stays like this from start to the end: weights [0.25/0.43/2.39]
-speed: shifts from this [1.12/1.14/0.74] to this [2.50/0.26/0.25]
-dro: [0.88/0.99/1.13] -> [0.94/1.00/1.07]
-
-Compare sample outputs against test 1: well... this is for a big run. Small runs don't reliable enough. Will be a task for future.
-
-## 6. Balanced timestep sampling
-Add `--balance-sampling 1` (with and without `--time-balance dro`).
-with dro: [0.88/0.96/1.16]->[1.03/0.96/1.01]
-without: can't say... no "weights" string.
-Runs looks fine. Nothing unexpected.
+## 5. Time balance (retest speed and sampling)
+Done: normalize holds [0.25/0.43/2.39] (the smallest-loss third sits at the clip; as designed, a strong setting), dro drifts gently, balance-sampling with dro runs.
+Found: `speed` ratcheted to the clip ([1.12/1.14/0.74] -> [2.50/0.26/0.25]) because nothing pulled weights back. It now has a `leak`
+(`--param balance.leak=0.05`, default) that forgets a share of the weight at each report. Sampling alone showed nothing on the step line;
+it now prints `draws a/b/c` (the chance of each third).
+Rerun `--time-balance speed` (100+ steps) and `--balance-sampling 1` alone.
+- Expect: speed weights wander but stay moderate (not pinned at 2.5/0.25); `draws` appears with sampling and shifts towards the lagging third.
+Pass: both. Fail: paste the weight/draw lines.
 
 ## 7. Probe
 Add `--param trainer.probe_every=50`.

@@ -296,6 +296,10 @@ def time_balance():
     check(early.weights_for(torch.rand(4)) is None, "nothing is weighted before a third has a baseline")
     speed = feed(TimeBalance("speed", warmup_reports=2, eta=1.0), [(0.2, 0.1, 0.1)] * 2 + [(0.2, 0.1, 0.05)] * 6)
     check(speed.weights["loss_t_low"] > speed.weights["loss_t_high"], "speed gives weight to the third that descends slower than the rest")
+    history = [(0.2, 0.1, 0.1)] * 2 + [(0.2, 0.1, 0.05)] * 40 + [(0.2, 0.1, 0.05)] * 300
+    kept, forgot = (feed(TimeBalance("speed", warmup_reports=2, eta=1.0, leak=leak), history) for leak in (0.0, 0.05))
+    check(kept.weights["loss_t_low"] > 1.2 and abs(forgot.weights["loss_t_low"] - 1.0) < 0.05,
+          "a difference in speed that has stopped no longer holds the weights away from 1 (the leak pulls them back)")
     dro = feed(TimeBalance("dro", warmup_reports=2, dro_lambda=5.0), [(0.2, 0.1, 0.1)] * 2 + [(0.4, 0.1, 0.1)] * 80)
     check(max(dro.weights, key=dro.weights.get) == "loss_t_low", "dro puts the weight on the third furthest above its baseline")
     frac = torch.tensor([0.1, 0.5, 0.9, 1.0])
@@ -314,6 +318,10 @@ def time_balance():
         trainer.run()
         keys = {k for e in events for k in e.metrics}
         check(any(k.startswith("weight_t_") for k in keys), "a run with a balance reports the weights it applied")
+    with tempfile.TemporaryDirectory() as raw:
+        trainer, *_, events, _ = rig(Path(raw), steps=3, balance=TimeBalance("off", warmup_reports=1, sample_bias=1.0))
+        trainer.run()
+        check(any(k.startswith("draw_t_") for e in events for k in e.metrics), "a run that biases the sampling reports the chance of each third")
 
 
 def time_probe():

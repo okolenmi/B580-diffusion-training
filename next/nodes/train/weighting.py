@@ -42,6 +42,8 @@ class TimeBalanceNode(Node):
                      doc="off: only track. normalize: equal loss scale per third. speed: thirds that improve slower gain weight. "
                          "dro: the third furthest above its own baseline dominates."),
         "eta": Port("eta", float, required=False, default=0.5, minimum=0.0, group="weights", visible_when=("mode", "speed")),
+        "leak": Port("leak", float, required=False, default=0.05, minimum=0.0, maximum=0.99, group="weights", visible_when=("mode", "speed"),
+                     doc="Share of the accumulated weight forgotten at every report, so a lasting weight needs a lasting difference in speed."),
         "dro_lambda": Port("dro_lambda", float, required=False, default=1.0, minimum=0.0, group="weights", visible_when=("mode", "dro")),
         "clip_min": Port("clip_min", float, required=False, default=0.25, minimum=0.0, group="weights"),
         "clip_max": Port("clip_max", float, required=False, default=4.0, minimum=0.0, group="weights"),
@@ -61,4 +63,4 @@ class TimeBalanceNode(Node):
             return default if inputs.get(name) is None else inputs[name]
         return {"balance": TimeBalance(get("mode", "speed"), get("warmup_reports", 10), get("ema_alpha", 0.05), get("fast_alpha", 0.25),
                                        get("eta", 0.5), get("clip_min", 0.25), get("clip_max", 4.0), get("dro_lambda", 1.0),
-                                       get("sample_bias", 0.0))}
+                                       get("sample_bias", 0.0), get("leak", 0.05))}

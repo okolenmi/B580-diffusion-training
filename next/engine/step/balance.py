@@ -24,14 +24,16 @@ class TimeBalance:
     small dicts of floats, so no lock is taken."""
 
     def __init__(self, mode: str = "off", warmup_reports: int = 10, ema_alpha: float = 0.05, fast_alpha: float = 0.25,
-                 eta: float = 0.5, clip_min: float = 0.25, clip_max: float = 4.0, dro_lambda: float = 1.0, sample_bias: float = 0.0):
+                 eta: float = 0.5, clip_min: float = 0.25, clip_max: float = 4.0, dro_lambda: float = 1.0, sample_bias: float = 0.0, leak: float = 0.05):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         if warmup_reports < 1 or not 0 < ema_alpha <= 1 or not 0 < fast_alpha <= 1 or eta <= 0:
             raise ValueError("warmup_reports must be at least 1, the EMA rates in (0, 1] and eta above 0")
         if clip_min <= 0 or clip_max < clip_min or dro_lambda < 0 or sample_bias < 0:
             raise ValueError("need 0 < clip_min <= clip_max, dro_lambda >= 0 and sample_bias >= 0")
-        self.mode, self.warmup_reports, self.eta = mode, warmup_reports, eta
+        if not 0 <= leak < 1:
+            raise ValueError("leak must be in [0, 1)")
+        self.mode, self.warmup_reports, self.eta, self.leak = mode, warmup_reports, eta, leak
         self.ema_alpha, self.fast_alpha = ema_alpha, fast_alpha
         self.clip_min, self.clip_max, self.dro_lambda, self.sample_bias = clip_min, clip_max, dro_lambda, sample_bias
         self._warmup: dict[str, list[float]] = {}
@@ -68,7 +70,8 @@ class TimeBalance:
         else:  # speed: a third that descends slower than the others gains weight
             rates = {k: self._fast[k] / self._slow[k] for k in ready}
             pack = sum(rates.values()) / len(rates)
-            raw = {k: self._weights.get(k, 1.0) * (rates[k] / pack) ** self.eta for k in ready}
+            # each report pulls the old weight back towards 1, so a difference in speed that does not last cannot ratchet to the clip
+            raw = {k: self._weights.get(k, 1.0) ** (1 - self.leak) * (rates[k] / pack) ** self.eta for k in ready}
         mean = sum(raw.values()) / len(raw)
         self._weights = {k: min(self.clip_max, max(self.clip_min, v / mean)) for k, v in raw.items()}
 

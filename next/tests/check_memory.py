@@ -488,6 +488,27 @@ def tuned_checkpointing():
               and any(t["event"] == "checkpoint_share" and t["share"] == 0.0 for t in m.trace),
               "the trainer lowers the checkpointed share to what the budget allows, applies it to the network and reports it")
 
+    with tempfile.TemporaryDirectory() as raw:
+        device = FakeDevice(ours=5000)
+        device.spike = 200.0
+        m = manager(device, limit_mb=11000)
+        m.start()
+        handle = Handle(device)
+        trainer, _, denoiser, *_ = rig(Path(raw), steps=1, residency=m, density=(CheckpointDensity(m.planner), handle))
+        handle.denoiser = denoiser
+        trainer.emit = lambda e: None
+        real = trainer.pipeline.run
+
+        def run_pipeline(state):
+            if state.step < 0 and handle.checkpoint_share <= 0.5:
+                raise RuntimeError("XPU out of memory. Tried to allocate 40.00 MiB")
+            return real(state)
+
+        trainer.pipeline.run = run_pipeline
+        result = trainer.run()
+        check(result.steps_done == 1 and handle.checkpoint_share == 1.0,
+              "a share whose measuring run out of memory counts as too expensive: the tuner keeps the starting share and the run goes on")
+
 
 if __name__ == "__main__":
     run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing)

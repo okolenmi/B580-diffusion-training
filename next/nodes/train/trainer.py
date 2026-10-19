@@ -35,12 +35,16 @@ class DiffusionTrainerNode(Node):
         "schedule": Port("schedule", LRSchedule),
         "weighting": Port("weighting", LossWeighting),
         "balance": Port("balance", TimeBalance, required=False, doc="Weights the loss by how each third of the timestep range is doing."),
-        "steps": Port("steps", int, required=False, default=1000, minimum=1, group="loop", doc="Optimizer steps."),
+        "steps": Port("steps", int, required=False, default=1000, minimum=0, group="loop",
+                      doc="Optimizer steps. 0 means no step limit (set epochs). With both set, the run ends at whichever comes first."),
+        "epochs": Port("epochs", int, required=False, default=0, minimum=0, group="loop",
+                       doc="Passes over the data (an epoch is the batcher's batches; with accumulation, steps are batches / accumulation). "
+                           "0 means no epoch limit. With both set, the run ends at whichever comes first."),
         "accumulation": Port("accumulation", int, required=False, default=1, minimum=1, group="loop",
                              doc="Batches per optimizer step; their gradients average."),
         "start_step": Port("start_step", int, required=False, default=0, minimum=0, group="loop",
                            doc="Step to start from when resuming (the schedule and the logs continue from it)."),
-        "tune_checkpointing": Port("tune_checkpointing", bool, required=False, default=False, group="loop",
+        "tune_checkpointing": Port("tune_checkpointing", bool, required=False, default=False, group="speed",
                                    doc="Before step 1, measure what the card allows and recompute fewer transformer blocks in backward "
                                        "(faster steps) as long as the largest batch still fits the memory budget."),
         "probe_every": Port("probe_every", int, required=False, default=0, minimum=0, group="diagnostics",
@@ -88,9 +92,11 @@ class DiffusionTrainerNode(Node):
                               item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
                               items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed)
         graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None
+        total = self._total_steps(inputs)
+        inputs["schedule"].fit(total)
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
-                          steps=inputs.get("steps", 1000), accumulation=inputs.get("accumulation", 1), device=model.device,
+                          steps=total, accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
                           synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph)
@@ -101,6 +107,18 @@ class DiffusionTrainerNode(Node):
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
 
+
+    @staticmethod
+    def _total_steps(inputs: dict) -> int:
+        """Optimizer steps of the run: the step limit, the epoch limit (batches per epoch / accumulation), whichever is smaller."""
+        limits = []
+        if inputs.get("steps", 1000):
+            limits.append(int(inputs.get("steps", 1000)))
+        if inputs.get("epochs"):
+            limits.append(max(1, int(inputs["epochs"]) * len(inputs["batches"]) // (inputs.get("accumulation") or 1)))
+        if not limits:
+            raise ValueError("DiffusionTrainer: set steps or epochs")
+        return min(limits)
 
     def _graph_factory(self, inputs: dict, model: TrainableDenoiser, accelerator: Accelerator):
         """What the Trainer calls with the eager phases to get the phase that replays a captured graph; refuses the
@@ -119,6 +137,27 @@ class DiffusionTrainerNode(Node):
                                             graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
                                             max_graphs=inputs.get("graph_shapes") or 8, attentions=attentions,
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
+
+
+class EveryEpochNode(Node):
+    """Turns the end of an epoch into a checkpoint-due event (in addition to Every N Steps; wire either or both)."""
+
+    DISPLAY_NAME = "Every Epoch"
+    CATEGORY = "Training"
+    INPUTS = {"every": Port("every", int, default=1, minimum=1, doc="Emit after every this many epochs.")}
+    OUTPUTS = {"interval": Port("interval", int)}
+    EVENTS_IN = {"step": EventIn(StepFinished, handler="on_step")}
+    EVENTS_OUT = {"due": EventOut(CheckpointDue)}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        self.every = inputs["every"]
+        return {"interval": self.every}
+
+    def on_step(self, event: StepFinished, ctx) -> None:
+        epoch = event.metrics.get("epoch", 0)
+        if event.metrics.get("epoch_end") and (epoch + 1) % self.every == 0:
+            ctx.emit("due", CheckpointDue(event.step, f"epoch {epoch + 1}"))
 
 
 class EveryNStepsNode(Node):

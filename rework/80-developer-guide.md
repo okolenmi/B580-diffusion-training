@@ -245,8 +245,11 @@ changes.
 
 ## 5. Ports, groups and the editor (target, plan 30)
 
-* **Group** every node that has more than eight widget ports; mark the rarely
-  touched ones `advanced`. The lint test fails otherwise.
+* **Group** every node that has more than six widget ports; mark the rarely
+  touched ones `advanced`. `next/tests/check_node_surface.py` fails otherwise, and also when a group holds more
+  than nine fields or more than nine are visible before anything is opened. A new option goes into a collapsed
+  group of its own topic (shapes, batches, padding, speed, diagnostics), not into the first group; `visible_when`
+  keeps its dependants hidden until it is on.
 * Port names are **API** once saved graphs and starters exist: they are stored in
   graph JSON. Before the swap (plan 90) names are free to fix; after it, a rename
   means updating `contracts/`, the starters and every user in one commit. Labels

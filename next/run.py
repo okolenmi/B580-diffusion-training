@@ -91,7 +91,8 @@ class Console:
         graphs = f"  graphs {m['graphs']} ({m['graph_replays']} replays)" if "graphs" in m else ""
         weights = "  weights " + "/".join(f"{m[k]:.2f}" for k in ("weight_t_low", "weight_t_mid", "weight_t_high") if k in m) \
             if "weight_t_low" in m or "weight_t_mid" in m or "weight_t_high" in m else ""
-        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{where}{graphs}{weights}{memory}", flush=True)
+        epoch = f"  epoch {m['epoch'] + 1}{' end' if m.get('epoch_end') else ''}" if "epoch" in m else ""
+        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{epoch}{where}{graphs}{weights}{memory}", flush=True)
         if "probe_worst_rel" in m:
             rel = "/".join(f"{m[k]:.3f}" for k in ("probe_rel_t_low", "probe_rel_t_mid", "probe_rel_t_high") if k in m)
             print(f"  probe: adapter/base loss by third {rel}, worst {m['probe_worst_rel']:.3f} (above 1: worse than the base model)", flush=True)
@@ -218,7 +219,9 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--resolution", type=int, default=1024)
             p.add_argument("--batch", type=int, default=1)
             p.add_argument("--accumulation", type=int, default=1)
-            p.add_argument("--steps", type=int, default=1000)
+            p.add_argument("--steps", type=int, default=None, help="optimizer steps (default 1000, or no limit when --epochs is given)")
+            p.add_argument("--epochs", type=int, default=0, help="passes over the data; with --steps the run ends at whichever limit comes first")
+            p.add_argument("--save-every-epoch", type=int, default=0, help="also save after every this many epochs (0 = off)")
             p.add_argument("--lr", type=float, default=1e-4)
             p.add_argument("--rank", type=int, default=16)
             p.add_argument("--optimizer", default="AdamWNode", choices=("AdamWNode", "AdafactorNode", "CAMENode"))
@@ -255,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             doc = parse(json.load(handle))
     else:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
-                                 batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
+                                 batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
                                  checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
                                  time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph,

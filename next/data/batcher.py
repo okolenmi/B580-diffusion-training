@@ -104,7 +104,8 @@ class Batcher:
         self.prompts.set_epoch(epoch)
         plan = self.plan_for(epoch)
         version, texts = self.prompts.snapshot()
-        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts)
+        last = len(plan.batches) - 1
+        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last)
                                    for i, (ids, shape) in enumerate(plan.batches)), self.depth)
         served = 0
         try:
@@ -117,7 +118,7 @@ class Batcher:
         self.epoch = epoch + 1
 
     def _make(self, index: int, ids: tuple[str, ...], shape: tuple[int, int], epoch: int, version: int,
-              texts: dict[str, str]) -> dict:
+              texts: dict[str, str], last: bool = False) -> dict:
         rng = random.Random(f"{self.seed}:batch:{epoch}:{index}")
         generator = torch.Generator().manual_seed(rng.getrandbits(62))
         height, width = shape
@@ -142,6 +143,7 @@ class Batcher:
             "samples": list(ids),
             "prompts": [texts[image_of(s)] for s in ids],
             "epoch": epoch,
+            "last_in_epoch": last,
             "prompts_version": version,
             "sizes_px": true_sizes,
         })

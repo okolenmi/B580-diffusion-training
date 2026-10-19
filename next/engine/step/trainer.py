@@ -146,7 +146,8 @@ class Trainer:
             self.residency.after_step(step)
         height, width = fetched[-1]["x_t"].shape[-2:]
         metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, "batch": len(fetched[-1]["samples"]),
-                   "latent_h": height, "latent_w": width, **timing}
+                   "latent_h": height, "latent_w": width, "epoch": fetched[-1].get("epoch", 0),
+                   "epoch_end": bool(fetched[-1].get("last_in_epoch", False)), **timing}
         if self.residency is not None and self.residency.last_used_mb is not None:
             stats = self.residency.last_stats
             metrics.update(device_mb=self.residency.last_used_mb, live_mb=stats.get("allocated", 0.0),

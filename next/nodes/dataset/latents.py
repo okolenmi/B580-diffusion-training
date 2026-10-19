@@ -23,12 +23,12 @@ _SERVICE = "datasets"
 class LatentCacheNode(Node):
     DISPLAY_NAME = "Latent Cache"
     CATEGORY = "Dataset"
-    GROUPS = (Group("size", "Size policy"), Group("encode", "Encoding", collapsed=True))
+    GROUPS = (Group("source", "Source"), Group("size", "Size policy"), Group("encode", "Encoding", collapsed=True))
     READS_SETTINGS = ("precision.vae",)
     INPUTS = {
         "images": Port("images", ImageSet),
         "vae": Port("vae", VAEPart),
-        "dataset": Port("dataset", str, picker="dataset", doc="The dataset the images came from; its folder holds the caches."),
+        "dataset": Port("dataset", str, picker="dataset", group="source", doc="The dataset the images came from; its folder holds the caches."),
         "base": Port("base", int, required=False, default=1024, minimum=64, step=64, unit="px", group="size",
                      doc="Short side of every image after resizing."),
         "mode": Port("mode", str, required=False, default="fit", choices=CROP_MODES, group="size",

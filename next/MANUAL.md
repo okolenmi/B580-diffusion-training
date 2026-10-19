@@ -103,6 +103,8 @@ So: fewer launches, fewer new shapes, fewer syncs.
 | Shapes | `latents.mode=fit|center_crop|pad|stretch`, `max_aspect`, `step` | How images become latents; `fit` keeps aspect, cutting at most `step-1` px. | verified |
 | Captions | nodes `Captions` (`channel` text/tags/desc), `TagShuffle` (`keep_first`, `drop`), `TagSwap` (`random`/`walk`), `CaptionPool` (`n_min`, `n_max`, `dividers`), `CaptionDropout` (`p`, `substitute`/`empty`) | Prompt variety per epoch; all seeded by `captions.seed`, so epochs repeat identically per seed. | verified (basic) |
 | Seeds | `--set seed.base=N`, or `batcher.seed`, `captions.seed` | Data order, padding offsets, timesteps, noise. A node seed left empty derives from the base and the node id. | untested (base) |
+| Run length | `--steps N` and/or `--epochs N` (`trainer.steps`, `trainer.epochs`) | An epoch is one pass over the batcher's batches (with accumulation, one step is `accumulation` batches). With both set the run ends at whichever limit comes first; 0 turns a limit off (`--epochs` alone sets steps to 0). A cosine schedule without `total_steps` follows the run's length. | verified (CPU) |
+| Save per epoch | `--save-every-epoch N` (node `EveryEpochNode`) | Saves at the last step of every Nth epoch, in addition to `--save-every` (Every N Steps); wire either or both to the saver. Step lines show `epoch N` (`end` on its last step). | verified (CPU) |
 | Resume | `trainer.start_step`, `batcher.start_epoch`, `LoadAdapter` | Schedule, data order and prompts continue from there. | untested |
 
 ## 4. Data and shapes

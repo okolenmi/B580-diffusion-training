@@ -36,9 +36,9 @@ REGISTRY = NodeRegistry(packages=("next.nodes", "next.tests.pipeline_nodes"))
 SETTINGS = {"device.default": "cpu", "precision.denoiser": "fp32", "precision.encoders": "fp32", "precision.autocast": "off"}
 
 
-def graph(tmp: Path, steps: int, captured: bool = False) -> GraphDoc:
+def graph(tmp: Path, steps: int, captured: bool = False, **extra) -> GraphDoc:
     return starters.sdxl_lora(model="", dataset="toy", output=str(tmp / "out"), name="toy", resolution=64, batch_size=2, steps=steps,
-                              lr=1e-3, rank=4, save_every=2, settings=SETTINGS, graph=captured,
+                              lr=1e-3, rank=4, save_every=extra.pop("save_every", 2), settings=SETTINGS, graph=captured, **extra,
                               source=("TinyModelSource", {"file": str(tmp / "model.safetensors")}),
                               overrides={"latents": {"batch_size": 2}, "buckets": {"multiple": 1}, "batcher": {"seed": 3}})
 
@@ -108,6 +108,14 @@ def full_run():
         said = [f for s, f in trace.frames if s == "graph"]
         check(graphed.ok and trace.steps() == 3 and said and "cannot capture" in said[0]["why"],
               f"a graph run on a device that cannot capture trains eagerly and says so ({graphed.error}, {said[:1]})")
+
+        shutil.rmtree(tmp / "out")
+        _, byepoch, trace = execute(store, graph(tmp, steps=0, epochs=2, save_every=1000, save_every_epoch=1))
+        steps = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        ends = [i + 1 for i, m in enumerate(steps) if m["epoch_end"]]
+        saved = sorted(int(p.stem[-6:]) for p in (tmp / "out").glob("*.safetensors"))
+        check(byepoch.ok and len(ends) == 2 and len(steps) == ends[-1] and saved == ends,
+              f"epochs=2 ends the run after the second epoch and Every Epoch saves at each epoch's last step ({len(steps)} steps, epoch ends {ends}, saved {saved})")
 
 
 if __name__ == "__main__":

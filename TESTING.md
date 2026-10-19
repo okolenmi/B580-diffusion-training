@@ -118,3 +118,10 @@ Two full runs with the same seed, dataset and settings (packing on, `--max-shape
 - Full runs: compare the loss curves (mirror should not be lower by a suspicious amount at high noise) and, more importantly, generations from both LoRAs with the same prompts and seeds. Look at borders/edges, symmetry artifacts, and style strength.
 - With a low `--pack` (0.1) the difference should shrink; with a higher one (0.5) it should grow, which tells you padding matters on your data.
 Pass: you pick a default; tell me which, and I will set it.
+
+## 18. Epochs
+Run `--epochs 2 --save-every-epoch 1 --save-every 100000` on a small dataset.
+- Step lines show `epoch 1`, then `epoch 2`; the last step of each says `epoch N end`.
+- The run stops after the second epoch (no step limit given); an adapter file is saved at each epoch end (its step number is the epoch's last step).
+- `--epochs 3 --steps 10` stops at 10 steps. A cosine schedule node with an empty `total_steps` decays over the whole run.
+Pass: all of the above.

@@ -19,25 +19,26 @@ from .handles import LatentSet, PromptTable
 class BucketerNode(Node):
     DISPLAY_NAME = "Bucketer"
     CATEGORY = "Dataset"
+    GROUPS = (Group("shapes", "Shapes"), Group("batches", "Batches"), Group("padding", "Padding", collapsed=True))
     INPUTS = {
         "latents": Port("latents", LatentSet),
         "multiple": Port("multiple", int, required=False, default=1, minimum=1, unit="latent px",
-                         doc="Round every latent side up to this multiple and pad; 1 keeps shapes as they are."),
+                         doc="Round every latent side up to this multiple and pad; 1 keeps shapes as they are.", group="shapes"),
         "max_shapes": Port("max_shapes", int, required=False, default=0, minimum=0,
                            doc="At most this many padded shapes: the cheapest ones are merged into a common size until it holds. "
-                               "Every shape the model meets for the first time costs seconds and driver memory; 0 keeps them all."),
+                               "Every shape the model meets for the first time costs seconds and driver memory; 0 keeps them all.", group="shapes"),
         "batch_area": Port("batch_area", float, required=False, default=0.0, minimum=0.0, unit="x base area",
                            doc="Samples up to this many times the area of the base resolution's square run in full batches; a batch holds at "
-                               "most batch size times that area in total, so bigger samples run in smaller batches, down to one. Bounds the memory a step can take. 0 = no limit."),
+                               "most batch size times that area in total, so bigger samples run in smaller batches, down to one. Bounds the memory a step can take. 0 = no limit.", group="batches"),
         "pack": Port("pack", float, required=False, default=0.3, minimum=0.0, maximum=0.9, unit="share of area",
                      doc="Fill short batches: samples left over after a shape's full batches are moved into a larger existing shape "
-                         "(never a new one) when no sample ends up more than this share padding. The batch-area limit still holds. 0 = off."),
+                         "(never a new one) when no sample ends up more than this share padding. The batch-area limit still holds. 0 = off.", group="padding"),
         "fill": Port("fill", str, required=False, default="zero", choices=FILLS,
                      doc="What the padded part of the input holds. zero: a blank strip (noised like the rest). mirror: a reflection of the "
                          "sample's own noisy input, so normalisation and attention see image-like content; it adds no information. "
-                         "The loss ignores the padding in both cases."),
+                         "The loss ignores the padding in both cases.", group="padding"),
         "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
-                                doc="Train on a short last batch of a group instead of dropping it (when shuffling)."),
+                                doc="Train on a short last batch of a group instead of dropping it (when shuffling).", group="batches"),
     }
     OUTPUTS = {"buckets": Port("buckets", BucketPolicy)}
 

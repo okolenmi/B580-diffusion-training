@@ -146,6 +146,39 @@ class _FakeGraph:
         slot.per_sample.copy_(per_sample)
 
 
+def epochs():
+    print("epochs")
+    from ..nodes.train.schedules import CosineLRNode
+    from ..nodes.train.trainer import DiffusionTrainerNode, EveryEpochNode
+
+    with tempfile.TemporaryDirectory() as raw:
+        trainer, _, _, _, events, _ = rig(Path(raw), steps=7)
+        batches = len(trainer._batches)
+        trainer.run()
+        seen = [(e.metrics["epoch"], e.metrics["epoch_end"]) for e in events if isinstance(e, StepFinished)]
+        ends = [i + 1 for i, (_, end) in enumerate(seen) if end]
+        check(ends == list(range(batches, 8, batches)) and [e for e, _ in seen][:batches + 1] == [0] * batches + [1],
+              f"steps report their epoch and mark the last step of each epoch ({batches} batches per epoch: {ends})")
+        node = EveryEpochNode(SimpleNamespace(uid="e", settings=None))
+        node.every, due = 2, []
+        ctx = SimpleNamespace(emit=lambda name, event: due.append(event))
+        for step, (epoch, end) in enumerate(seen, 1):
+            node.on_step(StepFinished(step, 7, {"epoch": epoch, "epoch_end": end}), ctx)
+        check([d.step for d in due] == [ends[1]] and "epoch 2" in due[0].reason, "Every Epoch fires on the last step of every second epoch")
+    total = DiffusionTrainerNode._total_steps
+    fake = SimpleNamespace
+    check(total({"steps": 1000, "epochs": 2, "batches": [0] * 7, "accumulation": 2}) == 7 and total({"steps": 5, "epochs": 2, "batches": [0] * 7}) == 5
+          and total({"steps": 0, "epochs": 3, "batches": [0] * 4}) == 12 and total({"batches": [0] * 4}) == 1000,
+          "the run ends at whichever of the step and epoch limits comes first (0 turns one off)")
+    raises(ValueError, lambda: total({"steps": 0, "batches": [0]}), "no limit at all is refused", "steps or epochs")
+    node = CosineLRNode(fake(uid="c", settings=None))
+    schedule = node.build(lr=1.0)["schedule"]
+    schedule.fit(11)
+    fixed = node.build(lr=1.0, total_steps=5)["schedule"]
+    fixed.fit(11)
+    check(schedule.total == 11 and fixed.total == 5, "a cosine schedule without a length follows the run; one with a length keeps it")
+
+
 def graphed():
     print("graph replay")
     with tempfile.TemporaryDirectory() as raw:
@@ -306,4 +339,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, time_probe, graphed)
+    run(main, time_balance, time_probe, epochs, graphed)

@@ -23,13 +23,14 @@ class CosineLRNode(Node):
     DISPLAY_NAME = "Cosine LR"
     CATEGORY = "Schedule"
     INPUTS = {"lr": Port("lr", float, default=1e-4, minimum=0.0),
-              "total_steps": Port("total_steps", int, minimum=1, doc="Optimizer steps over which the rate decays."),
+              "total_steps": Port("total_steps", int, required=False, minimum=1,
+                                doc="Optimizer steps over which the rate decays; empty follows the length of the run (steps or epochs)."),
               "min_fraction": Port("min_fraction", float, required=False, default=0.05, minimum=0.0, maximum=1.0, step=0.01)}
     OUTPUTS = {"schedule": Port("schedule", LRSchedule)}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        return {"schedule": Cosine(inputs["lr"], inputs["total_steps"], inputs.get("min_fraction", 0.05))}
+        return {"schedule": Cosine(inputs["lr"], inputs.get("total_steps"), inputs.get("min_fraction", 0.05))}
 
 
 class WarmupLRNode(Node):

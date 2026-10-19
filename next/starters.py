@@ -28,7 +28,7 @@ class _Builder:
 def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", resolution: int = 1024, batch_size: int = 1,
               accumulation: int = 1, steps: int = 1000, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
-              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, time_balance: str = "off", balance_sampling: float = 0.0,
+              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, fill: str = "zero", time_balance: str = "off", balance_sampling: float = 0.0,
               graph: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
@@ -41,7 +41,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("latents", "LatentCacheNode", dataset=dataset, base=resolution, mode="fit")
     b.add("captions", "CaptionsNode")
     b.add("tag_swap", "TagSwapNode")
-    b.add("buckets", "BucketerNode", multiple=4, max_shapes=max_shapes, batch_area=batch_area, pack=pack, keep_incomplete=True)  # 32 px steps, padded and masked
+    b.add("buckets", "BucketerNode", multiple=4, max_shapes=max_shapes, batch_area=batch_area, pack=pack, fill=fill, keep_incomplete=True)  # 32 px steps, padded and masked
     b.add("noiser", "NoiserNode")
     b.add("batcher", "BatcherNode", batch_size=batch_size)
     b.add("conditioner", "ConditionerNode", persist=persist_conditioning, **({"dataset": dataset} if persist_conditioning else {}))

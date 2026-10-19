@@ -7,6 +7,7 @@ from typing import Any
 from ...data.batcher import Batcher
 from ...data.bucketing import BucketPolicy, padding_stats
 from ...data.noise import Noiser, TimestepPolicy
+from ...data.padding import FILLS
 from ...engine.step.balance import TimeBalance
 from ...families.api.parts import DenoiserPart
 from ...families.registry import get_family
@@ -33,6 +34,10 @@ class BucketerNode(Node):
                          "(or combined into one batch of their bounding shape) when no sample ends up more than this share padding. "
                          "Padding is masked out of the loss and filled with noise. The batch-area limit still holds; without one, no batch gets a shape "
                          "larger than the largest existing one. 0 = off."),
+        "fill": Port("fill", str, required=False, default="zero", choices=FILLS,
+                     doc="What the padded part of the input holds. zero: a blank strip (noised like the rest). mirror: a reflection of the "
+                         "sample's own noisy input, so normalisation and attention see image-like content; it adds no information. "
+                         "The loss ignores the padding in both cases."),
         "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
                                 doc="Train on a short last batch of a group instead of dropping it (when shuffling)."),
     }
@@ -50,8 +55,9 @@ class BucketerNode(Node):
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        return {"buckets": BucketPolicy(inputs.get("multiple") or 1, bool(inputs.get("keep_incomplete")), inputs.get("max_shapes") or 0,
-                                         float(inputs.get("batch_area") or 0.0), float(inputs.get("pack", 0.3)))}
+        return {"buckets": BucketPolicy(multiple=inputs.get("multiple") or 1, keep_incomplete=bool(inputs.get("keep_incomplete")),
+                                         max_shapes=inputs.get("max_shapes") or 0, batch_area=float(inputs.get("batch_area") or 0.0),
+                                         pack=float(inputs.get("pack", 0.3)), fill=inputs.get("fill") or "zero")}
 
 
 class NoiserNode(Node):
@@ -117,7 +123,7 @@ class BatcherNode(Node):
         prompts.listener = emit
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
-                          multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, pack=buckets.pack, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
+                          multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, pack=buckets.pack, fill=buckets.fill, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
                           start_epoch=inputs.get("start_epoch") or 0, emit=emit)
         self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

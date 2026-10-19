@@ -204,4 +204,5 @@ class BucketPolicy:
     keep_incomplete: bool = False
     max_shapes: int = 0
     batch_area: float = 0.0  # multiples of the base resolution's area a sample may take and still run in a full batch; 0 = no limit
+    fill: str = "zero"  # what padding holds in the network's input (see data.padding)
     pack: float = 0.0  # largest padding share of a shape for a sample moved into a larger one to fill a short batch; 0 = off

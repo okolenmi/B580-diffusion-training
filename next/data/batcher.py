@@ -16,6 +16,7 @@ from ..graph.events import EpochEnding, EpochStarted, EventType
 from .bucketing import Plan, bucket_map, make_plan, padding_stats
 from .latent_cache import LatentSet
 from .noise import Noiser
+from .padding import FILLS, mirror_fill
 from .prefetch import Prefetch
 from .prompts import PromptTable
 from .ids import image_of
@@ -23,7 +24,7 @@ from .ids import image_of
 
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
-                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, pack: float = 0.0, seed: int = 0,
+                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, pack: float = 0.0, fill: str = "zero", seed: int = 0,
                  depth: int = 2, pin: bool = False, start_epoch: int = 0,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
@@ -33,7 +34,9 @@ class Batcher:
         self.latents, self.prompts, self.noiser = latents, prompts, noiser
         self.batch_size, self.shuffle, self.keep_incomplete = batch_size, shuffle, keep_incomplete
         self.multiple, self.max_shapes, self.seed, self.depth, self.pin = multiple, max_shapes, seed, depth, pin
-        self.batch_area, self.pack = batch_area, pack
+        if fill not in FILLS:
+            raise ValueError(f"fill must be one of {FILLS}, got {fill!r}")
+        self.batch_area, self.pack, self.fill = batch_area, pack, fill
         self.epoch = start_epoch
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
@@ -120,7 +123,7 @@ class Batcher:
         height, width = shape
         x0 = torch.zeros(len(ids), int(self.latents.spec["channels"]), height, width)
         valid = torch.zeros(len(ids), 1, height, width)
-        true_sizes = []
+        true_sizes, placed = [], []
         for k, sample in enumerate(ids):
             latent = self.latents.get(sample)
             h, w = latent.shape[-2:]
@@ -128,8 +131,13 @@ class Batcher:
             left = rng.randint(0, width - w) if width > w else 0
             x0[k, :, top:top + h, left:left + w] = latent
             true_sizes.append((h * self._factor, w * self._factor))
+            placed.append((top, left, h, w))
             valid[k, :, top:top + h, left:left + w] = 1.0
         batch = self.noiser(x0, generator)
+        if self.fill == "mirror":
+            for k, (top, left, h, w) in enumerate(placed):
+                if (h, w) != (height, width):
+                    batch["x_t"][k] = mirror_fill(batch["x_t"][k], top, left, h, w)
         batch.update({
             "samples": list(ids),
             "prompts": [texts[image_of(s)] for s in ids],

@@ -239,6 +239,28 @@ def batch_area_limit():
     check(len(plain.batches[0][0]) == 4, "without a limit batches stay full")
 
 
+def padding_fill():
+    """Mirror padding reflects the noisy valid block into the padding, changes nothing inside it, and adds no information."""
+    from ..data.padding import mirror_fill, mirror_index
+
+    check(mirror_index(6, 1, 3).tolist() == [2, 1, 2, 3, 2, 1] and mirror_index(5, 1, 1).tolist() == [1] * 5,
+          "positions outside the block reflect into it, and repeat when the padding is longer than the block")
+    canvas = torch.arange(36.0).reshape(1, 6, 6)
+    filled = mirror_fill(canvas, 1, 2, 3, 3)
+    block = canvas[:, 1:4, 2:5]
+    rows, cols = [2, 1, 2, 3, 2, 1], [4, 3, 2, 3, 4, 3]
+    check(torch.equal(filled[:, 1:4, 2:5], block) and torch.equal(filled, canvas[:, rows][:, :, cols]),
+          "the valid block is untouched and the rest is its reflection")
+    tmp = Path(tempfile.mkdtemp())
+    plain = list(build(tmp / "z", multiple=16, batch_size=3)[5])
+    mirrored = list(build(tmp / "m", multiple=16, batch_size=3, fill="mirror")[5])
+    same_inside = all(torch.equal(a["x_t"] * a["valid_mask"], b["x_t"] * b["valid_mask"]) for a, b in zip(plain, mirrored))
+    differs_outside = any(not torch.equal(a["x_t"] * (1 - a["valid_mask"]), b["x_t"] * (1 - b["valid_mask"])) for a, b in zip(plain, mirrored))
+    check(same_inside and differs_outside and all(torch.equal(a["target"], b["target"]) for a, b in zip(plain, mirrored)),
+          "through the batcher, mirroring changes only the padded part of the input (valid part and target are the same)")
+    raises(ValueError, lambda: build(tmp / "bad", fill="blur"), "an unknown fill is refused", "fill must be")
+
+
 def packing():
     """Left-over samples fill short batches: into larger existing shapes, or into their bounding shape."""
     import random
@@ -312,4 +334,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, packing, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, packing, padding_fill, prompt_lifetimes_and_store)

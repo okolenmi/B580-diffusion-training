@@ -111,3 +111,10 @@ Use a large batch (`--batch 4`, or bigger if the card allows) with `--batch-area
 - Try `--pack 0.15` and `--pack 0.5` to see how the number of short batches and the padding move; tell me which you prefer.
 - Check samples of packed batches in a probe or preview if you can: padding should be noise, not visible in the loss (loss values similar to the run without packing).
 Pass: fewer short batches and a faster first epoch, with the same peak and similar loss.
+
+## 17. Mirror padding: compare two LoRAs
+Two full runs with the same seed, dataset and settings (packing on, `--max-shapes` as you like): one with `--pad-fill zero`, one with `--pad-fill mirror`.
+- Quick check first (20 steps of each): both run, speed and peak are the same.
+- Full runs: compare the loss curves (mirror should not be lower by a suspicious amount at high noise) and, more importantly, generations from both LoRAs with the same prompts and seeds. Look at borders/edges, symmetry artifacts, and style strength.
+- With a low `--pack` (0.1) the difference should shrink; with a higher one (0.5) it should grow, which tells you padding matters on your data.
+Pass: you pick a default; tell me which, and I will set it.

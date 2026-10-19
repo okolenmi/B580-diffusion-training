@@ -231,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--batch-area", type=float, default=0.0,
                            help="a batch holds at most batch size times this many base-resolution areas in total (e.g. 1.5), so bigger samples run in smaller batches; 0 = no limit")
+            p.add_argument("--pad-fill", default="zero", choices=("zero", "mirror"),
+                           help="what the padded part of the network input holds: a blank strip, or a reflection of the sample's own noisy input")
             p.add_argument("--pack", type=float, default=0.3,
                            help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding; 0 = off")
             p.add_argument("--graph", action="store_true", help="replay forward and backward from captured device graphs (XPU; needs no dropout, no fused optimizer)")
@@ -255,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
                                  batch_size=args.batch, accumulation=args.accumulation, steps=args.steps, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack,
+                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
                                  time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph,
                                  settings=_settings(args.set), overrides=_overrides(args.param))
         if args.dump:

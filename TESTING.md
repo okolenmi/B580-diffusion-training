@@ -12,44 +12,32 @@ python -m next.run sdxl-lora --models <models> --datasets <datasets> --file <che
 
 Run each test from the same start (fresh process). Unless said otherwise only the listed flag changes.
 
-## 1. Baseline with the current defaults
-Run the prefix as is.
-- `data:` line: shapes <= 16, padding share printed, largest unit printed.
-- Step lines mark `new` only a handful of times in the first epoch, never late.
-- Ledger table has `ours` and `other` rows; `other` roughly 760-800 MB, flat.
-- `cache_returned` events appear when the cache grows; none of them reports an error.
-Pass: no crash, peak stable after the first epoch. Paste the `data:` line if padding share looks high.
-
-## 2. Batch area with batch 3 and 4
-Add `--batch-area 1.5` and run once with `--batch 4`, once with `--batch 3`.
-- Step lines: samples up to 96x144 latents (768 base, 1.5x) show batch 4 (or 3); 96x148 shows 3 (or 2); a 2x
-  shape shows 3 (or 2); a 3x shape shows 2 (or 1).
-- Peak allocated stays about the same across shapes (compare with `--batch 4` without the flag, which should spike on big shapes).
-Pass: batch column follows the rule above and the peak is flat.
-
 ## 3. Shape count vs padding
-Run with `--max-shapes 8`, then `--max-shapes 49`, then `--max-shapes 0`.
-- Count of `new` markers and total seconds of the first epoch go down with fewer shapes.
-- `data:` padding share goes up with fewer shapes.
-Pass: a table of (max_shapes, first-epoch time, padding share, peak) with the trend above. Tell me which is best for your set.
+Max shapes 8 gives 11 new shapes with batch size 4 (leftover shapes) - 7% mean padding. Feels ok. 49 and 0 have no differences - 2% mean.
 
 ## 4. Auto checkpoint share
-Add `--param trainer.tune_checkpointing=true`, and again with `--set memory.vram_max_mb=10240`.
-- `checkpoint_share` event before step 1 with the chosen share and the measured peak per tried share.
-- Step time below the baseline run, peak below the budget.
-- No OOM retry events in the following steps.
-Pass: faster steps than test 1 with the peak under the budget. Fail if peak exceeds the budget or the share is always 1.0.
+memory: {"event": "checkpoint_share", "share": 1.0, "of_blocks": "transformer"} - 10.3GB usage at final steps (batch 3, res 512)
+With limit `--set memory.vram_max_mb=10240` it's failing before first step:
+  Measuring what a pixel costs: 5.1 s
+Measuring what a pixel costs ...
+[  11.1s] DiffusionTrainerNode: 7.2s  allocated 8105, reserved 8124, device 9881 MB
+run: failed: OutOfMemoryError: XPU out of memory. Tried to allocate 40.00 MiB. GPU 0 has a total capacity of 11.93 GiB of which 2.28 GiB is free. 7.97 GiB allowed; Of the allocated memory 7.92 GiB is allocated by PyTorch, and 18.56 MiB is reserved by PyTorch but unallocated. Please use `empty_cache` to release all unoccupied cached memory. 
+
+Tested with 512 res 1 batch (0.75 share). It's faster. 1040ms->970ms
 
 ## 5. Time balance
 Run `--time-balance normalize`, then `speed`, then `dro` (100+ steps each; weights start after 10 reports per third).
-- Step lines show weights per third, all within 0.25-4.
-- Loss does not diverge compared with test 1.
-Pass: weights appear and training is stable. Quality judgement is yours: compare sample outputs against test 1.
+normalize: stays like this from start to the end: weights [0.25/0.43/2.39]
+speed: shifts from this [1.12/1.14/0.74] to this [2.50/0.26/0.25]
+dro: [0.88/0.99/1.13] -> [0.94/1.00/1.07]
+
+Compare sample outputs against test 1: well... this is for a big run. Small runs don't reliable enough. Will be a task for future.
 
 ## 6. Balanced timestep sampling
 Add `--balance-sampling 1` (with and without `--time-balance dro`).
-- No crash in the batch worker; the share of steps sampling the lagging third (see `loss_t_*` presence on step lines) grows as it lags.
-Pass: runs 200 steps cleanly.
+with dro: [0.88/0.96/1.16]->[1.03/0.96/1.01]
+without: can't say... no "weights" string.
+Runs looks fine. Nothing unexpected.
 
 ## 7. Probe
 Add `--param trainer.probe_every=50`.

@@ -23,7 +23,7 @@ from .ids import image_of
 
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
-                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, seed: int = 0,
+                 shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, pack: float = 0.0, seed: int = 0,
                  depth: int = 2, pin: bool = False, start_epoch: int = 0,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
@@ -33,7 +33,7 @@ class Batcher:
         self.latents, self.prompts, self.noiser = latents, prompts, noiser
         self.batch_size, self.shuffle, self.keep_incomplete = batch_size, shuffle, keep_incomplete
         self.multiple, self.max_shapes, self.seed, self.depth, self.pin = multiple, max_shapes, seed, depth, pin
-        self.batch_area = batch_area
+        self.batch_area, self.pack = batch_area, pack
         self.epoch = start_epoch
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
@@ -41,7 +41,7 @@ class Batcher:
         self.plan_for(start_epoch)  # an impossible configuration fails now, not on the first step
 
     def plan_for(self, epoch: int) -> Plan:
-        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes, full_batch_area=self.full_batch_area,
+        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes, full_batch_area=self.full_batch_area, pack=self.pack,
                          shuffle=self.shuffle, keep_incomplete=self.keep_incomplete,
                          rng=random.Random(f"{self.seed}:plan:{epoch}"))
 
@@ -50,9 +50,17 @@ class Batcher:
         and how much of the bucketed area is padding."""
         plan = self.plan_for(self.epoch)
         stats = padding_stats(list(self.latents.shapes.values()), self.multiple, self.max_shapes)
+        pads = [1.0 - (h * w) / (shape[0] * shape[1]) for ids, shape in plan.batches for h, w in (self.latents.shapes[i] for i in ids)]
         return {"samples": stats["samples"], "shapes_in": stats["shapes_in"], "bucket_shapes": stats["shapes_out"],
                 "batch_shapes": len({(len(ids), *shape) for ids, shape in plan.batches}), "batches": len(plan),
-                "padding_mean": round(stats["pad_mean"], 3), "padding_worst": round(stats["pad_max"], 3)}
+                "short_batches": sum(1 for ids, shape in plan.batches if len(ids) < self._full_size(shape)),
+                "packed": plan.packed, "dropped": plan.dropped,
+                "padding_mean": round(sum(pads) / max(len(pads), 1), 3), "padding_worst": round(max(pads, default=0.0), 3)}
+
+    def _full_size(self, shape: tuple[int, int]) -> int:
+        if not self.full_batch_area:
+            return self.batch_size
+        return max(1, min(self.batch_size, self.batch_size * self.full_batch_area // (shape[0] * shape[1])))
 
     def largest_units(self) -> int:
         """Latent pixels of the largest batch of the run (samples times the padded area)."""
@@ -129,7 +137,7 @@ class Batcher:
             "prompts_version": version,
             "sizes_px": true_sizes,
         })
-        if self.multiple > 1 and bool((valid == 0).any()):
+        if self.pack > 0 or bool((valid == 0).any()):  # with packing every batch carries one, so shapes do not split by mask presence
             batch["valid_mask"] = valid
         if self.pin:
             batch = {k: v.pin_memory() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}

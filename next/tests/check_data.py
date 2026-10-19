@@ -239,6 +239,39 @@ def batch_area_limit():
     check(len(plain.batches[0][0]) == 4, "without a limit batches stay full")
 
 
+def packing():
+    """Left-over samples fill short batches: into larger existing shapes, or into their bounding shape."""
+    import random
+
+    from ..data.bucketing import make_plan
+
+    shapes = {f"a{i}": (96, 96) for i in range(6)}
+    shapes.update({f"b{i}": (96, 144) for i in range(3)})
+    shapes.update({f"c{i}": (144, 96) for i in range(3)})
+    shapes.update({f"d{i}": (88, 96) for i in range(2)})
+
+    def plan(pack, area=0, shapes=shapes, batch=4):
+        return make_plan(shapes, batch_size=batch, full_batch_area=area, pack=pack, shuffle=True, keep_incomplete=True, rng=random.Random(1))
+
+    off, on = plan(0.0), plan(0.3)
+    used = sorted(s for ids, _ in on.batches for s in ids)
+    check(len(off.batches) == 5 and len(on.batches) == 4 and used == sorted(shapes) and on.packed == 2,
+          f"two 88x96 samples top up the short 96x96 batch: 5 batches become 4 ({[(len(i), s) for i, s in on.batches]})")
+    fits = all(shapes[s][0] <= h and shapes[s][1] <= w and 1 - shapes[s][0] * shapes[s][1] / (h * w) <= 0.3 for ids, (h, w) in on.batches for s in ids)
+    check(fits, "every sample fits its batch shape and no sample is more than 30% padding")
+    check(plan(0.05).packed == 0 and len(plan(0.05).batches) == 5, "a sample whose padding would pass the limit stays where it was")
+    two = {**{f"p{i}": (96, 128) for i in range(2)}, **{f"q{i}": (128, 96) for i in range(2)}}
+    joined = plan(0.3, shapes=two)
+    check([(len(i), s) for i, s in joined.batches] == [(4, (128, 128))] and plan(0.0, shapes=two).packed == 0 and len(plan(0.0, shapes=two).batches) == 2,
+          "portrait and landscape leftovers share one batch of their bounding shape when padding allows")
+    limited = plan(0.4, area=96 * 96 * 3 // 2, shapes={**{f"p{i}": (96, 144) for i in range(2)}, **{f"q{i}": (96, 192) for i in range(3)}})
+    check(all(len(ids) <= max(1, 4 * (96 * 96 * 3 // 2) // (h * w)) for ids, (h, w) in limited.batches),
+          "packed batches never exceed the size the batch-area limit allows for their shape")
+    dropping = make_plan(shapes, batch_size=4, pack=0.3, shuffle=True, keep_incomplete=False, rng=random.Random(1))
+    check(dropping.dropped == 6 and sum(len(i) for i, _ in dropping.batches) == len(shapes) - 6,
+          "with short batches dropped, packing keeps the samples that fill a batch")
+
+
 def prompt_lifetimes_and_store() -> None:
     """Prompts say how long they are worth keeping; only stable ones reach the disk store, and a second run reads them."""
     from ..data.conditioning_cache import ConditioningCache
@@ -278,4 +311,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, packing, prompt_lifetimes_and_store)

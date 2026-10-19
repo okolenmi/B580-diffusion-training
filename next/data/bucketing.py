@@ -1,6 +1,8 @@
 """Which samples share a batch.
 
-Samples of the same latent shape batch together. With a bucket multiple above 1, shapes are rounded up
+Samples of the same latent shape batch together. The samples a shape has left over after its full batches can be
+packed: topped up into a larger shape's short batch, or combined into a batch of their bounding shape, as long as no
+sample is more than a given fraction padding. With a bucket multiple above 1, shapes are rounded up
 to the multiple and smaller latents are padded (the batcher does the padding and marks it in a valid
 mask), so more samples share a shape and the model sees fewer distinct sizes.
 """
@@ -62,17 +64,70 @@ def bucket_map(shapes: Iterable[tuple[int, int]], multiple: int, max_shapes: int
 class Plan:
     batches: tuple[tuple[tuple[str, ...], tuple[int, int]], ...]  # (sample ids, bucket latent shape)
     dropped: int  # samples left out because their group could not fill a batch
+    packed: int = 0  # samples that run in a shape larger than their own bucket's
 
     def __len__(self) -> int:
         return len(self.batches)
 
 
+def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int, int]], size_of, limit: float,
+            rng: random.Random) -> list[tuple[list[str], tuple[int, int]]]:
+    """Combine the samples left over from full batches into as few batches as possible.
+
+    First the short batches of existing shapes are topped up, largest shape first, with left-over samples that fit
+    inside the shape (no new shape for the model to compile). What is still left is combined greedily into batches
+    of the bounding shape of their members, each time adding the sample that wastes the least area, never letting a
+    sample's padding pass ``limit`` of the shape and never exceeding the batch size the shape's area allows.
+    """
+    area = lambda s: s[0] * s[1]  # noqa: E731
+    out: list[tuple[list[str], tuple[int, int]]] = []
+    shapes = sorted(left, key=area, reverse=True)
+    for host in shapes:
+        mine = left[host]
+        room = size_of(host) - len(mine)
+        if not mine or room <= 0:
+            continue
+        donors = sorted((s for shape in shapes if shape != host and area(shape) < area(host) and shape[0] <= host[0] and shape[1] <= host[1]
+                         and 1.0 - area(shape) / area(host) <= limit for s in left[shape]), key=lambda s: -area(own[s]))
+        for sample in donors[:room]:
+            left[own[sample]].remove(sample)
+            mine.append(sample)
+        if len(mine) == size_of(host):
+            out.append((list(mine), host))
+            left[host] = []
+    pool = [s for members in left.values() for s in members]
+    rng.shuffle(pool)
+    pool.sort(key=lambda s: -area(own[s]))
+    while pool:
+        members, box = [pool.pop(0)], None
+        box = own[members[0]]
+        while len(members) < size_of(box):
+            best = None
+            for sample in pool:
+                grown = (max(box[0], own[sample][0]), max(box[1], own[sample][1]))
+                if len(members) + 1 > size_of(grown) or 1.0 - min(area(own[m]) for m in members + [sample]) / area(grown) > limit:
+                    continue
+                waste = (len(members) + 1) * area(grown) - sum(area(own[m]) for m in members + [sample])
+                if best is None or waste < best[0]:
+                    best = (waste, sample, grown)
+            if best is None:
+                break
+            members.append(best[1])
+            pool.remove(best[1])
+            box = best[2]
+        out.append((members, box))
+    return out
+
+
 def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multiple: int = 1, max_shapes: int = 0, full_batch_area: int = 0,
-              shuffle: bool, keep_incomplete: bool, rng: random.Random) -> Plan:
+              pack: float = 0.0, shuffle: bool, keep_incomplete: bool, rng: random.Random) -> Plan:
     """Group by bucket shape, cut into batches, and (when shuffling) order them in same-shape clumps.
 
     ``full_batch_area`` (0 means no limit) is the area one sample may take in a full batch, so a batch may hold
     ``batch_size * full_batch_area`` pixels: the batch shrinks to as many samples as fit (rounded down, at least one).
+
+    ``pack`` (0 means off) is the largest share of a shape's area that padding may take for a sample that runs in a
+    shape larger than its own, so that short batches are filled instead of run (or dropped) as they are.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
@@ -81,23 +136,34 @@ def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multipl
     for sample in sorted(shapes):
         groups.setdefault(target[shapes[sample]], []).append(sample)
     batches: list[tuple[tuple[str, ...], tuple[int, int]]] = []
-    dropped = 0
+    dropped = packed = 0
+    size_of = lambda shape: (max(1, min(batch_size, batch_size * full_batch_area // (shape[0] * shape[1]))) if full_batch_area else batch_size)  # noqa: E731
+    left: dict[tuple[int, int], list[str]] = {}
     for shape, members in groups.items():
         if shuffle:
             rng.shuffle(members)
-        size = max(1, min(batch_size, batch_size * full_batch_area // (shape[0] * shape[1]))) if full_batch_area else batch_size
-        for start in range(0, len(members), size):
-            chunk = members[start:start + size]
-            if len(chunk) < size and shuffle and not keep_incomplete:
-                dropped += len(chunk)
-                continue
-            batches.append((tuple(chunk), shape))
+        size = size_of(shape)
+        whole = len(members) - len(members) % size
+        batches += [(tuple(members[start:start + size]), shape) for start in range(0, whole, size)]
+        if whole < len(members):
+            left[shape] = members[whole:]
+    if left and pack > 0:
+        own = {sample: target[shapes[sample]] for members in left.values() for sample in members}
+        combined = _packed(left, own, size_of, pack, rng)
+    else:
+        combined = [(members, shape) for shape, members in left.items()]
+    for members, shape in combined:
+        if len(members) < size_of(shape) and shuffle and not keep_incomplete:
+            dropped += len(members)
+            continue
+        packed += sum(1 for m in members if target[shapes[m]] != shape)
+        batches.append((tuple(members), shape))
     if not batches:
         raise ValueError(
             f"{len(shapes)} sample(s) form no batch: batch_size={batch_size} with shuffle drops every group "
             f"smaller than a batch. Lower batch_size, add images, keep incomplete batches, or turn shuffle off.")
     if not shuffle:
-        return Plan(tuple(batches), dropped)
+        return Plan(tuple(batches), dropped, packed)
     by_shape: dict[tuple[int, int], list] = {}
     for batch in batches:
         by_shape.setdefault(batch[1], []).append(batch)
@@ -106,7 +172,7 @@ def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multipl
         rng.shuffle(group)
         clumps += [group[i:i + CLUMP] for i in range(0, len(group), CLUMP)]
     rng.shuffle(clumps)
-    return Plan(tuple(b for clump in clumps for b in clump), dropped)
+    return Plan(tuple(b for clump in clumps for b in clump), dropped, packed)
 
 
 def padding_stats(shapes: Sequence[tuple[int, int]], multiple: int, max_shapes: int = 0) -> dict:
@@ -137,3 +203,4 @@ class BucketPolicy:
     keep_incomplete: bool = False
     max_shapes: int = 0
     batch_area: float = 0.0  # multiples of the base resolution's area a sample may take and still run in a full batch; 0 = no limit
+    pack: float = 0.0  # largest padding share of a shape for a sample moved into a larger one to fill a short batch; 0 = off

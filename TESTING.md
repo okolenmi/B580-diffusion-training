@@ -103,3 +103,11 @@ Add `--graph` (batch 2, 200 steps), then the same run without it for comparison;
 - Peak/`device_used` rises by the graph pool (0.5-1.5 GB); check it stays under the card with your other settings; if it does not, lower `trainer.graph_shapes` or drop `--graph`.
 - Failure cases worth reporting: `[graph] capture of shape ... failed (...)` (note the message), a loss frozen at one value (outputs not refreshed), a crash at step 4-5.
 Pass: faster steps, similar loss, no crash. `--fused` or dropout with `--graph` must refuse with a clear message.
+
+## 16. Batch packing
+Use a large batch (`--batch 4`, or bigger if the card allows) with `--batch-area 1.5`. Run once without and once with `--pack 0.3`.
+- `data:` line: `short batches` drops (and `packed` is above 0); `padding mean` rises a little.
+- Fewer `new` shape markers over the first epoch, so the first epoch is faster; peak stays as before (the batch-area limit still holds).
+- Try `--pack 0.15` and `--pack 0.5` to see how the number of short batches and the padding move; tell me which you prefer.
+- Check samples of packed batches in a probe or preview if you can: padding should be noise, not visible in the loss (loss values similar to the run without packing).
+Pass: fewer short batches and a faster first epoch, with the same peak and similar loss.

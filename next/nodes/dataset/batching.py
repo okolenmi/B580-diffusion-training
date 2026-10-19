@@ -30,10 +30,8 @@ class BucketerNode(Node):
                            doc="Samples up to this many times the area of the base resolution's square run in full batches; a batch holds at "
                                "most batch size times that area in total, so bigger samples run in smaller batches, down to one. Bounds the memory a step can take. 0 = no limit."),
         "pack": Port("pack", float, required=False, default=0.3, minimum=0.0, maximum=0.9, unit="share of area",
-                     doc="Fill short batches: samples left over after a shape's full batches are moved into a larger shape's short batch "
-                         "(or combined into one batch of their bounding shape) when no sample ends up more than this share padding. "
-                         "Padding is masked out of the loss and filled with noise. The batch-area limit still holds; without one, no batch gets a shape "
-                         "larger than the largest existing one. 0 = off."),
+                     doc="Fill short batches: samples left over after a shape's full batches are moved into a larger existing shape "
+                         "(never a new one) when no sample ends up more than this share padding. The batch-area limit still holds. 0 = off."),
         "fill": Port("fill", str, required=False, default="zero", choices=FILLS,
                      doc="What the padded part of the input holds. zero: a blank strip (noised like the rest). mirror: a reflection of the "
                          "sample's own noisy input, so normalisation and attention see image-like content; it adds no information. "

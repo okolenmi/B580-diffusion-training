@@ -1,8 +1,8 @@
 """Which samples share a batch.
 
 Samples of the same latent shape batch together. The samples a shape has left over after its full batches can be
-packed: topped up into a larger shape's short batch, or combined into a batch of their bounding shape, as long as no
-sample is more than a given fraction padding. With a bucket multiple above 1, shapes are rounded up
+packed: moved into a larger existing shape (never a new one), as long as no sample is more than a given fraction
+padding. With a bucket multiple above 1, shapes are rounded up
 to the multiple and smaller latents are padded (the batcher does the padding and marks it in a valid
 mask), so more samples share a shape and the model sees fewer distinct sizes.
 """
@@ -70,17 +70,23 @@ class Plan:
         return len(self.batches)
 
 
-def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int, int]], size_of, limit: float,
-            rng: random.Random, max_area: int = 0) -> list[tuple[list[str], tuple[int, int]]]:
-    """Combine the samples left over from full batches into as few batches as possible.
+def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int, int]], hosts: Sequence[tuple[int, int]], size_of,
+            limit: float, rng: random.Random) -> list[tuple[list[str], tuple[int, int]]]:
+    """Combine the samples left over from full batches into as few batches as possible, always in a shape that exists.
 
-    First the short batches of existing shapes are topped up, largest shape first, with left-over samples that fit
-    inside the shape (no new shape for the model to compile). What is still left is combined greedily into batches
-    of the bounding shape of their members, each time adding the sample that wastes the least area, never letting a
-    sample's padding pass ``limit`` of the shape and never exceeding the batch size the shape's area allows. A bounding
-    shape larger than ``max_area`` (when given) is not made, so a batch never takes more memory than an existing one.
+    A new shape costs the model seconds of kernel compilation and driver memory, and ``max_shapes`` exists to keep
+    them few, so batches only ever take the shape of one of ``hosts``. First the short batches of existing shapes are
+    topped up, largest shape first, with left-over samples that fit inside. What is still left is combined greedily,
+    each time adding the sample that wastes the least area in the smallest host that holds every member, never letting
+    a sample's padding pass ``limit`` of the host and never exceeding the batch size the host's area allows.
     """
     area = lambda s: s[0] * s[1]  # noqa: E731
+
+    def host_of(members: list[str]) -> tuple[int, int] | None:
+        height, width = max(own[m][0] for m in members), max(own[m][1] for m in members)
+        fitting = [h for h in hosts if h[0] >= height and h[1] >= width]
+        return min(fitting, key=area) if fitting else None
+
     out: list[tuple[list[str], tuple[int, int]]] = []
     shapes = sorted(left, key=area, reverse=True)
     for host in shapes:
@@ -100,13 +106,13 @@ def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int,
     rng.shuffle(pool)
     pool.sort(key=lambda s: -area(own[s]))
     while pool:
-        members, box = [pool.pop(0)], None
-        box = own[members[0]]
+        members = [pool.pop(0)]
+        box = host_of(members)
         while len(members) < size_of(box):
             best = None
             for sample in pool:
-                grown = (max(box[0], own[sample][0]), max(box[1], own[sample][1]))
-                if (max_area and area(grown) > max_area) or len(members) + 1 > size_of(grown) or 1.0 - min(area(own[m]) for m in members + [sample]) / area(grown) > limit:
+                grown = host_of(members + [sample])
+                if grown is None or len(members) + 1 > size_of(grown) or 1.0 - min(area(own[m]) for m in members + [sample]) / area(grown) > limit:
                     continue
                 waste = (len(members) + 1) * area(grown) - sum(area(own[m]) for m in members + [sample])
                 if best is None or waste < best[0]:
@@ -150,7 +156,7 @@ def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multipl
             left[shape] = members[whole:]
     if left and pack > 0:
         own = {sample: target[shapes[sample]] for members in left.values() for sample in members}
-        combined = _packed(left, own, size_of, pack, rng, 0 if full_batch_area else max(h * w for h, w in groups))
+        combined = _packed(left, own, list(groups), size_of, pack, rng)
     else:
         combined = [(members, shape) for shape, members in left.items()]
     for members, shape in combined:

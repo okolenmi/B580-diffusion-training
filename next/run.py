@@ -231,8 +231,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--batch-area", type=float, default=0.0,
                            help="a batch holds at most batch size times this many base-resolution areas in total (e.g. 1.5), so bigger samples run in smaller batches; 0 = no limit")
-            p.add_argument("--pack", type=float, default=0.0,
-                           help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding (e.g. 0.3); 0 = off")
+            p.add_argument("--pack", type=float, default=0.3,
+                           help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding; 0 = off")
             p.add_argument("--graph", action="store_true", help="replay forward and backward from captured device graphs (XPU; needs no dropout, no fused optimizer)")
             p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro"),
                            help="weight the loss by how each third of the timestep range is improving")

@@ -28,7 +28,7 @@ class _Builder:
 def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", resolution: int = 1024, batch_size: int = 1,
               accumulation: int = 1, steps: int = 1000, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
-              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.0, time_balance: str = "off", balance_sampling: float = 0.0,
+              persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, time_balance: str = "off", balance_sampling: float = 0.0,
               graph: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 

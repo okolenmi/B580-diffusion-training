@@ -105,7 +105,7 @@ Add `--graph` (batch 2, 200 steps), then the same run without it for comparison;
 Pass: faster steps, similar loss, no crash. `--fused` or dropout with `--graph` must refuse with a clear message.
 
 ## 16. Batch packing
-Use a large batch (`--batch 4`, or bigger if the card allows) with `--batch-area 1.5`. Run once without and once with `--pack 0.3`.
+Use a large batch (`--batch 4`, or bigger if the card allows) with `--batch-area 1.5`. Packing is on by default (0.3): run once with `--pack 0` and once as is.
 - `data:` line: `short batches` drops (and `packed` is above 0); `padding mean` rises a little.
 - Fewer `new` shape markers over the first epoch, so the first epoch is faster; peak stays as before (the batch-area limit still holds).
 - Try `--pack 0.15` and `--pack 0.5` to see how the number of short batches and the padding move; tell me which you prefer.

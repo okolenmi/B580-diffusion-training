@@ -71,13 +71,14 @@ class Plan:
 
 
 def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int, int]], size_of, limit: float,
-            rng: random.Random) -> list[tuple[list[str], tuple[int, int]]]:
+            rng: random.Random, max_area: int = 0) -> list[tuple[list[str], tuple[int, int]]]:
     """Combine the samples left over from full batches into as few batches as possible.
 
     First the short batches of existing shapes are topped up, largest shape first, with left-over samples that fit
     inside the shape (no new shape for the model to compile). What is still left is combined greedily into batches
     of the bounding shape of their members, each time adding the sample that wastes the least area, never letting a
-    sample's padding pass ``limit`` of the shape and never exceeding the batch size the shape's area allows.
+    sample's padding pass ``limit`` of the shape and never exceeding the batch size the shape's area allows. A bounding
+    shape larger than ``max_area`` (when given) is not made, so a batch never takes more memory than an existing one.
     """
     area = lambda s: s[0] * s[1]  # noqa: E731
     out: list[tuple[list[str], tuple[int, int]]] = []
@@ -105,7 +106,7 @@ def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int,
             best = None
             for sample in pool:
                 grown = (max(box[0], own[sample][0]), max(box[1], own[sample][1]))
-                if len(members) + 1 > size_of(grown) or 1.0 - min(area(own[m]) for m in members + [sample]) / area(grown) > limit:
+                if (max_area and area(grown) > max_area) or len(members) + 1 > size_of(grown) or 1.0 - min(area(own[m]) for m in members + [sample]) / area(grown) > limit:
                     continue
                 waste = (len(members) + 1) * area(grown) - sum(area(own[m]) for m in members + [sample])
                 if best is None or waste < best[0]:
@@ -149,7 +150,7 @@ def make_plan(shapes: Mapping[str, tuple[int, int]], *, batch_size: int, multipl
             left[shape] = members[whole:]
     if left and pack > 0:
         own = {sample: target[shapes[sample]] for members in left.values() for sample in members}
-        combined = _packed(left, own, size_of, pack, rng)
+        combined = _packed(left, own, size_of, pack, rng, 0 if full_batch_area else max(h * w for h, w in groups))
     else:
         combined = [(members, shape) for shape, members in left.items()]
     for members, shape in combined:

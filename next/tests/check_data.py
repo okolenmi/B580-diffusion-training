@@ -261,8 +261,9 @@ def packing():
     check(fits, "every sample fits its batch shape and no sample is more than 30% padding")
     check(plan(0.05).packed == 0 and len(plan(0.05).batches) == 5, "a sample whose padding would pass the limit stays where it was")
     two = {**{f"p{i}": (96, 128) for i in range(2)}, **{f"q{i}": (128, 96) for i in range(2)}}
-    joined = plan(0.3, shapes=two)
-    check([(len(i), s) for i, s in joined.batches] == [(4, (128, 128))] and plan(0.0, shapes=two).packed == 0 and len(plan(0.0, shapes=two).batches) == 2,
+    check(plan(0.3, shapes=two).packed == 0, "without a batch-area limit no batch gets a shape larger than any existing one")
+    joined = plan(0.3, area=128 * 128, shapes=two)
+    check([(len(i), s) for i, s in joined.batches] == [(4, (128, 128))] and plan(0.0, area=128 * 128, shapes=two).packed == 0 and len(plan(0.0, area=128 * 128, shapes=two).batches) == 2,
           "portrait and landscape leftovers share one batch of their bounding shape when padding allows")
     limited = plan(0.4, area=96 * 96 * 3 // 2, shapes={**{f"p{i}": (96, 144) for i in range(2)}, **{f"q{i}": (96, 192) for i in range(3)}})
     check(all(len(ids) <= max(1, 4 * (96 * 96 * 3 // 2) // (h * w)) for ids, (h, w) in limited.batches),

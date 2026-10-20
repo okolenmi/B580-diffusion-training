@@ -5,7 +5,7 @@ domain. **Nothing here is implemented yet.** A fresh agent (or a session after
 compaction) starts by reading this file, then `90-build-plan.md`, then the plan it
 is assigned.
 
-User-facing lookup of the implemented levers (by VRAM, speed, quality, data): `next/MANUAL.md`. What the owner still has to run on hardware: `TESTING.md` in the repo root. Keep both current when a lever is added or its status changes.
+User-facing manual: `next/MANUAL.md` (how to set things, what to run for what) and one page per topic under `next/manual/` (VRAM, speed, quality, data, diagnostics, persistence). What the owner still has to run on hardware: `TESTING.md` in the repo root. Keep both current when a lever is added or its status changes.
 
 ## Ground rules for working on this folder
 

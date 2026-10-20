@@ -1,0 +1,20 @@
+# Speed
+
+Part of the trainer manual (`../MANUAL.md` has the short version). Status: `verified` = run on the B580, `untested` = unit-tested in the sandbox only.
+
+A step on this card is launch-bound (old measurement: ~22,300 kernel launches, ~48 us each; recompute adds ~7.5k).
+So: fewer launches, fewer new shapes, fewer syncs.
+
+| Lever | Switch | Effect | Cost | Status |
+|---|---|---|---|---|
+| Measured checkpoint placement | `trainer.tune_checkpointing=true` with `trainer.checkpoint_by=measured` | The probe's backward times each block's recompute and counts the memory of its activations; the blocks that save the most time per megabyte stop recomputing, residual blocks included, as far as the largest batch fits. Event `checkpoint_plan` lists the kept blocks with their MB and ms. | Same measuring pass as the share tuner, plus a timing synchronization per block in it. Keeps everything checkpointed when the profile shows no memory figures. | verified: batch 3, 512: 930 vs 1010 ms/step with the peak up from ~8.5 to ~10.5 GB; under a 10240 cap it emptied the cache after every step (1130 ms; fixed, retest) |
+| Less recompute | `tune_checkpointing`, `attention_fraction` | Each skipped block's recompute is not run. | VRAM. | untested |
+| Few shapes | `max_shapes` | First sight of a shape ~3.85 s; fewer shapes = fewer slow steps (the step line marks `new`). | Padding. | verified |
+| Bigger batch | `--batch` | Launches are shared by more samples. | VRAM; use with `batch_area`. | verified |
+| Conditioning store | `--persist-conditioning` / `conditioner.persist` | Second run neither loads encoders nor encodes. `conditioner.max_disk_mb` (4096) caps writes. | Disk. | verified: the second run skips encoding and starts sooner, same loss |
+| Latent cache | automatic, next to the dataset | Encoded once per (`base`, `mode`, `max_aspect`, `step`). Cold build was ~108 s. | Disk. | verified |
+| Latent encode batch | `latents.batch_size` (default 1) | Each distinct batch size compiles its own kernels; 1 is usually fastest overall. | - | verified (old tree) |
+| Prefetch | `batcher.prefetch` (default 2) | Batches built ahead of the step. | Host memory. | verified |
+| Fused/grouped optimizer | `fused`, `foreach`, `group_size` 0 | Fewer launches in the update (0 = all same-shaped at once). | `fused` no clipping. | measured: `--fused` ~1200 ms and `group_size=1` ~1200 ms against ~1010 ms default, memory the same: no gain for a LoRA |
+| Graph replay | `--graph` / `trainer.graph=true`, `trainer.graph_shapes` (8) | After a shape has been seen 3 times (eagerly) its forward + loss + backward is captured as a device graph and replayed: about 2x faster steps in the old measurements (launch-bound step), +37% steps/s end to end. Graphs share one memory pool, so the cost is the largest graph (old tree: ~0.5-1.5 GB), not the sum. Uses the memory-efficient attention kernel (flash cannot be captured). | Needs: no dropout, no timestep gate, non-fused optimizer (all refused loudly); chunked batches, the probe, and shapes past `graph_shapes` run eagerly. Count shapes with `max_shapes`: each graph is a capture (seconds). Competes with `tune_checkpointing` for the same spare VRAM. | verified: replayed steps ~510-550 ms against ~1000 ms eager, same loss at step 40; shapes past `graph_shapes` ran eagerly (graphs now go to the most used shapes; raise `graph_shapes` if memory allows) |
+| Timing | `trainer.timing=true` | Per-phase times; synchronizes, so it slows a bit. Turn off for speed. | - | untested |

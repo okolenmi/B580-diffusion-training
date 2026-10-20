@@ -495,7 +495,7 @@ def measured_placement():
             return 5.0 + kept / 10 + extra
         return measure
 
-    # the room beyond the all-checkpointed cost holds 30 MB of probed activations
+    # the budget leaves room for exactly the two cheapest-to-keep blocks
     budget = 768 + 1000 + 100 * 5.0 * 1.15 + 30 * 10 * 1.15
     flags = placement.choose(scripted(), 1000, 100, 10, budget)
     check(flags == [True, False, True, False, True], f"the blocks that save the most time per megabyte are kept while they fit, the rest recompute ({flags})")

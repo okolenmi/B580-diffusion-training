@@ -12,7 +12,8 @@ from ...engine.devices import resolve_device, resolve_dtype
 from ...engine.handles import TrainableDenoiser
 from ...engine.runtime.checkpointing import ActivationCheckpointer
 from ...families.api.adapters import GateWindow, TrainableSelection
-from ...families.api.parts import DenoiserPart
+from ...families.api.parts import AdapterMerge, DenoiserPart
+from ...families.general.adapters.merge import merge_adapter
 from ...families.registry import get_family
 from ...graph import Group, Node, Port
 
@@ -72,6 +73,16 @@ class InjectAdapterNode(Node):
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="Denoiser with adapters; only the adapters train.")}
 
+    def _merge(self, family, denoiser, merge: AdapterMerge) -> None:
+        scheme = family.schemes.get(merge.format)
+        if scheme is None or not hasattr(scheme, "key"):
+            raise ValueError(f"Merge Adapter: {family.id} cannot merge the {merge.format!r} format; choose from kohya")
+        path = self.context.env.service("models").resolve("loras", merge.file)
+        state, _ = family.read_adapter(str(path))
+        report = merge_adapter(denoiser.module(), scheme, state, merge.strength)
+        if report.merged == 0:
+            raise ValueError(f"Merge Adapter: nothing in {merge.file} matches this network (wrong family or key format?)")
+
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         part: DenoiserPart = inputs["denoiser"]
@@ -86,6 +97,9 @@ class InjectAdapterNode(Node):
         rank, alpha = inputs.get("rank") or 16, float(inputs.get("alpha") if inputs.get("alpha") is not None else 16.0)
         with self.context.task("Loading the denoiser"):
             denoiser = family.load_denoiser(part, device=device, dtype=dtype)
+        for merge in part.merges:
+            with self.context.task(f"Merging {merge.file}"):
+                self._merge(family, denoiser, merge)
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)

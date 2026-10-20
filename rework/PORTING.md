@@ -63,7 +63,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/lora_file.py` | 102 | 41 | next/families/general/adapters/schemes.py | rewrite | done |
 | `nodes/model/lora_gate.py` | 39 | 64 | next/families/general/adapters/gate.py | rewrite | done |
 | `nodes/model/lora_injector.py` | 394 | 35 | next/nodes/model/inject_adapter.py | rewrite | done |
-| `nodes/model/lora_merge.py` | 74 | 46 | next/families/general/adapters/ | ? | todo |
+| `nodes/model/lora_merge.py` | 74 | 46 | next/families/general/adapters/merge | 40 | done (on the live network at load, not a state dict) |
 | `nodes/model/lora_phases.py` | 531 | 48 | next/engine/step/phases.py | rewrite | partial (gate and forward/backward done; health summary pending) |
 | `nodes/model/lora_saver.py` | 199 | 38 | next/nodes/model/adapter_io.py (Save Adapter) | rewrite | done (event subscriber; final save via the trainer's `ended`) |
 | `nodes/model/lora_scaling.py` | 60 | 55 | next/families/general/adapters/scaling.py | rewrite | done |

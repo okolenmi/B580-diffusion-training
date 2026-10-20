@@ -40,12 +40,22 @@ class PartSource:
 
 
 @dataclass(frozen=True)
+class AdapterMerge:
+    """A saved adapter to bake into the weights when the part is loaded."""
+
+    file: str
+    strength: float = 1.0
+    format: str = "kohya"
+
+
+@dataclass(frozen=True)
 class ModelPart:
     family_id: str
     role: str
     source: PartSource
     info: PartInfo
     dtype: str = "auto"  # the dtype the person asked for; 'auto' leaves the choice to the loader
+    merges: tuple[AdapterMerge, ...] = ()  # applied in order by the loader of a denoiser
 
     ROLE: ClassVar[str] = ""
     KIND: ClassVar[PartKind] = PartKind.OTHER

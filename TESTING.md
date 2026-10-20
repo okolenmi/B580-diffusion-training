@@ -36,6 +36,12 @@ Add `--param trainer.tune_checkpointing=true --param trainer.checkpoint_by=measu
 - If every block is reported checkpointed, paste the `cost` event and the plan: the profile saw no activation memory.
 Pass: trains, plan has plausible figures, steps not slower than with `share`. Fail: paste console lines and the csv.
 
+## 6b. Merge Adapter
+Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA you have, `strength` 1 (the CLI starters have no switch for it; edit the graph).
+- Task line "Merging <file>"; training starts and the step-1 loss differs from the unmerged run; a LoRA of another family or a wrong key format stops with "nothing ... matches".
+- Strength 0 gives the same step-1 loss as no merge node.
+Pass: all three. Fail: paste the message.
+
 ## 7. Probe
 Add `--param trainer.probe_every=50`.
 - Probe line every 50 steps with `probe_rel_t_*`; the first record is about 1.0 (reference).

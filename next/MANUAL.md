@@ -89,6 +89,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 | Lever | Switch | Effect | Status |
 |---|---|---|---|
 | Learning rate | `--lr`, schedule nodes (`ConstantLR`, `CosineLR` with `min_fraction`, `WarmupLR` `steps`/`start`) | Standard. | verified |
+| Train on top of a LoRA | `Merge Adapter` node between Load Model's denoiser and Inject Adapter (chain several; `strength` scales, negative subtracts) | The saved kohya LoRA is added into the frozen weights when the denoiser loads (`W += strength*alpha/rank * up@down`, rounded once), so the new adapter trains on the merged model. Refuses a file that matches nothing. | A little time at load. The merge is not saved; export the new adapter and merge both when using it. | untested on a real LoRA (equivalence verified on a tiny UNet) |
 | Optimizer choice | `--optimizer AdamWNode|AdafactorNode|CAMENode` | AdamW is the baseline; Adafactor `clip_threshold`, `scale_parameter`; CAME `beta3`. | verified (AdamW) |
 | Gradient clip | `optimizer.grad_clip` | Largest total norm; 0 off. Not with `fused`. | untested |
 | Adapter kind | `adapter.kind=lora|dora`, `scaling=classic|rank_stabilized`, `alpha`, `dropout` | `rank_stabilized` uses alpha/sqrt(rank) so higher ranks do not shrink. | untested (dora) |
@@ -152,5 +153,4 @@ auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewa
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
 them at 0).
 
-Planned ports (see `rework/PORTING.md`): gradient alignment, conditioning blend, auto caption, block profiler,
-NF4, LoRA merge.
+Planned ports (see `rework/PORTING.md`): gradient alignment, conditioning blend, auto caption, NF4.

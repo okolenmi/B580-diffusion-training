@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Any
 
 from ...engine.handles import TrainableDenoiser
+from ...families.api.parts import AdapterMerge, DenoiserPart
 from ...graph import EventIn, Node, Port
 from ...graph.events import CheckpointDue
 
@@ -75,3 +77,24 @@ class LoadAdapterNode(Node):
         model.info = {**model.info, "loaded": {"file": inputs["file"], "matched": report.matched, "missing": list(report.missing)[:20],
                                                "unexpected": list(report.unexpected)[:20]}}
         return {"model": model}
+
+
+class MergeAdapterNode(Node):
+    DISPLAY_NAME = "Merge Adapter"
+    CATEGORY = "Model"
+    INPUTS = {
+        "denoiser": Port("denoiser", DenoiserPart),
+        "file": Port("file", str, picker="model_file", doc="A kohya-format adapter under the loras folder."),
+        "strength": Port("strength", float, required=False, default=1.0, step=0.05,
+                         doc="Multiplies the adapter's own scaling; 1 merges it as saved, negative removes its effect."),
+        "format": Port("format", str, required=False, default="kohya", advanced=True),
+    }
+    OUTPUTS = {"denoiser": Port("denoiser", DenoiserPart, doc="The same denoiser; the adapter is baked in when Inject Adapter loads it. "
+                                                              "Chain several nodes to merge several adapters, in order.")}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        part: DenoiserPart = inputs["denoiser"]
+        merge = AdapterMerge(inputs["file"], float(inputs.get("strength") if inputs.get("strength") is not None else 1.0),
+                             inputs.get("format") or "kohya")
+        return {"denoiser": replace(part, merges=(*part.merges, merge))}

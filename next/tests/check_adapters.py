@@ -98,6 +98,32 @@ def layer_cases():
     check(isinstance(drop.dropout, nn.Dropout), "dropout is used when asked for")
 
 
+def merging_into_weights():
+    import copy
+    from ..families.general.adapters.merge import merge_adapter
+
+    torch.manual_seed(0)
+    original = UNetModel(**TINY_UNET)
+    merged_net, pristine = copy.deepcopy(original), copy.deepcopy(original)
+    den = SDXLDenoiser(original, dtype=torch.float32)
+    part = inject_denoiser(den, TrainableSelection(), rank=4, alpha=2.0)
+    for layer in part.layers.values():
+        torch.nn.init.normal_(layer.lora_B, std=0.05)
+    state = SCHEMES["kohya"].export(part)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    with torch.no_grad():
+        trained = den(x, t, c, y)
+        report = merge_adapter(merged_net, SCHEMES["kohya"], state)
+        plain = SDXLDenoiser(merged_net, dtype=torch.float32)
+        check(report.merged == len(part.plan.modules) and not report.unused, f"every adapted module is merged ({report.merged})")
+        check(torch.allclose(plain(x, t, c, y), trained, atol=1e-4), "the merged network gives what the injected adapter gave")
+        before = SDXLDenoiser(pristine, dtype=torch.float32)(x, t, c, y)
+        check(not torch.allclose(before, trained, atol=1e-4), "the adapter changes the output, so the comparison above means something")
+        merge_adapter(pristine, SCHEMES["kohya"], state, 0.0)
+        check(torch.allclose(SDXLDenoiser(pristine, dtype=torch.float32)(x, t, c, y), before, atol=1e-6), "strength 0 leaves the weights as they were")
+        check(merge_adapter(pristine, SCHEMES["kohya"], {}).merged == 0, "a file that matches nothing merges nothing")
+
+
 def sdxl_plan_and_injection():
     meta = build_unet()
     descriptors = descriptors_from_model(meta)
@@ -154,4 +180,4 @@ def sdxl_plan_and_injection():
 
 
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, sdxl_plan_and_injection)

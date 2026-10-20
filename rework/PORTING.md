@@ -12,7 +12,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `manager/__init__.py` | 3 | 0 | next/data/ (triage) | ? | todo |
 | `manager/builder.py` | 724 | 21 | next/data/{images,latent_cache,library}.py | rewrite | done (teacher/trajectory generation dropped; VAE encode lives in the latent cache) |
 | `manager/caption_pool.py` | 137 | 32 | next/data/prompts.py (CaptionPool stage) | rewrite | done (variants dropped; draws derive from seed, epoch, image) |
-| `manager/captioning.py` | 244 | 23 | next/data/ (triage) | ? | todo |
+| `manager/captioning.py` | 244 | 23 | next/data/captioning | 110 | done |
 | `manager/dataset.py` | 265 | 18 | next/data/{library,store}.py | rewrite | done |
 | `manager/db.py` | 379 | 11 | next/data/library.py | rewrite | done (new schema) |
 | `manager/loader.py` | 749 | 39 | next/data/{batcher,bucketing,noise}.py | rewrite | done (no prompt grouping; mixed-prompt batches) |
@@ -28,7 +28,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/config_io.py` | 292 | 20 | next/ (triage) | ? | todo |
 | `nodes/config_model.py` | 338 | 14 | next/ (triage) | ? | todo |
 | `nodes/core.py` | 568 | 52 | next/graph/ | rewrite | done |
-| `nodes/dataset/auto_caption.py` | 112 | 11 | next/data/ + nodes/data/ | ? | todo |
+| `nodes/dataset/auto_caption.py` | 112 | 11 | next/nodes/dataset/captions | 60 | done (writes the library channel; no VAE-preview fallback) |
 | `nodes/dataset/caption_pool.py` | 104 | 9 | next/nodes/dataset/prompts.py | rewrite | done |
 | `nodes/dataset/handle.py` | 29 | 24 | next/data/ + nodes/data/ | ? | todo |
 | `nodes/dataset/managed.py` | 305 | 15 | next/nodes/dataset/* | rewrite | done (split into chain nodes) |

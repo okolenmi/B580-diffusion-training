@@ -114,6 +114,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 
 | Item | What it does |
 |---|---|
+| Auto caption | `--auto-caption` (model and options: `--param autocaption.model_id=...`, `prefix`, `suffix`, `lowercase`, `limit`, `overwrite`, `channel`) | Before training, a Hugging Face image-to-text model (BLIP base by default) writes captions into the dataset's library for images whose caption is empty, so a captionless set stops giving cross-attention one constant conditioning. Resumable (only empty captions are written), commits as it goes, frees the model afterwards. Backends are pluggable (`register_captioner`). | Time for one pass over the images, once; downloads the model on first use. | untested on a real model (logic verified with a stub) |
 | `latents.base` / `--resolution` | Short side in pixels (768 = SDXL-ish low budget, 1024 full). |
 | `latents.max_aspect` (2.0) | Longest side is at most this times base. |
 | `buckets.multiple` | Latent padding multiple (4 latents = 32 px). |
@@ -154,4 +155,4 @@ auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewa
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
 them at 0).
 
-Planned ports (see `rework/PORTING.md`): gradient alignment, auto caption, NF4.
+Planned ports (see `rework/PORTING.md`): gradient alignment, NF4 and int8 frozen weights (to use the owner's rewritten kernels).

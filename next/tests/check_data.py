@@ -300,6 +300,47 @@ def packing():
           "with short batches dropped, packing keeps the samples that fill a batch")
 
 
+def captioning() -> None:
+    """A caption model fills only what is empty, writes into the chosen channel, resumes, honours a limit and a stop."""
+    from ..data.captioning import CAPTIONERS, Captioner, caption_images, clean_caption, make_captioner, register_captioner
+
+    check(clean_caption("  a  cat sitting.\n", "xyz", "photo", True) == "xyz, a cat sitting, photo" and clean_caption("  . ", "xyz") == "",
+          "captions are tidied; nothing from the model stays empty")
+
+    class Stub(Captioner):
+        def caption(self, image):
+            return f"a {image.size[0]}x{image.size[1]} picture"
+
+    register_captioner("stub", Stub)
+    raises(ValueError, lambda: make_captioner("nope"), "unknown backend lists the registered ones", "stub")
+    tmp = Path(tempfile.mkdtemp())
+    folder = tmp / "images"
+    folder.mkdir()
+    make_images(folder)
+    for sidecar in list(folder.glob("img[0-2].txt")):
+        sidecar.unlink()
+    library = ImageLibrary(tmp / "lib.sqlite")
+    library.ingest(folder)
+    images = library.snapshot()
+    done = caption_images(library, images, make_captioner("stub"), limit=2)
+    check(done.captioned == 2, f"existing captions are kept and the limit holds ({done.summary()})")
+    again = library.snapshot()
+    check(sum(bool(again.caption(i).strip()) for i in again.ids) == 5, "what was written is in the library")
+    rest = caption_images(library, again, make_captioner("stub"))
+    check(rest.captioned == 1 and rest.kept == 5 and all(library.snapshot().caption(i).strip() for i in images.ids), "a rerun resumes with what is left")
+    tags = caption_images(library, library.snapshot(), make_captioner("stub"), channel="desc")
+    check(tags.captioned >= 5 and library.snapshot().caption(images.ids[0], "desc") and "desc" in library.snapshot().captions, "another channel is filled on its own")
+    swapped = caption_images(library, library.snapshot(), make_captioner("stub"), overwrite=True, prefix="trig")
+    check(swapped.kept == 0 and library.snapshot().caption(images.ids[0]).startswith("trig, "), "overwrite replaces captions, with the trigger words")
+    stopped = caption_images(library, library.snapshot(), make_captioner("stub"), overwrite=True, should_stop=lambda: True)
+    check(stopped.cancelled and stopped.captioned == 0, "a stop request ends the pass")
+    silent = type("Silent", (Captioner,), {"caption": lambda self, image: ""})
+    nothing = caption_images(library, library.snapshot(), silent(), channel="tags")
+    check(nothing.empty == 6 and nothing.captioned == 0 and not library.snapshot().caption(images.ids[0], "tags"), "a model that says nothing writes nothing")
+    check(CAPTIONERS["transformers"] is not None, "the transformers backend is registered")
+    library.close()
+
+
 def prompt_lifetimes_and_store() -> None:
     """Prompts say how long they are worth keeping; only stable ones reach the disk store, and a second run reads them."""
     from ..data.conditioning_cache import ConditioningCache
@@ -339,4 +380,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, packing, padding_fill, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, packing, padding_fill, captioning, prompt_lifetimes_and_store)

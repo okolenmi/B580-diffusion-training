@@ -131,6 +131,9 @@ class ImageLibrary:
         if commit:
             self._db.commit()
 
+    def commit(self) -> None:
+        self._db.commit()
+
     def sets(self) -> list[str]:
         return [r[0] for r in self._db.execute("select name from sets order by name")]
 

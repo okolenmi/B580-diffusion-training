@@ -29,7 +29,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
               accumulation: int = 1, steps: int = 1000, epochs: int = 0, save_every_epoch: int = 0, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
               persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, fill: str = "zero", time_balance: str = "off", balance_sampling: float = 0.0,
-              graph: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
+              graph: bool = False, auto_caption: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
     ``source`` replaces Load Model (tests hand in a stand-in); ``overrides`` sets extra parameters by node name.
@@ -40,6 +40,8 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("images", "DatasetLibraryNode", dataset=dataset)
     b.add("latents", "LatentCacheNode", dataset=dataset, base=resolution, mode="fit")
     b.add("captions", "CaptionsNode")
+    if auto_caption:  # fills empty captions in the library first, then the prompts read them
+        b.add("autocaption", "AutoCaptionNode", dataset=dataset)
     b.add("tag_swap", "TagSwapNode")
     b.add("buckets", "BucketerNode", multiple=4, max_shapes=max_shapes, batch_area=batch_area, pack=pack, fill=fill, keep_incomplete=True)  # 32 px steps, padded and masked
     b.add("noiser", "NoiserNode")
@@ -55,7 +57,9 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     if save_every_epoch:
         b.add("epoch_trigger", "EveryEpochNode", every=save_every_epoch)
     b.add("saver", "SaveAdapterNode", directory=output, name=name)
-    b.wires += [("model", "vae", "latents", "vae"), ("images", "images", "latents", "images"), ("images", "images", "captions", "images"),
+    captioned = [("images", "images", "autocaption", "images"), ("autocaption", "images", "captions", "images")] if auto_caption \
+        else [("images", "images", "captions", "images")]
+    b.wires += [*captioned, ("model", "vae", "latents", "vae"), ("images", "images", "latents", "images"),
                 ("captions", "prompts", "tag_swap", "prompts"), ("latents", "latents", "buckets", "latents"),
                 ("model", "denoiser", "noiser", "denoiser"), ("latents", "latents", "batcher", "latents"),
                 ("tag_swap", "prompts", "batcher", "prompts"), ("noiser", "noiser", "batcher", "noiser"),

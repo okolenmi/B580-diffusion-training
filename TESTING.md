@@ -48,6 +48,12 @@ Add `--param blend.strength_max=0.5` (min stays 0), then `--param blend.strength
 - Fixed 0.5: loss is higher at the start than unblended and the step time is unchanged; the probe (`trainer.probe_every`) still compares against the plain captions.
 Pass: both runs train without encoder reloads. Fail: paste the console lines.
 
+## 6d. Auto caption
+On a dataset where some images have no caption: `--auto-caption --param autocaption.limit=5` first, then without the limit.
+- Needs `transformers` installed and network once for the model. Task lines "Loading the caption model" and "Captioning"; a `captions:` summary line; the model memory is gone before training (peak not higher than without it).
+- Rerun: "0 captioned ... kept as they were": nothing replaced. Captions look sane in the dataset (and training prompts use them).
+Pass: captions written, resumed, no memory left behind. Fail: paste the console lines.
+
 ## 7. Probe
 Add `--param trainer.probe_every=50`.
 - Probe line every 50 steps with `probe_rel_t_*`; the first record is about 1.0 (reference).

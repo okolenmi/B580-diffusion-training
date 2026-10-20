@@ -55,6 +55,8 @@ class Console:
             print(f"data: {frame['samples']} samples, {frame['shapes_in']} latent shapes -> {frame['bucket_shapes']} padded shapes "
                   f"({frame['batch_shapes']} with short batches) in {frame['batches']} batches; padding mean {frame['padding_mean']:.0%}, "
                   f"worst {frame['padding_worst']:.0%}; {frame['short_batches']} short batches, {frame['packed']} samples packed up, {frame['dropped']} dropped", flush=True)
+        elif stream == "captions":
+            print(f"captions: {frame['summary']}", *(f"  failed: {e}" for e in frame["errors"]), sep="\n", flush=True)
         elif stream == "graph":
             print(f"{frame.get('message') or 'graph capture is off: ' + str(frame.get('why'))}", flush=True)
         elif stream == "warning" or self.verbose:
@@ -222,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--accumulation", type=int, default=1)
             p.add_argument("--steps", type=int, default=None, help="optimizer steps (default 1000, or no limit when --epochs is given)")
             p.add_argument("--epochs", type=int, default=0, help="passes over the data; with --steps the run ends at whichever limit comes first")
+            p.add_argument("--auto-caption", action="store_true", help="caption images that have no caption first (settings: --param autocaption.model_id=...)")
             p.add_argument("--save-every-epoch", type=int, default=0, help="also save after every this many epochs (0 = off)")
             p.add_argument("--lr", type=float, default=1e-4)
             p.add_argument("--rank", type=int, default=16)
@@ -259,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
             doc = parse(json.load(handle))
     else:
         doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
-                                 batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, lr=args.lr, rank=args.rank,
+                                 batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
                                  optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
                                  checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
                                  time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph,

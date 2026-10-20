@@ -54,6 +54,12 @@ On a dataset where some images have no caption: `--auto-caption --param autocapt
 - Rerun: "0 captioned ... kept as they were": nothing replaced. Captions look sane in the dataset (and training prompts use them).
 Pass: captions written, resumed, no memory left behind. Fail: paste the console lines.
 
+## 6e. Gradient alignment
+With test 7's probe: add `--param trainer.probe_alignment=true --param trainer.probe_items=4`.
+- A `gradient alignment:` line after each probe line with `norm_*`, `share_*`, `self_*`, `cos_*`, `align_*`; `self_*` well above 0 (if near 0, raise `probe_items`).
+- Extra time per probe is a few seconds; no new memory peak above the training peak.
+Pass: values printed, cosines within -1..1, shares add to 1.
+
 ## 7. Probe
 Add `--param trainer.probe_every=50`.
 - Probe line every 50 steps with `probe_rel_t_*`; the first record is about 1.0 (reference).

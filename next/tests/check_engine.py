@@ -358,7 +358,33 @@ def time_balance():
         check(any(k.startswith("draw_t_") for e in events for k in e.metrics), "a run that biases the sampling reports the chance of each third")
 
 
+def gradient_alignment():
+    import contextlib
+    from types import SimpleNamespace
+
+    from ..engine.step.alignment import GradientAlignment
+
+    module = torch.nn.Module()
+    module.p = torch.nn.Parameter(torch.ones(3))
+    inputs = [torch.tensor([[1.0, 0, 0]]), torch.tensor([[0, 1.0, 0]]), torch.tensor([[1.0, 0, 0]])]
+    targets = [torch.zeros(1, 3), torch.zeros(1, 3), torch.tensor([[2.0, 0, 0]])]
+    probe = SimpleNamespace(_items=[None], points=2, conditioning=lambda n: None, gate=SimpleNamespace(override=lambda v: contextlib.nullcontext()),
+                            point=lambda n, third, point: (inputs[third], None, targets[third], None),
+                            denoiser=SimpleNamespace(predict=lambda x, t, c: x * module.p))
+    module.train()
+    out = GradientAlignment(lambda: [module.p], lambda: module).run(probe)
+    check(all(abs(out[f"gc_norm_t_{k}"] - 2 / 3) < 1e-6 and abs(out[f"gc_share_t_{k}"] - 1 / 3) < 1e-6 for k in ("low", "mid", "high")),
+          "gradient norms and shares match the closed form")
+    check(abs(out["gc_cos_low_high"] + 1) < 1e-6 and abs(out["gc_cos_low_mid"]) < 1e-6 and abs(out["gc_cos_mid_high"]) < 1e-6,
+          "opposite gradients give cosine -1, private parameters give 0")
+    check(abs(out["gc_align_t_mid"] - 1) < 1e-6 and abs(out["gc_align_t_low"]) < 1e-6 and abs(out["gc_align_t_high"]) < 1e-6,
+          "the conflicting thirds cancel in the sum, so only the third with its own parameter follows it")
+    check(all(abs(out[f"gc_self_t_{k}"] - 1) < 1e-6 for k in ("low", "mid", "high")), "identical halves agree completely (the noise floor is 1)")
+    check(module.p.grad is None and module.training, "no gradient is left behind and the mode is restored")
+
+
 def time_probe():
+    from ..engine.step.alignment import GradientAlignment
     from ..engine.step.probe import TimeProbe
 
     with tempfile.TemporaryDirectory() as raw:
@@ -376,9 +402,15 @@ def time_probe():
               "the same samples, noise and timesteps give the same record every time")
         check(first["probe_worst_rel"] == max(first[f"probe_rel_t_{t}"] for t in ("low", "mid", "high")) and first["probe_drift_t_low"] > 0,
               "the worst ratio is the largest of the thirds and a trained adapter has moved the prediction")
+        probe.alignment = GradientAlignment(adapted.trainable_parameters, denoiser.module)
+        aligned = probe.run()
+        floors = [v for k, v in aligned.items() if k.startswith("gc_self_")]
+        check(floors and all(-1.0001 <= v <= 1.0001 for k, v in aligned.items() if k.startswith(("gc_cos", "gc_align", "gc_self")))
+              and abs(sum(v for k, v in aligned.items() if k.startswith("gc_share_")) - 1) < 1e-6 and probe.run().keys() == aligned.keys(),
+              "on the real network the probe adds gradient statistics that are cosines and shares")
         x0, mask, size = batcher.clean_item(batcher.latents.samples[0])
         check(x0.shape[0] == 1 and (mask is None or mask.shape[-2:] == x0.shape[-2:]), "a probe item is one sample in its bucket shape, with a mask when padded")
 
 
 if __name__ == "__main__":
-    run(main, time_balance, time_probe, blended_conditioning, epochs, graphed)
+    run(main, time_balance, gradient_alignment, time_probe, blended_conditioning, epochs, graphed)

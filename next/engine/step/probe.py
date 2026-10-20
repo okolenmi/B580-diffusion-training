@@ -31,7 +31,7 @@ class _Item:
 
 class TimeProbe:
     def __init__(self, *, denoiser, conditioner, gate, noiser, item_of: Callable[[str], tuple], device: str,
-                 every: int, items: int = 2, points: int = 2, seed: int = 0):
+                 every: int, items: int = 2, points: int = 2, seed: int = 0, alignment=None):
         if every < 1 or items < 1 or points < 1:
             raise ValueError("every, items and points must each be at least 1")
         self.denoiser, self.conditioner, self.gate, self.noiser = denoiser, conditioner, gate, noiser
@@ -39,6 +39,7 @@ class TimeProbe:
         self._items: list[_Item] = []
         self._seen: set[str] = set()
         self._base: dict[tuple, tuple[float, Tensor]] | None = None
+        self.alignment = alignment  # a GradientAlignment run with every record, or None
 
     @property
     def ready(self) -> bool:
@@ -57,22 +58,30 @@ class TimeProbe:
     def due(self, step: int) -> bool:
         return self.ready and (step + 1) % self.every == 0
 
+    def point(self, n: int, third: int, point: int) -> tuple[Tensor, Tensor, Tensor, Tensor | None]:
+        """Noisy input, timestep, target and mask of one probe point, on the device; the same ones every time."""
+        item = self._items[n]
+        frac = torch.tensor([(third + (point + 0.5) / self.points) / 3])
+        t = self.noiser.t_at(frac)
+        noise = torch.randn(item.x0.shape, generator=torch.Generator().manual_seed(self.seed + 1000 * n + 10 * third + point))
+        x_t, target, _ = self.noiser.objective.noisy(item.x0, noise, t)
+        mask = None if item.mask is None else item.mask.to(self.device)
+        return x_t.to(self.device), t.to(self.device), target.to(self.device), mask
+
+    def conditioning(self, n: int):
+        item = self._items[n]
+        return self.conditioner.encode([item.prompt], [item.size_px])
+
     def run(self) -> dict[str, float]:
         """Rel and drift per third (and the worst rel), in the metrics' naming."""
         live, base = {}, {}
         with torch.no_grad():
-            for n, item in enumerate(self._items):
-                conditioning = self.conditioner.encode([item.prompt], [item.size_px])
-                x0 = item.x0
+            for n in range(len(self._items)):
+                conditioning = self.conditioning(n)
                 for third in range(3):
                     for point in range(self.points):
                         key = (n, third, point)
-                        frac = torch.tensor([(third + (point + 0.5) / self.points) / 3])
-                        t = self.noiser.t_at(frac)
-                        noise = torch.randn(x0.shape, generator=torch.Generator().manual_seed(self.seed + 1000 * n + 10 * third + point))
-                        x_t, target, _ = self.noiser.objective.noisy(x0, noise, t)
-                        x_t, t_dev, target = x_t.to(self.device), t.to(self.device), target.to(self.device)
-                        mask = None if item.mask is None else item.mask.to(self.device)
+                        x_t, t_dev, target, mask = self.point(n, third, point)
                         with self.gate.override(None):
                             pred = self.denoiser.predict(x_t, t_dev, conditioning)
                         live[key] = (float(per_sample_mse(pred, target, mask)), pred.float().cpu())
@@ -92,4 +101,6 @@ class TimeProbe:
             out[f"probe_rel_{suffix}"] = loss_live / max(loss_base, 1e-12)
             out[f"probe_drift_{suffix}"] = drift / len(keys)
         out["probe_worst_rel"] = max(v for k, v in out.items() if k.startswith("probe_rel_"))
+        if self.alignment is not None:
+            out.update(self.alignment.run(self))
         return out

@@ -14,6 +14,7 @@ from ...engine.optim.handle import FusedOptimizer, Optimizer
 from ...engine.runtime.density import CheckpointDensity
 from ...engine.runtime.placement import BlockPlacement
 from ...engine.runtime.profiler import BlockProfiler
+from ...engine.step.alignment import GradientAlignment
 from ...engine.step.balance import TimeBalance
 from ...engine.step.graphed import GraphedCompute
 from ...engine.step.loss import LossWeighting
@@ -58,6 +59,10 @@ class DiffusionTrainerNode(Node):
                             doc="Every N steps, measure whether the adapter makes any third of the timestep range worse than the "
                                 "frozen model on fixed training samples (probe_rel_t_*: above 1 is worse; 0 = off). Costs a few "
                                 "batch-1 forwards each time."),
+        "probe_alignment": Port("probe_alignment", bool, required=False, default=False, group="diagnostics",
+                                doc="With the probe: also measure whether the timestep thirds pull the adapter the same way "
+                                    "(gc_*: gradient norm share, cosines between thirds, cosine with the sum, split-half noise floor). "
+                                    "Costs a backward per probe point at every probe."),
         "probe_items": Port("probe_items", int, required=False, default=2, minimum=1, group="diagnostics",
                             doc="Training samples the probe keeps (the first ones seen)."),
         "probe_points": Port("probe_points", int, required=False, default=2, minimum=1, group="diagnostics",
@@ -102,7 +107,8 @@ class DiffusionTrainerNode(Node):
             batches: Batcher = inputs["batches"]
             probe = TimeProbe(denoiser=model.denoiser, conditioner=getattr(inputs["conditioner"], "inner", inputs["conditioner"]), gate=model.gate, noiser=batches.noiser,
                               item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
-                              items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed)
+                              items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed,
+                              alignment=GradientAlignment(model.adapted.trainable_parameters, model.denoiser.module) if inputs.get("probe_alignment") else None)
         graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None
         total = self._total_steps(inputs)
         inputs["schedule"].fit(total)

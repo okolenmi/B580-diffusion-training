@@ -129,6 +129,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 
 | Tool | Gives you |
 |---|---|
+| Gradient alignment | `--param trainer.probe_every=50 --param trainer.probe_alignment=true` | At each probe, the gradient of the probe loss per third of the timestep range: `gc_norm/share` (which third dominates), `gc_cos_a_b` (negative = a step that helps one hurts the other), `gc_align_t_*` (cosine with the sum; <= 0: the combined update does not help that third), `gc_self_t_*` (split-half noise floor: read the other numbers relative to it). Explains `probe_rel_*`; not a trajectory. | One backward per probe point at every probe (autograd.grad, so the optimizer's gradients are untouched). Raise `probe_items`/`probe_points` to lift the noise floor. | untested on a real network (closed forms verified) |
 | `--memory-log FILE.csv` | Columns: seconds, label, allocated, reserved, peak_allocated, device_used, process, active, split_free, segments, alloc_retries (MB). Labels are node/step/task names. |
 | Ledger tables (console) | Additive slices of `device_used`: ours (allocated, cache, outside) and other programs. |
 | Step line | `[BxHxW new]`, loss, weights, probe, timings. |
@@ -155,4 +156,4 @@ auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewa
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
 them at 0).
 
-Planned ports (see `rework/PORTING.md`): gradient alignment, NF4 and int8 frozen weights (to use the owner's rewritten kernels).
+Planned ports (see `rework/PORTING.md`): NF4 and int8 frozen weights (to use the owner's rewritten kernels).

@@ -99,6 +99,9 @@ class Console:
         if "probe_worst_rel" in m:
             rel = "/".join(f"{m[k]:.3f}" for k in ("probe_rel_t_low", "probe_rel_t_mid", "probe_rel_t_high") if k in m)
             print(f"  probe: adapter/base loss by third {rel}, worst {m['probe_worst_rel']:.3f} (above 1: worse than the base model)", flush=True)
+            gc = sorted(k for k in m if k.startswith("gc_"))
+            if gc:
+                print("  gradient alignment: " + " ".join(f"{k[3:]}={m[k]:.3f}" for k in gc), flush=True)
 
     @staticmethod
     def _memory(frame: dict) -> None:

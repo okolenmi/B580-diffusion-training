@@ -15,6 +15,7 @@ from ...graph.events import StepFinished
 from ..optim.handle import FusedOptimizer, Optimizer
 from ..runtime.memory import MemoryBudgetExceeded, is_out_of_memory
 from ..runtime.planner import chunk_sizes
+from ..runtime.thrash import PrimitiveCacheMonitor
 from .loss import LossWeighting, thirds_of_range
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
@@ -48,12 +49,14 @@ class Trainer:
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
-                 graph: Callable[[list[StepPhase]], StepPhase] | None = None):
+                 graph: Callable[[list[StepPhase]], StepPhase] | None = None,
+                 warn: Callable[[str], None] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._balance = balance
+        self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
         self._placement = placement  # (BlockPlacement, TrainableDenoiser) or None; chosen over density
@@ -179,6 +182,10 @@ class Trainer:
         if self._time_probe is not None and not probe_metrics and self._time_probe.due(step):
             probe_metrics = self._time_probe.run()
         metrics.update(probe_metrics)
+        if self._warn is not None:
+            message = self._cache_monitor.observe((metrics["batch"], height, width), metrics["step_ms"] / 1000)
+            if message:
+                self._warn(message)
         if self._balance is not None:
             self._balance.observe(metrics)
             metrics.update({name.replace("loss_t_", "weight_t_"): w for name, w in self._balance.weights.items()})

@@ -117,7 +117,8 @@ class DiffusionTrainerNode(Node):
                           steps=total, accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, placement=placement, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, placement=placement, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph,
+                          warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

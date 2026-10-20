@@ -41,7 +41,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/memory/graph_memory.py` | 661 | 46 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
 | `nodes/memory/handle.py` | 82 | 66 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
 | `nodes/memory/manager.py` | 206 | 54 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
-| `nodes/memory/profile.py` | 84 | 68 | next/engine/runtime/profiler | rewrite | todo |
+| `nodes/memory/profile.py` | 84 | 68 | superseded | - | dropped: the memory ledger, `runtime.profile` and the per-phase timings cover it |
 | `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
 | `nodes/model/adapter_injection.py` | 160 | 72 | next/families/general/adapters/inject.py | drop | done |
 | `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/layers.py | drop | done (kind flag replaces strategy classes) |
@@ -68,13 +68,13 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/lora_saver.py` | 199 | 38 | next/nodes/model/adapter_io.py (Save Adapter) | rewrite | done (event subscriber; final save via the trainer's `ended`) |
 | `nodes/model/lora_scaling.py` | 60 | 55 | next/families/general/adapters/scaling.py | rewrite | done |
 | `nodes/model/lora_training_config.py` | 244 | 39 | next/nodes/model/inject_adapter.py (fields) | rewrite | done |
-| `nodes/model/lora_training_resources.py` | 450 | 56 | next/families/general/adapters/ | ? | todo |
-| `nodes/model/meta_init.py` | 57 | 44 | next/families/general/ | ? | todo |
+| `nodes/model/lora_training_resources.py` | 450 | 56 | superseded | - | dropped: Inject Adapter builds the adapted model directly |
+| `nodes/model/meta_init.py` | 57 | 44 | superseded | - | dropped: loaders refuse missing and unexpected keys instead of filling |
 | `nodes/model/nf4_lora_layer.py` | 179 | 40 | next/families/general/adapters/ or quantization/ | ? | todo |
 | `nodes/model/nf4_weight_store.py` | 221 | 53 | next/families/general/adapters/ or quantization/ | ? | todo |
 | `nodes/model/node.py` | 53 | 2 | next/graph/ | rewrite | done |
 | `nodes/model/parameters.py` | 35 | 26 | next/ (triage) | ? | todo |
-| `nodes/model/resource_inspection.py` | 149 | 38 | next/families/general/safetensors_io + sdxl/fingerprint | ? | todo |
+| `nodes/model/resource_inspection.py` | 149 | 38 | superseded | - | dropped: header detection in families/api/detection |
 | `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/memory.py | rewrite | done |
 | `nodes/model/sdxl_architecture.py` | 71 | 62 | next/families/sdxl/ | ? | todo |
 | `nodes/model/text_encoder.py` | 346 | 50 | next/families/general/ + sdxl/conditioning | ? | todo |
@@ -113,12 +113,12 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/optimizer/strategies/shape_grouping.py` | 89 | 55 | next/engine/optim/ + next/nodes/optimizer/ | rewrite | done (stacked state, fused hooks; bit-identical to the old rules) |
 | `nodes/optimizer/strategies/simple.py` | 29 | 28 | next/engine/optim/ + next/nodes/optimizer/ | rewrite | done (stacked state, fused hooks; bit-identical to the old rules) |
 | `nodes/optimizer/strategy_registry.py` | 105 | 38 | next/engine/optim/ + next/nodes/optimizer/ | rewrite | done (stacked state, fused hooks; bit-identical to the old rules) |
-| `nodes/primitive/values.py` | 72 | 8 | next/nodes/primitive/ | ? | todo |
+| `nodes/primitive/values.py` | 72 | 8 | next/nodes/primitive/values | - | done (Integer, Number, Text, Switch) |
 | `nodes/quantization.py` | 57 | 56 | next/ (triage) | ? | todo |
-| `nodes/resource_budget.py` | 44 | 75 | next/ (triage) | ? | todo |
+| `nodes/resource_budget.py` | 44 | 75 | superseded | - | dropped: `memory.vram_max_mb` and the memory policy |
 | `nodes/train/bucket_balance.py` | 456 | 36 | next/engine/step/balance.py + nodes/train/weighting.py (Time Balance) | rewrite | done (thirds of the timestep range as `loss_t_*`; modes off/normalize/speed/dro; sampling bias read by the Noiser) |
 | `nodes/train/bucket_sizes.py` | 132 | 56 | next/data/batcher.py (`sizes_px`) | rewrite | done (the batch carries each sample's true size, so conditioning describes the real extent) |
-| `nodes/train/cache_thrash.py` | 194 | 36 | next/engine/ or nodes/train/ (triage) | ? | todo |
+| `nodes/train/cache_thrash.py` | 194 | 36 | next/engine/runtime/thrash | - | done (warning once per run, through the warning stream) |
 | `nodes/train/conditioning_blend.py` | 160 | 38 | next/nodes/conditioning/blend + engine/conditioner | 50 | done (partners, strength range and chance; wraps the conditioner) |
 | `nodes/train/loss.py` | 208 | 28 | next/engine/step/loss.py + nodes/train/weighting.py | rewrite | done |
 | `nodes/train/managed.py` | 1714 | 40 | next/nodes/train/trainer.py | rewrite | partial (loop done; residency, capture, profiling pending) |

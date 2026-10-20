@@ -474,6 +474,24 @@ class FakeBlock:
         return args
 
 
+def cache_thrash():
+    from ..engine.runtime.thrash import PrimitiveCacheMonitor
+
+    def feed(steps, **kw):
+        monitor, messages = PrimitiveCacheMonitor(**kw), []
+        messages = [monitor.observe(shape, seconds) for shape, seconds in steps]
+        return monitor, [m for m in messages if m]
+
+    slow_first = [(f"s{i}", t) for i in range(8) for t in (4.0, 1.0)] + [(f"s{i % 8}", 1.0) for i in range(30)]
+    check(not feed(slow_first)[1], "slow first sightings alone are compilation, not cache eviction: no warning")
+    thrash = [("a", 1.0), ("a", 1.0), ("b", 1.0), ("b", 1.0)] + [("a", 3.5), ("b", 3.5), ("a", 3.5), ("a", 1.0)] * 3
+    monitor, warnings = feed(thrash)
+    check(len(warnings) == 1 and "ONEDNN_PRIMITIVE_CACHE_CAPACITY" in warnings[0] and monitor.warned, "slow revisits warn once and name the knob")
+    check(not feed([("a", 1.0), ("b", 1.0), ("a", 3.5), ("b", 3.5), ("a", 3.5)])[1], "too few revisits are no evidence")
+    check(not feed([("a", 1.0), ("b", 1.0)] * 20)[1], "a run that never repeats a shape has no baseline and does not warn")
+    raises(ValueError, lambda: PrimitiveCacheMonitor(ratio=1.0), "ratio must exceed 1", "ratio")
+
+
 def measured_placement():
     memory = [0.0]
     sizes = {"a": (100, 3), "b": (20, 8), "c": (200, 3), "d": (10, 6), "silent": (0, 2)}  # mb, ms
@@ -597,4 +615,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, measured_placement, measured_checkpointing_in_trainer)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, cache_thrash, measured_placement, measured_checkpointing_in_trainer)

@@ -144,6 +144,9 @@ def main() -> None:
         node = lambda cls: cls(ctx.scoped("n", cls.READS_SETTINGS, cls.__name__))  # noqa: E731
         got = node(DatasetLibraryNode).build(dataset="demo")["images"]
         check(len(got) == 6, "Dataset Library node returns the set")
+        from ..nodes.primitive.values import FloatNode, SwitchNode, TextNode
+        check(node(FloatNode).build(value=2.5)["value"] == 2.5 and node(FloatNode).build()["value"] == 0.0 and node(TextNode).build(value="a")["value"] == "a"
+              and node(SwitchNode).build(value=True)["value"] is True, "constant nodes hand their value on, with a default")
         table = node(TagSwapNode).build(prompts=node(CaptionsNode).build(images=got, seed=1)["prompts"])["prompts"]
         check(len(table.stages) == 1, "stage node appends to the table")
         seeded = lambda base, uid: ExecutionContext(settings=SettingsRegistry().snapshot({"seed.base": base})).scoped(  # noqa: E731

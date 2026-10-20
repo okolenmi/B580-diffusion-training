@@ -34,6 +34,15 @@ class TrainableDenoiser(DeviceResident):
         self.denoiser.set_checkpointer(self.checkpointer, share)
         self.checkpoint_share = share
 
+    def checkpoint_blocks(self) -> list[tuple[str, Any]]:
+        return self.denoiser.checkpoint_blocks()
+
+    def set_checkpoint_flags(self, flags) -> None:
+        if self.checkpointer is None:
+            raise ValueError("this denoiser was built without checkpointing")
+        self.denoiser.set_checkpointed(self.checkpointer, flags)
+        self.checkpoint_share = sum(1 for f in flags if f) / max(len(flags), 1)
+
     @property
     def gate(self):
         return self.adapted.gate

@@ -26,7 +26,7 @@ conditioner adapter optimizer schedule weighting trainer trigger saver` (+ `bala
 |---|---|
 | lower peak VRAM, same quality | `batch_area`, `max_shapes`, optimizer `fused`/`group_size`/`state_precision`, `--rank` |
 | lower VRAM, accepting slower steps | `checkpointing` on, `attention_fraction` 1.0, batch 1 + `accumulation` |
-| faster steps | `tune_checkpointing`, fewer shapes (`max_shapes`), `batch_size` up while peak allows, `--persist-conditioning` |
+| faster steps | `tune_checkpointing` (`checkpoint_by=measured`), fewer shapes (`max_shapes`), `batch_size` up while peak allows, `--persist-conditioning` |
 | faster start | `--persist-conditioning`, latent cache reuse, `max_shapes` |
 | fix weak spots in some noise range | `--time-balance`, `--balance-sampling`, noiser `mode`, `probe_every` to see them |
 | less overfitting to captions | caption nodes (shuffle, swap, pool, dropout) |
@@ -72,6 +72,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 
 | Lever | Switch | Effect | Cost | Status |
 |---|---|---|---|---|
+| Measured checkpoint placement | `trainer.tune_checkpointing=true` with `trainer.checkpoint_by=measured` | The probe's backward times each block's recompute and counts the memory of its activations; the blocks that save the most time per megabyte stop recomputing, residual blocks included, as far as the largest batch fits. Event `checkpoint_plan` lists the kept blocks with their MB and ms. | Same measuring pass as the share tuner, plus a timing synchronization per block in it. Keeps everything checkpointed when the profile shows no memory figures. | untested |
 | Less recompute | `tune_checkpointing`, `attention_fraction` | Each skipped block's recompute is not run. | VRAM. | untested |
 | Few shapes | `max_shapes` | First sight of a shape ~3.85 s; fewer shapes = fewer slow steps (the step line marks `new`). | Padding. | verified |
 | Bigger batch | `--batch` | Launches are shared by more samples. | VRAM; use with `batch_area`. | verified |

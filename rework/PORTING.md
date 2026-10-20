@@ -47,10 +47,10 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/adapter_strategy.py` | 206 | 43 | next/families/general/adapters/layers.py | drop | done (kind flag replaces strategy classes) |
 | `nodes/model/attention.py` | 354 | 42 | next/families/general/ldm_unet/attention.py | rewrite | done (bit-identical) |
 | `nodes/model/attention_checkpointing.py` | 227 | 78 | next/engine/runtime/checkpointing.py | rewrite | done (one recompute function; blocks chosen by the denoiser) |
-| `nodes/model/block_profiler.py` | 214 | 60 | next/engine/runtime/profiler | ? | todo |
+| `nodes/model/block_profiler.py` | 214 | 60 | next/engine/runtime/profiler | 75 | done (observer in the checkpointer's recompute) |
 | `nodes/model/checkpoint.py` | 312 | 50 | next/engine/runtime/checkpointing.py | rewrite | done (one recompute function; blocks chosen by the denoiser) |
 | `nodes/model/checkpoint_loader.py` | 61 | 26 | next/nodes/model/load_model.py | rewrite | done (detection only; tensor loading is phase 4) |
-| `nodes/model/checkpoint_placement.py` | 92 | 54 | next/engine/runtime/ | ? | todo |
+| `nodes/model/checkpoint_placement.py` | 92 | 54 | next/engine/runtime/placement | 70 | done (greedy time per megabyte, verified by measuring) |
 | `nodes/model/clip.py` | 554 | 40 | next/families/general/clip/model.py | rewrite | done (bit-identical) |
 | `nodes/model/clip_encoder.py` | 331 | 50 | next/families/sdxl/conditioning.py | rewrite | done |
 | `nodes/model/clip_state_dict.py` | 176 | 49 | next/families/general/clip/checkpoint.py | rewrite | done |

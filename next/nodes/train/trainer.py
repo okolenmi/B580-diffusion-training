@@ -12,6 +12,8 @@ from ...engine.devices import Accelerator
 from ...engine.handles import TrainableDenoiser
 from ...engine.optim.handle import FusedOptimizer, Optimizer
 from ...engine.runtime.density import CheckpointDensity
+from ...engine.runtime.placement import BlockPlacement
+from ...engine.runtime.profiler import BlockProfiler
 from ...engine.step.balance import TimeBalance
 from ...engine.step.graphed import GraphedCompute
 from ...engine.step.loss import LossWeighting
@@ -47,6 +49,11 @@ class DiffusionTrainerNode(Node):
         "tune_checkpointing": Port("tune_checkpointing", bool, required=False, default=False, group="speed",
                                    doc="Before step 1, measure what the card allows and recompute fewer transformer blocks in backward "
                                        "(faster steps) as long as the largest batch still fits the memory budget."),
+        "checkpoint_by": Port("checkpoint_by", str, required=False, default="share", choices=("share", "measured"), group="speed",
+                              visible_when=("tune_checkpointing", True),
+                              doc="How blocks are picked. share: an even share of the transformer blocks (residual blocks always recompute). "
+                                  "measured: the step times each block's recompute and counts its activation memory, then keeps the blocks "
+                                  "that save the most time per megabyte, residual blocks included, as far as the largest batch fits."),
         "probe_every": Port("probe_every", int, required=False, default=0, minimum=0, group="diagnostics",
                             doc="Every N steps, measure whether the adapter makes any third of the timestep range worse than the "
                                 "frozen model on fixed training samples (probe_rel_t_*: above 1 is worse; 0 = off). Costs a few "
@@ -82,9 +89,14 @@ class DiffusionTrainerNode(Node):
                             purpose="adapter gradients, allocated once and zeroed in place so no step allocates between them")
             residency.settle()
             residency.start()
-        density = None
+        density = placement = None
         if inputs.get("tune_checkpointing") and residency is not None and model.checkpointer is not None:
-            density = (CheckpointDensity(residency.planner), model)
+            if inputs.get("checkpoint_by") == "measured":
+                profiler = BlockProfiler(model.checkpointer, model.checkpoint_blocks(),
+                                         lambda: accelerator.memory().get("allocated", 0.0), accelerator.synchronize)
+                placement = (BlockPlacement(residency.planner, profiler), model)
+            else:
+                density = (CheckpointDensity(residency.planner), model)
         probe = None
         if inputs.get("probe_every"):
             batches: Batcher = inputs["batches"]
@@ -99,7 +111,7 @@ class DiffusionTrainerNode(Node):
                           steps=total, accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph)
+                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, placement=placement, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph)
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

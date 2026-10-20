@@ -59,6 +59,12 @@ class SDXLDenoiser:
     def set_checkpointer(self, checkpointer: Checkpointer | None, attention_fraction: float = 1.0) -> None:
         self.model.set_checkpointer(checkpointer, attention_fraction)
 
+    def checkpoint_blocks(self) -> list[tuple[str, nn.Module]]:
+        return self.model.checkpoint_blocks()
+
+    def set_checkpointed(self, checkpointer: Checkpointer | None, flags) -> None:
+        self.model.set_checkpointed(checkpointer, flags)
+
 
 def build_unet(config: dict | None = None) -> UNetModel:
     with torch.device("meta"):

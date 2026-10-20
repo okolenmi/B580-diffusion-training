@@ -197,6 +197,19 @@ class UNetModel(nn.Module):
             chosen = int((index + 1) * attention_fraction) > int(index * attention_fraction)
             block.checkpointer = checkpointer if chosen else None
 
+    def checkpoint_blocks(self) -> list[tuple[str, nn.Module]]:
+        """Every block that can run through a checkpointer, by module path, in network order."""
+        return [(name, m) for name, m in self.named_modules() if isinstance(m, (ResBlock, BasicTransformerBlock))]
+
+    def set_checkpointed(self, checkpointer: Checkpointer | None, flags: Iterable[bool]) -> None:
+        """Block by block: the ones flagged run through ``checkpointer``, the others keep their activations."""
+        blocks = self.checkpoint_blocks()
+        flags = list(flags)
+        if len(flags) != len(blocks):
+            raise ValueError(f"{len(blocks)} blocks need {len(blocks)} flags, got {len(flags)}")
+        for (_, block), on in zip(blocks, flags):
+            block.checkpointer = checkpointer if on else None
+
     def forward(self, x, timesteps, context=None, y=None):
         if (y is not None) != (self.num_classes is not None):
             raise ValueError(f"y must be given exactly when the model is class-conditional (num_classes={self.num_classes!r})")

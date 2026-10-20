@@ -78,7 +78,7 @@ class BasicTransformerBlock(nn.Module):
         if self.checkpointer is None:
             return self._forward(x, context)
         inputs = (x,) if context is None else (x, context)
-        return self.checkpointer(lambda *args: self._forward(*args), inputs, self.parameters())
+        return self.checkpointer(self._forward, inputs, self.parameters())
 
     def _forward(self, x, context=None):
         x = self.attn1(self.norm1(x)) + x

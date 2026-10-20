@@ -158,6 +158,13 @@ def denoiser_cases():
     den.set_checkpointer(checkpointer, 0.0)
     den(x, t, c, y)
     check(len(calls) == 11, f"attention_fraction 0 leaves only the residual blocks ({len(calls)})")
+    blocks = den.checkpoint_blocks()
+    flags = [i % 3 == 0 for i in range(len(blocks))]
+    calls.clear()
+    den.set_checkpointed(checkpointer, flags)
+    den(x, t, c, y)
+    check(len(blocks) == 23 and len(calls) == sum(flags), f"set_checkpointed picks blocks one by one ({len(calls)} of {len(blocks)})")
+    raises(ValueError, lambda: den.set_checkpointed(checkpointer, flags[:-1]), "flag count must match the blocks", "flags")
     den.set_checkpointer(None)
     before = len(calls)
     den(x, t, c, y)

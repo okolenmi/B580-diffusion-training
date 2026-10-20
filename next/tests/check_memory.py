@@ -19,6 +19,10 @@ from ..engine.runtime.planner import StepPlanner, chunk_sizes
 from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager, is_out_of_memory
 from ..engine.runtime.encoders import OnDemandKit
 from ..engine.runtime.residents import DeviceResident, ModulesResident
+from types import SimpleNamespace
+
+from ..engine.runtime.placement import BlockPlacement
+from ..engine.runtime.profiler import BlockProfiler
 from .check_engine import rig
 from .support import check, raises, run
 
@@ -457,6 +461,88 @@ def training():
         check(m.steps_seen == 2 and device.cache_emptied == 0, "the trainer calls the manager around every step; nothing released, so no cache emptying")
 
 
+class FakeBlock:
+    """A block whose recompute holds ``mb`` megabytes and takes about ``ms`` milliseconds."""
+
+    def __init__(self, memory: list, mb: float, ms: float):
+        self.memory, self.mb, self.ms = memory, mb, ms
+
+    def forward(self, *args):
+        import time
+        self.memory[0] += self.mb
+        time.sleep(self.ms / 1000)
+        return args
+
+
+def measured_placement():
+    memory = [0.0]
+    sizes = {"a": (100, 3), "b": (20, 8), "c": (200, 3), "d": (10, 6), "silent": (0, 2)}  # mb, ms
+    blocks = [(name, FakeBlock(memory, *size)) for name, size in sizes.items()]
+    checkpointer = SimpleNamespace(observer=None)
+    profiler = BlockProfiler(checkpointer, blocks, lambda: memory[0])
+    placement = BlockPlacement(SimpleNamespace(MARGIN=1.15), profiler)
+
+    def scripted(extra=0.0, seen=None):
+        def measure(flags):
+            if seen is not None:
+                seen.append(list(flags))
+            if all(flags):  # the backward of the first run: every block recomputes under the observer
+                for _, block in blocks if checkpointer.observer else ():
+                    checkpointer.observer(block.forward, [])
+                    memory[0] = 0.0
+                return 5.0
+            kept = sum(b.mb for (_, b), on in zip(blocks, flags) if not on)
+            return 5.0 + kept / 10 + extra
+        return measure
+
+    # the room beyond the all-checkpointed cost holds 30 MB of probed activations
+    budget = 768 + 1000 + 100 * 5.0 * 1.15 + 30 * 10 * 1.15
+    flags = placement.choose(scripted(), 1000, 100, 10, budget)
+    check(flags == [True, False, True, False, True], f"the blocks that save the most time per megabyte are kept while they fit, the rest recompute ({flags})")
+    check(not checkpointer.observer, "the profiler lets go of the checkpointer")
+    check([e["block"] for e in placement.describe(flags)] == ["b", "d"], "the kept blocks are described with its measured cost")
+
+    seen: list = []
+    flags = placement.choose(scripted(extra=float("inf"), seen=seen), 1000, 100, 10, budget)
+    check(all(flags) and seen[-1] == [True] * 5 and len(seen) < 10,
+          f"a placement that does not fit once measured is given back to checkpointing until nothing is kept ({len(seen)} measurements)")
+
+    check(all(placement.choose(scripted(), 1000, 100, 10, 768 + 1000 + 100 * 5.0 * 1.15 - 1)),
+          "no room beyond the all-checkpointed cost keeps everything checkpointed")
+    check(all(placement.choose(lambda flags: 5.0, 1000, 100, 10, 1e9)), "a profile without any activation figure (no data) keeps everything checkpointed")
+
+
+def measured_checkpointing_in_trainer():
+    from ..engine.runtime.checkpointing import ActivationCheckpointer
+
+    class Handle:
+        checkpoint_share = 1.0
+
+        def __init__(self, denoiser):
+            self.denoiser, self.checkpointer = denoiser, ActivationCheckpointer()
+
+        def checkpoint_blocks(self):
+            return self.denoiser.checkpoint_blocks()
+
+        def set_checkpoint_flags(self, flags):
+            self.denoiser.set_checkpointed(self.checkpointer, flags)
+
+    with tempfile.TemporaryDirectory() as raw:
+        device = FakeDevice(ours=5000)
+        device.spike = 200.0
+        m = manager(device, limit_mb=11000)
+        m.start()
+        trainer, _, denoiser, *_ = rig(Path(raw), steps=1, residency=m)
+        handle = Handle(denoiser)
+        profiler = BlockProfiler(handle.checkpointer, handle.checkpoint_blocks(), lambda: device.memory().get("allocated", 0.0))
+        trainer._placement = (BlockPlacement(m.planner, profiler), handle)
+        trainer.emit = lambda e: None
+        trainer.run()
+        check(any(t["event"] == "checkpoint_plan" for t in m.trace) and handle.checkpointer.observer is None
+              and all(b.checkpointer is handle.checkpointer for _, b in handle.checkpoint_blocks()),
+              "the trainer measures with the profiler attached, keeps everything checkpointed when the profile has no memory figures, and reports the plan")
+
+
 def tuned_checkpointing():
     from ..engine.runtime.checkpointing import ActivationCheckpointer
     from ..engine.runtime.density import CheckpointDensity
@@ -511,4 +597,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, measured_placement, measured_checkpointing_in_trainer)

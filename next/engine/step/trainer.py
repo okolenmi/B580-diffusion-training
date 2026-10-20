@@ -47,7 +47,7 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None, density=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
+                 timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
@@ -56,6 +56,7 @@ class Trainer:
         self._balance = balance
         self._time_probe = probe
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
+        self._placement = placement  # (BlockPlacement, TrainableDenoiser) or None; chosen over density
         self._task = task or (lambda title: contextlib.nullcontext())
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
@@ -88,31 +89,38 @@ class Trainer:
         batch = make(self._fetch.peek())
         units = batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
 
-        starting = self._density[1].checkpoint_share if self._density is not None else None
-
-        def measure(share: float | None = None) -> float:
-            if share is not None:
-                self._density[1].set_checkpoint_share(share)
+        def measure(apply=None, tolerate: bool = False) -> float:
+            """``apply`` changes the checkpointing first; a candidate that cannot fit says so by costing more than any budget."""
+            if apply is not None:
+                apply()
                 self.residency.planner.reset()
             try:
                 with self._task("Measuring what a pixel costs"), self.residency.measuring(units) as result, self.optimizer.suspended():
                     self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
             except Exception as error:  # noqa: BLE001 - narrowed just below
-                if share is None or share == starting or not is_out_of_memory(error):
+                if not tolerate or not is_out_of_memory(error):
                     raise
-                error.__traceback__ = None  # a share that stores too much to fit says so by costing more than any budget
+                error.__traceback__ = None
                 gc.collect()
-                self.residency.give_back("a checkpoint share that did not fit")
+                self.residency.give_back("a checkpoint choice that did not fit")
                 return math.inf
             return result["cost"]
 
         budget = self.residency.budget_mb()
-        if self._density is None or budget is None:
+        if budget is None or (self._density is None and self._placement is None):
             measure()
             return
-        tuner, model = self._density
         floor = self.residency.accelerator.memory().get("allocated", 0.0)
-        chosen = tuner.choose(measure, model.checkpoint_share, floor, self._batches.largest_units(), budget)
+        if self._placement is not None:
+            chooser, model = self._placement
+            flags = chooser.choose(lambda flags: measure(lambda: model.set_checkpoint_flags(flags), tolerate=not all(flags)),
+                                   floor, self._batches.largest_units(), units, budget)
+            self.residency.note("checkpoint_plan", checkpointed=sum(flags), of=len(flags), kept=chooser.describe(flags))
+            return
+        tuner, model = self._density
+        starting = model.checkpoint_share
+        chosen = tuner.choose(lambda share: measure(lambda: model.set_checkpoint_share(share), tolerate=share != starting),
+                              starting, floor, self._batches.largest_units(), budget)
         self.residency.note("checkpoint_share", share=chosen, of_blocks="transformer")
 
     def _step(self, step: int) -> float:

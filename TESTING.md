@@ -29,6 +29,13 @@ Rerun `--time-balance speed` (100+ steps) and `--balance-sampling 1` alone.
 - Expect: speed weights wander but stay moderate (not pinned at 2.5/0.25); `draws` appears with sampling and shifts towards the lagging third.
 Pass: both. Fail: paste the weight/draw lines.
 
+## 6. Measured checkpoint placement
+Add `--param trainer.tune_checkpointing=true --param trainer.checkpoint_by=measured` (batch 3, 512 as in test 4), then the same with `--set memory.vram_max_mb=10240`.
+- Event `checkpoint_plan`: how many blocks stay checkpointed and the list of kept blocks with `mb` and `ms` (real, non-zero numbers; residual blocks may appear).
+- Step time versus `checkpoint_by=share` (and versus no tuning); peak within the budget; no crash before step 1.
+- If every block is reported checkpointed, paste the `cost` event and the plan: the profile saw no activation memory.
+Pass: trains, plan has plausible figures, steps not slower than with `share`. Fail: paste console lines and the csv.
+
 ## 7. Probe
 Add `--param trainer.probe_every=50`.
 - Probe line every 50 steps with `probe_rel_t_*`; the first record is about 1.0 (reference).

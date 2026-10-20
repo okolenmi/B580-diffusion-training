@@ -44,8 +44,8 @@ def _device_rng(tensors: list[Tensor]) -> tuple[str | None, list[int], list[Tens
 
 class _Recompute(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, run, count, preserve_rng, *args):
-        ctx.run, ctx.inputs, ctx.params = run, list(args[:count]), list(args[count:])
+    def forward(ctx, run, count, preserve_rng, observer, *args):
+        ctx.run, ctx.inputs, ctx.params, ctx.observer = run, list(args[:count]), list(args[count:]), observer
         ctx.autocast_device, ctx.autocast_kwargs = _autocast_state(ctx.inputs)
         ctx.preserve_rng = preserve_rng
         if preserve_rng:
@@ -68,7 +68,8 @@ class _Recompute(torch.autograd.Function):
                     for index, state in zip(ctx.rng_devices, ctx.rng_states):
                         module.set_rng_state(state, index)
             with torch.enable_grad(), autocast:
-                outputs = ctx.run(*[x.view_as(x) for x in inputs])
+                again = [x.view_as(x) for x in inputs]
+                outputs = ctx.observer(ctx.run, again) if ctx.observer is not None else ctx.run(*again)
         wanted = [x for x in inputs if x.requires_grad] + [p for p in ctx.params if p.requires_grad]
         outputs = outputs if isinstance(outputs, tuple) else (outputs,)
         pairs = [(o, g) for o, g in zip(outputs, grads) if o.requires_grad and g is not None]
@@ -76,7 +77,7 @@ class _Recompute(torch.autograd.Function):
         input_grads = tuple(next(found, None) if x.requires_grad else None for x in inputs)
         param_grads = tuple(next(found, None) if p.requires_grad else None for p in ctx.params)
         del ctx.inputs, ctx.params
-        return (None, None, None) + input_grads + param_grads
+        return (None, None, None, None) + input_grads + param_grads
 
 
 class ActivationCheckpointer:
@@ -84,6 +85,7 @@ class ActivationCheckpointer:
 
     def __init__(self, preserve_rng: bool = True):
         self.preserve_rng = preserve_rng
+        self.observer = None  # called as observer(run, args) in place of the recompute in backward (the block profiler)
 
     def __call__(self, fn: Callable[..., Any], inputs: tuple, params: Iterable[nn.Parameter]) -> Any:
-        return _Recompute.apply(fn, len(inputs), self.preserve_rng, *inputs, *tuple(params))
+        return _Recompute.apply(fn, len(inputs), self.preserve_rng, self.observer, *inputs, *tuple(params))

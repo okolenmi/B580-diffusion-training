@@ -84,6 +84,13 @@ class Batcher:
             mask[..., top:top + h, left:left + w] = 1.0
         return x0, mask, (h * self._factor, w * self._factor)
 
+    def shape_counts(self) -> dict[tuple[int, int, int], int]:
+        """Batches per epoch of each (samples, height, width): which shapes the run spends its steps on."""
+        counts: dict[tuple[int, int, int], int] = {}
+        for ids, (height, width) in self.plan_for(self.epoch).batches:
+            counts[(len(ids), height, width)] = counts.get((len(ids), height, width), 0) + 1
+        return counts
+
     def max_batch_size(self) -> int:
         return max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
 

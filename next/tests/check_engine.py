@@ -229,6 +229,12 @@ def graphed():
         broken.run()
         gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a3.trainable_parameters()))
         check(broken.graphed.captures == 0 and gap < 1e-5, "a capture that fails leaves the shape running eagerly with the same result")
+        picky, a4, *_ = rig(tmp / "d", steps=12, graph_api=FakeGraphs())
+        shapes = picky._batches.shape_counts()
+        check(sum(shapes.values()) == len(picky._batches) and all(n >= 1 for n in shapes.values()), "the batcher says how many batches each shape has")
+        picky.graphed._wanted = frozenset()
+        picky.run()
+        check(picky.graphed.captures == 0 and picky.graphed.replays == 0, "a shape outside the wanted ones never gets a graph")
     model, optimizer = SimpleNamespace(deterministic=True, gate=None, gate_window=None), SimpleNamespace(holds_grads=True)
     refuse = GraphedCompute.refuse_unless_capturable
     refuse(model, optimizer, False)

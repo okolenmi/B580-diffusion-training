@@ -77,6 +77,9 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     if time_balance != "off" or balance_sampling > 0:
         b.add("balance", "TimeBalanceNode", mode=time_balance, sample_bias=balance_sampling)
         b.wires += [("balance", "balance", "trainer", "balance"), ("balance", "balance", "noiser", "balance")]
+    names = [n for n, _, _ in b.nodes]
     for node, params in (overrides or {}).items():
+        if node not in names:
+            raise ValueError(f"no node called {node!r} in this graph (nodes: {', '.join(names)}); settings such as memory.vram_max_mb are not node parameters")
         next(p for n, _, p in b.nodes if n == node).update(params)
     return b.doc(settings or {})

@@ -52,10 +52,10 @@ class GraphedCompute(StepPhase):
 
     def __init__(self, *, eager: list[StepPhase], denoiser: Any, weighting: LossWeighting, balance: Any, optimizer: Any,
                  accumulation: int, graph_api: Any | None, synchronize: Callable[[], None], max_graphs: int = 8,
-                 warmup: int = 3, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print):
+                 warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print):
         self._eager, self._denoiser, self._weighting, self._balance = eager, denoiser, weighting, balance
         self._optimizer, self._scale, self._api, self._sync = optimizer, 1.0 / accumulation, graph_api, synchronize
-        self._max, self._warmup = max_graphs, warmup
+        self._max, self._warmup, self._wanted = max_graphs, warmup, wanted  # wanted: (samples, h, w) allowed a graph; None = first come
         self._attentions = attentions or [contextlib.nullcontext]  # tried in order; the first that captures stays
         self._say = say
         self._slots: dict[tuple, _Slot] = {}
@@ -82,6 +82,8 @@ class GraphedCompute(StepPhase):
         if self._api is None or state.step < 0 or state.scale != 1.0:
             return self._run_eager(state)
         inputs = state.inputs
+        if self._wanted is not None and (inputs.x_t.shape[0], *inputs.x_t.shape[-2:]) not in self._wanted:
+            return self._run_eager(state)
         key = (tuple(inputs.x_t.shape), inputs.mask is not None, tuple(tuple(t.shape) for t in state.conditioning.tensors()))
         if key in self._off:
             return self._run_eager(state)

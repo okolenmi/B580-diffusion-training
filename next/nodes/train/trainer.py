@@ -151,10 +151,13 @@ class DiffusionTrainerNode(Node):
         from torch.nn.attention import SDPBackend, sdpa_kernel
         # The flash kernel cannot be captured; the memory-efficient one keeps the attention matrix out of the graph's memory
         attentions = [lambda b=b: sdpa_kernel(b) for b in (SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH)]
-        return lambda eager: GraphedCompute(eager=eager, denoiser=model.denoiser, weighting=inputs["weighting"], balance=inputs.get("balance"),
+        limit = inputs.get("graph_shapes") or 8
+        counts = inputs["batches"].shape_counts()
+        wanted = frozenset(shape for shape, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:limit])  # the shapes most steps use
+        return lambda eager: GraphedCompute(wanted=wanted, eager=eager, denoiser=model.denoiser, weighting=inputs["weighting"], balance=inputs.get("balance"),
                                             optimizer=optimizer, accumulation=inputs.get("accumulation", 1),
                                             graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
-                                            max_graphs=inputs.get("graph_shapes") or 8, attentions=attentions,
+                                            max_graphs=limit, attentions=attentions,
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
 
 

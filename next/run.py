@@ -6,7 +6,7 @@
     python -m next.run graph graph.json --models D:/models --datasets D:/datasets
 
 ``--file`` is relative to ``<models>/checkpoints`` when that folder exists, otherwise to ``--models`` itself.
-``--set key=value`` overrides a graph setting (for example ``--set memory.vram_max_mb=9000``); ``--param node.port=value`` sets a node's parameter in the starter graph (``--param adapter.attention_fraction=0.5``). Memory is printed as
+``--set key=value`` overrides a graph setting (``--set memory.vram_max_mb=9000``) or a node's parameter in the starter graph (``--set adapter.attention_fraction=0.5``); ``--param`` is the same for parameters only. Memory is printed as
 the breakdown the residency manager reports; the lines are the monitor's data. Every finished node prints its duration
 and the card's memory; ``--memory-log run.csv`` also samples memory four times a second against what the run is doing.
 """
@@ -25,6 +25,7 @@ from . import starters
 from .data.store import DatasetStore
 from .engine.devices import Accelerator, resolve_device
 from .engine.xpu_env import set_perf_env
+from .graph.settings import SettingsRegistry
 from .engine.runtime.factory import make_runtime
 from .engine.runtime.sampler import MemorySampler
 from .families.api.library import ModelLibrary
@@ -130,6 +131,16 @@ def _environment(args) -> Environment:
     return Environment(services=services)
 
 
+def _split_settings(pairs: list[str] | None) -> tuple[list[str], list[str]]:
+    """``--set`` takes both kinds: a registered graph setting (``memory.vram_max_mb``) is one, anything else is read as
+    ``node.port``."""
+    known = SettingsRegistry()
+    settings, params = [], []
+    for pair in pairs or []:
+        (settings if known.spec(pair.partition("=")[0]) is not None else params).append(pair)
+    return settings, params
+
+
 def _overrides(pairs: list[str] | None) -> dict[str, dict]:
     """``--param node.port=value`` pairs as ``{node: {port: value}}``; values are JSON when they parse, text otherwise."""
     out: dict[str, dict] = {}
@@ -198,6 +209,15 @@ def _run(doc, args) -> int:
     return 0 if outcome.ok else 1
 
 
+def _starter(args, settings: list[str], params: list[str]):
+    return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
+        batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
+        optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
+        checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
+        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph,
+        settings=_settings(settings), overrides=_overrides([*params, *(args.param or [])]))
+
+
 def main(argv: list[str] | None = None) -> int:
     set_perf_env()
     parser = argparse.ArgumentParser(prog="python -m next.run")
@@ -210,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         p.add_argument("--models", required=True)
         p.add_argument("--datasets", required=True)
-        p.add_argument("--set", action="append", metavar="KEY=VALUE", help="graph setting")
+        p.add_argument("--set", action="append", metavar="KEY=VALUE", help="a graph setting (memory.vram_max_mb=9000) or a node parameter of the starter graph (trainer.graph=true)")
         p.add_argument("--param", action="append", metavar="NODE.PORT=VALUE",
                        help="a node's parameter by the node's name in the starter (for example adapter.attention_fraction=0.5)")
         p.add_argument("--verbose", action="store_true")
@@ -264,17 +284,19 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.graph, encoding="utf8") as handle:
             doc = parse(json.load(handle))
     else:
-        doc = starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
-                                 batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
-                                 optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-                                 checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
-                                 time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph,
-                                 settings=_settings(args.set), overrides=_overrides(args.param))
+        settings, params = _split_settings(args.set)
+        try:
+            doc = _starter(args, settings, params)
+        except ValueError as error:
+            raise SystemExit(str(error))
         if args.dump:
             Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")
             return 0
     if args.command == "graph":
-        doc = replace(doc, settings={**doc.settings, **_settings(args.set)})
+        settings, params = _split_settings(args.set)
+        if params or args.param:
+            raise SystemExit(f"a graph file sets node parameters inside the file; --set takes graph settings here (not {(params + (args.param or []))[0]!r})")
+        doc = replace(doc, settings={**doc.settings, **_settings(settings)})
     return _run(doc, args)
 
 

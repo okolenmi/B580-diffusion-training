@@ -55,9 +55,11 @@ class FakeDevice:
     def synchronize(self):
         pass
 
+    capped = True
+
     def cap_allocator(self, mb):
         self.caps.append(mb)
-        return True
+        return self.capped
 
 
 class Blob(DeviceResident):
@@ -177,6 +179,7 @@ def footprints():
 def cached_blocks_are_not_pressure():
     device = FakeDevice(ours=8000)
     device.slack, device.spike = 2800.0, 1000.0  # 11400 MB in the driver's view, of which 2800 is reclaimable cache
+    device.capped = False  # this allocator cannot be capped, so only we can give its cache back
     opt = Blob(device, 600)
     m = manager(device, safety_margin=0.1)
     m.claim("optimizer", opt, purpose="test")
@@ -189,6 +192,12 @@ def cached_blocks_are_not_pressure():
     device.slack, device.cache_emptied = 100.0, 0
     m.after_step(1)
     check(device.cache_emptied == 0, "a card with little cached is left alone")
+    capped = FakeDevice(ours=8000)
+    capped.slack, capped.spike = 2800.0, 1000.0
+    again = manager(capped, safety_margin=0.1)
+    again.start()
+    again.after_step(0)
+    check(capped.cache_emptied == 0, "under an allocator cap the cache is not emptied every step: the allocator frees it at the cap")
 
 
 def allocator_cap():
@@ -445,12 +454,16 @@ def xpu_environment():
     check(xpu_env.capacity_for_shapes(44) == 2048 and xpu_env.capacity_for_shapes(100) == 3500
           and xpu_env.capacity_for_shapes(None) is None and xpu_env.capacity_for_shapes(0) is None,
           "the primitive cache is sized to the shape count, never below the default, and unknown counts get no number")
-    saved = {k: os.environ.pop(k, None) for k in (xpu_env.CACHE_VAR,)}
+    saved = {k: os.environ.pop(k, None) for k in (xpu_env.CACHE_VAR, "PYTORCH_ALLOC_CONF", "PYTORCH_XPU_ALLOC_CONF")}
     try:
         xpu_env._explicit = False
         xpu_env.set_perf_env()
         check(os.environ[xpu_env.CACHE_VAR] == "2048" and xpu_env.size_cache_for_shapes(100) == 3500 and os.environ[xpu_env.CACHE_VAR] == "3500",
               "the default capacity grows to fit a dataset's shapes")
+        check(os.environ["PYTORCH_ALLOC_CONF"] == "expandable_segments:True", "the allocator uses expandable segments unless told otherwise")
+        os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:False"
+        xpu_env.set_perf_env()
+        check(os.environ["PYTORCH_ALLOC_CONF"] == "expandable_segments:False", "an exported allocator setting wins")
         os.environ[xpu_env.CACHE_VAR] = "512"
         xpu_env._explicit = False
         xpu_env.set_perf_env()

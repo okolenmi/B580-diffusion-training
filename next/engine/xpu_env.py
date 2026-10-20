@@ -24,6 +24,8 @@ def set_perf_env(capacity: int | None = None) -> None:
     os.environ["UR_L0_USE_RELAXED_ALLOCATION_LIMITS"] = "1"
     os.environ["SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS"] = "1"
     os.environ["IGC_EnableDPEmulation"] = "1"
+    if "PYTORCH_ALLOC_CONF" not in os.environ and "PYTORCH_XPU_ALLOC_CONF" not in os.environ:
+        os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"  # no stuck free pieces between live blocks; export your own value to change it
     _set_capacity(capacity)
 
 

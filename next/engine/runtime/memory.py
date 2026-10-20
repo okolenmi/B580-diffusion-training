@@ -353,8 +353,8 @@ class ResidencyManager:
     def _cache_crowds_card(self, stats: Mapping[str, float]) -> bool:
         """Cached blocks are free to give back, but memory the driver hands out outside the allocator (kernel and
         primitive scratch for a new shape) cannot make the allocator release them: it fails while the cache sits on the card."""
-        if self.limit_mb is None or "reserved" not in stats or "allocated" not in stats:
-            return False
+        if self.limit_mb is None or self._cap_mb is not None or "reserved" not in stats or "allocated" not in stats:
+            return False  # under an allocator cap the allocator frees its own cache at the line; doing it every step only costs time
         return stats["device_used"] > self.ceiling_mb and self.returnable_mb(stats) > self.MIN_TRIM_MB
 
     def _react(self, step: int, used: float) -> None:

@@ -140,6 +140,10 @@ def making_room():
     check(moved == ["encoder"] and not encoder.on_device and opt.on_device, f"makes room by moving the lowest rank first ({moved})")
     m.restore(moved)
     check(encoder.on_device, "restore brings residents back")
+    m.restore(moved)
+    moved = m.make_room(800, "load the text encoders")
+    m.before_step(1)
+    check(encoder.on_device, "whatever left to make room is back before the next step, even if nobody restored it")
     raises(MemoryBudgetExceeded, lambda: m.make_room(6000, "huge"), "refuses when even moving everything movable is not enough", "do not fit")
 
 
@@ -402,6 +406,19 @@ def on_demand_encoders():
     check(enc.moves[-1] == "xpu" and enc.moves.count("xpu") == 3, "held encoders stay on the device")
     kit.release()
     check(device.ours == 5000, "release brings the device back to where it was")
+    class Room:
+        moved = ["optimizer"]
+        restored: list = []
+
+        def make_room(self, mb, why):
+            return self.moved
+
+        def restore(self, names):
+            self.restored.append(names)
+
+    roomy = OnDemandKit(FakeEncoder(device), resident, device, Room())
+    roomy.encode_text(["a"])
+    check(Room.restored == [["optimizer"]], "residents moved for the encoders return when the encoders leave")
     check(kit.cache_key("p") if hasattr(enc, "cache_key") else True, "other kit calls pass through")
 
 
@@ -472,6 +489,26 @@ class FakeBlock:
         self.memory[0] += self.mb
         time.sleep(self.ms / 1000)
         return args
+
+
+def planning_with_fixed_cost():
+    planner = StepPlanner()
+    planner.learn(0, 300, 1000)
+    check(planner.line() == (0.0, 0.3) and planner.cost_at(5000) == 0.3, "one point is taken as proportional")
+    planner.learn(0, 1300, 11000)
+    fixed, slope = planner.line()
+    check(abs(fixed - 200) < 1e-6 and abs(slope - 0.1) < 1e-9, f"two sizes separate the fixed part from the part that grows ({fixed}, {slope})")
+    check(abs(planner.predicted_peak_mb(100, 22000) - (100 + 200 + 22000 * 0.1 * 1.15)) < 1e-6, "the margin is on the growing part only")
+    planner.learn(0, 1000, 6000)  # above the fitted line
+    fixed, slope = planner.line()
+    check(all(fixed + slope * u >= e - 1e-9 for u, e in ((1000, 300), (11000, 1300), (6000, 1000))), "the line lies above every observed point")
+    check(planner.chunks(22, 1000, 0, 2000) == [11, 11] and planner.chunks(22, 1000, 0, 4000) == [22], "chunks follow the fitted line")
+    flat = StepPlanner()
+    flat.learn(0, 500, 1000)
+    flat.learn(0, 400, 2000)
+    check(flat.line() == (0.0, 0.5), "a falling trend is not extrapolated: the proportional bound is used")
+    planner.reset()
+    check(planner.line() is None and planner.chunks(5, 1000, 0, 100) == [5], "reset forgets everything")
 
 
 def cache_thrash():
@@ -556,6 +593,7 @@ def measured_checkpointing_in_trainer():
         trainer._placement = (BlockPlacement(m.planner, profiler), handle)
         trainer.emit = lambda e: None
         trainer.run()
+        check(len({u for u, _ in m.planner._points}) >= 2, "the memory probe runs at two batch sizes so the planner can tell fixed memory from growing memory")
         check(any(t["event"] == "checkpoint_plan" for t in m.trace) and handle.checkpointer.observer is None
               and all(b.checkpointer is handle.checkpointer for _, b in handle.checkpoint_blocks()),
               "the trainer measures with the profiler attached, keeps everything checkpointed when the profile has no memory figures, and reports the plan")
@@ -615,4 +653,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, cache_thrash, measured_placement, measured_checkpointing_in_trainer)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer)

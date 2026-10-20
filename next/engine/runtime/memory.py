@@ -317,7 +317,7 @@ class ResidencyManager:
 
     def before_step(self, step: int) -> None:
         for entry in self._entries.values():
-            if entry.parked and entry.away:
+            if entry.away:  # parked ones, and ones moved to make room for something that is not on the device now
                 entry.resident.reload()
                 entry.away = False
 

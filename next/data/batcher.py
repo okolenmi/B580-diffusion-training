@@ -84,14 +84,17 @@ class Batcher:
             mask[..., top:top + h, left:left + w] = 1.0
         return x0, mask, (h * self._factor, w * self._factor)
 
-    def probe_batch(self, like: dict) -> dict:
-        """One sample at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
+    def max_batch_size(self) -> int:
+        return max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
+
+    def probe_batch(self, like: dict, count: int = 1) -> dict:
+        """``count`` samples at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
         first sample: what a memory probe runs through the model."""
         ids, (height, width) = max(self.plan_for(self.epoch).batches, key=lambda b: b[1][0] * b[1][1])
-        x0 = torch.zeros(1, int(self.latents.spec["channels"]), height, width)
+        x0 = torch.zeros(count, int(self.latents.spec["channels"]), height, width)
         batch = self.noiser(x0, torch.Generator().manual_seed(self.seed))
-        batch.update({"samples": [ids[0]], "prompts": list(like["prompts"][:1]), "epoch": self.epoch,
-                      "prompts_version": like.get("prompts_version"), "sizes_px": [(height * self._factor, width * self._factor)]})
+        batch.update({"samples": [ids[i % len(ids)] for i in range(count)], "prompts": list(like["prompts"][:1]) * count, "epoch": self.epoch,
+                      "prompts_version": like.get("prompts_version"), "sizes_px": [(height * self._factor, width * self._factor)] * count})
         return batch
 
     def __len__(self) -> int:

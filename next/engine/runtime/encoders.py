@@ -23,6 +23,7 @@ class OnDemandKit:
         self.hold = False
         self._depth = 0
         self._on_device = False
+        self._moved: list[str] = []
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._kit, name)
@@ -42,7 +43,7 @@ class OnDemandKit:
     def _ensure_on_device(self) -> None:
         if not self._on_device:
             if self._residency is not None:
-                self._residency.make_room(self._resident.size_bytes() / 2**20, "load the text encoders")
+                self._moved = self._residency.make_room(self._resident.size_bytes() / 2**20, "load the text encoders")
             self._resident.reload()
             self._on_device = True
 
@@ -51,6 +52,9 @@ class OnDemandKit:
             self._resident.offload()
             self._on_device = False
             self._accelerator.empty_cache()
+            if self._moved and self._residency is not None:
+                self._residency.restore(self._moved)  # what left to make room comes back when the room is free again
+            self._moved = []
 
     def encode_text(self, prompts):
         with self.session():

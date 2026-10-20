@@ -43,6 +43,7 @@ class Trainer:
     """
 
     OOM_RETRIES = 1
+    PROBE_SAMPLES = 3  # samples in the larger memory probe
 
     def __init__(self, *, batches: Iterable[dict], denoiser, conditioner, optimizer: Optimizer, schedule: LRSchedule,
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
@@ -89,8 +90,11 @@ class Trainer:
         make = getattr(self._batches, "probe_batch", None)
         if self.residency is None or make is None or self.steps == 0:
             return
-        batch = make(self._fetch.peek())
-        units = batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
+        like = self._fetch.peek()
+        largest = self._batches.largest_units()
+        sizes = [1] + ([min(self._batches.max_batch_size(), self.PROBE_SAMPLES)] if self._batches.max_batch_size() > 1 else [])
+        batches = [make(like, count) for count in sizes]  # two sizes of the same shape: the slope is what a sample costs, the rest is fixed
+        units = batches[-1]["x_t"].shape[0] * batches[-1]["x_t"].shape[-2] * batches[-1]["x_t"].shape[-1]
 
         def measure(apply=None, tolerate: bool = False) -> float:
             """``apply`` changes the checkpointing first; a candidate that cannot fit says so by costing more than any budget."""
@@ -98,8 +102,11 @@ class Trainer:
                 apply()
                 self.residency.planner.reset()
             try:
-                with self._task("Measuring what a pixel costs"), self.residency.measuring(units) as result, self.optimizer.suspended():
-                    self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
+                with self._task("Measuring what a pixel costs"):
+                    for batch in batches:
+                        size = batch["x_t"].shape[0] * batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
+                        with self.residency.measuring(size), self.optimizer.suspended():
+                            self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
             except Exception as error:  # noqa: BLE001 - narrowed just below
                 if not tolerate or not is_out_of_memory(error):
                     raise
@@ -107,7 +114,7 @@ class Trainer:
                 gc.collect()
                 self.residency.give_back("a checkpoint choice that did not fit")
                 return math.inf
-            return result["cost"]
+            return self.residency.planner.cost_at(largest) or 0.0
 
         budget = self.residency.budget_mb()
         if budget is None or (self._density is None and self._placement is None):

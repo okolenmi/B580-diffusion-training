@@ -95,7 +95,7 @@ class ConditionerNode(Node):
     def on_prompts_changed(self, event: PromptsChanged, ctx) -> None:
         if self.prompts is None:
             return
-        universe = self.prompts.universe()
+        universe = self.prompts.universe() | self.conditioner.extra
         if not self.context.settings.get("conditioning.prewarm"):
             self.conditioner.cache.retain(universe)
             return

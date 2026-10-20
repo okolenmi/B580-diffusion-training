@@ -90,6 +90,7 @@ So: fewer launches, fewer new shapes, fewer syncs.
 |---|---|---|---|
 | Learning rate | `--lr`, schedule nodes (`ConstantLR`, `CosineLR` with `min_fraction`, `WarmupLR` `steps`/`start`) | Standard. | verified |
 | Train on top of a LoRA | `Merge Adapter` node between Load Model's denoiser and Inject Adapter (chain several; `strength` scales, negative subtracts) | The saved kohya LoRA is added into the frozen weights when the denoiser loads (`W += strength*alpha/rank * up@down`, rounded once), so the new adapter trains on the merged model. Refuses a file that matches nothing. | A little time at load. The merge is not saved; export the new adapter and merge both when using it. | untested on a real LoRA (equivalence verified on a tiny UNet) |
+| Conditioning blend | `--param blend.strength_max=0.5` (and `strength_min`, `probability`, `partners`, `segments`) on the starter's `Blend Conditioning` node | Each sample's text conditioning becomes `caption*(1-s) + partner*s`, s drawn per sample and step from min..max, with chance `probability`; the partner defaults to the empty prompt, or one of the lines of `partners`. Gives the cross-attention a continuum between a caption and nothing instead of one point per caption (or jumps with dropout). Random draws are made after the cached encode, so nothing random is cached. Strength 0 is bit-exact. | Nothing measurable; partners are encoded once up front. Not shown to fix anything by itself. | untested |
 | Optimizer choice | `--optimizer AdamWNode|AdafactorNode|CAMENode` | AdamW is the baseline; Adafactor `clip_threshold`, `scale_parameter`; CAME `beta3`. | verified (AdamW) |
 | Gradient clip | `optimizer.grad_clip` | Largest total norm; 0 off. Not with `fused`. | untested |
 | Adapter kind | `adapter.kind=lora|dora`, `scaling=classic|rank_stabilized`, `alpha`, `dropout` | `rank_stabilized` uses alpha/sqrt(rank) so higher ranks do not shrink. | untested (dora) |
@@ -153,4 +154,4 @@ auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewa
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
 them at 0).
 
-Planned ports (see `rework/PORTING.md`): gradient alignment, conditioning blend, auto caption, NF4.
+Planned ports (see `rework/PORTING.md`): gradient alignment, auto caption, NF4.

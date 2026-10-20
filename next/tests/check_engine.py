@@ -146,6 +146,40 @@ class _FakeGraph:
         slot.per_sample.copy_(per_sample)
 
 
+def blended_conditioning():
+    from ..engine.conditioner import BlendedConditioner
+    from ..families.sdxl.conditioning import SDXLConditioning
+
+    class Cache:
+        def get(self, prompts, sizes=None):
+            level = torch.tensor([{"caption": 1.0, "": 0.0, "other": -1.0}[p] for p in prompts])
+            return SDXLConditioning(level.view(-1, 1, 1).expand(-1, 3, 2048).clone(), level.view(-1, 1).expand(-1, 2816).clone())
+
+    plain = Conditioner(Cache(), dtype=torch.float32)
+
+    def blend(**kw):
+        return BlendedConditioner(plain, kw.pop("partners", [""]), generator=torch.Generator().manual_seed(1), **kw)
+
+    batch = ["caption"] * 6
+    half = blend(strength=(0.5, 0.5)).encode(batch)
+    check(torch.allclose(half.ctx, torch.full_like(half.ctx, 0.5)) and torch.allclose(half.y, torch.full_like(half.y, 0.5)),
+          "a fixed strength of 0.5 is the midpoint between the caption and the empty prompt")
+    spread = blend(strength=(0.2, 0.6)).encode(batch).ctx[:, 0, 0]
+    check(bool(((spread >= 0.4 - 1e-6) & (spread <= 0.8 + 1e-6)).all()) and spread.unique().numel() > 1, "each sample draws its own strength")
+    chance = blend(strength=(1.0, 1.0), probability=0.5).encode(["caption"] * 200).ctx[:, 0, 0]
+    check(0.3 < float((chance == 0).float().mean()) < 0.7 and bool(((chance == 0) | (chance == 1)).all()),
+          "the probability picks which samples are blended; the rest keep their caption exactly")
+    check(torch.equal(blend(strength=(0.0, 0.0)).encode(batch).ctx, plain.encode(batch).ctx), "strength 0 is the caption bit for bit")
+    partnered = blend(partners=["other"], strength=(1.0, 1.0)).encode(batch).ctx[:, 0, 0]
+    check(bool((partnered == -1).all()), "partners other than the empty prompt work")
+    only_g = blend(strength=(1.0, 1.0), segments=["clip_g"]).encode(batch)
+    check(bool((only_g.ctx[..., :768] == 1).all() and (only_g.ctx[..., 768:] == 0).all() and (only_g.y == 1).all()), "segments limit what is blended")
+    first, second = blend(strength=(0, 1)).encode(batch).ctx, blend(strength=(0, 1)).encode(batch).ctx
+    check(torch.equal(first, second), "the same seed draws the same blends")
+    check("" in plain.extra and plain.cache is not None, "partners are registered with the conditioner that owns the cache")
+    raises(ValueError, lambda: blend(strength=(0.8, 0.2)), "min above max", "strength")
+
+
 def epochs():
     print("epochs")
     from ..nodes.train.schedules import CosineLRNode
@@ -347,4 +381,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, time_probe, epochs, graphed)
+    run(main, time_balance, time_probe, blended_conditioning, epochs, graphed)

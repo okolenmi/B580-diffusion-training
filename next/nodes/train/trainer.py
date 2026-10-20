@@ -100,7 +100,7 @@ class DiffusionTrainerNode(Node):
         probe = None
         if inputs.get("probe_every"):
             batches: Batcher = inputs["batches"]
-            probe = TimeProbe(denoiser=model.denoiser, conditioner=inputs["conditioner"], gate=model.gate, noiser=batches.noiser,
+            probe = TimeProbe(denoiser=model.denoiser, conditioner=getattr(inputs["conditioner"], "inner", inputs["conditioner"]), gate=model.gate, noiser=batches.noiser,
                               item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
                               items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed)
         graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None

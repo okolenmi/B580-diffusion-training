@@ -44,6 +44,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("buckets", "BucketerNode", multiple=4, max_shapes=max_shapes, batch_area=batch_area, pack=pack, fill=fill, keep_incomplete=True)  # 32 px steps, padded and masked
     b.add("noiser", "NoiserNode")
     b.add("batcher", "BatcherNode", batch_size=batch_size)
+    b.add("blend", "BlendConditioningNode")  # identity until its strength is raised
     b.add("conditioner", "ConditionerNode", persist=persist_conditioning, **({"dataset": dataset} if persist_conditioning else {}))
     b.add("adapter", "InjectAdapterNode", rank=rank, alpha=float(alpha if alpha is not None else rank), checkpointing=checkpointing)
     b.add("optimizer", optimizer, lr=lr, fused=fused)
@@ -62,7 +63,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
                 ("model", "clip_g", "conditioner", "encoders"), ("tag_swap", "prompts", "conditioner", "prompts"),
                 ("model", "denoiser", "adapter", "denoiser"), ("adapter", "model", "optimizer", "model"),
                 ("batcher", "batches", "trainer", "batches"), ("adapter", "model", "trainer", "model"),
-                ("conditioner", "conditioner", "trainer", "conditioner"), ("optimizer", "optimizer", "trainer", "optimizer"),
+                ("conditioner", "conditioner", "blend", "conditioner"), ("blend", "conditioner", "trainer", "conditioner"), ("optimizer", "optimizer", "trainer", "optimizer"),
                 ("schedule", "schedule", "trainer", "schedule"), ("weighting", "weighting", "trainer", "weighting"),
                 ("adapter", "model", "saver", "model")]
     b.events += [("batcher", "prompts_changed", "conditioner", "prompts_changed"), ("trainer", "step_finished", "trigger", "step"),

@@ -42,6 +42,12 @@ Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject 
 - Strength 0 gives the same step-1 loss as no merge node.
 Pass: all three. Fail: paste the message.
 
+## 6c. Conditioning blend
+Add `--param blend.strength_max=0.5` (min stays 0), then `--param blend.strength_min=0.5 --param blend.strength_max=0.5`.
+- Trains; with `--persist-conditioning` and prewarm on, no encoder loading after the first epoch starts (the empty prompt is encoded up front).
+- Fixed 0.5: loss is higher at the start than unblended and the step time is unchanged; the probe (`trainer.probe_every`) still compares against the plain captions.
+Pass: both runs train without encoder reloads. Fail: paste the console lines.
+
 ## 7. Probe
 Add `--param trainer.probe_every=50`.
 - Probe line every 50 steps with `probe_rel_t_*`; the first record is about 1.0 (reference).

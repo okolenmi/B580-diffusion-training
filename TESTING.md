@@ -21,6 +21,21 @@ Rerun `--set memory.vram_max_mb=10240` (batch 3, 512) with `--set trainer.tune_c
 - Batch 32: the `split` events' `predicted_mb` close to what the run really peaks at (csv `peak_allocated`), fewer or no splits, faster steps than the 8000 ms before.
 Pass: predictions within ~15% of the real peak, no crash. Fail: paste the `cost`/`split` events and the csv.
 
+Tested. Found a new issue - budget doesn't expect int8 weights (and maybe other modifications of obects in memory). With usage under 6.5GB (real process usage) it sets share at 1.0 with 10240mb limit.
+
+Also found a problem. Previous environment variable (expandable segments) doesn't work anymore. You told me it's set on by default. The reality is memory consumption now on level as it was before that EV implementation + it doesn't work as a prefix now.
+Also 
+
+I have tried to use limit like 9000 - fail 512 batch 2:
+Encoding prompts (1) ...
+memory: {"event": "cache_returned", "why": "optimizer moved off the device", "returned_mb": 326, "card_freed_mb": 326, "ours_outside_mb": 0, "other_programs_mb": 0}
+memory: {"event": "evict", "why": "load the text encoders", "moved": ["optimizer"]}
+[   4.2s] DiffusionTrainerNode: 0.6s  allocated 6378, reserved 6392, device 7974 MB
+run: failed: EventHandlerError: n_jjjjjj.prompts_changed failed on PromptsChanged: OutOfMemoryError: XPU out of memory. Tried to allocate 14.00 MiB. GPU 0 has a total capacity of 11.93 GiB of which 4.14 GiB is free. 6.24 GiB allowed; Of the allocated memory 6.23 GiB is allocated by PyTorch, and 13.99 MiB is reserved by PyTorch but unallocated. Please use `empty_cache` to release all unoccupied cached memory. 
+
+Make A CONCRETE Memory system. I don't want to deal with such poor performance like now.
+
+
 ## 6. Measured checkpoint placement under a cap (retest)
 Done: batch 3, 512: 930 ms against 1010 ms, peak ~10.5 GB against ~8.5. With `--set memory.vram_max_mb=10240` it was slower (1130 ms) with a `cache_returned`
 event after every step, and ~950 ms with 1 GB more. Cause: after every step the manager emptied the cache because the device looked full, although the allocator
@@ -120,3 +135,21 @@ Pass: identical losses. If they differ, tell me the first differing step and the
 - With `--set trainer.graph=true` (graph replay) and with checkpointing on: both must run.
 - `--param adapter.kind=dora` with int8: the layers stay native (the summary line says so).
 Pass: runs, less memory, speed within a few percent, loss tracks native. Fail: paste the lines and the traceback.
+
+Tested. 
+Default:
+"Converting the frozen weights to int8 ...
+  Converting the frozen weights to int8: 7.6 s
+int8 base weights (xpu_kernels): 652 layers, 2059 MB saved; 10 left as they were (640 input features is not a multiple of 256); 81 left as they were (under 1,048,576 parameters)"
+Torch:
+"Converting the frozen weights to int8 ...
+int8 base weights (torch): 652 layers, 2059 MB saved; 10 left as they were (640 input features is not a multiple of 256); 81 left as they were (under 1,048,576 parameters)
+[warning] {"node": "n_kkkkkk", "message": "int8 runs on the plain-torch version, several times slower than the kernels (pip install xpu-kernels)"}
+"
+
+Speed is ~1500ms/step with default backend, and ~2000ms with torch. Still not good enough. Should be inspected more closely.
+With "--set trainer.graph=true" speed is around 1450ms/step. And after step 3 these lines appeared: "B580-diffusion-training/next/families/general/ldm_unet/attention.py:21: UserWarning: SDPA Memory Efficient Attention backend is not supported on XPU, falling back to math backend. (Triggered internally at /pytorch/aten/src/ATen/native/mkldnn/xpu/Attention.cpp:225.)
+  out = F.scaled_dot_product_attention(split(q), split(k), split(v))
+"
+
+About dora - there is another problem with it: "run: failed: ValueError: Save Adapter: the kohya format cannot hold dora weights; pick another format "

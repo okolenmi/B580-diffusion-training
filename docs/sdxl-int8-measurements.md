@@ -34,13 +34,13 @@ by the library's fused FFN.
 
 | arm | forward | backward | eager step | **captured step** | host time | aten calls | weights | peak |
 |---|---|---|---|---|---|---|---|---|
-| A: bf16 | 112.3 ms | 257.7 ms | 367.0 ms | **199.1 ms** | 980 ms | 44 277 | 4.89 GB | 5.04 GB |
-| B: INT8 linears | 268.6 ms | 676.1 ms | 935.2 ms | **223.3 ms** | 2610 ms | 85 822 | 2.84 GB | 3.00 GB |
-| C: INT8 + the fused GEGLU | 288.2 ms | 736.9 ms | 1041.8 ms | **241.9 ms** | 2775 ms | 85 822 | 2.85 GB | 3.00 GB |
+| A: bf16 | 116.5 ms | 270.8 ms | 366.9 ms | **190.0 ms** | 970 ms | 44 277 | 4.89 GB | 5.04 GB |
+| B: INT8 linears | 264.1 ms | 669.9 ms | 929.5 ms | **210.3 ms** | 2541 ms | 85 822 | 2.84 GB | 3.00 GB |
+| C: INT8 + the fused GEGLU | 262.2 ms | 669.6 ms | 951.3 ms | **209.3 ms** | 2506 ms | 85 822 | 2.85 GB | 3.00 GB |
 
 The captured column is the number that matters (below). The run-to-run spread
 on it is 5-10 %: the 768 bf16 arm measured 503-566 ms over three runs, the
-512 bf16 arm 194-219 ms.
+512 bf16 arm 190-219 ms.
 
 ## What the numbers say
 
@@ -59,7 +59,7 @@ the device time.
 
 **3. Under the capture the INT8 path costs about 10-12 % of the step and saves
 42 % of the weight memory and 39 % of the peak.** 628 ms against 566 ms at
-768; 223 against 199 at 512. The weights go from 4.89 GB to 2.84 GB (the
+768; 210 against 190 at 512. The weights go from 4.89 GB to 2.84 GB (the
 eligible 84 % of the parameters at one byte) and the peak from 5.23 GB to
 3.21 GB. On a 12 GB card that is the difference between fitting and not.
 
@@ -70,22 +70,49 @@ of the work and the difference is inside the noise (1.10× against 1.11× at
 768). It is worth having -- it is free, it is bit-identical, and it removes
 three launches per FFN -- but it is not a lever on the step.
 
-**5. The per-block profile says where the work is.** 87 checkpointed blocks;
-the transformer blocks dominate, and `output_blocks.4.1.transformer_blocks.0`
-is the largest at 11-15 ms (it is the widest one, 1280 channels at 32×32).
-The block profiler's absolute numbers need a warmup: the first block it
-measures pays the kernel compilation (11-15 ms against 2-5 ms for the rest).
+## Where the device time goes
 
-**6. torch's profiler cannot see the XPU on this driver.** The XPU activity
-fails to register (`PTI_ERROR_NOT_IMPLEMENTED`) and takes the process down
-when it stops. The CPU-side profiler works and is what these numbers use: the
-host time and the call count. Nothing in this tree uses it today; if the
-XPU-side table is ever wanted, it has to come from somewhere else.
+torch's profiler with the XPU activity gives the whole table for one step
+(512×512, the bf16 arm): **0.263 s of device time over 12 171 kernel
+calls**.
 
-**7. The capture's pool is the step's activations again.** At 1024×1024
-without checkpointing the step's peak is 9.88 GB, and the capture does not
-fit: the OOM is the graph's private pool, which is the activations a second
-time. With the checkpointing on, 768 and 512 both fit comfortably.
+| kernel | calls | device time | share |
+|---|---|---|---|
+| `gemm_kernel` | 2 199 | 59.4 ms | 23 % |
+| `aten::mm` | 1 579 | 32.4 ms | 12 % |
+| `aten::addmm` | 620 | 27.0 ms | 10 % |
+| the convolutions (`convolution_overrideable`, `gen_conv`, `conv_reorder`, the backward) | 555 | 57.2 ms | **22 %** |
+| the attention (the flash backward) | 280 | 14.2 ms | 5 % |
+| the elementwise, norm, cat and the rest | ~6 900 | 65 ms | 25 % |
+
+So: **the GEMMs are 45 % of the step's device time, the convolutions 22 %,
+the attention 5 %.** Two things follow:
+
+* the INT8 path works on the 45 %, and it costs 10-12 % of the step to save
+  42 % of the weight memory -- the quantize/epilogue traffic eats most of
+  what the faster GEMM wins;
+* the **convolutions are 22 %** and the library's INT8 path does not reach
+  them at all (the ConvRot is a linear format: a conv's contraction is
+  spatial, so the activation's scale would be per channel, and that cannot
+  fold into one epilogue scale). For an SDXL UNet they are 334.8 M of the
+  2.57 B parameters -- the largest remaining piece of the model that the
+  library cannot quantize.
+
+## Two things about profiling on this card
+
+**The XPU profiler works.** It registers PTI callbacks with the Level Zero
+loader, prints a registration warning (`XPTI Callback Registration returned:
+-2147467261`), and still produces a complete device-time table -- the
+warning is noise, not a failure. `COMFY_PROFILE_FWD` works the same way.
+
+**What is not survivable is an out-of-memory during the profiled step.** The
+device is lost (`UR_RESULT_ERROR_DEVICE_LOST`), the profiler's cleanup then
+fails with `PTI_ERROR_NOT_IMPLEMENTED`, and that exception escapes a
+destructor -- so the process *dies* instead of raising, and the profiler's
+table is lost with it. It looks like the profiler crashing; it is the
+device being gone. The protection is the memory budget this project already
+has (the checkpointing, the planner, `memory.vram_max_mb`), not a profiler
+setting.
 
 ## What it means for the INT8 base
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -30,12 +31,17 @@ def is_out_of_memory(error: BaseException) -> bool:
 
 @dataclass(frozen=True)
 class MemoryPolicy:
-    """The ``memory.*`` and ``runtime.*`` settings. ``limit_mb`` None means: what the card has left for this process."""
+    """The ``memory.*`` and ``runtime.*`` settings. ``limit_mb`` None means the whole card.
+
+    ``margin_mb`` is the one safety margin: memory kept free below the limit for what cannot be predicted (kernels
+    and primitives of a shape not seen yet, driver growth). Every threshold below is the limit minus measured
+    outside memory minus this, and nothing adds a second margin on top.
+    """
 
     limit_mb: float | None = None
     floor_mb: float = 0.0
     strict: bool = True
-    safety_margin: float = 0.1
+    margin_mb: float = 512.0
     calibration_steps: int = 3
     empty_cache_every: int = 1
 
@@ -43,7 +49,7 @@ class MemoryPolicy:
     def from_settings(cls, settings: Any) -> "MemoryPolicy":
         limit = settings.get("memory.vram_max_mb")
         return cls(None if limit in (None, AUTO) else float(limit), float(settings.get("memory.vram_min_mb") or 0),
-                   bool(settings.get("memory.strict")), float(settings.get("runtime.residency.safety_margin")),
+                   bool(settings.get("memory.strict")), float(settings.get("memory.margin_mb")),
                    int(settings.get("runtime.residency.calibration_steps")), int(settings.get("runtime.empty_cache_every_n_steps")))
 
 
@@ -71,9 +77,6 @@ class ResidencyManager:
 
     MIN_TRIM_MB = 256.0
     MIN_NOTE_MB = 64.0
-    OUTSIDE_HEADROOM_MB = 1024.0  # first guess for what the driver still takes outside the allocator (kernels, primitives)
-    OUTSIDE_SLACK_MB = 512.0      # kept free beyond what is measured outside the allocator
-
     accelerator: Accelerator
     policy: MemoryPolicy = field(default_factory=MemoryPolicy)
     report: Callable[[dict], None] | None = None
@@ -202,17 +205,19 @@ class ResidencyManager:
         if self.policy.limit_mb is not None and self.policy.limit_mb > total:
             raise MemoryBudgetExceeded(f"the budget is {self.policy.limit_mb:.0f} MB but the card has {total:.0f} MB")
         self.limit_mb = self.policy.limit_mb if self.policy.limit_mb is not None else total
-        self._note("limit", limit_mb=round(self.limit_mb), in_use_mb=round(stats["device_used"]))
-        self._cap(max(stats["device_used"] - stats.get("reserved", 0.0), 0.0), self.OUTSIDE_HEADROOM_MB, "start", stats)
+        self._note("limit", limit_mb=round(self.limit_mb), in_use_mb=round(stats["device_used"]), card_mb=round(total),
+                   margin_mb=round(self.policy.margin_mb), allocator_config=os.environ.get("PYTORCH_ALLOC_CONF") or os.environ.get("PYTORCH_XPU_ALLOC_CONF") or "default")
+        self._cap(max(stats["device_used"] - stats.get("reserved", 0.0), 0.0), "start", stats)
 
-    def _cap(self, outside_mb: float, margin_mb: float, why: str, stats: Mapping[str, float]) -> None:
-        """Keep the allocator below the limit minus what lives outside it (measured, plus ``margin_mb``). Past that line
+    def _cap(self, outside_mb: float, why: str, stats: Mapping[str, float]) -> None:
+        """Keep the allocator below the limit minus what lives outside it (measured) minus the margin. Past that line
         it frees its cached blocks instead of letting them crowd out the driver, whose allocations (a new shape's
         kernels) it cannot satisfy by releasing anything."""
+        margin_mb = self.policy.margin_mb
         if self.limit_mb is None:
             return
         assumed = outside_mb + margin_mb
-        cap = max(self.limit_mb - assumed, stats.get("allocated", 0.0) + self.OUTSIDE_SLACK_MB)
+        cap = max(self.limit_mb - assumed, stats.get("allocated", 0.0) + margin_mb)
         if self._cap_mb is not None and abs(cap - self._cap_mb) < 128:
             return
         if self.accelerator.cap_allocator(cap):
@@ -226,8 +231,8 @@ class ResidencyManager:
         if "device_used" not in stats or "reserved" not in stats or self._cap_mb is None:
             return
         outside = max(stats["device_used"] - stats["reserved"], 0.0)
-        if outside + self.OUTSIDE_SLACK_MB > self._outside_mb or self.steps_seen == self.policy.calibration_steps:
-            self._cap(outside, self.OUTSIDE_SLACK_MB, "outside memory grew" if self.steps_seen != self.policy.calibration_steps else "calibrated", stats)
+        if outside + self.policy.margin_mb > self._outside_mb or self.steps_seen == self.policy.calibration_steps:
+            self._cap(outside, "outside memory grew" if self.steps_seen != self.policy.calibration_steps else "calibrated", stats)
 
     def budget_mb(self) -> float | None:
         """What live and transient tensors together may reach: the allocator's cap."""
@@ -270,7 +275,7 @@ class ResidencyManager:
         self._note("out_of_memory", step=step + 1, error=str(error).splitlines()[0][:160] if str(error) else type(error).__name__,
                    parts=self.breakdown(stats))
         if self._cap_mb is not None:
-            self._cap(self._outside_mb, self.OUTSIDE_SLACK_MB, "after out of memory", stats)
+            self._cap(self._outside_mb, "after out of memory", stats)  # the assumption already holds one margin; this adds another
 
     def ensure_started(self) -> None:
         """Nodes that bring anything to the device before training call this first, so the allocator is capped
@@ -279,7 +284,7 @@ class ResidencyManager:
 
     @property
     def ceiling_mb(self) -> float | None:
-        return None if self.limit_mb is None else self.limit_mb * (1 - self.policy.safety_margin)
+        return None if self.limit_mb is None else self.limit_mb - self.policy.margin_mb
 
     def breakdown(self, stats: Mapping[str, float] | None = None) -> dict[str, float]:
         """The ledger as ``{name: megabytes}``."""
@@ -288,12 +293,21 @@ class ResidencyManager:
     def summary(self) -> dict[str, float]:
         return {name: round(e.resident.footprint_bytes() / MB, 1) for name, e in self._entries.items()}
 
+    def _fits(self, mb: float, hard: bool) -> bool:
+        """Whether ``mb`` more fits on the card and under the allocator's cap; ``hard`` allows the margin to be used."""
+        stats = self.accelerator.memory()
+        line = self.limit_mb if hard else self.ceiling_mb
+        if "device_used" in stats and line is not None and stats["device_used"] + mb > line:
+            return False
+        line = None if self._cap_mb is None else self._cap_mb + (self.policy.margin_mb if hard else 0.0)
+        return not ("allocated" in stats and line is not None and stats["allocated"] + mb > line)
+
     def make_room(self, mb: float, why: str) -> list[str]:
-        """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling; refuse past the limit."""
+        """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling and the allocator's
+        cap; refuse (naming where the memory is) when it does not fit even then."""
         moved: list[str] = []
         for name, entry in sorted(self._entries.items(), key=lambda kv: kv[1].rank):
-            used = self.used_mb()
-            if used is None or self.ceiling_mb is None or used + mb <= self.ceiling_mb:
+            if self._fits(mb, hard=False):
                 break
             if entry.pinned or entry.away or entry.resident.footprint_bytes() == 0:
                 continue
@@ -301,12 +315,14 @@ class ResidencyManager:
             entry.away = True
             self.give_back(f"{name} moved off the device")
             moved.append(name)
-        used = self.used_mb()
         if moved:
             self._note("evict", why=why, moved=moved)
-        if used is not None and self.limit_mb is not None and used + mb > self.limit_mb:
-            raise MemoryBudgetExceeded(f"{why}: {mb:.0f} MB do not fit ({used:.0f} MB in use of {self.limit_mb:.0f} MB; "
-                                       f"{self.breakdown()})")
+        if not self._fits(mb, hard=True):
+            used = self.used_mb()
+            raise MemoryBudgetExceeded(
+                f"{why}: {mb:.0f} MB do not fit ({0 if used is None else used:.0f} MB in use of {self.limit_mb:.0f} MB, "
+                f"allocator cap {self._cap_mb or 0:.0f} MB; {self.breakdown()}). Raise memory.vram_max_mb, lower memory.margin_mb, "
+                "or train a smaller model state (rank, batch size, int8 base weights).")
         return moved
 
     def restore(self, names: list[str]) -> None:

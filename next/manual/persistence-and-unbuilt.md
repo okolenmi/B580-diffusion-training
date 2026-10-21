@@ -12,8 +12,8 @@ Part of the trainer manual (`../MANUAL.md` has the short version). Status: `veri
 
 These graph settings exist in the registry and appear in the editor, but nothing reads them yet:
 `runtime.graph_capture` (use the trainer's `graph` port instead), `runtime.block_swap`, `memory.ram_max_mb`. Setting them changes nothing.
-Read by code: `memory.vram_max_mb`, `memory.vram_min_mb`, `memory.strict`, `device.default`, `precision.*`,
-`runtime.residency.safety_margin`, `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
+Read by code: `memory.vram_max_mb`, `memory.vram_min_mb`, `memory.margin_mb`, `memory.strict`, `device.default`, `precision.*`,
+``runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
 `runtime.profile` (turns the trainer's `timing` on), `conditioning.cache_mb` (size of the encoded-prompt cache,
 auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewarm` (off = encode prompts when first
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves

@@ -14,8 +14,8 @@ from .backends import Int8Backend
 class Int8LinearFn(torch.autograd.Function):
     """``x @ W.T + bias`` against an int8 weight. The weight is frozen, so backward only returns ``dL/dx``.
 
-    ``dL/dx = dL/dy @ W`` needs the dense weight; it is rebuilt from int8 for this one layer and dropped again, so the
-    memory the quantization saved stays saved.
+    ``dL/dx = dL/dy @ W`` is computed from the int8 weight through the backend's ``dx``, which never builds the dense
+    weight, so the memory the quantization saved stays saved.
     """
 
     @staticmethod
@@ -27,8 +27,7 @@ class Int8LinearFn(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad: Tensor):
         w8, scale = ctx.saved_tensors
-        dense = ctx.backend.dequant(w8, scale)
-        return (grad.to(dense.dtype) @ dense).to(ctx.dtype), None, None, None, None
+        return ctx.backend.dx(grad, w8, scale).to(ctx.dtype), None, None, None, None
 
 
 class Int8Weight:

@@ -153,3 +153,13 @@ With "--set trainer.graph=true" speed is around 1450ms/step. And after step 3 th
 "
 
 About dora - there is another problem with it: "run: failed: ValueError: Save Adapter: the kohya format cannot hold dora weights; pick another format "
+
+## 24. Memory budget retest (one margin)
+The four stacked margins are replaced by `memory.margin_mb` (default 512): allocator cap = limit - outside memory - margin, used by everything. Console lines `memory budget: ...` show the arithmetic.
+- `--set memory.vram_max_mb=10240` (batch 3, 512) with `--set trainer.tune_checkpointing=true --param trainer.checkpoint_by=measured`, with and without `--param adapter.base_precision=int8`: the share/placement should now use most of the room (device use close to 10240 minus the margin, not 8.1 GB); paste the `memory budget` lines and the chosen share.
+- `--set memory.vram_max_mb=9000`, batch 2, 512, int8: must start (the text encoders load) and train; if it refuses, the message now names the figures.
+- Expandable segments: the `limit` line prints `allocator config: ...`. Run the same short run with `PYTORCH_ALLOC_CONF=expandable_segments:True` and `PYTORCH_ALLOC_CONF=expandable_segments:False` exported, native weights, and tell me the peaks (csv `reserved_mb`, `device_used_mb`) and the config line. If both match, the setting has no effect on this workload any more and the earlier 8.3 -> 7.1 GB was something else.
+Pass: more of the card used than before at the same limit, no out of memory, the 9000 case runs.
+
+## 25. Int8 speed after the backward change
+`python scripts/bench_int8_layer.py --batch 3 --size 512` and paste the table; then test 23's speed line again. The backward no longer builds the dense weight (`new dx` against `old dx` in the table).

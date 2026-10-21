@@ -87,6 +87,11 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 minimum=256, step=256, group="Memory",
                 doc="Most device memory in use on the card, as the driver reports it (other programs included). "
                     "'auto' is the whole card, with head-room kept by the safety margin; a number above the card is refused."),
+    SettingSpec("memory.margin_mb", "Memory margin", "float", 512, unit="MB", minimum=0, step=64, group="Memory", advanced=True,
+                doc="The one safety margin: memory kept free below the budget for what cannot be predicted (kernels of a new shape, "
+                    "driver growth). The allocator cap, the checkpoint tuner, block placement and the planner all use "
+                    "budget - outside memory - this, with nothing added on top. Raise it if steps run out of memory when a new "
+                    "shape first appears; lower it to use more of the card."),
     SettingSpec("memory.vram_min_mb", "VRAM floor", "float", 0, unit="MB", minimum=0, step=256,
                 group="Memory", advanced=True, doc="Refuse to start when less than this is free. 0 is no floor."),
     SettingSpec("memory.strict", "Strict budget", "bool", True, group="Memory", advanced=True,
@@ -109,9 +114,6 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 doc="Same graph, data and settings give the same numbers: deterministic kernels (slower where they differ), "
                     "the global generator seeded from the base seed (0 when unset), and batches never split by predicted "
                     "memory (a batch that does not fit then runs out of memory instead; lower the batch size)."),
-    SettingSpec("runtime.residency.safety_margin", "Residency safety margin", "float", 0.1, minimum=0,
-                maximum=0.9, step=0.05, group="Runtime", advanced=True,
-                doc="Fraction of the budget kept free when deciding what stays on the device."),
     SettingSpec("runtime.residency.calibration_steps", "Residency calibration steps", "int", 3, minimum=0,
                 group="Runtime", advanced=True, doc="Steps spent measuring memory before residency is settled."),
     SettingSpec("runtime.empty_cache_every_n_steps", "Empty cache every N steps", "int", 1, minimum=0,

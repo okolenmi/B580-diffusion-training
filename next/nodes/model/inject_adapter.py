@@ -8,7 +8,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from ...engine.devices import resolve_device, resolve_dtype
+from ...engine.devices import Accelerator, resolve_device, resolve_dtype
 from ...engine.handles import TrainableDenoiser
 from ...engine.runtime.checkpointing import ActivationCheckpointer
 from ...families.api.adapters import GateWindow, TrainableSelection
@@ -118,6 +118,7 @@ class InjectAdapterNode(Node):
             with self.context.task("Converting the frozen weights to int8"):
                 report = family.quantize_frozen(denoiser.module(), backend=inputs.get("int8_backend") or "auto", device=device,
                                                 min_params=inputs.get("int8_min_params") or 0)
+            Accelerator(device).empty_cache()  # the dense temporaries of the conversion would otherwise stay cached between live blocks
             self.context.report("quantization", {"node": self.uid, "message": report.summary()})
             if report.backend == "torch" and torch.device(device).type == "xpu":
                 self.context.report("warning", {"node": self.uid, "message":

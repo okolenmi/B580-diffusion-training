@@ -117,6 +117,13 @@ class Console:
             print("memory claims (MB):", flush=True)
             for row in frame["rows"]:
                 print(f"  {row['mb']:8.0f}  {row['name']:<22} {row['purpose']}", flush=True)
+        elif frame["event"] == "limit":
+            print(f"memory budget: {frame['limit_mb']} MB of the card's {frame['card_mb']} MB, {frame['in_use_mb']} MB in use now, "
+                  f"margin {frame['margin_mb']} MB; allocator config: {frame['allocator_config']}", flush=True)
+        elif frame["event"] == "allocator_cap":
+            ours = "" if frame.get("ours_outside_mb") is None else f" (this process {frame['ours_outside_mb']}, other programs {frame['other_programs_mb']})"
+            print(f"memory budget: the allocator may hold {frame['cap_mb']} MB = {frame['limit_mb']} limit - {frame['outside_mb']} outside it{ours}"
+                  f" - {frame['margin_mb']} margin ({frame['why']})", flush=True)
         else:
             print(f"memory: {json.dumps(frame, default=str)}", flush=True)
 

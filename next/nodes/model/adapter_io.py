@@ -22,8 +22,9 @@ class SaveAdapterNode(Node):
                                                        "the saver must exist before training starts."),
         "directory": Port("directory", str, required=False, default="output/adapters"),
         "name": Port("name", str, required=False, default="adapter", doc="File name stem; the step is appended."),
-        "format": Port("format", str, required=False, default="kohya",
-                       doc="File format (key naming scheme). Choices depend on the model's family: kohya, native."),
+        "format": Port("format", str, required=False, default="auto",
+                       doc="File format (key naming scheme). auto: kohya where it can hold the adapter, native for DoRA. "
+                           "Choices depend on the model's family: kohya, native."),
     }
     OUTPUTS = {"saved": Port("saved", int, doc="Files written so far (0 at build time).")}
     EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint")}
@@ -31,9 +32,12 @@ class SaveAdapterNode(Node):
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         self.model: TrainableDenoiser = inputs["model"]
-        scheme = self.model.family.schemes.get(inputs.get("format") or "kohya")
+        requested = inputs.get("format") or "auto"
+        if requested == "auto":
+            requested = "kohya" if self.model.family.schemes["kohya"].can_write(self.model.kind) else "native"
+        scheme = self.model.family.schemes.get(requested)
         if scheme is None:
-            raise ValueError(f"Save Adapter: {self.model.family.id} has no {inputs.get('format')!r} format; "
+            raise ValueError(f"Save Adapter: {self.model.family.id} has no {requested!r} format; "
                              f"choose from {sorted(self.model.family.schemes)}")
         if not scheme.can_write(self.model.kind):
             raise ValueError(f"Save Adapter: the {scheme.name} format cannot hold {self.model.kind} weights; pick another format")
@@ -61,18 +65,22 @@ class LoadAdapterNode(Node):
     INPUTS = {
         "model": Port("model", TrainableDenoiser),
         "file": Port("file", str, picker="model_file", doc="An adapter under the loras folder."),
-        "format": Port("format", str, required=False, default="kohya"),
+        "format": Port("format", str, required=False, default="auto",
+                       doc="auto: the format the file names in its metadata, kohya when it names none."),
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="The same model with the file's weights loaded.")}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         model: TrainableDenoiser = inputs["model"]
-        scheme = model.family.schemes.get(inputs.get("format") or "kohya")
-        if scheme is None:
-            raise ValueError(f"Load Adapter: {model.family.id} has no {inputs.get('format')!r} format")
         path = self.context.env.service(_SERVICE).resolve("loras", inputs["file"])
         state, _metadata = model.family.read_adapter(str(path))
+        requested = inputs.get("format") or "auto"
+        if requested == "auto":
+            requested = (_metadata or {}).get("scheme") or "kohya"
+        scheme = model.family.schemes.get(requested)
+        if scheme is None:
+            raise ValueError(f"Load Adapter: {model.family.id} has no {requested!r} format")
         report = model.family.load_checked(scheme, model.adapted, state)
         model.info = {**model.info, "loaded": {"file": inputs["file"], "matched": report.matched, "missing": list(report.missing)[:20],
                                                "unexpected": list(report.unexpected)[:20]}}

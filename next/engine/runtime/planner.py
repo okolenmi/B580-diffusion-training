@@ -21,7 +21,7 @@ class StepPlanner:
     batch (the loss is a mean), so splitting changes memory and nothing else.
     """
 
-    RESERVE_MB = 768.0  # a tuner leaves this free below the cap: kernels of shapes not yet seen, allocator fragmentation
+    RESERVE_MB = 256.0  # what the optimizer update and gradient zeroing hold at the peak, which the probe does not run; the cap already holds the margin
     MARGIN = 1.15  # on the part that grows with the batch: fragmentation and the first sight of a shape's kernels
 
     def __init__(self, window: int = 64):

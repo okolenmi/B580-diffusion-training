@@ -82,6 +82,7 @@ class Blob(DeviceResident):
 
 
 def manager(device, **policy):
+    policy.setdefault("margin_mb", 0.1 * (policy.get("limit_mb") or 12000))
     return ResidencyManager(device, MemoryPolicy(**policy))
 
 
@@ -104,7 +105,7 @@ def limits():
 def pressure():
     device = FakeDevice(ours=9000)
     model, encoder, opt = Blob(device, 5000), Blob(device, 1000), Blob(device, 3000)
-    m = manager(device, limit_mb=11000, safety_margin=0.1, calibration_steps=3)
+    m = manager(device, limit_mb=11000, margin_mb=1100, calibration_steps=3)
     m.claim("model", model, rank=10, pinned=True, purpose="test")
     m.claim("encoder", encoder, rank=0, purpose="test")
     m.claim("optimizer", opt, rank=1, purpose="test")
@@ -160,6 +161,30 @@ def room_by_physical_limit():
     raises(MemoryBudgetExceeded, lambda: m.make_room(2500, "too much"), "past the card's total it is refused", "do not fit")
 
 
+def one_margin():
+    from ..engine.runtime.memory import MemoryPolicy
+
+    check(MemoryPolicy().margin_mb == 512, "the default margin is 512 MB")
+    device = FakeDevice(total=11930, foreign=1150, ours=5400)
+    device.own_outside = 420.0
+    m = ResidencyManager(device, MemoryPolicy(limit_mb=10240))
+    m.start()
+    check(device.caps == [10240 - 1150 - 420 - 512] and m.ceiling_mb == 10240 - 512,
+          f"the cap and the ceiling are the limit minus what lives outside minus one margin, nothing more ({device.caps})")
+
+    tight = FakeDevice(total=11930, foreign=1150, ours=5400)
+    tight.own_outside = 420.0
+    t = ResidencyManager(tight, MemoryPolicy(limit_mb=9000))
+    model, encoders = Blob(tight, 5000), Blob(tight, 400)
+    t.claim("model", model, rank=10, pinned=True, purpose="test")
+    t.claim("optimizer", encoders, rank=0, purpose="test")
+    t.start()
+    moved = t.make_room(1700, "load the text encoders")
+    check(moved == ["optimizer"] and not encoders.on_device,
+          "something moves off when the allocator's cap is the limit, not only when the card is full")
+    raises(MemoryBudgetExceeded, lambda: t.make_room(6000, "too much"), "what cannot fit even then is refused with the figures", "allocator cap")
+
+
 def footprints():
     import torch
 
@@ -181,7 +206,7 @@ def cached_blocks_are_not_pressure():
     device.slack, device.spike = 2800.0, 1000.0  # 11400 MB in the driver's view, of which 2800 is reclaimable cache
     device.capped = False  # this allocator cannot be capped, so only we can give its cache back
     opt = Blob(device, 600)
-    m = manager(device, safety_margin=0.1)
+    m = manager(device, margin_mb=1200)
     m.claim("optimizer", opt, purpose="test")
     m.start()
     m.after_step(0)
@@ -194,7 +219,7 @@ def cached_blocks_are_not_pressure():
     check(device.cache_emptied == 0, "a card with little cached is left alone")
     capped = FakeDevice(ours=8000)
     capped.slack, capped.spike = 2800.0, 1000.0
-    again = manager(capped, safety_margin=0.1)
+    again = manager(capped, margin_mb=1200)
     again.start()
     again.after_step(0)
     check(capped.cache_emptied == 0, "under an allocator cap the cache is not emptied every step: the allocator frees it at the cap")
@@ -204,20 +229,20 @@ def allocator_cap():
     device = FakeDevice(ours=5000, foreign=1200)
     m = manager(device, calibration_steps=2)
     m.start()
-    check(device.caps == [12000 - 1200 - m.OUTSIDE_HEADROOM_MB], f"the allocator is capped below the card by what lives outside it plus headroom ({device.caps})")
+    check(device.caps == [12000 - 1200 - m.policy.margin_mb], f"the allocator is capped below the card by what lives outside it plus the margin ({device.caps})")
     device.foreign = 1500  # less than guessed: the cap relaxes at calibration
     m.after_step(0)
     m.after_step(1)
-    check(device.caps[-1] == 12000 - 1500 - m.OUTSIDE_SLACK_MB, f"after calibration the cap is set from what was measured ({device.caps})")
+    check(device.caps[-1] == 12000 - 1500 - m.policy.margin_mb, f"after calibration the cap is set from what was measured ({device.caps})")
     device.foreign = 2400
     m.after_step(2)
-    check(device.caps[-1] == 12000 - 2400 - m.OUTSIDE_SLACK_MB, "it follows the outside share down when new shapes need more")
+    check(device.caps[-1] == 12000 - 2400 - m.policy.margin_mb, "it follows the outside share down when new shapes need more")
     device.foreign = 2000
     before = len(device.caps)
     m.after_step(3)
     check(len(device.caps) == before, "and does not loosen again")
     m.recover(3, RuntimeError("out of memory"))
-    check(device.caps[-1] == 12000 - 2400 - 2 * m.OUTSIDE_SLACK_MB and m.trace[-1]["event"] == "allocator_cap"
+    check(device.caps[-1] == 12000 - 2400 - 2 * m.policy.margin_mb and m.trace[-1]["event"] == "allocator_cap"
           and any(t["event"] == "out_of_memory" for t in m.trace), "after an out-of-memory error the driver is given more room")
     check(is_out_of_memory(RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES")) and is_out_of_memory(RuntimeError("XPU out of memory. Tried"))
           and not is_out_of_memory(RuntimeError("shape mismatch")), "driver refusals count as out of memory, other errors do not")
@@ -606,7 +631,7 @@ def measured_placement():
         return measure
 
     # the budget leaves room for exactly the two cheapest-to-keep blocks
-    budget = 768 + 1000 + 100 * 5.0 * 1.15 + 30 * 10 * 1.15
+    budget = StepPlanner.RESERVE_MB + 1000 + 100 * 5.0 * 1.15 + 30 * 10 * 1.15
     flags = placement.choose(scripted(), 1000, 100, 10, budget)
     check(flags == [True, False, True, False, True], f"the blocks that save the most time per megabyte are kept while they fit, the rest recompute ({flags})")
     check(not checkpointer.observer, "the profiler lets go of the checkpointer")
@@ -617,7 +642,7 @@ def measured_placement():
     check(all(flags) and seen[-1] == [True] * 5 and len(seen) < 10,
           f"a placement that does not fit once measured is given back to checkpointing until nothing is kept ({len(seen)} measurements)")
 
-    check(all(placement.choose(scripted(), 1000, 100, 10, 768 + 1000 + 100 * 5.0 * 1.15 - 1)),
+    check(all(placement.choose(scripted(), 1000, 100, 10, StepPlanner.RESERVE_MB + 1000 + 100 * 5.0 * 1.15 - 1)),
           "no room beyond the all-checkpointed cost keeps everything checkpointed")
     check(all(placement.choose(lambda flags: 5.0, 1000, 100, 10, 1e9)), "a profile without any activation figure (no data) keeps everything checkpointed")
 
@@ -708,4 +733,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)
+    run(limits, pressure, making_room, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)

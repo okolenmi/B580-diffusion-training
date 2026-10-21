@@ -222,13 +222,13 @@ def int8_base_weights():
     base = Int8Linear(nn.Linear(512, 64), backend)
     base(x2).backward(dy)
     expected = dy @ backend.dequant(base.weight_int8, base.weight_scale).float()
-    check(rel(x2.grad, expected) < 1e-2, "the input gradient is dy times the dequantized weight")
+    check(rel(x2.grad, expected) < 1e-2, "the input gradient is dy times the dequantized weight (without building it)")
     raises(NotImplementedError, wrapped.merge, "merging into int8 weights is refused", "int8")
 
     calls = []
     fake = SimpleNamespace(available=lambda: True, prepare_weight=lambda w: backend.prepare(w),
                            linear=lambda x, w8, s, bias: calls.append(1) or backend.linear(x, w8, s, bias),
-                           dequant_weight=lambda w8, s: backend.dequant(w8, s))
+                           dequant_weight=lambda w8, s: backend.dequant(w8, s), rotate=backend.rotate)
     kernels = XpuKernelsBackend(fake)
     check(kernels.problem() is None and kernels.call_problem(torch.zeros(40, 512), w8) is not None,
           "the kernels backend runs only on an XPU tensor and says why otherwise")

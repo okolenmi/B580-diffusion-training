@@ -133,6 +133,33 @@ hopeless. Under the capture that cost is gone and only the device cost
 remains -- 10-12 % of the step, for 42 % of the weight memory. The two levers
 are not independent: the INT8 base is only worth having with `--graph` on.
 
+## The host direction is finished; the recompute is what is left
+
+With the capture on, the host cost is gone (one replay instead of 6 609
+launches) and the step *is* the device time. So the next lever is not the
+host -- it is the **checkpointing's recompute**, which is a device cost under
+the capture.
+
+The same step, with and without the checkpointing (512×512, batch 1):
+
+| | eager step | **captured step** | host time | aten calls | peak |
+|---|---|---|---|---|---|
+| with the checkpointing (the default) | 366.9 ms | **190.0 ms** | 970 ms | 44 277 | 5.04 GB |
+| without it | 242.6 ms | **141.7 ms** | 684 ms | 27 239 | 6.19 GB |
+| the difference | **1.51×** | **1.34×** | 1.42× | 1.63× | 1.23× |
+
+So the checkpointing costs **a third of the captured step** (the recompute's
+forward, on the device) and buys 1.15 GB of the peak at this size. At 1024×1024
+it is not a choice: without it the peak is 9.88 GB and the capture does not
+fit.
+
+And there is a consequence for the placement lever: the measured placement
+(`trainer.checkpoint_by=measured`, 930 vs 1010 ms) was measured **eagerly**,
+where the host dominates and a recompute costs mostly launches. Under the
+capture the same absolute saving is a bigger *share*, because the denominator
+shrinks by the host time. **The placement should be re-measured with `--graph`
+on** — the tuner needs the capture in the loop, not the other way round.
+
 ## Two things about profiling on this card
 
 **The XPU profiler works.** It registers PTI callbacks with the Level Zero

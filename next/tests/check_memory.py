@@ -480,6 +480,48 @@ def xpu_environment():
                 os.environ[key] = value
 
 
+def deterministic_mode():
+    from ..engine.runtime.determinism import Determinism
+
+    saved = torch.are_deterministic_algorithms_enabled()
+    try:
+        Determinism(True, 7).apply()
+        first = torch.rand(3)
+        Determinism(True, 7).apply()
+        check(torch.are_deterministic_algorithms_enabled() and torch.equal(first, torch.rand(3))
+              and not torch.utils.deterministic.fill_uninitialized_memory,
+              "deterministic mode seeds the global generator, asks for deterministic kernels and skips the memory fill")
+        check(not Determinism(True).plans_chunks and Determinism(False).plans_chunks and Determinism(True, -1).seed == 0,
+              "an unset base seed means 0, and only a deterministic run refuses to split batches by memory")
+        Determinism(False).apply()
+        check(not torch.are_deterministic_algorithms_enabled(), "a later run without it gets the normal kernels back")
+    finally:
+        torch.use_deterministic_algorithms(saved)
+
+    def run_with(plan_chunks):
+        with tempfile.TemporaryDirectory() as raw:
+            m = manager(FakeDevice(ours=5000), limit_mb=11000)
+            m.start()
+            trainer, _, denoiser, _, _, _ = rig(Path(raw), steps=2, accumulation=2, residency=m, plan_chunks=plan_chunks)
+            original, calls = denoiser.predict, [0]
+
+            def predict(*args):
+                calls[0] += 1
+                if calls[0] == 3:
+                    raise RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES")
+                return original(*args)
+
+            denoiser.predict = predict
+            try:
+                trainer.run()
+                return None
+            except Exception as caught:  # noqa: BLE001
+                return caught
+
+    check(run_with(True) is None and run_with(False) is not None,
+          "a deterministic run reports an out-of-memory step instead of re-running it in chunks")
+
+
 def training():
     with tempfile.TemporaryDirectory() as raw:
         device = FakeDevice(ours=5000)
@@ -666,4 +708,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer)
+    run(limits, pressure, making_room, room_by_physical_limit, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)

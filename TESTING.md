@@ -104,3 +104,10 @@ Run `--epochs 2 --save-every-epoch 1 --save-every 100000` on a small dataset.
 - The run stops after the second epoch (no step limit given); an adapter file is saved at each epoch end (its step number is the epoch's last step).
 - `--epochs 3 --steps 10` stops at 10 steps. A cosine schedule node with an empty `total_steps` decays over the whole run.
 Pass: all of the above.
+
+## 22. Deterministic run
+Same command twice with `--set runtime.deterministic=true --set seed.base=1 --steps 30`, batch size small enough to fit without splitting.
+- Compare the two console loss lines and the saved adapters (`sha256sum` or a tensor compare): ideally identical, otherwise the first step where they differ.
+- Any `warning` lines about an operation without a deterministic kernel: paste them (those are the remaining sources).
+- Speed against the same run without the setting, and whether the peak changed.
+Pass: identical losses. If they differ, tell me the first differing step and the warnings; the next suspects are the oneDNN primitive choice and the fused optimizer paths.

@@ -105,6 +105,10 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 group="Device", advanced=True, doc="Dtype used for the arithmetic of a training step."),
     SettingSpec("runtime.graph_capture", "Graph capture", "bool", False, group="Runtime", advanced=True,
                 doc="Capture the step as a device graph (static shapes only)."),
+    SettingSpec("runtime.deterministic", "Deterministic run", "bool", False, group="Reproducibility", advanced=True,
+                doc="Same graph, data and settings give the same numbers: deterministic kernels (slower where they differ), "
+                    "the global generator seeded from the base seed (0 when unset), and batches never split by predicted "
+                    "memory (a batch that does not fit then runs out of memory instead; lower the batch size)."),
     SettingSpec("runtime.residency.safety_margin", "Residency safety margin", "float", 0.1, minimum=0,
                 maximum=0.9, step=0.05, group="Runtime", advanced=True,
                 doc="Fraction of the budget kept free when deciding what stays on the device."),

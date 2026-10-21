@@ -51,12 +51,12 @@ class Trainer:
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
-                 warn: Callable[[str], None] | None = None):
+                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
-        self._balance = balance
+        self._balance, self._plan_chunks = balance, plan_chunks
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
@@ -154,14 +154,15 @@ class Trainer:
                 self._time_probe.capture(batch)
             if first and self._time_probe.ready:
                 probe_metrics = self._time_probe.run()  # before the first update: the reference record
-        for attempt in range(self.OOM_RETRIES + 1):
+        retries = self.OOM_RETRIES if self._plan_chunks else 0  # a retry in more chunks would change the numbers
+        for attempt in range(retries + 1):
             self._committed = False
             failure = None
             try:
                 losses, thirds, spent = self._window(step, fetched, attempt)
                 break
             except Exception as error:  # noqa: BLE001 - narrowed just below
-                if self._committed or attempt == self.OOM_RETRIES or not is_out_of_memory(error):
+                if self._committed or attempt == retries or not is_out_of_memory(error):
                     explained = self._explained(step, error)
                     if explained is error:
                         raise
@@ -206,7 +207,7 @@ class Trainer:
     def _chunks(self, batch: dict, attempt: int) -> list[int]:
         x = batch["x_t"]
         count = x.shape[0]
-        sizes = self.residency.plan(count, x.shape[-2] * x.shape[-1]) if self.residency is not None else [count]
+        sizes = self.residency.plan(count, x.shape[-2] * x.shape[-1]) if self.residency is not None and self._plan_chunks else [count]
         if attempt and len(sizes) < count:
             sizes = chunk_sizes(count, min(count, len(sizes) * 2))
         return sizes

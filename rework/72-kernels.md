@@ -1,7 +1,8 @@
 # 72. Quantized frozen weights and the owner's kernels
 
-Status: **notes, nothing built.** The kernels (`github.com/okolenmi/oko-xpu-kernels`) are early and forward-only; the trainer
-waits for their backward support. This page records what was read there and where the trainer's seam is, so the port starts from it.
+Status: **int8 frozen weights built, unverified on hardware** (published as `xpu-kernels` on PyPI, 0.2.0: ConvRot linear plus the
+`dL/dx` backward). Fused rope/adaLN kernels wait for the Anima DiT (phase 8). This page records what the kernels give, how the trainer
+uses them and what is still open.
 
 ## What the kernels are
 - `xpu_kernels.int8`: ConvRot INT8 linear. The activation is rotated (Kronecker-Hadamard, blocks of 256 along K) and quantized per row;
@@ -32,3 +33,17 @@ and a CPU reference for the checks here.
 - `use_deterministic_algorithms(True)` turns on `fill_uninitialized_memory` (about 92 ms per forward on their model); a deterministic
   mode for the trainer should clear it. Not built; the owner's runs differ by ~1e-4 between identical seeds today.
 - Anima: port their adaLN and rope kernels with autograd wrappers (forward under no_grad, recompute or a Triton backward) when the DiT lands.
+
+## What was built (xpu-kernels 0.2.0)
+- `families/general/quantize/`: `backends.py` (one `Int8Backend` interface, the `xpu-kernels` implementation and a plain-torch reference that
+  is exact but slow and runs the checks here), `ops.py` (`Int8LinearFn`: forward through the backend, backward `dL/dy @ W` with the dense weight
+  rebuilt for that layer only), `int8.py` (`Int8Linear` for plain linears, `Int8Quantizer`, `quantize_frozen`).
+- `AdaptedLinear.use_int8`: the base weight buffer becomes int8 plus `base_scale`; `frozen_weight` rebuilds the dense weight (only merge and
+  DoRA need it, both refuse). The family exposes `quantize_frozen`; the Inject Adapter node has `base_precision`, `int8_backend`, `int8_min_params`.
+- Choices that follow the kernels' notes: the backward uses the weight-only path (their `linear_dx` after `dequant_weight`), not the quantized
+  gradient path (`linear_dx_int8`: a memory option, slower, extra gradient noise). The dense weight is rebuilt per layer per backward instead of
+  kept, since keeping it would undo the memory saving; the cost is one dequant of the quantized layers per backward (their figure: 2.6 ms per
+  25 M parameters, so roughly 0.2 s for the 2.17 B here if it ran at that rate: to be measured, it is the number that decides the feature).
+- Open: a captured step with the per-layer dequant inside the graph (allocations inside a capture come from the graph pool and replay at the same
+  addresses, so it should work; device test 23 covers it), the first-call verification gate for the INT8 side (the package has `selftest`;
+  the Triton kernels have their own gate), `dW` is not needed for LoRA.

@@ -58,6 +58,8 @@ class Console:
                   f"worst {frame['padding_worst']:.0%}; {frame['short_batches']} short batches, {frame['packed']} samples packed up, {frame['dropped']} dropped", flush=True)
         elif stream == "captions":
             print(f"captions: {frame['summary']}", *(f"  failed: {e}" for e in frame["errors"]), sep="\n", flush=True)
+        elif stream == "quantization":
+            print(frame["message"], flush=True)
         elif stream == "graph":
             print(f"{frame.get('message') or 'graph capture is off: ' + str(frame.get('why'))}", flush=True)
         elif stream == "warning" or self.verbose:

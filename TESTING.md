@@ -111,3 +111,12 @@ Same command twice with `--set runtime.deterministic=true --set seed.base=1 --st
 - Any `warning` lines about an operation without a deterministic kernel: paste them (those are the remaining sources).
 - Speed against the same run without the setting, and whether the peak changed.
 Pass: identical losses. If they differ, tell me the first differing step and the warnings; the next suspects are the oneDNN primitive choice and the fused optimizer paths.
+
+## 23. Int8 frozen weights
+`pip install xpu-kernels` first (check: `python -m xpu_kernels`). Then the usual short run with `--param adapter.base_precision=int8`, and the same without it.
+- A line `int8 base weights (xpu_kernels): N layers, X MB saved` after "Converting the frozen weights to int8"; with `--param adapter.int8_backend=torch` it must run too (very slow; 5 steps are enough) with a warning.
+- Peak memory against the native run (expected about 2 GB less at the same batch), and the step time (expected about parity).
+- Loss over 100 steps against native: close but not equal; if it diverges or turns to NaN, tell me the step.
+- With `--set trainer.graph=true` (graph replay) and with checkpointing on: both must run.
+- `--param adapter.kind=dora` with int8: the layers stay native (the summary line says so).
+Pass: runs, less memory, speed within a few percent, loss tracks native. Fail: paste the lines and the traceback.

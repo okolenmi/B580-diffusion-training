@@ -21,6 +21,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ..quantize.backends import shape_problem
+from ..quantize.ops import Int8Weight
 from .gate import TimestepGate
 from .scaling import scaling_factor
 
@@ -44,6 +46,8 @@ class AdaptedLayer(nn.Module):
         self.gate = gate
         self.register_buffer("base_weight", original.weight.detach())
         self.register_buffer("base_bias", original.bias.detach() if original.bias is not None else None)
+        self.register_buffer("base_scale", None)  # set when the weight is stored in int8
+        self._int8 = None
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     @property
@@ -51,8 +55,13 @@ class AdaptedLayer(nn.Module):
         return scaling_factor(self.policy, self.alpha, self.rank) * self.training_weight
 
     @property
+    def is_int8(self) -> bool:
+        return self._int8 is not None
+
+    @property
     def frozen_weight(self) -> Tensor:
-        return self.base_weight
+        """The weight as a dense tensor; for an int8 layer this rebuilds it, so hot paths must not call it."""
+        return self._int8.backend.dequant(self.base_weight, self.base_scale) if self._int8 is not None else self.base_weight
 
     def _init_factors(self, a_shape: tuple[int, ...], b_shape: tuple[int, ...]) -> None:
         device = self.base_weight.device
@@ -90,6 +99,8 @@ class AdaptedLayer(nn.Module):
         """Fold the update into the base weight and zero the factors. LoRA only."""
         if self.kind != "lora":
             raise NotImplementedError("merging a DoRA adapter into its weight is not supported")
+        if self.is_int8:
+            raise NotImplementedError("merging into an int8 base weight is not supported")
         self.base_weight.copy_(self.base_weight + self._delta().to(self.base_weight.dtype))
         nn.init.zeros_(self.lora_A)
         nn.init.zeros_(self.lora_B)
@@ -120,8 +131,22 @@ class AdaptedLinear(AdaptedLayer):
         merged = self.frozen_weight.to(self.lora_A.dtype) + self.scaling * (self.lora_B @ self.lora_A)
         return torch.linalg.norm(merged, dim=1)
 
+    def use_int8(self, backend) -> None:
+        """Keep the base weight as int8 from now on (LoRA only: DoRA needs the dense weight in every forward)."""
+        problem = shape_problem(self.out_features, self.in_features)
+        if self.kind != "lora" or problem is not None:
+            raise ValueError(problem or "only LoRA layers can keep their base weight in int8")
+        w8, scale = backend.prepare(self.base_weight)
+        self.base_weight, self.base_scale = w8, scale
+        self._int8 = Int8Weight(backend)
+
+    def _base(self, x: Tensor) -> Tensor:
+        if self._int8 is not None:
+            return self._int8.apply(x, self.base_weight, self.base_scale, self.base_bias)
+        return F.linear(x, self.base_weight, self.base_bias)
+
     def forward(self, x: Tensor) -> Tensor:
-        base = F.linear(x, self.frozen_weight, self.base_bias)
+        base = self._base(x)
         down = self.dropout(x).to(self.lora_A.dtype) @ self.lora_A.T
         if self.kind == "lora":
             # the small factor takes the scale: one full-size multiply fewer per layer

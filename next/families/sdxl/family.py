@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..general.adapters import merge as merge_io
 from ..general.adapters import schemes as scheme_io
+from ..general.quantize import int8 as int8_io
 from . import adapters, conditioning, denoiser, latents, objective
 
 FAMILY_ID = "sdxl"
@@ -27,6 +28,7 @@ class SDXLFamily:
     read_adapter = staticmethod(scheme_io.read_adapter)
     load_checked = staticmethod(scheme_io.load_checked)
     merge_adapter = staticmethod(merge_io.merge_adapter)
+    quantize_frozen = staticmethod(int8_io.quantize_frozen)
 
 
 FAMILY = SDXLFamily()

@@ -179,5 +179,69 @@ def sdxl_plan_and_injection():
     raises(ValueError, lambda: load_checked(SCHEMES["kohya"], part, {"other.weight": torch.zeros(1)}), "a file matching nothing is refused", "no layer matched")
 
 
+def int8_base_weights():
+    import warnings
+    from types import SimpleNamespace
+
+    from ..families.general.quantize.backends import TorchBackend, XpuKernelsBackend, make_backend, shape_problem
+    from ..families.general.quantize.int8 import Int8Linear, Int8Quantizer, quantize_frozen
+
+    torch.manual_seed(0)
+    backend = TorchBackend()
+    weight = torch.randn(64, 512) * 0.05
+    w8, scale = backend.prepare(weight)
+    dense = backend.dequant(w8, scale).float()
+    rel = lambda a, b: ((a.float() - b.float()).norm() / b.float().norm()).item()  # noqa: E731
+    check(w8.dtype == torch.int8 and scale.shape == (64,) and rel(dense, weight) < 0.02, "an int8 weight comes back within quantization error")
+    x = torch.randn(40, 512)
+    check(rel(backend.linear(x, w8, scale, None), x @ dense.T) < 0.02 and rel(backend.linear(x, w8, scale, None), x @ weight.T) < 0.03,
+          "the int8 linear matches the dense product of the dequantized weight")
+    check(shape_problem(64, 512) is None and "256" in shape_problem(64, 300) and "16" in shape_problem(70, 512), "layer shapes the rotation cannot take are named")
+
+    net = nn.Sequential(nn.Linear(512, 64), nn.Linear(100, 64), nn.Linear(512, 64))
+    wrapped = make("lora", net[0])
+    net[0] = wrapped
+    net[2] = make("dora", net[2])
+    report = Int8Quantizer(backend, min_params=0).run(net)
+    check(wrapped.is_int8 and wrapped.base_weight.dtype == torch.int8 and report.layers == 1 and report.saved_mb > 0
+          and len(report.skipped) == 2 and not net[2].is_int8,
+          "a LoRA layer converts; DoRA and a shape the rotation cannot take stay as they were")
+    plain = nn.Sequential(nn.Linear(512, 64))
+    quantize_frozen(plain, backend="torch", min_params=0)
+    check(isinstance(plain[0], Int8Linear), "an unadapted linear becomes an int8 linear")
+    check(quantize_frozen(nn.Sequential(nn.Linear(512, 64)), backend="torch").layers == 0, "small layers are left alone by default")
+
+    x = torch.randn(40, 512, requires_grad=True)
+    out = wrapped(x)
+    out.float().square().sum().backward()
+    reference = torch.randn(64, 512)
+    check(x.grad is not None and wrapped.lora_B.grad is not None and wrapped.lora_A.grad is not None and wrapped.base_weight.grad is None,
+          "gradients reach the input and the adapter factors but not the frozen weight")
+    x2 = x.detach().clone().requires_grad_(True)
+    dy = torch.randn(40, 64)
+    base = Int8Linear(nn.Linear(512, 64), backend)
+    base(x2).backward(dy)
+    expected = dy @ backend.dequant(base.weight_int8, base.weight_scale).float()
+    check(rel(x2.grad, expected) < 1e-2, "the input gradient is dy times the dequantized weight")
+    raises(NotImplementedError, wrapped.merge, "merging into int8 weights is refused", "int8")
+
+    calls = []
+    fake = SimpleNamespace(available=lambda: True, prepare_weight=lambda w: backend.prepare(w),
+                           linear=lambda x, w8, s, bias: calls.append(1) or backend.linear(x, w8, s, bias),
+                           dequant_weight=lambda w8, s: backend.dequant(w8, s))
+    kernels = XpuKernelsBackend(fake)
+    check(kernels.problem() is None and kernels.call_problem(torch.zeros(40, 512), w8) is not None,
+          "the kernels backend runs only on an XPU tensor and says why otherwise")
+    layer = Int8Linear(nn.Linear(512, 64), kernels)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = layer(torch.randn(40, 512))
+    check(result.shape == (40, 64) and not calls and any("dense weight" in str(w.message) for w in caught),
+          "a call the kernels cannot take falls back to the dense weight and warns once")
+    check(isinstance(make_backend("auto", "cpu"), TorchBackend) and isinstance(make_backend("torch", "xpu"), TorchBackend),
+          "auto on a CPU uses the torch version")
+    raises(ValueError, lambda: make_backend("nope", "cpu"), "an unknown backend is refused", "nope")
+
+
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, sdxl_plan_and_injection)

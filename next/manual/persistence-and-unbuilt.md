@@ -19,4 +19,4 @@ auto = 4096 MB; the Conditioner's own `cache_mb` port wins), `conditioning.prewa
 needed instead of up front), `seed.base` (nodes with an empty seed derive theirs from it and their id; -1 leaves
 them at 0).
 
-Planned ports (see `rework/PORTING.md`): NF4 and int8 frozen weights (to use the owner's rewritten kernels).
+Planned ports (see `rework/PORTING.md`): NF4 frozen weights (int8 frozen weights are built: `adapter.base_precision`, see vram.md).

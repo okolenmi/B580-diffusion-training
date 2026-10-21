@@ -21,6 +21,7 @@ start, about 1.5 GB after the first forward/backward, creeping by ~4 MB per new 
 | Fused optimizer | `--fused` / `optimizer.fused` | Updates each parameter when its gradient is ready: gradients never pile up. | No gradient clipping when fused. | measured: no memory gain for a LoRA, ~1200 ms/step against ~1010 |
 | Optimizer grouping | `optimizer.group_size` (0 = all same-shaped, 1 = one at a time) | 1 uses the least temporary memory. | Slower (more small launches). | measured: `group_size=1` same memory, ~1200 ms; with int8 state 2250 ms: do not combine |
 | Optimizer state | `optimizer.state_precision=int8_blockwise` | State at about a quarter of the memory. | Small precision loss. Adafactor (`beta1` 0) keeps least state; CAME in between. | verified: int8_blockwise ~1030 ms/step, memory about the same (the optimizer holds ~84 MB at rank 16, gradients ~162 MB) |
+| Int8 frozen weights | `--param adapter.base_precision=int8` (`adapter.int8_backend`, `adapter.int8_min_params`) | Linear layers of 1M+ weights (with a multiple of 256 inputs) keep their frozen weight in int8: about 2 GB less on SDXL, which buys batch size or fewer checkpointed blocks. Needs `pip install xpu-kernels` (without it a slow plain-torch version runs and a warning says so). | The model is the int8 network: losses and samples are not comparable with a native run. Backward rebuilds one layer's dense weight at a time: from the kernels' own dequant figure that is about 0.2 s per step on SDXL (to be measured). DoRA layers stay native. | new: device test 23 |
 | Adapter size | `--rank` / `adapter.rank` | Parameters, gradients and optimizer state scale with it. | Capacity. | verified |
 | Fewer trained modules | `adapter.groups`, `include`, `exclude` | Fewer adapter parameters and less backward work. | Capacity/coverage. | untested |
 | Encoders off the card | `conditioner.release_encoders` (default true) | Text encoders live on the host and visit the device only to encode. | Slower first epoch unless the conditioning store is on. | untested |
@@ -29,4 +30,4 @@ start, about 1.5 GB after the first forward/backward, creeping by ~4 MB per new 
 | Allocator mode | env `PYTORCH_ALLOC_CONF=expandable_segments:True` | Could reduce stuck fragmentation. | Not known to work on XPU. | verified: peak 8.3 -> 7.1 GB, no speed penalty; now on by default (export `PYTORCH_ALLOC_CONF` to change) |
 
 Not built (old tree had them, see `rework/71-memory.md`): NF4 frozen weights (measured 16-20% slower for
-180-1361 MB), block swap to host, activation offload.
+180-1361 MB; int8 above is the route now), block swap to host, activation offload.

@@ -1,6 +1,6 @@
 # 90. Build plan: a clean parallel tree instead of a migration
 
-Status: **proposal, replaces the earlier `90-migration.md`.**
+Status: **in progress. Phases 0 to 5 are built in `next/` (see the step table in `00-index.md`); 6 to 9 are open. Replaces the earlier `90-migration.md`.**
 
 ## 0. Owner decision (2026-10-13, 18:21 Kyiv) - DECIDED direction
 

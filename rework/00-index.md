@@ -1,8 +1,11 @@
 # Rework: index and resume point
 
 Status file for the nodes/graph/UI rework. Plans live in this folder, one file per
-domain. **Nothing here is implemented yet.** A fresh agent (or a session after
-compaction) starts by reading this file, then `90-build-plan.md`, then the plan it
+domain. **Implemented in `next/`: phases 0 to 5 (graph, families, data, engine, training
+nodes) plus the follow-up ports.** Not started: phase 6 (server and editor, ask the
+owner first), 7 (views and starters), 8 (Anima), 9 (acceptance and swap). A fresh
+agent (or a session after compaction) starts by reading this file, then
+`90-build-plan.md`, then `TESTING.md` (what is verified on hardware) and the plan it
 is assigned.
 
 User-facing manual: `next/MANUAL.md` (how to set things, what to run for what) and one page per topic under `next/manual/` (VRAM, speed, quality, data, diagnostics, persistence). What the owner still has to run on hardware: `TESTING.md` in the repo root. Keep both current when a lever is added or its status changes.
@@ -13,7 +16,8 @@ User-facing manual: `next/MANUAL.md` (how to set things, what to run for what) a
   below updated. A step that is not on disk did not happen.
 - Plans are refined in place. Decisions the owner has made are marked **DECIDED**
   with the date; everything else is a proposal.
-- **No code until the design is settled and the owner says "start".**
+- **Code in `next/` follows the plans; a phase that changes a plan updates the plan
+  first.** Phase 6 and later need the owner's go-ahead (phase 6 spans sessions).
 - Facts about the current code go to `audit/`, with file:line references. Plans
   cite those files instead of repeating them.
 - Sub-agents: at most one at a time (the owner's usage limit is per 5 hours; a

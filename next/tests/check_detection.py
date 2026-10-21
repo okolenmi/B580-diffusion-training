@@ -199,7 +199,7 @@ def failure_cases(fx):
     check(fx.detect("nowhere", "x.safetensors").error_kind == "bad_scope", "unknown scope")
     raises(ModelFileError, lambda: read_header(fx.root / "checkpoints" / "fake.ckpt"), "pickle refused at the reader", "pickle")
     names = fx.library.list_files("checkpoints")
-    check("sub/sdxl_nested.safetensors" in names and "fake.ckpt" not in names, f"listing: .safetensors only, with subfolders")
+    check("sub/sdxl_nested.safetensors" in names and "fake.ckpt" not in names, "listing: .safetensors only, with subfolders")
 
 
 def cache_cases(fx):

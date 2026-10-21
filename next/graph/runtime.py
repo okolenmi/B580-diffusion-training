@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from .document import GraphDoc
-from .events import EventError, EventHub, RunStopped, Reporter, StopRequested, Wire
+from .events import EventError, EventHub, RunStopped, Reporter, Wire
 from .node import COMPLETE, Completion, Environment, ExecutionContext, Node
 from .registry import NodeRegistry
 from .settings import SettingsRegistry

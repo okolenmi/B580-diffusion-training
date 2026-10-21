@@ -19,12 +19,12 @@ from ..data.ids import vae_identity
 from ..data.images import SizePolicy
 from ..data.latent_cache import CacheMismatch, LatentCache
 from ..data.library import ImageLibrary, report
-from ..data.noise import Noiser, TimestepPolicy
+from ..data.noise import Noiser
 from ..data.prompts import CaptionDropout, PromptTable, TagShuffle, TagSwap
 from ..families.api.header import read_header
 from ..families.sdxl.latents import LATENTS
 from ..families.sdxl.objective import SDXLObjective
-from ..graph.events import EpochEnding, EpochStarted, PromptsChanged
+from ..graph.events import EpochEnding, PromptsChanged
 from .support import check, raises, run
 
 TAGS = ["a girl", "red hair", "smiling", "outdoors", "sunset", "hat"]

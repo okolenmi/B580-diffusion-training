@@ -22,7 +22,8 @@ class TimestepPolicy:
 
 
 class Noiser:
-    def __init__(self, objective: Objective, policy: TimestepPolicy = TimestepPolicy(), balance=None):
+    def __init__(self, objective: Objective, policy: TimestepPolicy | None = None, balance=None):
+        policy = policy or TimestepPolicy()
         if policy.mode not in objective.timestep_modes:
             raise ValueError(f"timestep mode {policy.mode!r} is not offered by this objective; "
                              f"choose from {tuple(objective.timestep_modes)}")

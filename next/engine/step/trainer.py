@@ -36,8 +36,8 @@ class Trainer:
     ``emit`` receives a ``StepFinished`` after every optimizer step; ``should_stop`` is polled between steps, so
     stopping always leaves the adapters at a step boundary.
 
-    With a memory controller the run starts with a probe (one sample of the largest shape, gradients dropped) so
-    the cost of a pixel is known before the first step, and every batch the controller predicts will not fit runs as
+    With a memory controller the run starts with a probe (a sample and a few samples of the largest shape, gradients dropped)
+    so the memory a batch needs is known before the first step, and every batch the controller predicts will not fit runs as
     chunks whose gradients add up to the whole batch's. A step that runs out of memory anyway is run again once, in
     twice as many chunks, after the memory it held is given back, as long as no update has been applied yet.
     """
@@ -86,7 +86,7 @@ class Trainer:
         return RunResult(max(self.steps - start, 0), self.steps, last)
 
     def _probe(self) -> None:
-        """One sample of the largest shape through forward and backward, changing nothing: what a pixel costs."""
+        """One and a few samples of the largest shape through forward and backward, changing nothing: what a batch costs."""
         make = getattr(self._batches, "probe_batch", None)
         if self.residency is None or make is None or self.steps == 0:
             return

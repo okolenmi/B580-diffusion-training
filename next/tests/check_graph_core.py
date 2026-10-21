@@ -8,11 +8,10 @@ from __future__ import annotations
 import json
 import threading
 
-from ..graph import (Edge, EpochEnding, EventHub, EventIn, EventOut, Group, GraphDoc, GraphFormatError, GraphRunner,
-                     Node, NodeRegistry, NodeSpec, Port, PromptsChanged, build_catalog, parse, resolve_node)
+from ..graph import (Edge, EpochEnding, EventHub, EventIn, EventOut, GraphDoc, GraphFormatError, GraphRunner,
+                     Node, NodeRegistry, NodeSpec, Port, build_catalog, parse, resolve_node)
 from ..graph.document import FORMAT, new_uid
-from ..graph.events import (EventDeliveryError, EventHandlerError, EventLoopError, EventThreadError, StopRequested,
-                            Wire)
+from ..graph.events import (EventDeliveryError, EventHandlerError, EventLoopError, EventThreadError, Wire)
 from ..graph.settings import SettingsError, SettingsRegistry
 from ..graph.validate import topological_order
 from . import toy_nodes

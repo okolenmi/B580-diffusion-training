@@ -19,7 +19,7 @@ from ..families.general.adapters.inject import descriptors_from_model
 from ..families.general.adapters.schemes import load_checked, read_adapter, save_adapter
 from ..families.general.ldm_unet.unet import UNetModel
 from ..families.sdxl.adapters import LAYOUT, SCHEMES, inject_denoiser
-from ..families.sdxl.denoiser import SDXL_UNET_CONFIG, SDXLDenoiser, build_unet
+from ..families.sdxl.denoiser import SDXLDenoiser, build_unet
 from .check_sdxl import TINY_UNET
 from .support import check, raises, run
 

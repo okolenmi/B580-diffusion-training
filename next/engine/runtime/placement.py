@@ -14,7 +14,6 @@ from .profiler import BlockCost, BlockProfiler
 
 
 class BlockPlacement:
-    RESERVE_MB = 768.0  # left free: kernels of shapes not yet seen, allocator fragmentation
     SHRINK = 0.25  # share of the kept blocks given back to checkpointing when a placement does not fit once measured
 
     def __init__(self, planner: StepPlanner, profiler: BlockProfiler):
@@ -27,7 +26,7 @@ class BlockPlacement:
         the probe, ``units`` that of the largest batch of the run."""
         names = self.profiler.order
         everything = [True] * len(names)
-        usable = budget_mb - self.RESERVE_MB
+        usable = budget_mb - self.planner.RESERVE_MB
         self.profiler.reset()
         with self.profiler:
             base = measure(everything)  # the recomputes of this run are what the profiler times

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..general.adapters import merge as merge_io
 from ..general.adapters import schemes as scheme_io
 from . import adapters, conditioning, denoiser, latents, objective
 
@@ -25,6 +26,7 @@ class SDXLFamily:
     save_adapter = staticmethod(scheme_io.save_adapter)
     read_adapter = staticmethod(scheme_io.read_adapter)
     load_checked = staticmethod(scheme_io.load_checked)
+    merge_adapter = staticmethod(merge_io.merge_adapter)
 
 
 FAMILY = SDXLFamily()

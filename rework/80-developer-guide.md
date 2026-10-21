@@ -1,6 +1,6 @@
 # 80. Developer guide: how to write nodes (draft)
 
-Status: **draft of the document that will ship** as `docs/developing-nodes.md`
+Status: **draft of the document that will ship** as docs/developing-nodes.md (not written yet)
 once the design is settled. Until then it describes the *target* shape: sections
 marked **(target)** use APIs that the plans introduce and that do not exist yet.
 Sections marked **(today)** describe rules that already hold.
@@ -502,7 +502,7 @@ catalog format, setting keys, REST routes, DB schemas. They are written in
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| D1 | Where this guide lives | one file; a folder | `docs/developing-nodes.md` (short, linked) plus the plans kept as `docs/design/` records after the rework |
+| D1 | Where this guide lives | one file; a folder | docs/developing-nodes.md (short, linked; not written yet) plus the plans kept as `docs/design/` records after the rework |
 | D2 | Enforcement | review only; tests for the mechanical rules | Tests for imports, groups, no frontend node names, no module-level mutable state in `nodes/`; review for the rest |
 | D3 | Comment policy | advisory; checked | Advisory plus one cheap checker for digits-with-units (`MB`, `GB`, `it/s`, `ms`) in comments, warning only |
 | D4 | Plan documents after the rework | delete; keep | Move to `docs/design/` as numbered records, mark superseded where reality differed |

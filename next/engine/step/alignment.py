@@ -12,7 +12,6 @@ Keys: ``gc_norm_t_*``, ``gc_share_t_*`` (share of the summed norms), ``gc_self_t
 
 from __future__ import annotations
 
-import math
 from typing import Callable, Sequence
 
 import torch

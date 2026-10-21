@@ -15,7 +15,6 @@ class CheckpointDensity:
     """
 
     LEVELS = (1.0, 0.75, 0.5, 0.25, 0.0)
-    RESERVE_MB = 768.0  # left free: kernels of shapes not yet seen, allocator fragmentation
 
     def __init__(self, planner: StepPlanner):
         self.planner = planner
@@ -23,7 +22,7 @@ class CheckpointDensity:
     def choose(self, measure: Callable[[float], float], start: float, floor_mb: float, units: int, budget_mb: float) -> float:
         """The share to run with. ``measure(share)`` applies it and returns megabytes per latent pixel; ``units`` is the
         pixel count of the largest batch. The model is left set to the share returned."""
-        usable = budget_mb - self.RESERVE_MB
+        usable = budget_mb - self.planner.RESERVE_MB
 
         def fits(cost: float) -> bool:
             return floor_mb + units * cost * self.planner.MARGIN <= usable

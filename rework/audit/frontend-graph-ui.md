@@ -55,7 +55,7 @@ Exists:
   sequenced (`_diagSeq`) so a late answer cannot overwrite a newer one. This is
   the closest existing thing to "node shows server result", and it is the
   pattern the Load Model node should extend.
-* **SSE with replay** (`lib/events.js`, design `backend/09-event-contract.md`):
+* **SSE with replay** (`lib/events.js`, design `docs/design/backend/09-event-contract.md`):
   lifecycle events are numbered and ring-buffered; reconnect replays or says
   `resync_required`.
 * **Per-node execution badges**: `graph_execution_progressed` paints `ok`/`err`

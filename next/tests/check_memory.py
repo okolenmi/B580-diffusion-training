@@ -316,11 +316,11 @@ def checkpoint_density():
 
     chosen, seen = run_with(budget=20000)
     check(chosen == 0.0 and seen[-1] == 0.0, f"with room for everything no block is checkpointed, and the model is left at that share ({seen})")
-    chosen, _ = run_with(budget=5500 + CheckpointDensity.RESERVE_MB)
+    chosen, _ = run_with(budget=5500 + StepPlanner.RESERVE_MB)
     check(chosen == 0.5, f"the share goes down as far as the largest batch still fits ({chosen})")
     chosen, seen = run_with(budget=5200)
     check(chosen == 1.0 and seen == [1.0], "when even full checkpointing does not fit nothing more is measured")
-    chosen, seen = run_with(budget=5600 + CheckpointDensity.RESERVE_MB, cost=lambda share: 0.2 + 0.4 * (1 - share) + (0.2 if share == 0.25 else 0))
+    chosen, seen = run_with(budget=5600 + StepPlanner.RESERVE_MB, cost=lambda share: 0.2 + 0.4 * (1 - share) + (0.2 if share == 0.25 else 0))
     check(chosen == 0.5 and seen == [1.0, 0.5, 0.25, 0.5], f"a share that measures dearer than predicted is given up for the next one ({seen})")
     planner = StepPlanner()
     planner.learn(5000, 6000, 1000)
@@ -548,7 +548,7 @@ def measured_placement():
     blocks = [(name, FakeBlock(memory, *size)) for name, size in sizes.items()]
     checkpointer = SimpleNamespace(observer=None)
     profiler = BlockProfiler(checkpointer, blocks, lambda: memory[0])
-    placement = BlockPlacement(SimpleNamespace(MARGIN=1.15), profiler)
+    placement = BlockPlacement(StepPlanner(), profiler)
 
     def scripted(extra=0.0, seen=None):
         def measure(flags):

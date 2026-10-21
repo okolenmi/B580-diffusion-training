@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 
-from ..graph import (COMPLETE, Completion, DynamicShape, EpochEnding, EventIn, EventOut, EventType, Group, Node,
+from ..graph import (Completion, DynamicShape, EpochEnding, EventIn, EventOut, Group, Node,
                      Port, PromptsChanged, Resolution, StepFinished, StopRequested)
 
 

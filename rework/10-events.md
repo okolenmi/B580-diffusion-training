@@ -131,7 +131,7 @@ new channel is needed:
   frames to the server; this reuses that path);
 * lifecycle-class events (those the UI must never miss) also as domain events
   on the numbered `EventBus`, so a reconnecting tab gets them replayed under the
-  existing contract (`backend/09-event-contract.md`);
+  existing contract (`docs/design/backend/09-event-contract.md`);
 * node state (`resolving`, `running`, `ready`, `error`) is the same mechanism:
   a `node_state` event, which is how plan 30's "processing... please wait"
   works for slow server-side steps.

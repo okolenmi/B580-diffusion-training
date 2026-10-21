@@ -8,7 +8,7 @@ from typing import Any
 
 from .document import UID_PATTERN, Edge, GraphDoc
 from .node import Environment, Node, Resolution
-from .ports import Port, type_name, types_compatible
+from .ports import type_name, types_compatible
 from .registry import NodeRegistry
 from .settings import SettingsRegistry
 

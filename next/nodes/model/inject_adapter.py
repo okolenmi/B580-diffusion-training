@@ -13,7 +13,6 @@ from ...engine.handles import TrainableDenoiser
 from ...engine.runtime.checkpointing import ActivationCheckpointer
 from ...families.api.adapters import GateWindow, TrainableSelection
 from ...families.api.parts import AdapterMerge, DenoiserPart
-from ...families.general.adapters.merge import merge_adapter
 from ...families.registry import get_family
 from ...graph import Group, Node, Port
 
@@ -79,7 +78,7 @@ class InjectAdapterNode(Node):
             raise ValueError(f"Merge Adapter: {family.id} cannot merge the {merge.format!r} format; choose from kohya")
         path = self.context.env.service("models").resolve("loras", merge.file)
         state, _ = family.read_adapter(str(path))
-        report = merge_adapter(denoiser.module(), scheme, state, merge.strength)
+        report = family.merge_adapter(denoiser.module(), scheme, state, merge.strength)
         if report.merged == 0:
             raise ValueError(f"Merge Adapter: nothing in {merge.file} matches this network (wrong family or key format?)")
 

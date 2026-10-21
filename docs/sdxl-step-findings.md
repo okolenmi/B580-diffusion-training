@@ -3,9 +3,42 @@
 *Measured 2026-10-21 on the B580, with the trainer's own command line
 (`--resolution 512 --batch 4 --rank 16 --batch-area 1.5 --param
 adapter.base_precision=int8 --param buckets.max_shapes=4`, the `my_set`
-dataset).  Every run below is the same command with one thing changed; the
-numbers are the minimum over the steps of one shape (3×100×64 latents), so
-the allocator's outliers do not speak.*
+dataset).  Every run is the same command with one thing changed; the numbers
+are the minimum over the steps of one shape (3×100×64 latents).*
+
+## The reason the step is slow: the capture cannot use the flash attention
+
+`next/engine/step/graphed.py` captures with
+`sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION)`, because "the flash kernel
+cannot be captured".  On XPU that backend is **not supported** — torch says so
+("SDPA Memory Efficient Attention backend is not supported on XPU, falling
+back to math backend") — so the captured step runs the **math** attention
+while the eager step runs the **flash** one.
+
+The device cost of that substitution, measured on this trainer's own UNet
+(512×512, batch 1, device time by events):
+
+| attention backend | the forward | forward + backward |
+|---|---|---|
+| the default (**flash**) | 120.8 ms | 402.9 ms |
+| `EFFICIENT_ATTENTION` (→ math on XPU) | 163.4 ms | **558.5 ms** |
+| `MATH` | 164.3 ms | 548.3 ms |
+
+**The math attention costs +36 % of the step's device time.**  The capture
+saves the host time (a few tens of ms here) and pays 36 % of the device time
+for it.  That is why the graph is *slower* than the eager path, and why
+"without the graph it runs faster".
+
+The flash kernel cannot be captured because it uses the work-group scratch
+memory, and the SYCL Graph extension does not support that feature:
+
+```
+RuntimeError: The sycl_ext_oneapi_work_group_scratch_memory feature is not
+yet available for use with the SYCL Graph extension.
+```
+
+That is a driver/runtime limitation, not a trainer's bug — and it is worth
+reporting upstream (the same way the `reduce_over_group` crash was).
 
 ## The four cells
 
@@ -17,42 +50,23 @@ the allocator's outliers do not speak.*
 And the int8/bf16 ratio in each mode: **+37 % eager** (the int8 path launches
 about twice the kernels, so the eager step is host-bound) and **+10 %
 replayed** — the same +10-12 % the kernels' own probe measures on this UNet.
-
-## What it says
-
-**1. The step is device-bound.** The graph's replay is one launch, so its
-1324 ms is pure device time; the eager step's wall is 1134 ms. The host is
-not the bottleneck here — this differs from the old tree, where the step had
-enough host work for the graph to be worth 2×.
-
-**2. The graph costs 17 % of the device time.** A replay (1324 ms) is *slower*
-than the same work executed eagerly (1134 ms). The mechanism to look at is the
-graph's private pool: the graphed run holds ~2 GB more than the eager one
-(9299 MB against 8705 MB in the bf16 run; the int8 run's peak is 1.9 GB
-higher with the graph too), and the pool's memory layout costs the device
-time. The int8 base *reduces* that penalty (its 2 GB of headroom is why its
-graph penalty is only 6 %), which is the same effect seen from the other
-side.
-
-**3. The int8 base is a memory trade, and it needs the graph to be cheap.**
-Eagerly it is +37 % (the extra launches); under the capture +10 %; and it
-frees 2.06 GB of live memory (5546 → 3489 MB). Without the graph the int8
-base is the slow option; with it, it is the small one.
-
-**4. `buckets.max_shapes` is the difference between a graph and no graph.**
-Without it every step's shape is new (4×84×64, 3×64×80, 4×64×80, 4×64×64,
-4×88×64, 3×100×64, 4×96×64, 3×116×64 …), the graph's three-sighting warm-up
-never completes, each new shape costs 4-5 s to compile and capture, and **the
-graph is captured and never replayed** (the step line says `graphs 0 (0
-replays)`).
+The int8 base is not the problem; it is a 2.06 GB trade.
 
 ## What to do
 
-* If the step is device-bound, the graph's pool is a net cost: **measure
-  without it** (the bf16 eager step is the fastest thing here, 1134 ms) unless
-  the host grows again.
-* If the int8 base is wanted for the 2 GB, it must be measured *with* the
-  graph (1550 → 1452 ms) or it costs 37 %.
-* The next lever is the device side, not the host: the GEMMs are 45 % of the
-  step's device time, the convolutions 22 % (334.8 M of the UNet's
-  parameters, and ConvRot cannot reach a conv), the attention 5 %.
+* **Do not force `EFFICIENT_ATTENTION` on XPU.**  It is not supported, it
+  falls back to math, and math is 36 % of the step.  Either let the capture
+  use whatever the eager path uses (and let the capture fail where it cannot),
+  or compare the replay against the eager step and drop the graph when the
+  replay is slower — the machinery for "a shape that cannot be captured trains
+  eagerly instead" is already there; it just does not know about this.
+* Until the flash kernel can be captured, **the graph is a pessimization on
+  this card**: the eager path (flash) is the fastest thing here, 1134 ms
+  against 1324 ms.
+* `buckets.max_shapes` is still the difference between a graph and no graph:
+  without it every step's shape is new, the warm-up never completes, each new
+  shape costs 4-5 s, and the graph is captured and **never replayed**.
+* The next lever is the device side: the GEMMs are 45 % of the step's device
+  time, the convolutions 22 % (334.8 M of the UNet's parameters, and ConvRot
+  cannot reach a conv), the attention 5 % (but 13× that with the math
+  fallback).

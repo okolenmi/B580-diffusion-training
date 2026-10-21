@@ -131,14 +131,14 @@ class AdaptedLinear(AdaptedLayer):
         merged = self.frozen_weight.to(self.lora_A.dtype) + self.scaling * (self.lora_B @ self.lora_A)
         return torch.linalg.norm(merged, dim=1)
 
-    def use_int8(self, backend) -> None:
+    def use_int8(self, backend, grad: str = "dense") -> None:
         """Keep the base weight as int8 from now on (LoRA only: DoRA needs the dense weight in every forward)."""
         problem = shape_problem(self.out_features, self.in_features)
         if self.kind != "lora" or problem is not None:
             raise ValueError(problem or "only LoRA layers can keep their base weight in int8")
         w8, scale = backend.prepare(self.base_weight)
         self.base_weight, self.base_scale = w8, scale
-        self._int8 = Int8Weight(backend)
+        self._int8 = Int8Weight(backend, grad)
 
     def _base(self, x: Tensor) -> Tensor:
         if self._int8 is not None:

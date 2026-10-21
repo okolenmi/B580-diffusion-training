@@ -87,6 +87,10 @@ class DiffusionTrainerNode(Node):
         self.validate_inputs(inputs)
         model: TrainableDenoiser = inputs["model"]
         accelerator = Accelerator(model.device)
+        if (model.info or {}).get("base_precision") == "int8" and not inputs.get("graph"):
+            self.context.report("warning", {"node": self.uid, "message":
+                                            "an int8 base launches about twice the kernels per layer, so without graph replay "
+                                            "(graph=true) a step is about 2.5 times slower; with it the cost is about 10%"})
         residency = getattr(self.context.runtime, "residency", None)
         if residency is not None:
             residency.claim("model", model, rank=10, pinned=True,

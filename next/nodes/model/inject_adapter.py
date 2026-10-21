@@ -78,6 +78,11 @@ class InjectAdapterNode(Node):
         "int8_backend": Port("int8_backend", str, required=False, default="auto", choices=INT8_BACKENDS, group="memory",
                              visible_when=("base_precision", "int8"),
                              doc="auto: the xpu-kernels package on an Intel GPU when it loads, otherwise a slow plain-torch version."),
+        "int8_grad": Port("int8_grad", str, required=False, default="dense", choices=("dense", "int8"), group="memory",
+                          visible_when=("base_precision", "int8"),
+                          doc="How the input gradient passes an int8 layer. dense: rebuild that layer's bf16 weight for its backward "
+                              "and drop it (exact gradient of the int8 network). int8: keep the weight int8 and quantize the gradient "
+                              "instead (no dense weight, less weight traffic, a little more gradient error)."),
         "int8_min_params": Port("int8_min_params", int, required=False, default=1 << 20, minimum=0, group="memory",
                                 visible_when=("base_precision", "int8"),
                                 doc="Layers with fewer weights stay native: they save little and the per-call rotation costs more."),
@@ -117,7 +122,8 @@ class InjectAdapterNode(Node):
         if inputs.get("base_precision") == "int8":
             with self.context.task("Converting the frozen weights to int8"):
                 report = family.quantize_frozen(denoiser.module(), backend=inputs.get("int8_backend") or "auto", device=device,
-                                                min_params=inputs.get("int8_min_params") or 0)
+                                                min_params=inputs.get("int8_min_params") or 0,
+                                                grad=inputs.get("int8_grad") or "dense")
             Accelerator(device).empty_cache()  # the dense temporaries of the conversion would otherwise stay cached between live blocks
             self.context.report("quantization", {"node": self.uid, "message": report.summary()})
             if report.backend == "torch" and torch.device(device).type == "xpu":
@@ -131,7 +137,7 @@ class InjectAdapterNode(Node):
         window = None
         if inputs.get("gate"):
             window = GateWindow(inputs.get("gate_low", 0.0), inputs.get("gate_high", 999.0), inputs.get("gate_width", 100.0))
-        plan = adapted.plan.to_json()
+        plan = {**adapted.plan.to_json(), "base_precision": inputs.get("base_precision") or "native"}
         return {"model": TrainableDenoiser(family, part, denoiser, adapted, device, rank, alpha, inputs.get("kind") or "lora",
                                            selection, window, info=plan,
                                            checkpointer=checkpointer, checkpoint_share=share, deterministic=deterministic)}

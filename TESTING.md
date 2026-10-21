@@ -162,4 +162,8 @@ The four stacked margins are replaced by `memory.margin_mb` (default 512): alloc
 Pass: more of the card used than before at the same limit, no out of memory, the 9000 case runs.
 
 ## 25. Int8 speed after the backward change
-`python scripts/bench_int8_layer.py --batch 3 --size 512` and paste the table; then test 23's speed line again. The backward no longer builds the dense weight (`new dx` against `old dx` in the table).
+`pip install -U xpu-kernels` (0.3 or newer: the fused weight dequantizer; older versions are refused). Then:
+- `python scripts/bench_int8_layer.py --batch 3 --size 512`: paste the table (both gradient paths, the dequantizer, the dense and int8 input gradient).
+- The short run of test 23 with `--set trainer.graph=true` (int8 only pays with graph replay), once with `--param adapter.int8_grad=dense` and once with `int8`: step time, peak, and the loss over 100 steps against native.
+- Same with `--param trainer.checkpoint_by=measured --param trainer.tune_checkpointing=true` and graph on: does the placement still choose sensibly? (It measures eagerly; the kernels' measurements say the recompute is a third of a captured step, so it matters more under graph replay.)
+Pass: int8 with graph within about 15% of native graph; tell me which gradient path you prefer.

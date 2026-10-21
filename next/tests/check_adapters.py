@@ -222,14 +222,21 @@ def int8_base_weights():
     base = Int8Linear(nn.Linear(512, 64), backend)
     base(x2).backward(dy)
     expected = dy @ backend.dequant(base.weight_int8, base.weight_scale).float()
-    check(rel(x2.grad, expected) < 1e-2, "the input gradient is dy times the dequantized weight (without building it)")
+    check(rel(x2.grad, expected) < 1e-2, "the input gradient is dy times the dequantized weight")
+    x3 = x.detach().clone().requires_grad_(True)
+    base.quantized.grad = "int8"
+    base(x3).backward(dy)
+    check(rel(x3.grad, expected) < 3e-2 and x3.grad is not None, "the int8 gradient path stays close to the exact one without a dense weight")
+    raises(ValueError, lambda: Int8Linear(nn.Linear(512, 64), backend, "nope"), "an unknown gradient path is refused", "nope")
     raises(NotImplementedError, wrapped.merge, "merging into int8 weights is refused", "int8")
 
     calls = []
     fake = SimpleNamespace(available=lambda: True, prepare_weight=lambda w: backend.prepare(w),
                            linear=lambda x, w8, s, bias: calls.append(1) or backend.linear(x, w8, s, bias),
-                           dequant_weight=lambda w8, s: backend.dequant(w8, s), rotate=backend.rotate)
+                           dequant_weight=lambda w8, s: backend.dequant(w8, s), linear_dx_int8=backend.dx_int8, __version__="0.3.0")
     kernels = XpuKernelsBackend(fake)
+    check(XpuKernelsBackend(SimpleNamespace(available=lambda: True, __version__="0.2.0")).problem() is not None,
+          "an xpu-kernels older than the fused weight dequantizer is refused")
     check(kernels.problem() is None and kernels.call_problem(torch.zeros(40, 512), w8) is not None,
           "the kernels backend runs only on an XPU tensor and says why otherwise")
     layer = Int8Linear(nn.Linear(512, 64), kernels)

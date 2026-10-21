@@ -14,10 +14,10 @@ from .ops import Int8Weight
 class Int8Linear(nn.Module):
     """A frozen ``nn.Linear`` that keeps its weight in int8."""
 
-    def __init__(self, original: nn.Linear, backend: Int8Backend):
+    def __init__(self, original: nn.Linear, backend: Int8Backend, grad: str = "dense"):
         super().__init__()
         self.in_features, self.out_features = original.in_features, original.out_features
-        self.quantized = Int8Weight(backend)
+        self.quantized = Int8Weight(backend, grad)
         w8, scale = backend.prepare(original.weight.detach())
         self.register_buffer("weight_int8", w8)
         self.register_buffer("weight_scale", scale)
@@ -47,8 +47,8 @@ class QuantizeReport:
 class Int8Quantizer:
     """Converts the eligible linear layers of a network to int8, one layer at a time (peak is one dense weight)."""
 
-    def __init__(self, backend: Int8Backend, min_params: int = 1 << 20):
-        self.backend, self.min_params = backend, min_params
+    def __init__(self, backend: Int8Backend, min_params: int = 1 << 20, grad: str = "dense"):
+        self.backend, self.min_params, self.grad = backend, min_params, grad
 
     def _why_not(self, layer: nn.Module) -> str | None:
         if isinstance(layer, AdaptedLinear):
@@ -79,11 +79,11 @@ class Int8Quantizer:
                     continue
                 if isinstance(child, AdaptedLinear):
                     before = child.base_weight.numel() * child.base_weight.element_size()
-                    child.use_int8(self.backend)
+                    child.use_int8(self.backend, self.grad)
                     after = child.base_weight.numel() + child.base_scale.numel() * 4
                 else:
                     before = child.weight.numel() * child.weight.element_size()
-                    replacement = Int8Linear(child, self.backend)
+                    replacement = Int8Linear(child, self.backend, self.grad)
                     setattr(parent, name, replacement)
                     after = replacement.weight_int8.numel() + replacement.weight_scale.numel() * 4
                 report.layers += 1
@@ -92,6 +92,6 @@ class Int8Quantizer:
         return report
 
 
-def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20) -> QuantizeReport:
+def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20, grad: str = "dense") -> QuantizeReport:
     """Convert the eligible linear layers of ``module`` to int8 frozen weights. ``device`` is where it computes (decides ``auto``)."""
-    return Int8Quantizer(make_backend(backend, device), min_params).run(module)
+    return Int8Quantizer(make_backend(backend, device), min_params, grad).run(module)

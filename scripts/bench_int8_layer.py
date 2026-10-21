@@ -4,7 +4,7 @@
     python scripts/bench_int8_layer.py --device cpu --size 64 --iters 2   # smoke test of the script itself
 
 For each layer shape: forward and forward+backward (input gradient only, as in LoRA training) with the native bf16 weight
-and with the int8 weight, plus the pieces of the int8 path (rotate, the old dense-weight backward) so the slow part is
+and with the int8 weight, with both gradient paths, plus the pieces of the backward (the weight dequantizer, the dense and the int8 input gradient) so the slow part is
 named. Times are synchronised wall times per call in milliseconds; the layer counts are approximate.
 """
 
@@ -58,7 +58,8 @@ def main() -> None:
     device = torch.device(args.device)
     backend = make_backend(args.backend, device)
     print(f"backend {backend.name}, batch {args.batch}, {args.size}px\n")
-    head = f"{'layer':<34}{'rows':>7}{'fwd nat':>9}{'fwd int8':>10}{'f+b nat':>9}{'f+b int8':>10}{'rotate':>8}{'old dx':>8}{'new dx':>8}{'x count':>8}"
+    head = (f"{'layer':<34}{'rows':>7}{'fwd nat':>9}{'fwd int8':>10}{'f+b nat':>9}{'f+b dense':>10}{'f+b int8g':>10}"
+            f"{'dequant':>9}{'dx dense':>9}{'dx int8':>8}{'x count':>8}")
     print(head)
     totals = {"nat": 0.0, "int8": 0.0}
     for name, divide, k, n, count in LAYERS:
@@ -84,17 +85,22 @@ def main() -> None:
             torch.nn.functional.linear(xg, weight).backward(dy)
 
         def both_int8():
-            Int8LinearFn.apply(xg, w8, scale, None, backend).backward(dy)
+            Int8LinearFn.apply(xg, w8, scale, None, backend, "dense").backward(dy)
 
-        rotate = timed(lambda: backend.rotate(x), device, args.iters)
-        old = timed(lambda: dy @ backend.dequant(w8, scale), device, args.iters)
-        new = timed(lambda: backend.dx(dy, w8, scale), device, args.iters)
-        row = [timed(f, device, args.iters) for f in (forward_native, forward_int8, both_native, both_int8)]
+        def both_int8_grad():
+            Int8LinearFn.apply(xg, w8, scale, None, backend, "int8").backward(dy)
+
+        dequant = timed(lambda: backend.dequant(w8, scale), device, args.iters)
+        dx_dense = timed(lambda: dy @ backend.dequant(w8, scale), device, args.iters)
+        dx_int8 = timed(lambda: backend.dx_int8(dy, w8, scale), device, args.iters)
+        row = [timed(f, device, args.iters) for f in (forward_native, forward_int8, both_native, both_int8, both_int8_grad)]
         totals["nat"] += row[2] * count
         totals["int8"] += row[3] * count
-        print(f"{name:<34}{rows:>7}" + "".join(f"{v:>9.2f}" if i != 1 and i != 3 else f"{v:>10.2f}" for i, v in enumerate(row))
-              + f"{rotate:>8.2f}{old:>8.2f}{new:>8.2f}{count:>8}")
-    print(f"\nforward+backward over these layers, counted by how many of each the UNet has: native {totals['nat']:.0f} ms, int8 {totals['int8']:.0f} ms"
+        totals["int8 grad"] = totals.get("int8 grad", 0.0) + row[4] * count
+        print(f"{name:<34}{rows:>7}" + "".join(f"{v:>{10 if i in (1, 3, 4) else 9}.2f}" for i, v in enumerate(row))
+              + f"{dequant:>9.2f}{dx_dense:>9.2f}{dx_int8:>8.2f}{count:>8}")
+    print(f"\nforward+backward over these layers, counted by how many of each the UNet has: native {totals['nat']:.0f} ms, int8 with the dense gradient "
+          f"{totals['int8']:.0f} ms, with the int8 gradient {totals['int8 grad']:.0f} ms"
           " (a checkpointed block runs its forward twice, so the real gap is a little larger)")
 
 

@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 GROUP = 256  # input features must be a multiple of this; the rotation works on blocks of it
+MIN_VERSION = (0, 3)  # xpu-kernels with the fused weight dequantizer
 ROW_MULTIPLE = 16  # output features must be a multiple of this (the dequant epilogue reads 16 columns at a time)
 
 
@@ -51,17 +52,11 @@ class Int8Backend:
         """The bf16 ``[N, K]`` weight in its original (unrotated) orientation."""
         raise NotImplementedError
 
-    def rotate(self, x: Tensor) -> Tensor:
-        """The rotation alone, bf16 in and out; it is its own inverse."""
+    def dx_int8(self, dy: Tensor, w8: Tensor, scale: Tensor) -> Tensor:
+        """``dy @ W`` with the weight left in int8 and ``dy`` quantized per row instead. ``W = rotate(w8 * scale)`` and the scale
+        sits on the contraction index, so ``dy @ W = rotate((dy * scale) @ w8)``. No dense weight exists, at the price of one
+        quantizer's worth of error in the gradient."""
         raise NotImplementedError
-
-    def dx(self, dy: Tensor, w8: Tensor, scale: Tensor) -> Tensor:
-        """``dy @ W`` without building the dense weight. ``W = rotate(w8 * scale)`` and the scale sits on the contraction
-        index, so ``dy @ W = rotate((dy * scale) @ w8)``: the scaling and the rotation move from the ``[N, K]`` weight to
-        the activations, which are much smaller whenever a step has fewer rows than the layer has weights. Integers up to
-        127 are exact in bf16, so the stored weight enters the matmul as it is."""
-        scaled = (dy.float() * scale).to(torch.bfloat16)
-        return self.rotate(scaled @ w8.to(torch.bfloat16))
 
 
 class TorchBackend(Int8Backend):
@@ -79,9 +74,6 @@ class TorchBackend(Int8Backend):
                 h = torch.cat([torch.cat([h, h], 1), torch.cat([h, -h], 1)], 0)
             self._hadamard[device] = (h / math.sqrt(GROUP)).to(device=device, dtype=torch.float32)
         return self._hadamard[device]
-
-    def rotate(self, x: Tensor) -> Tensor:
-        return self._rotated(x).to(torch.bfloat16)
 
     def _rotated(self, x: Tensor) -> Tensor:
         blocks = x.float().reshape(*x.shape[:-1], x.shape[-1] // GROUP, GROUP)
@@ -105,8 +97,18 @@ class TorchBackend(Int8Backend):
             out = out + bias.float()
         return out.to(torch.bfloat16).reshape(*x.shape[:-1], w8.shape[0])
 
+    def dx_int8(self, dy: Tensor, w8: Tensor, scale: Tensor) -> Tensor:
+        scaled = (dy.to(torch.bfloat16) * scale.to(torch.bfloat16)).reshape(-1, dy.shape[-1]).float()
+        row = (scaled.abs().amax(dim=1, keepdim=True) / 127.0).clamp_min(1e-30)
+        q = torch.round(scaled / row).clamp_(-127, 127)
+        if dy.device.type == "xpu":
+            acc = torch._int_mm(q.to(torch.int8), w8).float()
+        else:
+            acc = (q.double() @ w8.double()).float()
+        return self._rotated((acc * row).to(torch.bfloat16)).to(torch.bfloat16).reshape(*dy.shape[:-1], w8.shape[1])
+
     def dequant(self, w8: Tensor, scale: Tensor) -> Tensor:
-        return self.rotate((w8.float() * scale[:, None]).to(torch.bfloat16))
+        return self._rotated((w8.float() * scale[:, None]).to(torch.bfloat16)).to(torch.bfloat16)
 
 
 class XpuKernelsBackend(Int8Backend):
@@ -127,6 +129,9 @@ class XpuKernelsBackend(Int8Backend):
             kernels = self._kernels()
         except ImportError:
             return "the xpu-kernels package is not installed (pip install xpu-kernels)"
+        version = tuple(int(part) for part in str(getattr(kernels, "__version__", "0")).split(".")[:2] if part.isdigit())
+        if version < MIN_VERSION:
+            return f"xpu-kernels {kernels.__version__} is too old: the backward needs the fused weight dequantizer of {'.'.join(map(str, MIN_VERSION))}"
         if not kernels.available():
             return "xpu-kernels is installed but its library did not load (it needs the oneAPI 2025.3 runtime that torch ships)"
         return None
@@ -148,8 +153,8 @@ class XpuKernelsBackend(Int8Backend):
     def dequant(self, w8: Tensor, scale: Tensor) -> Tensor:
         return self._kernels().dequant_weight(w8, scale)
 
-    def rotate(self, x: Tensor) -> Tensor:
-        return self._kernels().rotate(x.to(torch.bfloat16))
+    def dx_int8(self, dy: Tensor, w8: Tensor, scale: Tensor) -> Tensor:
+        return self._kernels().linear_dx_int8(dy.to(torch.bfloat16), w8, scale)
 
 
 BACKENDS = ("auto", "xpu_kernels", "torch")

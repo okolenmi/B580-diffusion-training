@@ -98,6 +98,41 @@ the attention 5 %.** Two things follow:
   2.57 B parameters -- the largest remaining piece of the model that the
   library cannot quantize.
 
+## Where the host time goes
+
+The step is launch-bound, so the *host* is the thing to optimise. One eager
+step at 512×512: a **368 ms wall** and **6 609 kernel launches**; the
+profiler says the host spends its time like this (the absolute numbers are
+inflated by the profiler's own bookkeeping -- the wall is 368 ms against
+1019 ms of profiled host time -- so the *shares* are the useful part):
+
+| | calls | host time | share |
+|---|---|---|---|
+| the GEMMs' dispatch (`mm`, `addmm`) | 2 199 | 259 ms | 25 % |
+| **the kernel launches** (`urEnqueueKernelLaunch`) | **6 609** | **220 ms** | 22 % |
+| the checkpointing's recompute (`_Recompute`, `_RecomputeBackward`) | 87 | 116 ms | 11 % |
+| the norms (layer norm, group norm, and their backwards) | 756 | 77 ms | 7.5 % |
+| the attention (forward and backward) | 420 | 41 ms | 4 % |
+| the convolutions | 147 | 35 ms | 3.4 % |
+| the view/empty/transpose plumbing | 25 245 | 40 ms | 4 % |
+
+Two things to read out of it:
+
+* **the launch count is what the capture removes** (6 609 launches, 33 µs each
+  in this profile). The captured step is 190 ms against 368 ms eager -- 1.9x,
+  and the host cost is gone entirely;
+* **the op count is not the time**: 25 245 of the 44 277 aten calls are
+  `view`/`empty`/`transpose`/`reshape` plumbing, and they are 4 % of the host
+  time. The real work is the GEMMs, the launches, the norms and the
+  recompute.
+
+And this is where the library's INT8 path lands: it replaces one `mm`/`addmm`
+with four calls (the rotate, the quantize, `_int_mm`, the epilogue), so it
+**doubles the host cost** (2.6x measured) and would make an eager step
+hopeless. Under the capture that cost is gone and only the device cost
+remains -- 10-12 % of the step, for 42 % of the weight memory. The two levers
+are not independent: the INT8 base is only worth having with `--graph` on.
+
 ## Two things about profiling on this card
 
 **The XPU profiler works.** It registers PTI callbacks with the Level Zero

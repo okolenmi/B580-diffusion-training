@@ -5,6 +5,11 @@ issuing cost (measured about 2x for forward plus backward). What is captured: th
 per-sample loss, the weighting and the backward, all reading static buffers that each replay overwrites with the
 step's inputs. What stays eager: conditioning, noise, the optimizer step, the time probe.
 
+Replay is not always the faster path: a captured step cannot use every kernel the eager one does (the flash attention
+cannot be captured, so the capture runs the math attention). With a clock, each shape's eager time is taken from its
+warm-up steps and its first replays are timed against it; a graph that does not win is dropped and the shape trains
+eagerly.
+
 A shape is captured only after it has been seen eagerly a few times (kernels compiled, memory settled), and only at
 the first micro-step of a window, because capturing executes the computation once and its gradients are discarded
 again. Graphs share one memory pool, so what they cost is the largest of them, not the sum.
@@ -18,6 +23,7 @@ random numbers, and the adapter must not be gated per step (the gate is a fresh 
 from __future__ import annotations
 
 import contextlib
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, ContextManager
 
@@ -41,6 +47,9 @@ class _Slot:
     loss: Tensor | None = None
     per_sample: Tensor | None = None
     touched: frozenset = frozenset()
+    eager_s: float = math.inf  # fastest timed warm-up step
+    replay_s: float = math.inf
+    replays_timed: int = 0
 
 
 class GraphedCompute(StepPhase):
@@ -52,16 +61,21 @@ class GraphedCompute(StepPhase):
 
     def __init__(self, *, eager: list[StepPhase], denoiser: Any, weighting: LossWeighting, balance: Any, optimizer: Any,
                  accumulation: int, graph_api: Any | None, synchronize: Callable[[], None], max_graphs: int = 8,
-                 warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print):
+                 warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print,
+                 clock: Callable[[], float] | None = None):
         self._eager, self._denoiser, self._weighting, self._balance = eager, denoiser, weighting, balance
         self._optimizer, self._scale, self._api, self._sync = optimizer, 1.0 / accumulation, graph_api, synchronize
         self._max, self._warmup, self._wanted = max_graphs, warmup, wanted  # wanted: (samples, h, w) allowed a graph; None = first come
         self._attentions = attentions or [contextlib.nullcontext]  # tried in order; the first that captures stays
-        self._say = say
+        self._say, self._clock = say, clock  # a clock turns on the check that a graph is faster than eager
         self._slots: dict[tuple, _Slot] = {}
         self._off: set[tuple] = set()
         self._pool = None
-        self.replays = self.captures = 0
+        self.replays = self.captures = self.dropped = 0
+
+    MIN_GAIN = 0.05  # a replay must beat the eager step by this share to keep its graph
+    TIMED_REPLAYS = 3
+    FIRST_TIMED_SIGHTING = 2  # the first sighting pays for compiling kernels
 
     @property
     def label(self) -> str:
@@ -96,10 +110,19 @@ class GraphedCompute(StepPhase):
             slot = self._slots[key] = _Slot()
         if slot.graph is None and not (state.micro == 0 and slot.sightings >= self._warmup):
             slot.sightings += 1
-            return self._run_eager(state)
+            return self._run_timed(slot, state) if slot.sightings >= self.FIRST_TIMED_SIGHTING else self._run_eager(state)
         if slot.graph is None and not self._capture(key, slot, state):
             return self._run_eager(state)
-        self._replay(slot, state)
+        self._replay(key, slot, state)
+
+    def _run_timed(self, slot: _Slot, state: StepState) -> None:
+        if self._clock is None:
+            return self._run_eager(state)
+        self._sync()
+        start = self._clock()
+        self._run_eager(state)
+        self._sync()
+        slot.eager_s = min(slot.eager_s, self._clock() - start)
 
     def _run_eager(self, state: StepState) -> None:
         for phase in self._eager:
@@ -170,9 +193,31 @@ class GraphedCompute(StepPhase):
         self._say(f"[graph] captured shape {key[0]} ({self.captures} graph(s))")
         return True
 
-    def _replay(self, slot: _Slot, state: StepState) -> None:
+    def _replay(self, key: tuple, slot: _Slot, state: StepState) -> None:
+        timed = self._clock is not None and slot.replays_timed < self.TIMED_REPLAYS and slot.eager_s < math.inf
+        if timed:
+            self._sync()
+            start = self._clock()
         self._fill(slot, state)
         slot.graph.replay()
         self._optimizer.touch(slot.touched)
         state.loss, state.per_sample = slot.loss.clone(), slot.per_sample.clone()
         self.replays += 1
+        if timed:
+            self._sync()
+            slot.replay_s = min(slot.replay_s, self._clock() - start)
+            slot.replays_timed += 1
+            if slot.replays_timed == self.TIMED_REPLAYS:
+                self._judge(key, slot)
+
+    def _judge(self, key: tuple, slot: _Slot) -> None:
+        kept = slot.replay_s <= slot.eager_s * (1 - self.MIN_GAIN)
+        self._say(f"[graph] shape {key[0]}: replay {slot.replay_s * 1000:.0f} ms against {slot.eager_s * 1000:.0f} ms eager"
+                  f"{'' if kept else '; the graph does not pay and is dropped'}")
+        if kept:
+            return
+        self._slots.pop(key, None)
+        self._off.add(key)
+        self.dropped += 1
+        if not self._slots:
+            self._pool = None  # nothing left to share it; its memory goes back to the allocator

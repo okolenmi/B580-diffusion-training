@@ -20,7 +20,7 @@ Everything goes through `python -m next.run sdxl-lora ...`.
 
 | Goal | Run |
 |---|---|
-| Fastest steps | `--graph` (replays the step as a device graph: ~2x on the shapes that get one; raise `--set trainer.graph_shapes=12` while memory allows), `--set trainer.tune_checkpointing=true --set trainer.checkpoint_by=measured` (recomputes only what must be), `--persist-conditioning` |
+| Fastest steps | `--graph` (replays the step as a device graph; each shape is timed against eager and dropped when it does not win, which on this card is the case for bf16; raise `--set trainer.graph_shapes=12` while memory allows), `--set trainer.tune_checkpointing=true --set trainer.checkpoint_by=measured` (recomputes only what must be), `--persist-conditioning` |
 | Least VRAM | checkpointing on (default), `--set optimizer.state_precision=int8_blockwise` (small), lower `--rank`, `--batch 1 --accumulation N`; expandable allocator segments are on by default (measured 8.3 -> 7.1 GB) |
 | Bigger batches on 12 GB | `--batch 8 --batch-area 1.5` and an explicit `--set memory.vram_max_mb=11000`: batches that would not fit are split into equal chunks by the planner; packing (`--pack`, default 0.3) turns short batches into full ones |
 | A run you leave alone | `--epochs 3 --save-every-epoch 1` (no step count needed), `--persist-conditioning`, `--set memory.vram_max_mb=...` so another program does not push it out of memory |

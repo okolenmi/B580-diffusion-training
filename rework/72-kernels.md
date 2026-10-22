@@ -33,7 +33,16 @@ rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's
 | **graph-replayed step** | **190 ms** | **210 ms (+10-12%)** |
 | the project's own run, batch 3 at 512 | about 1010 ms | about 1500 ms eager, 1450 ms with graph (before the fused dequantizer and the new input-gradient path; retest) |
 
-- The INT8 base is worth having **only with graph replay** (`trainer.graph=true`), and then it costs about a tenth of the step for 2 GB.
+- In the kernels' probe the INT8 base costs about a tenth of a graph-replayed step for 2 GB. In this tree's own command line (batch 4, 512, rank 16,
+  `buckets.max_shapes=4`; minimum over the steps of one shape) the four cells are: bf16 eager 1134 ms, bf16 replayed 1324 ms; int8 eager 1550 ms,
+  int8 replayed 1452 ms; live memory 5546 against 3489 MB. So int8 is +37% eager and +10% replayed, and replay helps int8 only a little.
+- **Why replay was slower for bf16:** the capture ran the math attention (the memory-efficient backend does not exist on XPU and falls back to it)
+  while the eager step runs the flash attention; on this UNet (512, batch 1) forward+backward is 403 ms with flash and 549-559 ms with math.
+  Flash cannot be captured (`sycl_ext_oneapi_work_group_scratch_memory` is not available with the SYCL Graph extension), a runtime limit worth
+  reporting upstream. The trainer now captures with the math attention explicitly and times each shape's replay against its eager warm-up steps,
+  dropping graphs that are not at least 5% faster. Without `buckets.max_shapes` every step's shape is new, the warm-up never completes and each
+  shape costs 4-5 s: the graph is captured and never replayed.
+- The next lever is on the device: GEMMs 45% of device time, convolutions 22%, attention 5% (13x that with the math fallback).
 - It is a different function from the bf16 base (0.9-1.2% from the unquantized weight): the loss curve has to be taken again with it, and the
   trainer's probe compares the base against itself within the same numerics.
 - Device time of one bf16 step at 512 (0.263 s over 12 171 kernels): GEMMs 45%, convolutions 22% (not reachable by ConvRot: a conv's contraction is

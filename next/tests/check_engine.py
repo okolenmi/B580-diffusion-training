@@ -75,7 +75,7 @@ class FakeKit:
         return 5 * 48 * 4 + 40 * 4
 
 
-def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3, graph_api=None, **extra):
+def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3, graph_api=None, graph_clock=None, **extra):
     folder = tmp / "images"
     if not folder.exists():
         folder.mkdir(parents=True)
@@ -106,7 +106,7 @@ def rig(tmp: Path, *, fused: bool = False, accumulation: int = 1, steps: int = 3
     if graph_api is not None:
         optimizer.hold_grads()
         graph = lambda eager: GraphedCompute(eager=eager, denoiser=denoiser, weighting=Uniform(), balance=None, optimizer=optimizer,  # noqa: E731
-                                             accumulation=accumulation, graph_api=graph_api, synchronize=lambda: None, say=lambda text: None)
+                                             accumulation=accumulation, graph_api=graph_api, synchronize=lambda: None, say=lambda text: None, clock=graph_clock)
     trainer = Trainer(batches=batcher, denoiser=denoiser, conditioner=Conditioner(ConditioningCache(FakeKit()), dtype=torch.float32),
                       optimizer=optimizer, schedule=Constant(1e-3), weighting=Uniform(), steps=steps, accumulation=accumulation,
                       gate=adapted.gate, emit=events.append, graph=graph, **extra)
@@ -119,8 +119,8 @@ class FakeGraphs:
     """Stands in for torch.xpu's graph API: a capture runs the computation once, a replay runs it again on the same
     static buffers and writes the outputs the capture handed out."""
 
-    def __init__(self, fail: bool = False):
-        self.fail, self.owner = fail, None
+    def __init__(self, fail: bool = False, clock=None, replay_cost: float = 0.0):
+        self.fail, self.owner, self.clock, self.replay_cost = fail, None, clock, replay_cost
 
     def graph_pool_handle(self):
         return "pool"
@@ -140,10 +140,44 @@ class _FakeGraph:
         self.api = api
 
     def replay(self):
+        if self.api.clock is not None:
+            self.api.clock.t += self.api.replay_cost
         slot = next(s for s in self.api.owner._slots.values() if s.graph is self)
         loss, per_sample = self.api.owner._compute(slot.statics)
         slot.loss.copy_(loss)
         slot.per_sample.copy_(per_sample)
+
+
+def graph_must_pay():
+    from ..engine.step.phases import StepPhase
+
+    class Clock:
+        t = 0.0
+
+        def __call__(self):
+            return self.t
+
+    class Spend(StepPhase):
+        label = "spend"
+
+        def __init__(self, clock, cost):
+            self.clock, self.cost = clock, cost
+
+        def run(self, state):
+            self.clock.t += self.cost
+
+    def run(replay_cost):
+        clock = Clock()
+        with tempfile.TemporaryDirectory() as raw:
+            trainer, *_ = rig(Path(raw), steps=24, graph_api=FakeGraphs(clock=clock, replay_cost=replay_cost), graph_clock=clock)
+            trainer.graphed._eager.append(Spend(clock, 10.0))
+            trainer.run()
+            return trainer.graphed
+
+    slow, fast = run(12.0), run(5.0)
+    check(slow.captures >= 1 and slow.dropped >= 1 and slow.dropped == slow.captures,
+          f"a graph whose replay is not faster than the eager step is dropped ({slow.dropped} of {slow.captures})")
+    check(fast.captures >= 1 and fast.dropped == 0 and fast.replays > slow.replays, "a graph that wins keeps replaying")
 
 
 def blended_conditioning():
@@ -419,4 +453,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, gradient_alignment, time_probe, blended_conditioning, epochs, graphed)
+    run(main, time_balance, gradient_alignment, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)

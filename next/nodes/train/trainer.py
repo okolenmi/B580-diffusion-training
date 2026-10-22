@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-import warnings
+import time
 from typing import Any
 
 import torch
@@ -89,8 +88,8 @@ class DiffusionTrainerNode(Node):
         accelerator = Accelerator(model.device)
         if (model.info or {}).get("base_precision") == "int8" and not inputs.get("graph"):
             self.context.report("warning", {"node": self.uid, "message":
-                                            "an int8 base launches about twice the kernels per layer, so without graph replay "
-                                            "(graph=true) a step is about 2.5 times slower; with it the cost is about 10%"})
+                                            "an int8 base launches about twice the kernels per layer: measured about 37% slower than native "
+                                            "per eager step, about 10% with graph replay (it saves about 2 GB)"})
         residency = getattr(self.context.runtime, "residency", None)
         if residency is not None:
             residency.claim("model", model, rank=10, pinned=True,
@@ -157,23 +156,16 @@ class DiffusionTrainerNode(Node):
             self.context.report("graph", {"node": self.uid, "active": False, "why": "this device cannot capture graphs"})
         from torch.nn.attention import SDPBackend, sdpa_kernel
 
-        def attention(backend):
-            """Entered around a capture. A build without the memory-efficient kernel says so once and uses the math one."""
-            stack = contextlib.ExitStack()
-            stack.enter_context(warnings.catch_warnings())
-            warnings.filterwarnings("ignore", message=".*Memory Efficient Attention backend is not supported.*")
-            stack.enter_context(sdpa_kernel(backend))
-            return stack
-
-        # The flash kernel cannot be captured; the memory-efficient one keeps the attention matrix out of the graph's memory
-        attentions = [lambda b=b: attention(b) for b in (SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH)]
+        # The default kernel (flash) uses work-group scratch memory, which graph capture does not support; the memory-efficient
+        # backend is not implemented on XPU and would only warn and fall back to this one.
+        attentions = [lambda: sdpa_kernel(SDPBackend.MATH)]
         limit = inputs.get("graph_shapes") or 8
         counts = inputs["batches"].shape_counts()
         wanted = frozenset(shape for shape, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:limit])  # the shapes most steps use
         return lambda eager: GraphedCompute(wanted=wanted, eager=eager, denoiser=model.denoiser, weighting=inputs["weighting"], balance=inputs.get("balance"),
                                             optimizer=optimizer, accumulation=inputs.get("accumulation", 1),
                                             graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
-                                            max_graphs=limit, attentions=attentions,
+                                            max_graphs=limit, attentions=attentions, clock=time.perf_counter,
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
 
 

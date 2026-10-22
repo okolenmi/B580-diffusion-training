@@ -122,6 +122,18 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 advanced=True, doc="Denoiser blocks kept in host memory and brought in per block."),
     SettingSpec("runtime.profile", "Profile steps", "bool", False, group="Runtime", advanced=True,
                 doc="Time each phase of the step (the trainer's timing port starts from it)."),
+    SettingSpec("perf.dir", "Performance report folder", "str", "", group="Performance", advanced=True,
+                doc="Profile a few steps of the trainer and write report.md and report.json here (empty = off). The report rates every "
+                    "kernel category and module against what the card measures it can do; see the performance manual page."),
+    SettingSpec("perf.warmup_steps", "Performance warm-up steps", "int", 8, minimum=0, group="Performance", advanced=True,
+                doc="Steps run before the profiled window: kernels get built, shapes seen and graphs captured. Replays start from the "
+                    "second sighting of a shape, so keep this above the number of distinct shapes."),
+    SettingSpec("perf.steps", "Performance window", "int", 3, minimum=1, group="Performance", advanced=True,
+                doc="Steps profiled, each with the device idle at both ends. Profiling slows these steps."),
+    SettingSpec("perf.modules", "Time every module", "bool", True, group="Performance", advanced=True,
+                doc="Per-module forward, recompute and backward device time. Needs eager steps (a replayed graph runs no Python)."),
+    SettingSpec("perf.trace", "Write the kernel trace", "bool", False, group="Performance", advanced=True,
+                doc="Also write trace.json (open in a Chrome-trace viewer); large."),
     SettingSpec("conditioning.cache_mb", "Conditioning cache", "float", AUTO, allow_auto=True, unit="MB",
                 minimum=0, group="Conditioning", advanced=True,
                 doc="Size of the encoded-prompt cache; 'auto' derives it from the budget."),

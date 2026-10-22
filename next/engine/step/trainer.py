@@ -51,12 +51,13 @@ class Trainer:
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
-                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True):
+                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._balance, self._plan_chunks = balance, plan_chunks
+        self._perf = perf  # duck-typed: step(n) context manager, observe(metrics), close(); the engine does not know the profiler
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
@@ -81,8 +82,13 @@ class Trainer:
         step = start
         for step in range(start, self.steps):
             if self.should_stop is not None and self.should_stop():
+                if self._perf is not None:
+                    self._perf.close()
                 return RunResult(step - start, self.steps, last, stopped=True)
-            last = self._step(step)
+            with self._perf.step(step) if self._perf is not None else contextlib.nullcontext():
+                last = self._step(step)
+        if self._perf is not None:
+            self._perf.close()
         return RunResult(max(self.steps - start, 0), self.steps, last)
 
     def _probe(self) -> None:
@@ -200,6 +206,8 @@ class Trainer:
             shares = self._balance.third_probabilities()
             if shares is not None:
                 metrics.update(zip(("draw_t_low", "draw_t_mid", "draw_t_high"), shares))
+        if self._perf is not None:
+            self._perf.observe(metrics)
         if self.emit is not None:
             self.emit(StepFinished(step + 1, self.steps, metrics))
         return loss

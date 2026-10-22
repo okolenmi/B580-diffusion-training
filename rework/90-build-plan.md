@@ -148,6 +148,7 @@ Each phase ends with something checkable. "Check" lists what runs **here**.
 | 6 | Server and editor (parallel track from phase 1) | `backend/` edited in place to use `next/graph` (catalog, validate, resolve, run, library; decision 0.1-1), settings dialog, `graph2` editor: incremental render, groups, collapse with pins, node states, multi ports, dynamic ports, event wires | `node --test` for pure editor logic; backend tests for the adapter; visual smoke script |
 | 7 | Views and starters | `views` in the graph, monitor/page boards, starters (SDXL LoRA, Anima LoRA), per-run metrics | starters validate and run headless |
 | 8 | Anima family | kits, fingerprints, flow-matching objective, block swap, key scheme | tiny random Anima-shaped weights on CPU; real header and run are the owner's |
+| P | Performance lab (parallel track, `next/perf/`; plan in `74-perf-lab.md`) | per-run reports that rate every piece of a step against what the card can do, a scenario matrix, micro-benchmarks, a one-command hardware bundle | CPU runs of a tiny model; unit tests of categorising, rating, rules, comparison |
 | 9 | Acceptance and swap | the big test (section 6); old trees to `archive/`; `next/*` promoted; docs rewritten | the big test; owner's B580 run |
 
 Dependencies: 1 -> 2, 3, 4, 5, 6. 2 -> 3. 3 -> 4 (VAE) and 5. 4 -> 5. 6 starts after

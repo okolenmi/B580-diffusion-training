@@ -29,7 +29,8 @@ LAYERS: dict[str, tuple[set[str], bool]] = {
     "families.<name>": ({"families.api", "families.general", "families.<own>", "graph"}, False),
     "data": ({"data", "graph", "families.api", "families.registry"}, False),
     "engine": ({"engine", "graph", "families.api", "families.registry", "data"}, False),
-    "nodes": ({"nodes", "graph", "families.api", "families.registry", "data", "engine"}, False),
+    "perf": ({"perf", "graph", "families.api", "families.registry", "families.general", "data", "engine"}, False),
+    "nodes": ({"nodes", "perf", "graph", "families.api", "families.registry", "data", "engine"}, False),
     "tests": (set(), False),  # may import anything inside next/
 }
 
@@ -49,7 +50,7 @@ def layer_of(path: Path) -> tuple[str, str | None] | None:
         if second == "registry":
             return "families.registry", None
         return "families.<name>", second
-    if top in {"graph", "data", "engine", "nodes", "tests"}:
+    if top in {"graph", "data", "engine", "nodes", "perf", "tests"}:
         return top, None
     return None
 
@@ -64,7 +65,7 @@ def target_layer(parts: tuple[str, ...]) -> tuple[str, str | None] | None:
         if parts[1] in {"api", "general", "registry"}:
             return f"families.{parts[1]}", None
         return "families.<name>", parts[1]
-    if parts[0] in {"graph", "data", "engine", "nodes", "tests"}:
+    if parts[0] in {"graph", "data", "engine", "nodes", "perf", "tests"}:
         return parts[0], None
     return None
 

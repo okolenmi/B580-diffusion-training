@@ -29,7 +29,7 @@ from ...graph.events import CheckpointDue, StepFinished
 class DiffusionTrainerNode(Node):
     DISPLAY_NAME = "Diffusion Trainer"
     CATEGORY = "Training"
-    READS_SETTINGS = ("device.default", "runtime.profile")
+    READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace")
     GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     INPUTS = {
         "batches": Port("batches", Batcher),
@@ -115,6 +115,7 @@ class DiffusionTrainerNode(Node):
                               items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed,
                               alignment=GradientAlignment(model.adapted.trainable_parameters, model.denoiser.module) if inputs.get("probe_alignment") else None)
         graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None
+        perf = self._perf_session(model, accelerator)
         total = self._total_steps(inputs)
         inputs["schedule"].fit(total)
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
@@ -123,7 +124,7 @@ class DiffusionTrainerNode(Node):
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
                           synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, placement=placement, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph,
-                          plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
+                          plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True), perf=perf,
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
@@ -132,6 +133,17 @@ class DiffusionTrainerNode(Node):
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
 
+
+    def _perf_session(self, model: TrainableDenoiser, accelerator: Accelerator):
+        settings = self.context.settings
+        folder = settings.get("perf.dir")
+        if not folder:
+            return None
+        from ...perf.session import PerfSession  # only a profiling run pays for the import
+        return PerfSession(model.denoiser.module(), str(model.device), folder, warmup=int(settings.get("perf.warmup_steps", 8)),
+                           steps=int(settings.get("perf.steps", 3)), modules=bool(settings.get("perf.modules", True)),
+                           trace=bool(settings.get("perf.trace", False)), say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
+                           meta={"base_precision": (model.info or {}).get("base_precision", "native")})
 
     @staticmethod
     def _total_steps(inputs: dict) -> int:

@@ -170,3 +170,7 @@ Pass: int8 with graph within about 15% of native graph; tell me which gradient p
 
 ## 26. Graph replay is timed
 `--set trainer.graph=true --param buckets.max_shapes=4`, bf16 and int8: a `[graph] shape ...: replay X ms against Y ms eager` line per shape. Expected from your measurements: bf16 dropped ("does not pay"), int8 kept with a small gain. Pass: step times with `graph=true` are never slower than without it by more than the three timed replays.
+
+## 27. Performance report (P1 of the performance lab)
+Add `--perf perf-b580` to a short run (bf16 first, then `--param adapter.base_precision=int8`; then each again with `--set trainer.graph=true`). After the warm-up (8 steps) three steps run under the profiler and `perf-b580/report.md` and `report.json` appear (`ceilings.json` is the measured matmul, int8, copy and launch ceilings, cached per torch build).
+Send me `report.md` (and `report.json` if it is small). Look at: the step budget (device busy against wall), the findings list, the slowest piece groups with their efficiency against the measured ceiling, and the reconciliation line (module time against device time). Known risks: module backward hooks could warn or fail on some module (rerun with `--set perf.modules=false` and tell me which); a profiler that records no XPU kernels (the report then says the times are host times).

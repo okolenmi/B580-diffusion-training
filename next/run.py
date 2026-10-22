@@ -58,7 +58,7 @@ class Console:
                   f"worst {frame['padding_worst']:.0%}; {frame['short_batches']} short batches, {frame['packed']} samples packed up, {frame['dropped']} dropped", flush=True)
         elif stream == "captions":
             print(f"captions: {frame['summary']}", *(f"  failed: {e}" for e in frame["errors"]), sep="\n", flush=True)
-        elif stream == "quantization":
+        elif stream in ("quantization", "perf"):
             print(frame["message"], flush=True)
         elif stream == "graph":
             print(f"{frame.get('message') or 'graph capture is off: ' + str(frame.get('why'))}", flush=True)
@@ -200,6 +200,8 @@ class NodeTrace:
 
 
 def _run(doc, args) -> int:
+    if getattr(args, "perf", None):
+        doc = replace(doc, settings={**doc.settings, "perf.dir": args.perf})
     device = resolve_device(doc.settings.get("device.default", "auto"))
     accelerator = Accelerator(device)
     console = Console(args.verbose)
@@ -243,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--param", action="append", metavar="NODE.PORT=VALUE",
                        help="a node's parameter by the node's name in the starter (for example adapter.attention_fraction=0.5)")
         p.add_argument("--verbose", action="store_true")
+        p.add_argument("--perf", nargs="?", const="perf-report", metavar="DIR",
+                       help="profile a few steps of the trainer (after a warm-up) and write a rated performance report to DIR (default perf-report)")
         p.add_argument("--memory-log", metavar="FILE.csv", help="sample device memory four times a second, labelled by node and step")
         if name == "graph":
             p.add_argument("graph")

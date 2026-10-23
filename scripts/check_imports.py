@@ -30,6 +30,7 @@ LAYERS: dict[str, tuple[set[str], bool]] = {
     "data": ({"data", "graph", "families.api", "families.registry"}, False),
     "engine": ({"engine", "graph", "families.api", "families.registry", "data"}, False),
     "perf": ({"perf", "graph", "families.api", "families.registry", "families.general", "data", "engine"}, False),
+    "accept": ({"accept", "perf", "graph", "families.<name>", "families.api", "families.registry", "families.general", "data", "engine"}, False),
     "nodes": ({"nodes", "perf", "graph", "families.api", "families.registry", "data", "engine"}, False),
     "tests": (set(), False),  # may import anything inside next/
 }
@@ -50,7 +51,7 @@ def layer_of(path: Path) -> tuple[str, str | None] | None:
         if second == "registry":
             return "families.registry", None
         return "families.<name>", second
-    if top in {"graph", "data", "engine", "nodes", "perf", "tests"}:
+    if top in {"graph", "data", "engine", "nodes", "perf", "accept", "tests"}:
         return top, None
     return None
 

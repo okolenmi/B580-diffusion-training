@@ -36,7 +36,8 @@ class CostModel:
     def _linear(module, shapes, out, e) -> Cost:
         rows, k, n = _numel(shapes[0][:-1]), shapes[0][-1], out[-1]
         int8 = bool(getattr(module, "is_int8", False)) or hasattr(module, "weight_int8")
-        weight_bytes = n * k * (1 if int8 else e)
+        nf4 = bool(getattr(module, "is_nf4", False)) or hasattr(module, "weight_nf4")
+        weight_bytes = n * k * (1 if int8 else (0.5625 + 2 * e if nf4 else e))  # nf4: packed read, then the rebuilt weight written and read
         return Cost(2.0 * rows * n * k, (rows * k + rows * n) * e + weight_bytes, int8)
 
     @staticmethod

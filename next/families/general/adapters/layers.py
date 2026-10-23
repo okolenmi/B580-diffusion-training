@@ -22,6 +22,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from ..quantize.backends import shape_problem
+from ..quantize.nf4_backends import shape_problem as nf4_shape_problem
+from ..quantize.nf4_ops import Nf4Weight
 from ..quantize.ops import Int8Weight
 from .gate import TimestepGate
 from .scaling import scaling_factor
@@ -46,8 +48,11 @@ class AdaptedLayer(nn.Module):
         self.gate = gate
         self.register_buffer("base_weight", original.weight.detach())
         self.register_buffer("base_bias", original.bias.detach() if original.bias is not None else None)
-        self.register_buffer("base_scale", None)  # set when the weight is stored in int8
+        self.register_buffer("base_scale", None)  # set when the weight is stored in int8 (its row scales) or NF4 (its absmax)
+        self.register_buffer("base_scale2", None)  # NF4 with double quantization: the scale of every 256 absmax values
+        self.register_buffer("base_offset", None)  # NF4 with double quantization: the mean the absmax values are stored around
         self._int8 = None
+        self._nf4 = None
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     @property
@@ -59,9 +64,21 @@ class AdaptedLayer(nn.Module):
         return self._int8 is not None
 
     @property
+    def is_nf4(self) -> bool:
+        return self._nf4 is not None
+
+    @property
+    def is_quantized(self) -> bool:
+        return self._int8 is not None or self._nf4 is not None
+
+    @property
     def frozen_weight(self) -> Tensor:
-        """The weight as a dense tensor; for an int8 layer this rebuilds it, so hot paths must not call it."""
-        return self._int8.backend.dequant(self.base_weight, self.base_scale) if self._int8 is not None else self.base_weight
+        """The weight as a dense tensor; for a quantized layer this rebuilds it, so hot paths must not call it."""
+        if self._int8 is not None:
+            return self._int8.backend.dequant(self.base_weight, self.base_scale)
+        if self._nf4 is not None:
+            return self._nf4.dense(self.base_weight, self.base_scale, self.base_scale2, self.base_offset)
+        return self.base_weight
 
     def _init_factors(self, a_shape: tuple[int, ...], b_shape: tuple[int, ...]) -> None:
         device = self.base_weight.device
@@ -99,8 +116,8 @@ class AdaptedLayer(nn.Module):
         """Fold the update into the base weight and zero the factors. LoRA only."""
         if self.kind != "lora":
             raise NotImplementedError("merging a DoRA adapter into its weight is not supported")
-        if self.is_int8:
-            raise NotImplementedError("merging into an int8 base weight is not supported")
+        if self.is_quantized:
+            raise NotImplementedError("merging into a quantized base weight is not supported")
         self.base_weight.copy_(self.base_weight + self._delta().to(self.base_weight.dtype))
         nn.init.zeros_(self.lora_A)
         nn.init.zeros_(self.lora_B)
@@ -140,7 +157,18 @@ class AdaptedLinear(AdaptedLayer):
         self.base_weight, self.base_scale = w8, scale
         self._int8 = Int8Weight(backend, grad)
 
+    def use_nf4(self, backend, double_quant: bool = False) -> None:
+        """Keep the base weight as NF4 from now on (LoRA only, like int8)."""
+        problem = nf4_shape_problem(self.base_weight.shape)
+        if self.kind != "lora" or problem is not None:
+            raise ValueError(problem or "only LoRA layers can keep their base weight in NF4")
+        store = Nf4Weight(backend, self.base_weight.shape, double_quant)
+        self.base_weight, self.base_scale, self.base_scale2, self.base_offset = store.quantize(self.base_weight)
+        self._nf4 = store
+
     def _base(self, x: Tensor) -> Tensor:
+        if self._nf4 is not None:
+            return self._nf4.apply(x, self.base_weight, self.base_scale, self.base_scale2, self.base_offset, self.base_bias)
         if self._int8 is not None:
             return self._int8.apply(x, self.base_weight, self.base_scale, self.base_bias)
         return F.linear(x, self.base_weight, self.base_bias)

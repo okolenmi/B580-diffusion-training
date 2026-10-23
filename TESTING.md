@@ -184,3 +184,8 @@ Known risks: attention capture attempts in `bench` may abort a process on some d
 - Speed: the `[graph]` line per shape (replay against eager) and the `bench` attention rows (`python -m next.perf bench --suites attention`): does either capture, and how far below `math`?
 - Quality: 200 steps, same seed and data, `--set runtime.deterministic=true`, once per mode: the loss curves against `math`. Pass: within the noise of a changed seed.
 - Memory: `chunked_bf16` should show a lower step peak than `math` at 1024 px.
+
+## 29. NF4 frozen weights
+First, no training: `python -m next.accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). Then training: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
+Known risks: the fused dequantizer's first call verifies itself (a few seconds, once); `xpu-kernels` older than 0.3 has no NF4 kernel and `auto` then uses the slow torch chain (a warning says so).
+Pass: no out of memory at a batch or resolution that int8 cannot hold; loss within the noise of int8's at the same seed.

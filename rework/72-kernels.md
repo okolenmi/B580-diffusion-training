@@ -1,6 +1,6 @@
 # 72. Quantized frozen weights and the owner's kernels
 
-Status: **int8 frozen base weights built, hardware numbers in; NF4 not built.** Kernels: `xpu-kernels` on PyPI (0.3 or newer; source
+Status: **int8 frozen base weights built, hardware numbers in; NF4 built (CPU-tested, not run on the card).** Kernels: `xpu-kernels` on PyPI (0.3 or newer; source
 `github.com/okolenmi/oko-xpu-kernels`): ConvRot INT8 linear, `dL/dx` backward, fused weight dequantizer, fused NF4 dequantizer, fused
 rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's own UNet by the kernels' `debug/probe_sdxl_trainer_step.py`.
 
@@ -55,7 +55,7 @@ rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's
 - Profiling on this card: the XPU profiler works (its registration warning is noise). An out-of-memory inside a profiled step loses the device and
   the process dies in a destructor, so it looks like a profiler crash; the protection is the memory budget, not a profiler setting.
 
-## NF4 (not built; plan and arithmetic)
+## NF4 (built; plan and arithmetic)
 - Storage for 2.17 B parameters: bf16 4.34 GB, int8 2.17 GB, NF4 about 1.26 GB (0.5 + 0.06 absmax + 0.02 double-quantized). NF4 is the next step
   down in memory (about 0.9 GB under int8), not a speed plan: forward is dequant plus bf16 GEMM (no int8 GEMM), and the gradient carries the NF4
   weight error (1-2% against 0.9%). Worth it only where memory is binding and speed is not; the loss baseline must be taken again.
@@ -73,3 +73,13 @@ rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's
 - Anima: port rope and adaLN with their autograd wrappers (both are differentiable in the library now), with the same gate; re-derive the
   constants (they are tuned for a 3072-wide, 24-head, 128-dim DiT).
 - `sycl::tanh` has a data-dependent slow path on this card (3.5x on saturated inputs); any tanh-based activation on saturating inputs is a candidate.
+
+### NF4 as built
+`families/general/quantize/`: `nf4_backends.py` (codebook identical to bitsandbytes' to 1e-7, `Nf4Codec` quantize and the torch dequantize chain, `TorchNf4Backend`,
+`XpuKernelsNf4Backend` using `xpu_kernels.triton.nf4.dequant_nf4` whenever its gate says the tensor is usable and the torch chain otherwise), `nf4_ops.py`
+(`Nf4LinearFn`: forward and backward rebuild the weight and drop it, only the quantized tensors are saved; `Nf4Weight`), `nf4.py` (`Nf4Linear`, `Nf4Quantizer`),
+`frozen.py` (the walk and the report both quantizers share; `weight_error` per layer). The adapted layer keeps the packed weight in `base_weight`, the absmax in
+`base_scale` and, with double quantization, the second-level scales in `base_scale2` and the mean in `base_offset`, so all of it moves with the module.
+Double quantization is off by default: it saves about 0.05 byte per weight (about 100 MB on the UNet) and costs two kernels per layer call in a launch-bound step.
+The trainer's first eager steps verify the fused kernel (it synchronises, so never inside a capture), as for int8. Open: a measured loss comparison against native and int8
+(`python -m next.accept quant-probe` gives the per-region error first; TESTING 29).

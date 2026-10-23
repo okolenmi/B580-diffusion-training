@@ -228,7 +228,7 @@ def int8_base_weights():
     base(x3).backward(dy)
     check(rel(x3.grad, expected) < 3e-2 and x3.grad is not None, "the int8 gradient path stays close to the exact one without a dense weight")
     raises(ValueError, lambda: Int8Linear(nn.Linear(512, 64), backend, "nope"), "an unknown gradient path is refused", "nope")
-    raises(NotImplementedError, wrapped.merge, "merging into int8 weights is refused", "int8")
+    raises(NotImplementedError, wrapped.merge, "merging into int8 weights is refused", "quantized")
 
     calls = []
     fake = SimpleNamespace(available=lambda: True, prepare_weight=lambda w: backend.prepare(w),
@@ -250,5 +250,82 @@ def int8_base_weights():
     raises(ValueError, lambda: make_backend("nope", "cpu"), "an unknown backend is refused", "nope")
 
 
+def nf4_base_weights():
+    from types import SimpleNamespace
+
+    from ..families.general.quantize.nf4 import Nf4Linear, Nf4Quantizer, quantize_frozen
+    from ..families.general.quantize.nf4_backends import (BLOCK, DQ_BLOCK, TorchNf4Backend, XpuKernelsNf4Backend, codebook, make_nf4_backend,
+                                                          shape_problem)
+
+    torch.manual_seed(0)
+    rel = lambda a, b: ((a.float() - b.float()).norm() / b.float().norm()).item()  # noqa: E731
+    bnb = [-1.0, -0.6961928009986877, -0.5250730514526367, -0.39491748809814453, -0.28444138169288635, -0.18477343022823334, -0.09105003625154495, 0.0,
+           0.07958029955625534, 0.16093020141124725, 0.24611230194568634, 0.33791524171829224, 0.44070982933044434, 0.5626170039176941,
+           0.7229568362236023, 1.0]
+    check(torch.allclose(codebook(), torch.tensor(bnb), atol=1e-6), "the codebook is the published NF4 table")
+    backend = TorchNf4Backend()
+    weight = torch.randn(64, 512) * 0.02
+    packed, absmax, scale, offset = backend.quantize(weight, False)
+    dense = backend.dequant(packed, absmax, scale, offset, weight.shape, torch.float32)
+    check(packed.dtype == torch.uint8 and packed.numel() == weight.numel() // 2 and absmax.shape == (weight.numel() // BLOCK,) and scale is None
+          and 0.05 < rel(dense, weight) < 0.15, f"NF4 packs two weights per byte and comes back within quantization error ({rel(dense, weight):.3f})")
+    levels = dense.view(-1, BLOCK) / absmax.unsqueeze(1)
+    check((levels.unsqueeze(-1) - codebook()).abs().amin(-1).max() < 1e-5, "every dequantized value is a codebook level times its block's absmax")
+    zeros = torch.zeros(1, BLOCK)
+    z = backend.quantize(zeros, False)
+    check(not backend.dequant(*z, zeros.shape, torch.float32).any(), "an all-zero block stays zero")
+    p2, a2, s2, o2 = backend.quantize(weight, True)
+    dense2 = backend.dequant(p2, a2, s2, o2, weight.shape, torch.float32)
+    check(a2.dtype == torch.int8 and s2.shape == (-(-absmax.numel() // DQ_BLOCK),) and torch.equal(p2, packed) and abs(rel(dense2, weight) - rel(dense, weight)) < 0.01,
+          "double quantization keeps the same nibbles, stores absmax in int8 and costs almost no accuracy")
+    check(stored_bytes(packed, absmax) > stored_bytes(p2, a2, s2, o2), "double quantization stores fewer bytes")
+    check(shape_problem((64, 512)) is None and "64" in shape_problem((3, 5)), "a weight that is not a whole number of blocks is named")
+
+    net = nn.Sequential(nn.Linear(512, 64), nn.Linear(10, 7), nn.Linear(512, 64))
+    wrapped = make("lora", net[0])
+    net[0] = wrapped
+    net[2] = make("dora", net[2])
+    report = Nf4Quantizer(backend, min_params=0).run(net)
+    check(wrapped.is_nf4 and wrapped.is_quantized and not wrapped.is_int8 and wrapped.base_weight.dtype == torch.uint8 and report.layers == 1
+          and len(report.skipped) == 2 and not net[2].is_quantized and report.summary().startswith("nf4 base weights"),
+          "a LoRA layer converts; DoRA and a shape that is not a whole number of blocks stay as they were")
+    plain = nn.Sequential(nn.Linear(512, 64))
+    quantize_frozen(plain, backend="torch", min_params=0)
+    check(isinstance(plain[0], Nf4Linear), "an unadapted linear becomes an NF4 linear")
+    check(quantize_frozen(nn.Sequential(nn.Linear(512, 64)), backend="torch").layers == 0, "small layers are left alone by default")
+    raises(ValueError, lambda: quantize_frozen(nn.Sequential(nn.Linear(512, 64)), backend="nope"), "an unknown backend is refused", "nope")
+
+    x = torch.randn(40, 512, requires_grad=True)
+    wrapped(x).float().square().sum().backward()
+    check(x.grad is not None and wrapped.lora_B.grad is not None and wrapped.base_weight.grad is None, "gradients reach the input and the factors, not the frozen weight")
+    layer = Nf4Linear(nn.Linear(512, 64), backend)
+    x2, dy = torch.randn(40, 512, requires_grad=True), torch.randn(40, 64)
+    layer(x2).backward(dy)
+    stored = backend.dequant(layer.weight_nf4, layer.weight_absmax, None, None, (64, 512), torch.float32)
+    check(rel(x2.grad, dy @ stored) < 1e-5, "the input gradient is dy times the dequantized weight")
+    check(rel(layer(x2.detach()), x2.detach() @ stored.T + layer.bias) < 1e-5, "the forward is the product with the dequantized weight")
+    raises(NotImplementedError, wrapped.merge, "merging into NF4 weights is refused", "quantized")
+    check(torch.allclose(wrapped.frozen_weight.float(), backend.dequant(wrapped.base_weight, wrapped.base_scale, None, None, (64, 512), torch.bfloat16).float()),
+          "frozen_weight rebuilds the dense weight")
+    saved_buffers = {k for k, _ in wrapped.named_buffers() if k.startswith("base_")}
+    check({"base_weight", "base_scale"} <= saved_buffers, "the quantized tensors are buffers of the layer (they move with it)")
+
+    calls = []
+    fused = XpuKernelsNf4Backend()
+    fused._module = SimpleNamespace(usable=lambda packed: True,
+                                    dequant_nf4=lambda packed, absmax, book, dtype: calls.append(1) or backend.codec.dequant(packed, absmax, (-1, 1), dtype).flatten())
+    out = fused.dequant(packed, absmax, None, None, weight.shape, torch.bfloat16)
+    check(calls and out.shape == weight.shape and out.dtype == torch.bfloat16 and rel(out, dense) < 0.01, "the fused kernel is used when it can run")
+    fused._module = SimpleNamespace(usable=lambda packed: False, dequant_nf4=lambda *a, **k: calls.append(2))
+    again = fused.dequant(packed, absmax, None, None, weight.shape, torch.float32)
+    check(calls == [1] and torch.equal(again, dense), "when the kernel refuses a tensor the torch chain runs instead")
+    check(isinstance(make_nf4_backend("auto", "cpu"), TorchNf4Backend), "auto on a CPU uses the torch version")
+    raises(ValueError, lambda: make_nf4_backend("nope", "cpu"), "an unknown NF4 backend is refused", "nope")
+
+
+def stored_bytes(*tensors):
+    return sum(t.numel() * t.element_size() for t in tensors if t is not None)
+
+
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, nf4_base_weights, sdxl_plan_and_injection)

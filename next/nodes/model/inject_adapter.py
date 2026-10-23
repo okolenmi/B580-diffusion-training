@@ -17,7 +17,7 @@ from ...families.registry import get_family
 from ...graph import Group, Node, Port
 
 SCALING = ("classic", "rank_stabilized")
-BASE_PRECISIONS = ("native", "int8")
+BASE_PRECISIONS = ("native", "int8", "nf4")
 INT8_BACKENDS = ("auto", "xpu_kernels", "torch")
 
 
@@ -73,8 +73,9 @@ class InjectAdapterNode(Node):
                                    doc="Share of the transformer blocks that are checkpointed (residual blocks always are)."),
         "base_precision": Port("base_precision", str, required=False, default="native", choices=BASE_PRECISIONS, group="memory",
                                doc="int8: keep the frozen weights of large linear layers in int8 (about half their memory). "
-                                   "The model is then the int8 network, not the file's: losses and samples are not comparable "
-                                   "with a native run. DoRA layers and small or oddly shaped layers stay native."),
+                                   "nf4: in 4-bit blocks (about a quarter): slower than int8 (the weight is rebuilt for every call), "
+                                   "for when memory is what binds. The model is then the quantized network, not the file's: losses and "
+                                   "samples are not comparable with a native run. DoRA layers and small or oddly shaped layers stay native."),
         "int8_backend": Port("int8_backend", str, required=False, default="auto", choices=INT8_BACKENDS, group="memory",
                              visible_when=("base_precision", "int8"),
                              doc="auto: the xpu-kernels package on an Intel GPU when it loads, otherwise a slow plain-torch version."),
@@ -86,6 +87,15 @@ class InjectAdapterNode(Node):
         "int8_min_params": Port("int8_min_params", int, required=False, default=1 << 20, minimum=0, group="memory",
                                 visible_when=("base_precision", "int8"),
                                 doc="Layers with fewer weights stay native: they save little and the per-call rotation costs more."),
+        "nf4_backend": Port("nf4_backend", str, required=False, default="auto", choices=INT8_BACKENDS, group="memory",
+                            visible_when=("base_precision", "nf4"),
+                            doc="auto: the fused dequantizer of xpu-kernels on an Intel GPU when it loads, otherwise plain torch (several times slower, needs more memory per call)."),
+        "nf4_double_quant": Port("nf4_double_quant", bool, required=False, default=False, group="memory",
+                                 visible_when=("base_precision", "nf4"),
+                                 doc="Store the per-block scales in 8 bits as well: about 100 MB less on an SDXL UNet, two more kernels per layer call."),
+        "nf4_min_params": Port("nf4_min_params", int, required=False, default=1 << 20, minimum=0, group="memory",
+                               visible_when=("base_precision", "nf4"),
+                               doc="Layers with fewer weights stay native: they save little."),
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="Denoiser with adapters; only the adapters train.")}
 
@@ -119,16 +129,20 @@ class InjectAdapterNode(Node):
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
-        if inputs.get("base_precision") == "int8":
-            with self.context.task("Converting the frozen weights to int8"):
-                report = family.quantize_frozen(denoiser.module(), backend=inputs.get("int8_backend") or "auto", device=device,
-                                                min_params=inputs.get("int8_min_params") or 0,
-                                                grad=inputs.get("int8_grad") or "dense")
+        precision = inputs.get("base_precision") or "native"
+        if precision in ("int8", "nf4"):
+            with self.context.task(f"Converting the frozen weights to {precision}"):
+                if precision == "int8":
+                    report = family.quantize_frozen(denoiser.module(), backend=inputs.get("int8_backend") or "auto", device=device,
+                                                    min_params=inputs.get("int8_min_params") or 0, grad=inputs.get("int8_grad") or "dense")
+                else:
+                    report = family.quantize_frozen_nf4(denoiser.module(), backend=inputs.get("nf4_backend") or "auto", device=device,
+                                                        min_params=inputs.get("nf4_min_params") or 0, double_quant=bool(inputs.get("nf4_double_quant")))
             Accelerator(device).empty_cache()  # the dense temporaries of the conversion would otherwise stay cached between live blocks
             self.context.report("quantization", {"node": self.uid, "message": report.summary()})
             if report.backend == "torch" and torch.device(device).type == "xpu":
                 self.context.report("warning", {"node": self.uid, "message":
-                                                "int8 runs on the plain-torch version, several times slower than the kernels (pip install xpu-kernels)"})
+                                                f"{precision} runs on the plain-torch version, several times slower than the kernels (pip install -U xpu-kernels)"})
         deterministic = not any(isinstance(m, nn.Dropout) and m.p > 0 for m in denoiser.module().modules())
         checkpointer = ActivationCheckpointer(preserve_rng=not deterministic) if inputs.get("checkpointing", True) else None
         share = inputs.get("attention_fraction", 1.0)
@@ -137,7 +151,7 @@ class InjectAdapterNode(Node):
         window = None
         if inputs.get("gate"):
             window = GateWindow(inputs.get("gate_low", 0.0), inputs.get("gate_high", 999.0), inputs.get("gate_width", 100.0))
-        plan = {**adapted.plan.to_json(), "base_precision": inputs.get("base_precision") or "native"}
+        plan = {**adapted.plan.to_json(), "base_precision": precision}
         return {"model": TrainableDenoiser(family, part, denoiser, adapted, device, rank, alpha, inputs.get("kind") or "lora",
                                            selection, window, info=plan,
                                            checkpointer=checkpointer, checkpoint_share=share, deterministic=deterministic)}

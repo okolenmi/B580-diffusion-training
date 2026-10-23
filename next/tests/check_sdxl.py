@@ -17,6 +17,8 @@ from ..families.general.clip.model import CLIPConfig, CLIPTextTower
 from ..families.general.embeddings import timestep_embedding
 from ..families.sdxl.conditioning import (SDXLConditioning, SDXLConditioningKit, SDXLTextEncoder, load_text_encoder,
                                           size_embedding)
+from ..families.general.ldm_unet import attention as attention_module
+from ..families.general.ldm_unet import attention_modes
 from ..families.general.ldm_unet.unet import UNetModel
 from ..families.sdxl.denoiser import SDXLDenoiser, load_denoiser
 from .check_families_torch import to_openclip
@@ -184,5 +186,56 @@ def denoiser_cases():
     check(all(p.grad is not None for p in den.parameters()), "gradients reach every parameter")
 
 
+def attention_modes_cases():
+    """The capturable attention modes against the stock kernel: values and gradients, blocks, bf16 error, scoping, and a whole UNet."""
+    torch.manual_seed(0)
+    F = torch.nn.functional
+    saved = attention_modes.ChunkedAttention.CHUNK_ELEMENTS
+    try:
+        for keys in (50, 7):
+            q, k, v = (torch.randn(2, 3, n, 16, requires_grad=True) for n in (50, keys, keys))
+            dy = torch.randn(2, 3, 50, 16)
+            F.scaled_dot_product_attention(q, k, v).backward(dy)
+            want = [t.grad.clone() for t in (q, k, v)]
+            for t in (q, k, v):
+                t.grad = None
+            attention_modes.ChunkedAttention.CHUNK_ELEMENTS = 2 * 3 * keys * 8
+            check(attention_modes.ChunkedAttention.rows_per_block(q, k) == 8, "the block size follows the budget")
+            out = attention_modes.chunked_attention(q, k, v)
+            out.backward(dy)
+            check(torch.allclose(out, F.scaled_dot_product_attention(q, k, v), atol=1e-5), f"chunked attention matches the stock kernel (keys {keys})")
+            check(all(torch.allclose(t.grad, w, atol=1e-5) for t, w in zip((q, k, v), want)), f"its gradients match (keys {keys}, several blocks)")
+        q, k, v = (torch.randn(1, 2, n, 16, requires_grad=True) for n in (20, 20, 20))
+        out = attention_modes.chunked_attention(q, k, v)
+        out.sum().backward()
+        check(all(t.grad is not None for t in (q, k, v)), "all three inputs receive a gradient")
+        k_only = k.detach().clone().requires_grad_(True)
+        attention_modes.chunked_attention(q.detach(), k_only, v.detach()).sum().backward()
+        check(k_only.grad is not None, "only the inputs that need a gradient get one")
+        attention_modes.ChunkedAttention.CHUNK_ELEMENTS = saved
+        qb, kb, vb = (torch.randn(1, 4, 64, 32).bfloat16().requires_grad_(True) for _ in range(3))
+        exact = F.scaled_dot_product_attention(qb.float(), kb.float(), vb.float())
+        mine = attention_modes.chunked_attention(qb, kb, vb).float()
+        check(((mine - exact).norm() / exact.norm()).item() < 0.02, f"bf16 attention stays close to the fp32 result ({((mine - exact).norm() / exact.norm()).item():.4f})")
+    finally:
+        attention_modes.ChunkedAttention.CHUNK_ELEMENTS = saved
+    check(set(attention_modes.MODES) == {"math", "math_bf16", "chunked_bf16"}, "the modes are named as the node's choices")
+    allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
+    before = allowed()
+    with attention_modes.MODES["math_bf16"]():
+        inside = allowed()
+    check(inside is True and allowed() == before, "the math_bf16 mode switches the flag on and restores it")
+    with attention_modes.MODES["chunked_bf16"]():
+        check(attention_module._replacement is attention_modes.chunked_attention, "chunked mode replaces the attention call")
+    check(attention_module._replacement is None, "the replacement is removed after the block")
+    model = UNetModel(**TINY_UNET)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    den = SDXLDenoiser(model, dtype=torch.float32)
+    base = den(x, t, c, y)
+    with den.attention_scopes()["chunked_bf16"]():
+        check(torch.allclose(den(x, t, c, y), base, atol=1e-4), "a whole UNet gives the same output under the chunked mode")
+    check(set(den.attention_scopes()) == set(attention_modes.MODES), "the denoiser offers the modes to the trainer")
+
+
 if __name__ == "__main__":
-    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases)
+    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases, attention_modes_cases)

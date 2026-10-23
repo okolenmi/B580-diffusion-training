@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -11,6 +13,24 @@ def group_norm(channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups=32, num_channels=channels, eps=1e-6, affine=True)
 
 
+_replacement = None  # an alternative to the stock kernel while a ``replace_sdpa`` block is open
+
+
+@contextlib.contextmanager
+def replace_sdpa(function):
+    """Within the block every attention call goes through ``function(q, k, v)`` (tensors of shape batch, heads, length, head_dim)."""
+    global _replacement
+    previous, _replacement = _replacement, function
+    try:
+        yield
+    finally:
+        _replacement = previous
+
+
+def sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    return F.scaled_dot_product_attention(q, k, v) if _replacement is None else _replacement(q, k, v)
+
+
 def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int) -> torch.Tensor:
     """Multi-head attention over (B, N, heads * head_dim) tensors; heads are split out of the channel axis."""
     b, n, width = q.shape
@@ -18,7 +38,7 @@ def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int) -> tor
     def split(t: torch.Tensor) -> torch.Tensor:
         return t.view(b, -1, heads, width // heads).transpose(1, 2)
 
-    out = F.scaled_dot_product_attention(split(q), split(k), split(v))
+    out = sdpa(split(q), split(k), split(v))
     return out.transpose(1, 2).reshape(b, n, width)
 
 

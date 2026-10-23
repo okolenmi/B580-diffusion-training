@@ -6,6 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from ..api.parts import ModelPart
+from ..general.ldm_unet.attention_modes import MODES as ATTENTION_MODES
 from ..general.ldm_unet.unet import Checkpointer, UNetModel
 from ..general.tensors import read_prefixed
 
@@ -55,6 +56,10 @@ class SDXLDenoiser:
         if dtype is not None:
             self.dtype = dtype
         return self
+
+    def attention_scopes(self) -> dict:
+        """Named ways to run attention inside a captured graph: name -> a function returning a context manager."""
+        return dict(ATTENTION_MODES)
 
     def set_checkpointer(self, checkpointer: Checkpointer | None, attention_fraction: float = 1.0) -> None:
         self.model.set_checkpointer(checkpointer, attention_fraction)

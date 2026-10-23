@@ -1,6 +1,6 @@
 # 73. Making attention capturable (brief for a separate project)
 
-Status: **open; nothing built.** Written to be handed to the `xpu-kernels` project or an upstream report.
+Status: **open for a fused kernel; a pure-torch stopgap (route D) is built.** Written to be handed to the `xpu-kernels` project or an upstream report.
 
 ## Problem
 - The trainer's replayed step (`next/engine/step/graphed.py`) captures forward, loss and backward in one `torch.xpu.XPUGraph`. The default SDPA kernel
@@ -40,6 +40,12 @@ Status: **open; nothing built.** Written to be handed to the `xpu-kernels` proje
 3. **Piecewise capture in the trainer.** Capture the segments between attention calls as separate graphs and run each attention eagerly (flash) between them. It
    needs per-segment autograd handling in forward, recompute and backward (about 280 to 420 graph launches per step instead of 22 k kernel launches) and is a
    substantial piece of work; only worth it if A and B both fail.
+
+## Route D, built in the trainer meanwhile (untested on the card)
+`next/families/general/ldm_unet/attention_modes.py`: `trainer.graph_attention=math_bf16` (math backend with the fp32 conversion switched off) and `chunked_bf16`
+(pure torch: bf16 matmuls over blocks of query rows, fp32 softmax, probabilities recomputed in backward, fp32 accumulation of dk and dv; deterministic, no
+atomics). Both round the scores to bf16, so quality needs the loss comparison in TESTING 28. They do not replace route A: a fused kernel keeps the scores
+in registers and still launches far fewer kernels. The `bench` attention rows rank every backend and mode at the SDXL shapes, with a capture attempt each.
 
 ## What would change in the trainer when it exists
 `nodes/train/trainer.py` builds the capture's `attentions` list (today only the math backend); a capturable kernel goes first, and the existing per-shape timing

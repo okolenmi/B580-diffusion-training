@@ -73,6 +73,11 @@ class DiffusionTrainerNode(Node):
                           "about twice as fast per step where the step is bound by kernel launches. Costs memory for the graph "
                           "(shared by the shapes) and needs no dropout, no gate and no fused optimizer. Shapes that cannot be "
                           "captured keep running eagerly."),
+        "graph_attention": Port("graph_attention", str, required=False, default="math", choices=("math", "math_bf16", "chunked_bf16"), group="speed",
+                                visible_when=("graph", True),
+                                doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
+                                    "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
+                                    "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
         "graph_shapes": Port("graph_shapes", int, required=False, default=8, minimum=1, group="speed", visible_when=("graph", True),
                              doc="Most shapes that get a graph; the rest run eagerly."),
         "timing": Port("timing", bool, required=False, default=False, group="diagnostics",
@@ -170,7 +175,11 @@ class DiffusionTrainerNode(Node):
 
         # The default kernel (flash) uses work-group scratch memory, which graph capture does not support; the memory-efficient
         # backend is not implemented on XPU and would only warn and fall back to this one.
-        attentions = [lambda: sdpa_kernel(SDPBackend.MATH)]
+        scopes = getattr(model.denoiser, "attention_scopes", lambda: {})()
+        mode = inputs.get("graph_attention") or "math"
+        if mode != "math" and mode not in scopes:
+            raise ValueError(f"DiffusionTrainer: this model has no graph attention mode {mode!r}")
+        attentions = [scopes.get(mode) or (lambda: sdpa_kernel(SDPBackend.MATH))]
         limit = inputs.get("graph_shapes") or 8
         counts = inputs["batches"].shape_counts()
         wanted = frozenset(shape for shape, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:limit])  # the shapes most steps use

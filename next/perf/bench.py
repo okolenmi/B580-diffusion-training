@@ -171,13 +171,20 @@ class ElementwiseBench(Bench):
 
 
 class AttentionBench(Bench):
-    """Scaled dot-product attention per backend: forward, forward+backward, and whether the forward+backward can be captured into a graph."""
+    """Scaled dot-product attention per backend and per capturable mode: forward, forward+backward, and whether forward+backward can be captured into a graph."""
 
     group = "attention"
 
-    def rows(self, ctx):
+    @staticmethod
+    def scopes() -> list[tuple[str, Callable | None]]:
         from torch.nn.attention import SDPBackend, sdpa_kernel
-        backends = [("default", None), ("math", SDPBackend.MATH), ("flash", SDPBackend.FLASH_ATTENTION), ("efficient", SDPBackend.EFFICIENT_ATTENTION)]
+        from ..families.general.ldm_unet.attention_modes import MODES
+        stock = [(label, (lambda b=backend: sdpa_kernel(b))) for label, backend in
+                 (("math", SDPBackend.MATH), ("flash", SDPBackend.FLASH_ATTENTION), ("efficient", SDPBackend.EFFICIENT_ATTENTION))]
+        return [("default", None), *stock, *[(name, factory) for name, factory in MODES.items() if name != "math"]]
+
+    def rows(self, ctx):
+        from ..families.general.ldm_unet.attention import sdpa
         out = []
         dim = 64 if not ctx.quick else 16
         for name, channels, side in ctx.levels()[1:]:
@@ -187,30 +194,20 @@ class AttentionBench(Bench):
                 dy = torch.randn(ctx.batch, heads, tokens, dim, device=ctx.device, dtype=ctx.dtype)
                 flops = 4.0 * ctx.batch * heads * tokens * lk * dim
                 shape = f"{ctx.batch}x{heads}x{tokens}x{dim} ({kind}, keys {lk})"
-                for label, backend in backends:
+                for label, scope in self.scopes():
                     try:
-                        fwd = self._time(ctx, backend, lambda: F.scaled_dot_product_attention(q, k, v), sdpa_kernel)
-                        both = self._time(ctx, backend, lambda: F.scaled_dot_product_attention(q, k, v).backward(dy), sdpa_kernel)
+                        with (scope() if scope else _nothing()):
+                            fwd = ctx.time_ms(lambda: sdpa(q, k, v))
+                            both = ctx.time_ms(lambda: sdpa(q, k, v).backward(dy))
                     except Exception as error:  # noqa: BLE001 - a backend the device lacks is a result
                         out.append(Row(self.group, f"{name} {kind} {label}", shape, None, note=f"unavailable: {type(error).__name__}: {str(error).splitlines()[0][:100] if str(error) else ''}"))
                         continue
-                    note = self._capture(ctx, backend, lambda: F.scaled_dot_product_attention(q, k, v).backward(dy), sdpa_kernel)
+                    note = GraphProbe(ctx).describe(lambda: sdpa(q, k, v).backward(dy), scope)
                     e = q.element_size()
                     data = (2 * q.numel() + 2 * k.numel()) * e
                     out.append(ctx.rated(self.group, f"{name} {kind} {label} forward", shape, fwd, Cost(flops, data)))
                     out.append(ctx.rated(self.group, f"{name} {kind} {label} forward+backward", shape, both, Cost(3.5 * flops, 3 * data), note=note))
         return out
-
-    @staticmethod
-    def _time(ctx, backend, fn, sdpa_kernel) -> float:
-        if backend is None:
-            return ctx.time_ms(fn)
-        with sdpa_kernel(backend):
-            return ctx.time_ms(fn)
-
-    @staticmethod
-    def _capture(ctx, backend, fn, sdpa_kernel) -> str:
-        return GraphProbe(ctx).describe(fn, (lambda: sdpa_kernel(backend)) if backend is not None else None)
 
 
 class GraphProbe:

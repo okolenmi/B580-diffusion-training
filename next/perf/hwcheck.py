@@ -57,6 +57,9 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
     return [S("native eager"), S("native graph", *graph), S("int8 eager", *int8), S("int8 graph", *int8, *graph),
             S("int8 dx-int8 eager", *int8, "--param", "adapter.int8_grad=int8"), S("int8 dx-int8 graph", *int8, "--param", "adapter.int8_grad=int8", *graph),
             S("native graph measured-checkpoints", *graph, *measured), S("int8 graph measured-checkpoints", *int8, *graph, *measured),
+            S("native graph attention-math_bf16", *graph, "--param", "trainer.graph_attention=math_bf16"),
+            S("native graph attention-chunked_bf16", *graph, "--param", "trainer.graph_attention=chunked_bf16"),
+            S("int8 graph attention-chunked_bf16", *int8, *graph, "--param", "trainer.graph_attention=chunked_bf16"),
             S("native expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:True"),)),
             S("native no-expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:False"),))]
 

@@ -1,6 +1,6 @@
 # 74. Performance lab: measuring where a step's time goes, and what is recoverable
 
-Status: **P1 built (CPU-tested, not yet run on the card); P2 next.** A sub-project inside `next/perf/`, beside the trainer, that turns one run (or a matrix of runs) into a report that names the
+Status: **P1 to P4 built (CPU-tested, not yet run on the card).** Manual page: `next/manual/performance.md`. A sub-project inside `next/perf/`, beside the trainer, that turns one run (or a matrix of runs) into a report that names the
 slowest pieces, says how far each is from what this card can do, and says which known cause it looks like. It exists because the sandbox has no XPU:
 every run on the owner's card must return everything needed to understand it, in one file.
 
@@ -71,6 +71,9 @@ Layering: `perf` may import `engine`, `data`, `graph`, `families.api`, `families
 | P2 | `Scenario` and `Matrix` runner (`python -m next.perf matrix FILE`), `Comparison`, a scenario file for the open questions (native/int8 x graph x checkpointing x attention x batch) | comparison of two synthetic reports; matrix with a fake runner |
 | P3 | Micro-benchmark suite: layer shapes (native/int8, both gradient paths), attention backends (what captures, per-backend device time), GEMM/conv/norm efficiency vs ceilings, launch-cost probe; results feed `Ceilings` and the rating | scripts run on CPU at small size |
 | P4 | `python -m next.perf hwcheck`: the pending `TESTING.md` runs in one go, one process each, one bundle (`HardwareReport` + reports + matrix); `next/manual/performance.md` | the runner against a fake command |
+
+## As built
+P2: `Scenario`, `MatrixSpec` (TOML: `[base] command`, `[axes.NAME]` cross product, `[[scenario]]`), `SubprocessRunner`, `Matrix` (resume, failures recorded, every scenario compared with the first), `Comparison`. P3: `bench.py` with suites gemm, conv, norm, elementwise, attention (per backend, with a capture attempt and replay time), layers (native against int8, both gradient paths, dequantize), launch (eager against graph per kernel); results are rows rated against the ceilings, written as `bench.md` and `bench.json`; they do not feed back into `Ceilings` (a rating must not move with what it rates). P4: `hardware.py` (`HardwareReport`, `AllocatorProbe`), `hwcheck.py` (`HwCheck`: hardware, allocator A/B, bench, matrix of ten default scenarios, one `bundle.zip`).
 
 ## Owner's workflow
 `python -m next.run ... --perf` (or `--set perf.dir=DIR`), then push `DIR/report.md` and `report.json`; later `python -m next.perf matrix scenarios/open.toml`

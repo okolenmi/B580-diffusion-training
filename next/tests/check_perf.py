@@ -8,15 +8,21 @@ from __future__ import annotations
 
 import json
 import tempfile
+import zipfile
 from pathlib import Path
 
 import torch
 from torch import nn
 
+from ..perf import bench as bench_module
+from ..perf.bench import BenchRunner, context_for
 from ..perf.categories import Categorizer
 from ..perf.ceilings import Ceilings
 from ..perf.cost import CostModel
+from ..perf.comparison import Comparison
 from ..perf.findings import findings_for
+from ..perf.hwcheck import HwCheck, StepResult, default_scenarios
+from ..perf.matrix import Matrix, MatrixSpec, Outcome, Scenario
 from ..perf.modules import region_of, role_of
 from ..perf.rating import Rating
 from ..perf.session import PerfSession
@@ -131,5 +137,117 @@ def short_run():
         raises(ValueError, lambda: PerfSession(denoiser.module(), "cpu", folder, steps=0), "an empty window is refused", contains="at least 1")
 
 
+def synthetic(wall: float, gemm: float, copy: float, linear_ms: float) -> dict:
+    return {"budget": {"wall_ms": wall, "eager_ms": wall, "replayed_ms": None, "device_ms": gemm + copy, "launches": 100.0, "utilisation": 0.8, "peak_mb": 5000.0,
+                       "device_is_host": False, "outliers": []},
+            "categories": [{"category": "gemm", "calls": 10.0, "device_ms": gemm, "share": gemm / (gemm + copy)},
+                           {"category": "copy", "calls": 50.0, "device_ms": copy, "share": copy / (gemm + copy)}],
+            "kernels": [], "modules": [], "reconciliation": {},
+            "groups": [{"kind": "linear", "role": "attn1.to_q", "region": "down", "count": 4, "total_ms": linear_ms, "ideal_ms": 1.0, "recoverable_ms": linear_ms - 1.0,
+                        "efficiency": 1.0 / linear_ms, "bound": "compute"}],
+            "findings": []}
+
+
+def comparison():
+    diff = Comparison(synthetic(1000, 700, 50, 10.0), synthetic(1300, 700, 350, 25.0), "native", "int8")
+    cats = diff.categories()
+    check(cats[0]["category"] == "copy" and abs(cats[0]["delta_ms"] - 300) < 1e-9, "the category that grew most comes first")
+    check(diff.groups()[0]["delta_ms"] == 15.0 and diff.budget()[0]["delta"] == 300, "group and budget deltas")
+    text = diff.markdown()
+    check("int8 against native" in text and "+300" in text and "attn1.to_q" in text, "the markdown names both runs and the pieces that changed")
+    one_sided = Comparison(synthetic(1, 1, 1, 2.0), {**synthetic(1, 1, 1, 2.0), "groups": []}, "a", "b").groups()
+    check(one_sided[0]["only_in"] == "a", "a group present in one run only is marked")
+
+
+SPEC = {"base": {"command": ["train", "--x"]}, "axes": {"precision": {"native": [], "int8": ["--param", "p=int8"]}, "graph": {"eager": [], "graph": ["--set", "g=true"]}},
+        "scenario": [{"name": "extra one", "args": ["--y"], "env": {"A": "1"}}]}
+
+
+class FakeRunner:
+    def __init__(self, fail: str | None = None, silent: str | None = None):
+        self.fail, self.silent, self.ran = fail, silent, []
+
+    def run(self, scenario, folder):
+        self.ran.append(scenario.name)
+        folder.mkdir(parents=True, exist_ok=True)
+        if scenario.name == self.fail:
+            return Outcome(scenario, False, 1.0, folder, error="exit code 1")
+        if scenario.name != self.silent:
+            (folder / "report.json").write_text(json.dumps(synthetic(1000 + 100 * len(self.ran), 700, 50 + 10 * len(self.ran), 10.0)))
+        return Outcome(scenario, True, 1.0, folder)
+
+
+def matrix():
+    spec = MatrixSpec.from_dict(SPEC)
+    names = [s.name for s in spec.scenarios]
+    check(names == ["precision=native,graph=eager", "precision=native,graph=graph", "precision=int8,graph=eager", "precision=int8,graph=graph", "extra one"], "axes multiply, hand-written scenarios follow")
+    check(spec.scenarios[3].args == ("--param", "p=int8", "--set", "g=true") and dict(spec.scenarios[4].env) == {"A": "1"}, "arguments and environment per scenario")
+    raises(ValueError, lambda: MatrixSpec.from_dict({"axes": {}}), "a file without a command is refused", contains="base.command")
+    raises(ValueError, lambda: MatrixSpec.from_dict({"base": {"command": ["x"]}}), "a file without scenarios is refused", contains="no scenarios")
+    raises(ValueError, lambda: MatrixSpec.from_dict({"base": {"command": ["x"]}, "scenario": [{"name": "a b"}, {"name": "a_b"}]}), "names that collide as folders are refused", contains="differ")
+    with tempfile.TemporaryDirectory() as tmp:
+        runner = FakeRunner(fail="precision=int8,graph=eager", silent="extra one")
+        path = Matrix(spec, Path(tmp), runner, say=lambda text: None).run()
+        text = path.read_text()
+        check(len(runner.ran) == 5 and "FAILED: exit code 1" in text, "a failed scenario is recorded and the rest still run")
+        check("wrote no report" in text, "a run that ends without a report says so")
+        check("precision=int8,graph=graph against precision=native,graph=eager" in text, "every scenario is compared with the first")
+        again = FakeRunner()
+        Matrix(spec, Path(tmp), again, resume=True, say=lambda text: None).run()
+        check(again.ran == ["precision=int8,graph=eager", "extra one"], "resuming reruns only the scenarios without a report")
+
+
+def micro():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = context_for("cpu", True, tmp)
+        runner = BenchRunner(ctx, ["gemm", "conv", "norm", "elementwise", "launch", "attention", "layers"], say=lambda text: None)
+        report = runner.run()
+        groups = {r.group for r in report.rows}
+        check(not report.errors and {"gemm", "convolution", "norm", "elementwise", "attention", "launch", "linear layer"} <= groups, f"every suite produced rows ({sorted(groups)}, errors {list(report.errors)})")
+        timed = [r for r in report.rows if r.ms is not None and r.ideal_ms is not None]
+        check(timed and all(r.ms > 0 and r.ideal_ms >= 0 for r in timed), "timed rows carry an ideal time")
+        check(any(r.note.startswith("unavailable") for r in report.rows if r.group == "attention") or all(r.ms is not None for r in report.rows if r.group == "attention"), "a missing attention backend is a row, not a crash")
+        check(any("no graph API" in r.note for r in report.rows if r.group in ("launch", "attention")), "without a graph API the capture rows say so")
+        path = runner.write(report, Path(tmp) / "out")
+        check(path.exists() and (path.parent / "bench.json").exists() and "## gemm" in path.read_text(), "bench.md and bench.json are written")
+        raises(ValueError, lambda: BenchRunner(ctx, ["nonsense"]), "an unknown suite is refused", contains="nonsense")
+        saved = dict(bench_module.SUITES)
+        try:
+            class Broken(bench_module.Bench):
+                def rows(self, ctx):
+                    raise RuntimeError("boom")
+            bench_module.SUITES["broken"] = Broken
+            failed = BenchRunner(ctx, ["broken", "launch"], say=lambda text: None).run()
+        finally:
+            bench_module.SUITES.clear()
+            bench_module.SUITES.update(saved)
+        check("broken" in failed.errors and any(r.group == "launch" for r in failed.rows) and "Suites that failed" in failed.markdown(), "a failing suite is recorded and the others still run")
+
+
+def hwcheck():
+    scenarios = default_scenarios(warmup=20, ceilings="c.json")
+    check(scenarios[0].name == "native eager" and len({s.slug for s in scenarios}) == len(scenarios), "the baseline comes first and every scenario has its own folder")
+    check(all("perf.ceilings=c.json" in s.args and "perf.warmup_steps=20" in s.args for s in scenarios), "every scenario shares the ceilings cache and the warm-up")
+    check(any(dict(s.env).get("PYTORCH_ALLOC_CONF") == "expandable_segments:False" for s in scenarios), "the allocator A/B is among the scenarios")
+    with tempfile.TemporaryDirectory() as tmp:
+        ran = []
+
+        def fake(step, log):
+            ran.append(step.name)
+            log.write_text("$ " + " ".join(step.command) + "\n" + ("x" * 400_000 if step.name == "bench" else ""))
+            (log.parent.parent / "trace.json").write_text("{}")
+            return StepResult(step.name, step.name != "allocator plain", 0.1, "exit code 1" if step.name == "allocator plain" else "")
+        out = Path(tmp) / "bundle"
+        index = HwCheck(out, ["--file", "m.safetensors"], run_step=fake, say=lambda text: None, only={"hardware", "allocator", "bench"}).run()
+        check(ran == ["hardware", "allocator expandable", "allocator plain", "bench"], "the steps run in order, each as its own process")
+        text = index.read_text()
+        check("FAILED: exit code 1" in text and "bundle.zip" in text, "the index lists failures and names the bundle")
+        with zipfile.ZipFile(out / "bundle.zip") as archive:
+            names = archive.namelist()
+            big = archive.read("logs/bench.log")
+        check("README.md" in names and "logs/hardware.log" in names and not any(n.endswith("trace.json") for n in names), "the zip holds text files, no traces")
+        check(len(big) < 210_000 and b"middle cut" in big, "a huge log is cut in the middle")
+
+
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, window, short_run)
+    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, hwcheck)

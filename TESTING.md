@@ -171,6 +171,10 @@ Pass: int8 with graph within about 15% of native graph; tell me which gradient p
 ## 26. Graph replay is timed
 `--set trainer.graph=true --param buckets.max_shapes=4`, bf16 and int8: a `[graph] shape ...: replay X ms against Y ms eager` line per shape. Expected from your measurements: bf16 dropped ("does not pay"), int8 kept with a small gain. Pass: step times with `graph=true` are never slower than without it by more than the three timed replays.
 
-## 27. Performance report (P1 of the performance lab)
+## 27. Performance report (the performance lab)
 Add `--perf perf-b580` to a short run (bf16 first, then `--param adapter.base_precision=int8`; then each again with `--set trainer.graph=true`). After the warm-up (8 steps) three steps run under the profiler and `perf-b580/report.md` and `report.json` appear (`ceilings.json` is the measured matmul, int8, copy and launch ceilings, cached per torch build).
 Send me `report.md` (and `report.json` if it is small). Look at: the step budget (device busy against wall), the findings list, the slowest piece groups with their efficiency against the measured ceiling, and the reconciliation line (module time against device time). Known risks: module backward hooks could warn or fail on some module (rerun with `--set perf.modules=false` and tell me which); a profiler that records no XPU kernels (the report then says the times are host times).
+
+### 27b. One command for all of it
+`python -m next.perf hwcheck --out perf-bundle -- --models <models> --datasets <datasets> --file <checkpoint> --dataset <name> --output <out> --batch 2 --resolution 512 --param buckets.max_shapes=4` runs the hardware report, the allocator A/B, the micro-benchmarks and ten training scenarios (native and int8, eager and graph, both int8 gradient paths, measured checkpoint placement, expandable segments on and off) in separate processes, about 5 to 10 minutes per scenario. Send `perf-bundle/bundle.zip`. It covers tests 23 to 26 as far as numbers go; the loss comparison over 100 steps and the deterministic run (22) are still separate. If it stops early, rerun the same command: finished scenarios are kept.
+Known risks: attention capture attempts in `bench` may abort a process on some driver; the bundle then holds the `bench` log and the other steps still run.

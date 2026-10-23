@@ -29,7 +29,7 @@ from ...graph.events import CheckpointDue, StepFinished
 class DiffusionTrainerNode(Node):
     DISPLAY_NAME = "Diffusion Trainer"
     CATEGORY = "Training"
-    READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace")
+    READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.ceilings", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace")
     GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     INPUTS = {
         "batches": Port("batches", Batcher),
@@ -142,7 +142,7 @@ class DiffusionTrainerNode(Node):
         from ...perf.session import PerfSession  # only a profiling run pays for the import
         return PerfSession(model.denoiser.module(), str(model.device), folder, warmup=int(settings.get("perf.warmup_steps", 8)),
                            steps=int(settings.get("perf.steps", 3)), modules=bool(settings.get("perf.modules", True)),
-                           trace=bool(settings.get("perf.trace", False)), say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
+                           trace=bool(settings.get("perf.trace", False)), ceilings_path=settings.get("perf.ceilings") or None, say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
                            meta={"base_precision": (model.info or {}).get("base_precision", "native")})
 
     @staticmethod

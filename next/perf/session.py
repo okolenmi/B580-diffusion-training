@@ -23,12 +23,13 @@ class PerfSession:
     ends. ``observe`` receives the step's metrics (replayed or eager, phase times, peak memory); ``close`` writes the report."""
 
     def __init__(self, model: nn.Module, device: str, folder: str | Path, *, warmup: int = 8, steps: int = 3, modules: bool = True,
-                 trace: bool = False, quick_ceilings: bool = False, say: Callable[[str], None] = print, meta: dict | None = None):
+                 trace: bool = False, quick_ceilings: bool = False, ceilings_path: str | Path | None = None, say: Callable[[str], None] = print, meta: dict | None = None):
         if steps < 1:
             raise ValueError("perf.steps must be at least 1")
         self.model, self.device, self.folder = model, device, Path(folder)
         self.warmup, self.steps, self.modules, self.trace = warmup, steps, modules, trace
         self._quick, self._say, self._meta = quick_ceilings, say, meta or {}
+        self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
         self.records: list[StepRecord] = []
         self._timer: ModuleTimer | None = None
@@ -93,7 +94,7 @@ class PerfSession:
         if self._timer is not None:
             self._timer.detach()
             records = self._timer.records()
-        ceilings = load_or_measure(self.folder / "ceilings.json", self.device, quick=self._quick)
+        ceilings = load_or_measure(self._ceilings_path, self.device, quick=self._quick)
         self.report = ReportBuilder(ceilings, self.device, self._meta).build(self.records, self._kernels.result, records)
         self.report_path = ReportWriter(self.folder).write(self.report)
         self._say(f"perf: report written to {self.report_path}")

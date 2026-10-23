@@ -125,6 +125,8 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("perf.dir", "Performance report folder", "str", "", group="Performance", advanced=True,
                 doc="Profile a few steps of the trainer and write report.md and report.json here (empty = off). The report rates every "
                     "kernel category and module against what the card measures it can do; see the performance manual page."),
+    SettingSpec("perf.ceilings", "Ceilings cache file", "str", "", group="Performance", advanced=True,
+                doc="Where the measured ceilings are cached (empty = ceilings.json in the report folder). Runs that share a file compare against the same numbers."),
     SettingSpec("perf.warmup_steps", "Performance warm-up steps", "int", 8, minimum=0, group="Performance", advanced=True,
                 doc="Steps run before the profiled window: kernels get built, shapes seen and graphs captured. Replays start from the "
                     "second sighting of a shape, so keep this above the number of distinct shapes."),

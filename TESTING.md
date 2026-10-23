@@ -189,3 +189,9 @@ Known risks: attention capture attempts in `bench` may abort a process on some d
 First, no training: `python -m next.accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). Then training: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
 Known risks: the fused dequantizer's first call verifies itself (a few seconds, once); `xpu-kernels` older than 0.3 has no NF4 kernel and `auto` then uses the slow torch chain (a warning says so).
 Pass: no out of memory at a batch or resolution that int8 cannot hold; loss within the noise of int8's at the same seed.
+
+## 30. Padding decision by eye (mirror against zero)
+`python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
+
+## Reading results automatically
+`python -m next.perf hwcheck` now ends with `verdict/verdict.md` (the acceptance lab's pass/fail per check for the speed and allocator runs). For other items: `python -m next.accept run SUITE -- <train arguments>` (memory, nf4, determinism) and send `accept-run/verdict.md`; a verdict row says what failed and why, so the logs are only needed for a FAIL. Anything marked LOOK is for your eyes.

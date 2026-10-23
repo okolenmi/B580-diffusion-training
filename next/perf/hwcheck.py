@@ -99,6 +99,8 @@ class HwCheck:
             self.say(f"    {'ok' if result.ok else 'FAILED: ' + result.error} in {result.seconds:.0f} s")
         if self.wanted("matrix"):
             self._matrix()
+            if self.wanted("verdict"):
+                self._verdict(logs)
         index = self._index()
         self._zip()
         return index
@@ -112,11 +114,20 @@ class HwCheck:
         failed = [o for o in matrix.outcomes if not o.ok]
         self.results.append(StepResult("matrix", not failed, time.monotonic() - started, f"{len(failed)} of {len(matrix.outcomes)} scenarios failed" if failed else ""))
 
+    def _verdict(self, logs: Path) -> None:
+        """The acceptance lab judges the matrix folders (run as a command: the perf layer does not import it)."""
+        step = Step("verdict", [self.python, "-m", "next.accept", "judge", str(self.out / "matrix"), "speed", "allocator", "--out", str(self.out / "verdict"),
+                                "--warmup", str(self.warmup)], 300)
+        self.say("hwcheck: verdict ...")
+        result = self.run_step(step, logs / "verdict.log")
+        self.results.append(result)
+        self.say(f"    {'ok' if result.ok else 'FAILED: ' + result.error} in {result.seconds:.0f} s")
+
     def _index(self) -> Path:
         rows = ["# Hardware check bundle", "", "| step | result | seconds |", "|---|---|---:|"]
         rows += [f"| {r.name} | {'ok' if r.ok else 'FAILED: ' + r.error} | {r.seconds:.0f} |" for r in self.results]
         rows += ["", "Send `bundle.zip` (text files only), or these files: `hardware/hardware.md`, `bench/bench.md`, `matrix/summary.md`, the `report.md` inside each `matrix/<scenario>/` folder,",
-                 "and `logs/` for anything that failed. The allocator steps print one JSON line each (in `logs/`): equal numbers between the two mean the allocator setting changes nothing."]
+                 "`verdict/verdict.md` (the acceptance lab's pass/fail per check) and `logs/` for anything that failed. The allocator steps print one JSON line each (in `logs/`): equal numbers between the two mean the allocator setting changes nothing."]
         path = self.out / "README.md"
         path.write_text("\n".join(rows) + "\n", encoding="utf8")
         return path

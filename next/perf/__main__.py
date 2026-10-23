@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--device", default="xpu")
     check.add_argument("--steps", type=int, default=28)
     check.add_argument("--warmup", type=int, default=20, help="steps before the profiled window (graph capture and timing need several sightings per shape)")
-    check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "bench", "matrix"), help="default: all")
+    check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "bench", "matrix", "verdict"), help="default: all")
     check.add_argument("train_args", nargs=argparse.REMAINDER, help="after --: --models M --datasets D --file F --dataset NAME --output OUT, plus --batch/--resolution/...")
     args = parser.parse_args(argv)
     if args.command == "hardware":

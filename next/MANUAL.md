@@ -37,6 +37,7 @@ with int8 state was 2x slower, leave it.
 |---|---|
 | [manual/vram.md](manual/vram.md) | every memory lever: batch area, packing, shapes, checkpointing, budget and planner, optimizer, precision, allocator |
 | [manual/performance.md](manual/performance.md) | the performance lab: profile a run, rate every piece against the card's measured ceilings, matrix of runs, micro-benchmarks, the one-command hardware bundle |
+| [manual/acceptance.md](manual/acceptance.md) | automatic verdicts for the hardware runs, per-region quantization probe, padding sheet |
 | [manual/speed.md](manual/speed.md) | graph replay, measured checkpoint placement, caches, prefetch, timing |
 | [manual/quality.md](manual/quality.md) | learning rate, loss weighting, time balance, padding and masks, seeds, run length, resume, merge adapter, blend |
 | [manual/data.md](manual/data.md) | dataset and bucket parameters, auto caption, the `data:` line |

@@ -103,7 +103,7 @@ class SubprocessRunner:
         folder.mkdir(parents=True, exist_ok=True)
         log = folder / "run.log"
         started = time.monotonic()
-        full = [*self.command, *scenario.args, "--perf", str(folder)]
+        full = [*self.command, *(a.replace("{folder}", str(folder)) for a in scenario.args), "--perf", str(folder)]  # {folder}: per-scenario output paths
         try:
             with open(log, "w", encoding="utf8") as handle:
                 handle.write("$ " + " ".join(full) + "\n")

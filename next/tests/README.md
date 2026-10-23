@@ -9,6 +9,7 @@ Plain scripts (`python -m next.tests.<name>`), grouped by what they protect. Eac
 | data | `check_data` | epoch barrier and event order, per-VAE cache refusal, prompt determinism and resume, bucketing, dataset nodes |
 | engine | `check_engine`, `check_memory` | training steps on a tiny UNet: only adapters train, accumulation, stopping, fused equals plain, checkpointing equals plain; budget, pressure levers, eviction order and refusals on a scripted fake device |
 | performance lab | `check_perf` | kernel categories, cost and rating arithmetic, findings rules, a profiling window over the tiny trainer |
+| acceptance lab | `check_accept` | regions, block recorder, quantization probe (a planted fault is found in its block), artifact parsing, every check passing and failing, suites and verdicts, the runner with a fake command, visual aids |
 | node surface | `check_node_surface` | field groups: nodes with many fields group them all, small groups, few fields visible before opening anything |
 | whole pipeline | `check_pipeline` | a full graph (dataset to saved adapter) through the graph runner; `pipeline_nodes.py` holds its tiny stand-ins |
 

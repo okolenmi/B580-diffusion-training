@@ -1,6 +1,6 @@
 # 75. Acceptance lab: tests the owner does not have to read, and instruments that make the next test cheaper
 
-Status: **T1 built (CPU-tested); T2 and T3 next.** `next/accept/`, beside `next/perf/`. NF4 frozen weights (rework/72) are built with it as the first user: whether a quantized network is
+Status: **T1 to T3 built (CPU-tested, not run on the card).** Manual: `next/manual/acceptance.md`. `next/accept/`, beside `next/perf/`. NF4 frozen weights (rework/72) are built with it as the first user: whether a quantized network is
 good enough is a question about *regions* of the network, and nothing answered it per region.
 
 ## Why
@@ -21,3 +21,11 @@ decide (does this padding look right, is this caption sane). So: automate the nu
 - A failed run is a verdict ("did not finish: last log lines"), not an exception.
 - The instruments are generic (regions, probes, sheets); a suite is the only place that knows a particular `TESTING.md` item.
 - Probes attach hooks only inside a window and detach after, like the perf lab's `ModuleTimer`.
+
+## As built
+T1: `regions.py`, `recorder.py` (`BlockRecorder`), `quantization.py` (`QuantizationProbe`, `ProbeResult`), `fixtures.py` (`DenoiserInputs`), `loading.py`, `quant-probe`.
+T2: `artifacts.py` (`RunArtifacts` parses the console format of `next/run.py`; a change to those lines needs the regexes changed with it), `checks.py`, `suites.py` (`SuiteBook`:
+speed, memory, nf4, determinism, allocator; scenario names are the ones `perf.hwcheck` runs, plus `{folder}` in an argument for per-scenario output paths), `verdict.py`
+(`Judge`, `write_verdict`), `acceptance.py` (`Acceptance`), commands `run`, `judge`, `list`. `hwcheck` ends by running `judge` as a command (perf does not import accept).
+T3: `visual.py` (`ImageSheet`, `PaddingSheet`), `padding-sheet`.
+Not done: checks over the memory csv (`--memory-log`) and the quantization probe's numbers (thresholds need a first real measurement); a suite for adapter file formats.

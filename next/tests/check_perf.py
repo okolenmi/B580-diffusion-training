@@ -241,7 +241,7 @@ def hwcheck():
         index = HwCheck(out, ["--file", "m.safetensors"], run_step=fake, say=lambda text: None, only={"hardware", "allocator", "bench"}).run()
         check(ran == ["hardware", "allocator expandable", "allocator plain", "bench"], "the steps run in order, each as its own process")
         text = index.read_text()
-        check("FAILED: exit code 1" in text and "bundle.zip" in text, "the index lists failures and names the bundle")
+        check("FAILED: exit code 1" in text and "bundle.zip" in text and "verdict/verdict.md" in text, "the index lists failures and names the bundle and the verdict")
         with zipfile.ZipFile(out / "bundle.zip") as archive:
             names = archive.namelist()
             big = archive.read("logs/bench.log")

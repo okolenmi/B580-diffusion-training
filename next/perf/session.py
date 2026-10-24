@@ -19,8 +19,8 @@ from .trace import KernelTrace
 
 class PerfSession:
     """Given to the trainer as ``perf``. ``step(n)`` wraps one optimizer step; steps before ``warmup`` run untouched (kernels get
-    built, shapes get seen), the next ``steps`` run under the module hooks and the profiler, each timed with the device idle at both
-    ends. ``observe`` receives the step's metrics (replayed or eager, phase times, peak memory); ``close`` writes the report."""
+    built, shapes get seen), the next ``steps`` are timed alone (the step time), the ``steps`` after them run under the module hooks
+    and the profiler (device and module times; their own wall time is inflated), each timed with the device idle at both ends. ``observe`` receives the step's metrics (replayed or eager, phase times, peak memory); ``close`` writes the report."""
 
     def __init__(self, model: nn.Module, device: str, folder: str | Path, *, warmup: int = 8, steps: int = 3, modules: bool = True,
                  trace: bool = False, quick_ceilings: bool = False, ceilings_path: str | Path | None = None, say: Callable[[str], None] = print, meta: dict | None = None):
@@ -31,7 +31,9 @@ class PerfSession:
         self._quick, self._say, self._meta = quick_ceilings, say, meta or {}
         self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
-        self.records: list[StepRecord] = []
+        self.records: list[StepRecord] = []  # profiled steps
+        self.clean: list[StepRecord] = []    # timed alone
+        self.seconds: dict[str, float] = {}  # what the report cost, by stage
         self._timer: ModuleTimer | None = None
         self._kernels: KernelTrace | None = None
         self._current: StepRecord | None = None
@@ -50,7 +52,11 @@ class PerfSession:
         if number < self.warmup or self.done:
             yield
             return
-        self._begin()
+        profiled = len(self.clean) >= self.steps
+        if profiled:
+            self._begin()
+        elif not self.clean:
+            self._say(f"perf: timing steps {self.warmup + 1} to {self.warmup + self.steps}, then profiling steps {self.warmup + self.steps + 1} to {self.warmup + 2 * self.steps}")
         self.clock.synchronize()
         started = time.perf_counter()
         self._current = StepRecord(number, 0.0)
@@ -59,9 +65,9 @@ class PerfSession:
         finally:
             self.clock.synchronize()
             self._current.wall_ms = (time.perf_counter() - started) * 1000
-            self.records.append(self._current)
+            (self.records if profiled else self.clean).append(self._current)
             self._current = None
-        if self.done:
+        if profiled and self.done:
             self._end()
 
     def observe(self, metrics: dict) -> None:
@@ -80,7 +86,6 @@ class PerfSession:
         if self._open:
             return
         self._open = True
-        self._say(f"perf: profiling steps {self.warmup + 1} to {self.warmup + self.steps}")
         if self.modules:
             self._timer = ModuleTimer(self.model, self.clock).attach()
         self._kernels = KernelTrace(self.device, trace_path=str(self.folder / "trace.json") if self.trace else None)
@@ -89,16 +94,31 @@ class PerfSession:
 
     def _end(self) -> None:
         self.clock.synchronize()
+        self._say("perf: window done, processing the profile (single-threaded, this takes a while on a real model) ...")
+        stages = self.seconds
+        self._lap(None)
         self._kernels.__exit__(None, None, None)
+        stages.update(self._kernels.result.seconds)
+        self._lap(None)
         records = []
         if self._timer is not None:
             self._timer.detach()
             records = self._timer.records()
+        self._lap("module timings", stages)
         ceilings = load_or_measure(self._ceilings_path, self.device, quick=self._quick)
-        self.report = ReportBuilder(ceilings, self.device, self._meta).build(self.records, self._kernels.result, records)
+        self._lap("ceilings", stages)
+        self.report = ReportBuilder(ceilings, self.device, self._meta).build(self.records, self._kernels.result, records, self.clean, stages)
+        self._lap("report build", stages)
         self.report_path = ReportWriter(self.folder).write(self.report)
-        self._say(f"perf: report written to {self.report_path}")
+        self._lap("report write", stages)
+        self._say(f"perf: report written to {self.report_path} (" + ", ".join(f"{k} {v:.1f} s" for k, v in stages.items()) + ")")
         self._open = False
+
+    def _lap(self, label: str | None, into: dict[str, float] | None = None) -> None:
+        now = time.perf_counter()
+        if label and into is not None:
+            into[label] = now - self._mark
+        self._mark = now
 
     def close(self) -> None:
         """Writes the report if the run ended inside the window."""
@@ -106,4 +126,4 @@ class PerfSession:
             self.steps = len(self.records)
             self._end()
         elif not self.records:
-            self._say(f"perf: the run ended before the window (warm-up {self.warmup} steps); nothing was profiled")
+            self._say(f"perf: the run ended before the profiled window (warm-up {self.warmup} steps, then {self.steps} timed and {self.steps} profiled); nothing was profiled")

@@ -30,6 +30,7 @@ from ..perf.matrix import Matrix, MatrixSpec, Outcome, Scenario
 from ..perf.modules import region_of, role_of
 from ..perf.rating import Rating
 from ..perf.session import PerfSession
+from ..perf.trace import KernelTrace
 from .check_engine import rig
 from .support import check, raises, run
 
@@ -90,6 +91,21 @@ def rules():
     check("Some steps in the window were much slower than the rest" in {f.title for f in findings_for(outliers)}, "slow steps are reported")
 
 
+def raw_events():
+    """The rows come from the profiler's raw events: counts, durations and operator self time agree with the averaged table."""
+    x, lin = torch.randn(16, 16), nn.Linear(16, 16)
+    trace = KernelTrace("cpu")
+    with trace:
+        for _ in range(20):
+            lin(x).sum().backward()
+    averaged = trace._collect_averaged()
+    fast = trace.result
+    names = {r.name: r for r in fast.rows}
+    check(fast.device_is_host and fast.ops > 0 and {"aten::addmm", "aten::sum"} <= set(names), "a CPU run reports host operators")
+    check(abs(fast.host_op_us - averaged.host_op_us) <= 0.01 * averaged.host_op_us + 1.0, "operator self time agrees with the averaged table")
+    check(set(trace.result.seconds) >= {"profiler stop", "events to rows"}, "the cost of reading the profile is recorded")
+
+
 def window():
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) / "report"
@@ -107,7 +123,9 @@ def window():
         check(session.report is not None and session.done, "the window closed and the report was built")
         check((folder / "report.md").exists() and (folder / "report.json").exists() and (folder / "ceilings.json").exists(), "report files and ceilings are written")
         report = json.loads((folder / "report.json").read_text())
-        check(report["budget"]["steps"] == 2 and report["meta"]["steps_in_window"] == 2 and session.records[0].step == 2, "only the window's steps are profiled, after the warm-up")
+        check(report["budget"]["steps"] == 2 and report["meta"]["steps_in_window"] == 2 and [r.step for r in session.clean] == [2, 3] and [r.step for r in session.records] == [4, 5],
+              "after the warm-up, steps are first timed alone and then profiled")
+        check(report["budget"]["wall_clean"] and report["budget"]["timed_steps"] == 2 and "profiler stop" in report["meta"]["report_seconds"], "the step time comes from the unprofiled steps and the report says what it cost")
         check(all(r.wall_ms > 0 and r.shape and r.shape[0] for r in session.records), "each step has a wall time and a shape")
         kinds = {m["kind"] for m in report["modules"]}
         check({"linear", "conv"} <= kinds, f"modules of the tiny UNet are timed ({sorted(kinds)})")
@@ -132,10 +150,10 @@ def short_run():
         said = []
         trainer._perf = PerfSession(denoiser.module(), "cpu", folder, warmup=10, steps=2, quick_ceilings=True, say=said.append)
         trainer.run()
-        check(not (folder / "report.md").exists() and any("before the window" in s for s in said), "a run shorter than the warm-up says so and writes nothing")
+        check(not (folder / "report.md").exists() and any("before the profiled window" in s for s in said), "a run shorter than the warm-up says so and writes nothing")
         out = rig(Path(tmp) / "b", steps=4, perf=None)
         trainer, denoiser = out[0], out[2]
-        trainer._perf = PerfSession(denoiser.module(), "cpu", folder, warmup=2, steps=5, quick_ceilings=True, say=lambda text: None)
+        trainer._perf = PerfSession(denoiser.module(), "cpu", folder, warmup=1, steps=2, quick_ceilings=True, say=lambda text: None)
         trainer.run()
         check((folder / "report.md").exists(), "a run that ends inside the window still reports the steps it got")
         raises(ValueError, lambda: PerfSession(denoiser.module(), "cpu", folder, steps=0), "an empty window is refused", contains="at least 1")
@@ -287,4 +305,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)

@@ -21,9 +21,10 @@ class ReportBuilder:
         self.ceilings, self.device, self.meta = ceilings, device, meta or {}
         self.rating = Rating(ceilings)
 
-    def build(self, steps: list[StepRecord], trace: TraceResult, records: list[ModuleRecord]) -> dict:
+    def build(self, steps: list[StepRecord], trace: TraceResult, records: list[ModuleRecord], clean: list[StepRecord] | None = None,
+              seconds: dict[str, float] | None = None) -> dict:
         eager = [s for s in steps if not s.replayed]
-        budget = build_budget(steps, trace)
+        budget = build_budget(steps, trace, clean)
         count = max(len(steps), 1)
         total = trace.device_us or 1.0
         categories = [{"category": name, "calls": c["calls"] / count, "device_ms": c["device_us"] / 1000 / count, "share": c["device_us"] / total}
@@ -35,7 +36,7 @@ class ReportBuilder:
         groups = self._groups(modules)
         report = {"meta": {"device": self.device, "ceilings": self.ceilings.to_json(), "steps_in_window": len(steps),
                            "eager_steps": len(eager), "replayed_steps": len(steps) - len(eager),
-                           "device_time_is_host_time": trace.device_is_host, **self.meta},
+                           "device_time_is_host_time": trace.device_is_host, "report_seconds": {k: round(v, 2) for k, v in (seconds or {}).items()}, **self.meta},
                   "budget": budget, "categories": categories, "kernels": kernels, "modules": modules, "groups": groups,
                   "reconciliation": self._reconcile(budget, modules, len(steps) - len(eager))}
         report["findings"] = [vars(f) for f in findings_for(report)]
@@ -108,7 +109,9 @@ class ReportWriter:
             out += ["> No device activity was recorded (a CPU run): kernel times below are host operator times and utilisation is not meaningful.", ""]
         out += [f"Window: {meta['steps_in_window']} steps ({meta['eager_steps']} eager, {meta['replayed_steps']} replayed). All times are per step.", "",
                 "## Step budget", "",
-                f"- wall {b['wall_ms']:.0f} ms (best {b['wall_ms_min']:.0f}); eager {_fmt(b['eager_ms'], '.0f')} ms, replayed {_fmt(b['replayed_ms'], '.0f')} ms",
+                f"- step {b['wall_ms']:.0f} ms, median of {b['timed_steps']} " + ("unprofiled steps" if b["wall_clean"] else "profiled steps (inflated by the profiler)")
+                + f" (best {b['wall_ms_min']:.0f}); eager {_fmt(b['eager_ms'], '.0f')} ms, replayed {_fmt(b['replayed_ms'], '.0f')} ms",
+                f"- the profiled window's steps took {_fmt(b['profiled_ms'], '.0f')} ms each (hooks and profiler); device and module times come from them",
                 f"- device busy {b['device_ms']:.0f} ms" + (f", utilisation {b['utilisation']:.0%}" if b["utilisation"] is not None else ""),
                 f"- {b['launches']:.0f} kernel launches, {b['ops']:.0f} operators, {b['host_us_per_launch']:.0f} us host time per launch"]
         if b.get("peak_mb") is not None:

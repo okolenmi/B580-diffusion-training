@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import torch
+from torch.autograd import DeviceType
 from torch.profiler import ProfilerActivity, profile
 
 from .categories import Categorizer
@@ -25,6 +27,7 @@ class TraceResult:
     ops: int = 0               # host-side operator calls
     host_op_us: float = 0.0    # time spent in them (self time)
     device_is_host: bool = False  # no device activity was recorded: the rows are host operators
+    seconds: dict[str, float] = field(default_factory=dict)  # what collecting cost, by stage
 
     @property
     def device_us(self) -> float:
@@ -62,13 +65,64 @@ class KernelTrace:
         return self
 
     def __exit__(self, *exc) -> None:
+        began = time.perf_counter()
         self._profiler.__exit__(*exc)
+        stopped = time.perf_counter()
         if exc[0] is None:
             self.result = self._collect()
+            self.result.seconds = {"profiler stop": stopped - began, "events to rows": time.perf_counter() - stopped}
             if self.trace_path:
+                exported = time.perf_counter()
                 self._profiler.export_chrome_trace(self.trace_path)
+                self.result.seconds["trace export"] = time.perf_counter() - exported
 
     def _collect(self) -> TraceResult:
+        """Reads the profiler's raw events. ``key_averages`` builds an event object and a call tree per event in Python on one thread
+        (minutes for a real step); the rows need only names, durations and, for host operators, self time."""
+        kineto = getattr(getattr(self._profiler, "profiler", None), "kineto_results", None)
+        if kineto is None:
+            return self._collect_averaged()
+        device: dict[str, list[float]] = {}
+        ops: list[tuple[int, int, int, str]] = []  # thread, start, end, name
+        for event in kineto.events():
+            if event.device_type() != DeviceType.CPU:
+                row = device.setdefault(event.name(), [0, 0.0])
+                row[0] += 1
+                row[1] += event.duration_ns() / 1000.0
+            elif event.activity_type() == "cpu_op" and not event.is_hidden_event():
+                ops.append((event.start_thread_id(), event.start_ns(), event.end_ns(), event.name()))
+        host: dict[str, list[float]] = {}
+        host_us = 0.0
+        for name, self_us in self._self_times(ops):
+            row = host.setdefault(name, [0, 0.0])
+            row[0] += 1
+            row[1] += self_us
+            host_us += self_us
+        result = TraceResult(ops=len(ops), host_op_us=host_us)
+        source = device or host
+        result.device_is_host = not device
+        result.rows = sorted((KernelRow(name, self.categorizer.category(name), int(calls), us, 0.0 if device else us) for name, (calls, us) in source.items()),
+                             key=lambda r: -r.device_us)
+        return result
+
+    @staticmethod
+    def _self_times(ops: list[tuple[int, int, int, str]]):
+        """(name, own microseconds) per operator: its duration minus the operators called inside it on the same thread."""
+        ops.sort(key=lambda o: (o[0], o[1], -o[2]))
+        own = [(end - start) / 1000.0 for _, start, end, _ in ops]
+        stack: list[int] = []
+        thread = None
+        for i, (tid, start, end, _) in enumerate(ops):
+            if tid != thread:
+                stack, thread = [], tid
+            while stack and ops[stack[-1]][2] <= start:
+                stack.pop()
+            if stack:
+                own[stack[-1]] -= (end - start) / 1000.0
+            stack.append(i)
+        return [(ops[i][3], max(own[i], 0.0)) for i in range(len(ops))]
+
+    def _collect_averaged(self) -> TraceResult:
         result = TraceResult()
         device_rows, host_rows = [], []
         for event in self._profiler.key_averages():

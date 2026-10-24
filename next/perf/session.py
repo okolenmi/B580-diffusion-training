@@ -23,11 +23,11 @@ class PerfSession:
     and the profiler (device and module times; their own wall time is inflated), each timed with the device idle at both ends. ``observe`` receives the step's metrics (replayed or eager, phase times, peak memory); ``close`` writes the report."""
 
     def __init__(self, model: nn.Module, device: str, folder: str | Path, *, warmup: int = 8, steps: int = 3, modules: bool = True,
-                 trace: bool = False, quick_ceilings: bool = False, ceilings_path: str | Path | None = None, say: Callable[[str], None] = print, meta: dict | None = None):
+                 trace: bool = False, provenance: bool = False, quick_ceilings: bool = False, ceilings_path: str | Path | None = None, say: Callable[[str], None] = print, meta: dict | None = None):
         if steps < 1:
             raise ValueError("perf.steps must be at least 1")
         self.model, self.device, self.folder = model, device, Path(folder)
-        self.warmup, self.steps, self.modules, self.trace = warmup, steps, modules, trace
+        self.warmup, self.steps, self.modules, self.trace, self.provenance = warmup, steps, modules, trace, provenance
         self._quick, self._say, self._meta = quick_ceilings, say, meta or {}
         self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
@@ -63,6 +63,7 @@ class PerfSession:
         try:
             yield
         finally:
+            self._current.enqueue_ms = (time.perf_counter() - started) * 1000
             self.clock.synchronize()
             self._current.wall_ms = (time.perf_counter() - started) * 1000
             (self.records if profiled else self.clean).append(self._current)
@@ -87,8 +88,8 @@ class PerfSession:
             return
         self._open = True
         if self.modules:
-            self._timer = ModuleTimer(self.model, self.clock).attach()
-        self._kernels = KernelTrace(self.device, trace_path=str(self.folder / "trace.json") if self.trace else None)
+            self._timer = ModuleTimer(self.model, self.clock, annotate=self.provenance).attach()
+        self._kernels = KernelTrace(self.device, trace_path=str(self.folder / "trace.json") if self.trace else None, provenance=self.provenance)
         self.folder.mkdir(parents=True, exist_ok=True)
         self._kernels.__enter__()
 

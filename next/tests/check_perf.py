@@ -13,6 +13,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
+from torch.autograd import DeviceType
 
 from types import SimpleNamespace
 
@@ -106,6 +107,66 @@ def raw_events():
     check(set(trace.result.seconds) >= {"profiler stop", "events to rows"}, "the cost of reading the profile is recorded")
 
 
+class FakeEvent:
+    """The accessors of a profiler event that the attribution reads."""
+
+    def __init__(self, name, device="cpu", activity="cpu_op", start=0, end=0, thread=1, corr=0, linked=0, shapes=(), dtypes=()):
+        self._v = dict(name=name, start_ns=start, end_ns=end, duration_ns=end - start, start_thread_id=thread, correlation_id=corr,
+                       linked_correlation_id=linked, shapes=[list(x) for x in shapes], dtypes=list(dtypes), activity_type=activity)
+        self._device = DeviceType.CPU if device == "cpu" else DeviceType.XPU
+
+    def device_type(self):
+        return self._device
+
+    def is_hidden_event(self):
+        return False
+
+    def __getattr__(self, field):
+        if field.startswith("_"):
+            raise AttributeError(field)
+        return lambda: self._v[field]
+
+
+def provenance():
+    """A kernel is tied, through its correlation id, to the operator chain and module range its launch happened in."""
+    from ..perf.categories import Categorizer
+    from ..perf.events import OpTree, read_events
+    from ..perf.provenance import ProvenanceBuilder, matmul_flops
+
+    events = [
+        FakeEvent("perf|input_blocks.1.0.attn|forward", activity="user_annotation", start=0, end=5050),
+        FakeEvent("aten::linear", start=100, end=5000),
+        FakeEvent("aten::addmm", start=200, end=4000, shapes=[[64], [128, 32], [32, 64]], dtypes=["c10::BFloat16"] * 3),
+        FakeEvent("xpu_launch", activity="xpu_runtime", start=300, end=320, corr=7),
+        FakeEvent("gemm_kernel", device="xpu", activity="kernel", start=9000, end=59_000, linked=7),
+        FakeEvent("aten::to", start=5100, end=6000),
+        FakeEvent("aten::copy_", start=5200, end=5900, shapes=[[8, 8], [8, 8]], dtypes=["c10::BFloat16", "float"]),
+        FakeEvent("xpu_launch", activity="xpu_runtime", start=5300, end=5310, corr=8),
+        FakeEvent("at::native::xpu::CopyScalarFunc", device="xpu", activity="kernel", start=60_000, end=90_000, linked=8),
+        FakeEvent("gemm_kernel", device="xpu", activity="kernel", start=91_000, end=141_000, linked=0),  # a replayed kernel: no launch recorded
+    ]
+    table = read_events(events, keep_raw=True)
+    tree = OpTree(table.ops)
+    result = ProvenanceBuilder(table, tree, Categorizer()).build()
+    rows = {r["kernel"]: r for r in result.rows if r["op"]}
+    gemm, cast = rows["gemm_kernel"], rows["at::native::xpu::CopyScalarFunc"]
+    check(gemm["op"] == "aten::linear > aten::addmm" and gemm["shapes"] == "64, 128x32, 32x64" and gemm["flops"] == 2 * 128 * 32 * 64, "a matrix kernel gets its operator chain, shapes and FLOPs")
+    check(cast["op"] == "aten::to > aten::copy_" and cast["dtypes"] == "bf16,f32" and cast["module"] == "", "a cast gets its operator chain and dtypes; outside a module range it has no module")
+    check(gemm["module"] == "input_blocks.attn" and result.modules["input_blocks.1.0.attn"]["forward"] == [50.0, 50.0], "kernel time is added to the module range it was launched in")
+    check(abs(result.coverage["operator"] - 80 / 130) < 1e-9 and any(r["op"] == "" for r in result.rows), "kernels without a launch stay unattributed and the coverage says how many")
+    check(matmul_flops("aten::bmm", [[4, 8, 16], [4, 16, 32]]) == 2 * 4 * 8 * 16 * 32 and matmul_flops("aten::relu", [[2, 2]]) is None, "FLOPs of batched matrix products, none for other operators")
+    tree_ops = {op.name: own for op, own in zip(tree.ops, tree.own_us)}
+    check(abs(tree_ops["aten::linear"] - 1.1) < 1e-9, "operator self time excludes the operators called inside")
+    report = {"categories": [{"category": "copy", "device_ms": 30.0}, {"category": "gemm", "device_ms": 70.0}],
+              "provenance": [{"category": "copy", "op": "aten::to > aten::copy_", "module": "attn", "device_ms": 30.0, "calls": 400, "dtypes": "bf16,f32", "shapes": "8x8, 8x8", "tflops": None, "efficiency": None},
+                             {"category": "gemm", "op": "aten::mm", "module": "ff", "device_ms": 20.0, "calls": 10, "dtypes": "bf16", "shapes": "9x9, 9x9", "tflops": 20.0, "efficiency": 0.2}],
+              "meta": {"provenance_coverage": {"operator": 0.1}, "profiler_event_kinds": {}}}
+    from ..perf.findings import AttributionCoverage, CopySources, GemmShapes
+    titles = {f.title for rule in (CopySources(), GemmShapes(), AttributionCoverage()) for f in rule.check(report)}
+    check(any("Copy kernels come from aten::to > aten::copy_" in t for t in titles) and any("runs at 20% of the ceiling" in t for t in titles) and "Kernels could not be tied to operators" in titles,
+          "the provenance rules name the cast source, the slow matrix shape and a failed attribution")
+
+
 def capture_is_skipped():
     """Module events are not recorded while a graph is captured: the capture runs the module without running its kernels."""
     from ..perf.clock import DeviceClock
@@ -160,6 +221,20 @@ def window():
         check(abs(sum(c["share"] for c in report["categories"]) - 1.0) < 1e-6, "category shares add up")
         text = (folder / "report.md").read_text()
         check("## Step budget" in text and "## Slowest piece groups" in text and "## Slowest kernels" in text, "the markdown has the sections")
+        check(not any(m._forward_hooks or m._backward_hooks for m in session.model.modules()), "hooks are removed after the window")
+
+
+def window_provenance():
+    """A profiled window with provenance on (a CPU run has no kernels, so the tables are empty) still writes a complete report."""
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "report"
+        out = rig(Path(tmp), steps=6, perf=None)
+        trainer, denoiser = out[0], out[2]
+        session = PerfSession(denoiser.module(), "cpu", folder, warmup=2, steps=2, quick_ceilings=True, provenance=True, say=lambda text: None)
+        trainer._perf = session
+        trainer.run()
+        report = json.loads((folder / "report.json").read_text())
+        check(report["provenance"] == [] and report["meta"]["module_times"] == "span" and report["regions"], "without kernels the module spans and regions are reported")
         check(not any(m._forward_hooks or m._backward_hooks for m in session.model.modules()), "hooks are removed after the window")
 
 
@@ -326,4 +401,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, capture_is_skipped, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)

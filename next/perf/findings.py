@@ -38,7 +38,47 @@ class LaunchBound(Rule):
                  if tried else "graph replay (trainer.graph=true) removes the launch cost if the capture can use the same kernels")
         return [Finding("The step is launch bound", gap,
                         f"the device is busy {b['utilisation']:.0%} of the step ({b['device_ms']:.0f} of {b['wall_ms']:.0f} ms) over "
-                        f"{b['launches']:.0f} launches and {b['ops']:.0f} operators per step, {b['host_us_per_launch']:.0f} us of host time per launch", lever)]
+                        f"{b['launches']:.0f} launches and {b['ops']:.0f} operators per step; the host had issued the step after {b.get('enqueue_ms') or 0:.0f} ms", lever)]
+
+
+class CopySources(Rule):
+    THRESHOLD = 0.08
+    TOP = 3
+
+    def check(self, report: dict) -> list[Finding]:
+        rows = [r for r in (report.get("provenance") or []) if r["category"] == "copy"]
+        total = sum(c["device_ms"] for c in report["categories"]) or 1.0
+        copy_ms = sum(r["device_ms"] for r in rows)
+        if not rows or copy_ms / total < self.THRESHOLD:
+            return []
+        return [Finding(f"Copy kernels come from {r['op'] or 'unknown operator'} in {r['module'] or 'no module'}", r["device_ms"],
+                        f"{r['calls']:.0f} calls per step, {r['dtypes'] or 'dtypes unknown'}, shapes {r['shapes'] or 'unknown'}",
+                        "avoid the cast (keep the tensor in the compute dtype, cache a cast copy, or fuse it into the neighbouring kernel)") for r in rows[: self.TOP]]
+
+
+class GemmShapes(Rule):
+    THRESHOLD = 0.5
+    MIN_MS = 4.0
+    TOP = 4
+
+    def check(self, report: dict) -> list[Finding]:
+        slow = [r for r in (report.get("provenance") or []) if r.get("efficiency") is not None and r["efficiency"] < self.THRESHOLD and r["device_ms"] >= self.MIN_MS]
+        slow.sort(key=lambda r: -(r["device_ms"] * (1 - r["efficiency"])))
+        return [Finding(f"Matrix product {r['shapes']} runs at {r['efficiency']:.0%} of the ceiling", r["device_ms"] * (1 - r["efficiency"]),
+                        f"{r['calls']:.0f} calls, {r['device_ms']:.1f} ms per step, {r['tflops']:.1f} TFLOPS, launched by {r['op']} in {r['module'] or 'no module'}",
+                        "a shape that is small or skinny for the card: batch it with its neighbours or change the layout") for r in slow[: self.TOP]]
+
+
+class AttributionCoverage(Rule):
+    THRESHOLD = 0.3
+
+    def check(self, report: dict) -> list[Finding]:
+        cov = (report.get("meta") or {}).get("provenance_coverage")
+        if cov is None or cov.get("operator", 0.0) >= self.THRESHOLD:
+            return []
+        return [Finding("Kernels could not be tied to operators", 0.0,
+                        f"only {cov.get('operator', 0.0):.0%} of kernel time has a launching operator (profiler event kinds: {(report.get("meta") or {}).get("profiler_event_kinds")})",
+                        "the device profiler does not link launches on this build; the provenance tables are incomplete")]
 
 
 class AttentionAsMath(Rule):
@@ -154,7 +194,7 @@ class Coverage(Rule):
         return out
 
 
-RULES: tuple[Rule, ...] = (LaunchBound(), AttentionAsMath(), CastCopyShare(), Int8Overhead(), ElementwiseTail(), RecomputeShare(), NewShapes(), SlowModules(), Coverage())
+RULES: tuple[Rule, ...] = (LaunchBound(), CopySources(), GemmShapes(), AttributionCoverage(), AttentionAsMath(), CastCopyShare(), Int8Overhead(), ElementwiseTail(), RecomputeShare(), NewShapes(), SlowModules(), Coverage())
 
 
 def findings_for(report: dict, rules: tuple[Rule, ...] = RULES) -> list[Finding]:

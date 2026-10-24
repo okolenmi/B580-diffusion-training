@@ -8,9 +8,11 @@ from typing import Any
 
 import torch
 from torch import nn
+from torch.autograd.profiler import record_function
 
 from .clock import DeviceClock
 from .cost import Cost, CostModel, element_bytes
+from .events import ANNOTATION
 
 KINDS = {"Linear": "linear", "AdaptedLinear": "linear", "Int8Linear": "linear", "Conv2d": "conv", "AdaptedConv2d": "conv",
          "GroupNorm": "norm", "LayerNorm": "norm", "CrossAttention": "attention", "FeedForward": "feedforward",
@@ -61,8 +63,10 @@ class ModuleTimer:
     """Attaches hooks to the selected modules of ``model`` while it is active. Events are recorded without waiting; ``records()``
     synchronises once and turns them into per-module totals over every call seen while attached."""
 
-    def __init__(self, model: nn.Module, clock: DeviceClock, cost_model: CostModel | None = None):
+    def __init__(self, model: nn.Module, clock: DeviceClock, cost_model: CostModel | None = None, annotate: bool = False):
         self.model, self.clock, self.cost_model = model, clock, cost_model or CostModel()
+        self.annotate = annotate  # also open a profiler range per call, so kernels can be tied to modules (events.py)
+        self._ranges: dict[Any, list[Any]] = {}
         self._records: dict[str, ModuleRecord] = {}
         self._handles: list[Any] = []
         self._open: dict[int, Any] = {}
@@ -105,16 +109,29 @@ class ModuleTimer:
         except AttributeError:
             return False
 
+    def _enter(self, key: Any, path: str, phase: str) -> None:
+        if self.annotate:
+            scope = record_function(f"{ANNOTATION}{path}|{phase}")
+            scope.__enter__()
+            self._ranges.setdefault(key, []).append(scope)
+
+    def _exit(self, key: Any) -> None:
+        stack = self._ranges.get(key)
+        if stack:
+            stack.pop().__exit__(None, None, None)
+
     def _forward_start(self, record: ModuleRecord):
         def hook(module, args):
             if not self.clock.capturing():
                 self._open.setdefault(id(module), []).append(self.clock.stamp())
+                self._enter(id(module), record.path, "recompute" if self._in_backward() else "forward")
         return hook
 
     def _forward_end(self, record: ModuleRecord, module: nn.Module):
         def hook(mod, args, output):
             if self.clock.capturing():  # a graph capture runs the module once without running its kernels
                 return
+            self._exit(id(mod))
             end = self.clock.stamp()
             start = self._open[id(mod)].pop()
             tag = "recompute" if self._in_backward() else "forward"
@@ -134,12 +151,14 @@ class ModuleTimer:
         def hook(module, grad_output):
             if not self.clock.capturing():
                 self._open.setdefault(("b", id(module)), []).append(self.clock.stamp())
+                self._enter(("b", id(module)), record.path, "backward")
         return hook
 
     def _backward_end(self, record: ModuleRecord):
         def hook(module, grad_input, grad_output):
             stack = self._open.get(("b", id(module)))
             if stack and not self.clock.capturing():
+                self._exit(("b", id(module)))
                 self._events.append((record.path, "backward", stack.pop(), self.clock.stamp()))
         return hook
 

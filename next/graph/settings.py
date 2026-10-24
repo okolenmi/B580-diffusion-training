@@ -134,6 +134,9 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 doc="Steps profiled, each with the device idle at both ends. Profiling slows these steps."),
     SettingSpec("perf.modules", "Time every module", "bool", True, group="Performance", advanced=True,
                 doc="Per-module forward, recompute and backward device time. Needs eager steps (a replayed graph runs no Python)."),
+    SettingSpec("perf.provenance", "Tie kernels to operators and modules", "bool", False, group="Performance", advanced=True,
+                doc="Records operator shapes and opens a profiler range per module call, so every kernel is reported with the operator, dtypes, shapes and module "
+                    "that launched it and module times are device times. Slower to process."),
     SettingSpec("perf.trace", "Write the kernel trace", "bool", False, group="Performance", advanced=True,
                 doc="Also write trace.json (open in a Chrome-trace viewer); large."),
     SettingSpec("conditioning.cache_mb", "Conditioning cache", "float", AUTO, allow_auto=True, unit="MB",

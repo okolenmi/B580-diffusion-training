@@ -10,6 +10,8 @@ from torch.autograd import DeviceType
 from torch.profiler import ProfilerActivity, profile
 
 from .categories import Categorizer
+from .events import OpTree, read_events
+from .provenance import Provenance, ProvenanceBuilder
 
 
 @dataclass
@@ -28,6 +30,7 @@ class TraceResult:
     host_op_us: float = 0.0    # time spent in them (self time)
     device_is_host: bool = False  # no device activity was recorded: the rows are host operators
     seconds: dict[str, float] = field(default_factory=dict)  # what collecting cost, by stage
+    provenance: Provenance | None = None
 
     @property
     def device_us(self) -> float:
@@ -49,15 +52,16 @@ class TraceResult:
 class KernelTrace:
     """Context manager around ``torch.profiler``. On a device the rows are its kernels; on a CPU they are host operators."""
 
-    def __init__(self, device: str = "cpu", categorizer: Categorizer | None = None, trace_path: str | None = None):
+    def __init__(self, device: str = "cpu", categorizer: Categorizer | None = None, trace_path: str | None = None, provenance: bool = False):
         self.categorizer = categorizer or Categorizer()
         self.trace_path = trace_path
+        self.provenance = provenance
         kind = str(device).split(":")[0]
         activities = [ProfilerActivity.CPU]
         if kind == "xpu" and hasattr(ProfilerActivity, "XPU"):
             activities.append(ProfilerActivity.XPU)
         self._device_kind = kind
-        self._profiler = profile(activities=activities)
+        self._profiler = profile(activities=activities, record_shapes=provenance)
         self.result = TraceResult()
 
     def __enter__(self) -> "KernelTrace":
@@ -82,45 +86,29 @@ class KernelTrace:
         kineto = getattr(getattr(self._profiler, "profiler", None), "kineto_results", None)
         if kineto is None:
             return self._collect_averaged()
+        table = read_events(kineto.events(), keep_raw=self.provenance)
+        tree = OpTree(table.ops)
         device: dict[str, list[float]] = {}
-        ops: list[tuple[int, int, int, str]] = []  # thread, start, end, name
-        for event in kineto.events():
-            if event.device_type() != DeviceType.CPU:
-                row = device.setdefault(event.name(), [0, 0.0])
-                row[0] += 1
-                row[1] += event.duration_ns() / 1000.0
-            elif event.activity_type() == "cpu_op" and not event.is_hidden_event():
-                ops.append((event.start_thread_id(), event.start_ns(), event.end_ns(), event.name()))
+        for name, _, us, _ in table.kernels:
+            row = device.setdefault(name, [0, 0.0])
+            row[0] += 1
+            row[1] += us
         host: dict[str, list[float]] = {}
         host_us = 0.0
-        for name, self_us in self._self_times(ops):
-            row = host.setdefault(name, [0, 0.0])
+        for op, own in zip(tree.ops, tree.own_us):
+            row = host.setdefault(op.name, [0, 0.0])
+            own = max(own, 0.0)
             row[0] += 1
-            row[1] += self_us
-            host_us += self_us
-        result = TraceResult(ops=len(ops), host_op_us=host_us)
+            row[1] += own
+            host_us += own
+        result = TraceResult(ops=len(tree.ops), host_op_us=host_us)
         source = device or host
         result.device_is_host = not device
         result.rows = sorted((KernelRow(name, self.categorizer.category(name), int(calls), us, 0.0 if device else us) for name, (calls, us) in source.items()),
                              key=lambda r: -r.device_us)
+        if self.provenance:
+            result.provenance = ProvenanceBuilder(table, tree, self.categorizer).build()
         return result
-
-    @staticmethod
-    def _self_times(ops: list[tuple[int, int, int, str]]):
-        """(name, own microseconds) per operator: its duration minus the operators called inside it on the same thread."""
-        ops.sort(key=lambda o: (o[0], o[1], -o[2]))
-        own = [(end - start) / 1000.0 for _, start, end, _ in ops]
-        stack: list[int] = []
-        thread = None
-        for i, (tid, start, end, _) in enumerate(ops):
-            if tid != thread:
-                stack, thread = [], tid
-            while stack and ops[stack[-1]][2] <= start:
-                stack.pop()
-            if stack:
-                own[stack[-1]] -= (end - start) / 1000.0
-            stack.append(i)
-        return [(ops[i][3], max(own[i], 0.0)) for i in range(len(ops))]
 
     def _collect_averaged(self) -> TraceResult:
         result = TraceResult()

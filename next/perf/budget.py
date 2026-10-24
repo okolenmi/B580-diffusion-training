@@ -16,6 +16,7 @@ class StepRecord:
     shape: tuple | None = None
     phase_ms: dict[str, float] = field(default_factory=dict)
     peak_mb: float | None = None
+    enqueue_ms: float | None = None  # until the host had issued the whole step, before it waited for the device
 
 
 def build_budget(steps: list[StepRecord], trace: TraceResult, clean: list[StepRecord] | None = None) -> dict:
@@ -30,6 +31,7 @@ def build_budget(steps: list[StepRecord], trace: TraceResult, clean: list[StepRe
                  "wall_ms": statistics.median(wall) if wall else 0.0,
                  "wall_ms_min": min(wall) if wall else 0.0,
                  "profiled_ms": _mean([s.wall_ms for s in steps]),
+                 "enqueue_ms": _median([s.enqueue_ms for s in timed if s.enqueue_ms is not None]),
                  "eager_ms": _median([s.wall_ms for s in timed if not s.replayed]),
                  "replayed_ms": _median([s.wall_ms for s in timed if s.replayed]),
                  "device_ms": trace.device_us / 1000 / count, "launches": trace.launches / count,

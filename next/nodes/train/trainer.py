@@ -29,7 +29,7 @@ from ...graph.events import CheckpointDue, StepFinished
 class DiffusionTrainerNode(Node):
     DISPLAY_NAME = "Diffusion Trainer"
     CATEGORY = "Training"
-    READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.ceilings", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace")
+    READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.ceilings", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace", "perf.provenance")
     GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     INPUTS = {
         "batches": Port("batches", Batcher),
@@ -147,7 +147,7 @@ class DiffusionTrainerNode(Node):
         from ...perf.session import PerfSession  # only a profiling run pays for the import
         return PerfSession(model.denoiser.module(), str(model.device), folder, warmup=int(settings.get("perf.warmup_steps")),
                            steps=int(settings.get("perf.steps")), modules=bool(settings.get("perf.modules")),
-                           trace=bool(settings.get("perf.trace")), ceilings_path=settings.get("perf.ceilings") or None, say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
+                           trace=bool(settings.get("perf.trace")), provenance=bool(settings.get("perf.provenance")), ceilings_path=settings.get("perf.ceilings") or None, say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
                            meta={"base_precision": (model.info or {}).get("base_precision", "native")})
 
     @staticmethod

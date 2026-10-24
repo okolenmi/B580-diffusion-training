@@ -80,7 +80,7 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
     int8 = ("--param", "adapter.base_precision=int8")
     graph = ("--set", "trainer.graph=true")
     measured = ("--param", "trainer.checkpoint_by=measured", "--param", "trainer.tune_checkpointing=true")
-    window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}")  # one measurement of the ceilings for every scenario
+    window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}", "--set", "perf.provenance=true")  # one measurement of the ceilings for every scenario
     S = lambda name, *args, env=(): Scenario(name, (*window, *args), tuple(env))  # noqa: E731
     return [S("native eager"), S("native graph", *graph), S("int8 eager", *int8), S("int8 graph", *int8, *graph),
             S("int8 dx-int8 eager", *int8, "--param", "adapter.int8_grad=int8"), S("int8 dx-int8 graph", *int8, "--param", "adapter.int8_grad=int8", *graph),
@@ -111,6 +111,7 @@ class HwCheck:
         return [Step("hardware", [*m, "hardware", "--out", str(out / "hardware")], 300),
                 Step("allocator expandable", [*m, "allocator", "--device", self.device], 300, (("PYTORCH_ALLOC_CONF", "expandable_segments:True"),)),
                 Step("allocator plain", [*m, "allocator", "--device", self.device], 300, (("PYTORCH_ALLOC_CONF", "expandable_segments:False"),)),
+                Step("events", [*m, "events", "--device", self.device, "--out", str(out / "events")], 300),
                 Step("bench", [*m, "bench", "--device", self.device, "--out", str(out / "bench"), *self.bench_args], 1800)]
 
     def run(self) -> Path:

@@ -13,6 +13,7 @@ from .comparison import Comparison
 from .bench import SUITES, BenchRunner, context_for
 from .hardware import AllocatorProbe, HardwareReport
 from .hwcheck import HwCheck, TrainArguments
+from .probe import EventsProbe
 from .matrix import Matrix, MatrixSpec, SubprocessRunner
 from .report import ReportWriter
 
@@ -38,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     allocator = sub.add_parser("allocator", help="print what the allocator reserves in a fragmenting pattern (run under different PYTORCH_ALLOC_CONF)")
     allocator.add_argument("--device", default="xpu")
     allocator.add_argument("--quick", action="store_true")
+    events = sub.add_parser("events", help="known operations under the profiler: do launches link to operators on this build?")
+    events.add_argument("--device", default="xpu")
+    events.add_argument("--out", default="perf-events")
     bench = sub.add_parser("bench", help="micro-benchmarks of one operation at a time, rated against the ceilings")
     bench.add_argument("--device", default="xpu")
     bench.add_argument("--quick", action="store_true", help="tiny sizes (a CPU, a smoke run)")
@@ -51,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--device", default="xpu")
     check.add_argument("--steps", type=int, default=28)
     check.add_argument("--warmup", type=int, default=20, help="steps before the profiled window (graph capture and timing need several sightings per shape)")
-    check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "bench", "matrix", "verdict"), help="default: all")
+    check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "events", "bench", "matrix", "verdict"), help="default: all")
     TrainArguments.add_to(check)
     args = parser.parse_args(argv)
     if args.command == "hardware":
@@ -65,6 +69,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "allocator":
         print(json.dumps(AllocatorProbe(args.device, args.quick).run()))
+        return 0
+    if args.command == "events":
+        probe = EventsProbe(args.device)
+        print(probe.write(probe.run(), args.out))
         return 0
     if args.command == "bench":
         ctx = context_for(args.device, args.quick, args.out, args.batch, args.size, args.backend)

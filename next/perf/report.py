@@ -14,6 +14,8 @@ from .trace import TraceResult
 
 TOP_KERNELS = 25
 TOP_MODULES = 30
+PROVENANCE_ROWS = 150
+PROVENANCE_SHOWN = 25
 
 
 class ReportBuilder:
@@ -32,23 +34,36 @@ class ReportBuilder:
         kernels = [{"name": r.name, "category": r.category, "calls": r.calls / count, "device_ms": r.device_us / 1000 / count,
                     "us_per_call": r.device_us / r.calls if r.calls else 0.0} for r in trace.rows[:TOP_KERNELS]]
         # kernels outside the top list still count in the categories; the top list is for reading
-        modules = self._modules(records, len(eager))
+        prov = trace.provenance
+        modules = self._modules(records, len(eager), prov)
         groups = self._groups(modules)
         report = {"meta": {"device": self.device, "ceilings": self.ceilings.to_json(), "steps_in_window": len(steps),
                            "eager_steps": len(eager), "replayed_steps": len(steps) - len(eager),
-                           "device_time_is_host_time": trace.device_is_host, "report_seconds": {k: round(v, 2) for k, v in (seconds or {}).items()}, **self.meta},
+                           "device_time_is_host_time": trace.device_is_host, "module_times": "device" if prov and prov.modules else "span",
+                           "provenance_coverage": prov.coverage if prov else None, "profiler_event_kinds": prov.kinds if prov else None, "report_seconds": {k: round(v, 2) for k, v in (seconds or {}).items()}, **self.meta},
                   "budget": budget, "categories": categories, "kernels": kernels, "modules": modules, "groups": groups,
+                  "regions": self._regions(modules, budget["device_ms"]), "provenance": self._provenance(prov, len(eager)),
                   "reconciliation": self._reconcile(budget, modules, len(steps) - len(eager))}
         report["findings"] = [vars(f) for f in findings_for(report)]
         return report
 
-    def _modules(self, records: list[ModuleRecord], eager_steps: int) -> list[dict]:
+    def _modules(self, records: list[ModuleRecord], eager_steps: int, prov=None) -> list[dict]:
+        """Per module times. With provenance they are the device time of the kernels launched inside the module's call (the host is
+        slow under the profiler, so spans between two timestamps mostly measure waiting); without, the spans."""
         n = max(eager_steps, 1)
+        device = prov.modules if prov and prov.modules else None
         rows = []
         for r in records:
-            own = (r.self_forward_ms + r.self_recompute_ms + r.self_backward_ms) / n
+            span = (r.forward_ms / n, r.recompute_ms / n, r.backward_ms / n, (r.self_forward_ms + r.self_recompute_ms + r.self_backward_ms) / n)
+            if device is not None:
+                phases = device.get(r.path, {})
+                part = lambda phase, index: phases.get(phase, (0.0, 0.0))[index] / 1000.0 / n  # noqa: E731
+                fwd, rec, bwd = part("forward", 1), part("recompute", 1), part("backward", 1)
+                own = sum(part(phase, 0) for phase in ("forward", "recompute", "backward"))
+            else:
+                fwd, rec, bwd, own = span
             row = {"path": r.path, "kind": r.kind, "region": r.region, "role": r.role, "int8": r.int8, "calls": r.calls / n,
-                   "fwd_ms": r.forward_ms / n, "recompute_ms": r.recompute_ms / n, "bwd_ms": r.backward_ms / n,
+                   "fwd_ms": fwd, "recompute_ms": rec, "bwd_ms": bwd, "span_ms": span[3],
                    "self_ms": own, "ideal_ms": None, "recoverable_ms": None, "efficiency": None, "bound": None,
                    "flops": None, "bytes": None, "shapes": [list(s) for s in r.shapes]}
             if r.cost is not None and own > 0:
@@ -60,6 +75,34 @@ class ReportBuilder:
                            flops=r.cost.flops, bytes=r.cost.bytes)
             rows.append(row)
         return sorted(rows, key=lambda m: -m["self_ms"])
+
+    @staticmethod
+    def _regions(modules: list[dict], device_ms: float) -> list[dict]:
+        merged: dict[str, dict] = {}
+        for m in modules:
+            g = merged.setdefault(m["region"], {"region": m["region"], "self_ms": 0.0, "rated_ms": 0.0, "ideal_ms": 0.0})
+            g["self_ms"] += m["self_ms"]
+            if m["ideal_ms"] is not None:
+                g["rated_ms"] += m["self_ms"]
+                g["ideal_ms"] += m["ideal_ms"]
+        for g in merged.values():
+            g["share"] = g["self_ms"] / device_ms if device_ms else 0.0
+            g["efficiency"] = g["ideal_ms"] / g["rated_ms"] if g["rated_ms"] else None
+        return sorted(merged.values(), key=lambda g: -g["self_ms"])
+
+    def _provenance(self, prov, eager_steps: int) -> list[dict]:
+        if prov is None:
+            return []
+        n, ceiling = max(eager_steps, 1), self.ceilings.gemm_tflops
+        rows = []
+        for r in prov.rows[:PROVENANCE_ROWS]:
+            row = {k: r[k] for k in ("category", "kernel", "op", "shapes", "dtypes", "module", "region")}
+            row.update(calls=r["calls"] / n, device_ms=r["device_us"] / 1000 / n, tflops=None, efficiency=None)
+            if r["flops"] and r["device_us"]:
+                row["tflops"] = r["flops"] * r["calls"] / r["device_us"] / 1e6
+                row["efficiency"] = row["tflops"] / ceiling if ceiling else None
+            rows.append(row)
+        return rows
 
     def _groups(self, modules: list[dict]) -> list[dict]:
         merged: dict[tuple, dict] = {}
@@ -102,6 +145,23 @@ class ReportWriter:
         (self.folder / "report.md").write_text(self.markdown(report))
         return self.folder / "report.md"
 
+    @staticmethod
+    def _provenance_markdown(report: dict) -> list[str]:
+        rows, meta = report.get("provenance") or [], report["meta"]
+        if not rows:
+            return []
+        cov = meta.get("provenance_coverage") or {}
+        out = ["", "## Where device time comes from", "",
+               f"Kernels tied to the operator that launched them: {cov.get('operator', 0):.0%} of kernel time; to a module: {cov.get('module', 0):.0%} (replayed graph steps launch nothing, so they stay unattributed). "
+               "Times are per eager step.", "",
+               "### Everything except matrix products, largest first", "", "| ms | calls | category | operator | dtypes | shapes | module | kernel |", "|---:|---:|---|---|---|---|---|---|"]
+        rest = [r for r in rows if r["tflops"] is None][:PROVENANCE_SHOWN]
+        out += [f"| {r['device_ms']:.2f} | {r['calls']:.0f} | {r['category']} | {r['op'] or '?'} | {r['dtypes']} | {r['shapes']} | {r['module']} | `{r['kernel'][:60]}` |" for r in rest]
+        out += ["", "### Matrix products by shape", "", "| ms | calls | operator | shapes | module | TFLOPS | of ceiling |", "|---:|---:|---|---|---|---:|---:|"]
+        mm = [r for r in rows if r["tflops"] is not None][:PROVENANCE_SHOWN]
+        out += [f"| {r['device_ms']:.2f} | {r['calls']:.0f} | {r['op']} | {r['shapes']} | {r['module']} | {r['tflops']:.1f} | {_fmt(None if r['efficiency'] is None else r['efficiency'] * 100, '.0f')}% |" for r in mm]
+        return out
+
     def markdown(self, report: dict) -> str:
         b, meta = report["budget"], report["meta"]
         out = [f"# Performance report ({meta['device']})", ""]
@@ -111,6 +171,7 @@ class ReportWriter:
                 "## Step budget", "",
                 f"- step {b['wall_ms']:.0f} ms, median of {b['timed_steps']} " + ("unprofiled steps" if b["wall_clean"] else "profiled steps (inflated by the profiler)")
                 + f" (best {b['wall_ms_min']:.0f}); eager {_fmt(b['eager_ms'], '.0f')} ms, replayed {_fmt(b['replayed_ms'], '.0f')} ms",
+                f"- the host had issued the whole step after {_fmt(b.get('enqueue_ms'), '.0f')} ms (the rest of the step it waited for the device)",
                 f"- the profiled window's steps took {_fmt(b['profiled_ms'], '.0f')} ms each (hooks and profiler); device and module times come from them",
                 f"- device busy {b['device_ms']:.0f} ms" + (f", utilisation {b['utilisation']:.0%}" if b["utilisation"] is not None else ""),
                 f"- {b['launches']:.0f} kernel launches, {b['ops']:.0f} operators, {b['host_us_per_launch']:.0f} us host time per launch"]
@@ -127,7 +188,11 @@ class ReportWriter:
         out += ["", "## Measured ceilings (what 'ideal' means here)", "",
                 f"gemm {_fmt(c.get('gemm_tflops'))} TFLOPS, int8 {_fmt(c.get('int8_tops'))} TOPS, copy {_fmt(c.get('copy_gbps'))} GB/s, "
                 f"dispatch {_fmt(c.get('dispatch_us'))} us, queued launch {_fmt(c.get('launch_us'))} us. Backward costs are estimates (see perf/rating.py).",
-                "", "## Slowest piece groups by recoverable time", "",
+                "", "## Device time by model region", "", "| region | ms | share | ideal ms (rated modules) | efficiency |", "|---|---:|---:|---:|---:|"]
+        out += [f"| {g['region']} | {g['self_ms']:.1f} | {g['share']:.0%} | {g['ideal_ms']:.1f} | {_fmt(None if g['efficiency'] is None else g['efficiency'] * 100, '.0f')}{'' if g['efficiency'] is None else '%'} |"
+                for g in report["regions"]]
+        out += self._provenance_markdown(report)
+        out += ["", "## Slowest piece groups by recoverable time", "",
                 "| kind | role | region | layers | ms | ideal ms | efficiency | bound | recoverable ms |", "|---|---|---|---:|---:|---:|---:|---|---:|"]
         out += [f"| {g['kind']}{' int8' if g['int8'] else ''} | {g['role']} | {g['region']} | {g['count']} | {g['total_ms']:.1f} | {g['ideal_ms']:.1f} | "
                 f"{g['efficiency']:.0%} | {g['bound']} | {g['recoverable_ms']:.1f} |" for g in report["groups"][:TOP_MODULES]]

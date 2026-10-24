@@ -5,8 +5,8 @@
 | hardware | ok | 2 |
 | allocator expandable | ok | 2 |
 | allocator plain | ok | 2 |
-| bench | ok | 24 |
-| matrix | ok | 3461 |
+| bench | ok | 26 |
+| matrix | FAILED: 6 of 13 scenarios failed | 1294 |
 | verdict | ok | 2 |
 
 Send `bundle.zip` (text files only), or these files: `hardware/hardware.md`, `bench/bench.md`, `matrix/summary.md`, the `report.md` inside each `matrix/<scenario>/` folder,

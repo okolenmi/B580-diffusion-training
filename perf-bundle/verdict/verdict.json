@@ -13,8 +13,8 @@
    },
    {
     "check": "native graph finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \nstep 25/28  loss 0.1117  5839 ms  epoch 1  [2x64x128 new]  graphs 2 (18 replays)  device 9046 MB (live 5549, step peak 6305, cached 7542)\nstep 26/28  loss 0.0226  5931 ms  epoch 1  [2x64x128]  graphs 2 (18 replays)  device 9054 MB (live 5549, step peak 6305, cached 7542)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:22:00 7363:7363 ActivityProfilerController.cpp:455] profiler_stop\n[  73.7s] DiffusionTrainerNode: 70.1s  allocated 5549, reserved 7542, device 9049 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
@@ -25,8 +25,8 @@
    },
    {
     "check": "int8 graph finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \n       673  other programs\nstep 26/28  loss 0.0226  6918 ms  epoch 1  [2x64x128]  graphs 2 (18 replays)  device 7506 MB (live 3489, step peak 4246, cached 5708)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:25:22 7512:7512 ActivityProfilerController.cpp:455] profiler_stop\n[  96.0s] DiffusionTrainerNode: 80.9s  allocated 3489, reserved 5708, device 7506 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
@@ -37,26 +37,26 @@
    },
    {
     "check": "int8 dx-int8 graph finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \n       673  other programs\nstep 26/28  loss 0.0226  7463 ms  epoch 1  [2x64x128]  graphs 2 (18 replays)  device 7519 MB (live 3489, step peak 4253, cached 5710)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:29:03 7724:7724 ActivityProfilerController.cpp:455] profiler_stop\n[ 103.5s] DiffusionTrainerNode: 88.4s  allocated 3489, reserved 5710, device 7519 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
     "check": "native graph attention-math_bf16 finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \nstep 25/28  loss 0.1117  6272 ms  epoch 1  [2x64x128 new]  graphs 2 (18 replays)  device 8749 MB (live 5549, step peak 6305, cached 7142)\nstep 26/28  loss 0.0226  6385 ms  epoch 1  [2x64x128]  graphs 2 (18 replays)  device 8717 MB (live 5549, step peak 6305, cached 7142)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:34:50 7967:7967 ActivityProfilerController.cpp:455] profiler_stop\n[  73.6s] DiffusionTrainerNode: 69.9s  allocated 5549, reserved 7142, device 8701 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
     "check": "native graph attention-chunked_bf16 finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \nstep 25/28  loss 0.1118  6369 ms  epoch 1  [2x64x128 new]  graphs 2 (4 replays)  device 8928 MB (live 5548, step peak 6304, cached 7362)\nstep 26/28  loss 0.0226  6421 ms  epoch 1  [2x64x128]  graphs 2 (4 replays)  device 8948 MB (live 5548, step peak 6304, cached 7362)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:36:14 8171:8171 ActivityProfilerController.cpp:455] profiler_stop\n[  81.0s] DiffusionTrainerNode: 77.1s  allocated 5548, reserved 7362, device 8919 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
     "check": "int8 graph attention-chunked_bf16 finished",
-    "status": "PASS",
-    "message": "the run finished",
+    "status": "FAIL",
+    "message": "the run did not finish: run: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. \n       574  other programs\nstep 26/28  loss 0.0226  7486 ms  epoch 1  [2x64x128]  graphs 2 (18 replays)  device 7253 MB (live 3489, step peak 4246, cached 5548)\nperf: window done, processing the profile (single-threaded, this takes a while on a real model) ...\nUSDT:2026-10-24 20:37:58 8252:8252 ActivityProfilerController.cpp:455] profiler_stop\n[ 103.3s] DiffusionTrainerNode: 87.0s  allocated 3489, reserved 5548, device 7253 MB\nrun: failed: RuntimeError: Profiling information is unavailable for events returned from a submission to a queue in the recording state. ",
     "reason": ""
    },
    {
@@ -68,7 +68,7 @@
    {
     "check": "native graph loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
@@ -80,7 +80,7 @@
    {
     "check": "int8 graph loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
@@ -92,25 +92,25 @@
    {
     "check": "int8 dx-int8 graph loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
     "check": "native graph attention-math_bf16 loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
     "check": "native graph attention-chunked_bf16 loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
     "check": "int8 graph attention-chunked_bf16 loss finite",
     "status": "PASS",
-    "message": "28 losses, all finite",
+    "message": "26 losses, all finite",
     "reason": ""
    },
    {
@@ -122,61 +122,61 @@
    {
     "check": "int8 graph within 15% of native graph",
     "status": "PASS",
-    "message": "median step 1042 ms against 916 ms: x1.14 (limit x1.15)",
+    "message": "median step 952 ms against 849 ms: x1.12 (limit x1.15)",
     "reason": "TESTING 25 pass criterion"
    },
    {
     "check": "native graph no slower than eager",
     "status": "PASS",
-    "message": "median step 916 ms against 1076 ms: x0.85 (limit x1.03)",
+    "message": "median step 849 ms against 949 ms: x0.89 (limit x1.03)",
     "reason": "TESTING 26: replay is dropped when it does not pay, the cost is the timed replays"
    },
    {
     "check": "int8 graph no slower than eager",
     "status": "PASS",
-    "message": "median step 1042 ms against 1673 ms: x0.62 (limit x1.03)",
+    "message": "median step 952 ms against 1330 ms: x0.72 (limit x1.03)",
     "reason": "TESTING 26"
    },
    {
     "check": "int8 graph decision",
     "status": "PASS",
-    "message": "(2, 4, 100, 64): replay 992 ms against 1492 ms eager kept",
+    "message": "(2, 4, 100, 64): replay 914 ms against 1267 ms eager kept",
     "reason": "measured: int8 replay kept with a small gain"
    },
    {
     "check": "native graph decision",
     "status": "PASS",
-    "message": "(2, 4, 100, 64): replay 869 ms against 1076 ms eager kept",
+    "message": "(2, 4, 100, 64): replay 810 ms against 918 ms eager kept",
     "reason": "measured: dropped with the math attention; the bf16 attention modes may change it"
    },
    {
     "check": "int8 gradient path int8 no slower than dense",
     "status": "PASS",
-    "message": "median step 956 ms against 1042 ms: x0.92 (limit x1.00)",
+    "message": "median step 929 ms against 952 ms: x0.98 (limit x1.00)",
     "reason": "TESTING 25: which gradient path to prefer"
    },
    {
     "check": "math_bf16 attention beats math in a graph",
     "status": "PASS",
-    "message": "median step 713 ms against 916 ms: x0.78 (limit x1.00)",
+    "message": "median step 691 ms against 849 ms: x0.81 (limit x1.00)",
     "reason": "TESTING 28"
    },
    {
     "check": "chunked_bf16 attention beats math in a graph",
     "status": "FAIL",
-    "message": "median step 968 ms against 916 ms: x1.06, over x1.00",
+    "message": "median step 1036 ms against 849 ms: x1.22, over x1.00",
     "reason": "TESTING 28"
    },
    {
     "check": "int8 loss close to native",
     "status": "PASS",
-    "message": "mean loss over the last 10 steps 0.1050 against 0.1050 (0.0%, limit 15%)",
+    "message": "mean loss over the last 10 steps 0.1050 against 0.1049 (0.1%, limit 15%)",
     "reason": "the int8 network is not the native one; a wide band catches divergence, not noise"
    },
    {
     "check": "chunked_bf16 loss close to math",
     "status": "PASS",
-    "message": "mean loss over the last 10 steps 0.1050 against 0.1050 (0.0%, limit 10%)",
+    "message": "mean loss over the last 10 steps 0.1268 against 0.1268 (0.0%, limit 10%)",
     "reason": "TESTING 28: scores rounded to bf16"
    }
   ]
@@ -202,7 +202,7 @@
    {
     "check": "allocator setting changes the peak?",
     "status": "LOOK",
-    "message": "device_mb peaks native expandable-segments 7922 MB, native no-expandable-segments 8474 MB. Equal peaks mean the setting has no effect on this workload (TESTING 24).",
+    "message": "device_mb peaks native expandable-segments 7800 MB, native no-expandable-segments 8452 MB. Equal peaks mean the setting has no effect on this workload (TESTING 24).",
     "reason": "TESTING 24, expandable segments"
    }
   ]

@@ -67,6 +67,7 @@ class ModuleTimer:
         self._handles: list[Any] = []
         self._open: dict[int, Any] = {}
         self._events: list[tuple[str, str, Any, Any]] = []  # path, tag, start, end
+        self.skipped = 0
 
     def attach(self) -> "ModuleTimer":
         paths: dict[str, str] = {}
@@ -106,11 +107,14 @@ class ModuleTimer:
 
     def _forward_start(self, record: ModuleRecord):
         def hook(module, args):
-            self._open.setdefault(id(module), []).append(self.clock.stamp())
+            if not self.clock.capturing():
+                self._open.setdefault(id(module), []).append(self.clock.stamp())
         return hook
 
     def _forward_end(self, record: ModuleRecord, module: nn.Module):
         def hook(mod, args, output):
+            if self.clock.capturing():  # a graph capture runs the module once without running its kernels
+                return
             end = self.clock.stamp()
             start = self._open[id(mod)].pop()
             tag = "recompute" if self._in_backward() else "forward"
@@ -128,13 +132,14 @@ class ModuleTimer:
 
     def _backward_start(self, record: ModuleRecord):
         def hook(module, grad_output):
-            self._open.setdefault(("b", id(module)), []).append(self.clock.stamp())
+            if not self.clock.capturing():
+                self._open.setdefault(("b", id(module)), []).append(self.clock.stamp())
         return hook
 
     def _backward_end(self, record: ModuleRecord):
         def hook(module, grad_input, grad_output):
             stack = self._open.get(("b", id(module)))
-            if stack:
+            if stack and not self.clock.capturing():
                 self._events.append((record.path, "backward", stack.pop(), self.clock.stamp()))
         return hook
 
@@ -142,7 +147,11 @@ class ModuleTimer:
         self.clock.synchronize()
         for path, tag, start, end in self._events:
             record = self._records[path]
-            ms = self.clock.elapsed_ms(start, end)
+            try:
+                ms = self.clock.elapsed_ms(start, end)
+            except RuntimeError:  # an event recorded into a graph under capture that capturing() did not see
+                self.skipped += 1
+                continue
             if tag == "forward":
                 record.forward_ms += ms
             elif tag == "recompute":

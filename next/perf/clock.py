@@ -21,6 +21,17 @@ class DeviceClock:
         if self.module is not None and hasattr(self.module, "synchronize"):
             self.module.synchronize()
 
+    def capturing(self) -> bool:
+        """True while the current stream records a device graph: events made then carry no timing, and the work in it does not run."""
+        for owner in (self.module, getattr(self.module, "graphs", None)):
+            probe = getattr(owner, "is_current_stream_capturing", None)
+            if probe is not None:
+                try:
+                    return bool(probe())
+                except RuntimeError:
+                    return False
+        return False
+
     def stamp(self) -> Any:
         if self.has_events:
             event = self.module.Event(enable_timing=True)

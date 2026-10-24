@@ -106,6 +106,27 @@ def raw_events():
     check(set(trace.result.seconds) >= {"profiler stop", "events to rows"}, "the cost of reading the profile is recorded")
 
 
+def capture_is_skipped():
+    """Module events are not recorded while a graph is captured: the capture runs the module without running its kernels."""
+    from ..perf.clock import DeviceClock
+    from ..perf.modules import ModuleTimer
+
+    clock = DeviceClock("cpu")
+    state = {"capturing": False}
+    clock.capturing = lambda: state["capturing"]
+    model = nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 4))
+    timer = ModuleTimer(model, clock).attach()
+    x = torch.randn(2, 4, requires_grad=True)
+    model(x).sum().backward()
+    state["capturing"] = True
+    model(x).sum().backward()
+    state["capturing"] = False
+    timer.detach()
+    records = {r.path: r for r in timer.records()}
+    check(records and all(r.calls == 1 for r in records.values()), "a pass made while capturing is not counted")
+    check(DeviceClock("cpu").capturing() is False, "a CPU clock is never capturing")
+
+
 def window():
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) / "report"
@@ -305,4 +326,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, capture_is_skipped, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)

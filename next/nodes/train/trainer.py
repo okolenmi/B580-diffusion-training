@@ -145,9 +145,9 @@ class DiffusionTrainerNode(Node):
         if not folder:
             return None
         from ...perf.session import PerfSession  # only a profiling run pays for the import
-        return PerfSession(model.denoiser.module(), str(model.device), folder, warmup=int(settings.get("perf.warmup_steps", 8)),
-                           steps=int(settings.get("perf.steps", 3)), modules=bool(settings.get("perf.modules", True)),
-                           trace=bool(settings.get("perf.trace", False)), ceilings_path=settings.get("perf.ceilings") or None, say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
+        return PerfSession(model.denoiser.module(), str(model.device), folder, warmup=int(settings.get("perf.warmup_steps")),
+                           steps=int(settings.get("perf.steps")), modules=bool(settings.get("perf.modules")),
+                           trace=bool(settings.get("perf.trace")), ceilings_path=settings.get("perf.ceilings") or None, say=lambda text: self.context.report("perf", {"node": self.uid, "message": text}),
                            meta={"base_precision": (model.info or {}).get("base_precision", "native")})
 
     @staticmethod

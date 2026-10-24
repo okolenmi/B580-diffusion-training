@@ -14,6 +14,10 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from types import SimpleNamespace
+
+from ..graph import ExecutionContext, SettingsRegistry
+from ..nodes.train.trainer import DiffusionTrainerNode
 from ..perf import bench as bench_module
 from ..perf.bench import BenchRunner, context_for
 from ..perf.categories import Categorizer
@@ -244,6 +248,19 @@ def train_arguments():
     check(done.returncode == 0 and "--models" in done.stdout, "that subcommand is one next.run really has")
 
 
+def node_session():
+    """The trainer node reads the perf settings through its declared view, the way a real run does."""
+    model = SimpleNamespace(denoiser=SimpleNamespace(module=lambda: nn.Linear(2, 2)), device=torch.device("cpu"), info={"base_precision": "nf4"})
+
+    def node(values):
+        context = ExecutionContext(settings=SettingsRegistry().snapshot(values)).scoped("trainer", DiffusionTrainerNode.READS_SETTINGS, "Diffusion Trainer")
+        return DiffusionTrainerNode(context)
+    check(node({})._perf_session(model, None) is None, "without a report folder the node profiles nothing")
+    with tempfile.TemporaryDirectory() as tmp:
+        session = node({"perf.dir": tmp, "perf.warmup_steps": 5, "perf.steps": 2})._perf_session(model, None)
+        check(session is not None and session.warmup == 5 and session.steps == 2, "the node passes the declared settings to the session")
+
+
 def hwcheck():
     scenarios = default_scenarios(warmup=20, ceilings="c.json")
     check(scenarios[0].name == "native eager" and len({s.slug for s in scenarios}) == len(scenarios), "the baseline comes first and every scenario has its own folder")
@@ -270,4 +287,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, train_arguments, hwcheck)
+    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)

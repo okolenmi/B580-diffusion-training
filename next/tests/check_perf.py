@@ -128,7 +128,7 @@ class FakeEvent:
 
 
 def provenance():
-    """A kernel is tied, through its correlation id, to the operator chain and module range its launch happened in."""
+    """A kernel's linked correlation id names the operator that launched it; its chain and module range come from where that operator ran."""
     from ..perf.categories import Categorizer
     from ..perf.events import OpTree, read_events
     from ..perf.provenance import ProvenanceBuilder, matmul_flops
@@ -136,12 +136,11 @@ def provenance():
     events = [
         FakeEvent("perf|input_blocks.1.0.attn|forward", activity="user_annotation", start=0, end=5050),
         FakeEvent("aten::linear", start=100, end=5000),
-        FakeEvent("aten::addmm", start=200, end=4000, shapes=[[64], [128, 32], [32, 64]], dtypes=["c10::BFloat16"] * 3),
-        FakeEvent("xpu_launch", activity="xpu_runtime", start=300, end=320, corr=7),
+        FakeEvent("aten::addmm", start=200, end=4000, corr=7, shapes=[[64], [128, 32], [32, 64]], dtypes=["c10::BFloat16"] * 3),
+        FakeEvent("zeKernelSetArgumentValue", activity="xpu_driver", start=300, end=320, corr=8, linked=7),  # driver ids collide with operator ids
         FakeEvent("gemm_kernel", device="xpu", activity="kernel", start=9000, end=59_000, linked=7),
         FakeEvent("aten::to", start=5100, end=6000),
-        FakeEvent("aten::copy_", start=5200, end=5900, shapes=[[8, 8], [8, 8]], dtypes=["c10::BFloat16", "float"]),
-        FakeEvent("xpu_launch", activity="xpu_runtime", start=5300, end=5310, corr=8),
+        FakeEvent("aten::copy_", start=5200, end=5900, corr=8, shapes=[[8, 8], [8, 8]], dtypes=["c10::BFloat16", "float"]),
         FakeEvent("at::native::xpu::CopyScalarFunc", device="xpu", activity="kernel", start=60_000, end=90_000, linked=8),
         FakeEvent("gemm_kernel", device="xpu", activity="kernel", start=91_000, end=141_000, linked=0),  # a replayed kernel: no launch recorded
     ]
@@ -236,6 +235,26 @@ def window_provenance():
         report = json.loads((folder / "report.json").read_text())
         check(report["provenance"] == [] and report["meta"]["module_times"] == "span" and report["regions"], "without kernels the module spans and regions are reported")
         check(not any(m._forward_hooks or m._backward_hooks for m in session.model.modules()), "hooks are removed after the window")
+
+
+def profile_failure():
+    """When the profiler's own post-processing fails, the step times already measured are still reported, with the reason."""
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "report"
+        out = rig(Path(tmp), steps=6, perf=None)
+        trainer, denoiser = out[0], out[2]
+        original = KernelTrace._collect
+
+        def broken(self):
+            raise MemoryError("std::bad_array_new_length")
+        KernelTrace._collect = broken
+        try:
+            trainer._perf = PerfSession(denoiser.module(), "cpu", folder, warmup=2, steps=2, quick_ceilings=True, say=lambda text: None)
+            trainer.run()
+        finally:
+            KernelTrace._collect = original
+        report = json.loads((folder / "report.json").read_text())
+        check("bad_array_new_length" in report["meta"]["profile_error"] and report["budget"]["wall_clean"], "the report keeps the step time and names the profiler failure")
 
 
 def short_run():
@@ -377,6 +396,9 @@ def node_session():
 
 def hwcheck():
     scenarios = default_scenarios(warmup=20, ceilings="c.json")
+    picked = HwCheck(Path("x"), [], scenarios=["int8 eager", "native_graph"], warmup=20).scenarios()
+    check([s.name for s in picked] == ["native eager", "native graph", "int8 eager"], "a scenario filter keeps the baseline and the named ones, by name or folder name")
+    raises(ValueError, lambda: HwCheck(Path("x"), [], scenarios=["nonsense"]).scenarios(), "an unknown scenario name is refused with the list", "nonsense")
     check(scenarios[0].name == "native eager" and len({s.slug for s in scenarios}) == len(scenarios), "the baseline comes first and every scenario has its own folder")
     check(all("perf.ceilings=c.json" in s.args and "perf.warmup_steps=20" in s.args for s in scenarios), "every scenario shares the ceilings cache and the warm-up")
     check(any(dict(s.env).get("PYTORCH_ALLOC_CONF") == "expandable_segments:False" for s in scenarios), "the allocator A/B is among the scenarios")
@@ -401,4 +423,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)

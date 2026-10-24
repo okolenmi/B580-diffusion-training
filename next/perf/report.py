@@ -39,7 +39,7 @@ class ReportBuilder:
         groups = self._groups(modules)
         report = {"meta": {"device": self.device, "ceilings": self.ceilings.to_json(), "steps_in_window": len(steps),
                            "eager_steps": len(eager), "replayed_steps": len(steps) - len(eager),
-                           "device_time_is_host_time": trace.device_is_host, "module_times": "device" if prov and prov.modules else "span",
+                           "device_time_is_host_time": trace.device_is_host, "profile_error": trace.error, "module_times": "device" if prov and prov.modules else "span",
                            "provenance_coverage": prov.coverage if prov else None, "profiler_event_kinds": prov.kinds if prov else None, "report_seconds": {k: round(v, 2) for k, v in (seconds or {}).items()}, **self.meta},
                   "budget": budget, "categories": categories, "kernels": kernels, "modules": modules, "groups": groups,
                   "regions": self._regions(modules, budget["device_ms"]), "provenance": self._provenance(prov, len(eager)),

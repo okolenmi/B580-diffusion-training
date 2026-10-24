@@ -31,6 +31,7 @@ class TraceResult:
     device_is_host: bool = False  # no device activity was recorded: the rows are host operators
     seconds: dict[str, float] = field(default_factory=dict)  # what collecting cost, by stage
     provenance: Provenance | None = None
+    error: str = ""  # why the fast path was not used
 
     @property
     def device_us(self) -> float:
@@ -73,7 +74,10 @@ class KernelTrace:
         self._profiler.__exit__(*exc)
         stopped = time.perf_counter()
         if exc[0] is None:
-            self.result = self._collect()
+            try:
+                self.result = self._collect()
+            except Exception as error:  # noqa: BLE001 - no kernel data must not cost the step times already measured
+                self.result = TraceResult(error=f"{type(error).__name__}: {error}")
             self.result.seconds = {"profiler stop": stopped - began, "events to rows": time.perf_counter() - stopped}
             if self.trace_path:
                 exported = time.perf_counter()
@@ -86,7 +90,12 @@ class KernelTrace:
         kineto = getattr(getattr(self._profiler, "profiler", None), "kineto_results", None)
         if kineto is None:
             return self._collect_averaged()
-        table = read_events(kineto.events(), keep_raw=self.provenance)
+        try:
+            table = read_events(kineto.events(), keep_raw=self.provenance)
+        except (MemoryError, RuntimeError) as error:  # the profiler's C++ side failed on this window: the slow path has its own copy of the data
+            result = self._collect_averaged()
+            result.error = f"{type(error).__name__}: {error}"
+            return result
         tree = OpTree(table.ops)
         device: dict[str, list[float]] = {}
         for name, _, us, _ in table.kernels:

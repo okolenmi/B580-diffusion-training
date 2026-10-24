@@ -1,12 +1,13 @@
 """The profiler's raw events, and which operator and module launched each device kernel.
 
 ``torch.profiler``'s own tables build an object and a call tree per event in Python; here events are read once into plain tuples.
-A kernel is tied to its launch through the correlation id the profiler gives both; the launch sits inside operators (innermost
-first, up to the frontend op) on its host thread, and inside the ``perf|<module>|<phase>`` ranges the module hooks open."""
+A device kernel's ``linked_correlation_id`` is the correlation id of the operator it was launched from (the innermost one, e.g.
+``aten::mm`` under ``aten::matmul``); the operator's ancestors come from the call tree per host thread, and its module from the
+``perf|<module>|<phase>`` ranges the module hooks open around it. The driver and runtime events carry ids of their own that collide
+with operator ids, so they are not used."""
 
 from __future__ import annotations
 
-import bisect
 from dataclasses import dataclass, field
 
 from torch.autograd import DeviceType
@@ -20,6 +21,7 @@ class Op:
     start: int
     end: int
     name: str
+    corr: int = 0
     raw: object = None   # the profiler event, for shapes and dtypes on demand
 
 
@@ -28,7 +30,6 @@ class EventTable:
     kernels: list[tuple[str, int, float, int]] = field(default_factory=list)       # name, start ns, duration us, linked correlation id
     ops: list[Op] = field(default_factory=list)
     ranges: list[tuple[int, int, int, str]] = field(default_factory=list)          # thread, start, end, name
-    anchors: dict[int, tuple[int, int]] = field(default_factory=dict)              # correlation id -> (thread, start ns) of the host side of a launch
     kinds: dict[str, int] = field(default_factory=dict)                            # "device/activity" -> count, for diagnostics
 
 
@@ -43,14 +44,10 @@ def read_events(events, *, keep_raw: bool = False) -> EventTable:
             table.kernels.append((event.name(), event.start_ns(), event.duration_ns() / 1000.0, event.linked_correlation_id()))
         elif activity == "cpu_op":
             if not event.is_hidden_event():
-                table.ops.append(Op(event.start_thread_id(), event.start_ns(), event.end_ns(), event.name(), event if keep_raw else None))
+                table.ops.append(Op(event.start_thread_id(), event.start_ns(), event.end_ns(), event.name(), event.correlation_id(), event if keep_raw else None))
         elif activity == "user_annotation":
             if event.name().startswith(ANNOTATION):
                 table.ranges.append((event.start_thread_id(), event.start_ns(), event.end_ns(), event.name()))
-        else:
-            corr = event.correlation_id()
-            if corr:
-                table.anchors[corr] = (event.start_thread_id(), event.start_ns())
     return table
 
 
@@ -73,21 +70,7 @@ class OpTree:
                 self.parent[i] = stack[-1]
                 self.own_us[stack[-1]] -= (op.end - op.start) / 1000.0
             stack.append(i)
-        self._starts: dict[int, tuple[int, list[int]]] = {}
-        for i, op in enumerate(self.ops):
-            first, starts = self._starts.setdefault(op.thread, (i, []))
-            starts.append(op.start)
-
-    def innermost(self, thread: int, at: int) -> int:
-        """Index of the innermost operator running on ``thread`` at time ``at``, or -1."""
-        entry = self._starts.get(thread)
-        if entry is None:
-            return -1
-        first, starts = entry
-        i = first + bisect.bisect_right(starts, at) - 1
-        while i >= first and self.ops[i].end <= at:
-            i = self.parent[i]
-        return i if i >= first else -1
+        self.by_corr = {op.corr: i for i, op in enumerate(self.ops) if op.corr}
 
     def chain(self, index: int) -> list[int]:
         """The operator and its ancestors, innermost first."""
@@ -113,12 +96,13 @@ class Attribution:
         self.table, self.tree = table, tree
 
     def launches(self) -> list[Launch]:
-        by_thread: dict[int, list[tuple[int, int]]] = {}  # thread -> (time, kernel index)
         out = [Launch(name, us) for name, _, us, _ in self.table.kernels]
+        by_thread: dict[int, list[tuple[int, int]]] = {}  # thread -> (launch time, kernel index)
         for i, (_, _, _, link) in enumerate(self.table.kernels):
-            anchor = self.table.anchors.get(link) if link else None
-            if anchor is not None:
-                by_thread.setdefault(anchor[0], []).append((anchor[1], i))
+            op = self.tree.by_corr.get(link, -1) if link else -1
+            out[i].op = op
+            if op >= 0:
+                by_thread.setdefault(self.tree.ops[op].thread, []).append((self.tree.ops[op].start, i))
         ranges: dict[int, list[tuple[int, int, str]]] = {}
         for thread, start, end, name in self.table.ranges:
             ranges.setdefault(thread, []).append((start, end, name))
@@ -127,7 +111,6 @@ class Attribution:
             pending = sorted(ranges.get(thread, ()))
             cursor, active = 0, []
             for time, i in items:
-                out[i].op = self.tree.innermost(thread, time)
                 while cursor < len(pending) and pending[cursor][0] <= time:
                     active.append(pending[cursor])
                     cursor += 1

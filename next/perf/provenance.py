@@ -43,6 +43,18 @@ class Provenance:
 class ProvenanceBuilder:
     def __init__(self, table: EventTable, tree: OpTree, categorizer: Categorizer):
         self.table, self.tree, self.categorizer = table, tree, categorizer
+        self.shape_errors = 0
+
+    def _shapes(self, event) -> tuple[str, str, list]:
+        """Input shapes and dtypes of an operator event; a build whose shape metadata fails (seen as a MemoryError from the profiler's C++) gives none."""
+        if event is None:
+            return "", "", []
+        try:
+            raw = event.shapes()
+            return compact(raw), ",".join(DTYPES.get(d, d) for d in event.dtypes()), raw
+        except (MemoryError, RuntimeError, ValueError, TypeError):
+            self.shape_errors += 1
+            return "", "", []
 
     def build(self) -> Provenance:
         launches = Attribution(self.table, self.tree).launches()
@@ -57,9 +69,7 @@ class ProvenanceBuilder:
             if launch.op >= 0:
                 with_op += launch.duration_us
                 if launch.op not in shape_cache:
-                    event = self.tree.ops[launch.op].raw
-                    raw = event.shapes() if event is not None else []
-                    shape_cache[launch.op] = (compact(raw), ",".join(DTYPES.get(d, d) for d in (event.dtypes() if event is not None else [])), raw)
+                    shape_cache[launch.op] = self._shapes(self.tree.ops[launch.op].raw)
                 shapes, dtypes, raw_shapes = shape_cache[launch.op]
                 ancestors = self.tree.chain(launch.op)
                 op_name = self.tree.ops[launch.op].name
@@ -84,5 +94,5 @@ class ProvenanceBuilder:
             row["device_us"] += launch.duration_us
         rows = sorted(groups.values(), key=lambda r: -r["device_us"])
         share = (lambda part: part / total if total else 0.0)
-        return Provenance(rows, modules, {"operator": share(with_op), "module": share(with_module), "kernel_ms": total / 1000.0}, dict(self.table.kinds))
+        return Provenance(rows, modules, {"operator": share(with_op), "module": share(with_module), "kernel_ms": total / 1000.0, "shape_errors": self.shape_errors}, dict(self.table.kinds))
 

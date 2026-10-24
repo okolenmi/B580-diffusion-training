@@ -97,9 +97,10 @@ class HwCheck:
 
     def __init__(self, out: Path, train_args: list[str], *, device: str = "xpu", steps: int = 28, warmup: int = 20, python: str = sys.executable,
                  run_step: Callable[[Step, Path], StepResult] = run_process, say: Callable[[str], None] = print, only: set[str] | None = None,
-                 bench_args: tuple[str, ...] = ()):
+                 bench_args: tuple[str, ...] = (), scenarios: list[str] | None = None):
         self.out, self.train_args, self.device, self.steps, self.warmup = out, train_args, device, steps, warmup
         self.python, self.run_step, self.say, self.only, self.bench_args = python, run_step, say, only, bench_args
+        self.scenario_names = scenarios
         self.results: list[StepResult] = []
 
     def wanted(self, name: str) -> bool:
@@ -137,9 +138,20 @@ class HwCheck:
     def train_command(self) -> list[str]:
         return [self.python, "-m", "next.run", "sdxl-lora", *self.train_args, "--steps", str(self.steps)]
 
+    def scenarios(self) -> list[Scenario]:
+        """All of them, or those whose name or folder name was asked for (the first, the baseline, is always kept)."""
+        every = default_scenarios(warmup=self.warmup, ceilings=str(self.out / "ceilings.json"))
+        if not self.scenario_names:
+            return every
+        wanted = {n.lower() for n in self.scenario_names}
+        unknown = wanted - {s.name.lower() for s in every} - {s.slug.lower() for s in every}
+        if unknown:
+            raise ValueError(f"unknown scenario(s) {sorted(unknown)}; choose from: " + ", ".join(s.name for s in every))
+        return [s for i, s in enumerate(every) if i == 0 or s.name.lower() in wanted or s.slug.lower() in wanted]
+
     def _matrix(self) -> None:
         command = self.train_command()
-        spec = MatrixSpec(command, default_scenarios(warmup=self.warmup, ceilings=str(self.out / 'ceilings.json')), timeout_s=3600.0)
+        spec = MatrixSpec(command, self.scenarios(), timeout_s=3600.0)
         started = time.monotonic()
         matrix = Matrix(spec, self.out / "matrix", SubprocessRunner(command, spec.timeout_s), resume=True, say=self.say)
         matrix.run()

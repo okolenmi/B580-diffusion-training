@@ -1,0 +1,11 @@
+{
+ "xpu|2.12.1+xpu|full": {
+  "device": "xpu",
+  "torch_version": "2.12.1+xpu",
+  "gemm_tflops": 95.09794749557096,
+  "int8_tops": 184.8991552336624,
+  "copy_gbps": 366.1594743351782,
+  "dispatch_us": 10.952049000025,
+  "launch_us": 11.005472500073665
+ }
+}

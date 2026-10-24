@@ -1,0 +1,210 @@
+[
+ {
+  "suite": "speed",
+  "item": "23, 25, 26, 28",
+  "status": "FAIL",
+  "missing": [],
+  "results": [
+   {
+    "check": "native eager finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "native graph finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "int8 eager finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "int8 graph finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "int8 dx-int8 eager finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "int8 dx-int8 graph finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "native graph attention-math_bf16 finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "native graph attention-chunked_bf16 finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "int8 graph attention-chunked_bf16 finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "native eager loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "native graph loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 eager loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 graph loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 dx-int8 eager loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 dx-int8 graph loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "native graph attention-math_bf16 loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "native graph attention-chunked_bf16 loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 graph attention-chunked_bf16 loss finite",
+    "status": "PASS",
+    "message": "28 losses, all finite",
+    "reason": ""
+   },
+   {
+    "check": "int8 holds less memory than native",
+    "status": "PASS",
+    "message": "peak_mb 4244 against 6303 MB: 2059 MB lower (wanted 1500)",
+    "reason": "TESTING 23: 2059 MB saved by 652 int8 layers"
+   },
+   {
+    "check": "int8 graph within 15% of native graph",
+    "status": "PASS",
+    "message": "median step 1042 ms against 916 ms: x1.14 (limit x1.15)",
+    "reason": "TESTING 25 pass criterion"
+   },
+   {
+    "check": "native graph no slower than eager",
+    "status": "PASS",
+    "message": "median step 916 ms against 1076 ms: x0.85 (limit x1.03)",
+    "reason": "TESTING 26: replay is dropped when it does not pay, the cost is the timed replays"
+   },
+   {
+    "check": "int8 graph no slower than eager",
+    "status": "PASS",
+    "message": "median step 1042 ms against 1673 ms: x0.62 (limit x1.03)",
+    "reason": "TESTING 26"
+   },
+   {
+    "check": "int8 graph decision",
+    "status": "PASS",
+    "message": "(2, 4, 100, 64): replay 992 ms against 1492 ms eager kept",
+    "reason": "measured: int8 replay kept with a small gain"
+   },
+   {
+    "check": "native graph decision",
+    "status": "PASS",
+    "message": "(2, 4, 100, 64): replay 869 ms against 1076 ms eager kept",
+    "reason": "measured: dropped with the math attention; the bf16 attention modes may change it"
+   },
+   {
+    "check": "int8 gradient path int8 no slower than dense",
+    "status": "PASS",
+    "message": "median step 956 ms against 1042 ms: x0.92 (limit x1.00)",
+    "reason": "TESTING 25: which gradient path to prefer"
+   },
+   {
+    "check": "math_bf16 attention beats math in a graph",
+    "status": "PASS",
+    "message": "median step 713 ms against 916 ms: x0.78 (limit x1.00)",
+    "reason": "TESTING 28"
+   },
+   {
+    "check": "chunked_bf16 attention beats math in a graph",
+    "status": "FAIL",
+    "message": "median step 968 ms against 916 ms: x1.06, over x1.00",
+    "reason": "TESTING 28"
+   },
+   {
+    "check": "int8 loss close to native",
+    "status": "PASS",
+    "message": "mean loss over the last 10 steps 0.1050 against 0.1050 (0.0%, limit 15%)",
+    "reason": "the int8 network is not the native one; a wide band catches divergence, not noise"
+   },
+   {
+    "check": "chunked_bf16 loss close to math",
+    "status": "PASS",
+    "message": "mean loss over the last 10 steps 0.1050 against 0.1050 (0.0%, limit 10%)",
+    "reason": "TESTING 28: scores rounded to bf16"
+   }
+  ]
+ },
+ {
+  "suite": "allocator",
+  "item": "24",
+  "status": "LOOK",
+  "missing": [],
+  "results": [
+   {
+    "check": "native expandable-segments finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "native no-expandable-segments finished",
+    "status": "PASS",
+    "message": "the run finished",
+    "reason": ""
+   },
+   {
+    "check": "allocator setting changes the peak?",
+    "status": "LOOK",
+    "message": "device_mb peaks native expandable-segments 7922 MB, native no-expandable-segments 8474 MB. Equal peaks mean the setting has no effect on this workload (TESTING 24).",
+    "reason": "TESTING 24, expandable segments"
+   }
+  ]
+ }
+]

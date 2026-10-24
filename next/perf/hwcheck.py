@@ -17,6 +17,34 @@ LOG_CAP = 200_000
 TEXT_SUFFIXES = (".md", ".json", ".log")
 
 
+class TrainArguments:
+    """The arguments that say *what* to train, shared by ``hwcheck`` and the acceptance lab, turned into the arguments of ``python -m next.run sdxl-lora``."""
+
+    REQUIRED = (("models", "FOLDER", "the folder that holds your models; checkpoints are looked up in FOLDER/checkpoints (or in FOLDER itself when it has no such subfolder)"),
+                ("datasets", "FOLDER", "the folder where your datasets are stored (the one you gave to `python -m next.run ingest --datasets`)"),
+                ("dataset", "NAME", "the name of one dataset inside that folder (the NAME you gave to `ingest`)"),
+                ("file", "NAME", "the checkpoint's file name, relative to FOLDER/checkpoints, e.g. sd_xl_base_1.0.safetensors"),
+                ("output", "FOLDER", "where trained adapters are saved"))
+    OPTIONAL = (("batch", "N", "images per step"), ("resolution", "PIXELS", "training resolution, e.g. 512"))
+
+    @classmethod
+    def add_to(cls, parser) -> None:
+        for name, metavar, text in cls.REQUIRED:
+            parser.add_argument(f"--{name}", required=True, metavar=metavar, help=text)
+        for name, metavar, text in cls.OPTIONAL:
+            parser.add_argument(f"--{name}", metavar=metavar, help=text)
+        parser.add_argument("extra", nargs="*", help="after a lone --: any other `python -m next.run sdxl-lora` options (for example --rank 16 --param buckets.max_shapes=4)")
+
+    @classmethod
+    def from_args(cls, args) -> list[str]:
+        out: list[str] = []
+        for name, _, _ in (*cls.REQUIRED, *cls.OPTIONAL):
+            value = getattr(args, name)
+            if value is not None:
+                out += [f"--{name}", str(value)]
+        return [*out, *(a for a in args.extra if a != "--")]
+
+
 @dataclass
 class Step:
     name: str
@@ -65,7 +93,7 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
 
 
 class HwCheck:
-    """``train_args`` are the arguments of ``python -m next.run train`` that describe the model, dataset and size (everything but steps and --perf)."""
+    """``train_args`` are the arguments of ``python -m next.run sdxl-lora`` that describe the model, dataset and size (everything but steps and --perf)."""
 
     def __init__(self, out: Path, train_args: list[str], *, device: str = "xpu", steps: int = 28, warmup: int = 20, python: str = sys.executable,
                  run_step: Callable[[Step, Path], StepResult] = run_process, say: Callable[[str], None] = print, only: set[str] | None = None,
@@ -105,8 +133,11 @@ class HwCheck:
         self._zip()
         return index
 
+    def train_command(self) -> list[str]:
+        return [self.python, "-m", "next.run", "sdxl-lora", *self.train_args, "--steps", str(self.steps)]
+
     def _matrix(self) -> None:
-        command = [self.python, "-m", "next.run", "train", *self.train_args, "--steps", str(self.steps)]
+        command = self.train_command()
         spec = MatrixSpec(command, default_scenarios(warmup=self.warmup, ceilings=str(self.out / 'ceilings.json')), timeout_s=3600.0)
         started = time.monotonic()
         matrix = Matrix(spec, self.out / "matrix", SubprocessRunner(command, spec.timeout_s), resume=True, say=self.say)

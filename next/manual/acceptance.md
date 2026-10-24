@@ -8,7 +8,7 @@ The hardware runs listed in `TESTING.md` are mostly numeric judgements (a step t
 | Goal | Command |
 |---|---|
 | List suites and checks | `python -m next.accept list` |
-| Run suites (each scenario in its own process) and judge | `python -m next.accept run speed nf4 --out DIR --steps 28 --warmup 20 -- --models M --datasets D --file F --dataset NAME --output OUT --batch 2 --resolution 512` |
+| Run suites (each scenario in its own process) and judge | `python -m next.accept run --suites speed nf4 --out accept --steps 28 --warmup 20 --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512` |
 | Judge folders that exist (a `hwcheck` bundle's `matrix/`, a rerun) | `python -m next.accept judge DIR/matrix speed allocator --out DIR/verdict` |
 | NF4 or int8 quality by region of the network | `python -m next.accept quant-probe --models M --file CKPT --precision nf4 int8 --out DIR` |
 | What zero and mirror padding put around samples | `python -m next.accept padding-sheet --images FOLDER --canvas 128x128 --count 4 --out sheet.png` |

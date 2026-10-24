@@ -274,7 +274,7 @@ def run_suites():
     with tempfile.TemporaryDirectory() as tmp:
         runners = []
         acceptance = Acceptance(suites, Path(tmp), ["--file", "m.safetensors"], steps=20, runner_for=lambda c: runners.append(FakeRunner(c)) or runners[-1], say=lambda text: None)
-        check("--steps" in acceptance.command and acceptance.command[-1] == "20" and acceptance.command[3:5] == ["train", "--file"], "the command is next.run train with the user's arguments and the step count")
+        check("--steps" in acceptance.command and acceptance.command[-1] == "20" and acceptance.command[3:5] == ["sdxl-lora", "--file"], "the command is next.run sdxl-lora with the user's arguments and the step count")
         names = [s.name for s in acceptance.scenarios()]
         check(len(names) == len(set(names)) and "native eager" in names and "nf4 graph" in names, "scenarios of the chosen suites are run once each")
         path = acceptance.run()

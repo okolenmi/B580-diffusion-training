@@ -12,7 +12,7 @@ from .findings import findings_for
 from .comparison import Comparison
 from .bench import SUITES, BenchRunner, context_for
 from .hardware import AllocatorProbe, HardwareReport
-from .hwcheck import HwCheck
+from .hwcheck import HwCheck, TrainArguments
 from .matrix import Matrix, MatrixSpec, SubprocessRunner
 from .report import ReportWriter
 
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--steps", type=int, default=28)
     check.add_argument("--warmup", type=int, default=20, help="steps before the profiled window (graph capture and timing need several sightings per shape)")
     check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "bench", "matrix", "verdict"), help="default: all")
-    check.add_argument("train_args", nargs=argparse.REMAINDER, help="after --: --models M --datasets D --file F --dataset NAME --output OUT, plus --batch/--resolution/...")
+    TrainArguments.add_to(check)
     args = parser.parse_args(argv)
     if args.command == "hardware":
         info = HardwareReport()
@@ -72,10 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         print(runner.write(runner.run(), args.out))
         return 0
     if args.command == "hwcheck":
-        train = [a for a in args.train_args if a != "--"]
-        if not train:
-            raise SystemExit("give the training arguments after --, e.g.: hwcheck -- --models M --datasets D --file F --dataset NAME --output OUT")
-        print(HwCheck(Path(args.out), train, device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None).run())
+        print(HwCheck(Path(args.out), TrainArguments.from_args(args), device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None).run())
         return 0
     if args.command == "matrix":
         spec = MatrixSpec.load(args.file)

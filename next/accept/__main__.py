@@ -1,7 +1,7 @@
 """Instruments and automatic verdicts for the hardware runs.
 
-    python -m next.accept quant-probe --models MODELS --file sd_xl_base_1.0.safetensors --precision nf4 int8 --out probe
-    python -m next.accept run speed nf4 --out accept -- --models MODELS --datasets D --file F --dataset NAME --output OUT --batch 2 --resolution 512
+    python -m next.accept quant-probe --models D:/models --file sd_xl_base_1.0.safetensors --precision nf4 int8 --out probe
+    python -m next.accept run --suites speed nf4 --out accept --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512
     python -m next.accept judge perf-bundle/matrix speed        # a bundle that came back from ``python -m next.perf hwcheck``
     python -m next.accept list
 """
@@ -20,6 +20,7 @@ from ..families.general.quantize.int8 import Int8Quantizer
 from ..families.general.quantize.nf4 import Nf4Quantizer
 from ..families.general.quantize.nf4_backends import make_nf4_backend
 from .fixtures import DenoiserInputs
+from ..perf.hwcheck import TrainArguments
 from .acceptance import Acceptance, choose
 from .loading import load_denoiser
 from .quantization import QuantizationProbe
@@ -75,12 +76,12 @@ def main(argv: list[str] | None = None) -> int:
     pad.add_argument("--sigma", type=float, default=0.6)
     pad.add_argument("--seed", type=int, default=0)
     pad.add_argument("--out", default="padding-sheet.png")
-    run = sub.add_parser("run", help="run suites (each scenario in its own process) and write verdict.md; train arguments follow --")
-    run.add_argument("suites", nargs="*", help="default: all (see 'list')")
+    run = sub.add_parser("run", help="run suites (each scenario in its own process) and write verdict.md")
+    run.add_argument("--suites", nargs="*", help="which suites (see 'list'); default: all")
     run.add_argument("--out", default="accept-run")
     run.add_argument("--steps", type=int, default=28)
     run.add_argument("--warmup", type=int, default=20)
-    run.add_argument("train_args", nargs=argparse.REMAINDER)
+    TrainArguments.add_to(run)
     judge = sub.add_parser("judge", help="judge folders that already exist (a hwcheck bundle's matrix/ folder, or an earlier run) without running anything")
     judge.add_argument("root", help="the folder holding one subfolder per scenario")
     judge.add_argument("suites", nargs="*")
@@ -109,11 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         print(write_verdict(verdicts, args.out))
         return 0
     if args.command == "run":
-        train = [a for a in args.train_args if a != "--"]
-        if not train:
-            raise SystemExit("give the training arguments after --, e.g.: run speed -- --models M --datasets D --file F --dataset NAME --output OUT")
         book = SuiteBook(args.warmup, str(Path(args.out) / "ceilings.json"))
-        print(Acceptance(choose(args.suites, book), Path(args.out), train, steps=args.steps).run())
+        print(Acceptance(choose(args.suites, book), Path(args.out), TrainArguments.from_args(args), steps=args.steps).run())
         return 0
     return quant_probe(args)
 

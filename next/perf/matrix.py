@@ -3,7 +3,7 @@
 Scenario file (TOML)::
 
     [base]
-    command = ["python", "-m", "next.run", "train", "--models", "M", "--datasets", "D", "--file", "x.safetensors", "--dataset", "d", "--output", "out", "--steps", "14"]
+    command = ["python", "-m", "next.run", "sdxl-lora", "--models", "M", "--datasets", "D", "--file", "x.safetensors", "--dataset", "d", "--output", "out", "--steps", "14"]
     timeout_s = 1800
 
     [axes.precision]          # every combination of the axes is a scenario

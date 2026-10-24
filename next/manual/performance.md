@@ -7,8 +7,8 @@ The lab answers "where does a step's time go, and how much of it could be recove
 ## Commands
 | Goal | Command | Writes |
 |---|---|---|
-| Profile a few steps of a real run | `python -m next.run train ... --perf DIR` (or `--set perf.dir=DIR`) | `DIR/report.md`, `report.json`, `ceilings.json` |
-| Everything pending in one go | `python -m next.perf hwcheck --out DIR -- --models M --datasets D --file F --dataset NAME --output OUT [--batch 2 --resolution 512 ...]` | `DIR/README.md`, `bundle.zip` (text only), the pieces below |
+| Profile a few steps of a real run | `python -m next.run sdxl-lora ... --perf DIR` (or `--set perf.dir=DIR`) | `DIR/report.md`, `report.json`, `ceilings.json` |
+| Everything pending in one go | `python -m next.perf hwcheck --out DIR --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512 [-- more sdxl-lora options]` | `DIR/README.md`, `bundle.zip` (text only), the pieces below |
 | A set of runs you define | `python -m next.perf matrix scenarios.toml --out DIR [--resume]` | `DIR/summary.md`, one folder per scenario |
 | What changed between two runs | `python -m next.perf compare DIR_A DIR_B` | stdout |
 | One operation at a time | `python -m next.perf bench --out DIR [--suites gemm attention layers ...] [--batch 2 --size 768]` | `DIR/bench.md`, `bench.json` |

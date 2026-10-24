@@ -224,6 +224,26 @@ def micro():
         check("broken" in failed.errors and any(r.group == "launch" for r in failed.rows) and "Suites that failed" in failed.markdown(), "a failing suite is recorded and the others still run")
 
 
+def train_arguments():
+    import argparse
+    import subprocess
+    import sys
+    from ..perf.hwcheck import TrainArguments
+    parser = argparse.ArgumentParser()
+    TrainArguments.add_to(parser)
+    args = parser.parse_args(["--models", "M", "--datasets", "D", "--dataset", "set", "--file", "f.safetensors", "--output", "O", "--batch", "2", "--", "--param", "buckets.max_shapes=4"])
+    out = TrainArguments.from_args(args)
+    check(out == ["--models", "M", "--datasets", "D", "--dataset", "set", "--file", "f.safetensors", "--output", "O", "--batch", "2", "--param", "buckets.max_shapes=4"],
+          f"named options and the extras after -- become the trainer's arguments ({out})")
+    raises(SystemExit, lambda: parser.parse_args(["--models", "M"]), "the options that say what to train are required")
+    command = HwCheck(Path("x"), out, steps=12).train_command()
+    check(command[-2:] == ["--steps", "12"] and command[1:4] == ["-m", "next.run", "sdxl-lora"], "the step count is added by hwcheck after the user's arguments")
+    from ..accept.acceptance import Acceptance
+    check(Acceptance([], Path("x"), out, steps=12).command[1:4] == command[1:4], "the acceptance lab runs the same subcommand")
+    done = subprocess.run([*command[:4], "--help"], capture_output=True, text=True)
+    check(done.returncode == 0 and "--models" in done.stdout, "that subcommand is one next.run really has")
+
+
 def hwcheck():
     scenarios = default_scenarios(warmup=20, ceilings="c.json")
     check(scenarios[0].name == "native eager" and len({s.slug for s in scenarios}) == len(scenarios), "the baseline comes first and every scenario has its own folder")
@@ -250,4 +270,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, hwcheck)
+    run(categories, cost_and_rating, rules, window, short_run, comparison, matrix, micro, train_arguments, hwcheck)

@@ -12,12 +12,12 @@ from .verdict import Judge, SuiteVerdict, write_verdict
 
 
 class Acceptance:
-    """``train_args`` are the arguments of ``python -m next.run train`` that describe the model, dataset and size (not steps, not --perf)."""
+    """``train_args`` are the arguments of ``python -m next.run sdxl-lora`` that describe the model, dataset and size (not steps, not --perf)."""
 
     def __init__(self, suites: list[Suite], out: Path, train_args: list[str], *, steps: int = 28, python: str = sys.executable,
                  runner_for: Callable[[list[str]], Runner] | None = None, say: Callable[[str], None] = print):
         self.suites, self.out, self.say = suites, out, say
-        self.command = [python, "-m", "next.run", "train", *train_args, "--steps", str(steps)]
+        self.command = [python, "-m", "next.run", "sdxl-lora", *train_args, "--steps", str(steps)]
         self.runner = (runner_for or (lambda command: SubprocessRunner(command)))(self.command)
 
     def scenarios(self) -> list[Scenario]:

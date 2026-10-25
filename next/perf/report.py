@@ -189,6 +189,8 @@ class ReportWriter:
                 f"- {b['launches']:.0f} kernel launches, {b['ops']:.0f} operators, {b['host_us_per_launch']:.0f} us host time per launch"]
         if b.get("peak_mb") is not None:
             out.append(f"- step peak memory {b['peak_mb']:.0f} MB")
+        if meta.get("power_w") is not None:
+            out.append(f"- GPU power {meta['power_w']:.0f} W on average over the unprofiled steps (energy counter {meta['power_counter']}); a busy device at low power is stalled or launch-bound, not saturated")
         if b["phase_ms"]:
             out.append("- phases: " + ", ".join(f"{k} {v:.0f} ms" for k, v in b["phase_ms"].items()))
         out += ["", "## Findings, largest first", ""]

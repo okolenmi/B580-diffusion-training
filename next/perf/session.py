@@ -13,6 +13,7 @@ from .budget import StepRecord
 from .ceilings import load_or_measure
 from .clock import DeviceClock
 from .modules import ModuleTimer
+from .power import PowerMeter
 from .report import ReportBuilder, ReportWriter
 from .trace import KernelTrace
 
@@ -31,6 +32,8 @@ class PerfSession:
         self._quick, self._say, self._meta = quick_ceilings, say, meta or {}
         self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
+        self._power = PowerMeter()
+        self.power_w: float | None = None
         self.records: list[StepRecord] = []  # profiled steps
         self.clean: list[StepRecord] = []    # timed alone
         self.seconds: dict[str, float] = {}  # what the report cost, by stage
@@ -58,6 +61,8 @@ class PerfSession:
         elif not self.clean:
             self._say(f"perf: timing steps {self.warmup + 1} to {self.warmup + self.steps}, then profiling steps {self.warmup + self.steps + 1} to {self.warmup + 2 * self.steps}")
         self.clock.synchronize()
+        if not profiled and not self.clean:
+            self._power.start()
         started = time.perf_counter()
         self._current = StepRecord(number, 0.0)
         try:
@@ -68,6 +73,8 @@ class PerfSession:
             self._current.wall_ms = (time.perf_counter() - started) * 1000
             (self.records if profiled else self.clean).append(self._current)
             self._current = None
+            if not profiled and len(self.clean) == self.steps:
+                self.power_w = self._power.stop()
         if profiled and self.done:
             self._end()
 
@@ -108,7 +115,7 @@ class PerfSession:
         self._lap("module timings", stages)
         ceilings = load_or_measure(self._ceilings_path, self.device, quick=self._quick)
         self._lap("ceilings", stages)
-        self.report = ReportBuilder(ceilings, self.device, self._meta).build(self.records, self._kernels.result, records, self.clean, stages)
+        self.report = ReportBuilder(ceilings, self.device, {**self._meta, "power_w": self.power_w, "power_counter": str(self._power.counter) if self._power.counter else None}).build(self.records, self._kernels.result, records, self.clean, stages)
         self._lap("report build", stages)
         self.report_path = ReportWriter(self.folder).write(self.report)
         self._lap("report write", stages)

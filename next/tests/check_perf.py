@@ -29,6 +29,7 @@ from ..perf.findings import findings_for
 from ..perf.hwcheck import HwCheck, StepResult, TrainArguments, default_scenarios
 from ..perf.matrix import Matrix, MatrixSpec, Outcome, Scenario
 from ..perf.modules import region_of, role_of
+from ..perf.power import PowerMeter
 from ..perf.rating import Rating
 from ..perf.session import PerfSession
 from ..perf.trace import KernelTrace
@@ -314,6 +315,31 @@ class FakeRunner:
         return Outcome(scenario, True, 1.0, folder)
 
 
+def power():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        check(PowerMeter(root).counter is None and PowerMeter(root).stop() is None, "no card, no reading")
+        other = root / "card0" / "device"
+        (other / "hwmon" / "hwmon1").mkdir(parents=True)
+        (other / "vendor").write_text("0x10de\n")
+        (other / "hwmon" / "hwmon1" / "energy1_input").write_text("0")
+        check(PowerMeter(root).counter is None, "another vendor's card is not measured")
+        counter = root / "card1" / "device" / "hwmon" / "hwmon3" / "energy1_input"
+        counter.parent.mkdir(parents=True)
+        (root / "card1" / "device" / "vendor").write_text("0x8086\n")
+        counter.write_text("1000000")
+        now = [10.0]
+        meter = PowerMeter(root, clock=lambda: now[0])
+        check(meter.counter == counter, "the Intel card's energy counter is found")
+        meter.start()
+        now[0], _ = 12.0, counter.write_text("161000000")
+        check(abs(meter.stop() - 80.0) < 1e-9, "average watts is energy over time")
+        check(meter.stop() is None, "a stopped meter reports nothing")
+        meter.start()
+        counter.write_text("5")
+        check(meter.stop() is None, "a counter that went backwards is not trusted")
+
+
 def matrix():
     spec = MatrixSpec.from_dict(SPEC)
     names = [s.name for s in spec.scenarios]
@@ -438,4 +464,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, option_order, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, power, matrix, micro, train_arguments, option_order, node_session, hwcheck)

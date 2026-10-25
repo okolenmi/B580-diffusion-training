@@ -151,17 +151,17 @@ class Matrix:
 
     def summary(self) -> str:
         done = [o for o in self.outcomes if o.report]
-        out = ["# Matrix summary", "", "| scenario | status | wall ms | eager ms | replayed ms | device ms | utilisation | peak MB | top finding |",
-               "|---|---|---:|---:|---:|---:|---:|---:|---|"]
+        out = ["# Matrix summary", "", "| scenario | status | wall ms | eager ms | replayed ms | device ms | utilisation | power W | peak MB | top finding |",
+               "|---|---|---:|---:|---:|---:|---:|---:|---:|---|"]
         for o in self.outcomes:
             if not o.report:
-                out.append(f"| {o.scenario.name} | FAILED: {o.error} | | | | | | | log: {o.log} |")
+                out.append(f"| {o.scenario.name} | FAILED: {o.error} | | | | | | | | log: {o.log} |")
                 continue
             b = o.report["budget"]
             finding = o.report["findings"][0]["title"] if o.report["findings"] else "-"
             f = lambda v, s=".0f": "-" if v is None else format(v, s)  # noqa: E731
             out.append(f"| {o.scenario.name} | ok | {f(b['wall_ms'])} | {f(b['eager_ms'])} | {f(b['replayed_ms'])} | {f(b['device_ms'])} | "
-                       f"{'-' if b['utilisation'] is None else format(b['utilisation'], '.0%')} | {f(b.get('peak_mb'))} | {finding} |")
+                       f"{'-' if b['utilisation'] is None else format(b['utilisation'], '.0%')} | {f(o.report.get('meta', {}).get('power_w'))} | {f(b.get('peak_mb'))} | {finding} |")
         if len(done) > 1:
             first = done[0]
             out += ["", f"Every other scenario below is compared with the first, `{first.scenario.name}`.", ""]

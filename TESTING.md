@@ -211,5 +211,8 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
+## 34. GPU power in the perf report
+No extra command: any `--perf DIR` run or matrix now prints `GPU power N W` in the Step budget of `report.md` and a `power W` column in the matrix `summary.md`. Check that the number appears (it reads `/sys/class/drm/card*/device/hwmon/hwmon*/energy*_input`; if the line is missing, send `ls /sys/class/drm/card*/device/hwmon/hwmon*/`) and whether it matches your observation (~70 W for most work, 160-200 W for int8).
+
 ## Reading results automatically
 `python -m next.perf hwcheck` now ends with `verdict/verdict.md` (the acceptance lab's pass/fail per check for the speed and allocator runs). For other items: `python -m next.accept run --suites SUITE --models ... --datasets ... --dataset ... --file ... --output ...` (memory, nf4, determinism) and send `accept-run/verdict.md`; a verdict row says what failed and why, so the logs are only needed for a FAIL. Anything marked LOOK is for your eyes.

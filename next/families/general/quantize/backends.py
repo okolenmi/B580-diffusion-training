@@ -118,6 +118,7 @@ class XpuKernelsBackend(Int8Backend):
 
     def __init__(self, module=None):
         self._module = module
+        self._two_pass = None  # xpu_kernels.triton.dequant when it is installed and has verified itself on this machine
 
     def _kernels(self):
         if self._module is None:
@@ -134,7 +135,20 @@ class XpuKernelsBackend(Int8Backend):
             return f"xpu-kernels {kernels.__version__} is too old: the backward needs the fused weight dequantizer of {'.'.join(map(str, MIN_VERSION))}"
         if not kernels.available():
             return "xpu-kernels is installed but its library did not load (it needs the oneAPI 2025.3 runtime that torch ships)"
+        self._resolve_two_pass()
         return None
+
+    def _resolve_two_pass(self) -> None:
+        """The two-pass weight dequantizer (a Triton scale pass and one matrix product) is faster than the single SYCL kernel; it checks
+        itself against it on first use, which cannot happen inside a graph capture, so it is settled here, before any."""
+        try:
+            module = importlib.import_module("xpu_kernels.triton.dequant")
+            probe = torch.zeros(16, GROUP, dtype=torch.int8, device="xpu")
+            self._two_pass = module if module.usable(probe) else None
+            if self._two_pass is not None:
+                module.prepare(probe.device)
+        except Exception:  # noqa: BLE001 - an older package, no Triton, no XPU: the SYCL kernel stays
+            self._two_pass = None
 
     def call_problem(self, x: Tensor, w8: Tensor) -> str | None:
         if x.device.type != "xpu" or w8.device != x.device:
@@ -151,6 +165,8 @@ class XpuKernelsBackend(Int8Backend):
         return self._kernels().linear(x.to(torch.bfloat16), w8, scale, None if bias is None else bias.to(torch.bfloat16))
 
     def dequant(self, w8: Tensor, scale: Tensor) -> Tensor:
+        if self._two_pass is not None and self._two_pass.usable(w8):
+            return self._two_pass.dequant_weight(w8, scale)
         return self._kernels().dequant_weight(w8, scale)
 
     def dx_int8(self, dy: Tensor, w8: Tensor, scale: Tensor) -> Tensor:

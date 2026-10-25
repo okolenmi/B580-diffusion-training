@@ -86,6 +86,7 @@ class Launch:
     name: str
     duration_us: float
     op: int = -1                 # innermost operator, index into the tree, -1 when unknown
+    link: int = 0                # the kernel's linked correlation id (0: the profiler gave none)
     ranges: tuple[str, ...] = ()  # module ranges the launch happened in, innermost first
 
 
@@ -96,7 +97,7 @@ class Attribution:
         self.table, self.tree = table, tree
 
     def launches(self) -> list[Launch]:
-        out = [Launch(name, us) for name, _, us, _ in self.table.kernels]
+        out = [Launch(name, us, link=link) for name, _, us, link in self.table.kernels]
         by_thread: dict[int, list[tuple[int, int]]] = {}  # thread -> (launch time, kernel index)
         for i, (_, _, _, link) in enumerate(self.table.kernels):
             op = self.tree.by_corr.get(link, -1) if link else -1

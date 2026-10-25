@@ -323,9 +323,45 @@ def nf4_base_weights():
     raises(ValueError, lambda: make_nf4_backend("nope", "cpu"), "an unknown NF4 backend is refused", "nope")
 
 
+def activation_compute():
+    """The low-rank path in the activation dtype matches the float32 path within bf16 rounding, forward and gradient, and makes no float32 full-size tensor."""
+    torch.manual_seed(3)
+    for module, shape in ((nn.Linear(24, 40).to(torch.bfloat16), (2, 5, 24)), (nn.Conv2d(8, 12, 3, padding=1).to(torch.bfloat16), (2, 8, 6, 6))):
+        reference, fast = make("lora", module), make("lora", module)
+        fast.load_state_dict(reference.state_dict(), strict=False)
+        fast.compute_in_activation()
+        x = torch.randn(*shape).to(torch.bfloat16)
+        x_ref, x_fast = x.clone().requires_grad_(True), x.clone().requires_grad_(True)
+        out_ref, out_fast = reference(x_ref), fast(x_fast)
+        out_ref.float().square().mean().backward()
+        out_fast.float().square().mean().backward()
+        name = type(module).__name__
+        check(out_fast.dtype == torch.bfloat16 and torch.allclose(out_ref.float(), out_fast.float(), atol=0.05, rtol=0.05), f"{name}: forward agrees within bf16 rounding")
+        grad_error = (reference.lora_B.grad - fast.lora_B.grad).abs().max() / reference.lora_B.grad.abs().max()
+        check(fast.lora_A.grad.dtype == torch.float32 and grad_error < 0.05 and torch.allclose(x_ref.grad.float(), x_fast.grad.float(), atol=0.05, rtol=0.1),
+              f"{name}: factor gradients stay float32 parameters and agree ({grad_error:.3f})")
+    lin = make("lora", nn.Linear(24, 40).to(torch.bfloat16))
+    lin.compute_in_activation()
+    gate = TimestepGate()
+    lin.gate = gate
+    x = torch.randn(3, 24).to(torch.bfloat16)
+    plain = lin(x)
+    gate.set(torch.tensor([1.0, 0.5, 0.0]))
+    gated = lin(x)
+    base = F.linear(x, lin.base_weight, lin.base_bias)
+    check(torch.allclose(gated[2].float(), base[2].float(), atol=1e-2) and not torch.allclose(gated[0].float(), base[0].float(), atol=1e-3) and plain.shape == gated.shape,
+          "an active timestep gate scales the update per sample on this path too")
+    dora = make("dora", nn.Linear(24, 40))
+    raises(ValueError, lambda: dora.compute_in_activation(), "DoRA cannot compute in the activation dtype", "LoRA")
+    fp32 = make("lora", nn.Linear(24, 40))
+    fp32.compute_in_activation()
+    x32 = torch.randn(2, 24)
+    check(torch.equal(fp32(x32), make("lora", nn.Linear(24, 40)).__class__.forward(fp32, x32)), "float32 activations take the ordinary path")
+
+
 def stored_bytes(*tensors):
     return sum(t.numel() * t.element_size() for t in tensors if t is not None)
 
 
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, nf4_base_weights, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, nf4_base_weights, activation_compute, sdxl_plan_and_injection)

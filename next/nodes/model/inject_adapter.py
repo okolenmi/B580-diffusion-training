@@ -51,6 +51,10 @@ class InjectAdapterNode(Node):
         "rank": Port("rank", int, required=False, default=16, minimum=1, group="adapter"),
         "alpha": Port("alpha", float, required=False, default=16.0, minimum=0.0, group="adapter"),
         "dropout": Port("dropout", float, required=False, default=0.0, minimum=0.0, maximum=0.9, step=0.01, group="adapter"),
+        "lora_compute": Port("lora_compute", str, required=False, default="float32", choices=("float32", "activation"), group="adapter",
+                             doc="float32: the low-rank path runs in float32 (a float32 copy of the input, a float32 update cast back and added, per layer). "
+                                 "activation: it runs in the activations' dtype (bf16) with the add fused into the matmul: fewer and smaller kernels, "
+                                 "the low-rank intermediate and the factors' gradient are rounded to bf16. LoRA only."),
         "scaling": Port("scaling", str, required=False, default="classic", choices=SCALING, group="adapter",
                         doc="classic: alpha / rank. rank_stabilized: alpha / sqrt(rank)."),
         "groups": Port("groups", str, required=False, default="", group="targets",
@@ -128,7 +132,8 @@ class InjectAdapterNode(Node):
                 self._merge(family, denoiser, merge)
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
-                                             policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0)
+                                             policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
+                                             compute=inputs.get("lora_compute") or "float32")
         precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):
             with self.context.task(f"Converting the frozen weights to {precision}"):

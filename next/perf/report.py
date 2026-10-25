@@ -14,7 +14,8 @@ from .trace import TraceResult
 
 TOP_KERNELS = 25
 TOP_MODULES = 30
-PROVENANCE_ROWS = 150
+PROVENANCE_ROWS = 300
+SUMMARY_ROWS = 80
 PROVENANCE_SHOWN = 25
 
 
@@ -42,7 +43,7 @@ class ReportBuilder:
                            "device_time_is_host_time": trace.device_is_host, "profile_error": trace.error, "module_times": "device" if prov and prov.modules else "span",
                            "provenance_coverage": prov.coverage if prov else None, "profiler_event_kinds": prov.kinds if prov else None, "report_seconds": {k: round(v, 2) for k, v in (seconds or {}).items()}, **self.meta},
                   "budget": budget, "categories": categories, "kernels": kernels, "modules": modules, "groups": groups,
-                  "regions": self._regions(modules, budget["device_ms"]), "provenance": self._provenance(prov, len(eager)),
+                  "regions": self._regions(modules, budget["device_ms"]), "provenance": self._provenance(prov, len(eager)), "provenance_summary": self._summary(prov, len(eager)),
                   "reconciliation": self._reconcile(budget, modules, len(steps) - len(eager))}
         report["findings"] = [vars(f) for f in findings_for(report)]
         return report
@@ -90,13 +91,21 @@ class ReportBuilder:
             g["efficiency"] = g["ideal_ms"] / g["rated_ms"] if g["rated_ms"] else None
         return sorted(merged.values(), key=lambda g: -g["self_ms"])
 
+    @staticmethod
+    def _summary(prov, eager_steps: int) -> list[dict]:
+        if prov is None:
+            return []
+        n = max(eager_steps, 1)
+        return [{**{k: r[k] for k in ("category", "op", "dtypes", "module", "phase")}, "calls": r["calls"] / n, "device_ms": r["device_us"] / 1000 / n}
+                for r in prov.summary[:SUMMARY_ROWS]]
+
     def _provenance(self, prov, eager_steps: int) -> list[dict]:
         if prov is None:
             return []
         n, ceiling = max(eager_steps, 1), self.ceilings.gemm_tflops
         rows = []
         for r in prov.rows[:PROVENANCE_ROWS]:
-            row = {k: r[k] for k in ("category", "kernel", "op", "shapes", "dtypes", "module", "region")}
+            row = {k: r[k] for k in ("category", "kernel", "op", "shapes", "dtypes", "module", "phase", "region")}
             row.update(calls=r["calls"] / n, device_ms=r["device_us"] / 1000 / n, tflops=None, efficiency=None)
             if r["flops"] and r["device_us"]:
                 row["tflops"] = r["flops"] * r["calls"] / r["device_us"] / 1e6
@@ -151,10 +160,13 @@ class ReportWriter:
         if not rows:
             return []
         cov = meta.get("provenance_coverage") or {}
+        summary = report.get("provenance_summary") or []
         out = ["", "## Where device time comes from", "",
-               f"Kernels tied to the operator that launched them: {cov.get('operator', 0):.0%} of kernel time; to a module: {cov.get('module', 0):.0%} (replayed graph steps launch nothing, so they stay unattributed). "
+               f"Kernels tied to the operator that launched them: {cov.get('operator', 0):.0%} of kernel time; to a module: {cov.get('module', 0):.0%} (replayed graph steps launch nothing, so they stay unattributed; the profiler gave no link for {cov.get('no_link', 0):.0%} and a link to an unknown operator for {cov.get('link_to_unknown_operator', 0):.0%}). "
                "Times are per eager step.", "",
-               "### Everything except matrix products, largest first", "", "| ms | calls | category | operator | dtypes | shapes | module | kernel |", "|---:|---:|---|---|---|---|---|---|"]
+               "### By kind of work (all shapes together), largest first", "", "| ms | calls | category | phase | operator | dtypes | module |", "|---:|---:|---|---|---|---|---|"]
+        out += [f"| {r['device_ms']:.2f} | {r['calls']:.0f} | {r['category']} | {r['phase']} | {r['op']} | {r['dtypes']} | {r['module']} |" for r in summary[:PROVENANCE_SHOWN]]
+        out += ["", "### Everything except matrix products, by shape, largest first", "", "| ms | calls | category | operator | dtypes | shapes | module | kernel |", "|---:|---:|---|---|---|---|---|---|"]
         rest = [r for r in rows if r["tflops"] is None][:PROVENANCE_SHOWN]
         out += [f"| {r['device_ms']:.2f} | {r['calls']:.0f} | {r['category']} | {r['op'] or '?'} | {r['dtypes']} | {r['shapes']} | {r['module']} | `{r['kernel'][:60]}` |" for r in rest]
         out += ["", "### Matrix products by shape", "", "| ms | calls | operator | shapes | module | TFLOPS | of ceiling |", "|---:|---:|---|---|---|---:|---:|"]

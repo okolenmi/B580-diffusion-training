@@ -63,6 +63,6 @@ def plan_from_header(index: HeaderIndex, prefix: str, selection: TrainableSelect
 
 
 def inject_denoiser(denoiser: SDXLDenoiser, selection: TrainableSelection, *, rank: int, alpha: float, kind: str = "lora",
-                    policy: str = "classic", dropout: float = 0.0) -> AdaptedPart:
+                    policy: str = "classic", dropout: float = 0.0, compute: str = "float32") -> AdaptedPart:
     plan = plan_adapter(LAYOUT, descriptors_from_model(denoiser.model), selection, rank, alpha)
-    return inject(denoiser.model, plan, kind=kind, policy=policy, dropout=dropout)
+    return inject(denoiser.model, plan, kind=kind, policy=policy, dropout=dropout, compute=compute)

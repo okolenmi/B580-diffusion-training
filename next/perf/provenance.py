@@ -34,7 +34,8 @@ def compact(shapes: list) -> str:
 
 @dataclass
 class Provenance:
-    rows: list[dict] = field(default_factory=list)                              # one per (kernel, operator, shapes, dtypes, module), totals over the window
+    rows: list[dict] = field(default_factory=list)                              # one per (kernel, operator, shapes, dtypes, module, phase), totals over the window
+    summary: list[dict] = field(default_factory=list)                           # the same without kernel names and shapes: what a kind of work costs in all
     modules: dict[str, dict[str, list[float]]] = field(default_factory=dict)  # path -> phase -> [own us, inclusive us]
     coverage: dict[str, float] = field(default_factory=dict)                  # shares of kernel time with a known operator / module
     kinds: dict[str, int] = field(default_factory=dict)
@@ -59,8 +60,9 @@ class ProvenanceBuilder:
     def build(self) -> Provenance:
         launches = Attribution(self.table, self.tree).launches()
         groups: dict[tuple, dict] = {}
+        kinds: dict[tuple, dict] = {}
         modules: dict[str, dict[str, list[float]]] = {}
-        total = with_op = with_module = 0.0
+        total = with_op = with_module = no_link = lost = 0.0
         shape_cache: dict[int, tuple[str, str, list]] = {}
         for launch in launches:
             total += launch.duration_us
@@ -75,24 +77,37 @@ class ProvenanceBuilder:
                 op_name = self.tree.ops[launch.op].name
                 root = self.tree.ops[ancestors[-1]].name
                 chain = op_name if root == op_name else f"{root} > {op_name}"
-            module = ""
+            if launch.op < 0:
+                if launch.link:
+                    lost += launch.duration_us
+                else:
+                    no_link += launch.duration_us
+            module = phase = ""
             for depth, name in enumerate(launch.ranges):
-                _, path, phase = name.split("|", 2)
-                entry = modules.setdefault(path, {}).setdefault(phase, [0.0, 0.0])
+                _, path, phase_name = name.split("|", 2)
+                entry = modules.setdefault(path, {}).setdefault(phase_name, [0.0, 0.0])
                 entry[1] += launch.duration_us
                 if depth == 0:
                     entry[0] += launch.duration_us
-                    module = path
+                    module, phase = path, phase_name
                     with_module += launch.duration_us
-            key = (launch.name, chain, shapes, dtypes, role_of(module) if module else "")
+            key = (launch.name, chain, shapes, dtypes, role_of(module) if module else "", phase)
             row = groups.get(key)
             if row is None:
                 flops = matmul_flops(op_name, raw_shapes) if launch.op >= 0 else None
                 row = groups[key] = {"category": self.categorizer.category(launch.name), "kernel": launch.name, "op": chain, "shapes": shapes, "dtypes": dtypes,
-                                     "module": key[4], "region": region_of(module) if module else "", "calls": 0, "device_us": 0.0, "flops": flops}
+                                     "module": key[4], "phase": phase, "region": region_of(module) if module else "", "calls": 0, "device_us": 0.0, "flops": flops}
             row["calls"] += 1
             row["device_us"] += launch.duration_us
+            kind_key = (row["category"], op_name or "?", dtypes, key[4], phase)
+            kind = kinds.get(kind_key)
+            if kind is None:
+                kind = kinds[kind_key] = {"category": row["category"], "op": op_name or "?", "dtypes": dtypes, "module": key[4], "phase": phase, "calls": 0, "device_us": 0.0}
+            kind["calls"] += 1
+            kind["device_us"] += launch.duration_us
         rows = sorted(groups.values(), key=lambda r: -r["device_us"])
+        summary = sorted(kinds.values(), key=lambda r: -r["device_us"])
         share = (lambda part: part / total if total else 0.0)
-        return Provenance(rows, modules, {"operator": share(with_op), "module": share(with_module), "kernel_ms": total / 1000.0, "shape_errors": self.shape_errors}, dict(self.table.kinds))
+        return Provenance(rows, summary, modules, {"operator": share(with_op), "module": share(with_module), "kernel_ms": total / 1000.0, "shape_errors": self.shape_errors,
+                                                                      "no_link": share(no_link), "link_to_unknown_operator": share(lost)}, dict(self.table.kinds))
 

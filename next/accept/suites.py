@@ -44,7 +44,8 @@ class SuiteBook:
 
     def speed(self) -> Suite:
         names = [NATIVE, NATIVE_G, INT8, INT8_G, "int8 dx-int8 eager", "int8 dx-int8 graph", "native graph attention-math_bf16",
-                 "native graph attention-chunked_bf16", "int8 graph attention-chunked_bf16"]
+                 "native graph attention-chunked_bf16", "int8 graph attention-chunked_bf16",
+                 "native eager lora-activation", "native graph attention-math_bf16 lora-activation", "int8 graph attention-math_bf16 lora-activation"]
         scenarios = _named(self.base, *names)
         skip = 10
         checks: list[Check] = [RunFinished(f"{n} finished", (n,)) for n in names]
@@ -59,6 +60,9 @@ class SuiteBook:
             StepTimeWithin("int8 gradient path int8 no slower than dense", ("int8 dx-int8 graph", INT8_G), 1.0, skip, reason="TESTING 25: which gradient path to prefer"),
             StepTimeWithin("math_bf16 attention beats math in a graph", ("native graph attention-math_bf16", NATIVE_G), 1.0, skip, reason="TESTING 28"),
             StepTimeWithin("chunked_bf16 attention beats math in a graph", ("native graph attention-chunked_bf16", NATIVE_G), 1.0, skip, reason="TESTING 28"),
+            StepTimeWithin("lora in the activation dtype beats float32 (eager)", ("native eager lora-activation", NATIVE), 1.0, skip, reason="TESTING 31"),
+            StepTimeWithin("lora in the activation dtype beats float32 (math_bf16 graph)", ("native graph attention-math_bf16 lora-activation", "native graph attention-math_bf16"), 1.0, skip, reason="TESTING 31"),
+            LossCurveClose("lora activation loss close to float32 (eager)", ("native eager lora-activation", NATIVE), 0.05, 10, reason="TESTING 31: the low-rank intermediate and factor gradients are rounded to bf16"),
             LossCurveClose("int8 loss close to native", (INT8, NATIVE), 0.15, 10, reason="the int8 network is not the native one; a wide band catches divergence, not noise"),
             LossCurveClose("chunked_bf16 loss close to math", ("native graph attention-chunked_bf16", NATIVE_G), 0.10, 10, reason="TESTING 28: scores rounded to bf16"),
         ]

@@ -53,6 +53,7 @@ class AdaptedLayer(nn.Module):
         self.register_buffer("base_offset", None)  # NF4 with double quantization: the mean the absmax values are stored around
         self._int8 = None
         self._nf4 = None
+        self.in_activation = False
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     @property
@@ -122,6 +123,14 @@ class AdaptedLayer(nn.Module):
         nn.init.zeros_(self.lora_A)
         nn.init.zeros_(self.lora_B)
 
+    def compute_in_activation(self, on: bool = True) -> None:
+        """Run the low-rank path in the dtype of the activations (bf16) instead of float32. The factors stay float32 parameters (a copy
+        is cast per call), so the update is still accumulated at full precision; what changes is the rounding of the low-rank
+        intermediate and of the gradient of the factors, and that no full-size float32 tensor is made, cast back and added per layer."""
+        if on and self.kind != "lora":
+            raise ValueError("only LoRA layers can compute in the activation dtype (DoRA needs float32 norms)")
+        self.in_activation = on
+
     def _gated(self, out: Tensor) -> Tensor:
         return self.gate.apply(out) if self.gate is not None else out
 
@@ -173,8 +182,19 @@ class AdaptedLinear(AdaptedLayer):
             return self._int8.apply(x, self.base_weight, self.base_scale, self.base_bias)
         return F.linear(x, self.base_weight, self.base_bias)
 
+    def _lora_in_activation(self, x: Tensor, base: Tensor) -> Tensor:
+        dtype = x.dtype
+        down = F.linear(self.dropout(x), self.lora_A.to(dtype))
+        up = self.lora_B.to(dtype)
+        if self.gate is None or self.gate.value is None:
+            # the base result is the matmul's addend: no separate add, no cast of a full-size delta
+            return torch.addmm(base.reshape(-1, self.out_features), down.reshape(-1, self.rank), up.t(), alpha=self.scaling).view_as(base)
+        return base + self._gated((down @ up.t()) * self.scaling)
+
     def forward(self, x: Tensor) -> Tensor:
         base = self._base(x)
+        if self.in_activation and x.dtype != self.lora_A.dtype:
+            return self._lora_in_activation(x, base)
         down = self.dropout(x).to(self.lora_A.dtype) @ self.lora_A.T
         if self.kind == "lora":
             # the small factor takes the scale: one full-size multiply fewer per layer
@@ -213,6 +233,9 @@ class AdaptedConv2d(AdaptedLayer):
 
     def forward(self, x: Tensor) -> Tensor:
         base = self._conv(x, self.frozen_weight, self.base_bias)
+        if self.in_activation and x.dtype != self.lora_A.dtype:
+            down = self._conv(self.dropout(x), self.lora_A.to(x.dtype), None)
+            return base + self._gated(F.conv2d(down, (self.lora_B * self.scaling).to(x.dtype)))
         down = self._conv(self.dropout(x).to(self.lora_A.dtype), self.lora_A, None)
         if self.kind == "lora":
             return base + self._gated(F.conv2d(down, self.lora_B * self.scaling)).to(base.dtype)

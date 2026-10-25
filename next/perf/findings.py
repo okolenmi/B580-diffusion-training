@@ -46,13 +46,13 @@ class CopySources(Rule):
     TOP = 3
 
     def check(self, report: dict) -> list[Finding]:
-        rows = [r for r in (report.get("provenance") or []) if r["category"] == "copy"]
+        rows = [r for r in (report.get("provenance_summary") or report.get("provenance") or []) if r["category"] == "copy"]
         total = sum(c["device_ms"] for c in report["categories"]) or 1.0
         copy_ms = sum(r["device_ms"] for r in rows)
         if not rows or copy_ms / total < self.THRESHOLD:
             return []
         return [Finding(f"Copy kernels come from {r['op'] or 'unknown operator'} in {r['module'] or 'no module'}", r["device_ms"],
-                        f"{r['calls']:.0f} calls per step, {r['dtypes'] or 'dtypes unknown'}, shapes {r['shapes'] or 'unknown'}",
+                        f"{r['calls']:.0f} calls per step in the {r.get('phase') or 'unknown'} phase, dtypes {r['dtypes'] or 'unknown'}" + (f", shapes {r['shapes']}" if r.get("shapes") else ""),
                         "avoid the cast (keep the tensor in the compute dtype, cache a cast copy, or fuse it into the neighbouring kernel)") for r in rows[: self.TOP]]
 
 

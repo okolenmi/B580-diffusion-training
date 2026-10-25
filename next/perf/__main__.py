@@ -18,8 +18,8 @@ from .matrix import Matrix, MatrixSpec, SubprocessRunner
 from .report import ReportWriter
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m next.perf")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m next.perf", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
     ceilings = sub.add_parser("ceilings", help="measure matmul, int8, copy and launch ceilings and print them")
     ceilings.add_argument("--device", default="xpu")
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--size", type=int, default=768, help="image side in pixels")
     bench.add_argument("--suites", nargs="*", choices=sorted(SUITES), help="default: all")
     bench.add_argument("--backend", default="auto", choices=("auto", "xpu_kernels", "torch"))
-    check = sub.add_parser("hwcheck", help="everything pending on hardware in one go; train arguments follow --")
+    check = sub.add_parser("hwcheck", allow_abbrev=False, help="everything pending on hardware in one go; options it does not know go to the trainer (python -m next.run sdxl-lora)")
     check.add_argument("--out", default="perf-hwcheck")
     check.add_argument("--device", default="xpu")
     check.add_argument("--steps", type=int, default=28)
@@ -58,7 +58,14 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "events", "bench", "matrix", "verdict"), help="default: all")
     check.add_argument("--scenarios", nargs="*", metavar="NAME", help="only these training scenarios (names as in matrix/summary.md, e.g. 'int8 eager'); the baseline always runs; default: all")
     TrainArguments.add_to(check)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args, rest = TrainArguments.parse(parser, argv)
+    if rest and args.command != "hwcheck":
+        parser.error(f"unrecognized arguments: {' '.join(rest)}")
     if args.command == "hardware":
         info = HardwareReport()
         data = info.collect()
@@ -81,11 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         print(runner.write(runner.run(), args.out))
         return 0
     if args.command == "hwcheck":
-        try:
-            train = TrainArguments.from_args(args, reserved=("--out", "--device", "--steps", "--warmup", "--only", "--scenarios"))
-        except ValueError as error:
-            parser.error(str(error))
-        print(HwCheck(Path(args.out), train, device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None, scenarios=args.scenarios).run())
+        print(HwCheck(Path(args.out), TrainArguments.from_args(args, rest), device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None, scenarios=args.scenarios).run())
         return 0
     if args.command == "matrix":
         spec = MatrixSpec.load(args.file)

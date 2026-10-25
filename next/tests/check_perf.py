@@ -368,11 +368,11 @@ def train_arguments():
     from ..perf.hwcheck import TrainArguments
     parser = argparse.ArgumentParser()
     TrainArguments.add_to(parser)
-    args = parser.parse_args(["--models", "M", "--datasets", "D", "--dataset", "set", "--file", "f.safetensors", "--output", "O", "--batch", "2", "--", "--param", "buckets.max_shapes=4"])
-    out = TrainArguments.from_args(args)
+    args, rest = TrainArguments.parse(parser, ["--models", "M", "--datasets", "D", "--dataset", "set", "--file", "f.safetensors", "--output", "O", "--batch", "2", "--", "--param", "buckets.max_shapes=4"])
+    out = TrainArguments.from_args(args, rest)
     check(out == ["--models", "M", "--datasets", "D", "--dataset", "set", "--file", "f.safetensors", "--output", "O", "--batch", "2", "--param", "buckets.max_shapes=4"],
           f"named options and the extras after -- become the trainer's arguments ({out})")
-    raises(SystemExit, lambda: parser.parse_args(["--models", "M"]), "the options that say what to train are required")
+    raises(SystemExit, lambda: TrainArguments.parse(parser, ["--models", "M"]), "the options that say what to train are required")
     command = HwCheck(Path("x"), out, steps=12).train_command()
     check(command[-2:] == ["--steps", "12"] and command[1:4] == ["-m", "next.run", "sdxl-lora"], "the step count is added by hwcheck after the user's arguments")
     from ..accept.acceptance import Acceptance
@@ -394,13 +394,19 @@ def node_session():
         check(session is not None and session.warmup == 5 and session.steps == 2, "the node passes the declared settings to the session")
 
 
-def misplaced_options():
-    """hwcheck's own options after the lone -- would be handed to the trainer; they are refused with the reason."""
-    import argparse
-    parser = argparse.ArgumentParser()
-    TrainArguments.add_to(parser)
-    args = parser.parse_args(["--models", "M", "--datasets", "D", "--dataset", "n", "--file", "f", "--output", "O", "--", "--param", "a=1", "--only", "events"])
-    raises(ValueError, lambda: TrainArguments.from_args(args, reserved=("--only",)), "an option placed after -- is refused", "must come before")
+def option_order():
+    """Options work in any place: hwcheck's own after trainer options (with or without --), trainer options before them, no abbreviation swallowing a trainer option."""
+    from ..perf.__main__ import build_parser
+    parser = build_parser()
+    mine = ["--models", "M", "--datasets", "D", "--dataset", "n", "--file", "f", "--output", "O"]
+    for order in (["--only", "events", "matrix", "--scenarios", "int8 eager", *mine, "--", "--param", "a=1"],
+                  [*mine, "--param", "a=1", "--only", "events", "matrix", "--scenarios", "int8 eager"],
+                  [*mine, "--", "--param", "a=1", "--only", "events", "matrix", "--scenarios", "int8 eager"]):
+        args, rest = TrainArguments.parse(parser, ["hwcheck", *order])
+        check(args.only == ["events", "matrix"] and args.scenarios == ["int8 eager"] and TrainArguments.from_args(args, rest)[-2:] == ["--param", "a=1"],
+              f"the same arguments in another order mean the same ({order[:2]}...)")
+    args, rest = TrainArguments.parse(parser, ["hwcheck", *mine, "--set", "x=1", "--rank", "16", "--step", "5"])
+    check(rest == ["--set", "x=1", "--rank", "16", "--step", "5"] and args.steps == 28, "an unknown option that starts like a known one stays the trainer's")
 
 
 def hwcheck():
@@ -432,4 +438,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, misplaced_options, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, option_order, node_session, hwcheck)

@@ -33,20 +33,24 @@ class TrainArguments:
             parser.add_argument(f"--{name}", required=True, metavar=metavar, help=text)
         for name, metavar, text in cls.OPTIONAL:
             parser.add_argument(f"--{name}", metavar=metavar, help=text)
-        parser.add_argument("extra", nargs="*", help="after a lone --: any other `python -m next.run sdxl-lora` options (for example --rank 16 --param buckets.max_shapes=4)")
+
+    @staticmethod
+    def parse(parser, argv: list[str] | None) -> tuple[object, list[str]]:
+        """Options may come in any order and place. The ones the parser knows are its own; every other token is the trainer's
+        (any other `python -m next.run sdxl-lora` option, e.g. --rank 16 --param buckets.max_shapes=4), in the order given.
+        A lone -- changes nothing, so it is dropped. Callers build their parsers with ``allow_abbrev=False``: an abbreviation
+        would swallow a trainer option that happens to start like one of theirs."""
+        tokens = [a for a in (sys.argv[1:] if argv is None else argv) if a != "--"]
+        return parser.parse_known_args(tokens)
 
     @classmethod
-    def from_args(cls, args, reserved: tuple[str, ...] = ()) -> list[str]:
-        """``reserved`` are the caller's own options: one found among the extras (after the lone --) went to the wrong side and would reach the trainer as an unknown option."""
-        misplaced = [a for a in args.extra if a.split("=")[0] in reserved]
-        if misplaced:
-            raise ValueError(f"{', '.join(misplaced)} must come before the lone `--` (everything after it is passed to the trainer)")
+    def from_args(cls, args, rest: list[str] = ()) -> list[str]:
         out: list[str] = []
         for name, _, _ in (*cls.REQUIRED, *cls.OPTIONAL):
             value = getattr(args, name)
             if value is not None:
                 out += [f"--{name}", str(value)]
-        return [*out, *(a for a in args.extra if a != "--")]
+        return [*out, *rest]
 
 
 @dataclass

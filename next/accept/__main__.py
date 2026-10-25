@@ -54,7 +54,7 @@ def quant_probe(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m next.accept")
+    parser = argparse.ArgumentParser(prog="python -m next.accept", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
     probe = sub.add_parser("quant-probe", help="dense against quantized copy of a checkpoint's UNet: weight, output and gradient error by region")
     probe.add_argument("--models", required=True)
@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     pad.add_argument("--sigma", type=float, default=0.6)
     pad.add_argument("--seed", type=int, default=0)
     pad.add_argument("--out", default="padding-sheet.png")
-    run = sub.add_parser("run", help="run suites (each scenario in its own process) and write verdict.md")
+    run = sub.add_parser("run", allow_abbrev=False, help="run suites (each scenario in its own process) and write verdict.md; options it does not know go to the trainer")
     run.add_argument("--suites", nargs="*", help="which suites (see 'list'); default: all")
     run.add_argument("--out", default="accept-run")
     run.add_argument("--steps", type=int, default=28)
@@ -88,7 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     judge.add_argument("--out", default="accept-verdict")
     judge.add_argument("--warmup", type=int, default=20)
     sub.add_parser("list", help="the suites and their checks")
-    args = parser.parse_args(argv)
+    args, rest = TrainArguments.parse(parser, argv)
+    if rest and args.command != "run":
+        parser.error(f"unrecognized arguments: {' '.join(rest)}")
     if args.command == "list":
         for suite in SuiteBook().all().values():
             print(f"{suite.name}  (TESTING {suite.item}): {suite.title}\n  scenarios: {', '.join(suite.scenario_names())}")
@@ -111,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run":
         book = SuiteBook(args.warmup, str(Path(args.out) / "ceilings.json"))
-        print(Acceptance(choose(args.suites, book), Path(args.out), TrainArguments.from_args(args), steps=args.steps).run())
+        print(Acceptance(choose(args.suites, book), Path(args.out), TrainArguments.from_args(args, rest), steps=args.steps).run())
         return 0
     return quant_probe(args)
 

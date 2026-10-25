@@ -26,7 +26,7 @@ from ..perf.ceilings import Ceilings
 from ..perf.cost import CostModel
 from ..perf.comparison import Comparison
 from ..perf.findings import findings_for
-from ..perf.hwcheck import HwCheck, StepResult, default_scenarios
+from ..perf.hwcheck import HwCheck, StepResult, TrainArguments, default_scenarios
 from ..perf.matrix import Matrix, MatrixSpec, Outcome, Scenario
 from ..perf.modules import region_of, role_of
 from ..perf.rating import Rating
@@ -394,6 +394,15 @@ def node_session():
         check(session is not None and session.warmup == 5 and session.steps == 2, "the node passes the declared settings to the session")
 
 
+def misplaced_options():
+    """hwcheck's own options after the lone -- would be handed to the trainer; they are refused with the reason."""
+    import argparse
+    parser = argparse.ArgumentParser()
+    TrainArguments.add_to(parser)
+    args = parser.parse_args(["--models", "M", "--datasets", "D", "--dataset", "n", "--file", "f", "--output", "O", "--", "--param", "a=1", "--only", "events"])
+    raises(ValueError, lambda: TrainArguments.from_args(args, reserved=("--only",)), "an option placed after -- is refused", "must come before")
+
+
 def hwcheck():
     scenarios = default_scenarios(warmup=20, ceilings="c.json")
     picked = HwCheck(Path("x"), [], scenarios=["int8 eager", "native_graph"], warmup=20).scenarios()
@@ -423,4 +432,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, matrix, micro, train_arguments, misplaced_options, node_session, hwcheck)

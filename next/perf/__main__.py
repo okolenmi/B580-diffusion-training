@@ -81,7 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         print(runner.write(runner.run(), args.out))
         return 0
     if args.command == "hwcheck":
-        print(HwCheck(Path(args.out), TrainArguments.from_args(args), device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None, scenarios=args.scenarios).run())
+        try:
+            train = TrainArguments.from_args(args, reserved=("--out", "--device", "--steps", "--warmup", "--only", "--scenarios"))
+        except ValueError as error:
+            parser.error(str(error))
+        print(HwCheck(Path(args.out), train, device=args.device, steps=args.steps, warmup=args.warmup, only=set(args.only) if args.only else None, scenarios=args.scenarios).run())
         return 0
     if args.command == "matrix":
         spec = MatrixSpec.load(args.file)

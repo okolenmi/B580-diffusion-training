@@ -36,7 +36,11 @@ class TrainArguments:
         parser.add_argument("extra", nargs="*", help="after a lone --: any other `python -m next.run sdxl-lora` options (for example --rank 16 --param buckets.max_shapes=4)")
 
     @classmethod
-    def from_args(cls, args) -> list[str]:
+    def from_args(cls, args, reserved: tuple[str, ...] = ()) -> list[str]:
+        """``reserved`` are the caller's own options: one found among the extras (after the lone --) went to the wrong side and would reach the trainer as an unknown option."""
+        misplaced = [a for a in args.extra if a.split("=")[0] in reserved]
+        if misplaced:
+            raise ValueError(f"{', '.join(misplaced)} must come before the lone `--` (everything after it is passed to the trainer)")
         out: list[str] = []
         for name, _, _ in (*cls.REQUIRED, *cls.OPTIONAL):
             value = getattr(args, name)

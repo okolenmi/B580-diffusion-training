@@ -19,6 +19,7 @@ from ..families.sdxl.conditioning import (SDXLConditioning, SDXLConditioningKit,
                                           size_embedding)
 from ..families.general.ldm_unet import attention as attention_module
 from ..families.general.ldm_unet import attention_modes
+from ..families.general.ldm_unet.fused import FusedGeglu
 from ..families.general.ldm_unet.unet import UNetModel
 from ..families.sdxl.denoiser import SDXLDenoiser, load_denoiser
 from .check_families_torch import to_openclip
@@ -237,5 +238,28 @@ def attention_modes_cases():
     check(set(den.attention_scopes()) == set(attention_modes.MODES), "the denoiser offers the modes to the trainer")
 
 
+def fused_geglu_cases():
+    """The feed-forward routes through a fused function when one is set, and staying off reports a reason."""
+    layer = attention_module.GEGLU(8, 16)
+    x = torch.randn(2, 3, 8)
+    eager = layer(x)
+    calls = []
+
+    def fused(h):
+        calls.append(tuple(h.shape))
+        return h[..., :16] * torch.nn.functional.gelu(h[..., 16:])
+
+    try:
+        attention_module.GEGLU.fused = fused
+        routed = layer(x)
+    finally:
+        FusedGeglu.disable()
+    check("the fused function receives the projection", calls == [(2, 3, 32)])
+    check("and gives the eager result", torch.equal(routed, eager))
+    check("disabled again afterwards", attention_module.GEGLU.fused is None)
+    reason = FusedGeglu.enable(torch.device("cpu"))
+    check("without a device the fused kernel stays off and says why", bool(reason) and attention_module.GEGLU.fused is None)
+
+
 if __name__ == "__main__":
-    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases, attention_modes_cases)
+    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases, attention_modes_cases, fused_geglu_cases)

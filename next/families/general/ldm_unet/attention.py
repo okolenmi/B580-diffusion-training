@@ -43,12 +43,17 @@ def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int) -> tor
 
 
 class GEGLU(nn.Module):
+    fused = None  # a function h -> h[.., :I] * gelu(h[.., I:]) that replaces the three eager kernels; set by ``fused.FusedGeglu``
+
     def __init__(self, dim_in: int, dim_out: int) -> None:
         super().__init__()
         self.proj = nn.Linear(dim_in, dim_out * 2)
 
     def forward(self, x):
-        x, gate = self.proj(x).chunk(2, dim=-1)
+        h = self.proj(x)
+        if GEGLU.fused is not None:
+            return GEGLU.fused(h)
+        x, gate = h.chunk(2, dim=-1)
         return x * F.gelu(gate)
 
 

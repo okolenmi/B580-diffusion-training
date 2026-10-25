@@ -88,6 +88,7 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
     int8 = ("--param", "adapter.base_precision=int8")
     graph = ("--set", "trainer.graph=true")
     lora = ("--param", "adapter.lora_compute=activation")
+    geglu = ("--param", "trainer.fused_geglu=true")
     measured = ("--param", "trainer.checkpoint_by=measured", "--param", "trainer.tune_checkpointing=true")
     window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}", "--set", "perf.provenance=true")  # one measurement of the ceilings for every scenario
     S = lambda name, *args, env=(): Scenario(name, (*window, *args), tuple(env))  # noqa: E731
@@ -99,6 +100,8 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
             S("int8 graph attention-chunked_bf16", *int8, *graph, "--param", "trainer.graph_attention=chunked_bf16"),
             S("native eager lora-activation", *lora), S("native graph attention-math_bf16 lora-activation", *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
             S("int8 graph attention-math_bf16 lora-activation", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
+            S("native graph attention-math_bf16 lora-activation fused-geglu", *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu),
+            S("native eager lora-activation fused-geglu", *lora, *geglu),
             S("native expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:True"),)),
             S("native no-expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:False"),))]
 

@@ -109,7 +109,7 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
 class HwCheck:
     """``train_args`` are the arguments of ``python -m next.run sdxl-lora`` that describe the model, dataset and size (everything but steps and --perf)."""
 
-    def __init__(self, out: Path, train_args: list[str], *, device: str = "xpu", steps: int = 28, warmup: int = 20, python: str = sys.executable,
+    def __init__(self, out: Path, train_args: list[str], *, device: str = "xpu", steps: int = 28, warmup: int = 10, python: str = sys.executable,
                  run_step: Callable[[Step, Path], StepResult] = run_process, say: Callable[[str], None] = print, only: set[str] | None = None,
                  bench_args: tuple[str, ...] = (), scenarios: list[str] | None = None):
         self.out, self.train_args, self.device, self.steps, self.warmup = out, train_args, device, steps, warmup

@@ -158,9 +158,10 @@ class Matrix:
                 out.append(f"| {o.scenario.name} | FAILED: {o.error} | | | | | | | | log: {o.log} |")
                 continue
             b = o.report["budget"]
+            unsteady = f" ({o.report.get('meta', {}).get('unsteady_steps')} unsteady steps)" if o.report.get("meta", {}).get("unsteady_steps") else ""
             finding = o.report["findings"][0]["title"] if o.report["findings"] else "-"
             f = lambda v, s=".0f": "-" if v is None else format(v, s)  # noqa: E731
-            out.append(f"| {o.scenario.name} | ok | {f(b['wall_ms'])} | {f(b['eager_ms'])} | {f(b['replayed_ms'])} | {f(b['device_ms'])} | "
+            out.append(f"| {o.scenario.name} | ok{unsteady} | {f(b['wall_ms'])} | {f(b['eager_ms'])} | {f(b['replayed_ms'])} | {f(b['device_ms'])} | "
                        f"{'-' if b['utilisation'] is None else format(b['utilisation'], '.0%')} | {f(o.report.get('meta', {}).get('power_w'))} | {f(b.get('peak_mb'))} | {finding} |")
         if len(done) > 1:
             first = done[0]

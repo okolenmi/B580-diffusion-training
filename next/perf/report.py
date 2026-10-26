@@ -179,6 +179,8 @@ class ReportWriter:
         out = [f"# Performance report ({meta['device']})", ""]
         if meta["device_time_is_host_time"]:
             out += ["> No device activity was recorded (a CPU run): kernel times below are host operator times and utilisation is not meaningful.", ""]
+        if meta.get("unsteady_steps"):
+            out += [f"> {meta['unsteady_steps']} of the {meta['window_steps']} window steps were not steady (a shape seen for the first time, a graph capture, or an eager step in a graph run): the times below describe those steps, not the steady state. Move the window later (`perf.warmup_steps`) or use a dataset with one shape.", ""]
         out += [f"Window: {meta['steps_in_window']} steps ({meta['eager_steps']} eager, {meta['replayed_steps']} replayed). All times are per step.", "",
                 "## Step budget", "",
                 f"- step {b['wall_ms']:.0f} ms, median of {b['timed_steps']} " + ("unprofiled steps" if b["wall_clean"] else "profiled steps (inflated by the profiler)")

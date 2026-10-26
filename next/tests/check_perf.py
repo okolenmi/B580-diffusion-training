@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from ..graph import ExecutionContext, SettingsRegistry
 from ..nodes.train.trainer import DiffusionTrainerNode
 from ..perf import bench as bench_module
+from ..perf.budget import StepRecord
 from ..perf.bench import BenchRunner, context_for
 from ..perf.categories import Categorizer
 from ..perf.ceilings import Ceilings
@@ -222,6 +223,32 @@ def window():
         text = (folder / "report.md").read_text()
         check("## Step budget" in text and "## Slowest piece groups" in text and "## Slowest kernels" in text, "the markdown has the sections")
         check(not any(m._forward_hooks or m._backward_hooks for m in session.model.modules()), "hooks are removed after the window")
+
+
+def steady_steps():
+    """A step is steady unless it met a new shape, captured a graph, or ran eagerly in a graph run."""
+    session = PerfSession(nn.Linear(2, 2), "cpu", "unused", warmup=0, steps=1, quick_ceilings=True, say=lambda text: None)
+    sequence = [  # (shape, replays, graphs, steady)
+        ((2, 8, 8), 0, 0, False),   # a new shape, eager
+        ((2, 8, 8), 0, 0, False),   # eager step in a graph run
+        ((2, 8, 8), 1, 1, False),   # the capture step
+        ((2, 8, 8), 2, 1, True),    # a replay
+        ((2, 6, 6), 2, 1, False),   # another new shape
+        ((2, 8, 8), 3, 1, True),    # back to the captured one
+    ]
+    got = []
+    for n, (shape, replays, graphs, _) in enumerate(sequence):
+        session._current = StepRecord(n, 1.0)
+        session.observe({"batch": shape[0], "latent_h": shape[1], "latent_w": shape[2], "graph_replays": replays, "graphs": graphs})
+        got.append(session._current.steady)
+    check(got == [row[3] for row in sequence], f"steady steps are told from new shapes, captures and eager steps ({got})")
+    eager = PerfSession(nn.Linear(2, 2), "cpu", "unused", warmup=0, steps=1, quick_ceilings=True, say=lambda text: None)
+    flags = []
+    for shape in ((2, 8, 8), (2, 8, 8), (2, 6, 6)):
+        eager._current = StepRecord(0, 1.0)
+        eager.observe({"batch": shape[0], "latent_h": shape[1], "latent_w": shape[2]})
+        flags.append(eager._current.steady)
+    check(flags == [False, True, False], "without graphs only a new shape is unsteady")
 
 
 def window_provenance():
@@ -464,4 +491,4 @@ def hwcheck():
 
 
 if __name__ == "__main__":
-    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, window_provenance, profile_failure, short_run, comparison, power, matrix, micro, train_arguments, option_order, node_session, hwcheck)
+    run(categories, cost_and_rating, rules, raw_events, provenance, capture_is_skipped, window, steady_steps, window_provenance, profile_failure, short_run, comparison, power, matrix, micro, train_arguments, option_order, node_session, hwcheck)

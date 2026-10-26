@@ -33,6 +33,8 @@ class PerfSession:
         self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
         self._power = PowerMeter()
+        self._shapes: set = set()
+        self._replays = self._captures = 0
         self.power_w: float | None = None
         self.records: list[StepRecord] = []  # profiled steps
         self.clean: list[StepRecord] = []    # timed alone
@@ -79,14 +81,20 @@ class PerfSession:
             self._end()
 
     def observe(self, metrics: dict) -> None:
+        shape = (metrics.get("batch"), metrics.get("latent_h"), metrics.get("latent_w"))
+        new = shape not in self._shapes
+        self._shapes.add(shape)
+        replays, captures = metrics.get("graph_replays"), metrics.get("graphs")
+        replayed = replays is not None and replays > self._replays
+        captured = captures is not None and captures > self._captures
+        self._replays, self._captures = replays or self._replays, captures or self._captures
         record = self._current
         if record is None:
             return
-        replays = metrics.get("graph_replays")
         if replays is not None:
-            record.replayed = replays > getattr(self, "_replays", 0)
-            self._replays = replays
-        record.shape = (metrics.get("batch"), metrics.get("latent_h"), metrics.get("latent_w"))
+            record.replayed = replayed
+        record.steady = not new and not captured and (replays is None or replayed)
+        record.shape = shape
         record.peak_mb = metrics.get("step_peak_mb")
         record.phase_ms = {k: metrics[k] for k in self.PHASES if k in metrics}
 
@@ -115,7 +123,7 @@ class PerfSession:
         self._lap("module timings", stages)
         ceilings = load_or_measure(self._ceilings_path, self.device, quick=self._quick)
         self._lap("ceilings", stages)
-        self.report = ReportBuilder(ceilings, self.device, {**self._meta, "power_w": self.power_w, "power_counter": str(self._power.counter) if self._power.counter else None}).build(self.records, self._kernels.result, records, self.clean, stages)
+        self.report = ReportBuilder(ceilings, self.device, {**self._meta, "unsteady_steps": sum(not r.steady for r in (*self.clean, *self.records)), "window_steps": len(self.clean) + len(self.records), "power_w": self.power_w, "power_counter": str(self._power.counter) if self._power.counter else None}).build(self.records, self._kernels.result, records, self.clean, stages)
         self._lap("report build", stages)
         self.report_path = ReportWriter(self.folder).write(self.report)
         self._lap("report write", stages)

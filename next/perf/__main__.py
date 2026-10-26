@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--out", default="perf-hwcheck")
     check.add_argument("--device", default="xpu")
     check.add_argument("--steps", type=int, default=28)
-    check.add_argument("--warmup", type=int, default=20, help="steps before the profiled window (graph capture and timing need several sightings per shape)")
+    check.add_argument("--warmup", type=int, default=10, help="steps before the profiled window (a graph is captured and timed within six steps of a shape; the window must end before the next shape appears)")
     check.add_argument("--only", nargs="*", choices=("hardware", "allocator", "events", "bench", "matrix", "verdict"), help="default: all")
     check.add_argument("--scenarios", nargs="*", metavar="NAME", help="only these training scenarios (names as in matrix/summary.md, e.g. 'int8 eager'); the baseline always runs; default: all")
     TrainArguments.add_to(check)

@@ -21,6 +21,7 @@ from ..graph import ExecutionContext, SettingsRegistry
 from ..nodes.train.trainer import DiffusionTrainerNode
 from ..perf import bench as bench_module
 from ..perf.budget import StepRecord
+from ..perf.bundle import pack
 from ..perf.bench import BenchRunner, context_for
 from ..perf.categories import Categorizer
 from ..perf.ceilings import Ceilings
@@ -491,6 +492,14 @@ def hwcheck():
             big = archive.read("logs/bench.log")
         check("README.md" in names and "logs/hardware.log" in names and not any(n.endswith("trace.json") for n in names), "the zip holds text files, no traces")
         check(len(big) < 210_000 and b"middle cut" in big, "a huge log is cut in the middle")
+        pile = Path(tmp) / "pile"
+        (pile / "a").mkdir(parents=True)
+        (pile / "a" / "report.json").write_text("x" * 1_200_000)
+        (pile / "a" / "report.md").write_text("small")
+        (pile / "a" / "adapter.safetensors").write_bytes(b"0" * 100)
+        with zipfile.ZipFile(pack(pile)) as archive:
+            kept = archive.namelist()
+        check(kept == ["a/report.md"], f"a bundle keeps text, leaves out a huge json and tensors ({kept})")
 
 
 if __name__ == "__main__":

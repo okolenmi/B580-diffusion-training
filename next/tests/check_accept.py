@@ -239,7 +239,7 @@ def suites_and_verdict():
         results = {r.name: r for r in verdict.results}
         check(results["int8 holds less memory than native"].status is Status.PASS and results["int8 graph within 15% of native graph"].status is Status.PASS,
               "int8 saves memory and its graph step is within 15%")
-        check(results["int8 gradient path int8 no slower than dense"].status is Status.SKIP and "no run for" in results["int8 gradient path int8 no slower than dense"].message
+        check(results["dense gradient path no slower than int8"].status is Status.SKIP and "no run for" in results["dense gradient path no slower than int8"].message
               and "int8 dx-int8 graph" in verdict.missing, "checks whose run is missing are skipped and the missing runs are listed")
         check(verdict.status is Status.PASS and verdict.count(Status.FAIL) == 0, "a suite whose evaluated checks all pass passes, skipped checks aside")
         suites["speed"].checks.append(C.LossFinite("explode", ("native eager",)))

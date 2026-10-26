@@ -6,15 +6,13 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .bundle import pack
 from .matrix import Matrix, MatrixSpec, Scenario, SubprocessRunner
 
-LOG_CAP = 200_000
-TEXT_SUFFIXES = (".md", ".json", ".log")
 
 
 class TrainArguments:
@@ -192,13 +190,4 @@ class HwCheck:
         return path
 
     def _zip(self) -> Path:
-        path = self.out / "bundle.zip"
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-            for file in sorted(self.out.rglob("*")):
-                if not file.is_file() or file == path or file.suffix not in TEXT_SUFFIXES or file.name == "trace.json":
-                    continue
-                data = file.read_bytes()
-                if len(data) > LOG_CAP and file.suffix == ".log":
-                    data = data[:LOG_CAP // 4] + b"\n... (middle cut) ...\n" + data[-LOG_CAP * 3 // 4:]
-                archive.writestr(str(file.relative_to(self.out)), data)
-        return path
+        return pack(self.out)

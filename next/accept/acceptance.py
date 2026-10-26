@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from ..perf.bundle import pack
 from ..perf.matrix import Matrix, MatrixSpec, Runner, Scenario, SubprocessRunner
 from .suites import Suite, SuiteBook
 from .verdict import Judge, SuiteVerdict, write_verdict
@@ -30,7 +31,9 @@ class Acceptance:
     def run(self) -> Path:
         spec = MatrixSpec(self.command, self.scenarios())
         Matrix(spec, self.out / "matrix", self.runner, resume=True, say=self.say).run()
-        return self.judge(self.out / "matrix", self.out)
+        verdict = self.judge(self.out / "matrix", self.out)
+        self.say(f"text bundle (logs, verdict, reports; no adapters or traces): {pack(self.out)}")
+        return verdict
 
     def judge(self, root: Path, out: Path) -> Path:
         judge = Judge(root)

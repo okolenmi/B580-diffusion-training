@@ -69,6 +69,9 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 31. Pictures for the faster defaults
 `adapter.lora_compute=activation` and `trainer.fused_geglu=true` passed every number (steps 8% to 40% faster, loss over the last 10 steps the same to four digits). They become defaults after a look: train 300+ steps with the defaults and the same with both options (same seed, `--set runtime.deterministic=true` if you want the same noise), generate from both with the same prompts and seeds, and tell me whether you can tell them apart.
 
+## 36. Channels-last convolutions
+`python -m next.perf hwcheck --out perf-bundle --only matrix verdict --scenarios "int8 graph attention-math_bf16 lora-activation fused-geglu" "int8 graph attention-math_bf16 lora-activation fused-geglu channels-last" <the usual train options>` (remove `perf-bundle` first) and send `bundle.zip`. Expected: `conv_reorder` (12.6 ms per step) gone from the kernel list and a faster step; if the step is slower or the loss differs, say so, the option is off by default.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

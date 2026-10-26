@@ -25,10 +25,14 @@ class SDXLDenoiser:
 
     def __init__(self, model: UNetModel, device="cpu", dtype: torch.dtype = torch.bfloat16):
         self.model, self.device, self.dtype = model, torch.device(device), dtype
+        self.channels_last = False
         self.model.to(device=self.device, dtype=dtype)
 
     def __call__(self, x_t: Tensor, timestep: Tensor, context: Tensor, y: Tensor) -> Tensor:
-        return self.model(x_t.to(self.dtype), timestep.to(torch.float32), context.to(self.dtype), y.to(self.dtype))
+        x = x_t.to(self.dtype)
+        if self.channels_last:
+            x = x.contiguous(memory_format=torch.channels_last)
+        return self.model(x, timestep.to(torch.float32), context.to(self.dtype), y.to(self.dtype))
 
     def predict(self, x_t: Tensor, timestep: Tensor, conditioning) -> Tensor:
         """The family-neutral entry point: noisy input, timesteps and an SDXL conditioning in, prediction out."""
@@ -61,6 +65,14 @@ class SDXLDenoiser:
     def attention_scopes(self) -> dict:
         """Named ways to run attention inside a captured graph: name -> a function returning a context manager."""
         return dict(ATTENTION_MODES)
+
+    def enable_channels_last(self) -> None:
+        """Keep the frozen convolutions' weights and the input in channels-last layout, which oneDNN runs without reordering them on
+        every call. Trainable convolutions stay as they are (a saved adapter must be contiguous)."""
+        for module in self.model.modules():
+            if isinstance(module, nn.Conv2d) and not any(p.requires_grad for p in module.parameters()):
+                module.to(memory_format=torch.channels_last)
+        self.channels_last = True
 
     def enable_fused_geglu(self, device) -> str:
         """Run the feed-forward activation as one fused kernel. Returns "" when on, otherwise why it stays off."""

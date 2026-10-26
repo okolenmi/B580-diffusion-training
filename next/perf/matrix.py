@@ -62,12 +62,12 @@ class MatrixSpec:
     timeout_s: float = 3600.0
 
     @classmethod
-    def load(cls, path: str | Path) -> "MatrixSpec":
+    def load(cls, path: str | Path) -> MatrixSpec:
         data = tomllib.loads(Path(path).read_text(encoding="utf8"))
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "MatrixSpec":
+    def from_dict(cls, data: dict) -> MatrixSpec:
         base = data.get("base") or {}
         command = list(base.get("command") or [])
         if not command:

@@ -30,7 +30,7 @@ class ImageSheet:
         self.cell, self.columns, self.caption_height, self.gap, self.title = cell, columns, caption_height, gap, title
         self.items: list[tuple[Image.Image, str]] = []
 
-    def add(self, image: Image.Image | Tensor, caption: str = "") -> "ImageSheet":
+    def add(self, image: Image.Image | Tensor, caption: str = "") -> ImageSheet:
         self.items.append((to_pil(image), caption))
         return self
 

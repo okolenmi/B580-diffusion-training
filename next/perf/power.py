@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 INTEL_VENDOR = "0x8086"
 

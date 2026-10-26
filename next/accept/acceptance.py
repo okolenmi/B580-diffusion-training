@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from ..perf.bundle import pack
 from ..perf.matrix import Matrix, MatrixSpec, Runner, Scenario, SubprocessRunner

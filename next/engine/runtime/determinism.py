@@ -18,7 +18,7 @@ class Determinism:
         self.enabled, self.seed = bool(enabled), max(int(seed), 0)
 
     @classmethod
-    def from_settings(cls, settings) -> "Determinism":
+    def from_settings(cls, settings) -> Determinism:
         return cls(bool(settings.get("runtime.deterministic")), int(settings.get("seed.base")))
 
     @property
@@ -26,7 +26,7 @@ class Determinism:
         """Splitting a batch by predicted memory changes the order gradients add up in, and the prediction is measured."""
         return not self.enabled
 
-    def apply(self) -> "Determinism":
+    def apply(self) -> Determinism:
         if self.enabled:
             torch.use_deterministic_algorithms(True, warn_only=True)  # warn: an operation without a deterministic kernel still runs
             torch.utils.deterministic.fill_uninitialized_memory = False  # filling only costs time here; results do not depend on it

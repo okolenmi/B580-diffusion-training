@@ -8,7 +8,7 @@ the encoder's output dtype.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 from torch import Tensor
@@ -30,19 +30,19 @@ class SDXLConditioning:
     y: Tensor
 
     @staticmethod
-    def stack(items: Sequence["SDXLConditioning"]) -> "SDXLConditioning":
+    def stack(items: Sequence[SDXLConditioning]) -> SDXLConditioning:
         return SDXLConditioning(torch.cat([c.ctx for c in items]), torch.cat([c.y for c in items]))
 
-    def to(self, device=None, dtype=None) -> "SDXLConditioning":
+    def to(self, device=None, dtype=None) -> SDXLConditioning:
         return SDXLConditioning(self.ctx.to(device=device, dtype=dtype), self.y.to(device=device))
 
     def tensors(self) -> list[Tensor]:
         return [self.ctx, self.y]
 
-    def map(self, fn) -> "SDXLConditioning":
+    def map(self, fn) -> SDXLConditioning:
         return SDXLConditioning(fn(self.ctx), fn(self.y))
 
-    def index(self, i) -> "SDXLConditioning":
+    def index(self, i) -> SDXLConditioning:
         if isinstance(i, int):
             i = slice(i, i + 1)
         return SDXLConditioning(self.ctx[i], self.y[i])
@@ -51,7 +51,7 @@ class SDXLConditioning:
         return {"clip_l": self.ctx[..., :L_WIDTH], "clip_g": self.ctx[..., L_WIDTH:],
                 "pooled": self.y[:, :G_WIDTH], "size": self.y[:, G_WIDTH:]}
 
-    def blend(self, other: "SDXLConditioning", p, segments: Sequence[str] | None = None) -> "SDXLConditioning":
+    def blend(self, other: SDXLConditioning, p, segments: Sequence[str] | None = None) -> SDXLConditioning:
         """``self * (1 - p) + other * p`` on the chosen segments (all by default); the rest stay as in ``self``.
 
         ``p`` is a float or a per-sample tensor of shape (B,).
@@ -85,7 +85,7 @@ class TextEncoding:
     ctx: Tensor
     pooled: Tensor
 
-    def to(self, device=None, dtype=None) -> "TextEncoding":
+    def to(self, device=None, dtype=None) -> TextEncoding:
         return TextEncoding(self.ctx.to(device=device, dtype=dtype), self.pooled.to(device=device, dtype=dtype))
 
     def nbytes(self) -> int:

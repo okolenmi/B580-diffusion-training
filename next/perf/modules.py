@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -73,7 +72,7 @@ class ModuleTimer:
         self._events: list[tuple[str, str, Any, Any]] = []  # path, tag, start, end
         self.skipped = 0
 
-    def attach(self) -> "ModuleTimer":
+    def attach(self) -> ModuleTimer:
         paths: dict[str, str] = {}
         for path, module in self.model.named_modules():
             kind = selected_kind(module)

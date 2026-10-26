@@ -7,7 +7,7 @@ largest batch of the run still fits the budget. Blocks the profile has no memory
 
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from .planner import StepPlanner
 from .profiler import BlockCost, BlockProfiler

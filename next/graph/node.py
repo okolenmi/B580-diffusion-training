@@ -49,7 +49,7 @@ class Completion:
 
     @classmethod
     def unfinished_at(cls, step: int | None = None, total: int | None = None,
-                      reason: str | None = "stopped") -> "Completion":
+                      reason: str | None = "stopped") -> Completion:
         return cls(cls.UNFINISHED_STATE, step=step, total=total, reason=reason)
 
     def as_dict(self) -> dict:
@@ -85,7 +85,7 @@ class Task:
 
     INTERVAL_S = 0.5
 
-    def __init__(self, context: "ExecutionContext", title: str, total: int | None):
+    def __init__(self, context: ExecutionContext, title: str, total: int | None):
         self.context, self.title, self.total, self.done = context, title, total, 0
         self._started = self._last = 0.0
 
@@ -93,7 +93,7 @@ class Task:
         self.context.report("task", {"node": self.context.uid, "title": self.title, "state": state, "done": self.done,
                                      "total": self.total, **extra})
 
-    def __enter__(self) -> "Task":
+    def __enter__(self) -> Task:
         self._started = self._last = time.monotonic()
         self._frame("started")
         return self
@@ -133,7 +133,7 @@ class ExecutionContext:
         return self.cancel_event is not None and self.cancel_event.is_set()
 
     def scoped(self, uid: str, reads: tuple[str, ...], owner: str,
-               upstream: dict[str, Completion] | None = None) -> "ExecutionContext":
+               upstream: dict[str, Completion] | None = None) -> ExecutionContext:
         clone = copy.copy(self)
         clone.uid = uid
         clone.settings = self._settings.view(reads, owner)

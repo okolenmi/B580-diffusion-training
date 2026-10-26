@@ -14,7 +14,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Mapping, Protocol
+from typing import Protocol
+from collections.abc import Callable, Mapping
 
 from ..graph.events import PromptsChanged
 from .ids import image_of
@@ -34,7 +35,7 @@ class Prompt(str):
 
     lifetime: Lifetime
 
-    def __new__(cls, text: str, lifetime: Lifetime = Lifetime.STABLE) -> "Prompt":
+    def __new__(cls, text: str, lifetime: Lifetime = Lifetime.STABLE) -> Prompt:
         obj = super().__new__(cls, text)
         obj.lifetime = lifetime
         return obj
@@ -185,14 +186,14 @@ class PromptTable:
         self._distinct = self._distinct_of(self._base)
 
     @classmethod
-    def from_images(cls, images, channel: str = "text", *, seed: int = 0) -> "PromptTable":
+    def from_images(cls, images, channel: str = "text", *, seed: int = 0) -> PromptTable:
         return cls({i: images.caption(i, channel) for i in images.ids}, seed=seed)
 
     @staticmethod
     def _distinct_of(base: Mapping[str, str]) -> tuple[str, ...]:
         return tuple(sorted({t for t in base.values() if t.strip()}))
 
-    def with_stage(self, stage: Stage) -> "PromptTable":
+    def with_stage(self, stage: Stage) -> PromptTable:
         """A new table with ``stage`` appended; base captions and seed are shared, state is not."""
         return PromptTable(self._base, self.stages + (stage,), seed=self.seed)
 

@@ -12,7 +12,8 @@ random numbers (dropout); ``preserve_rng=False`` skips it, which also lets a cap
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Callable, Iterable
+from typing import Any
+from collections.abc import Callable, Iterable
 
 import torch
 from torch import Tensor, nn

@@ -6,7 +6,7 @@ import importlib
 import inspect
 import pkgutil
 from dataclasses import dataclass, field
-from typing import Iterable
+from collections.abc import Iterable
 
 from .node import Node
 from .settings import SettingSpec, SettingsRegistry
@@ -32,7 +32,7 @@ class NodeRegistry:
     _loaded: bool = False
 
     @classmethod
-    def default(cls) -> "NodeRegistry":
+    def default(cls) -> NodeRegistry:
         root = tree_root()
         names = [_qualify(root, "nodes")]
         try:

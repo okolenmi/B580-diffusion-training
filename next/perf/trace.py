@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-import torch
-from torch.autograd import DeviceType
 from torch.profiler import ProfilerActivity, profile
 
 from .categories import Categorizer
@@ -65,7 +63,7 @@ class KernelTrace:
         self._profiler = profile(activities=activities, record_shapes=provenance)
         self.result = TraceResult()
 
-    def __enter__(self) -> "KernelTrace":
+    def __enter__(self) -> KernelTrace:
         self._profiler.__enter__()
         return self
 

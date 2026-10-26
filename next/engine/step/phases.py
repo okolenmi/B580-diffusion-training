@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Iterable, Iterator
+from typing import Any
+from collections.abc import Iterable, Iterator
 
 from .loss import LossWeighting, per_sample_mse
 from .state import Inputs, StepState

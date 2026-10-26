@@ -6,7 +6,8 @@ import gc
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any
+from collections.abc import Callable, Mapping
 
 from ...graph.settings import AUTO
 from ..devices import Accelerator
@@ -46,7 +47,7 @@ class MemoryPolicy:
     empty_cache_every: int = 1
 
     @classmethod
-    def from_settings(cls, settings: Any) -> "MemoryPolicy":
+    def from_settings(cls, settings: Any) -> MemoryPolicy:
         limit = settings.get("memory.vram_max_mb")
         return cls(None if limit in (None, AUTO) else float(limit), float(settings.get("memory.vram_min_mb") or 0),
                    bool(settings.get("memory.strict")), float(settings.get("memory.margin_mb")),

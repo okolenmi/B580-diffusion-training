@@ -5,9 +5,8 @@ from __future__ import annotations
 import math
 import re
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 
 from .artifacts import RunArtifacts
 
@@ -66,7 +65,7 @@ class LinesPresent(Check):
         self.pattern, self.at_least = re.compile(pattern), at_least
 
     def evaluate(self, runs):
-        found = [l for l in runs[0].lines if self.pattern.search(l)]
+        found = [line for line in runs[0].lines if self.pattern.search(line)]
         return self._passes(len(found) >= self.at_least, f"{len(found)} line(s) match {self.pattern.pattern!r}: {found[0][:140]}" if found else "",
                             f"{len(found)} line(s) match {self.pattern.pattern!r}, expected at least {self.at_least}")
 
@@ -77,7 +76,7 @@ class LinesAbsent(Check):
         self.pattern = re.compile(pattern)
 
     def evaluate(self, runs):
-        found = [l for l in runs[0].lines if self.pattern.search(l)]
+        found = [line for line in runs[0].lines if self.pattern.search(line)]
         first = found[0][:160] if found else ""
         return self._passes(not found, f"no line matches {self.pattern.pattern!r}", f"{len(found)} line(s) match {self.pattern.pattern!r}: {first}")
 

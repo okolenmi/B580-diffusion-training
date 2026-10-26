@@ -13,7 +13,7 @@ necessary, not sufficient (an adapter that memorises them looks fine here).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 from torch import Tensor

@@ -8,7 +8,8 @@ The training runtime supplies the callable, so this module stays free of runtime
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from typing import Any
+from collections.abc import Callable, Iterable
 
 import torch
 import torch.nn.functional as F

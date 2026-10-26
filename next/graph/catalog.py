@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .node import Node, is_field
 from .ports import EventIn, EventOut, Port, type_mro_names, type_name

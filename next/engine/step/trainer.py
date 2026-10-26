@@ -7,7 +7,8 @@ import gc
 import math
 import time
 from dataclasses import dataclass
-from typing import Callable, ContextManager, Iterable
+from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterable
 
 import torch
 
@@ -49,7 +50,7 @@ class Trainer:
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
                  gate_window=None, emit: Callable[[StepFinished], None] | None = None,
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
-                 timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], ContextManager] | None = None,
+                 timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
                  warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None):
         if accumulation < 1 or steps < 0:

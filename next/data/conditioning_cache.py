@@ -11,7 +11,8 @@ FLEETING prompts (see ``prompts.Lifetime``) live in memory only, for as long as 
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
+from collections.abc import Callable, Iterable, Sequence
 
 from ..families.api.conditioning import Conditioning, ConditioningKit
 from .conditioning_store import ConditioningStore
@@ -27,7 +28,7 @@ class ConditioningCache:
                  store: ConditioningStore | None = None):
         self.kit, self.max_bytes, self.batch_size, self.store = kit, max_bytes, batch_size, store
         self.loaded = 0  # entries read from the store instead of encoded
-        self._items: "OrderedDict[Any, tuple[str, Any]]" = OrderedDict()
+        self._items: OrderedDict[Any, tuple[str, Any]] = OrderedDict()
         self._bytes = 0
 
     def __len__(self) -> int:

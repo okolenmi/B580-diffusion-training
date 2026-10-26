@@ -6,7 +6,8 @@ import base64
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 FORMAT = 3
 UID_PATTERN = re.compile(r"^n_[a-z2-7]{6}$")
@@ -74,7 +75,7 @@ class GraphDoc:
     def event_edges_from(self, uid: str) -> list[Edge]:
         return [e for e in self.event_edges if e.from_node == uid]
 
-    def for_run(self) -> "GraphDoc":
+    def for_run(self) -> GraphDoc:
         """The document without presentation: layouts and views never reach a run."""
         nodes = tuple(NodeSpec(n.uid, n.class_name, n.params, n.title, {}) for n in self.nodes)
         return GraphDoc(nodes, self.edges, self.event_edges, self.settings, (), self.extras)

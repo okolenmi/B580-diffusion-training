@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from torch import nn
 

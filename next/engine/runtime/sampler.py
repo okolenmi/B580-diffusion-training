@@ -20,7 +20,7 @@ class MemorySampler:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="memory-sampler", daemon=True)
 
-    def __enter__(self) -> "MemorySampler":
+    def __enter__(self) -> MemorySampler:
         self._t0 = time.monotonic()
         self._file = self.path.open("w", encoding="utf8")
         self._file.write(",".join(COLUMNS) + "\n")

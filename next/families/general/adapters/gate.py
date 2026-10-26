@@ -7,7 +7,7 @@ One ``TimestepGate`` is shared by every layer of an adapted model; the training 
 from __future__ import annotations
 
 import contextlib
-from typing import Iterator
+from collections.abc import Iterator
 
 from torch import Tensor
 

@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
-import torch
 from torch import Tensor, nn
 
 from ..families.general.adapters.layers import AdaptedLinear

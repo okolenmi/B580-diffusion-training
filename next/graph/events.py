@@ -11,7 +11,8 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable
 
 MAX_DEPTH = 8
 
@@ -136,7 +137,7 @@ class _Subscriber:
 class EventContext:
     """What a handler gets besides the event: a way to emit from its own node."""
 
-    def __init__(self, hub: "EventHub", uid: str):
+    def __init__(self, hub: EventHub, uid: str):
         self._hub = hub
         self.uid = uid
 

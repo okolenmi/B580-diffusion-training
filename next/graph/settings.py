@@ -9,7 +9,8 @@ gets an immutable ``Settings`` snapshot and each node sees only the keys it decl
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
+from collections.abc import Iterable, Mapping
 
 TYPES = ("bool", "int", "float", "str", "choice")
 AUTO = "auto"
@@ -193,7 +194,7 @@ class SettingsRegistry:
         return problems
 
     def snapshot(self, graph_values: Mapping[str, Any] | None = None,
-                 app_defaults: Mapping[str, Any] | None = None) -> "Settings":
+                 app_defaults: Mapping[str, Any] | None = None) -> Settings:
         """graph value > app default > spec default, for every known key."""
         resolved: dict[str, Any] = {}
         origin: dict[str, str] = {}
@@ -226,7 +227,7 @@ class Settings:
     def as_dict(self) -> dict[str, Any]:
         return dict(self._values)
 
-    def view(self, allowed: Iterable[str], owner: str) -> "SettingsView":
+    def view(self, allowed: Iterable[str], owner: str) -> SettingsView:
         return SettingsView(self, frozenset(allowed), owner)
 
 

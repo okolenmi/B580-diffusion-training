@@ -9,7 +9,7 @@ after the first few revisits.
 from __future__ import annotations
 
 import statistics
-from typing import Hashable
+from collections.abc import Hashable
 
 from ..xpu_env import CACHE_VAR
 

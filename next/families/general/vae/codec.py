@@ -6,7 +6,7 @@ from __future__ import annotations
 import gc
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from collections.abc import Mapping
 
 import torch
 from torch import Tensor, nn
@@ -37,7 +37,7 @@ class VAECodec:
 
     @classmethod
     def kl_from_state_dict(cls, state: Mapping[str, Tensor], ddconfig: dict, embed_dim: int, spec: LatentSpec,
-                           device="cpu", dtype: torch.dtype = torch.float32) -> "VAECodec":
+                           device="cpu", dtype: torch.dtype = torch.float32) -> VAECodec:
         """Build the KL autoencoder and load ``state`` strictly: a VAE that does not fit is an error."""
         model = AutoencoderKL(embed_dim, ddconfig)
         result = model.load_state_dict(state, strict=False)

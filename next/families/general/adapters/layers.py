@@ -15,7 +15,7 @@ and override ``frozen_weight``.
 from __future__ import annotations
 
 import math
-from typing import Mapping
+from collections.abc import Mapping
 
 import torch
 import torch.nn.functional as F

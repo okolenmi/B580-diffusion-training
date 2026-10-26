@@ -7,12 +7,11 @@ small kernels cost against one pass over the memory, what does a graph save per 
 from __future__ import annotations
 
 import json
-import math
 import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 from torch.nn import functional as F
@@ -222,7 +221,7 @@ class GraphProbe:
         return self.module is not None and hasattr(self.module, "XPUGraph" if self.ctx.device.startswith("xpu") else "CUDAGraph") and self.ctx.device != "cpu"
 
     def capture(self, fn: Callable[[], object], scope: Callable | None = None):
-        graph_class = getattr(self.module, "XPUGraph", None) or getattr(self.module, "CUDAGraph")
+        graph_class = getattr(self.module, "XPUGraph", None) or self.module.CUDAGraph
         graph = graph_class()
         for _ in range(2):
             fn()

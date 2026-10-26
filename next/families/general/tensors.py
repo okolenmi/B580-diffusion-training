@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from collections.abc import Iterable
 
 import torch
 from safetensors import safe_open

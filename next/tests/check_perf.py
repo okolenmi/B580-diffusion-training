@@ -29,7 +29,7 @@ from ..perf.cost import CostModel
 from ..perf.comparison import Comparison
 from ..perf.findings import findings_for
 from ..perf.hwcheck import HwCheck, StepResult, TrainArguments, default_scenarios
-from ..perf.matrix import Matrix, MatrixSpec, Outcome, Scenario
+from ..perf.matrix import Matrix, MatrixSpec, Outcome
 from ..perf.modules import region_of, role_of
 from ..perf.power import PowerMeter
 from ..perf.rating import Rating
@@ -215,7 +215,7 @@ def window():
         check({"linear", "conv"} <= kinds, f"modules of the tiny UNet are timed ({sorted(kinds)})")
         check(all(m["fwd_ms"] >= 0 and m["bwd_ms"] >= 0 for m in report["modules"]) and any(m["bwd_ms"] > 0 for m in report["modules"]), "forward and backward are recorded")
         rated = [m for m in report["modules"] if m["ideal_ms"] is not None]
-        check(rated and all(m["recoverable_ms"] >= 0 and 0 <= m["efficiency"] for m in rated), "rated modules carry ideal, recoverable time and efficiency")
+        check(rated and all(m["recoverable_ms"] >= 0 and m["efficiency"] >= 0 for m in rated), "rated modules carry ideal, recoverable time and efficiency")
         check(report["groups"] and abs(sum(g["total_ms"] for g in report["groups"]) - sum(m["self_ms"] for m in rated)) < 1e-6, "groups add up to their modules")
         rec = report["reconciliation"]
         check(rec["module_ms"] is not None and rec["unrated_ms"] <= rec["module_ms"] + 1e-9, "reconciliation reports module and unrated time")
@@ -421,7 +421,6 @@ def micro():
 def train_arguments():
     import argparse
     import subprocess
-    import sys
     from ..perf.hwcheck import TrainArguments
     parser = argparse.ArgumentParser()
     TrainArguments.add_to(parser)

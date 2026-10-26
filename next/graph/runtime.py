@@ -7,7 +7,8 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable
 
 from .document import GraphDoc
 from .events import EventError, EventHub, RunStopped, Reporter, Wire

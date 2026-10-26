@@ -81,7 +81,7 @@ class _Quantized:
     def requantize(self, tensor: Tensor) -> None:
         self.codes, self.low, self.scale = quantize_u8(tensor.reshape(-1).float(), self.blocksize)
 
-    def to(self, device: str) -> "_Quantized":
+    def to(self, device: str) -> _Quantized:
         moved = object.__new__(_Quantized)
         moved.shape, moved.blocksize = self.shape, self.blocksize
         moved.codes, moved.low, moved.scale = self.codes.to(device), self.low.to(device), self.scale.to(device)

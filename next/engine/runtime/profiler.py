@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any
+from collections.abc import Callable, Sequence
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class BlockProfiler:
         entry[0], entry[1], entry[2] = max(entry[0], after - before), entry[1] + elapsed, entry[2] + 1
         return outputs
 
-    def __enter__(self) -> "BlockProfiler":
+    def __enter__(self) -> BlockProfiler:
         self._checkpointer.observer = self.observer
         return self
 

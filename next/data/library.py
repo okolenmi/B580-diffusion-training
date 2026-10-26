@@ -14,7 +14,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 from .ids import hash_file
 
@@ -57,7 +57,7 @@ class ImageSet:
     def caption(self, image_id: str, channel: str = "text") -> str:
         return self.captions.get(channel, {}).get(image_id, "")
 
-    def subset(self, ids: Iterable[str]) -> "ImageSet":
+    def subset(self, ids: Iterable[str]) -> ImageSet:
         keep = tuple(i for i in ids if i in self.paths)
         return ImageSet(keep, {i: self.paths[i] for i in keep}, {i: self.sizes[i] for i in keep},
                         {c: {i: t for i, t in m.items() if i in set(keep)} for c, m in self.captions.items()})

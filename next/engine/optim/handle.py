@@ -11,7 +11,7 @@ from __future__ import annotations
 import gc
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Sequence
+from collections.abc import Sequence
 
 import torch
 from torch import Tensor, nn

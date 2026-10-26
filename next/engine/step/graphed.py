@@ -25,7 +25,9 @@ from __future__ import annotations
 import contextlib
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, ContextManager
+from contextlib import AbstractContextManager
+from typing import Any
+from collections.abc import Callable
 
 import torch
 from torch import Tensor
@@ -61,7 +63,7 @@ class GraphedCompute(StepPhase):
 
     def __init__(self, *, eager: list[StepPhase], denoiser: Any, weighting: LossWeighting, balance: Any, optimizer: Any,
                  accumulation: int, graph_api: Any | None, synchronize: Callable[[], None], max_graphs: int = 8,
-                 warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print,
+                 warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], AbstractContextManager]] | None = None, say: Callable[[str], None] = print,
                  clock: Callable[[], float] | None = None, fits: Callable[[float], bool] | None = None, used: Callable[[], float] | None = None):
         self._eager, self._denoiser, self._weighting, self._balance = eager, denoiser, weighting, balance
         self._optimizer, self._scale, self._api, self._sync = optimizer, 1.0 / accumulation, graph_api, synchronize

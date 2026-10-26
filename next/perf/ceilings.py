@@ -24,7 +24,7 @@ class Ceilings:
         return asdict(self)
 
     @classmethod
-    def from_json(cls, data: dict) -> "Ceilings":
+    def from_json(cls, data: dict) -> Ceilings:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 

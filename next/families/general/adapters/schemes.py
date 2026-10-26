@@ -8,7 +8,8 @@ always means ``alpha / rank`` on load.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Protocol
+from collections.abc import Mapping
 
 import torch
 from safetensors import safe_open

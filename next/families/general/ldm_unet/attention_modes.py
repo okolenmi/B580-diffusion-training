@@ -8,7 +8,8 @@ which is what most bf16 attention outside flash does; the softmax itself runs in
 from __future__ import annotations
 
 import contextlib
-from typing import Callable, ContextManager
+from contextlib import AbstractContextManager
+from collections.abc import Callable
 
 import torch
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -92,7 +93,7 @@ def _math_with_bf16_products():
         setter(previous)
 
 
-MODES: dict[str, Callable[[], ContextManager]] = {
+MODES: dict[str, Callable[[], AbstractContextManager]] = {
     "math": lambda: sdpa_kernel(SDPBackend.MATH),
     "math_bf16": _math_with_bf16_products,
     "chunked_bf16": lambda: replace_sdpa(chunked_attention),

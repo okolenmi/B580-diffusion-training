@@ -47,14 +47,14 @@ class SDXLDenoiser:
     def state_dict(self):
         return self.model.state_dict()
 
-    def train(self, mode: bool = True) -> "SDXLDenoiser":
+    def train(self, mode: bool = True) -> SDXLDenoiser:
         self.model.train(mode)
         return self
 
-    def eval(self) -> "SDXLDenoiser":
+    def eval(self) -> SDXLDenoiser:
         return self.train(False)
 
-    def to(self, device=None, dtype: torch.dtype | None = None) -> "SDXLDenoiser":
+    def to(self, device=None, dtype: torch.dtype | None = None) -> SDXLDenoiser:
         self.model.to(device=device, dtype=dtype)
         if device is not None:
             self.device = torch.device(device)

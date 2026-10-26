@@ -44,7 +44,7 @@ def quant_probe(args) -> int:
         denoiser = load_denoiser(args.models, args.file, str(device))
         inputs = DenoiserInputs(resolution=args.resolution, timesteps=args.timesteps, device=device, dtype=torch.bfloat16)
         quantizer = quantizer_for(args, device)
-        result = QuantizationProbe(limit_mb=args.limit_mb).run(denoiser.module(), quantizer, lambda _: inputs.run(denoiser), precision=precision)
+        result = QuantizationProbe(limit_mb=args.limit_mb).run(denoiser.module(), quantizer, lambda _, ready=inputs, model=denoiser: ready.run(model), precision=precision)
         (out / f"quant-{precision}.md").write_text(result.markdown(), encoding="utf8")
         (out / f"quant-{precision}.json").write_text(json.dumps(result.to_json(), indent=1), encoding="utf8")
         print(result.markdown(), flush=True)

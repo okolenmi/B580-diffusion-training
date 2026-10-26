@@ -6,7 +6,7 @@ from torch import Tensor, nn
 
 from ..adapters.layers import AdaptedLinear
 from .backends import Int8Backend, make_backend, shape_problem
-from .frozen import FrozenQuantizer
+from .frozen import FrozenQuantizer, QuantizeReport
 from .ops import Int8Weight
 
 

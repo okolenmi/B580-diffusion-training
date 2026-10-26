@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import MutableMapping
+from collections.abc import MutableMapping
 
 from torch import Tensor
 

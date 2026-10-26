@@ -8,7 +8,7 @@ so a handler of ``EpochEnding`` runs while nothing of the next epoch has been re
 from __future__ import annotations
 
 import random
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 import torch
 

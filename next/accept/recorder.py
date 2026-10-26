@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
-import torch
 from torch import Tensor, nn
 
 from ..perf.modules import selected_kind
@@ -35,7 +34,7 @@ class BlockRecorder:
         self.recording = Recording()
         self._handles: list = []
 
-    def __enter__(self) -> "BlockRecorder":
+    def __enter__(self) -> BlockRecorder:
         for path, module in self.model.named_modules():
             if path and self.select(module):
                 self._handles.append(module.register_forward_hook(self._hook(path)))

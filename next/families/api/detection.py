@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from .header import HeaderIndex
 from .parts import ROLE_LABELS, PartInfo

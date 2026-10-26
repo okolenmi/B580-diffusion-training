@@ -53,7 +53,7 @@ class RunArtifacts:
     report: dict | None = None
 
     @classmethod
-    def read(cls, folder: str | Path) -> "RunArtifacts":
+    def read(cls, folder: str | Path) -> RunArtifacts:
         folder = Path(folder)
         art = cls(folder)
         log = folder / "run.log"

@@ -16,7 +16,8 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable
 
 import torch
 from safetensors import safe_open
@@ -194,7 +195,7 @@ class LatentCache:
                     self._db.execute("insert or replace into done values(?,?,?)", (image, policy.key, stored))
             self._db.commit()
 
-    def view(self, images: ImageSet, policy: SizePolicy, *, skip_missing: bool = False) -> "LatentSet":
+    def view(self, images: ImageSet, policy: SizePolicy, *, skip_missing: bool = False) -> LatentSet:
         """The samples of ``images`` for ``policy``. Missing latents are an error here, not at step 4000,
         unless the caller already knows some images could not be encoded and passes ``skip_missing``."""
         todo = [] if skip_missing else self.missing(images, policy)

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Iterable, Mapping, Sequence
 
 CUSTOM_GROUP = "custom"
 

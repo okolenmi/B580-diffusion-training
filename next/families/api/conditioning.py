@@ -5,24 +5,25 @@ Pure declarations: no torch import. Tensors appear only as ``Any`` here.
 
 from __future__ import annotations
 
-from typing import Any, Hashable, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+from collections.abc import Hashable, Sequence
 
 
 @runtime_checkable
 class Conditioning(Protocol):
     """Opaque to the trainer; these operations are all it needs."""
 
-    def to(self, device: Any = None, dtype: Any = None) -> "Conditioning": ...
+    def to(self, device: Any = None, dtype: Any = None) -> Conditioning: ...
 
     def tensors(self) -> list[Any]:
         """Every tensor it holds, in a fixed order."""
 
-    def map(self, fn: Any) -> "Conditioning":
+    def map(self, fn: Any) -> Conditioning:
         """The same conditioning with ``fn`` applied to each tensor, in the order ``tensors`` lists them."""
 
-    def index(self, i: Any) -> "Conditioning": ...
+    def index(self, i: Any) -> Conditioning: ...
 
-    def blend(self, other: "Conditioning", p: Any, segments: Sequence[str] | None = None) -> "Conditioning": ...
+    def blend(self, other: Conditioning, p: Any, segments: Sequence[str] | None = None) -> Conditioning: ...
 
     def segments(self) -> dict[str, Any]: ...
 

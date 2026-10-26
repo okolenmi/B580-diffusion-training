@@ -43,9 +43,7 @@ def split_batch(batch: dict, sizes: list[int]) -> list[dict]:
     start = 0
     for chunk, size in zip(chunks, sizes):
         for key, value in batch.items():
-            if isinstance(value, Tensor) and value.ndim >= 1 and value.shape[0] == count:
-                chunk[key] = value[start:start + size]
-            elif isinstance(value, list) and len(value) == count:
+            if isinstance(value, Tensor) and value.ndim >= 1 and value.shape[0] == count or isinstance(value, list) and len(value) == count:
                 chunk[key] = value[start:start + size]
         start += size
     return chunks

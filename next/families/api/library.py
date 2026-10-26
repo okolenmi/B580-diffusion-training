@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from .header import HeaderCache, HeaderIndex, ModelFileError
 

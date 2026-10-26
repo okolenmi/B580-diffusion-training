@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from ..perf.hwcheck import default_scenarios
 from ..perf.matrix import Scenario
-from .checks import (AdaptersIdentical, Check, GraphDecided, LinesPresent, LossCurveClose, LossFinite, NumbersShown, PeakAtLeast, PeakBelow, PeakLower,
+from .checks import (AdaptersIdentical, Check, GraphDecided, LinesAbsent, LinesPresent, LossCurveClose, LossFinite, NumbersShown, PeakAtLeast, PeakBelow, PeakLower,
                      RunFinished, StepTimeWithin)
 
 NATIVE, INT8 = "native eager", "int8 eager"
@@ -118,5 +118,42 @@ class SuiteBook:
                                 "Equal peaks mean the setting has no effect on this workload (TESTING 24).", reason="TESTING 24, expandable segments")]
         return Suite("allocator", "Allocator A/B", "24", scenarios, checks)
 
+    def features(self) -> Suite:
+        """Short runs of the options TESTING.md lists one by one: each must start, finish, and say what its item expects."""
+        def run(name, *args):
+            return Scenario(name, args)
+        int8 = ("--param", "adapter.base_precision=int8")
+        scenarios = [
+            run("probe and alignment", "--set", "trainer.probe_every=10", "--set", "trainer.probe_alignment=true", "--set", "trainer.probe_items=4"),
+            run("blend max 0.5", "--set", "blend.strength_max=0.5"),
+            run("blend fixed 0.5", "--set", "blend.strength_min=0.5", "--set", "blend.strength_max=0.5", "--persist-conditioning"),
+            run("cap 9216 no prewarm", "--set", "memory.vram_max_mb=9216", "--set", "conditioning.prewarm=false"),
+            run("three settings", "--set", "memory.vram_max_mb=10240", "--set", "trainer.graph=true", "--set", "blend.strength_max=0.5"),
+            run("setting typo", "--set", "trainr.graph=true"),
+            run("pad zero", "--pad-fill", "zero"),
+            run("pad mirror", "--pad-fill", "mirror"),
+            run("int8 torch backend", *int8, "--param", "adapter.int8_backend=torch"),
+            run("int8 dora", *int8, "--param", "adapter.kind=dora"),
+        ]
+        scenarios += _named(self.base, INT8)
+        done = [s.name for s in scenarios if s.name not in ("setting typo", INT8)]
+        checks: list[Check] = [RunFinished(f"{n} finished", (n,)) for n in done]
+        checks += [LossFinite(f"{n} loss finite", (n,)) for n in done]
+        checks += [
+            LinesPresent("probe lines every 10 steps", ("probe and alignment",), r"^  probe: adapter/base loss", 2, "TESTING 7"),
+            LinesPresent("gradient alignment after each probe", ("probe and alignment",), r"^  gradient alignment: .*cos_", 2, "TESTING 6e"),
+            LinesPresent("graph settings take effect next to the others", ("three settings",), r"graphs \d+ \(", 1, "TESTING 20"),
+            LinesPresent("a typo in --set names the node", ("setting typo",), r"trainr", 1, "TESTING 20: the run stops at once and lists the node names"),
+            LinesPresent("the typo message lists the real names", ("setting typo",), r"trainer", 1, "TESTING 20"),
+            LinesAbsent("the typo stops before training", ("setting typo",), r"^step 1/", "TESTING 20"),
+            PeakBelow("cap 9216 holds", ("cap 9216 no prewarm",), 9216, "device_mb", "TESTING 11"),
+            StepTimeWithin("mirror padding costs the same as zero", ("pad mirror", "pad zero"), 1.05, 10, reason="TESTING 17 quick check"),
+            NumbersShown("padding changes the peak?", ("pad zero", "pad mirror"), "device_mb", "Equal peaks expected.", reason="TESTING 17 quick check"),
+            LinesPresent("int8 summary line (kernels)", (INT8,), r"int8 base weights \(xpu_kernels\): \d+ layers", 1, "TESTING 23"),
+            LinesPresent("int8 summary line (torch)", ("int8 torch backend",), r"int8 base weights \(torch\): \d+ layers", 1, "TESTING 23"),
+            LinesPresent("int8 torch backend warns", ("int8 torch backend",), r"plain-torch", 1, "TESTING 23"),
+        ]
+        return Suite("features", "Options listed one by one in TESTING.md", "6c, 6e, 7, 11, 17, 20, 23", scenarios, checks)
+
     def all(self) -> dict[str, Suite]:
-        return {s.name: s for s in (self.speed(), self.memory(), self.nf4(), self.determinism(), self.allocator())}
+        return {s.name: s for s in (self.speed(), self.memory(), self.nf4(), self.determinism(), self.allocator(), self.features())}

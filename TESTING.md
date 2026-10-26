@@ -1,86 +1,31 @@
 # To test on the B580
 
 Things written in the sandbox (no XPU) that need hardware. Delete an entry once it passed; if one fails, keep it
-and paste the console lines and the `--memory-log` csv. Feature background: `next/MANUAL.md`.
+and paste the console lines. Feature background: `next/MANUAL.md`.
 
-Common prefix used below (use your usual paths and dataset; 768, batch 2 as in earlier runs):
+## Everything that can run unattended: one command
 
 ```
-python -m next.run sdxl-lora --models <models> --datasets <datasets> --file <checkpoint> --dataset <name> \
-  --output <out> --resolution 768 --batch 2 --steps 200 --memory-log run.csv
+python -m next.accept run --out accept --models <models folder> --datasets <datasets folder> --dataset <dataset name> --file <checkpoint file name> \
+  --output <output folder> --batch 2 --resolution 512 -- --param buckets.max_shapes=4
 ```
 
-Run each test from the same start (fresh process). Unless said otherwise only the listed flag changes.
+Runs six suites in separate processes (about 34 short runs, an hour or two; finished scenarios are kept, so rerun the same command after a stop) and writes
+`accept/verdict.md`: a pass/fail row per check with the reason, LOOK for what needs your eyes. Send `accept/verdict.md` (and the `accept/matrix/*/run.log` of
+anything marked FAIL). `--suites features` (or `speed`, `memory`, `nf4`, `determinism`, `allocator`) runs one suite; `python -m next.accept list` shows every check.
 
-## 4. Tight budget, again (planner and tuners changed)
-Your 10240 run held everything under 8.5 GB and could not lower the share; at batch 32 the planner predicted 13.3 GB for 22 samples that ran under 10 GB.
-Cause: the cost per pixel was taken from one sample and multiplied up, so a fixed part of the step (workspaces) was counted per pixel. The probe now
-runs at two batch sizes of the same shape and the planner fits fixed + growing memory.
-Rerun `--set memory.vram_max_mb=10240` (batch 3, 512) with `--set trainer.tune_checkpointing=true`, and batch 32 with `--batch-area 1.5`.
-- The `cost` events (two per measuring pass, `--verbose`) and `checkpoint_share`: a lower share than before may now fit at 10240.
-- Batch 32: the `split` events' `predicted_mb` close to what the run really peaks at (csv `peak_allocated`), fewer or no splits, faster steps than the 8000 ms before.
-Pass: predictions within ~15% of the real peak, no crash. Fail: paste the `cost`/`split` events and the csv.
+| suite | covers | what it checks |
+|---|---|---|
+| speed | int8 and native, eager and graph, both int8 gradient paths, attention modes, LoRA in bf16 | every run finishes with a finite loss, int8 saves memory and stays near native graph speed, graph decisions, attention modes beat `math`, losses close |
+| memory | one-margin budget at 10240 and 9000 | stays under the limit, uses most of the room, prints its budget |
+| nf4 | NF4 frozen weights | runs, saves memory, loss near int8's |
+| determinism | two runs with the same seed | identical losses and adapter tensors |
+| allocator | expandable segments on and off | the peaks side by side |
+| features | probe and gradient alignment, blend, a 9216 cap without prewarm, three `--set`s at once, a typo in `--set`, mirror against zero padding, int8 with the torch backend, int8 with DoRA | each runs and prints what its item expects |
 
-Tested. Found a new issue - budget doesn't expect int8 weights (and maybe other modifications of obects in memory). With usage under 6.5GB (real process usage) it sets share at 1.0 with 10240mb limit.
+For speed numbers with power and a kernel profile (not pass/fail): `python -m next.perf hwcheck --out perf-bundle ...` as in `next/manual/performance.md`.
 
-Also found a problem. Previous environment variable (expandable segments) doesn't work anymore. You told me it's set on by default. The reality is memory consumption now on level as it was before that EV implementation + it doesn't work as a prefix now.
-Also 
-
-I have tried to use limit like 9000 - fail 512 batch 2:
-Encoding prompts (1) ...
-memory: {"event": "cache_returned", "why": "optimizer moved off the device", "returned_mb": 326, "card_freed_mb": 326, "ours_outside_mb": 0, "other_programs_mb": 0}
-memory: {"event": "evict", "why": "load the text encoders", "moved": ["optimizer"]}
-[   4.2s] DiffusionTrainerNode: 0.6s  allocated 6378, reserved 6392, device 7974 MB
-run: failed: EventHandlerError: n_jjjjjj.prompts_changed failed on PromptsChanged: OutOfMemoryError: XPU out of memory. Tried to allocate 14.00 MiB. GPU 0 has a total capacity of 11.93 GiB of which 4.14 GiB is free. 6.24 GiB allowed; Of the allocated memory 6.23 GiB is allocated by PyTorch, and 13.99 MiB is reserved by PyTorch but unallocated. Please use `empty_cache` to release all unoccupied cached memory. 
-
-Make A CONCRETE Memory system. I don't want to deal with such poor performance like now.
-
-
-## 6. Measured checkpoint placement under a cap (retest)
-Done: batch 3, 512: 930 ms against 1010 ms, peak ~10.5 GB against ~8.5. With `--set memory.vram_max_mb=10240` it was slower (1130 ms) with a `cache_returned`
-event after every step, and ~950 ms with 1 GB more. Cause: after every step the manager emptied the cache because the device looked full, although the allocator
-cap already makes the allocator free its own cache. That rule is off under a cap now.
-Rerun `--set trainer.tune_checkpointing=true --set trainer.checkpoint_by=measured --set memory.vram_max_mb=10240`.
-- No `cache_returned` after each step; steps near the ~950 ms of the roomier run.
-Pass: no per-step cache events, speed near 950 ms. Fail: paste the events.
-
-## 7. Probe: periodic lines
-Your run printed one line after step 1 (1.000/1.000/1.000, as designed: the first record is the reference) and nothing after. Lines are expected every N steps.
-Rerun `--set trainer.probe_every=20 --steps 100` and paste the exact command and the console; if nothing appears at steps 20, 40, ..., also run with `--verbose`
-and paste a few step events (`probe_*` keys).
-Note the first lines can stay 1.000 while the adapter is still near zero; after a few hundred steps they should move.
-
-## 11. Budget cap: optimizer offloaded (fixed)
-Failure: `--set memory.vram_max_mb=9216` died at step 1 with "optimizer state is offloaded; reload it before stepping".
-Cause: making room for the text encoders moved the optimizer state to the host and nothing brought it back. It is now restored when the encoders leave and before every step.
-Rerun `--set memory.vram_max_mb=9216` (tight on purpose), then `--set conditioning.prewarm=false`.
-- `evict` events when the encoders load, `allocator_cap`, training goes on, no crash.
-Pass: it trains. Fail: paste the events.
-
-## 15. Graphs for the most used shapes
-Done: replayed steps 510-550 ms against ~1000 eager, same loss. Shapes past the 8-graph cap ran eagerly, which looked like penalties (1742 ms) and
-instability. Graphs now go to the shapes that have the most batches per epoch, and only those.
-Rerun `--graph` (batch 2, 200 steps) with the default 8, then `--set trainer.graph_shapes=12`.
-- Console: `graphs N (R replays)` rises early and then stays; eager steps come only from rare shapes; the average step time drops against your earlier run.
-- Memory with 12 graphs: `device` stays under the card (the pool is shared, so it should barely move; each capture takes a few seconds).
-Pass: faster average, no crash. Fail: paste the step lines around the slow steps.
-
-## 19. Expandable segments are the default now
-You measured 8.3 -> 7.1 GB with `PYTORCH_ALLOC_CONF=expandable_segments:True`; the trainer sets it itself unless you export your own value.
-Run the common prefix without exporting anything.
-- Peak about the same as with your manual export (~7.1 GB process). `PYTORCH_ALLOC_CONF=expandable_segments:False` restores the old behaviour for comparison.
-Pass: same memory as with the manual export. Fail: tell me the number; the setting may be applied too late in the process.
-
-## 20. One `--set`
-`--set` now takes graph settings and node parameters alike: `--set memory.vram_max_mb=10240 --set trainer.graph=true --set blend.strength_max=0.5`.
-- All three take effect (check with `--dump graph.json`: the trainer has `graph: true`, `settings` has the budget, the blend node has its strength).
-- A typo such as `--set trainr.graph=true` stops at once and lists the node names.
-Pass: both behave as described.
-
-## 21. Experiment: kernel compile cache between runs
-You saw a default run after a graph run start with almost no new-shape penalty, and the next run slow again. The driver keeps a compiled-kernel cache on disk that may fill up and evict.
-Try `NEO_CACHE_MAX_SIZE=4294967296` (4 GB) before two default runs in a row, and compare the first-sighting step times (`[... new]` markers) of the second run with a run without it.
-Pass: tell me whether first sightings of shapes are faster on the second run. No fix needed either way.
+## Still manual
 
 ## 6b. Merge Adapter
 Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA you have, `strength` 1 (the CLI starters have no switch for it; edit the graph).
@@ -88,23 +33,11 @@ Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject 
 - Strength 0 gives the same step-1 loss as no merge node.
 Pass: all three. Fail: paste the message.
 
-## 6c. Conditioning blend
-Add `--set blend.strength_max=0.5` (min stays 0), then `--set blend.strength_min=0.5 --set blend.strength_max=0.5`.
-- Trains; with `--persist-conditioning` and prewarm on, no encoder loading after the first epoch starts (the empty prompt is encoded up front).
-- Fixed 0.5: loss is higher at the start than unblended and the step time is unchanged; the probe (`trainer.probe_every`) still compares against the plain captions.
-Pass: both runs train without encoder reloads. Fail: paste the console lines.
-
 ## 6d. Auto caption
 On a dataset where some images have no caption: `--auto-caption --set autocaption.limit=5` first, then without the limit.
 - Needs `transformers` installed and network once for the model. Task lines "Loading the caption model" and "Captioning"; a `captions:` summary line; the model memory is gone before training (peak not higher than without it).
 - Rerun: "0 captioned ... kept as they were": nothing replaced. Captions look sane in the dataset (and training prompts use them).
 Pass: captions written, resumed, no memory left behind. Fail: paste the console lines.
-
-## 6e. Gradient alignment
-With test 7's probe: add `--set trainer.probe_alignment=true --set trainer.probe_items=4`.
-- A `gradient alignment:` line after each probe line with `norm_*`, `share_*`, `self_*`, `cos_*`, `align_*`; `self_*` well above 0 (if near 0, raise `probe_items`).
-- Extra time per probe is a few seconds; no new memory peak above the training peak.
-Pass: values printed, cosines within -1..1, shares add to 1.
 
 ## 17. Mirror padding: compare two LoRAs
 Two full runs with the same seed, dataset and settings (packing on, `--max-shapes` as you like): one with `--pad-fill zero`, one with `--pad-fill mirror`.
@@ -120,88 +53,10 @@ Run `--epochs 2 --save-every-epoch 1 --save-every 100000` on a small dataset.
 - `--epochs 3 --steps 10` stops at 10 steps. A cosine schedule node with an empty `total_steps` decays over the whole run.
 Pass: all of the above.
 
-## 22. Deterministic run
-Same command twice with `--set runtime.deterministic=true --set seed.base=1 --steps 30`, batch size small enough to fit without splitting.
-- Compare the two console loss lines and the saved adapters (`sha256sum` or a tensor compare): ideally identical, otherwise the first step where they differ.
-- Any `warning` lines about an operation without a deterministic kernel: paste them (those are the remaining sources).
-- Speed against the same run without the setting, and whether the peak changed.
-Pass: identical losses. If they differ, tell me the first differing step and the warnings; the next suspects are the oneDNN primitive choice and the fused optimizer paths.
-
-## 23. Int8 frozen weights
-`pip install xpu-kernels` first (check: `python -m xpu_kernels`). Then the usual short run with `--param adapter.base_precision=int8`, and the same without it.
-- A line `int8 base weights (xpu_kernels): N layers, X MB saved` after "Converting the frozen weights to int8"; with `--param adapter.int8_backend=torch` it must run too (very slow; 5 steps are enough) with a warning.
-- Peak memory against the native run (expected about 2 GB less at the same batch), and the step time (expected about parity).
-- Loss over 100 steps against native: close but not equal; if it diverges or turns to NaN, tell me the step.
-- With `--set trainer.graph=true` (graph replay) and with checkpointing on: both must run.
-- `--param adapter.kind=dora` with int8: the layers stay native (the summary line says so).
-Pass: runs, less memory, speed within a few percent, loss tracks native. Fail: paste the lines and the traceback.
-
-Tested. 
-Default:
-"Converting the frozen weights to int8 ...
-  Converting the frozen weights to int8: 7.6 s
-int8 base weights (xpu_kernels): 652 layers, 2059 MB saved; 10 left as they were (640 input features is not a multiple of 256); 81 left as they were (under 1,048,576 parameters)"
-Torch:
-"Converting the frozen weights to int8 ...
-int8 base weights (torch): 652 layers, 2059 MB saved; 10 left as they were (640 input features is not a multiple of 256); 81 left as they were (under 1,048,576 parameters)
-[warning] {"node": "n_kkkkkk", "message": "int8 runs on the plain-torch version, several times slower than the kernels (pip install xpu-kernels)"}
-"
-
-Speed is ~1500ms/step with default backend, and ~2000ms with torch. Still not good enough. Should be inspected more closely.
-With "--set trainer.graph=true" speed is around 1450ms/step. And after step 3 these lines appeared: "B580-diffusion-training/next/families/general/ldm_unet/attention.py:21: UserWarning: SDPA Memory Efficient Attention backend is not supported on XPU, falling back to math backend. (Triggered internally at /pytorch/aten/src/ATen/native/mkldnn/xpu/Attention.cpp:225.)
-  out = F.scaled_dot_product_attention(split(q), split(k), split(v))
-"
-
-About dora - there is another problem with it: "run: failed: ValueError: Save Adapter: the kohya format cannot hold dora weights; pick another format "
-
-## 24. Memory budget retest (one margin)
-The four stacked margins are replaced by `memory.margin_mb` (default 512): allocator cap = limit - outside memory - margin, used by everything. Console lines `memory budget: ...` show the arithmetic.
-- `--set memory.vram_max_mb=10240` (batch 3, 512) with `--set trainer.tune_checkpointing=true --param trainer.checkpoint_by=measured`, with and without `--param adapter.base_precision=int8`: the share/placement should now use most of the room (device use close to 10240 minus the margin, not 8.1 GB); paste the `memory budget` lines and the chosen share.
-- `--set memory.vram_max_mb=9000`, batch 2, 512, int8: must start (the text encoders load) and train; if it refuses, the message now names the figures.
-- Expandable segments: the `limit` line prints `allocator config: ...`. Run the same short run with `PYTORCH_ALLOC_CONF=expandable_segments:True` and `PYTORCH_ALLOC_CONF=expandable_segments:False` exported, native weights, and tell me the peaks (csv `reserved_mb`, `device_used_mb`) and the config line. If both match, the setting has no effect on this workload any more and the earlier 8.3 -> 7.1 GB was something else.
-Pass: more of the card used than before at the same limit, no out of memory, the 9000 case runs.
-
-## 25. Int8 speed after the backward change
-`pip install -U xpu-kernels` (0.3 or newer: the fused weight dequantizer; older versions are refused). Then:
-- `python scripts/bench_int8_layer.py --batch 3 --size 512`: paste the table (both gradient paths, the dequantizer, the dense and int8 input gradient).
-- The short run of test 23 (with and without `--set trainer.graph=true`; replay is now timed per shape and dropped when it does not win: paste the `[graph]` lines), once with `--param adapter.int8_grad=dense` and once with `int8`: step time, peak, and the loss over 100 steps against native.
-- Same with `--param trainer.checkpoint_by=measured --param trainer.tune_checkpointing=true` and graph on: does the placement still choose sensibly? (It measures eagerly; the kernels' measurements say the recompute is a third of a captured step, so it matters more under graph replay.)
-Pass: int8 with graph within about 15% of native graph; tell me which gradient path you prefer.
-
-## 26. Graph replay is timed
-`--set trainer.graph=true --param buckets.max_shapes=4`, bf16 and int8: a `[graph] shape ...: replay X ms against Y ms eager` line per shape. Expected from your measurements: bf16 dropped ("does not pay"), int8 kept with a small gain. Pass: step times with `graph=true` are never slower than without it by more than the three timed replays.
-
-## 27. Performance report (the performance lab)
-Add `--perf perf-b580` to a short run (bf16 first, then `--param adapter.base_precision=int8`; then each again with `--set trainer.graph=true`). After the warm-up (8 steps) three steps run under the profiler and `perf-b580/report.md` and `report.json` appear (`ceilings.json` is the measured matmul, int8, copy and launch ceilings, cached per torch build).
-Send me `report.md` (and `report.json` if it is small). Look at: the step budget (device busy against wall), the findings list, the slowest piece groups with their efficiency against the measured ceiling, and the reconciliation line (module time against device time). Known risks: module backward hooks could warn or fail on some module (rerun with `--set perf.modules=false` and tell me which); a profiler that records no XPU kernels (the report then says the times are host times).
-
-### 31. LoRA in the activation dtype
-The profile of a native step (provenance, TESTING 27c) showed copy kernels at a quarter of device time and most of them the LoRA path's float32 casts, plus float32 low-rank matmuls at a few TFLOPS. `--param adapter.lora_compute=activation` computes that path in bf16 with the add fused into the matmul. Run `python -m next.perf hwcheck --out perf-bundle --only matrix verdict --scenarios "native eager" "native graph" "native graph attention-math_bf16" "native eager lora-activation" "native graph attention-math_bf16 lora-activation" "int8 graph attention-math_bf16 lora-activation" <the usual train options>` (delete `perf-bundle/matrix` first). `verdict.md` then says whether the step is faster (eager and math_bf16 graph) and whether the loss over the last 10 steps stays within 5% of float32; send `bundle.zip`. If it passes, the default becomes `activation`. Look at a sample picture or two from a longer run before trusting it.
-
-### 33. The int8 weight dequantizer (xpu-kernels, rewritten SYCL kernel)
-Measured in the library (device time, 0 differing values): 1280x5120 0.529 -> 0.034 ms, 10240x1280 0.316 -> 0.109, 2560x2560 0.255 -> 0.035, 1280x1280 0.074 -> 0.022. The trainer needs no change: the int8 backend calls `xpu_kernels.dequant_weight`, and the kernels checkout must be built (`./build.sh`) and installed with `pip install -e`.
-Run: the int8 scenarios again (`--scenarios "int8 graph" "int8 graph attention-math_bf16 lora-activation"`, delete `perf-bundle/matrix` first), and send `bundle.zip`: the step time, the loss against the previous int8 run (0.1049), and the `launch_dequant_weight` time in the profile (it was ~82 ms of the int8 step; expect about 7). The matrix summary now also has a power column (item 34).
-Measured (bundle 34cced53, int8 graph): `launch_dequant_weight` 23.3 ms per step over 960 calls, against 109 ms (75.8 + 33.5) before; the card has to move 6.5 GB, a floor near 16 ms. Losses track the native run to 3-4 digits at every step. The perf window opened on shapes that had no graph yet, so the table's step times for graph scenarios are eager ones (fixed: the report marks unsteady window steps and `hwcheck` now warms up 10 steps, so the window ends before the dataset's next shape).
-
-### 32. Fused GEGLU (xpu-kernels, new kernel)
-The profile put the feed-forward activation (gelu, multiply, and in backward gelu_backward, two multiplies and a `cat`) at about 50 ms of a 466 ms native step. `xpu-kernels` now has `triton.geglu`: one pass each way, the backward writes both halves of the gradient itself. It is checked against the eager chain before it is allowed to run. Steps:
-1. Install the checkout (the wheel has no GEGLU): `git clone https://github.com/okolenmi/oko-xpu-kernels && pip install -e oko-xpu-kernels` in the trainer's environment, then `LEVEL_ZERO_V1_SDK_PATH=~/.local/levelzero python -m xpu_kernels` (Triton needs the Level Zero headers to compile a new kernel; without them the GEGLU gate says so) and look for `geglu` and `geglu_backward` lines (active or the reason). Send that output.
-2. `LEVEL_ZERO_V1_SDK_PATH=~/.local/levelzero python oko-xpu-kernels/debug/verify_geglu.py` and then `.../debug/bench_geglu.py` (forward and backward timed separately and a table of launch configurations). Send both outputs.
-3. If both gates are active: `python -m next.perf hwcheck --out perf-bundle --only matrix verdict --scenarios "native eager lora-activation" "native graph attention-math_bf16 lora-activation" "native eager lora-activation fused-geglu" "native graph attention-math_bf16 lora-activation fused-geglu" <the usual train options>` (delete `perf-bundle/matrix` first) and send `bundle.zip`. `--param trainer.fused_geglu=true` is the option; a closed gate gives a warning "fused_geglu stays off: ..." and the run is then identical to the eager one.
-Measured (bundle 8c31f678, graph + math_bf16 + LoRA activation): replay 531 -> 487 ms, eager 995 -> 920 ms, loss over the last 10 steps 0.1049 -> 0.1050. Pass: the gates are active, the fused step is faster and the loss over the last 10 steps is the same as without it.
-
-### 27c. Kernel provenance (new in the bundle)
-`hwcheck` now runs a small `events` step (raw profiler event fields, `events/events.md`) and every scenario with `perf.provenance=true`: each `report.md` gains "Device time by model region" and "Where device time comes from" (casts, elementwise kernels and matrix products by shape, each with the operator, dtypes, shapes and module that launched it). Delete `perf-bundle/matrix` before rerunning (finished scenarios are kept otherwise and have no provenance). To get just the provenance of the four scenarios that matter (about 8 minutes), add `--only events matrix --scenarios "native eager" "int8 eager" "native graph attention-math_bf16" "int8 graph"` anywhere in the command. Options may come in any order; any option `hwcheck` does not know is passed to the trainer, and a lone `--` is not needed. Send `bundle.zip`; if `events/events.md` shows 0% attributed, send it alone.
-
-### 27b. One command for all of it
-`python -m next.perf hwcheck --out perf-bundle --models <models folder> --datasets <datasets folder> --dataset <dataset name> --file <checkpoint file name> --output <output folder> --batch 2 --resolution 512 -- --param buckets.max_shapes=4` (`python -m next.perf hwcheck --help` explains each option) runs the hardware report, the allocator A/B, the micro-benchmarks and thirteen training scenarios (native and int8, eager and graph, both int8 gradient paths, measured checkpoint placement, the two bf16 graph attention modes, expandable segments on and off) in separate processes, about 5 to 10 minutes per scenario. Send `perf-bundle/bundle.zip`. It covers tests 23 to 26 as far as numbers go; the loss comparison over 100 steps and the deterministic run (22) are still separate. If it stops early, rerun the same command: finished scenarios are kept.
-Known risks: attention capture attempts in `bench` may abort a process on some driver; the bundle then holds the `bench` log and the other steps still run.
-
-## 28. Graph attention modes (speed and quality)
-`--set trainer.graph=true --param trainer.graph_attention=math_bf16` and `=chunked_bf16` (default `math`, the stock backend with fp32 products): the graph's attention was the reason bf16 replay lost to eager (rework/73). `math_bf16` lets the math backend keep bf16 products (a global switch, restored after capture); `chunked_bf16` is a pure-torch attention in blocks of query rows that keeps no score matrix. Both round the scores to bf16 before the softmax.
-- Speed: the `[graph]` line per shape (replay against eager) and the `bench` attention rows (`python -m next.perf bench --suites attention`): does either capture, and how far below `math`?
-- Quality: 200 steps, same seed and data, `--set runtime.deterministic=true`, once per mode: the loss curves against `math`. Pass: within the noise of a changed seed.
-- Memory: `chunked_bf16` should show a lower step peak than `math` at 1024 px.
+## 21. Experiment: kernel compile cache between runs
+You saw a default run after a graph run start with almost no new-shape penalty, and the next run slow again. The driver keeps a compiled-kernel cache on disk that may fill up and evict.
+Try `NEO_CACHE_MAX_SIZE=4294967296` (4 GB) before two default runs in a row, and compare the first-sighting step times (`[... new]` markers) of the second run with a run without it.
+Pass: tell me whether first sightings of shapes are faster on the second run. No fix needed either way.
 
 ## 29. NF4 frozen weights
 First, no training: `python -m next.accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). Then training: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
@@ -211,12 +66,11 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 34. GPU power in the perf report
-No extra command: any `--perf DIR` run or matrix now prints `GPU power N W` in the Step budget of `report.md` and a `power W` column in the matrix `summary.md`. Check that the number appears (it reads `/sys/class/drm/card*/device/hwmon/hwmon*/energy*_input`; if the line is missing, send `ls /sys/class/drm/card*/device/hwmon/hwmon*/`) and whether it matches your observation (~70 W for most work, 160-200 W for int8).
+## 31. Pictures for the faster defaults
+`adapter.lora_compute=activation` and `trainer.fused_geglu=true` passed every number (steps 8% to 40% faster, loss over the last 10 steps the same to four digits). They become defaults after a look: train 300+ steps with the defaults and the same with both options (same seed, `--set runtime.deterministic=true` if you want the same noise), generate from both with the same prompts and seeds, and tell me whether you can tell them apart.
 
-## 35. The best int8 path with fused GEGLU, and what a replay really runs
-The profile of a graph run now comes from eager steps run under the attention the capture chose, so its kernel tables describe the replayed work (before, the flash kernels of an eager step stood in for it). Run: `python -m next.perf hwcheck --out perf-bundle --only matrix verdict --scenarios "int8 graph attention-math_bf16 lora-activation" "int8 graph attention-math_bf16 lora-activation fused-geglu" <the usual train options>` (remove `perf-bundle` first) and send `bundle.zip`. Expected: the first row at about 577 ms and 161 W (measured), the second about 8% lower; the report's utilisation line now compares the replay's step time with the device time of the same kernels, so a gap there is work outside the graph (optimizer, conditioning, host).
-Measured on the previous run (100 steps): a steady shape replays at a constant 565 ms from step 5 to step 99 (no slow start); each new shape costs about 13 s once (4-6 s first step, two eager steps of 1.3 s, a 2.4 s capture), and a batch of one sample in a new shape 4-6 s.
+## 28. Chunked attention, memory side
+`--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 
-## Reading results automatically
-`python -m next.perf hwcheck` now ends with `verdict/verdict.md` (the acceptance lab's pass/fail per check for the speed and allocator runs). For other items: `python -m next.accept run --suites SUITE --models ... --datasets ... --dataset ... --file ... --output ...` (memory, nf4, determinism) and send `accept-run/verdict.md`; a verdict row says what failed and why, so the logs are only needed for a FAIL. Anything marked LOOK is for your eyes.
+## Reading a bundle automatically
+`python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

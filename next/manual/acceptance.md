@@ -13,7 +13,7 @@ The hardware runs listed in `TESTING.md` are mostly numeric judgements (a step t
 | NF4 or int8 quality by region of the network | `python -m next.accept quant-probe --models M --file CKPT --precision nf4 int8 --out DIR` |
 | What zero and mirror padding put around samples | `python -m next.accept padding-sheet --images FOLDER --canvas 128x128 --count 4 --out sheet.png` |
 
-`python -m next.perf hwcheck` runs the `speed` and `allocator` judgement itself at the end (`verdict/verdict.md` in the bundle). Suites: `speed` (TESTING 23, 25, 26, 28), `memory` (24), `nf4` (29), `determinism` (22), `allocator` (24). `run` reuses finished scenario folders, so an interrupted run continues.
+`python -m next.perf hwcheck` runs the `speed` and `allocator` judgement itself at the end (`verdict/verdict.md` in the bundle). Suites: `speed`, `memory`, `nf4`, `determinism`, `allocator`, and `features` (probe and alignment, blend, a tight cap without prewarm, several `--set`s and a typo, zero against mirror padding, int8 with the torch backend and with DoRA). `run` reuses finished scenario folders, so an interrupted run continues.
 
 ## Verdicts
 Each check ends in PASS, FAIL, LOOK (a judgement for eyes, with the file to open) or SKIP (the data is not there: the scenario did not run, or the log has no such lines). A scenario that failed to run is not an exception: its checks fail with the last log lines. A suite's threshold carries its source (the measurement or TESTING item) in the table's detail.

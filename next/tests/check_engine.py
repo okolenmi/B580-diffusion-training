@@ -259,6 +259,18 @@ def graphed():
         check(replayed.graphed.captures >= 1 and replayed.graphed.replays >= 1,
               f"shapes seen often enough are captured and replayed ({replayed.graphed.captures} graphs, {replayed.graphed.replays} replays)")
         check(gap < 1e-5, f"replayed steps train the same adapters as eager ones (max gap {gap:.1e})")
+        entered = []
+
+        @contextlib.contextmanager
+        def counting():
+            entered.append(1)
+            yield
+
+        replays = replayed.graphed.replays
+        replayed.graphed._attentions, replayed.graphed.force_eager = [counting], True
+        replayed.steps = 14
+        replayed.run(start=12)
+        check(replayed.graphed.replays == replays and len(entered) == 2, "a step forced eager (for the profiler) does not replay and runs under the attention the capture chose")
         broken, a3, *_ = rig(tmp / "c", steps=12, graph_api=FakeGraphs(fail=True))
         broken.run()
         gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a3.trainable_parameters()))

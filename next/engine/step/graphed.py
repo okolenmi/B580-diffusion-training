@@ -94,7 +94,11 @@ class GraphedCompute(StepPhase):
             raise GraphRefused("graph capture cannot be used with the timestep gate: the gate changes with every batch")
 
     def run(self, state: StepState) -> None:
-        if self.force_eager or self._api is None or state.step < 0 or state.scale != 1.0:
+        if self.force_eager:
+            # the kernels a replay runs, made visible: the attention the capture settled on
+            with self._attentions[0]() if self.captures else contextlib.nullcontext():
+                return self._run_eager(state)
+        if self._api is None or state.step < 0 or state.scale != 1.0:
             return self._run_eager(state)
         inputs = state.inputs
         if self._wanted is not None and (inputs.x_t.shape[0], *inputs.x_t.shape[-2:]) not in self._wanted:

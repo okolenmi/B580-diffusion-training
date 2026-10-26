@@ -238,6 +238,15 @@ class ResidencyManager:
         """What live and transient tensors together may reach: the allocator's cap."""
         return self._cap_mb
 
+    def graph_fits(self, cost_mb: float) -> bool:
+        """Can another captured graph, which takes ``cost_mb`` outside the allocator and so lowers its cap by as much, be added while the
+        cap still holds the largest step planned so far?"""
+        budget = self.budget_mb()
+        if budget is None or not self._planned:
+            return True
+        need = self.planner.predicted_peak_mb(*self._planned)
+        return need is None or budget - cost_mb >= need
+
     def plan(self, count: int, units_per_sample: int) -> list[int]:
         """Sizes of the chunks a batch of ``count`` samples (each ``units_per_sample`` latent pixels) runs as."""
         floor = self.accelerator.memory().get("allocated", 0.0)

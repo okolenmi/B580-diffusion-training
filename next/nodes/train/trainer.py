@@ -127,7 +127,7 @@ class DiffusionTrainerNode(Node):
                               item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
                               items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed,
                               alignment=GradientAlignment(model.adapted.trainable_parameters, model.denoiser.module) if inputs.get("probe_alignment") else None)
-        graph = self._graph_factory(inputs, model, accelerator) if inputs.get("graph") else None
+        graph = self._graph_factory(inputs, model, accelerator, residency) if inputs.get("graph") else None
         perf = self._perf_session(model, accelerator)
         total = self._total_steps(inputs)
         inputs["schedule"].fit(total)
@@ -170,7 +170,7 @@ class DiffusionTrainerNode(Node):
             raise ValueError("DiffusionTrainer: set steps or epochs")
         return min(limits)
 
-    def _graph_factory(self, inputs: dict, model: TrainableDenoiser, accelerator: Accelerator):
+    def _graph_factory(self, inputs: dict, model: TrainableDenoiser, accelerator: Accelerator, residency=None):
         """What the Trainer calls with the eager phases to get the phase that replays a captured graph; refuses the
         configurations a replay would silently get wrong."""
         optimizer = inputs["optimizer"]
@@ -195,6 +195,8 @@ class DiffusionTrainerNode(Node):
                                             optimizer=optimizer, accumulation=inputs.get("accumulation", 1),
                                             graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
                                             max_graphs=limit, attentions=attentions, clock=time.perf_counter,
+                                            fits=residency.graph_fits if residency is not None else None,
+                                            used=lambda: accelerator.memory().get("device_used", 0.0),
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
 
 

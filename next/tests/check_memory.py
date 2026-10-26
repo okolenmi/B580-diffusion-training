@@ -248,6 +248,17 @@ def allocator_cap():
           and not is_out_of_memory(RuntimeError("shape mismatch")), "driver refusals count as out of memory, other errors do not")
 
 
+def graph_room():
+    device = FakeDevice(ours=5000, foreign=1200)
+    m = manager(device, calibration_steps=2)
+    check(m.graph_fits(500), "without a cap or a plan there is always room for a graph")
+    m.start()
+    check(m.graph_fits(500), "with a cap but nothing planned yet there is room")
+    m._planned = (5000.0, 100)
+    m.planner.predicted_peak_mb = lambda floor, units: m.budget_mb() - 300.0
+    check(m.graph_fits(200) and not m.graph_fits(400), "a graph is refused when the cap would fall below the largest planned step")
+
+
 def out_of_memory_retry():
     def run_with(fail_on_call=None, error=RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES"), **extra):
         with tempfile.TemporaryDirectory() as raw:
@@ -733,4 +744,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)
+    run(limits, pressure, making_room, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, graph_room, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)

@@ -281,6 +281,12 @@ def graphed():
         picky.graphed._wanted = frozenset()
         picky.run()
         check(picky.graphed.captures == 0 and picky.graphed.replays == 0, "a shape outside the wanted ones never gets a graph")
+        asked = []
+        tight, a5, *_ = rig(tmp / "e", steps=12, graph_api=FakeGraphs())
+        tight.graphed._fits = lambda mb: asked.append(mb) or False
+        tight.run()
+        gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a5.trainable_parameters()))
+        check(asked and tight.graphed.captures == 0 and gap < 1e-5, "a memory cap with no room for a graph leaves the shape eager, with the same result")
     model, optimizer = SimpleNamespace(deterministic=True, gate=None, gate_window=None), SimpleNamespace(holds_grads=True)
     refuse = GraphedCompute.refuse_unless_capturable
     refuse(model, optimizer, False)
@@ -410,6 +416,13 @@ def time_balance():
         check(any(k.startswith("draw_t_") for e in events for k in e.metrics), "a run that biases the sampling reports the chance of each third")
 
 
+def step_summary_keeps_every_metric():
+    from ..graph.events import StepFinished
+
+    metrics = {f"k{i}": float(i) for i in range(60)}
+    check(StepFinished(1, 2, metrics).summary()["metrics"] == metrics, "a step's summary keeps all of its metrics (the console prints the late ones, such as the gradient alignment)")
+
+
 def gradient_alignment():
     import contextlib
     from types import SimpleNamespace
@@ -465,4 +478,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, gradient_alignment, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)
+    run(main, time_balance, step_summary_keeps_every_metric, gradient_alignment, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)

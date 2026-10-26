@@ -62,12 +62,14 @@ class GraphedCompute(StepPhase):
     def __init__(self, *, eager: list[StepPhase], denoiser: Any, weighting: LossWeighting, balance: Any, optimizer: Any,
                  accumulation: int, graph_api: Any | None, synchronize: Callable[[], None], max_graphs: int = 8,
                  warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], ContextManager]] | None = None, say: Callable[[str], None] = print,
-                 clock: Callable[[], float] | None = None):
+                 clock: Callable[[], float] | None = None, fits: Callable[[float], bool] | None = None, used: Callable[[], float] | None = None):
         self._eager, self._denoiser, self._weighting, self._balance = eager, denoiser, weighting, balance
         self._optimizer, self._scale, self._api, self._sync = optimizer, 1.0 / accumulation, graph_api, synchronize
         self._max, self._warmup, self._wanted = max_graphs, warmup, wanted  # wanted: (samples, h, w) allowed a graph; None = first come
         self._attentions = attentions or [contextlib.nullcontext]  # tried in order; the first that captures stays
         self._say, self._clock = say, clock  # a clock turns on the check that a graph is faster than eager
+        self._fits, self._used = fits, used  # fits(mb): room for a graph that takes this much; used(): device memory in use now
+        self._cost_mb = 400.0  # what the next capture is assumed to take outside the allocator, until one has been measured
         self._slots: dict[tuple, _Slot] = {}
         self._off: set[tuple] = set()
         self._pool = None
@@ -161,6 +163,12 @@ class GraphedCompute(StepPhase):
     def _capture(self, key: tuple, slot: _Slot, state: StepState) -> bool:
         """Capture this shape. The window's gradients are still zero (micro-step 0), and are zeroed again after the
         capture run, so the replay that follows is the step."""
+        if self._fits is not None and not self._fits(self._cost_mb):
+            self._slots.pop(key, None)
+            self._off.add(key)
+            self._say(f"[graph] shape {key[0]} is not captured: the memory cap leaves no room for another graph (about {self._cost_mb:.0f} MB); it runs eagerly")
+            return False
+        before = self._used() if self._used is not None else None
         i = state.inputs
         slot.statics = {"x_t": torch.empty_like(i.x_t), "t": torch.empty_like(i.t), "sigma": torch.empty_like(i.sigma),
                         "target": torch.empty_like(i.target), "conditioning": state.conditioning.map(torch.empty_like)}
@@ -193,6 +201,8 @@ class GraphedCompute(StepPhase):
             return False
         slot.graph, slot.loss, slot.per_sample = graph, loss, per_sample
         slot.touched = self._optimizer.touched()
+        if before is not None:
+            self._cost_mb = max(self._used() - before, 100.0)
         self._optimizer.zero_grad()
         self.captures += 1
         self._say(f"[graph] captured shape {key[0]} ({self.captures} graph(s))")

@@ -44,7 +44,7 @@ def _json_safe(value: Any, depth: int = 0) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(v, depth + 1) for v in list(value)[:20]]
     if isinstance(value, dict):
-        return {str(k): _json_safe(v, depth + 1) for k, v in list(value.items())[:20]}
+        return {str(k): _json_safe(v, depth + 1) for k, v in list(value.items())[:200 if depth == 0 else 20]}  # a step's metrics are a long flat dict
     return repr(value)[:80]
 
 

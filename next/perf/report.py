@@ -181,6 +181,8 @@ class ReportWriter:
             out += ["> No device activity was recorded (a CPU run): kernel times below are host operator times and utilisation is not meaningful.", ""]
         if meta.get("unsteady_steps"):
             out += [f"> {meta['unsteady_steps']} of the {meta['window_steps']} window steps were not steady (a shape seen for the first time, a graph capture, or an eager step in a graph run): the times below describe those steps, not the steady state. Move the window later (`perf.warmup_steps`) or use a dataset with one shape.", ""]
+        if meta.get("profile_eager"):
+            out += ["> A graph run: the step time is from replayed steps, but the profiler cannot see inside a replay, so the kernel, module and device-time tables come from separate eager steps (the captured graph can differ, e.g. it uses the math attention where the eager step uses the flash kernel). Utilisation compares the two.", ""]
         out += [f"Window: {meta['steps_in_window']} steps ({meta['eager_steps']} eager, {meta['replayed_steps']} replayed). All times are per step.", "",
                 "## Step budget", "",
                 f"- step {b['wall_ms']:.0f} ms, median of {b['timed_steps']} " + ("unprofiled steps" if b["wall_clean"] else "profiled steps (inflated by the profiler)")

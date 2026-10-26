@@ -249,6 +249,9 @@ def steady_steps():
         eager.observe({"batch": shape[0], "latent_h": shape[1], "latent_w": shape[2]})
         flags.append(eager._current.steady)
     check(flags == [False, True, False], "without graphs only a new shape is unsteady")
+    session._current = StepRecord(9, 1.0, eager_profile=True)
+    session.observe({"batch": 2, "latent_h": 8, "latent_w": 8, "graph_replays": 3, "graphs": 1})
+    check(session._current.steady, "a profiled step forced eager in a graph run is steady when its shape is known and nothing was captured")
 
 
 def window_provenance():

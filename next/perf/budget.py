@@ -17,6 +17,7 @@ class StepRecord:
     phase_ms: dict[str, float] = field(default_factory=dict)
     peak_mb: float | None = None
     enqueue_ms: float | None = None  # until the host had issued the whole step, before it waited for the device
+    eager_profile: bool = False  # a profiled step of a graph run, made to run the eager phases
     steady: bool = True  # False for a step that met a new shape, captured a graph, or ran eagerly in a graph run: its time is not the step's cost
 
 

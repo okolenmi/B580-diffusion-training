@@ -33,6 +33,7 @@ class PerfSession:
         self._ceilings_path = Path(ceilings_path) if ceilings_path else self.folder / "ceilings.json"
         self.clock = DeviceClock(device)
         self._power = PowerMeter()
+        self._graph = None  # the trainer's graphed compute, when there is one
         self._shapes: set = set()
         self._replays = self._captures = 0
         self.power_w: float | None = None
@@ -47,6 +48,9 @@ class PerfSession:
         self.report_path: Path | None = None
 
     PHASES = ("fetch_batch", "prepare_inputs", "encode_conditioning", "forward", "loss", "backward", "graphed_compute")  # phase labels, present when the trainer is timed
+
+    def attach_graph(self, graph) -> None:
+        self._graph = graph
 
     @property
     def done(self) -> bool:
@@ -66,10 +70,14 @@ class PerfSession:
         if not profiled and not self.clean:
             self._power.start()
         started = time.perf_counter()
-        self._current = StepRecord(number, 0.0)
+        self._current = StepRecord(number, 0.0, eager_profile=profiled and self._graph is not None)
+        if self._current.eager_profile:
+            self._graph.force_eager = True
         try:
             yield
         finally:
+            if self._current.eager_profile:
+                self._graph.force_eager = False
             self._current.enqueue_ms = (time.perf_counter() - started) * 1000
             self.clock.synchronize()
             self._current.wall_ms = (time.perf_counter() - started) * 1000
@@ -93,7 +101,7 @@ class PerfSession:
             return
         if replays is not None:
             record.replayed = replayed
-        record.steady = not new and not captured and (replays is None or replayed)
+        record.steady = not new and not captured and (replays is None or replayed or record.eager_profile)
         record.shape = shape
         record.peak_mb = metrics.get("step_peak_mb")
         record.phase_ms = {k: metrics[k] for k in self.PHASES if k in metrics}
@@ -123,7 +131,7 @@ class PerfSession:
         self._lap("module timings", stages)
         ceilings = load_or_measure(self._ceilings_path, self.device, quick=self._quick)
         self._lap("ceilings", stages)
-        self.report = ReportBuilder(ceilings, self.device, {**self._meta, "unsteady_steps": sum(not r.steady for r in (*self.clean, *self.records)), "window_steps": len(self.clean) + len(self.records), "power_w": self.power_w, "power_counter": str(self._power.counter) if self._power.counter else None}).build(self.records, self._kernels.result, records, self.clean, stages)
+        self.report = ReportBuilder(ceilings, self.device, {**self._meta, "unsteady_steps": sum(not r.steady for r in (*self.clean, *self.records)), "window_steps": len(self.clean) + len(self.records), "profile_eager": self._graph is not None, "power_w": self.power_w, "power_counter": str(self._power.counter) if self._power.counter else None}).build(self.records, self._kernels.result, records, self.clean, stages)
         self._lap("report build", stages)
         self.report_path = ReportWriter(self.folder).write(self.report)
         self._lap("report write", stages)

@@ -78,6 +78,9 @@ class Trainer:
 
     def run(self, start: int = 0) -> RunResult:
         self._probe()
+        attach = getattr(self._perf, "attach_graph", None)
+        if attach is not None and self.graphed is not None:
+            attach(self.graphed)
         last = None
         step = start
         for step in range(start, self.steps):

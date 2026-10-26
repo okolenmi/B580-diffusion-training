@@ -72,6 +72,7 @@ class GraphedCompute(StepPhase):
         self._off: set[tuple] = set()
         self._pool = None
         self.replays = self.captures = self.dropped = 0
+        self.force_eager = False  # set by the profiler: a replay is one opaque launch to it, so the profiled steps run the eager phases
 
     MIN_GAIN = 0.05  # a replay must beat the eager step by this share to keep its graph
     TIMED_REPLAYS = 3
@@ -93,7 +94,7 @@ class GraphedCompute(StepPhase):
             raise GraphRefused("graph capture cannot be used with the timestep gate: the gate changes with every batch")
 
     def run(self, state: StepState) -> None:
-        if self._api is None or state.step < 0 or state.scale != 1.0:
+        if self.force_eager or self._api is None or state.step < 0 or state.scale != 1.0:
             return self._run_eager(state)
         inputs = state.inputs
         if self._wanted is not None and (inputs.x_t.shape[0], *inputs.x_t.shape[-2:]) not in self._wanted:

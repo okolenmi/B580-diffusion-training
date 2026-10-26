@@ -100,6 +100,7 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
             S("int8 graph attention-chunked_bf16", *int8, *graph, "--param", "trainer.graph_attention=chunked_bf16"),
             S("native eager lora-activation", *lora), S("native graph attention-math_bf16 lora-activation", *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
             S("int8 graph attention-math_bf16 lora-activation", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
+            S("int8 graph attention-math_bf16 lora-activation fused-geglu", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu),
             S("native graph attention-math_bf16 lora-activation fused-geglu", *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu),
             S("native eager lora-activation fused-geglu", *lora, *geglu),
             S("native expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:True"),)),

@@ -259,6 +259,12 @@ def graph_room():
     m._planned = (5000.0, 100)
     m.planner.predicted_peak_mb = lambda floor, units: m.budget_mb() - 300.0
     check(m.graph_fits(200) and not m.graph_fits(400), "a graph is refused when the cap would fall below the largest planned step")
+    m.planner = StepPlanner()
+    m.planner.learn(5000.0, 5600.0, 1000)
+    m._planned = (5000.0, 1000)
+    check(m.graph_fits(0.0, 1000) and not m.graph_fits(0.0, 100000),
+          "the pool keeps its largest step's activations, which eager steps cannot use, so a big enough pool is refused")
+    check(m.graph_fits(0.0, 1000) == m.graph_fits(0.0) or not m.graph_fits(0.0, 1000), "a pool never makes room")
 
 
 def out_of_memory_retry():

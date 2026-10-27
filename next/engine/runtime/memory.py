@@ -139,14 +139,17 @@ class ResidencyManager:
 
     # -- planning the step --------------------------------------------------------------------------------------
 
-    def graph_fits(self, cost_mb: float) -> bool:
-        """Can another captured graph, which takes ``cost_mb`` outside the allocator and so lowers its cap by as much, be added while the
-        cap still holds the largest step planned so far?"""
+    def graph_fits(self, cost_mb: float, units: int = 0) -> bool:
+        """Can another captured graph be added? It takes ``cost_mb`` outside the allocator, and the pool the graphs share
+        keeps the activations of its largest step (``units`` latent pixels) for itself: eager steps cannot use that
+        memory even while it is free. The cap must still hold the largest step planned so far on top of both."""
         budget = self.budget_mb()
         if budget is None or not self._planned:
             return True
+        floor = self._planned[0]
         need = self.planner.predicted_peak_mb(*self._planned)
-        return need is None or budget - cost_mb >= need
+        pool = max((self.planner.predicted_peak_mb(floor, units) or floor) - floor, 0.0) if units else 0.0
+        return need is None or budget - cost_mb - pool >= need
 
     def plan(self, count: int, units_per_sample: int) -> list[int]:
         """Sizes of the chunks a batch of ``count`` samples (each ``units_per_sample`` latent pixels) runs as."""

@@ -89,7 +89,9 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
     geglu = ("--param", "trainer.fused_geglu=true")
     channels = ("--param", "trainer.channels_last=true")
     measured = ("--param", "trainer.checkpoint_by=measured", "--param", "trainer.tune_checkpointing=true")
-    window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}", "--set", "perf.provenance=true")  # one measurement of the ceilings for every scenario
+    # Options the scenarios vary are stated in every scenario (later arguments win), so options the user put in the shared arguments cannot change a baseline.
+    neutral = ("--param", "adapter.lora_compute=float32", "--param", "trainer.fused_geglu=false", "--param", "trainer.channels_last=false")
+    window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}", "--set", "perf.provenance=true", *neutral)  # one measurement of the ceilings for every scenario
     S = lambda name, *args, env=(): Scenario(name, (*window, *args), tuple(env))  # noqa: E731
     return [S("native eager"), S("native graph", *graph), S("int8 eager", *int8), S("int8 graph", *int8, *graph),
             S("int8 dx-int8 eager", *int8, "--param", "adapter.int8_grad=int8"), S("int8 dx-int8 graph", *int8, "--param", "adapter.int8_grad=int8", *graph),

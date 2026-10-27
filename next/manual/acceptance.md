@@ -15,6 +15,9 @@ The hardware runs listed in `TESTING.md` are mostly numeric judgements (a step t
 
 `python -m next.perf hwcheck` runs the `speed` and `allocator` judgement itself at the end (`verdict/verdict.md` in the bundle). Suites: `speed`, `memory`, `nf4`, `determinism`, `allocator`, and `features` (probe and alignment, blend, a tight cap without prewarm, several `--set`s and a typo, zero against mirror padding, int8 with the torch backend and with DoRA). `run` reuses finished scenario folders, so an interrupted run continues.
 
+## Your options in the command
+Everything after `--` and the train options before it reach every scenario. The scenarios of the `speed` suite state the options they compare (LoRA compute dtype, fused GEGLU, channels-last) themselves, so a `--set adapter.lora_compute=activation` of yours changes the `features` runs but not the baselines the speed checks compare against.
+
 ## Verdicts
 Each check ends in PASS, FAIL, LOOK (a judgement for eyes, with the file to open) or SKIP (the data is not there: the scenario did not run, or the log has no such lines). A scenario that failed to run is not an exception: its checks fail with the last log lines. A suite's threshold carries its source (the measurement or TESTING item) in the table's detail.
 

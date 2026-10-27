@@ -283,7 +283,7 @@ def graphed():
         check(picky.graphed.captures == 0 and picky.graphed.replays == 0, "a shape outside the wanted ones never gets a graph")
         asked = []
         tight, a5, *_ = rig(tmp / "e", steps=12, graph_api=FakeGraphs())
-        tight.graphed._fits = lambda mb: asked.append(mb) or False
+        tight.graphed._fits = lambda mb, units: asked.append(mb) or False
         tight.run()
         gap = max((p - q).abs().max().item() for p, q in zip(a1.trainable_parameters(), a5.trainable_parameters()))
         check(asked and tight.graphed.captures == 0 and gap < 1e-5, "a memory cap with no room for a graph leaves the shape eager, with the same result")

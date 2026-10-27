@@ -130,10 +130,14 @@ class InjectAdapterNode(Node):
         for merge in part.merges:
             with self.context.task(f"Merging {merge.file}"):
                 self._merge(family, denoiser, merge)
+        kind, compute = inputs.get("kind") or "lora", inputs.get("lora_compute") or "float32"
+        if compute == "activation" and kind != "lora":
+            self.context.report("warning", {"node": self.uid, "message": f"lora_compute=activation applies to plain LoRA only; {kind} keeps float32"})
+            compute = "float32"
         with self.context.task("Injecting the adapter"):
-            adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=inputs.get("kind") or "lora",
+            adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=kind,
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
-                                             compute=inputs.get("lora_compute") or "float32")
+                                             compute=compute)
         precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):
             with self.context.task(f"Converting the frozen weights to {precision}"):

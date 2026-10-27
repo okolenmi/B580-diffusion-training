@@ -110,71 +110,7 @@ class LatentCache:
         cached memory); only a single image that still does not fit is an error.
         """
         todo = self.missing(images, policy)
-        skipped: list[tuple[str, str]] = []
-        pending: list[tuple[str, torch.Tensor]] = []  # (sample, uint8 CHW)
-        crops_of: dict[str, int] = {}
-        out: dict[str, torch.Tensor] = {}
-        finished = {"images": 0, "samples": 0}
-        limit = [batch_size]
-
-        def encode(chunk: list[tuple[str, torch.Tensor]]) -> torch.Tensor:
-            try:
-                return encoder.encode(torch.stack([c[1] for c in chunk])).to("cpu", torch.float16)
-            except (torch.OutOfMemoryError, RuntimeError) as exc:
-                if not isinstance(exc, torch.OutOfMemoryError) and "out of memory" not in str(exc).lower():
-                    raise
-                if recover is not None:
-                    recover()
-                if len(chunk) == 1:
-                    raise RuntimeError(f"one {chunk[0][1].shape[-1]}x{chunk[0][1].shape[-2]} image does not fit on the device "
-                                       f"for encoding; lower the size, or encode on the CPU") from exc
-                limit[0] = max(1, len(chunk) // 2)
-                half = len(chunk) // 2
-                return torch.cat([encode(chunk[:half]), encode(chunk[half:])])
-
-        def flush_batches(force: bool) -> None:
-            by_shape: dict[tuple[int, int], list[tuple[str, torch.Tensor]]] = {}
-            for item in pending:
-                by_shape.setdefault(tuple(item[1].shape[-2:]), []).append(item)
-            rest = []
-            for group in by_shape.values():
-                while len(group) >= limit[0] or (force and group):
-                    chunk, group = group[:limit[0]], group[limit[0]:]
-                    latents = encode(chunk)
-                    out.update({c[0]: latents[k] for k, c in enumerate(chunk)})
-                rest += group
-            pending[:] = rest
-            if len(out) >= SHARD_SAMPLES or (force and out):
-                self._write_shard(out, policy, crops_of)
-                finished["samples"] += len(out)
-                out.clear()
-
-        def load(image_id: str):
-            try:
-                return image_id, load_crops(images.paths[image_id], policy), None
-            except Exception as exc:  # noqa: BLE001 - reported as a skipped image
-                return image_id, None, exc
-
-        loader = Prefetch(lambda: map(load, todo), depth=8)  # decoding runs ahead while the device encodes
-        try:
-            for n, (image_id, crops, error) in enumerate(loader, 1):
-                if should_stop and should_stop():
-                    flush_batches(True)
-                    return BuildStats(finished["images"], finished["samples"], skipped, stopped=True)
-                if error is not None:
-                    skipped.append((images.paths[image_id], f"{type(error).__name__}: {error}"))
-                    continue
-                crops_of[image_id] = len(crops)
-                for k, crop in enumerate(crops):
-                    pending.append((sample_id(image_id, k), torch.from_numpy(crop.copy()).permute(2, 0, 1).contiguous()))
-                finished["images"] += 1
-                flush_batches(False)
-                if progress:
-                    progress(n, len(todo))
-        finally:
-            loader.close()
-        flush_batches(True)
-        return BuildStats(finished["images"], finished["samples"], skipped)
+        return _Encoding(self, images, policy, encoder, batch_size, recover).run(todo, progress, should_stop)
 
     def _write_shard(self, latents: dict[str, torch.Tensor], policy: SizePolicy, crops_of: dict[str, int]) -> None:
         name = f"shard_{len(list(self.dir.glob('shard_*.safetensors'))):05d}.safetensors"
@@ -258,3 +194,84 @@ def list_caches(root: str | Path) -> list[CacheInfo]:
         size = sum(p.stat().st_size for p in child.parent.glob("shard_*.safetensors"))
         found.append(CacheInfo(meta["vae_id"], meta.get("label", ""), json.loads(meta["spec"]), count, size))
     return found
+
+
+class _Encoding:
+    """One ``build``: images are decoded ahead on a thread, grouped by shape into batches for the encoder, and written
+    in shards. The batch size only goes down: after an out-of-memory error it stays at the size that fit."""
+
+    def __init__(self, cache: LatentCache, images: ImageSet, policy: SizePolicy, encoder: Encoder, batch_size: int,
+                 recover: Callable[[], None] | None) -> None:
+        self.cache, self.images, self.policy, self.encoder, self.recover = cache, images, policy, encoder, recover
+        self.limit = batch_size
+        self.pending: list[tuple[str, torch.Tensor]] = []  # (sample, uint8 CHW)
+        self.encoded: dict[str, torch.Tensor] = {}  # waiting for the next shard
+        self.crops_of: dict[str, int] = {}
+        self.skipped: list[tuple[str, str]] = []
+        self.images_done = self.samples_done = 0
+
+    def run(self, todo: list[str], progress: Callable[[int, int], None] | None,
+            should_stop: Callable[[], bool] | None) -> BuildStats:
+        loader = Prefetch(lambda: map(self._load, todo), depth=8)  # decoding runs ahead while the device encodes
+        try:
+            for n, (image_id, crops, error) in enumerate(loader, 1):
+                if should_stop and should_stop():
+                    self._flush(True)
+                    return self._stats(stopped=True)
+                if error is not None:
+                    self.skipped.append((self.images.paths[image_id], f"{type(error).__name__}: {error}"))
+                    continue
+                self.crops_of[image_id] = len(crops)
+                for k, crop in enumerate(crops):
+                    self.pending.append((sample_id(image_id, k), torch.from_numpy(crop.copy()).permute(2, 0, 1).contiguous()))
+                self.images_done += 1
+                self._flush(False)
+                if progress:
+                    progress(n, len(todo))
+        finally:
+            loader.close()
+        self._flush(True)
+        return self._stats()
+
+    def _stats(self, stopped: bool = False) -> BuildStats:
+        return BuildStats(self.images_done, self.samples_done, self.skipped, stopped=stopped)
+
+    def _load(self, image_id: str):
+        try:
+            return image_id, load_crops(self.images.paths[image_id], self.policy), None
+        except Exception as exc:  # noqa: BLE001 - reported as a skipped image
+            return image_id, None, exc
+
+    def _encode(self, chunk: list[tuple[str, torch.Tensor]]) -> torch.Tensor:
+        """Encode a chunk; when the device runs out of memory, give cached memory back and encode it in halves."""
+        try:
+            return self.encoder.encode(torch.stack([c[1] for c in chunk])).to("cpu", torch.float16)
+        except (torch.OutOfMemoryError, RuntimeError) as exc:
+            if not isinstance(exc, torch.OutOfMemoryError) and "out of memory" not in str(exc).lower():
+                raise
+            if self.recover is not None:
+                self.recover()
+            if len(chunk) == 1:
+                raise RuntimeError(f"one {chunk[0][1].shape[-1]}x{chunk[0][1].shape[-2]} image does not fit on the device "
+                                   f"for encoding; lower the size, or encode on the CPU") from exc
+            half = len(chunk) // 2
+            self.limit = max(1, half)
+            return torch.cat([self._encode(chunk[:half]), self._encode(chunk[half:])])
+
+    def _flush(self, force: bool) -> None:
+        """Encode every full batch of one shape (all of them when ``force``) and write a shard when enough is ready."""
+        by_shape: dict[tuple[int, int], list[tuple[str, torch.Tensor]]] = {}
+        for item in self.pending:
+            by_shape.setdefault(tuple(item[1].shape[-2:]), []).append(item)
+        rest = []
+        for group in by_shape.values():
+            while len(group) >= self.limit or (force and group):
+                chunk, group = group[:self.limit], group[self.limit:]
+                latents = self._encode(chunk)
+                self.encoded.update({c[0]: latents[k] for k, c in enumerate(chunk)})
+            rest += group
+        self.pending = rest
+        if len(self.encoded) >= SHARD_SAMPLES or (force and self.encoded):
+            self.cache._write_shard(self.encoded, self.policy, self.crops_of)
+            self.samples_done += len(self.encoded)
+            self.encoded.clear()

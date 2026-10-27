@@ -96,47 +96,13 @@ class DiffusionTrainerNode(Node):
         self.validate_inputs(inputs)
         model: TrainableDenoiser = inputs["model"]
         accelerator = Accelerator(model.device)
-        if (model.info or {}).get("base_precision") == "int8" and not inputs.get("graph"):
-            self.context.report("warning", {"node": self.uid, "message":
-                                            "an int8 base launches about twice the kernels per layer: measured about 37% slower than native "
-                                            "per eager step, about 10% with graph replay (it saves about 2 GB)"})
-        if inputs.get("channels_last"):
-            enable = getattr(model.denoiser, "enable_channels_last", None)
-            if enable is None:
-                self.context.report("warning", {"node": self.uid, "message": "channels_last stays off: this model family does not support it"})
-            else:
-                enable()
-        if inputs.get("fused_geglu"):
-            enable = getattr(model.denoiser, "enable_fused_geglu", None)
-            reason = enable(model.device) if enable else "this model family has no fused GEGLU"
-            if reason:
-                self.context.report("warning", {"node": self.uid, "message": f"fused_geglu stays off: {reason}"})
+        self._warn_slow_int8(model, inputs)
+        self._enable_speed_options(model, inputs)
         residency = getattr(self.context.runtime, "residency", None)
         if residency is not None:
-            residency.claim("model", model, rank=10, pinned=True,
-                            purpose="frozen weights, adapter factors and whatever else the denoiser keeps")
-            residency.claim("optimizer", inputs["optimizer"], rank=1, purpose="optimizer state (moments), one set per adapter factor")
-            residency.claim("gradients", inputs["optimizer"].hold_grads(), pinned=True,
-                            purpose="adapter gradients, allocated once and zeroed in place so no step allocates between them")
-            residency.settle()
-            residency.start()
-        density = placement = None
-        if inputs.get("tune_checkpointing") and residency is not None and model.checkpointer is not None:
-            if inputs.get("checkpoint_by") == "measured":
-                profiler = BlockProfiler(model.checkpointer, model.checkpoint_blocks(),
-                                         lambda: accelerator.memory().get("allocated", 0.0), accelerator.synchronize)
-                placement = (BlockPlacement(residency.planner, profiler), model)
-            else:
-                density = (CheckpointDensity(residency.planner), model)
-        probe = None
-        if inputs.get("probe_every"):
-            batches: Batcher = inputs["batches"]
-            probe = TimeProbe(denoiser=model.denoiser, conditioner=getattr(inputs["conditioner"], "inner", inputs["conditioner"]), gate=model.gate, noiser=batches.noiser,
-                              item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
-                              items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed,
-                              alignment=GradientAlignment(model.adapted.trainable_parameters, model.denoiser.module) if inputs.get("probe_alignment") else None)
+            self._claim_memory(residency, model, inputs["optimizer"])
+        density, placement = self._checkpoint_choice(residency, model, accelerator, inputs)
         graph = self._graph_factory(inputs, model, accelerator, residency) if inputs.get("graph") else None
-        perf = self._perf_session(model, accelerator)
         total = self._total_steps(inputs)
         inputs["schedule"].fit(total)
         trainer = Trainer(batches=inputs["batches"], denoiser=model.denoiser, conditioner=inputs["conditioner"],
@@ -144,8 +110,12 @@ class DiffusionTrainerNode(Node):
                           steps=total, accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
                           emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
-                          synchronize=accelerator.synchronize, timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")), residency=residency, density=density, placement=placement, balance=inputs.get("balance"), probe=probe, task=self.context.task, graph=graph,
-                          plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True), perf=perf,
+                          synchronize=accelerator.synchronize,
+                          timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")),
+                          residency=residency, density=density, placement=placement, balance=inputs.get("balance"),
+                          probe=self._time_probe(model, inputs), task=self.context.task, graph=graph,
+                          plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
+                          perf=self._perf_session(model, accelerator),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         result = trainer.run(start)
@@ -154,6 +124,59 @@ class DiffusionTrainerNode(Node):
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
 
+    def _warn(self, message: str) -> None:
+        self.context.report("warning", {"node": self.uid, "message": message})
+
+    def _warn_slow_int8(self, model: TrainableDenoiser, inputs: dict) -> None:
+        if (model.info or {}).get("base_precision") == "int8" and not inputs.get("graph"):
+            self._warn("an int8 base launches about twice the kernels per layer: measured about 37% slower than native "
+                       "per eager step, about 10% with graph replay (it saves about 2 GB)")
+
+    def _enable_speed_options(self, model: TrainableDenoiser, inputs: dict) -> None:
+        """Switch on what the model family offers for speed; an option the family lacks stays off, with a warning."""
+        if inputs.get("channels_last"):
+            enable = getattr(model.denoiser, "enable_channels_last", None)
+            if enable is None:
+                self._warn("channels_last stays off: this model family does not support it")
+            else:
+                enable()
+        if inputs.get("fused_geglu"):
+            enable = getattr(model.denoiser, "enable_fused_geglu", None)
+            reason = enable(model.device) if enable else "this model family has no fused GEGLU"
+            if reason:
+                self._warn(f"fused_geglu stays off: {reason}")
+
+    @staticmethod
+    def _claim_memory(residency, model: TrainableDenoiser, optimizer: Optimizer) -> None:
+        """Everything that stays on the device for the whole run is claimed first, then the cache is handed back once."""
+        residency.claim("model", model, rank=10, pinned=True,
+                        purpose="frozen weights, adapter factors and whatever else the denoiser keeps")
+        residency.claim("optimizer", optimizer, rank=1, purpose="optimizer state (moments), one set per adapter factor")
+        residency.claim("gradients", optimizer.hold_grads(), pinned=True,
+                        purpose="adapter gradients, allocated once and zeroed in place so no step allocates between them")
+        residency.settle()
+        residency.start()
+
+    @staticmethod
+    def _checkpoint_choice(residency, model: TrainableDenoiser, accelerator: Accelerator, inputs: dict) -> tuple[tuple | None, tuple | None]:
+        """``(density, placement)``: who picks which blocks recompute in backward, each paired with the model, or None."""
+        if not (inputs.get("tune_checkpointing") and residency is not None and model.checkpointer is not None):
+            return None, None
+        if inputs.get("checkpoint_by") == "measured":
+            profiler = BlockProfiler(model.checkpointer, model.checkpoint_blocks(),
+                                     lambda: accelerator.memory().get("allocated", 0.0), accelerator.synchronize)
+            return None, (BlockPlacement(residency.planner, profiler), model)
+        return (CheckpointDensity(residency.planner), model), None
+
+    @staticmethod
+    def _time_probe(model: TrainableDenoiser, inputs: dict) -> TimeProbe | None:
+        if not inputs.get("probe_every"):
+            return None
+        batches: Batcher = inputs["batches"]
+        alignment = GradientAlignment(model.adapted.trainable_parameters, model.denoiser.module) if inputs.get("probe_alignment") else None
+        return TimeProbe(denoiser=model.denoiser, conditioner=getattr(inputs["conditioner"], "inner", inputs["conditioner"]), gate=model.gate,
+                         noiser=batches.noiser, item_of=batches.clean_item, device=model.device, every=inputs["probe_every"],
+                         items=inputs.get("probe_items") or 2, points=inputs.get("probe_points") or 2, seed=batches.seed, alignment=alignment)
 
     def _perf_session(self, model: TrainableDenoiser, accelerator: Accelerator):
         settings = self.context.settings

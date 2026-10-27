@@ -67,10 +67,18 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
 ## 31. Pictures for the faster defaults
-`adapter.lora_compute=activation` and `trainer.fused_geglu=true` passed every number (steps 8% to 40% faster, loss over the last 10 steps the same to four digits; with the baselines pinned to float32 LoRA the activation dtype is 10% faster eager and 24% faster in a math_bf16 graph). They become defaults after a look: train 300+ steps with the defaults and the same with both options (same seed, `--set runtime.deterministic=true` if you want the same noise), generate from both with the same prompts and seeds, and tell me whether you can tell them apart.
+`adapter.lora_compute=activation` and `trainer.fused_geglu=true` passed every number (steps 8% to 40% faster, loss over the last 10 steps the same to four digits; with the baselines pinned to float32 LoRA the activation dtype is 10% faster eager and 24% faster in a math_bf16 graph). They become defaults after a look at pictures. Two LoRAs are enough: today's defaults against both options together (the options are judged as one package, because that is what would become the default; fused GEGLU is checked against the eager result when it starts, so activation is the one that can change a picture).
 
-## 36. Channels-last convolutions
-`python -m next.perf hwcheck --out perf-bundle --only matrix verdict --scenarios "int8 graph attention-math_bf16 lora-activation fused-geglu" "int8 graph attention-math_bf16 lora-activation fused-geglu channels-last" <the usual train options>` (remove `perf-bundle` first) and send `bundle.zip`. Expected: `conv_reorder` (12.6 ms per step) gone from the kernel list and a faster step; if the step is slower or the loss differs, say so, the option is off by default.
+Same command for both, with your paths; `--steps 600` or more, at the resolution you train at if the time allows (512 is fine for a first look). `--set runtime.deterministic=true` makes the default run repeatable, so any difference below comes from the options and not from the run.
+```
+python -m next.run sdxl-lora --models <models> --datasets <datasets> --dataset <name> --file <checkpoint> --output <output> --resolution 512 --batch 2 \
+  --steps 600 --save-every 600 --set runtime.deterministic=true --name lora_default
+python -m next.run sdxl-lora ...the same arguments... --name lora_fast --param adapter.lora_compute=activation --param trainer.fused_geglu=true
+```
+Add nothing else to either (no graph, no int8, so the only difference is the two options). Optional third run for scale: the default again with `--set seed.base=1 --name lora_other_seed` (a different noise and order, which is the kind of difference you would never notice as a flaw).
+
+Then in ComfyUI: the same checkpoint, the same 4 or more prompts (some from your dataset's style, some off it), 3 seeds each, the same sampler and strength, once per LoRA. Look at the pairs side by side and answer: can you tell `lora_default` from `lora_fast`, and is the gap larger than the one to `lora_other_seed`? Also send both console loss lines at steps 100, 300, 600.
+Pass: the pairs look alike (differences of the seed-change kind). Fail: describe what changed (washed out, noisier, style weaker), and I will keep the defaults and look at which option causes it (one more LoRA with `activation` only).
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

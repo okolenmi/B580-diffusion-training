@@ -78,8 +78,6 @@ class DiffusionTrainerNode(Node):
                                 doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
                                     "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
                                     "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
-        "channels_last": Port("channels_last", bool, required=False, default=False, group="speed",
-                              doc="Keep the frozen convolutions and the UNet input in channels-last layout, so oneDNN stops reordering them on every call. Experimental."),
         "fused_geglu": Port("fused_geglu", bool, required=False, default=False, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
@@ -134,12 +132,6 @@ class DiffusionTrainerNode(Node):
 
     def _enable_speed_options(self, model: TrainableDenoiser, inputs: dict) -> None:
         """Switch on what the model family offers for speed; an option the family lacks stays off, with a warning."""
-        if inputs.get("channels_last"):
-            enable = getattr(model.denoiser, "enable_channels_last", None)
-            if enable is None:
-                self._warn("channels_last stays off: this model family does not support it")
-            else:
-                enable()
         if inputs.get("fused_geglu"):
             enable = getattr(model.denoiser, "enable_fused_geglu", None)
             reason = enable(model.device) if enable else "this model family has no fused GEGLU"

@@ -87,10 +87,9 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
     graph = ("--set", "trainer.graph=true")
     lora = ("--param", "adapter.lora_compute=activation")
     geglu = ("--param", "trainer.fused_geglu=true")
-    channels = ("--param", "trainer.channels_last=true")
     measured = ("--param", "trainer.checkpoint_by=measured", "--param", "trainer.tune_checkpointing=true")
     # Options the scenarios vary are stated in every scenario (later arguments win), so options the user put in the shared arguments cannot change a baseline.
-    neutral = ("--param", "adapter.lora_compute=float32", "--param", "trainer.fused_geglu=false", "--param", "trainer.channels_last=false")
+    neutral = ("--param", "adapter.lora_compute=float32", "--param", "trainer.fused_geglu=false")
     window = ("--set", f"perf.warmup_steps={warmup}", "--set", f"perf.ceilings={ceilings}", "--set", "perf.provenance=true", *neutral)  # one measurement of the ceilings for every scenario
     S = lambda name, *args, env=(): Scenario(name, (*window, *args), tuple(env))  # noqa: E731
     return [S("native eager"), S("native graph", *graph), S("int8 eager", *int8), S("int8 graph", *int8, *graph),
@@ -102,7 +101,6 @@ def default_scenarios(*, warmup: int, ceilings: str) -> list[Scenario]:
             S("native eager lora-activation", *lora), S("native graph attention-math_bf16 lora-activation", *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
             S("int8 graph attention-math_bf16 lora-activation", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora),
             S("int8 graph attention-math_bf16 lora-activation fused-geglu", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu),
-            S("int8 graph attention-math_bf16 lora-activation fused-geglu channels-last", *int8, *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu, *channels),
             S("native graph attention-math_bf16 lora-activation fused-geglu", *graph, "--param", "trainer.graph_attention=math_bf16", *lora, *geglu),
             S("native eager lora-activation fused-geglu", *lora, *geglu),
             S("native expandable-segments", env=(("PYTORCH_ALLOC_CONF", "expandable_segments:True"),)),

@@ -238,25 +238,6 @@ def attention_modes_cases():
     check(set(den.attention_scopes()) == set(attention_modes.MODES), "the denoiser offers the modes to the trainer")
 
 
-def channels_last_cases():
-    """Frozen convolutions and the input go channels-last; the result does not change."""
-    torch.manual_seed(0)
-    den = SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32)
-    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
-    before = den(x, t, c, y)
-    convs = [m for m in den.model.modules() if isinstance(m, torch.nn.Conv2d)]
-    trained = convs[0]
-    for p in trained.parameters():
-        p.requires_grad_(True)
-    for m in convs[1:]:
-        for p in m.parameters():
-            p.requires_grad_(False)
-    den.enable_channels_last()
-    check("frozen convolutions are channels-last", all(m.weight.is_contiguous(memory_format=torch.channels_last) for m in convs[1:] if m.weight.shape[2] > 1))
-    check("a trainable convolution is left as it was", trained.weight.is_contiguous())
-    check("the result is the same", torch.allclose(den(x, t, c, y), before, atol=1e-5))
-
-
 def fused_geglu_cases():
     """The feed-forward routes through a fused function when one is set, and staying off reports a reason."""
     layer = attention_module.GEGLU(8, 16)
@@ -281,4 +262,4 @@ def fused_geglu_cases():
 
 
 if __name__ == "__main__":
-    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases, attention_modes_cases, channels_last_cases, fused_geglu_cases)
+    run(conditioning_ops, encoder_cases, loading_cases, denoiser_cases, attention_modes_cases, fused_geglu_cases)

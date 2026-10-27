@@ -76,6 +76,8 @@ def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None):
 def full_run():
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
+        classes = {n.class_name for n in graph(tmp, 2, schedule="cosine").nodes}
+        check("CosineLRNode" in classes and "ConstantLRNode" not in classes, "the starter can decay the learning rate (cosine) instead of holding it")
         folder = tmp / "images"
         folder.mkdir()
         make_images(folder)

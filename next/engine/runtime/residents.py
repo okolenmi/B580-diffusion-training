@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 
 from torch import Tensor, nn
 
@@ -24,6 +25,18 @@ class DeviceResident(ABC):
     @abstractmethod
     def release(self) -> None:
         """Drop everything; the object is unusable afterwards."""
+
+
+@dataclass
+class Claim:
+    """One resident of a run and what it is kept for. Lower ranks move off the device first; pinned ones never move."""
+
+    resident: DeviceResident
+    purpose: str
+    rank: int
+    pinned: bool
+    parked: bool = False  # offloaded after every step, reloaded before the next
+    away: bool = False
 
 
 def tensor_bytes(tensors: Iterable[Tensor | None]) -> int:

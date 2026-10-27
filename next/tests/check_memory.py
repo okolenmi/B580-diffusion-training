@@ -16,7 +16,9 @@ import torch
 from ..engine.optim.algorithms import AdamW
 from ..engine.optim.handle import Optimizer, ParamGroup
 from ..engine.runtime.planner import StepPlanner, chunk_sizes
-from ..engine.runtime.memory import MB, MemoryBudgetExceeded, MemoryPolicy, ResidencyManager, is_out_of_memory
+from ..engine.runtime import card
+from ..engine.runtime.card import MB
+from ..engine.runtime.memory import MemoryBudgetExceeded, MemoryPolicy, ResidencyManager, is_out_of_memory
 from ..engine.runtime.encoders import OnDemandKit
 from ..engine.runtime.residents import DeviceResident, ModulesResident
 from types import SimpleNamespace
@@ -210,7 +212,7 @@ def cached_blocks_are_not_pressure():
     m.claim("optimizer", opt, purpose="test")
     m.start()
     m.after_step(0)
-    check(m.need_mb(device.memory()) == 9600 + 0 and not [t for t in m.trace if t["event"] in ("pressure", "lever")] and opt.on_device,
+    check(card.need_mb(device.memory()) == 9600 + 0 and not [t for t in m.trace if t["event"] in ("pressure", "lever")] and opt.on_device,
           "a card that looks full only because the allocator keeps free blocks is not under pressure")
     check(device.cache_emptied == 1 and m.trace[-1]["event"] == "trim" and opt.on_device,
           "it hands the cached blocks back instead, since the driver cannot reclaim them for its own allocations")
@@ -327,7 +329,7 @@ def attribution():
     check(note["event"] == "cache_returned" and note["returned_mb"] == 1200 and note["card_freed_mb"] == 1200 and note["ours_outside_mb"] == 0,
           "a cache release says what it returned and whether the card's other users moved in")
     device.slack = 5000.0
-    check(m.returnable_mb(device.memory()) == 4700, "only whole free segments count as returnable, not pieces between live blocks")
+    check(card.returnable_mb(device.memory()) == 4700, "only whole free segments count as returnable, not pieces between live blocks")
     check(parse_fdinfo("drm-driver:\txe\ndrm-pdev:\t0000:03:00.0\ndrm-client-id:\t7\ndrm-resident-vram0:\t2048 KiB\ndrm-resident-gtt:\t5 KiB\n") ==
           (("0000:03:00.0", "7"), 2 * MB) and parse_fdinfo("pos:\t0\nflags:\t02\n") is None, "a handle's resident device memory is read, other handles are ignored")
     with tempfile.TemporaryDirectory() as folder:
@@ -681,7 +683,7 @@ def measured_checkpointing_in_trainer():
         trainer, _, denoiser, *_ = rig(Path(raw), steps=1, residency=m)
         handle = Handle(denoiser)
         profiler = BlockProfiler(handle.checkpointer, handle.checkpoint_blocks(), lambda: device.memory().get("allocated", 0.0))
-        trainer._placement = (BlockPlacement(m.planner, profiler), handle)
+        trainer._memory_probe.placement = (BlockPlacement(m.planner, profiler), handle)
         trainer.emit = lambda e: None
         trainer.run()
         check(len({u for u, _ in m.planner._points}) >= 2, "the memory probe runs at two batch sizes so the planner can tell fixed memory from growing memory")

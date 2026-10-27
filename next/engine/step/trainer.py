@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import gc
-import math
 import time
 from dataclasses import dataclass
 from contextlib import AbstractContextManager
@@ -17,6 +16,7 @@ from ..optim.handle import FusedOptimizer, Optimizer
 from ..runtime.memory import MemoryBudgetExceeded, is_out_of_memory
 from ..runtime.planner import chunk_sizes
 from ..runtime.thrash import PrimitiveCacheMonitor
+from .memory_probe import MemoryProbe
 from .loss import LossWeighting, thirds_of_range
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
@@ -44,7 +44,6 @@ class Trainer:
     """
 
     OOM_RETRIES = 1
-    PROBE_SAMPLES = 3  # samples in the larger memory probe
 
     def __init__(self, *, batches: Iterable[dict], denoiser, conditioner, optimizer: Optimizer, schedule: LRSchedule,
                  weighting: LossWeighting, steps: int, accumulation: int = 1, device="cpu", gate=None,
@@ -61,8 +60,6 @@ class Trainer:
         self._perf = perf  # duck-typed: step(n) context manager, observe(metrics), close(); the engine does not know the profiler
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
-        self._density = density  # (CheckpointDensity, TrainableDenoiser) or None
-        self._placement = placement  # (BlockPlacement, TrainableDenoiser) or None; chosen over density
         self._task = task or (lambda title: contextlib.nullcontext())
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
@@ -76,9 +73,11 @@ class Trainer:
             fetch = Timed(fetch, synchronize or (lambda: None))
         self._fetch_phase = fetch
         self.pipeline = Pipeline(phases)
+        self._memory_probe = MemoryProbe(residency, optimizer, self.pipeline, batches, self._fetch, device, self._task, density, placement)
 
     def run(self, start: int = 0) -> RunResult:
-        self._probe()
+        if self.steps:
+            self._memory_probe.run()
         attach = getattr(self._perf, "attach_graph", None)
         if attach is not None and self.graphed is not None:
             attach(self.graphed)
@@ -95,61 +94,30 @@ class Trainer:
             self._perf.close()
         return RunResult(max(self.steps - start, 0), self.steps, last)
 
-    def _probe(self) -> None:
-        """One and a few samples of the largest shape through forward and backward, changing nothing: what a batch costs."""
-        make = getattr(self._batches, "probe_batch", None)
-        if self.residency is None or make is None or self.steps == 0:
-            return
-        like = self._fetch.peek()
-        largest = self._batches.largest_units()
-        sizes = [1] + ([min(self._batches.max_batch_size(), self.PROBE_SAMPLES)] if self._batches.max_batch_size() > 1 else [])
-        batches = [make(like, count) for count in sizes]  # two sizes of the same shape: the slope is what a sample costs, the rest is fixed
-        units = batches[-1]["x_t"].shape[0] * batches[-1]["x_t"].shape[-2] * batches[-1]["x_t"].shape[-1]
-
-        def measure(apply=None, tolerate: bool = False) -> float:
-            """``apply`` changes the checkpointing first; a candidate that cannot fit says so by costing more than any budget."""
-            if apply is not None:
-                apply()
-                self.residency.planner.reset()
-            try:
-                with self._task("Measuring what a pixel costs"):
-                    for batch in batches:
-                        size = batch["x_t"].shape[0] * batch["x_t"].shape[-2] * batch["x_t"].shape[-1]
-                        with self.residency.measuring(size), self.optimizer.suspended():
-                            self.pipeline.run(StepState(-1, 0, self.device, batch=batch))
-            except Exception as error:  # noqa: BLE001 - narrowed just below
-                if not tolerate or not is_out_of_memory(error):
-                    raise
-                error.__traceback__ = None
-                gc.collect()
-                self.residency.give_back("a checkpoint choice that did not fit")
-                return math.inf
-            return self.residency.planner.cost_at(largest) or 0.0
-
-        budget = self.residency.budget_mb()
-        if budget is None or (self._density is None and self._placement is None):
-            measure()
-            return
-        floor = self.residency.accelerator.memory().get("allocated", 0.0)
-        if self._placement is not None:
-            chooser, model = self._placement
-            flags = chooser.choose(lambda flags: measure(lambda: model.set_checkpoint_flags(flags), tolerate=not all(flags)),
-                                   floor, self._batches.largest_units(), units, budget)
-            self.residency.note("checkpoint_plan", checkpointed=sum(flags), of=len(flags), kept=chooser.describe(flags))
-            return
-        tuner, model = self._density
-        starting = model.checkpoint_share
-        chosen = tuner.choose(lambda share: measure(lambda: model.set_checkpoint_share(share), tolerate=share != starting),
-                              starting, floor, self._batches.largest_units(), budget)
-        self.residency.note("checkpoint_share", share=chosen, of_blocks="transformer")
-
     def _step(self, step: int) -> float:
         started = time.perf_counter()
         lr = self.schedule.value(step)
         if self.residency is not None:
             self.residency.before_step(step)
         self.optimizer.set_lr(lr)
-        fetched = []
+        fetched, timing = self._fetch_window(step)
+        probe_metrics = self._reference_probe(fetched)
+        losses, thirds, spent = self._update(step, fetched)
+        for label, ms in spent.items():
+            timing[label] = timing.get(label, 0.0) + ms
+        loss = float(sum(losses) / len(losses))
+        if self.residency is not None:
+            self.residency.after_step(step)
+        metrics = self._metrics(step, loss, lr, started, fetched, timing, thirds, probe_metrics)
+        if self._perf is not None:
+            self._perf.observe(metrics)
+        if self.emit is not None:
+            self.emit(StepFinished(step + 1, self.steps, metrics))
+        return loss
+
+    def _fetch_window(self, step: int) -> tuple[list[dict], dict[str, float]]:
+        """The ``accumulation`` batches of one optimizer step and what fetching them cost, by phase."""
+        fetched: list[dict] = []
         timing: dict[str, float] = {}
         for micro in range(self.accumulation):
             state = StepState(step, micro, self.device)
@@ -157,33 +125,36 @@ class Trainer:
             fetched.append(state.batch)
             for label, ms in state.timing_ms.items():
                 timing[label] = timing.get(label, 0.0) + ms
-        probe_metrics: dict[str, float] = {}
-        if self._time_probe is not None:
-            first = not self._time_probe.ready
-            for batch in fetched:
-                self._time_probe.capture(batch)
-            if first and self._time_probe.ready:
-                probe_metrics = self._time_probe.run()  # before the first update: the reference record
-        retries = self.OOM_RETRIES if self._plan_chunks else 0  # a retry in more chunks would change the numbers
+        return fetched, timing
+
+    def _reference_probe(self, fetched: list[dict]) -> dict[str, float]:
+        """Feed the time probe; its first record is taken before the first update, so it is the reference."""
+        if self._time_probe is None:
+            return {}
+        first = not self._time_probe.ready
+        for batch in fetched:
+            self._time_probe.capture(batch)
+        return self._time_probe.run() if first and self._time_probe.ready else {}
+
+    def _update(self, step: int, fetched: list[dict]) -> tuple[list, list, dict]:
+        """The window's forward, backward and update; a step that runs out of memory is run again in more chunks when
+        no update has been applied yet (a retry in more chunks would change the numbers, so not when chunks are off)."""
+        retries = self.OOM_RETRIES if self._plan_chunks else 0
         for attempt in range(retries + 1):
             self._committed = False
-            failure = None
             try:
-                losses, thirds, spent = self._window(step, fetched, attempt)
-                break
+                return self._window(step, fetched, attempt)
             except Exception as error:  # noqa: BLE001 - narrowed just below
                 if self._committed or attempt == retries or not is_out_of_memory(error):
                     explained = self._explained(step, error)
                     if explained is error:
                         raise
                     raise explained from error
-                failure = error
-            self._recover(step, failure)
-        for label, ms in spent.items():
-            timing[label] = timing.get(label, 0.0) + ms
-        loss = float(sum(losses) / len(losses))
-        if self.residency is not None:
-            self.residency.after_step(step)
+                self._recover(step, error)
+        raise AssertionError("unreachable: the last attempt returns or raises")
+
+    def _metrics(self, step: int, loss: float, lr: float, started: float, fetched: list[dict], timing: dict[str, float],
+                 thirds: list, probe_metrics: dict[str, float]) -> dict[str, float]:
         height, width = fetched[-1]["x_t"].shape[-2:]
         metrics = {"loss": loss, "lr": lr, "step_ms": (time.perf_counter() - started) * 1000, "batch": len(fetched[-1]["samples"]),
                    "latent_h": height, "latent_w": width, "epoch": fetched[-1].get("epoch", 0),
@@ -210,11 +181,7 @@ class Trainer:
             shares = self._balance.third_probabilities()
             if shares is not None:
                 metrics.update(zip(("draw_t_low", "draw_t_mid", "draw_t_high"), shares))
-        if self._perf is not None:
-            self._perf.observe(metrics)
-        if self.emit is not None:
-            self.emit(StepFinished(step + 1, self.steps, metrics))
-        return loss
+        return metrics
 
     def _chunks(self, batch: dict, attempt: int) -> list[int]:
         x = batch["x_t"]

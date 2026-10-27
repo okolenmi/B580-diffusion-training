@@ -91,83 +91,15 @@ class GraphRunner:
             first = validation.errors[0]
             extra = f" (+{len(validation.errors) - 1} more)" if len(validation.errors) > 1 else ""
             return RunOutcome((), f"graph invalid: {first.message}{extra}")
-        classes, _ = self.registry.load()
-        order = validation.order or []
-        t0 = time.monotonic()
-        settings = self._settings().snapshot(doc.settings, self.app_defaults)
-        hub = EventHub(self.reporter, ranks={uid: i for i, uid in enumerate(order)})
-        hub.set_stop_callback(lambda ev: cancel.set())
-        self._wire_events(doc, classes, hub)
-        context = ExecutionContext(cancel_event=cancel, reporter=self.reporter, settings=settings, events=hub, env=self.env)
-        if self.runtime_factory is not None:
-            context.runtime = self.runtime_factory(context)
-
-        outputs_by: dict[str, dict] = {}
-        completion_by: dict[str, Completion] = {}
-        retained: dict[str, Node] = {}
-        results: list[NodeResult] = []
-        error: str | None = None
-        self._run_frame("run_started", None, t0)
+        execution = _Execution(self, doc, validation, cancel)
+        execution.announce("run_started")
         try:
-            for uid in order:
-                spec = doc.node(uid)
-                cls = classes[spec.class_name]
-                edges_in = doc.edges_to(uid)
-                upstream = {e.to_port: completion_by.get(e.from_node, COMPLETE) for e in edges_in}
-                if cancel.is_set():
-                    hub.mark_stopped()
-                    if not self._runs_after_stop(cls, edges_in, upstream, outputs_by):
-                        self._state(uid, "skipped", t0, {})
-                        results.append(NodeResult(uid, True, {}, None, 0.0, "skipped"))
-                        continue
-                inputs = self._gather(doc, uid, validation, outputs_by)
-                node_context = context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream)
-                self._state(uid, "running", t0, {})
-                started = time.monotonic()
-                try:
-                    node = cls(node_context)
-                    outputs = node.build(**inputs)
-                    self._check_outputs(uid, validation, outputs)
-                    if cls.EVENTS_IN:
-                        retained[uid] = node
-                        hub.attach(uid, node)
-                    hub.drain()
-                except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome
-                    message = f"{type(exc).__name__}: {exc}"
-                    result = NodeResult(uid, False, {}, message, (time.monotonic() - started) * 1000, "failed")
-                    results.append(result)
-                    self._state(uid, "failed", t0, {"error": message})
-                    self._done(result)
-                    error = message
+            for uid in validation.order or []:
+                if not execution.execute(uid):
                     break
-                duration = (time.monotonic() - started) * 1000
-                outputs_by[uid] = outputs
-                completion_by[uid] = (node_context.reported_completion
-                                      or node_context.any_upstream_unfinished() or COMPLETE)
-                result = NodeResult(uid, True, {k: describe(v) for k, v in outputs.items()}, None, duration, "done")
-                results.append(result)
-                self._state(uid, "done", t0, {"duration_ms": round(duration, 1)})
-                self._done(result)
-            stopped = cancel.is_set()
-            if stopped and error is None:
-                hub.mark_stopped()
-                try:
-                    hub.emit("run", "run_stopped", RunStopped())
-                except EventError as exc:
-                    error = str(exc)
-            final = "run_failed" if error else ("run_stopped" if stopped else "run_finished")
-            self._run_frame(final, error, t0)
-            return RunOutcome(tuple(results), error, stopped)
+            return execution.finish()
         finally:
-            for uid in reversed(list(retained)):
-                try:
-                    retained[uid].close()
-                except Exception:  # noqa: BLE001 -- cleanup must not lose results
-                    logger.exception("closing node %s failed", uid)
-            try:
-                self.releaser()
-            except Exception:  # noqa: BLE001
-                logger.exception("memory release after a run failed")
+            execution.close()
 
     # -- helpers -----------------------------------------------------------
 
@@ -237,3 +169,93 @@ class GraphRunner:
                 self.observer.run(state, error)
             except Exception:  # noqa: BLE001
                 logger.exception("observer.run failed")
+
+
+class _Execution:
+    """One run of a validated graph: the nodes built so far, what they produced, and how the run ends."""
+
+    def __init__(self, runner: GraphRunner, doc: GraphDoc, validation: Validation, cancel: threading.Event) -> None:
+        self.runner, self.doc, self.validation, self.cancel = runner, doc, validation, cancel
+        self.classes, _ = runner.registry.load()
+        self.t0 = time.monotonic()
+        order = validation.order or []
+        self.hub = EventHub(runner.reporter, ranks={uid: i for i, uid in enumerate(order)})
+        self.hub.set_stop_callback(lambda ev: cancel.set())
+        runner._wire_events(doc, self.classes, self.hub)
+        settings = runner._settings().snapshot(doc.settings, runner.app_defaults)
+        self.context = ExecutionContext(cancel_event=cancel, reporter=runner.reporter, settings=settings,
+                                        events=self.hub, env=runner.env)
+        if runner.runtime_factory is not None:
+            self.context.runtime = runner.runtime_factory(self.context)
+        self.outputs_by: dict[str, dict] = {}
+        self.completion_by: dict[str, Completion] = {}
+        self.retained: dict[str, Node] = {}  # nodes that listen to events stay alive until the run ends
+        self.results: list[NodeResult] = []
+        self.error: str | None = None
+
+    def announce(self, state: str) -> None:
+        self.runner._run_frame(state, self.error, self.t0)
+
+    def execute(self, uid: str) -> bool:
+        """Build one node; False when the run has to stop here (the node failed)."""
+        runner = self.runner
+        cls = self.classes[self.doc.node(uid).class_name]
+        edges_in = self.doc.edges_to(uid)
+        upstream = {e.to_port: self.completion_by.get(e.from_node, COMPLETE) for e in edges_in}
+        if self.cancel.is_set():
+            self.hub.mark_stopped()
+            if not runner._runs_after_stop(cls, edges_in, upstream, self.outputs_by):
+                runner._state(uid, "skipped", self.t0, {})
+                self.results.append(NodeResult(uid, True, {}, None, 0.0, "skipped"))
+                return True
+        inputs = runner._gather(self.doc, uid, self.validation, self.outputs_by)
+        node_context = self.context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream)
+        runner._state(uid, "running", self.t0, {})
+        started = time.monotonic()
+        try:
+            node = cls(node_context)
+            outputs = node.build(**inputs)
+            runner._check_outputs(uid, self.validation, outputs)
+            if cls.EVENTS_IN:
+                self.retained[uid] = node
+                self.hub.attach(uid, node)
+            self.hub.drain()
+        except Exception as exc:  # noqa: BLE001 -- a failing node is a normal outcome
+            message = f"{type(exc).__name__}: {exc}"
+            result = NodeResult(uid, False, {}, message, (time.monotonic() - started) * 1000, "failed")
+            self.results.append(result)
+            runner._state(uid, "failed", self.t0, {"error": message})
+            runner._done(result)
+            self.error = message
+            return False
+        duration = (time.monotonic() - started) * 1000
+        self.outputs_by[uid] = outputs
+        self.completion_by[uid] = node_context.reported_completion or node_context.any_upstream_unfinished() or COMPLETE
+        result = NodeResult(uid, True, {k: describe(v) for k, v in outputs.items()}, None, duration, "done")
+        self.results.append(result)
+        runner._state(uid, "done", self.t0, {"duration_ms": round(duration, 1)})
+        runner._done(result)
+        return True
+
+    def finish(self) -> RunOutcome:
+        stopped = self.cancel.is_set()
+        if stopped and self.error is None:
+            self.hub.mark_stopped()
+            try:
+                self.hub.emit("run", "run_stopped", RunStopped())
+            except EventError as exc:
+                self.error = str(exc)
+        self.announce("run_failed" if self.error else ("run_stopped" if stopped else "run_finished"))
+        return RunOutcome(tuple(self.results), self.error, stopped)
+
+    def close(self) -> None:
+        """Close the retained nodes, last built first, then let the process give back what the run held."""
+        for uid in reversed(list(self.retained)):
+            try:
+                self.retained[uid].close()
+            except Exception:  # noqa: BLE001 -- cleanup must not lose results
+                logger.exception("closing node %s failed", uid)
+        try:
+            self.runner.releaser()
+        except Exception:  # noqa: BLE001
+            logger.exception("memory release after a run failed")

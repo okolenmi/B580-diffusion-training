@@ -91,158 +91,177 @@ def literal_mismatch(port_type: Any, value: Any) -> bool:
 
 def validate(doc: GraphDoc, registry: NodeRegistry, settings: SettingsRegistry | None = None,
              env: Environment | None = None) -> Validation:
-    result = Validation()
-    issues = result.issues
-    classes, _ = registry.load()
-    settings = settings or registry.settings_registry()
+    return _Validator(doc, registry, settings or registry.settings_registry(), env).run()
 
-    def add(severity, code, message, **kw):
-        issues.append(Issue(severity, code, message, **kw))
 
-    # pass 1: identity and shape
-    seen: set[str] = set()
-    shaped: dict[str, Resolution] = {}
-    cls_of: dict[str, type[Node]] = {}
-    for spec in doc.nodes:
-        if not UID_PATTERN.match(spec.uid or ""):
-            add(ERROR, "invalid_uid", f"node uid {spec.uid!r} is not of the form n_xxxxxx", uid=spec.uid)
-        if spec.uid in seen:
-            add(ERROR, "duplicate_uid", f"node uid {spec.uid!r} appears more than once", uid=spec.uid)
-        seen.add(spec.uid)
-        cls = classes.get(spec.class_name)
-        if cls is None:
-            add(ERROR, "unknown_class", f"no node class named {spec.class_name!r} is registered", uid=spec.uid)
-            continue
-        cls_of[spec.uid] = cls
-        try:
-            res = cls.resolve(dict(spec.params), env)
-        except Exception as exc:  # noqa: BLE001 -- the node's bug becomes an issue
-            add(ERROR, "shape_resolution_failed",
-                f"{spec.class_name}.resolve raised {type(exc).__name__}: {exc}", uid=spec.uid)
-            continue
-        result.resolutions[spec.uid] = res
-        if res.state == "needs_choice":
-            add(ERROR, "needs_choice", res.message or f"{spec.class_name} needs a choice", uid=spec.uid, port=res.focus)
-        elif res.state == "error":
-            add(ERROR, "resolve_error", res.message or f"{spec.class_name} could not be resolved", uid=spec.uid,
-                port=res.focus)
-        else:
-            shaped[spec.uid] = res
+class _Validator:
+    """Six passes over a graph document, each one adding issues and leaving what the next needs: the nodes' own
+    shapes (pass 1), their params (2), the data wires (3), the event wires (4), the build order (5), the settings (6)."""
 
-    # pass 2: params against the resolved inputs
-    for spec in doc.nodes:
-        res = shaped.get(spec.uid)
-        if res is None:
-            continue
-        fed = {e.to_port for e in doc.edges_to(spec.uid)}
-        for name, port in res.inputs.items():
-            provided = name in spec.params
-            if port.required and not provided and name not in fed:
-                add(ERROR, "missing_required_input",
-                    f"{spec.class_name}.{name} is required but neither a param nor a wire provides it",
-                    uid=spec.uid, port=name)
-            if provided:
-                value = spec.params[name]
-                if port.choices is not None and value is not None and value not in port.choices:
-                    add(ERROR, "invalid_choice", f"{spec.class_name}.{name}={value!r} is not one of {list(port.choices)}",
-                        uid=spec.uid, port=name)
-                if literal_mismatch(port.type, value):
-                    add(ERROR, "type_mismatch",
-                        f"{spec.class_name}.{name} expects {type_name(port.type)}, got {type(value).__name__}",
-                        uid=spec.uid, port=name)
-                if port.minimum is not None and isinstance(value, (int, float)) and not isinstance(value, bool) \
-                        and value < port.minimum:
-                    add(ERROR, "out_of_range", f"{spec.class_name}.{name}={value} is below {port.minimum}",
-                        uid=spec.uid, port=name)
-                if port.maximum is not None and isinstance(value, (int, float)) and not isinstance(value, bool) \
-                        and value > port.maximum:
-                    add(ERROR, "out_of_range", f"{spec.class_name}.{name}={value} is above {port.maximum}",
-                        uid=spec.uid, port=name)
-        for key in spec.params:
-            if key not in res.inputs:
-                add(ERROR, "unknown_param", f"{spec.class_name} has no input named {key!r}", uid=spec.uid, port=key)
+    def __init__(self, doc: GraphDoc, registry: NodeRegistry, settings: SettingsRegistry, env: Environment | None) -> None:
+        self.doc, self.settings, self.env = doc, settings, env
+        self.classes, _ = registry.load()
+        self.result = Validation()
+        self.cls_of: dict[str, type[Node]] = {}
+        self.shaped: dict[str, Resolution] = {}
+        self.unique_uids = 0
 
-    # pass 3: data edges
-    per_input: dict[tuple[str, str], int] = {}
-    for index, edge in enumerate(doc.edges):
-        src, dst = doc.node(edge.from_node), doc.node(edge.to_node)
-        if src is None or dst is None:
-            missing = edge.from_node if src is None else edge.to_node
-            add(ERROR, "edge_unknown_node", f"wire references node {missing!r}, which is not in the graph",
-                uid=missing, edge_index=index)
-            continue
-        out_res, in_res = shaped.get(src.uid), shaped.get(dst.uid)
-        out_port = out_res.outputs.get(edge.from_port) if out_res else None
-        in_port = in_res.inputs.get(edge.to_port) if in_res else None
-        if out_res and out_port is None:
-            add(ERROR, "unknown_output_port", f"{src.class_name} has no output port {edge.from_port!r}",
-                uid=src.uid, port=edge.from_port, edge_index=index)
-        if in_res and in_port is None:
-            add(ERROR, "unknown_input_port", f"{dst.class_name} has no input port {edge.to_port!r}",
-                uid=dst.uid, port=edge.to_port, edge_index=index)
-        if out_port and in_port and not types_compatible(out_port.type, in_port.type):
-            add(ERROR, "incompatible_types",
-                f"{src.class_name}.{edge.from_port} ({type_name(out_port.type)}) does not satisfy "
-                f"{dst.class_name}.{edge.to_port} ({type_name(in_port.type)})",
-                uid=dst.uid, port=edge.to_port, edge_index=index)
-        if in_port is not None and not in_port.multi:
-            key = (dst.uid, edge.to_port)
-            per_input[key] = per_input.get(key, 0) + 1
-            if per_input[key] == 2:
-                add(ERROR, "multiple_wires_to_input",
-                    f"{dst.class_name}.{edge.to_port} takes one wire; it has several", uid=dst.uid,
-                    port=edge.to_port, edge_index=index)
+    def run(self) -> Validation:
+        self._shapes()
+        self._params()
+        self._data_wires()
+        self._event_wires()
+        self._order()
+        self._settings()
+        return self.result
 
-    # pass 4: event edges
-    for index, edge in enumerate(doc.event_edges):
-        src, dst = doc.node(edge.from_node), doc.node(edge.to_node)
-        if src is None or dst is None:
-            missing = edge.from_node if src is None else edge.to_node
-            add(ERROR, "edge_unknown_node", f"event wire references node {missing!r}, which is not in the graph",
-                uid=missing, edge_index=index, plane="event")
-            continue
-        src_cls, dst_cls = cls_of.get(src.uid), cls_of.get(dst.uid)
-        out_ev = src_cls.EVENTS_OUT.get(edge.from_port) if src_cls else None
-        in_ev = dst_cls.EVENTS_IN.get(edge.to_port) if dst_cls else None
-        if src_cls and out_ev is None:
-            add(ERROR, "unknown_event_out", f"{src.class_name} has no event output {edge.from_port!r}",
-                uid=src.uid, port=edge.from_port, edge_index=index, plane="event")
-        if dst_cls and in_ev is None:
-            add(ERROR, "unknown_event_in", f"{dst.class_name} has no event input {edge.to_port!r}",
-                uid=dst.uid, port=edge.to_port, edge_index=index, plane="event")
-        if out_ev and in_ev and not issubclass(out_ev.payload, in_ev.payload):
-            add(ERROR, "event_incompatible",
-                f"{src.class_name}.{edge.from_port} ({out_ev.payload.__name__}) does not satisfy "
-                f"{dst.class_name}.{edge.to_port} ({in_ev.payload.__name__})",
-                uid=dst.uid, port=edge.to_port, edge_index=index, plane="event")
-    if doc.event_edges and _has_cycle([(e.from_node, e.to_node) for e in doc.event_edges]):
-        add(WARNING, "event_cycle", "the event wires form a cycle; the runtime stops a re-entrant loop", plane="event")
+    def add(self, severity: str, code: str, message: str, **where: Any) -> None:
+        self.result.issues.append(Issue(severity, code, message, **where))
 
-    # pass 5: acyclicity of the data plane
-    if len(seen) == len(doc.nodes):
+    def _shapes(self) -> None:
+        seen: set[str] = set()
+        for spec in self.doc.nodes:
+            if not UID_PATTERN.match(spec.uid or ""):
+                self.add(ERROR, "invalid_uid", f"node uid {spec.uid!r} is not of the form n_xxxxxx", uid=spec.uid)
+            if spec.uid in seen:
+                self.add(ERROR, "duplicate_uid", f"node uid {spec.uid!r} appears more than once", uid=spec.uid)
+            seen.add(spec.uid)
+            cls = self.classes.get(spec.class_name)
+            if cls is None:
+                self.add(ERROR, "unknown_class", f"no node class named {spec.class_name!r} is registered", uid=spec.uid)
+                continue
+            self.cls_of[spec.uid] = cls
+            try:
+                res = cls.resolve(dict(spec.params), self.env)
+            except Exception as exc:  # noqa: BLE001 -- the node's bug becomes an issue
+                self.add(ERROR, "shape_resolution_failed",
+                         f"{spec.class_name}.resolve raised {type(exc).__name__}: {exc}", uid=spec.uid)
+                continue
+            self.result.resolutions[spec.uid] = res
+            if res.state == "needs_choice":
+                self.add(ERROR, "needs_choice", res.message or f"{spec.class_name} needs a choice", uid=spec.uid, port=res.focus)
+            elif res.state == "error":
+                self.add(ERROR, "resolve_error", res.message or f"{spec.class_name} could not be resolved", uid=spec.uid,
+                         port=res.focus)
+            else:
+                self.shaped[spec.uid] = res
+        self.unique_uids = len(seen)
+
+    def _params(self) -> None:
+        for spec in self.doc.nodes:
+            res = self.shaped.get(spec.uid)
+            if res is None:
+                continue
+            fed = {e.to_port for e in self.doc.edges_to(spec.uid)}
+            for name, port in res.inputs.items():
+                provided = name in spec.params
+                if port.required and not provided and name not in fed:
+                    self.add(ERROR, "missing_required_input",
+                             f"{spec.class_name}.{name} is required but neither a param nor a wire provides it",
+                             uid=spec.uid, port=name)
+                if provided:
+                    self._literal(spec, name, port, spec.params[name])
+            for key in spec.params:
+                if key not in res.inputs:
+                    self.add(ERROR, "unknown_param", f"{spec.class_name} has no input named {key!r}", uid=spec.uid, port=key)
+
+    def _literal(self, spec: Any, name: str, port: Any, value: Any) -> None:
+        where = {"uid": spec.uid, "port": name}
+        label = f"{spec.class_name}.{name}"
+        if port.choices is not None and value is not None and value not in port.choices:
+            self.add(ERROR, "invalid_choice", f"{label}={value!r} is not one of {list(port.choices)}", **where)
+        if literal_mismatch(port.type, value):
+            self.add(ERROR, "type_mismatch", f"{label} expects {type_name(port.type)}, got {type(value).__name__}", **where)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if port.minimum is not None and value < port.minimum:
+                self.add(ERROR, "out_of_range", f"{label}={value} is below {port.minimum}", **where)
+            if port.maximum is not None and value > port.maximum:
+                self.add(ERROR, "out_of_range", f"{label}={value} is above {port.maximum}", **where)
+
+    def _data_wires(self) -> None:
+        wires_in: dict[tuple[str, str], int] = {}
+        for index, edge in enumerate(self.doc.edges):
+            src, dst = self.doc.node(edge.from_node), self.doc.node(edge.to_node)
+            if src is None or dst is None:
+                missing = edge.from_node if src is None else edge.to_node
+                self.add(ERROR, "edge_unknown_node", f"wire references node {missing!r}, which is not in the graph",
+                         uid=missing, edge_index=index)
+                continue
+            out_res, in_res = self.shaped.get(src.uid), self.shaped.get(dst.uid)
+            out_port = out_res.outputs.get(edge.from_port) if out_res else None
+            in_port = in_res.inputs.get(edge.to_port) if in_res else None
+            if out_res and out_port is None:
+                self.add(ERROR, "unknown_output_port", f"{src.class_name} has no output port {edge.from_port!r}",
+                         uid=src.uid, port=edge.from_port, edge_index=index)
+            if in_res and in_port is None:
+                self.add(ERROR, "unknown_input_port", f"{dst.class_name} has no input port {edge.to_port!r}",
+                         uid=dst.uid, port=edge.to_port, edge_index=index)
+            if out_port and in_port and not types_compatible(out_port.type, in_port.type):
+                self.add(ERROR, "incompatible_types",
+                         f"{src.class_name}.{edge.from_port} ({type_name(out_port.type)}) does not satisfy "
+                         f"{dst.class_name}.{edge.to_port} ({type_name(in_port.type)})",
+                         uid=dst.uid, port=edge.to_port, edge_index=index)
+            if in_port is not None and not in_port.multi:
+                key = (dst.uid, edge.to_port)
+                wires_in[key] = wires_in.get(key, 0) + 1
+                if wires_in[key] == 2:
+                    self.add(ERROR, "multiple_wires_to_input",
+                             f"{dst.class_name}.{edge.to_port} takes one wire; it has several", uid=dst.uid,
+                             port=edge.to_port, edge_index=index)
+
+    def _event_wires(self) -> None:
+        for index, edge in enumerate(self.doc.event_edges):
+            src, dst = self.doc.node(edge.from_node), self.doc.node(edge.to_node)
+            if src is None or dst is None:
+                missing = edge.from_node if src is None else edge.to_node
+                self.add(ERROR, "edge_unknown_node", f"event wire references node {missing!r}, which is not in the graph",
+                         uid=missing, edge_index=index, plane="event")
+                continue
+            src_cls, dst_cls = self.cls_of.get(src.uid), self.cls_of.get(dst.uid)
+            out_ev = src_cls.EVENTS_OUT.get(edge.from_port) if src_cls else None
+            in_ev = dst_cls.EVENTS_IN.get(edge.to_port) if dst_cls else None
+            if src_cls and out_ev is None:
+                self.add(ERROR, "unknown_event_out", f"{src.class_name} has no event output {edge.from_port!r}",
+                         uid=src.uid, port=edge.from_port, edge_index=index, plane="event")
+            if dst_cls and in_ev is None:
+                self.add(ERROR, "unknown_event_in", f"{dst.class_name} has no event input {edge.to_port!r}",
+                         uid=dst.uid, port=edge.to_port, edge_index=index, plane="event")
+            if out_ev and in_ev and not issubclass(out_ev.payload, in_ev.payload):
+                self.add(ERROR, "event_incompatible",
+                         f"{src.class_name}.{edge.from_port} ({out_ev.payload.__name__}) does not satisfy "
+                         f"{dst.class_name}.{edge.to_port} ({in_ev.payload.__name__})",
+                         uid=dst.uid, port=edge.to_port, edge_index=index, plane="event")
+        if self.doc.event_edges and _has_cycle([(e.from_node, e.to_node) for e in self.doc.event_edges]):
+            self.add(WARNING, "event_cycle", "the event wires form a cycle; the runtime stops a re-entrant loop", plane="event")
+
+    def _order(self) -> None:
+        """The build order: data wires decide, and events only break ties; skipped while uids repeat."""
+        doc = self.doc
+        if self.unique_uids != len(doc.nodes):
+            return
         try:
             data_order = topological_order(doc.uids, list(doc.edges))
         except ValueError as exc:
-            add(ERROR, "cycle", str(exc))
-        else:
-            result.order = data_order
-            if doc.event_edges:
-                # Prefer to build an event's subscriber before its emitter, so a handler is in place
-                # when the emitter first emits; data edges always win, so fall back when they disagree.
-                reverse = [Edge(e.to_node, e.to_port, e.from_node, e.from_port) for e in doc.event_edges]
-                try:
-                    result.order = topological_order(doc.uids, list(doc.edges) + reverse)
-                except ValueError:
-                    add(WARNING, "event_order",
-                        "event wires cannot all be satisfied by build order; an event emitted before its "
-                        "subscriber is built fails the run", plane="event")
+            self.add(ERROR, "cycle", str(exc))
+            return
+        self.result.order = data_order
+        if not doc.event_edges:
+            return
+        # Prefer to build an event's subscriber before its emitter, so a handler is in place when the emitter first
+        # emits; data edges always win, so fall back when they disagree.
+        reverse = [Edge(e.to_node, e.to_port, e.from_node, e.from_port) for e in doc.event_edges]
+        try:
+            self.result.order = topological_order(doc.uids, list(doc.edges) + reverse)
+        except ValueError:
+            self.add(WARNING, "event_order",
+                     "event wires cannot all be satisfied by build order; an event emitted before its "
+                     "subscriber is built fails the run", plane="event")
 
-    # pass 6: settings
-    for severity, key, message in settings.validate(doc.settings):
-        add(severity, "invalid_setting" if severity == ERROR else "unknown_setting", f"{key}: {message}", port=key)
-    for message in settings.errors:
-        add(WARNING, "settings_conflict", message)
-    return result
+    def _settings(self) -> None:
+        for severity, key, message in self.settings.validate(self.doc.settings):
+            self.add(severity, "invalid_setting" if severity == ERROR else "unknown_setting", f"{key}: {message}", port=key)
+        for message in self.settings.errors:
+            self.add(WARNING, "settings_conflict", message)
 
 
 def _has_cycle(pairs: list[tuple[str, str]]) -> bool:

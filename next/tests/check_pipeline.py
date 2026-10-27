@@ -22,7 +22,7 @@ from .. import starters
 from ..data.store import DatasetStore
 from ..engine.devices import Accelerator
 from ..engine.runtime.factory import make_runtime
-from ..run import NodeTrace
+from ..console import NodeTrace
 from ..graph import GraphDoc, GraphRunner, NodeRegistry
 from ..graph.node import Environment
 from ..nodes.conditioning import conditioner

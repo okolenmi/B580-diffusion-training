@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from ..devices import Accelerator, resolve_device
 from .determinism import Determinism
-from .memory import MemoryPolicy, ResidencyManager
+from .memory import ResidencyManager
+from .policy import MemoryPolicy
 
 
 @dataclass

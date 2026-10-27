@@ -123,12 +123,13 @@ class SuiteBook:
         def run(name, *args):
             return Scenario(name, args)
         int8 = ("--param", "adapter.base_precision=int8")
+        splitting = ("--set", "runtime.deterministic=false")  # the runs that test a memory cap need steps that may split; a deterministic run refuses to
         scenarios = [
             run("probe and alignment", "--set", "trainer.probe_every=10", "--set", "trainer.probe_alignment=true", "--set", "trainer.probe_items=4"),
             run("blend max 0.5", "--set", "blend.strength_max=0.5"),
             run("blend fixed 0.5", "--set", "blend.strength_min=0.5", "--set", "blend.strength_max=0.5", "--persist-conditioning"),
-            run("cap 9216 no prewarm", "--set", "memory.vram_max_mb=9216", "--set", "conditioning.prewarm=false"),
-            run("three settings", "--set", "memory.vram_max_mb=10240", "--set", "trainer.graph=true", "--set", "blend.strength_max=0.5"),
+            run("cap 9216 no prewarm", "--set", "memory.vram_max_mb=9216", "--set", "conditioning.prewarm=false", *splitting),
+            run("three settings", "--set", "memory.vram_max_mb=10240", "--set", "trainer.graph=true", "--set", "blend.strength_max=0.5", *splitting),
             run("setting typo", "--set", "trainr.graph=true"),
             run("pad zero", "--pad-fill", "zero"),
             run("pad mirror", "--pad-fill", "mirror"),

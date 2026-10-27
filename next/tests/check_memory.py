@@ -256,15 +256,18 @@ def graph_room():
     check(m.graph_fits(500), "without a cap or a plan there is always room for a graph")
     m.start()
     check(m.graph_fits(500), "with a cap but nothing planned yet there is room")
-    m._planned = (5000.0, 100)
+    m._largest = (5000.0, 100)
     m.planner.predicted_peak_mb = lambda floor, units: m.budget_mb() - 300.0
     check(m.graph_fits(200) and not m.graph_fits(400), "a graph is refused when the cap would fall below the largest planned step")
     m.planner = StepPlanner()
     m.planner.learn(5000.0, 5600.0, 1000)
-    m._planned = (5000.0, 1000)
+    m._largest = (5000.0, 1000)
     check(m.graph_fits(0.0, 1000) and not m.graph_fits(0.0, 100000),
           "the pool keeps its largest step's activations, which eager steps cannot use, so a big enough pool is refused")
     check(m.graph_fits(0.0, 1000) == m.graph_fits(0.0) or not m.graph_fits(0.0, 1000), "a pool never makes room")
+    m._largest, m._planned = None, None
+    m.expect(1000)
+    check(m.graph_fits(0.0, 1000) and not m.graph_fits(0.0, 100000), "the largest step known up front is enough, no step has to be planned first")
 
 
 def out_of_memory_retry():
@@ -564,6 +567,19 @@ def deterministic_mode():
 
     check(run_with(True) is None and run_with(False) is not None,
           "a deterministic run reports an out-of-memory step instead of re-running it in chunks")
+
+    def unsplit_notes(limit_mb):
+        with tempfile.TemporaryDirectory() as raw:
+            m = manager(FakeDevice(ours=5000), limit_mb=limit_mb, strict=False)
+            m.start()
+            m.planner.learn(5000.0, 9000.0, 1000)  # what an earlier measurement would have said: 4 MB a pixel
+            trainer, *_ = rig(Path(raw), steps=1, residency=m, plan_chunks=False)
+            trainer.emit = lambda e: None
+            trainer.run()
+            return [t for t in m.trace if t["event"] == "unsplit_over_budget"]
+
+    check(unsplit_notes(5200) and not unsplit_notes(11000),
+          "a run that cannot split says before the first step when its largest step is predicted over the budget")
 
 
 def training():

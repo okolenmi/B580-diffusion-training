@@ -22,18 +22,26 @@ class MemoryProbe:
 
     def __init__(self, residency: ResidencyManager | None, optimizer, pipeline: Pipeline, batches: Iterable[dict],
                  fetch: FetchBatch, device, task: Callable[[str], AbstractContextManager],
-                 density: tuple | None = None, placement: tuple | None = None) -> None:
+                 density: tuple | None = None, placement: tuple | None = None, splits: bool = True) -> None:
         self.residency, self.optimizer, self.pipeline = residency, optimizer, pipeline
         self.batches, self.fetch, self.device, self.task = batches, fetch, device, task
         self.density = density  # (CheckpointDensity, TrainableDenoiser) or None
         self.placement = placement  # (BlockPlacement, TrainableDenoiser) or None
+        self.splits = splits  # whether a step too big for the budget can run as chunks
 
     def run(self) -> None:
         make = getattr(self.batches, "probe_batch", None)
         if self.residency is None or make is None:
             return
-        like = self.fetch.peek()
         largest = self.batches.largest_units()
+        self._choose(make, largest)
+        self.residency.expect(largest)
+        predicted, budget = self.residency.largest_peak_mb(), self.residency.budget_mb()
+        if not self.splits and predicted is not None and budget is not None and predicted > budget:
+            self.residency.note("unsplit_over_budget", predicted_mb=round(predicted), budget_mb=round(budget))
+
+    def _choose(self, make: Callable, largest: Any) -> None:
+        like = self.fetch.peek()
         sizes = [1] + ([min(self.batches.max_batch_size(), self.SAMPLES)] if self.batches.max_batch_size() > 1 else [])
         probes = [make(like, count) for count in sizes]  # two sizes of the same shape: the slope is what a sample costs, the rest is fixed
         units = probes[-1]["x_t"].shape[0] * probes[-1]["x_t"].shape[-2] * probes[-1]["x_t"].shape[-1]

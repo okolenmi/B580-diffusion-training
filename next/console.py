@@ -100,6 +100,9 @@ class Console:
             ours = "" if frame.get("ours_outside_mb") is None else f" (this process {frame['ours_outside_mb']}, other programs {frame['other_programs_mb']})"
             print(f"memory budget: the allocator may hold {frame['cap_mb']} MB = {frame['limit_mb']} limit - {frame['outside_mb']} outside it{ours}"
                   f" - {frame['margin_mb']} margin ({frame['why']})", flush=True)
+        elif frame["event"] == "unsplit_over_budget":
+            print(f"memory: the largest step is predicted to peak at {frame['predicted_mb']} MB, over the {frame['budget_mb']} MB the allocator may hold, "
+                  f"and deterministic mode runs steps whole: expect an out-of-memory error there (raise memory.vram_max_mb or lower the batch size)", flush=True)
         else:
             print(f"memory: {json.dumps(frame, default=str)}", flush=True)
 

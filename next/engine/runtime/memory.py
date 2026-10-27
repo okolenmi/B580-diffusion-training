@@ -57,6 +57,7 @@ class ResidencyManager:
         self.trace: list[dict] = []
         self.planner = StepPlanner()
         self._planned: tuple[float, int] | None = None  # live memory and pixel count the coming step was planned with
+        self._largest: tuple[float, int] | None = None  # the same for the largest step seen or expected so far; never cleared
         self._started = False
 
     @property
@@ -139,23 +140,34 @@ class ResidencyManager:
 
     # -- planning the step --------------------------------------------------------------------------------------
 
+    def expect(self, units: int) -> None:
+        """The largest step the run will make is ``units`` latent pixels (known from the data before any step runs)."""
+        floor = self.accelerator.memory().get("allocated", 0.0)
+        self._largest = (floor, max(units, self._largest[1])) if self._largest else (floor, units)
+
+    def largest_peak_mb(self) -> float | None:
+        """What the largest step is predicted to peak at, None until something has been measured."""
+        return None if self._largest is None else self.planner.predicted_peak_mb(*self._largest)
+
     def graph_fits(self, cost_mb: float, units: int = 0) -> bool:
         """Can another captured graph be added? It takes ``cost_mb`` outside the allocator, and the pool the graphs share
         keeps the activations of its largest step (``units`` latent pixels) for itself: eager steps cannot use that
-        memory even while it is free. The cap must still hold the largest step planned so far on top of both."""
+        memory even while it is free. The cap must still hold the largest step of the run on top of both, because
+        every shape runs eagerly until its own graph exists."""
         budget = self.budget_mb()
-        if budget is None or not self._planned:
+        need = self.largest_peak_mb()
+        if budget is None or need is None:
             return True
-        floor = self._planned[0]
-        need = self.planner.predicted_peak_mb(*self._planned)
+        floor = self._largest[0]
         pool = max((self.planner.predicted_peak_mb(floor, units) or floor) - floor, 0.0) if units else 0.0
-        return need is None or budget - cost_mb - pool >= need
+        return budget - cost_mb - pool >= need
 
     def plan(self, count: int, units_per_sample: int) -> list[int]:
         """Sizes of the chunks a batch of ``count`` samples (each ``units_per_sample`` latent pixels) runs as."""
         floor = self.accelerator.memory().get("allocated", 0.0)
         sizes = self.planner.chunks(count, units_per_sample, floor, self.budget_mb())
         units = max(sizes) * units_per_sample
+        self.expect(units)
         self._planned = (floor, max(units, self._planned[1])) if self._planned else (floor, units)
         if len(sizes) > 1:
             self._note("split", samples=count, chunks=sizes, predicted_mb=round(self.planner.predicted_peak_mb(floor, count * units_per_sample) or 0),

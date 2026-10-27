@@ -73,7 +73,7 @@ class Trainer:
             fetch = Timed(fetch, synchronize or (lambda: None))
         self._fetch_phase = fetch
         self.pipeline = Pipeline(phases)
-        self._memory_probe = MemoryProbe(residency, optimizer, self.pipeline, batches, self._fetch, device, self._task, density, placement)
+        self._memory_probe = MemoryProbe(residency, optimizer, self.pipeline, batches, self._fetch, device, self._task, density, placement, splits=plan_chunks)
 
     def run(self, start: int = 0) -> RunResult:
         if self.steps:

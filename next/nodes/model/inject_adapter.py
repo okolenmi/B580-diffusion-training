@@ -51,10 +51,10 @@ class InjectAdapterNode(Node):
         "rank": Port("rank", int, required=False, default=16, minimum=1, group="adapter"),
         "alpha": Port("alpha", float, required=False, default=16.0, minimum=0.0, group="adapter"),
         "dropout": Port("dropout", float, required=False, default=0.0, minimum=0.0, maximum=0.9, step=0.01, group="adapter"),
-        "lora_compute": Port("lora_compute", str, required=False, default="float32", choices=("float32", "activation"), group="adapter",
-                             doc="float32: the low-rank path runs in float32 (a float32 copy of the input, a float32 update cast back and added, per layer). "
-                                 "activation: it runs in the activations' dtype (bf16) with the add fused into the matmul: fewer and smaller kernels, "
-                                 "the low-rank intermediate and the factors' gradient are rounded to bf16. LoRA only."),
+        "lora_compute": Port("lora_compute", str, required=False, default="activation", choices=("float32", "activation"), group="adapter",
+                             doc="activation: the low-rank path runs in the activations' dtype (bf16) with the add fused into the matmul: fewer and smaller kernels, "
+                                 "the low-rank intermediate and the factors' gradient are rounded to bf16 (the factors stay float32). "
+                                 "float32: it runs in float32 (a float32 copy of the input, a float32 update cast back and added, per layer). DoRA always uses float32."),
         "scaling": Port("scaling", str, required=False, default="classic", choices=SCALING, group="adapter",
                         doc="classic: alpha / rank. rank_stabilized: alpha / sqrt(rank)."),
         "groups": Port("groups", str, required=False, default="", group="targets",
@@ -130,10 +130,8 @@ class InjectAdapterNode(Node):
         for merge in part.merges:
             with self.context.task(f"Merging {merge.file}"):
                 self._merge(family, denoiser, merge)
-        kind, compute = inputs.get("kind") or "lora", inputs.get("lora_compute") or "float32"
-        if compute == "activation" and kind != "lora":
-            self.context.report("warning", {"node": self.uid, "message": f"lora_compute=activation applies to plain LoRA only; {kind} keeps float32"})
-            compute = "float32"
+        kind = inputs.get("kind") or "lora"
+        compute = (inputs.get("lora_compute") or "activation") if kind == "lora" else "float32"
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=kind,
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,

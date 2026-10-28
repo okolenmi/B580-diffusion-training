@@ -154,7 +154,16 @@ class ComputeDtype(ModelCheck):
 
 class ChunkedGradients(ModelCheck):
     name = "chunks"
-    purpose = "a batch of two run whole, and as two batches of one with the gradients added (what memory splitting does)"
+    purpose = "a batch of two run whole, and as two batches of one with the gradients added (what memory splitting does); where they differ, whether the batch position or the sample causes it"
+
+    FIELDS = ("x", "t", "context", "adm", "dy")
+
+    @classmethod
+    def pick(cls, inputs, rows: list[int]):
+        part = copy.copy(inputs)
+        for name in cls.FIELDS:
+            setattr(part, name, getattr(inputs, name)[rows])
+        return part
 
     def run(self, ctx) -> list[Finding]:
         subject = ctx.subject
@@ -163,17 +172,27 @@ class ChunkedGradients(ModelCheck):
         for label, scope in (("default kernels", contextlib.nullcontext), ("math attention", lambda: sdpa_kernel(SDPBackend.MATH))):
             with scope():
                 whole = subject.evaluate(whole_inputs)
-                parts = []
-                for i in range(2):
-                    part = copy.copy(whole_inputs)
-                    for name in ("x", "t", "context", "adm", "dy"):
-                        setattr(part, name, getattr(whole_inputs, name)[i:i + 1])
-                    parts.append(subject.evaluate(part))
+                parts = [subject.evaluate(self.pick(whole_inputs, [i])) for i in range(2)]
             summed = Snapshot(torch.cat([p.out for p in parts]), torch.cat([p.dx for p in parts]),
                               {k: parts[0].grads[k] + parts[1].grads[k] for k in parts[0].grads})
             per_sample = ", ".join(f"sample {i}: output {relative(summed.out[i], whole.out[i]):.1e}, input gradient {relative(summed.dx[i], whole.dx[i]):.1e}" for i in range(2))
             found.append(self.compare(ctx, f"two chunks of one against the whole batch, {label}", summed, whole, f"; {per_sample}"))
-        return found
+        return found + [self._diagnose(subject, whole_inputs, whole, parts)]
+
+    def _diagnose(self, subject, inputs, whole: Snapshot, parts: list[Snapshot]) -> Finding:
+        """Sample 1 four ways: alone, at position 1 of the batch, at position 0 of the swapped batch, and alone with a nudged input."""
+        swapped = subject.evaluate(self.pick(inputs, [1, 0]))
+        alone = self.pick(inputs, [1])
+        nudged = copy.copy(alone)
+        nudged.x = (alone.x.float() * (1 + BF16_STEP)).to(alone.x.dtype)
+        moved = subject.evaluate(nudged)
+
+        def pair(a: Snapshot, i: int, b: Snapshot, j: int) -> str:
+            return f"output {relative(a.out[i], b.out[j]):.1e} input gradient {relative(a.dx[i], b.dx[j]):.1e}"
+
+        detail = (f"sample 1 alone against at position 1 of the batch: {pair(parts[1], 0, whole, 1)}; alone against at position 0 of the swapped batch: {pair(parts[1], 0, swapped, 0)}; "
+                  f"position 1 against position 0 of the swapped batch: {pair(whole, 1, swapped, 0)}; the reference for this sample alone (input 1/256 larger): {pair(moved, 0, parts[1], 0)}")
+        return self.measured("sample 1, by batch position", detail, {})
 
 
 class CheckpointingEquality(ModelCheck):

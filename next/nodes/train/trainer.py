@@ -78,7 +78,7 @@ class DiffusionTrainerNode(Node):
                                 doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
                                     "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
                                     "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
-        "fused_geglu": Port("fused_geglu", bool, required=False, default=False, group="speed",
+        "fused_geglu": Port("fused_geglu", bool, required=False, default=True, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
         "graph_shapes": Port("graph_shapes", int, required=False, default=8, minimum=1, group="speed", visible_when=("graph", True),

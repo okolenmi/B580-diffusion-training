@@ -52,6 +52,26 @@ class TransferRoundtrip(NumericCheck):
                     f = self.exact(f"{str(dtype).split('.')[-1]} {size} MB {'pinned' if pinned else 'pageable'}", bad, n * self.REPEATS)
                     f.detail += f" ({gbps:.1f} GB/s both ways)"
                     found.append(f)
+        return found + self._long_reductions(ctx)
+
+    LONG = ((1024, 10240, 1280), (4096, 10240, 1280), (1024, 1280, 10240), (4096, 1280, 5120))  # rows x reduction x columns: gemms of a feed-forward block, forward and backward to its input
+
+    def _long_reductions(self, ctx) -> list[Finding]:
+        """Gemms with a long reduction axis: a library may split it across work groups and add the parts atomically, which is not repeatable."""
+        from .model import deterministic_algorithms
+
+        gen = torch.Generator().manual_seed(4)
+        found = []
+        for m, k, n in self.LONG:
+            a = (torch.randn(m, k, generator=gen) * 0.5).to(ctx.device, torch.bfloat16)
+            b = (torch.randn(k, n, generator=gen) * 0.5).to(ctx.device, torch.bfloat16)
+            for deterministic in (False, True):
+                with deterministic_algorithms(deterministic):
+                    first = (a @ b).clone()
+                    bad = sum(differing(a @ b, first) > 0 for _ in range(self.REPEATS))
+                suffix = ", deterministic algorithms" if deterministic else ""
+                found.append(self.measured(f"gemm bf16 {m}x{k}x{n}{suffix}", f"{bad} of {self.REPEATS} results differ from the first launch",
+                                           {"differing": bad, "total": self.REPEATS}, warn_if=bad > 0 and deterministic))
         return found
 
 

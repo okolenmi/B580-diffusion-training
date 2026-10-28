@@ -60,9 +60,9 @@ class SuiteBook:
             StepTimeWithin("dense gradient path no slower than int8", (INT8_G, "int8 dx-int8 graph"), 1.02, skip, reason="measured: the int8 input gradient is 4% slower in a graph, so the default stays dense"),
             StepTimeWithin("math_bf16 attention beats math in a graph", ("native graph attention-math_bf16", NATIVE_G), 1.0, skip, reason="TESTING 28"),
             StepTimeWithin("chunked_bf16 attention within 25% of math in a graph", ("native graph attention-chunked_bf16", NATIVE_G), 1.25, skip, reason="measured: 15% slower; it exists to save memory at large sizes, not time"),
-            StepTimeWithin("lora in the activation dtype not slower than float32 (eager)", ("native eager lora-activation", NATIVE), 1.04, skip, reason="TESTING 31; eager steps vary by about 3% between identical runs"),
-            StepTimeWithin("lora in the activation dtype not slower than float32 (math_bf16 graph)", ("native graph attention-math_bf16 lora-activation", "native graph attention-math_bf16"), 1.04, skip, reason="TESTING 31; graph steps vary by about 5% between identical runs"),
-            LossCurveClose("lora activation loss close to float32 (eager)", ("native eager lora-activation", NATIVE), 0.05, 10, reason="TESTING 31: the low-rank intermediate and factor gradients are rounded to bf16"),
+            StepTimeWithin("lora in the activation dtype not slower than float32 (eager)", ("native eager lora-activation", NATIVE), 1.04, skip, reason="eager steps vary by about 3% between identical runs"),
+            StepTimeWithin("lora in the activation dtype not slower than float32 (math_bf16 graph)", ("native graph attention-math_bf16 lora-activation", "native graph attention-math_bf16"), 1.04, skip, reason="graph steps vary by about 5% between identical runs"),
+            LossCurveClose("lora activation loss close to float32 (eager)", ("native eager lora-activation", NATIVE), 0.05, 10, reason="the low-rank intermediate and factor gradients are rounded to bf16"),
             LossCurveClose("int8 loss close to native", (INT8, NATIVE), 0.15, 10, reason="the int8 network is not the native one; a wide band catches divergence, not noise"),
             LossCurveClose("chunked_bf16 loss close to math", ("native graph attention-chunked_bf16", NATIVE_G), 0.10, 10, reason="TESTING 28: scores rounded to bf16"),
         ]

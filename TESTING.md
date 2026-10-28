@@ -66,31 +66,12 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 31. Pictures for the faster defaults
-`adapter.lora_compute=activation` and `trainer.fused_geglu=true` passed every number (steps 8% to 40% faster, loss over the last 10 steps the same to four digits; with the baselines pinned to float32 LoRA the activation dtype is 10% faster eager and 24% faster in a math_bf16 graph). They become defaults after a look at pictures. Two LoRAs are enough: today's defaults against both options together (the options are judged as one package, because that is what would become the default; fused GEGLU is checked against the eager result when it starts, so activation is the one that can change a picture).
-
-Same command for both, with your paths; `--steps 600` or more, at the resolution you train at if the time allows (512 is fine for a first look). `--set runtime.deterministic=true` makes the default run repeatable, so any difference below comes from the options and not from the run.
+## 37. Numerics: two follow-up checks
+The first two runs of `python -m next.accept numerics` found nothing wrong (every bit-exact check passes; differences between modes are bf16 rounding; `runtime.deterministic=true` makes the backward repeatable). Two open questions remain, both quick (a few minutes):
 ```
-python -m next.run sdxl-lora --models <models> --datasets <datasets> --dataset <name> --file <checkpoint> --output <output> --resolution 512 --batch 2 \
-  --steps 600 --save-every 600 --set runtime.deterministic=true --name lora_default
-python -m next.run sdxl-lora ...the same arguments... --name lora_fast --param adapter.lora_compute=activation --param trainer.fused_geglu=true
+python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --resolution 256 --only repeat chunks --out numerics2
 ```
-Add nothing else to either (no graph, no int8, so the only difference is the two options). Optional third run for scale: the default again with `--set seed.base=1 --name lora_other_seed` (a different noise and order, which is the kind of difference you would never notice as a flaw).
-
-Then in ComfyUI: the same checkpoint, the same 4 or more prompts (some from your dataset's style, some off it), 3 seeds each, the same sampler and strength, once per LoRA. Look at the pairs side by side and answer: can you tell `lora_default` from `lora_fast`, and is the gap larger than the one to `lora_other_seed`? Also send both console loss lines at steps 100, 300, 600.
-Pass: the pairs look alike (differences of the seed-change kind). Fail: describe what changed (washed out, noisier, style weaker), and I will keep the defaults and look at which option causes it (one more LoRA with `activation` only).
-
-## 37. Numerics of the device, the moves and the adapter path
-Why: two LoRAs trained a minute apart differ by chance, so what matters is whether anything we do adds a *systematic* error, or the numbers are not repeatable. This checks the numbers directly, without training. About 10 minutes; needs about 3 GB of free device memory besides the checkpoint's and about 5 GB of free host memory (`merge-effect` keeps a copy of the adapted weights while it merges).
-```
-python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --lora <one of your trained LoRA files> --resolution 256 --out numerics
-```
-Send `numerics/numerics.md` (and `numerics.json` if it is small). A check that crashes is reported as a FAIL with its traceback, so the run always finishes.
-Pass: no FAIL. A FAIL means a move or a repeat is not bit-exact (host and back, memory pattern, repeated forward output, optimizer or weights offload, graph replay, adapter file) and is the real finding. The rest I read myself.
-
-## 38. Does the merge explain the pictures? (ComfyUI precision)
-`numerics` item 37 measured that a trained LoRA merged into bf16 weights loses a large part of its update (the update is about as small as the weight's rounding step), while running it beside the weights, as the trainer does, loses nothing. ComfyUI merges a LoRA into the model's weights when it loads it, in the dtype the model runs in. So the same LoRA can look different there than in training, and by a different amount per LoRA. The test: the same LoRA files (`lora_default`, `lora_fast`), the same prompts and seeds, strengths 0.5 and 1.0, with ComfyUI started with `--fp16-unet` (finer rounding: about 8 times smaller loss) and then with `--bf16-unet`; `--fp32-unet` as well if it fits in memory (no loss at all). Send the pictures side by side per dtype.
-Pass (the merge is the cause): the fp16/fp32 pictures look like what the training loss promised (less destroyed at 1.0, the two LoRAs closer to each other) and the bf16 ones are noisier or weaker. If all dtypes look alike the merge is not the cause and I look elsewhere.
+Send `numerics2/numerics.md`. `repeat` now includes gemms with a long reduction axis (the feed-forward backward), with and without deterministic algorithms: it shows which kernel makes the backward differ between identical runs. `chunks` now shows whether the 9x larger input-gradient difference of a split batch comes from the sample or from its position in the batch.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

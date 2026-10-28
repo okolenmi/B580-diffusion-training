@@ -29,7 +29,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
               accumulation: int = 1, steps: int = 1000, epochs: int = 0, save_every_epoch: int = 0, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
               persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, fill: str = "zero", time_balance: str = "off", balance_sampling: float = 0.0,
-              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
+              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", tag_swap: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
     ``source`` replaces Load Model (tests hand in a stand-in); ``overrides`` sets extra parameters by node name.
@@ -42,7 +42,9 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("captions", "CaptionsNode")
     if auto_caption:  # fills empty captions in the library first, then the prompts read them
         b.add("autocaption", "AutoCaptionNode", dataset=dataset)
-    b.add("tag_swap", "TagSwapNode")
+    if tag_swap:  # reduces every caption to one random tag per epoch: an experiment, not a default
+        b.add("tag_swap", "TagSwapNode")
+    prompts = "tag_swap" if tag_swap else "captions"
     b.add("buckets", "BucketerNode", multiple=4, max_shapes=max_shapes, batch_area=batch_area, pack=pack, fill=fill, keep_incomplete=True)  # 32 px steps, padded and masked
     b.add("noiser", "NoiserNode")
     b.add("batcher", "BatcherNode", batch_size=batch_size)
@@ -59,12 +61,14 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("saver", "SaveAdapterNode", directory=output, name=name)
     captioned = [("images", "images", "autocaption", "images"), ("autocaption", "images", "captions", "images")] if auto_caption \
         else [("images", "images", "captions", "images")]
+    if tag_swap:
+        b.wires.append(("captions", "prompts", "tag_swap", "prompts"))
     b.wires += [*captioned, ("model", "vae", "latents", "vae"), ("images", "images", "latents", "images"),
-                ("captions", "prompts", "tag_swap", "prompts"), ("latents", "latents", "buckets", "latents"),
+                ("latents", "latents", "buckets", "latents"),
                 ("model", "denoiser", "noiser", "denoiser"), ("latents", "latents", "batcher", "latents"),
-                ("tag_swap", "prompts", "batcher", "prompts"), ("noiser", "noiser", "batcher", "noiser"),
+                (prompts, "prompts", "batcher", "prompts"), ("noiser", "noiser", "batcher", "noiser"),
                 ("buckets", "buckets", "batcher", "buckets"), ("model", "clip_l", "conditioner", "encoders"),
-                ("model", "clip_g", "conditioner", "encoders"), ("tag_swap", "prompts", "conditioner", "prompts"),
+                ("model", "clip_g", "conditioner", "encoders"), (prompts, "prompts", "conditioner", "prompts"),
                 ("model", "denoiser", "adapter", "denoiser"), ("adapter", "model", "optimizer", "model"),
                 ("batcher", "batches", "trainer", "batches"), ("adapter", "model", "trainer", "model"),
                 ("conditioner", "conditioner", "blend", "conditioner"), ("blend", "conditioner", "trainer", "conditioner"), ("optimizer", "optimizer", "trainer", "optimizer"),

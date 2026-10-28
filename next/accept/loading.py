@@ -23,3 +23,9 @@ def load_denoiser(models: str, file: str, device: str, dtype=torch.bfloat16, sco
     path = str(library.resolve(scope, file))
     parts = {p.role: make_part(found.family_id, path, p) for p in found.parts}
     return get_family(found.family_id).load_denoiser(parts["denoiser"], device=device, dtype=dtype)
+
+
+def checkpoint_path(models: str, file: str, scope: str = "checkpoints") -> str:
+    """The path of ``file`` the way ``load_denoiser`` resolves it."""
+    root = Path(models) / scope
+    return str(ModelLibrary({scope: [root]} if root.is_dir() else {scope: [models]}).resolve(scope, file))

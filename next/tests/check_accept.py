@@ -384,5 +384,39 @@ def numerics_suite() -> None:
     ctx.release()
 
 
+def training_signal_instruments() -> None:
+    """The prompt audit reads captions the way the prompt nodes do; the LoRA map's low-rank arithmetic equals the full matrices; Tag Swap is opt-in in the starter."""
+    from ..accept.lora_map import LoraMap, Update, agreement
+    from ..accept.prompts import PromptAudit
+    from ..data.library import ImageSet
+    from ..starters import sdxl_lora
+
+    ids = ("a", "b", "c", "d")
+    images = ImageSet(ids, {i: i for i in ids}, {i: (8, 8) for i in ids},
+                      {"text": {"a": "1girl, solo, smile", "b": "", "c": "a house. oil on canvas, warm colors"}, "tags": {"b": "cat, indoor"}})
+    plain = PromptAudit(images, tag_swap=False, epochs=2).tables()
+    swapped = PromptAudit(images, tag_swap=True, epochs=3).tables()
+    check(plain[0][1] == {"a": "1girl, solo, smile", "b": "", "c": "a house. oil on canvas, warm colors", "d": ""}, "without Tag Swap the prompts are the stored captions")
+    check(all(len(p["a"].split(", ")) == 1 for _, p in swapped) and len({p["a"] for _, p in swapped}) >= 2, "Tag Swap reduces a caption to one tag, a different one in some epochs")
+    report = PromptAudit(images, tag_swap=False, epochs=1).markdown()
+    check("2 of 4 images have an empty `text` caption" in report and "channel(s) tags" in report, "the audit counts empty captions and says which other channel has text for them")
+
+    g = torch.Generator().manual_seed(0)
+    a = Update("x", torch.randn(7, 3, generator=g).double(), torch.randn(3, 5, generator=g).double(), 0.5)
+    b = Update("x", torch.randn(7, 3, generator=g).double(), torch.randn(3, 5, generator=g).double(), 2.0)
+    full = lambda u: u.scale * u.up @ u.down  # noqa: E731
+    check(abs(a.energy() - float(full(a).pow(2).sum())) < 1e-9 and abs(a.dot(b) - float((full(a) * full(b)).sum())) < 1e-9, "update energy and dot product from the small factors equal the full matrices")
+    first, second = "lora_unet_input_blocks_1_1_transformer_blocks_0_attn1_to_q", "lora_unet_output_blocks_4_1_transformer_blocks_0_ff_net_2"
+    names = {first: Update(first, a.up, a.down, a.scale), second: Update(second, b.up, b.down, b.scale)}
+    table = LoraMap(names).markdown("t")
+    check("| down | 1 |" in table and "| up | 1 |" in table and "feed-forward" in table and "self attention" in table, "the map groups layers by part and kind")
+    check("cosine is 1.000" in agreement(names, names, ("a", "a")), "an adapter agrees with itself")
+
+    def nodes(**kw):
+        return {n.class_name for n in sdxl_lora(model="m.safetensors", dataset="d", output="o", **kw).nodes}
+
+    check("TagSwapNode" not in nodes() and "TagSwapNode" in nodes(tag_swap=True), "the starter has Tag Swap only when asked")
+
+
 if __name__ == "__main__":
-    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids, numerics_suite)
+    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids, numerics_suite, training_signal_instruments)

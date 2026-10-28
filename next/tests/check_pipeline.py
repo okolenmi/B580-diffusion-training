@@ -89,7 +89,7 @@ def full_run():
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
             validation, outcome, trace = execute(store, graph(tmp, steps=4))
-        check(len(printed.getvalue().strip().splitlines()) == 17, "the command line reports every finished node")
+        check(len(printed.getvalue().strip().splitlines()) == 16, "the command line reports every finished node")
         check(validation.ok, f"the graph validates ({[i.message for i in validation.errors][:2]})")
         check(outcome.ok and not outcome.stopped, f"the run finishes ({outcome.error})")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))

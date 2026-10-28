@@ -73,6 +73,18 @@ python -m next.accept numerics --device xpu --models <models> --file <checkpoint
 ```
 Send `numerics3/numerics.md`. `repeat` now includes gemms with a long reduction axis (the feed-forward backward), with and without deterministic algorithms; if one differs between launches it is the kernel that makes the backward vary when `runtime.deterministic` is off.
 
+## 38. What does each image train with, and where did the LoRA change?
+No hardware needed, a minute each. Until now the starter graph always applied Tag Swap (every caption cut to one random tag per epoch); it is now off unless `--tag-swap` is given, so **every LoRA you trained so far had it on**. First see what your set really feeds (paths as in your other commands):
+```
+python -m next.accept prompts --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --epochs 3 --tag-swap --out prompts-swap.md
+python -m next.accept prompts --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --epochs 3 --out prompts.md
+```
+Send both. Then where your LoRAs changed the network, and how much two LoRAs trained from different seeds agree (use the four you have: default and fast, both seed pairs):
+```
+python -m next.accept lora-map --lora <default s1> <fast s1> <default s2> <fast s2> --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --out lora-map.md
+```
+Send `lora-map.md`. After that, one pair of trainings: today's command with and without `--tag-swap` (everything else equal, `--set runtime.deterministic=true`), looked at the way item 31 was, at strength 1.0 and 0.5.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

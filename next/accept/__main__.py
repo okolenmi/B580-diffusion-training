@@ -68,6 +68,38 @@ def numerics(args) -> int:
     return 1 if counts(findings)["FAIL"] else 0
 
 
+def prompts(args) -> int:
+    from ..data.store import DatasetStore
+    from .prompts import PromptAudit
+
+    library = DatasetStore(args.datasets).library(args.dataset)
+    try:
+        images = library.snapshot(args.set)
+    finally:
+        library.close()
+    text = PromptAudit(images, args.channel, tag_swap=args.tag_swap, epochs=args.epochs, seed=args.seed).markdown()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
+def lora_map(args) -> int:
+    from .lora_map import lora_map_report
+
+    checkpoint = None
+    if args.file:
+        from .loading import checkpoint_path
+        checkpoint = checkpoint_path(args.models, args.file)
+    text = lora_map_report(args.lora, checkpoint)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m next.accept", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -95,6 +127,20 @@ def main(argv: list[str] | None = None) -> int:
     num.add_argument("--memory-mb", type=int, default=1024, help="size of the device memory pattern test")
     num.add_argument("--seed", type=int, default=0)
     num.add_argument("--out", default="numerics")
+    pr = sub.add_parser("prompts", help="what text every image trains with: stored captions by channel, empty ones, and the prompts per epoch")
+    pr.add_argument("--datasets", required=True)
+    pr.add_argument("--dataset", required=True)
+    pr.add_argument("--set", default="all")
+    pr.add_argument("--channel", default="text", choices=("text", "tags", "desc"))
+    pr.add_argument("--epochs", type=int, default=3)
+    pr.add_argument("--tag-swap", action="store_true", help="show the prompts with Tag Swap (the --tag-swap option of the trainer)")
+    pr.add_argument("--seed", type=int, default=0)
+    pr.add_argument("--out", default="prompts.md")
+    lm = sub.add_parser("lora-map", help="where trained adapters changed the network (by part, kind of layer and block), and how two adapters agree; reads files only, runs on the CPU")
+    lm.add_argument("--lora", nargs="+", required=True, help="one or more adapter files; every pair is compared")
+    lm.add_argument("--models", help="with --file: sizes of the updates relative to the checkpoint's weights")
+    lm.add_argument("--file")
+    lm.add_argument("--out", default="lora-map.md")
     pad = sub.add_parser("padding-sheet", help="a picture of what zero and mirror padding put around samples of a folder of images")
     pad.add_argument("--images", required=True)
     pad.add_argument("--canvas", default="64x64", help="canvas HxW in the units shown (pixels here, latent size times 8 for a real bucket)")
@@ -126,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "numerics":
         return numerics(args)
+    if args.command == "lora-map":
+        return lora_map(args)
+    if args.command == "prompts":
+        return prompts(args)
     if args.command == "padding-sheet":
         from PIL import Image
 

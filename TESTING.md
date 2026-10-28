@@ -66,12 +66,12 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 37. Numerics: two follow-up checks
-The first two runs of `python -m next.accept numerics` found nothing wrong (every bit-exact check passes; differences between modes are bf16 rounding; `runtime.deterministic=true` makes the backward repeatable). Two open questions remain, both quick (a few minutes):
+## 37. Numerics: which gemm makes the backward differ between runs
+Two numerics runs found nothing wrong (every bit-exact check passes; differences between modes are bf16 rounding; `runtime.deterministic=true` makes the backward repeatable; a split batch differs as much as that sample's own sensitivity to one bf16 step, whatever its position). One question is left, about half a minute:
 ```
-python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --resolution 256 --only repeat chunks --out numerics2
+python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --resolution 256 --only repeat --out numerics3
 ```
-Send `numerics2/numerics.md`. `repeat` now includes gemms with a long reduction axis (the feed-forward backward), with and without deterministic algorithms: it shows which kernel makes the backward differ between identical runs. `chunks` now shows whether the 9x larger input-gradient difference of a split batch comes from the sample or from its position in the batch.
+Send `numerics3/numerics.md`. `repeat` now includes gemms with a long reduction axis (the feed-forward backward), with and without deterministic algorithms; if one differs between launches it is the kernel that makes the backward vary when `runtime.deterministic` is off.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

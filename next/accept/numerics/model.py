@@ -51,26 +51,27 @@ class Reference:
     by_region: dict[str, float]
 
     @classmethod
-    def of(cls, ctx) -> Reference:
-        if "reference" not in ctx.cache:
+    def of(cls, ctx, batch: int = 1) -> Reference:
+        """Per batch size: the samples differ in how sensitive they are (the timestep), so a batch of two has its own reference."""
+        if ("reference", batch) not in ctx.cache:
             subject = ctx.subject
-            inputs = subject.inputs()
+            inputs = subject.inputs(batch=batch)
             subject.set_compute("float32")
             base = subject.evaluate(inputs)
             nudged = copy.copy(inputs)
             nudged.x = (inputs.x.float() * (1 + BF16_STEP)).to(inputs.x.dtype)
             moved = subject.evaluate(nudged)
             grads, by_region = grad_difference(moved, base)
-            ctx.cache["reference"] = cls(relative(moved.out, base.out), relative(moved.dx, base.dx), grads, by_region)
-        return ctx.cache["reference"]
+            ctx.cache[("reference", batch)] = cls(relative(moved.out, base.out), relative(moved.dx, base.dx), grads, by_region)
+        return ctx.cache[("reference", batch)]
 
 
 class ModelCheck(NumericCheck):
     needs_model = True
 
-    def compare(self, ctx, name: str, got: Snapshot, ref: Snapshot, note: str = "") -> Finding:
+    def compare(self, ctx, name: str, got: Snapshot, ref: Snapshot, note: str = "", batch: int = 1) -> Finding:
         """Two valid runs: shown next to the reference; WARN only when one of them is past WARN_ABOVE times it."""
-        floor = Reference.of(ctx)
+        floor = Reference.of(ctx, batch)
         grads, by_region = grad_difference(got, ref)
         out, dx = relative(got.out, ref.out), relative(got.dx, ref.dx)
         times = {"output": out / max(floor.out, 1e-12), "input gradient": dx / max(floor.dx, 1e-12), "adapter gradients": grads / max(floor.grads, 1e-12)}
@@ -176,7 +177,7 @@ class ChunkedGradients(ModelCheck):
             summed = Snapshot(torch.cat([p.out for p in parts]), torch.cat([p.dx for p in parts]),
                               {k: parts[0].grads[k] + parts[1].grads[k] for k in parts[0].grads})
             per_sample = ", ".join(f"sample {i}: output {relative(summed.out[i], whole.out[i]):.1e}, input gradient {relative(summed.dx[i], whole.dx[i]):.1e}" for i in range(2))
-            found.append(self.compare(ctx, f"two chunks of one against the whole batch, {label}", summed, whole, f"; {per_sample}"))
+            found.append(self.compare(ctx, f"two chunks of one against the whole batch, {label}", summed, whole, f"; {per_sample}", batch=2))
         return found + [self._diagnose(subject, whole_inputs, whole, parts)]
 
     def _diagnose(self, subject, inputs, whole: Snapshot, parts: list[Snapshot]) -> Finding:

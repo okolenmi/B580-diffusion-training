@@ -80,6 +80,14 @@ Add nothing else to either (no graph, no int8, so the only difference is the two
 Then in ComfyUI: the same checkpoint, the same 4 or more prompts (some from your dataset's style, some off it), 3 seeds each, the same sampler and strength, once per LoRA. Look at the pairs side by side and answer: can you tell `lora_default` from `lora_fast`, and is the gap larger than the one to `lora_other_seed`? Also send both console loss lines at steps 100, 300, 600.
 Pass: the pairs look alike (differences of the seed-change kind). Fail: describe what changed (washed out, noisier, style weaker), and I will keep the defaults and look at which option causes it (one more LoRA with `activation` only).
 
+## 37. Numerics of the device, the moves and the adapter path
+Why: two LoRAs trained a minute apart differ by chance, so what matters is whether anything we do adds a *systematic* error or a non-repeatable one. This checks the numbers directly, without training. About 5 to 10 minutes; needs about 3 GB of free device memory besides the checkpoint's.
+```
+python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --lora <one of your trained LoRA files> --resolution 256 --out numerics
+```
+Send `numerics/numerics.md` (and `numerics.json` if it is small). Nothing else to do; a check that crashes is reported as a FAIL with its traceback, so the run always finishes.
+Pass: no FAIL. A FAIL means a move or a repeat is not bit-exact (host and back, memory pattern, repeated forward, optimizer or weights offload, graph replay, adapter file) and is the real finding. WARN or INFO lines I read myself.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

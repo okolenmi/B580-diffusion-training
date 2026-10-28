@@ -311,5 +311,38 @@ def visual_aids():
     check(clean.shape == (3, 64, 80) and h <= 64 and w <= 80 and float(clean[:, :top].abs().sum()) == 0.0 and float(clean[:, top:top + h, left:left + w].abs().sum()) > 0, "a sample is placed on a blank canvas")
 
 
+def numerics_suite() -> None:
+    """The numerics instrument on the CPU with the tiny model: every check that can run here passes, a crashing check is a FAIL, the report is written."""
+    from ..accept import numerics as N
+    from ..accept.numerics.measure import differing, relative
+
+    a = torch.tensor([1.0, float("nan"), -0.0], dtype=torch.float32)
+    check(differing(a, a.clone()) == 0 and differing(torch.tensor([0.0]), torch.tensor([-0.0])) == 1, "bit comparison: NaN equals itself, -0 differs from 0")
+    check(abs(relative(torch.ones(4) * 1.01, torch.ones(4)) - 0.01) < 1e-6, "relative error of a 1% shift")
+    ctx = N.Context(torch.device("cpu"), tiny=True, memory_mb=64)
+    names = [c.name for c in N.all_checks()]
+    check(len(set(names)) == len(names) and names[-1] == "model-int8", f"checks are uniquely named and the int8 conversion runs last ({names})")
+    findings = N.NumericsRunner([c for c in N.all_checks() if c.name != "model-int8"], ctx, say=lambda _: None, cleanup=ctx.release).run()
+    totals = N.counts(findings)
+    check(totals["FAIL"] == 0 and totals["PASS"] > 20 and totals["INFO"] > 5, f"no exact check fails on the CPU ({totals})")
+    by_check = {f.check for f in findings}
+    check({"adapter", "frozen", "optimizer", "model-repeat", "compute-dtype", "merge"} <= by_check, "the checks reported")
+    merge = [f for f in findings if f.check == "merge"]
+    check(merge and all(0 < f.numbers["lost"] < 0.5 for f in merge if f.numbers.get("lost") is not None), "a random LoRA merged into bf16 loses a small share of its update")
+
+    class Crashing(N.NumericCheck):
+        name, purpose, needs_model = "crash", "raises", False
+
+        def run(self, ctx):
+            raise RuntimeError("boom")
+
+    crashed = N.NumericsRunner([Crashing()], ctx, say=lambda _: None).run()
+    check(len(crashed) == 1 and crashed[0].status == "FAIL" and "boom" in crashed[0].detail, "a check that raises becomes one FAIL finding")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = N.write(findings, tmp, "header")
+        check(Path(path).exists() and (Path(tmp) / "numerics.json").exists() and "header" in Path(path).read_text(encoding="utf8"), "report and json are written")
+    ctx.release()
+
+
 if __name__ == "__main__":
-    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids)
+    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids, numerics_suite)

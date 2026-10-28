@@ -53,6 +53,21 @@ def quant_probe(args) -> int:
     return 0
 
 
+def numerics(args) -> int:
+    from .numerics import Context, NumericsRunner, all_checks, counts, write
+
+    device = torch.device(resolve_device(args.device))
+    checks = [c for c in all_checks() if not args.only or c.name in args.only]
+    if args.tiny:
+        print("tiny stand-in model: the model checks run on a small random UNet, not on --file", flush=True)
+    ctx = Context(device, args.models, args.file, args.lora, args.resolution, args.tiny, args.seed, args.memory_mb)
+    findings = NumericsRunner(checks, ctx, cleanup=ctx.release).run()
+    header = f"device {device}, {'tiny stand-in model' if args.tiny else args.file}{', adapter ' + args.lora if args.lora else ''}, resolution {args.resolution}"
+    path = write(findings, args.out, header)
+    print(f"\n{counts(findings)}\nreport: {path}")
+    return 1 if counts(findings)["FAIL"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m next.accept", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -69,6 +84,17 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--double-quant", action="store_true")
     probe.add_argument("--limit-mb", type=float, default=2048.0, help="host memory for the recorded block outputs and gradients")
     probe.add_argument("--out", default="accept-quant-probe")
+    num = sub.add_parser("numerics", help="bit-exactness and rounding checks of the device, the moves a run makes and the adapter path; one report file")
+    num.add_argument("--device", default="xpu")
+    num.add_argument("--models", help="models folder (the model checks load --file from it)")
+    num.add_argument("--file", help="checkpoint relative to MODELS/checkpoints (or MODELS)")
+    num.add_argument("--lora", help="a trained adapter file: its values are inspected and its merge loss measured on the real weights")
+    num.add_argument("--tiny", action="store_true", help="use a small random UNet instead of --file (no checkpoint needed)")
+    num.add_argument("--resolution", type=int, default=256, help="pixels of the model checks' input; the numerics do not depend on it much, the memory does")
+    num.add_argument("--only", nargs="*", help="run only these checks (see 'list')")
+    num.add_argument("--memory-mb", type=int, default=1024, help="size of the device memory pattern test")
+    num.add_argument("--seed", type=int, default=0)
+    num.add_argument("--out", default="numerics")
     pad = sub.add_parser("padding-sheet", help="a picture of what zero and mirror padding put around samples of a folder of images")
     pad.add_argument("--images", required=True)
     pad.add_argument("--canvas", default="64x64", help="canvas HxW in the units shown (pixels here, latent size times 8 for a real bucket)")
@@ -95,7 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         for suite in SuiteBook().all().values():
             print(f"{suite.name}  (TESTING {suite.item}): {suite.title}\n  scenarios: {', '.join(suite.scenario_names())}")
             print("".join(f"  - {c.name}\n" for c in suite.checks))
+        from .numerics import all_checks
+        print("numerics (python -m next.accept numerics):\n" + "".join(f"  - {c.name}: {c.purpose}\n" for c in all_checks()))
         return 0
+    if args.command == "numerics":
+        return numerics(args)
     if args.command == "padding-sheet":
         from PIL import Image
 

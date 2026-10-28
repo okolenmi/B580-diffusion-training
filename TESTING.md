@@ -81,12 +81,16 @@ Then in ComfyUI: the same checkpoint, the same 4 or more prompts (some from your
 Pass: the pairs look alike (differences of the seed-change kind). Fail: describe what changed (washed out, noisier, style weaker), and I will keep the defaults and look at which option causes it (one more LoRA with `activation` only).
 
 ## 37. Numerics of the device, the moves and the adapter path
-Why: two LoRAs trained a minute apart differ by chance, so what matters is whether anything we do adds a *systematic* error or a non-repeatable one. This checks the numbers directly, without training. About 5 to 10 minutes; needs about 3 GB of free device memory besides the checkpoint's.
+Why: two LoRAs trained a minute apart differ by chance, so what matters is whether anything we do adds a *systematic* error, or the numbers are not repeatable. This checks the numbers directly, without training. About 10 minutes; needs about 3 GB of free device memory besides the checkpoint's and about 5 GB of free host memory (`merge-effect` keeps a copy of the adapted weights while it merges).
 ```
 python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --lora <one of your trained LoRA files> --resolution 256 --out numerics
 ```
-Send `numerics/numerics.md` (and `numerics.json` if it is small). Nothing else to do; a check that crashes is reported as a FAIL with its traceback, so the run always finishes.
-Pass: no FAIL. A FAIL means a move or a repeat is not bit-exact (host and back, memory pattern, repeated forward, optimizer or weights offload, graph replay, adapter file) and is the real finding. WARN or INFO lines I read myself.
+Send `numerics/numerics.md` (and `numerics.json` if it is small). A check that crashes is reported as a FAIL with its traceback, so the run always finishes.
+Pass: no FAIL. A FAIL means a move or a repeat is not bit-exact (host and back, memory pattern, repeated forward output, optimizer or weights offload, graph replay, adapter file) and is the real finding. The rest I read myself.
+
+## 38. Does the merge explain the pictures? (ComfyUI precision)
+`numerics` item 37 measured that a trained LoRA merged into bf16 weights loses a large part of its update (the update is about as small as the weight's rounding step), while running it beside the weights, as the trainer does, loses nothing. ComfyUI merges a LoRA into the model's weights when it loads it, in the dtype the model runs in. So the same LoRA can look different there than in training, and by a different amount per LoRA. The test: the same LoRA files (`lora_default`, `lora_fast`), the same prompts and seeds, strengths 0.5 and 1.0, with ComfyUI started with `--fp16-unet` (finer rounding: about 8 times smaller loss) and then with `--bf16-unet`; `--fp32-unet` as well if it fits in memory (no loss at all). Send the pictures side by side per dtype.
+Pass (the merge is the cause): the fp16/fp32 pictures look like what the training loss promised (less destroyed at 1.0, the two LoRAs closer to each other) and the bf16 ones are noisier or weaker. If all dtypes look alike the merge is not the cause and I look elsewhere.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

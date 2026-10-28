@@ -17,6 +17,7 @@ from ...families.sdxl.adapters import inject_denoiser
 from ...families.sdxl.denoiser import SDXLDenoiser
 from ..fixtures import DenoiserInputs
 from ..loading import load_denoiser
+from .measure import digest
 
 TINY_UNET = {
     "in_channels": 4, "out_channels": 4, "model_channels": 32, "num_res_blocks": [1, 1, 1], "channel_mult": [1, 2, 4],
@@ -48,6 +49,7 @@ class Context:
     seed: int = 0
     memory_mb: int = 1024  # the size of the device memory pattern test
     _subject: Subject | None = field(default=None, repr=False)
+    cache: dict = field(default_factory=dict, repr=False)  # what several checks share (the rounding reference)
 
     @property
     def subject(self) -> Subject:
@@ -130,6 +132,15 @@ class Subject:
                     grads[f"{path}.{name}"] = tensor.grad.detach().float().cpu().clone()
         self.zero()
         return Snapshot(out.detach().float().cpu(), dx.detach().float().cpu(), grads)
+
+    def output(self, inputs: DenoiserInputs) -> torch.Tensor:
+        """Forward only."""
+        with torch.no_grad():
+            return self.denoiser(inputs.x, inputs.t, inputs.context, inputs.adm).detach().float().cpu()
+
+    def weights_digest(self) -> dict[str, tuple[int, int]]:
+        """A digest of every stored tensor (weights, quantized codes, scales, adapter factors)."""
+        return {name: digest(t) for name, t in self.denoiser.module().state_dict().items() if t.numel()}
 
     def zero(self) -> None:
         for p in self.adapted.trainable_parameters():

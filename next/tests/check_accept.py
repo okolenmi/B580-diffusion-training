@@ -326,9 +326,49 @@ def numerics_suite() -> None:
     totals = N.counts(findings)
     check(totals["FAIL"] == 0 and totals["PASS"] > 20 and totals["INFO"] > 5, f"no exact check fails on the CPU ({totals})")
     by_check = {f.check for f in findings}
-    check({"adapter", "frozen", "optimizer", "model-repeat", "compute-dtype", "merge"} <= by_check, "the checks reported")
+    check({"adapter", "frozen", "optimizer", "model-repeat", "backward-bisect", "compute-dtype", "merge", "merge-effect", "model-offload"} <= by_check, "the checks reported")
+    effect = [f for f in findings if f.check == "merge-effect"]
+    check(len(effect) == 2 and all(0.5 < f.numbers["delivered"] < 1.5 for f in effect), "a merge delivers most of the adapter's effect on the output")
+    check(next(f for f in findings if f.check == "model-offload" and "stored" in f.name).status == "PASS", "an offload round trip returns every stored tensor")
     merge = [f for f in findings if f.check == "merge"]
     check(merge and all(0 < f.numbers["lost"] < 0.5 for f in merge if f.numbers.get("lost") is not None), "a random LoRA merged into bf16 loses a small share of its update")
+
+    from ..accept.numerics.measure import digest
+    from ..accept.numerics.trace import BackwardBisect, GradientTrace
+
+    t = torch.arange(10, dtype=torch.float32)
+    flipped = t.clone()
+    flipped[3] = float(t[3]) + 2.0 ** -20
+    swapped = t.clone()
+    swapped[[1, 2]] = swapped[[2, 1]]
+    check(digest(t) == digest(t.clone()) and digest(t) != digest(flipped) and digest(t) != digest(swapped), "a digest sees one changed bit and a swap of two values")
+
+    class Noisy(torch.autograd.Function):
+        @staticmethod
+        def forward(_ctx, x):
+            return x * 1.0
+
+        @staticmethod
+        def backward(_ctx, grad):
+            return grad * (1 + 1e-3 * torch.rand(()).item())
+
+    class Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a, self.b, self.c = torch.nn.Linear(4, 4), torch.nn.Identity(), torch.nn.Linear(4, 4)
+
+        def forward(self, x):
+            return self.c(Noisy.apply(self.b(self.a(x))))
+
+    net = Net()
+    traces = []
+    for _ in range(2):
+        with GradientTrace(net) as trace:
+            net(torch.ones(2, 4, requires_grad=True)).sum().backward()
+        traces.append(trace.entries)
+    report = BackwardBisect()._report("noise", traces[0], traces[1], dict(net.named_modules()))
+    check(report.status == "INFO" and report.numbers["first"] == "a" and report.numbers["before"] == "c", f"the bisect names the first module whose gradient changes ({report.detail[:90]})")
+    check(BackwardBisect()._report("same", traces[0], traces[0], dict(net.named_modules())).status == "PASS", "identical traces pass")
 
     class Crashing(N.NumericCheck):
         name, purpose, needs_model = "crash", "raises", False

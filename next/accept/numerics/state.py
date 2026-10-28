@@ -186,10 +186,10 @@ class MergeLoss(NumericCheck):
         return found
 
     @staticmethod
-    def _loss(weight: torch.Tensor, delta: torch.Tensor, strength: float) -> tuple[float, float]:
+    def _loss(weight: torch.Tensor, delta: torch.Tensor, strength: float, dtype: torch.dtype | None = None) -> tuple[float, float]:
         """``(share of the update's size lost, share of update values that vanish)`` when ``weight + strength * delta`` is rounded to the weight's dtype."""
         wanted = delta.float() * strength
-        merged = (weight.float() + wanted).to(weight.dtype).float()
+        merged = (weight.float() + wanted).to(dtype or weight.dtype).float()
         realized = merged - weight.float()
         lost = (realized - wanted).norm().item() / max(wanted.norm().item(), 1e-30)
         vanished = ((realized == 0) & (wanted != 0)).float().mean().item()
@@ -211,21 +211,22 @@ class MergeLoss(NumericCheck):
     def _real(self, ctx) -> list[Finding]:
         subject, regions = ctx.subject, Regions(coarse=True)
         found = []
-        for strength in self.STRENGTHS:
-            lost: dict[str, list[float]] = {}
-            vanished: dict[str, list[float]] = {}
-            for path, layer in subject.adapted.layers.items():
-                weight = layer.frozen_weight
-                if weight.dtype == torch.float32:
-                    continue
-                share, gone = self._loss(weight, layer._delta().detach(), strength)
-                group = regions.of(path).name
-                lost.setdefault(group, []).append(share)
-                vanished.setdefault(group, []).append(gone)
-            for group in sorted(lost):
-                values, gone = sorted(lost[group]), vanished[group]
-                median, worst = values[len(values) // 2], values[-1]
-                found.append(self.measured(f"{Path(ctx.lora).name} strength {strength}, {group} ({len(values)} layers)",
-                                           f"update size lost: median {median:.1%}, worst {worst:.1%}; values vanishing: mean {sum(gone) / len(gone):.1%}",
-                                           {"median_lost": median, "worst_lost": worst}, warn_if=median > 0.25))
+        for label, dtype in (("bf16 weights", torch.bfloat16), ("fp16 weights", torch.float16)):
+            for strength in self.STRENGTHS:
+                lost: dict[str, list[float]] = {}
+                vanished: dict[str, list[float]] = {}
+                for path, layer in subject.adapted.layers.items():
+                    weight = layer.frozen_weight
+                    if weight.dtype == torch.float32:
+                        continue
+                    share, gone = self._loss(weight, layer._delta().detach(), strength, dtype)
+                    group = regions.of(path).name
+                    lost.setdefault(group, []).append(share)
+                    vanished.setdefault(group, []).append(gone)
+                for group in sorted(lost):
+                    values, gone = sorted(lost[group]), vanished[group]
+                    median, worst = values[len(values) // 2], values[-1]
+                    found.append(self.measured(f"{Path(ctx.lora).name} merged into {label}, strength {strength}, {group} ({len(values)} layers)",
+                                               f"update size lost: median {median:.1%}, worst {worst:.1%}; values vanishing: mean {sum(gone) / len(gone):.1%}",
+                                               {"median_lost": median, "worst_lost": worst}, warn_if=median > 0.25 and dtype == torch.bfloat16))
         return found

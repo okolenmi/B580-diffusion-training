@@ -33,3 +33,21 @@ def fingerprint(t: Tensor) -> str:
     """A short digest of the bytes, to show two tensors are the same without printing them."""
     import hashlib
     return hashlib.sha1(t.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:12]
+
+
+def digest(t: Tensor) -> tuple[int, int]:
+    """Two sums over the bytes of a tensor (plain, and weighted by position), computed where the tensor lives: equal digests mean the same bytes for any practical purpose."""
+    flat = t.detach().contiguous().view(-1).view(torch.uint8)
+    total = weighted = 0
+    step = 1 << 24
+    for start in range(0, flat.numel(), step):
+        part = flat[start:start + step].to(torch.int64)
+        position = torch.arange(start, start + part.numel(), device=part.device, dtype=torch.int64) % 1000003 + 1
+        total += int(part.sum())
+        weighted += int((part * position).sum())
+    return total, weighted
+
+
+def spread(runs: list[Tensor], first: Tensor) -> tuple[int, float]:
+    """How many values of ``runs`` differ bit for bit from ``first``, and the largest relative difference of one run."""
+    return sum(differing(r, first) for r in runs), max((relative(r, first) for r in runs), default=0.0)

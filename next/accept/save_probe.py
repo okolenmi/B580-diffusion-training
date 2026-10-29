@@ -88,21 +88,24 @@ class Comparison:
     def __init__(self, title: str, note: str):
         self.title, self.note, self.rows = title, note, []
 
-    def add(self, case: dict, difference: Difference) -> None:
-        self.rows.append((case, difference))
+    def add(self, case: dict, difference: Difference, floor: float | None = None) -> None:
+        """``floor``: the same engines' relative difference without the adapter, what the comparison cannot do better than."""
+        self.rows.append((case, difference, floor))
 
     def worst(self) -> str:
         order = ["PASS (identical)", "PASS", "WARN", "FAIL"]
-        return max((d.verdict() for _, d in self.rows), key=order.index) if self.rows else "-"
+        return max((d.verdict() for _, d, _ in self.rows), key=order.index) if self.rows else "-"
 
     def markdown(self) -> str:
+        floored = any(f is not None for _, _, f in self.rows)
         lines = [f"### {self.title}: {self.worst()}", "", self.note, "",
-                 "| prompt | t | verdict | identical | error / prediction | error / adapter effect | effect cosine | effect size ratio | adapter effect / prediction |",
-                 "|---|---|---|---|---|---|---|---|---|"]
-        for case, d in self.rows:
+                 "| prompt | t | verdict | identical | error / prediction | error / adapter effect | effect cosine | effect size ratio | adapter effect / prediction |"
+                 + (" error / the engines' difference without the adapter |" if floored else ""),
+                 "|---|---|---|---|---|---|---|---|---|" + ("---|" if floored else "")]
+        for case, d, floor in self.rows:
             prompt = (case["prompt"] or "(empty)")[:40]
             lines.append(f"| {prompt} | {case['t']:.0f} | {d.verdict()} | {'yes' if d.exact else 'no'} | {d.relative:.2e} | {d.of_effect:.3f} | "
-                         f"{d.effect_cosine:.4f} | {d.effect_ratio:.4f} | {d.effect:.3f} |")
+                         f"{d.effect_cosine:.4f} | {d.effect_ratio:.4f} | {d.effect:.3f} |" + (f" {d.relative / floor:.2f} |" if floored and floor else ""))
         return "\n".join(lines)
 
 
@@ -220,13 +223,14 @@ class SaveFidelity:
             sections.append("\n".join(["## ComfyUI", "", "| | |", "|---|---|", *[f"| {k} | {v} |" for k, v in header.items()]]))
             with_ours = Comparison("3a. Training forward against ComfyUI (model, LoRA loader) fed this project's conditioning",
                                    "Only the UNet and the way the file is applied differ. The difference between the two models without the adapter is "
-                                   "the engines' own noise (precision, attention kernels).")
+                                   "the engines' own noise (precision, attention kernels). The last column is the error divided by that noise: near 1 means the adapter adds nothing to the difference.")
             with_own = Comparison("3b. Training forward against ComfyUI with its own text encoders and size embedding",
                                   "Everything differs that can: also tests the text side.")
             for n, case in enumerate(probe.cases):
                 base_want = live[f"base{n}"]
-                with_ours.add(case, Difference.of(data[f"comfy_ours{n}"], live[f"live{n}"], data[f"comfy_base{n}"], base_want))
-                with_own.add(case, Difference.of(data[f"comfy_own{n}"], live[f"live{n}"], data[f"comfy_base{n}"], base_want))
+                floor = _relative(data[f"comfy_base{n}"], base_want)
+                with_ours.add(case, Difference.of(data[f"comfy_ours{n}"], live[f"live{n}"], data[f"comfy_base{n}"], base_want), floor)
+                with_own.add(case, Difference.of(data[f"comfy_own{n}"], live[f"live{n}"], data[f"comfy_base{n}"], base_want), floor)
             sections += [with_ours.markdown(), with_own.markdown(), self.text_section(probe, data)]
             summary += [("training forward = ComfyUI + saved file (our conditioning)", with_ours.worst()),
                         ("training forward = ComfyUI + saved file (its own conditioning)", with_own.worst())]

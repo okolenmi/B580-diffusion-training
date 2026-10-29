@@ -6,9 +6,11 @@ import os
 from dataclasses import replace
 from typing import Any
 
+from ...engine.conditioner import Conditioner
 from ...engine.handles import TrainableDenoiser
+from ...engine.step.save_probe import SaveProbe
 from ...families.api.parts import AdapterMerge, DenoiserPart
-from ...graph import EventIn, Node, Port
+from ...graph import EventIn, Group, Node, Port
 from ...graph.events import CheckpointDue
 
 _SERVICE = "models"
@@ -25,7 +27,14 @@ class SaveAdapterNode(Node):
         "format": Port("format", str, required=False, default="auto",
                        doc="File format (key naming scheme). auto: kohya where it can hold the adapter, native for DoRA. "
                            "Choices depend on the model's family: kohya, native."),
+        "conditioner": Port("conditioner", Conditioner, required=False, doc="Needed by the probe: the conditioner the trainer uses."),
+        "probe": Port("probe", bool, required=False, default=False, group="diagnostics",
+                      doc="Before each file is written, run a forward pass with the adapter as it is now and keep its inputs and outputs in "
+                          "<file>.probe.safetensors; `accept save-probe` then checks that the saved file reproduces it."),
+        "probe_seed": Port("probe_seed", int, required=False, default=0, group="diagnostics", visible_when=("probe", True),
+                           doc="Picks the probe prompt and noise (the empty prompt is probed too)."),
     }
+    GROUPS = (Group("diagnostics", "Diagnostics", collapsed=True, advanced=True),)
     OUTPUTS = {"saved": Port("saved", int, doc="Files written so far (0 at build time).")}
     EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint")}
 
@@ -43,12 +52,20 @@ class SaveAdapterNode(Node):
             raise ValueError(f"Save Adapter: the {scheme.name} format cannot hold {self.model.kind} weights; pick another format")
         self.scheme, self.directory = scheme, inputs.get("directory") or "output/adapters"
         self.stem, self.written = inputs.get("name") or "adapter", []
+        self.probe = None
+        if inputs.get("probe"):
+            conditioner = inputs.get("conditioner")
+            if conditioner is None:
+                raise ValueError("Save Adapter: the probe needs the conditioner wired in")
+            self.probe = SaveProbe(self.model, getattr(conditioner, "inner", conditioner), seed=inputs.get("probe_seed") or 0)
         return {"saved": 0}
 
     def _write(self, label: str, step: int) -> str:
         os.makedirs(self.directory, exist_ok=True)
         path = os.path.join(self.directory, f"{self.stem}_{label}.safetensors")
         model = self.model
+        if self.probe is not None:  # first: nothing has been exported or written yet, the adapter is exactly what training used
+            self.probe.record(path.replace(".safetensors", ".probe.safetensors"), step, os.path.basename(path))
         model.family.save_adapter(path, self.scheme.export(model.adapted), {
             "family": model.family.id, "kind": model.kind, "rank": model.rank, "alpha": model.alpha, "step": step,
             "scheme": self.scheme.name, "base": os.path.basename(model.part.source.path)})

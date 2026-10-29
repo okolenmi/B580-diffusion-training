@@ -29,7 +29,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
               accumulation: int = 1, steps: int = 1000, epochs: int = 0, save_every_epoch: int = 0, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
               persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, fill: str = "zero", time_balance: str = "off", balance_sampling: float = 0.0,
-              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", tag_swap: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
+              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", tag_swap: bool = False, save_probe: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
     ``source`` replaces Load Model (tests hand in a stand-in); ``overrides`` sets extra parameters by node name.
@@ -58,7 +58,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     b.add("trigger", "EveryNStepsNode", every=save_every)
     if save_every_epoch:
         b.add("epoch_trigger", "EveryEpochNode", every=save_every_epoch)
-    b.add("saver", "SaveAdapterNode", directory=output, name=name)
+    b.add("saver", "SaveAdapterNode", directory=output, name=name, probe=save_probe)
     captioned = [("images", "images", "autocaption", "images"), ("autocaption", "images", "captions", "images")] if auto_caption \
         else [("images", "images", "captions", "images")]
     if tag_swap:
@@ -76,6 +76,8 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
                 ("adapter", "model", "saver", "model")]
     b.events += [("batcher", "prompts_changed", "conditioner", "prompts_changed"), ("trainer", "step_finished", "trigger", "step"),
                  ("trigger", "due", "saver", "checkpoint"), ("trainer", "ended", "saver", "checkpoint")]
+    if save_probe:
+        b.wires.append(("blend", "conditioner", "saver", "conditioner"))
     if save_every_epoch:
         b.events += [("trainer", "step_finished", "epoch_trigger", "step"), ("epoch_trigger", "due", "saver", "checkpoint")]
     if time_balance != "off" or balance_sampling > 0:

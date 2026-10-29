@@ -85,6 +85,18 @@ python -m next.accept lora-map --lora <default s1> <fast s1> <default s2> <fast 
 ```
 Send `lora-map.md`. After that, one pair of trainings: today's command with and without `--tag-swap` (everything else equal, `--set runtime.deterministic=true`), looked at the way item 31 was, at strength 1.0 and 0.5.
 
+## 39. Is the saved LoRA what training computed? (three forwards, same prompt and seed)
+A short training whose saver first runs one extra forward with the LoRA exactly as the optimizer left it, before anything is written (two prompts, a random one and the empty one, at three timesteps; with the LoRA and with it switched off). Add `--save-probe` to your usual command with a short run:
+```
+<your usual train command> --save-probe --steps 100 --save-every 100
+```
+It writes `<name>_step000100.safetensors` and `<name>_step000100.probe.safetensors` (a few MB) in the output folder. Then, with the card free:
+```
+python -m next.accept save-probe --probe <output>/<name>_step000100.probe.safetensors --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --device xpu --out save-fidelity.md
+```
+This compares the training forward with a fresh copy of our model that loaded the saved file (should be identical). To add ComfyUI (its own checkpoint loader, LoRA loader, UNet and text encoders; a minute or two), add `--comfy /home/okolenmi/comfy/ComfyUI --comfy-python <the Python you start ComfyUI with>` (try `--comfy-dtype bf16` as well as the default: ComfyUI picks fp16 on its own). The ComfyUI step can also be run by itself in ComfyUI's environment: `<that Python> next/accept/comfy_forward.py --comfy ... --checkpoint ... --lora ... --probe ... --out <x>.comfy.safetensors`; then the command above without `--comfy` reads it.
+Send `save-fidelity.md`. Reading it: the table at the top gives one verdict per comparison; the rows say how large the difference is against what the LoRA does at all (3a: ComfyUI fed our text conditioning, so only the UNet and the way the file is applied differ; 3b: ComfyUI's own text side as well; the last tables show the text conditioning difference and the two engines' difference without any LoRA, which is the noise a LoRA comparison has to be read against).
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

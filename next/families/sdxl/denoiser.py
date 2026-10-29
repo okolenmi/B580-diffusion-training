@@ -67,6 +67,10 @@ class SDXLDenoiser:
         """Run the feed-forward activation as one fused kernel. Returns "" when on, otherwise why it stays off."""
         return FusedGeglu.enable(device)
 
+    def runtime_facts(self) -> dict:
+        """Switches outside the weights that change the numbers a forward produces."""
+        return {"fused_geglu": FusedGeglu.active()}
+
     def set_checkpointer(self, checkpointer: Checkpointer | None, attention_fraction: float = 1.0) -> None:
         self.model.set_checkpointer(checkpointer, attention_fraction)
 

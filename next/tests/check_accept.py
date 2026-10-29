@@ -418,5 +418,61 @@ def training_signal_instruments() -> None:
     check("TagSwapNode" not in nodes() and "TagSwapNode" in nodes(tag_swap=True), "the starter has Tag Swap only when asked")
 
 
+def save_probe_instrument() -> None:
+    """The save probe records the adapter as trained; a file written from it reloads to an identical prediction, and a damaged file is told apart."""
+    from types import SimpleNamespace
+
+    from safetensors.torch import load_file
+
+    from ..accept import save_probe as S
+    from ..engine.handles import TrainableDenoiser
+    from ..engine.step.save_probe import SaveProbe
+    from ..families.api.adapters import TrainableSelection
+    from ..families.registry import get_family
+    from ..families.sdxl.adapters import inject_denoiser
+    from ..families.sdxl.conditioning import SDXLConditioning
+    from ..starters import sdxl_lora
+
+    family = get_family("sdxl")
+    denoiser = tiny_denoiser()
+    adapted = inject_denoiser(denoiser, TrainableSelection(), rank=4, alpha=4.0, compute="float32")
+    gen = torch.Generator().manual_seed(3)
+    for layer in adapted.layers.values():
+        with torch.no_grad():
+            layer.lora_B.copy_(torch.randn(layer.lora_B.shape, generator=gen) * 0.05)
+
+    class Conditioner:
+        def encode(self, prompts, sizes):
+            g = torch.Generator().manual_seed(sum(map(ord, prompts[0])))
+            return SDXLConditioning(torch.randn(1, 5, 48, generator=g), torch.randn(1, 40, generator=g))
+
+    model = TrainableDenoiser(family, SimpleNamespace(source=SimpleNamespace(path="base.safetensors")), denoiser, adapted, "cpu", 4, 4.0, "lora")
+    with tempfile.TemporaryDirectory() as tmp:
+        lora, probe_path = str(Path(tmp) / "a_step000010.safetensors"), str(Path(tmp) / "a_step000010.probe.safetensors")
+        SaveProbe(model, Conditioner(), seed=2, size=(64, 64)).record(probe_path, 10, "a_step000010.safetensors")
+        scheme = family.schemes["kohya"]
+        family.save_adapter(lora, scheme.export(adapted), {"family": "sdxl", "kind": "lora", "rank": 4, "alpha": 4.0, "step": 10, "scheme": "kohya"})
+        recorded = S.Probe.read(probe_path)
+        check(len(recorded.cases) == 6 and recorded.cases[3]["prompt"] == "" and recorded.meta["compute"] == "float32", "the probe holds the random prompt and the empty one at three timesteps")
+        check(not torch.equal(recorded.tensors["live0"], recorded.tensors["base0"]), "the probe's adapter-off prediction differs from the live one")
+
+        S.load_denoiser, S.checkpoint_path = lambda models, file, device: tiny_denoiser(), lambda models, file: "base.safetensors"
+        text = S.SaveFidelity(probe_path, "m", "f", "cpu").run()
+        check("| training forward = our model + saved file | PASS (identical) |" in text, "a faithful file reloads to the identical prediction")
+        check("ComfyUI\n\nNot run" in text, "without --comfy the report says ComfyUI was not run")
+
+        damaged = {k: (v * 2 if k.endswith(".alpha") else v) for k, v in load_file(lora).items()}  # every adapter twice as strong
+        family.save_adapter(lora, damaged, {"family": "sdxl", "kind": "lora", "rank": 4, "alpha": 4.0, "step": 10, "scheme": "kohya"})
+        check("| training forward = our model + saved file | FAIL |" in S.SaveFidelity(probe_path, "m", "f", "cpu").run(), "a file with doubled strength is a FAIL")
+        partial = {k: v for k, v in load_file(lora).items() if "output_blocks" not in k}
+        family.save_adapter(lora, partial, {"family": "sdxl", "kind": "lora", "rank": 4, "alpha": 4.0, "step": 10, "scheme": "kohya"})
+        text = S.SaveFidelity(probe_path, "m", "f", "cpu").run()
+        check("| training forward = our model + saved file | FAIL |" in text and "| model layers the file lacks | " in text, "a file without the output blocks is a FAIL and the report counts the missing layers")
+
+    doc = sdxl_lora(model="m.safetensors", dataset="d", output="o", save_probe=True)
+    saver = next(n for n in doc.nodes if n.class_name == "SaveAdapterNode")
+    check(saver.params.get("probe") is True and any((e.to_node, e.to_port) == (saver.uid, "conditioner") for e in doc.edges), "the starter wires the conditioner into the saver when the probe is on")
+
+
 if __name__ == "__main__":
-    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids, numerics_suite, training_signal_instruments)
+    run(regions, recorder, nf4_probe, int8_probe, artifacts, checks, suites_and_verdict, run_suites, visual_aids, numerics_suite, training_signal_instruments, save_probe_instrument)

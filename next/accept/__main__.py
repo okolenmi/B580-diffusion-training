@@ -100,6 +100,18 @@ def lora_map(args) -> int:
     return 0
 
 
+def save_probe(args) -> int:
+    from .save_probe import SaveFidelity
+
+    device = str(resolve_device(args.device))
+    text = SaveFidelity(args.probe, args.models, args.file, device, args.lora, args.comfy, args.comfy_python, args.comfy_dtype, args.comfy_device).run()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m next.accept", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -141,6 +153,17 @@ def main(argv: list[str] | None = None) -> int:
     lm.add_argument("--models", help="with --file: sizes of the updates relative to the checkpoint's weights")
     lm.add_argument("--file")
     lm.add_argument("--out", default="lora-map.md")
+    sp = sub.add_parser("save-probe", help="a training run's forward just before a save, against this project's model and against ComfyUI, both loaded from the saved file")
+    sp.add_argument("--probe", required=True, help="the <adapter>.probe.safetensors a run with --save-probe wrote")
+    sp.add_argument("--models", required=True)
+    sp.add_argument("--file", required=True, help="the checkpoint the adapter was trained on")
+    sp.add_argument("--lora", help="the adapter file (default: the probe's name without .probe)")
+    sp.add_argument("--device", default="xpu")
+    sp.add_argument("--comfy", help="the ComfyUI folder: also run ComfyUI's loader and UNet on the same inputs")
+    sp.add_argument("--comfy-python", help="the Python that runs ComfyUI (default: this one)")
+    sp.add_argument("--comfy-dtype", default="auto", choices=("auto", "bf16", "fp16", "fp32"), help="ComfyUI's UNet precision (auto: its own choice)")
+    sp.add_argument("--comfy-device", default="auto", choices=("auto", "cpu"))
+    sp.add_argument("--out", default="save-fidelity.md")
     pad = sub.add_parser("padding-sheet", help="a picture of what zero and mirror padding put around samples of a folder of images")
     pad.add_argument("--images", required=True)
     pad.add_argument("--canvas", default="64x64", help="canvas HxW in the units shown (pixels here, latent size times 8 for a real bucket)")
@@ -176,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         return lora_map(args)
     if args.command == "prompts":
         return prompts(args)
+    if args.command == "save-probe":
+        return save_probe(args)
     if args.command == "padding-sheet":
         from PIL import Image
 

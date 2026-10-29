@@ -30,5 +30,9 @@ class FusedGeglu:
         return ""
 
     @staticmethod
+    def active() -> bool:
+        return GEGLU.fused is not None
+
+    @staticmethod
     def disable() -> None:
         GEGLU.fused = None

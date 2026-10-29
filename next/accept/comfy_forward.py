@@ -81,7 +81,7 @@ def main() -> int:
         results[f"comfy_ours{n}"] = unet(patched, x, tensors[f"t{n}"], tensors[f"ctx{n}"], tensors[f"y{n}"])
         ctx, y = own[case["prompt"]]
         results[f"comfy_own{n}"] = unet(patched, x, tensors[f"t{n}"], ctx, y)
-        results[f"comfy_ctx{n}"], results[f"comfy_y{n}"] = ctx, y
+        results[f"comfy_ctx{n}"], results[f"comfy_y{n}"] = ctx.clone(), y.clone()
     try:
         from comfyui_version import __version__ as version
     except ImportError:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import gc
 import json
 import subprocess
+import time
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,7 +186,9 @@ class SaveFidelity:
         bad = sum(1 for t in factors if not torch.isfinite(t.float()).all())
         zero_up = sum(1 for k, t in state.items() if k.endswith(".lora_up.weight") and not t.any())
         dtypes = sorted({str(t.dtype).replace("torch.", "") for t in factors})
-        rows = [("adapter file", Path(self.adapter).name), ("file step / probe step", f"{header.get('step')} / {probe.meta.get('step')}"),
+        size = lambda path: f"{Path(path).stat().st_size / 1e6:.1f} MB"  # noqa: E731
+        rows = [("adapter file read", f"{Path(self.adapter).resolve()} ({size(self.adapter)}, {time.strftime('%Y-%m-%d %H:%M', time.localtime(Path(self.adapter).stat().st_mtime))})"),
+                ("probe file (only the recorded inputs and predictions, not the adapter)", f"{Path(self.probe_path).resolve()} ({size(self.probe_path)})"), ("file step / probe step", f"{header.get('step')} / {probe.meta.get('step')}"),
                 ("probe names this file", probe.meta.get("adapter")), ("format, rank, alpha", f"{header.get('scheme')}, {header.get('rank')}, {header.get('alpha')}"),
                 ("tensors", len(state)), ("factor dtypes in the file", ", ".join(dtypes)), ("tensors with NaN/inf", bad), ("layers whose up factor is all zero", zero_up),
                 ("training state recorded", f"compute {probe.meta.get('compute')}, fused GEGLU {probe.meta.get('fused_geglu')}, base {probe.meta.get('base_precision')}")]
@@ -203,8 +206,12 @@ class SaveFidelity:
                               "Same code, same weights if the file holds what training had: the prediction should be identical.")
         for n, case in enumerate(probe.cases):
             reloaded.add(case, Difference.of(ours[f"live{n}"], live[f"live{n}"], ours[f"base{n}"], live[f"base{n}"]))
-        sections.append(reloaded.markdown())
-        summary.append(("training forward = our model + saved file", reloaded.worst()))
+        control = Comparison("1. Control: the same comparison with the adapter switched off in the reloaded model",
+                             "This must FAIL: it shows the comparison notices a model that does not carry the adapter.")
+        for n, case in enumerate(probe.cases):
+            control.add(case, Difference.of(ours[f"base{n}"], live[f"live{n}"], ours[f"base{n}"], live[f"base{n}"]))
+        sections += [control.markdown(), reloaded.markdown()]
+        summary += [("control: reloaded model without the adapter (must FAIL)", control.worst()), ("training forward = our model + saved file", reloaded.worst())]
         answer = self.comfy.run()
         if answer is None:
             sections.append("## ComfyUI\n\nNot run: give --comfy <ComfyUI folder> (and --comfy-python for ComfyUI's own Python), or put its output next to the probe.")

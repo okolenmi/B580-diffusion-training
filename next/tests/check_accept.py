@@ -459,6 +459,7 @@ def save_probe_instrument() -> None:
         S.load_denoiser, S.checkpoint_path = lambda models, file, device: tiny_denoiser(), lambda models, file: "base.safetensors"
         text = S.SaveFidelity(probe_path, "m", "f", "cpu").run()
         check("| training forward = our model + saved file | PASS (identical) |" in text, "a faithful file reloads to the identical prediction")
+        check("| control: reloaded model without the adapter (must FAIL) | FAIL |" in text and "step000010.safetensors" in text, "the control fails and the report names the adapter file it read")
         check("ComfyUI\n\nNot run" in text, "without --comfy the report says ComfyUI was not run")
 
         damaged = {k: (v * 2 if k.endswith(".alpha") else v) for k, v in load_file(lora).items()}  # every adapter twice as strong

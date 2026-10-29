@@ -90,9 +90,9 @@ A short training whose saver first runs one extra forward with the LoRA exactly 
 ```
 <your usual train command> --save-probe --steps 100 --save-every 100
 ```
-It writes `<name>_step000100.safetensors` and `<name>_step000100.probe.safetensors` (a few MB) in the output folder. Then, with the card free:
+It writes the LoRA `<name>_step000100.safetensors` and, beside it, `<name>_step000100.probe.safetensors` (a few MB: only the recorded inputs and predictions, no weights) in the output folder. The comparison reads **both**: the probe for what training computed, the LoRA file for what was saved. Then, with the card free:
 ```
-python -m next.accept save-probe --probe <output>/<name>_step000100.probe.safetensors --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --device xpu --out save-fidelity.md
+python -m next.accept save-probe --probe <output>/<name>_step000100.probe.safetensors --lora <output>/<name>_step000100.safetensors --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --device xpu --out save-fidelity.md
 ```
 This compares the training forward with a fresh copy of our model that loaded the saved file (should be identical). To add ComfyUI (its own checkpoint loader, LoRA loader, UNet and text encoders; a minute or two), add `--comfy /home/okolenmi/comfy/ComfyUI --comfy-python <the Python you start ComfyUI with>` (try `--comfy-dtype bf16` as well as the default: ComfyUI picks fp16 on its own). The ComfyUI step can also be run by itself in ComfyUI's environment: `<that Python> next/accept/comfy_forward.py --comfy ... --checkpoint ... --lora ... --probe ... --out <x>.comfy.safetensors`; then the command above without `--comfy` reads it.
 Send `save-fidelity.md`. Reading it: the table at the top gives one verdict per comparison; the rows say how large the difference is against what the LoRA does at all (3a: ComfyUI fed our text conditioning, so only the UNet and the way the file is applied differ; 3b: ComfyUI's own text side as well; the last tables show the text conditioning difference and the two engines' difference without any LoRA, which is the noise a LoRA comparison has to be read against).

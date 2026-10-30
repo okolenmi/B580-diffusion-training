@@ -73,8 +73,9 @@ class Console:
         graphs = f"  graphs {m['graphs']} ({m['graph_replays']} replays)" if "graphs" in m else ""
         weights = "  weights " + "/".join(f"{m[k]:.2f}" for k in ("weight_t_low", "weight_t_mid", "weight_t_high") if k in m) \
             if "weight_t_low" in m or "weight_t_mid" in m or "weight_t_high" in m else ""
+        by_third = "  by t " + " ".join(f"{k[7:]} {m[k]:.4f}" for k in ("loss_t_low", "loss_t_mid", "loss_t_high") if k in m) if any(k in m for k in ("loss_t_low", "loss_t_mid", "loss_t_high")) else ""
         epoch = f"  epoch {m['epoch'] + 1}{' end' if m.get('epoch_end') else ''}" if "epoch" in m else ""
-        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{epoch}{where}{graphs}{weights}{draws}{memory}", flush=True)
+        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{by_third}{epoch}{where}{graphs}{weights}{draws}{memory}", flush=True)
         if "probe_worst_rel" in m:
             rel = "/".join(f"{m[k]:.3f}" for k in ("probe_rel_t_low", "probe_rel_t_mid", "probe_rel_t_high") if k in m)
             print(f"  probe: adapter/base loss by third {rel}, worst {m['probe_worst_rel']:.3f} (above 1: worse than the base model)", flush=True)

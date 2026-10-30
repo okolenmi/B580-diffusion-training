@@ -116,15 +116,15 @@ class Experiment:
 
 TEMPLATE = {
     "name": "range-ablation",
-    "note": "Which part of the timestep range gives the painted-over look? Each arm trains on one range only.",
+    "note": "Which part of the timestep range gives the painted-over look? Each arm trains on one range only. t is the timestep: t=0 is a clean image, t=999 is pure noise.",
     "train_command": "python -m next.run sdxl-lora --models /home/okolenmi/comfy/ComfyUI/models/ --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --file divA.safetensors --output x --batch 2 --resolution 512 --steps 600 --save-every 600 --set runtime.deterministic=true --set trainer.probe_every=100 --set trainer.probe_items=4",
     "output": "lab-out",
     "device": "xpu",
     "images": {"train": "/path/to/training/images", "holdout": "/path/to/images/not/in/training", "count": 6, "size": 768},
     "grid": {"prompts": ["", "a portrait of a woman, detailed face", "a red house on a green hill under a blue sky"], "seeds": [1, 2, 3], "strengths": [1.0],
-             "steps": 20, "cfg": 6.0, "sampler": "dpmpp_2m", "scheduler": "normal", "width": 1024, "height": 1024},
+             "steps": 20, "cfg": 6.0, "sampler": "euler", "scheduler": "normal", "width": 1024, "height": 1024},
     "arms": [{"name": "full"},
-             {"name": "low-noise", "args": ["--set", "noiser.low=0", "--set", "noiser.high=250"], "note": "t 0-250 only"},
-             {"name": "mid-noise", "args": ["--set", "noiser.low=250", "--set", "noiser.high=600"]},
-             {"name": "high-noise", "args": ["--set", "noiser.low=600", "--set", "noiser.high=999"]}],
+             {"name": "t0-250", "args": ["--set", "noiser.low=0", "--set", "noiser.high=250"], "note": "t 0-250 only (sigma 0.03-0.70, nearly clean images)"},
+             {"name": "t250-600", "args": ["--set", "noiser.low=250", "--set", "noiser.high=600"], "note": "sigma 0.70-2.29"},
+             {"name": "t600-999", "args": ["--set", "noiser.low=600", "--set", "noiser.high=999"], "note": "sigma 2.29-14.6 (mostly noise)"}],
 }

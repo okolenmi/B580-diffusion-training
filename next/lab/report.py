@@ -74,12 +74,11 @@ class Report:
         return json.loads(path.read_text()) if path.exists() else {}
 
     def arms_table(self) -> list[str]:
-        rows = ["| arm | arguments | steps | minutes | loss (last 20 steps) |", "|---|---|---|---|---|"]
+        rows = ["| arm | arguments | steps | minutes |", "|---|---|---|---|"]
         for arm in self.experiment.arms:
             train = self._json(arm.name, "train.json")
-            losses = train.get("losses") or []
-            rows.append(f"| {arm.name} | `{' '.join(arm.args) or '-'}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} | {mean(losses[-20:]):.4f} |" if losses
-                        else f"| {arm.name} | `{' '.join(arm.args) or '-'}` | - | - | - |")
+            rows.append(f"| {arm.name} | `{' '.join(arm.args) or '-'}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} |" if train
+                        else f"| {arm.name} | `{' '.join(arm.args) or '-'}` | - | - |")
         return rows
 
     def detail_table(self, strength: float) -> list[str]:
@@ -150,9 +149,19 @@ class Report:
                     made.append(crops.save(out / f"{Recipe(prompt, seed).stem.rsplit('_x', 1)[0]}_crops.png"))
         return made
 
+    def resolution_notes(self) -> list[str]:
+        """A LoRA trained at one resolution and rendered at another is a different experiment; say so."""
+        args = [*self.experiment.train_args, *[a for arm in self.experiment.arms for a in arm.args]]
+        trained = [int(args[i + 1]) for i, a in enumerate(args[:-1]) if a == "--resolution" and args[i + 1].isdigit()]
+        grid = self.experiment.grid
+        if trained and max(trained) < min(grid.width, grid.height):
+            return [f"**Note:** training used `--resolution {max(trained)}`, the pictures are rendered at {grid.width}x{grid.height}. "
+                    "Effects seen only at the larger size may come from that mismatch, not from the arm.", ""]
+        return []
+
     def markdown(self, sheets: list[Path]) -> str:
         exp = self.experiment
-        lines = [f"# Lab report: {exp.name}", "", exp.note, "", "## Arms", "", *self.arms_table(), ""]
+        lines = [f"# Lab report: {exp.name}", "", exp.note, "", *self.resolution_notes(), "## Arms", "", *self.arms_table(), ""]
         for strength in exp.grid.strengths:
             lines += [f"## Detail of the images at strength {strength:g}", "",
                       "Ratios against the same prompt and seed rendered without the adapter: below 1 means less fine detail. Slope: more negative = less fine detail "

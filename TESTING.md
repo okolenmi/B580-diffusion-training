@@ -76,7 +76,17 @@ python -m next.lab engines --models /home/okolenmi/comfy/ComfyUI/models/ --file 
 Pass: the same pictures up to small differences (mean PSNR above about 30 dB; fine and coarse change small and similar); a clearly different composition or a washed-out or noisy result is a bug in the renderer.
 
 ## 41. Lab: the first experiment (range ablation)
-`python -m next.lab template > range.json`, then edit: put **your own usual training command** (the whole `python -m next.run sdxl-lora ...` line, with the resolution, batch and memory settings you really train with) into `train_command` (the lab takes the paths out, drops `--output` and `--name` and keeps the rest for every arm), set `images.train` (a folder with some of your training images) and `images.holdout` (ten images that are not in the dataset), and run `python -m next.lab run range.json`. The template's `--resolution 512 --batch 2` are placeholders: the first attempt used the trainer's defaults (1024 px) and ran out of memory before step 1. Four arms train on all timesteps, 0-250, 250-600 and 600-999; if the first arm fails the lab stops and shows the end of its log. The first run prints seconds per image; lower `grid.steps`, `seeds` or the prompt list if it is too slow (finished arms are kept). Send `lab-out/range-ablation/range-ablation-share.zip`.
+`python -m next.lab template > range.json`, then edit: put **your own usual training command** (the whole `python -m next.run sdxl-lora ...` line, with the resolution, batch and memory settings you really train with) into `train_command` (the lab takes the paths out, drops `--output` and `--name` and keeps the rest for every arm), set `images.train` (a folder with some of your training images) and `images.holdout` (ten images that are not in the dataset), and run `python -m next.lab run range.json`. The template's `--resolution 512 --batch 2` are placeholders: the first attempt used the trainer's defaults (1024 px) and ran out of memory before step 1. Four arms train on all timesteps, t 0-250, 250-600 and 600-999 (t=0 is a clean image, t=999 pure noise; σ 0.03-0.70, 0.70-2.29, 2.29-14.6). The report now warns when the training resolution differs from the render size; if the first arm fails the lab stops and shows the end of its log. The first run prints seconds per image; lower `grid.steps`, `seeds` or the prompt list if it is too slow (finished arms are kept). Send `lab-out/range-ablation/range-ablation-share.zip`.
+
+## 42. Memory at the defaults: 1024 px, batch 1
+The old system trained 1024 px batches far larger than this, so a first measuring pass that runs out of memory at batch 1 is a regression to find. Four short runs with your usual dataset and model, the same everywhere except the marked part (`--steps 5`, no probes, no lab):
+```
+python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 --output t42a
+python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 --set runtime.deterministic=true --output t42b
+python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 4 --steps 5 --output t42c
+python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 --no-checkpointing --output t42d
+```
+Send the console output of each (the memory lines before step 1 and any error) and the peak memory they print. Expected: a, c fit (c is split into chunks by the planner); b is the suspect (deterministic mode runs steps whole); the point of d is only to see how much checkpointing saves.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

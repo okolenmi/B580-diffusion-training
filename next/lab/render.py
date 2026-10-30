@@ -26,7 +26,7 @@ class Recipe:
     steps: int = 25
     cfg: float = 6.0
     sampler: str = "dpmpp_2m"
-    scheduler: str = "karras"
+    scheduler: str = "normal"
     width: int = 1024
     height: int = 1024
 
@@ -46,7 +46,7 @@ class Grid:
     steps: int = 25
     cfg: float = 6.0
     sampler: str = "dpmpp_2m"
-    scheduler: str = "karras"
+    scheduler: str = "normal"
     width: int = 1024
     height: int = 1024
 

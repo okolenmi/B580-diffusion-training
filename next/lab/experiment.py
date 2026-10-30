@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,14 +61,38 @@ class Experiment:
         return tuple(out)
 
     @staticmethod
+    def split_command(command: str) -> dict:
+        """A training command as people type it (``python -m next.run sdxl-lora --models ... --steps 600``) into the experiment's own fields:
+        models, datasets, dataset and checkpoint are taken out, ``--output`` and ``--name`` are dropped (the lab chooses them), the rest are the shared arguments."""
+        tokens = shlex.split(command.replace("\\\n", " "))
+        if "sdxl-lora" not in tokens:
+            raise ValueError("the training command must be a `python -m next.run sdxl-lora ...` command")
+        tokens = tokens[tokens.index("sdxl-lora") + 1:]
+        fields = {"--models": "models", "--datasets": "datasets", "--dataset": "dataset", "--file": "checkpoint"}
+        found, rest, i = {}, [], 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token in fields and i + 1 < len(tokens):
+                found[fields[token]] = tokens[i + 1]
+                i += 2
+            elif token in ("--output", "--name") and i + 1 < len(tokens):
+                i += 2
+            else:
+                rest.append(token)
+                i += 1
+        return {**found, "train_args": rest}
+
+    @staticmethod
     def from_dict(spec: dict) -> Experiment:
+        if spec.get("train_command"):
+            spec = {**Experiment.split_command(spec["train_command"]), **{k: v for k, v in spec.items() if k != "train_command"}}
         grid = dict(spec.get("grid", {}))
         grid["prompts"] = tuple(grid.get("prompts") or ("",))
         for key in ("seeds", "strengths"):
             if key in grid:
                 grid[key] = tuple(grid[key])
         images = spec.get("images", {})
-        known = {"name", "models", "datasets", "dataset", "checkpoint", "output", "arms", "product", "grid", "train_args", "device", "images", "timesteps", "reference", "note"}
+        known = {"train_command", "name", "models", "datasets", "dataset", "checkpoint", "output", "arms", "product", "grid", "train_args", "device", "images", "timesteps", "reference", "note"}
         return Experiment(name=spec["name"], models=spec["models"], datasets=spec["datasets"], dataset=spec["dataset"], checkpoint=spec["checkpoint"],
                           output=spec.get("output", "lab-out"), arms=Experiment.expand(spec.get("arms", []), spec.get("product", [])), grid=Grid(**grid),
                           train_args=tuple(spec.get("train_args", ())), device=spec.get("device", "xpu"), train_images=images.get("train", ""), holdout_images=images.get("holdout", ""),
@@ -92,16 +117,12 @@ class Experiment:
 TEMPLATE = {
     "name": "range-ablation",
     "note": "Which part of the timestep range gives the painted-over look? Each arm trains on one range only.",
-    "models": "/home/okolenmi/comfy/ComfyUI/models/",
-    "datasets": "/home/okolenmi/Desktop/B580-diffusion-training/datasets/",
-    "dataset": "my_set",
-    "checkpoint": "divA.safetensors",
+    "train_command": "python -m next.run sdxl-lora --models /home/okolenmi/comfy/ComfyUI/models/ --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --file divA.safetensors --output x --batch 2 --resolution 512 --steps 600 --save-every 600 --set runtime.deterministic=true --set trainer.probe_every=100 --set trainer.probe_items=4",
     "output": "lab-out",
     "device": "xpu",
-    "train_args": ["--steps", "600", "--save-every", "600", "--set", "runtime.deterministic=true", "--set", "trainer.probe_every=100", "--set", "trainer.probe_items=4"],
     "images": {"train": "/path/to/training/images", "holdout": "/path/to/images/not/in/training", "count": 6, "size": 768},
-    "grid": {"prompts": ["", "a portrait of a woman, detailed face"], "seeds": [1, 2, 3], "strengths": [1.0],
-             "steps": 20, "cfg": 6.0, "sampler": "dpmpp_2m", "scheduler": "karras", "width": 1024, "height": 1024},
+    "grid": {"prompts": ["", "a portrait of a woman, detailed face", "a red house on a green hill under a blue sky"], "seeds": [1, 2, 3], "strengths": [1.0],
+             "steps": 20, "cfg": 6.0, "sampler": "dpmpp_2m", "scheduler": "normal", "width": 1024, "height": 1024},
     "arms": [{"name": "full"},
              {"name": "low-noise", "args": ["--set", "noiser.low=0", "--set", "noiser.high=250"], "note": "t 0-250 only"},
              {"name": "mid-noise", "args": ["--set", "noiser.low=250", "--set", "noiser.high=600"]},

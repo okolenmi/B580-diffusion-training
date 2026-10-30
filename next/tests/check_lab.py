@@ -169,6 +169,9 @@ def experiment_run() -> None:
                 "grid": {"prompts": ["", "a fox"], "seeds": [1], "strengths": [0.5, 1.0], "steps": 4, "width": 64, "height": 64},
                 "arms": [{"name": "full"}], "product": [[{"name": "lr1", "args": ["--lr", "1e-4"]}, {"name": "lr2", "args": ["--lr", "2e-4"]}], [{"name": "b1", "args": ["--batch", "1"]}]]}
         experiment = Experiment.from_dict(spec)
+        split = Experiment.split_command("python -m next.run sdxl-lora --models /m --datasets /d --dataset set --file c.safetensors \\\n --output /o --name x --batch 2 --set a.b=1 --steps 5")
+        check(split == {"models": "/m", "datasets": "/d", "dataset": "set", "checkpoint": "c.safetensors", "train_args": ["--batch", "2", "--set", "a.b=1", "--steps", "5"]},
+              "a pasted training command becomes the experiment's fields and shared arguments")
         check([a.name for a in experiment.arms] == ["full", "lr1+b1", "lr2+b1"] and experiment.arm("lr2+b1").args == ("--lr", "2e-4", "--batch", "1"), "arms and products expand to named variants with their arguments")
 
         def trainer(exp, arm, folder):

@@ -118,7 +118,10 @@ class Lab:
             self.say(f"{arm.name}: training ({' '.join(arm.args) or 'no extra arguments'})")
             result = self._train(self.experiment, arm, self.folder(arm))
             if result.returncode or not result.lora:
-                self.say(f"{arm.name}: training failed (code {result.returncode}); see {self.folder(arm) / 'train.log'}")
+                tail = (self.folder(arm) / "train.log").read_text(encoding="utf8", errors="replace").splitlines()[-8:]
+                self.say(f"{arm.name}: training failed (code {result.returncode}); the end of {self.folder(arm) / 'train.log'}:\n    " + "\n    ".join(tail))
+                if not any((self.folder(a) / "train.json").exists() and json.loads((self.folder(a) / "train.json").read_text())["lora"] for a in self.experiment.arms):
+                    raise SystemExit("no arm has trained yet, so the arguments are probably wrong for this machine (memory, paths): fix them and run again")
             else:
                 self.say(f"{arm.name}: {result.steps} steps, {result.seconds / 60:.1f} min, final loss {result.losses[-1] if result.losses else float('nan'):.4f}")
 

@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--steps", type=int, default=25)
     r.add_argument("--cfg", type=float, default=6.0)
     r.add_argument("--sampler", default="dpmpp_2m", choices=("euler", "dpmpp_2m"))
-    r.add_argument("--scheduler", default="karras", choices=("normal", "simple", "karras"))
+    r.add_argument("--scheduler", default="normal", choices=("normal", "simple", "karras"))
     r.add_argument("--width", type=int, default=1024)
     r.add_argument("--height", type=int, default=1024)
     r.add_argument("--device", default="xpu")
@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     for flag, kwargs in (("--models", {"required": True}), ("--file", {"required": True}), ("--comfy", {"required": True}), ("--comfy-python", {}), ("--lora", {}),
                          ("--comfy-dtype", {"default": "auto", "choices": ("auto", "bf16", "fp16", "fp32")}), ("--comfy-device", {"default": "auto", "choices": ("auto", "cpu")}),
                          ("--seeds", {"type": int, "nargs": "+", "default": [1, 2]}), ("--steps", {"type": int, "default": 20}), ("--cfg", {"type": float, "default": 6.0}),
-                         ("--sampler", {"default": "dpmpp_2m", "choices": ("euler", "dpmpp_2m")}), ("--scheduler", {"default": "karras", "choices": ("normal", "simple", "karras")}),
+                         ("--sampler", {"default": "dpmpp_2m", "choices": ("euler", "dpmpp_2m")}), ("--scheduler", {"default": "normal", "choices": ("normal", "simple", "karras")}),
                          ("--width", {"type": int, "default": 1024}), ("--height", {"type": int, "default": 1024}), ("--device", {"default": "xpu"}), ("--out", {"default": "lab-engines"})):
         e.add_argument(flag, **kwargs)
     e.add_argument("--prompt", action="append")

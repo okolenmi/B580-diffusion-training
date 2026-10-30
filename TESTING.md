@@ -97,6 +97,17 @@ python -m next.accept save-probe --probe <output>/<name>_step000100.probe.safete
 This compares the training forward with a fresh copy of our model that loaded the saved file (should be identical). To add ComfyUI (its own checkpoint loader, LoRA loader, UNet and text encoders; a minute or two), add `--comfy /home/okolenmi/comfy/ComfyUI --comfy-python <the Python you start ComfyUI with>` (try `--comfy-dtype bf16` as well as the default: ComfyUI picks fp16 on its own). The ComfyUI step can also be run by itself in ComfyUI's environment: `<that Python> next/accept/comfy_forward.py --comfy ... --checkpoint ... --lora ... --probe ... --out <x>.comfy.safetensors`; then the command above without `--comfy` reads it.
 Send `save-fidelity.md`. Reading it: the table at the top gives one verdict per comparison; the rows say how large the difference is against what the LoRA does at all (3a: ComfyUI fed our text conditioning, so only the UNet and the way the file is applied differ; 3b: ComfyUI's own text side as well; the last tables show the text conditioning difference and the two engines' difference without any LoRA, which is the noise a LoRA comparison has to be read against).
 
+## 40. Lab: is our renderer ComfyUI's? (no training, about 15 minutes)
+Before trusting images from the lab, check them against ComfyUI on the same settings:
+```
+python -m next.lab engines --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --comfy /home/okolenmi/comfy --comfy-python /home/okolenmi/comfy/venv/bin/python --lora <your lora> --out lab-engines
+```
+(`--comfy` is the folder that holds `comfy/` and `main.py`; without `--lora` it compares the base model.) Add `--comfy-dtype bf16` for a second run: ComfyUI picks fp16, we run bf16. Send `lab-engines/engines.md` and `lab-engines/engines-sheet.png` (left ours, right ComfyUI).
+Pass: the same pictures up to small differences (mean PSNR above about 30 dB; fine and coarse change small and similar); a clearly different composition or a washed-out or noisy result is a bug in the renderer.
+
+## 41. Lab: the first experiment (range ablation)
+`python -m next.lab template > range.json`, then edit `train_args` to your usual command's arguments (the template has the steps, deterministic mode and the probe), the dataset name, `images.train` (a folder with some of your training images) and `images.holdout` (a folder of images that are not in the dataset; ten will do), and run `python -m next.lab run range.json`. Four arms train on all timesteps, 0-250, 250-600 and 600-999. The first run prints the seconds per image; if it is too slow, lower `grid.steps`, `seeds` or the resolution and start again (finished arms are kept). Send `lab-out/range-ablation/range-ablation-share.zip`.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

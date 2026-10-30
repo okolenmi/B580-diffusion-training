@@ -66,36 +66,6 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 37. Numerics: which gemm makes the backward differ between runs
-Two numerics runs found nothing wrong (every bit-exact check passes; differences between modes are bf16 rounding; `runtime.deterministic=true` makes the backward repeatable; a split batch differs as much as that sample's own sensitivity to one bf16 step, whatever its position). One question is left, about half a minute:
-```
-python -m next.accept numerics --device xpu --models <models> --file <checkpoint> --resolution 256 --only repeat --out numerics3
-```
-Send `numerics3/numerics.md`. `repeat` now includes gemms with a long reduction axis (the feed-forward backward), with and without deterministic algorithms; if one differs between launches it is the kernel that makes the backward vary when `runtime.deterministic` is off.
-
-## 38. What does each image train with, and where did the LoRA change?
-No hardware needed, a minute each. Until now the starter graph always applied Tag Swap (every caption cut to one random tag per epoch); it is now off unless `--tag-swap` is given, so **every LoRA you trained so far had it on**. First see what your set really feeds (paths as in your other commands):
-```
-python -m next.accept prompts --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --epochs 3 --tag-swap --out prompts-swap.md
-python -m next.accept prompts --datasets /home/okolenmi/Desktop/B580-diffusion-training/datasets/ --dataset my_set --epochs 3 --out prompts.md
-```
-Send both. Then where your LoRAs changed the network, and how much two LoRAs trained from different seeds agree (use the four you have: default and fast, both seed pairs):
-```
-python -m next.accept lora-map --lora <default s1> <fast s1> <default s2> <fast s2> --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --out lora-map.md
-```
-Send `lora-map.md`. After that, one pair of trainings: today's command with and without `--tag-swap` (everything else equal, `--set runtime.deterministic=true`), looked at the way item 31 was, at strength 1.0 and 0.5.
-
-## 39. Is the saved LoRA what training computed? (three forwards, same prompt and seed)
-A short training whose saver first runs one extra forward with the LoRA exactly as the optimizer left it, before anything is written (two prompts, a random one and the empty one, at three timesteps; with the LoRA and with it switched off). Add `--save-probe` to your usual command with a short run:
-```
-<your usual train command> --save-probe --steps 100 --save-every 100
-```
-It writes the LoRA `<name>_step000100.safetensors` and, beside it, `<name>_step000100.probe.safetensors` (a few MB: only the recorded inputs and predictions, no weights) in the output folder. The comparison reads **both**: the probe for what training computed, the LoRA file for what was saved. Then, with the card free:
-```
-python -m next.accept save-probe --probe <output>/<name>_step000100.probe.safetensors --lora <output>/<name>_step000100.safetensors --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --device xpu --out save-fidelity.md
-```
-This compares the training forward with a fresh copy of our model that loaded the saved file (should be identical). To add ComfyUI (its own checkpoint loader, LoRA loader, UNet and text encoders; a minute or two), add `--comfy /home/okolenmi/comfy/ComfyUI --comfy-python <the Python you start ComfyUI with>` (try `--comfy-dtype bf16` as well as the default: ComfyUI picks fp16 on its own). The ComfyUI step can also be run by itself in ComfyUI's environment: `<that Python> next/accept/comfy_forward.py --comfy ... --checkpoint ... --lora ... --probe ... --out <x>.comfy.safetensors`; then the command above without `--comfy` reads it.
-Send `save-fidelity.md`. Reading it: the table at the top gives one verdict per comparison; the rows say how large the difference is against what the LoRA does at all (3a: ComfyUI fed our text conditioning, so only the UNet and the way the file is applied differ; 3b: ComfyUI's own text side as well; the last tables show the text conditioning difference and the two engines' difference without any LoRA, which is the noise a LoRA comparison has to be read against).
 
 ## 40. Lab: is our renderer ComfyUI's? (no training, about 15 minutes)
 Before trusting images from the lab, check them against ComfyUI on the same settings:

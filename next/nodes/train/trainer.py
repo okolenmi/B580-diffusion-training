@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -116,11 +117,22 @@ class DiffusionTrainerNode(Node):
                           perf=self._perf_session(model, accelerator),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
-        result = trainer.run(start)
+        with self._attention_for_determinism(model, inputs):
+            result = trainer.run(start)
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
+
+    def _attention_for_determinism(self, model: TrainableDenoiser, inputs: dict):
+        """Deterministic kernels leave the stock attention for one that materialises the whole score matrix, which does not
+        fit at large sizes; blockwise attention is deterministic and keeps the memory low. A graph run picks its own."""
+        determinism = getattr(self.context.runtime, "determinism", None)
+        scopes = getattr(model.denoiser, "attention_scopes", lambda: {})()
+        if not (getattr(determinism, "enabled", False) and not inputs.get("graph") and "chunked_bf16" in scopes):
+            return contextlib.nullcontext()
+        self._warn("deterministic mode: attention runs blockwise with bf16 scores (the stock kernel's deterministic form needs far more memory)")
+        return scopes["chunked_bf16"]()
 
     def _warn(self, message: str) -> None:
         self.context.report("warning", {"node": self.uid, "message": message})

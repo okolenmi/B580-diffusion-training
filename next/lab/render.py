@@ -91,7 +91,7 @@ class Renderer:
         x = initial_noise(recipe.seed, (1, 4, recipe.height // 8, recipe.width // 8), float(sigmas[0]), self.table).to(self.device)
         with torch.no_grad():
             cfg = 1.0 if recipe.prompt == recipe.negative else recipe.cfg  # equal prompts predict equal noise: guidance changes nothing, the second pass is wasted
-            return SAMPLERS[recipe.sampler]().run(GuidedDenoiser(network, self.table, cfg), x, sigmas.to(self.device)).cpu()
+            return SAMPLERS[recipe.sampler]().run(GuidedDenoiser(network, self.table, cfg), x, sigmas).cpu()  # sigmas stay on the host: 0-dim host tensors combine with device tensors
 
     def render(self, recipes: Iterable[Recipe], meta: dict | None = None, on_image=None) -> list[Image]:
         recipes = list(recipes)

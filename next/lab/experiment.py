@@ -166,4 +166,26 @@ PERTURB_TEMPLATE = {
              {"name": "perturb-low-big", "args": ["--regions", "3", "--set", "noiser.perturb=0.4,0.2,0"]},
              {"name": "perturb-low-only", "args": ["--regions", "3", "--set", "noiser.perturb=0.3,0,0"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE}
+CHEAP_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "cheap-equal",
+    "note": "Can per-timestep weights (1 / the typical gradient norm of each third) give what three timesteps per image give, at a third of the cost? "
+            "`equal` costs three forwards per step; `gradnorm-900` has the same compute with single-timestep steps.",
+    "arms": [{"name": "equal", "args": ["--regions", "3"]},
+             {"name": "gradnorm-300", "args": ["--time-balance", "gradnorm"], "note": "a third of the compute"},
+             {"name": "gradnorm-900", "args": ["--time-balance", "gradnorm", "--steps", "900", "--save-every", "900"]},
+             {"name": "single-900", "args": ["--steps", "900", "--save-every", "900"], "note": "same compute as equal, no weights"}],
+}
+NOISE_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "noise-floor",
+    "note": "Same arguments, same seed, run twice (and twice more with deterministic kernels): how different are two runs that should be the same? "
+            "Differences between arms in other experiments smaller than this are not results.",
+    "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 150").replace("--save-every 300", "--save-every 150"),
+    "arms": [{"name": "equal-a", "args": ["--regions", "3"]},
+             {"name": "equal-b", "args": ["--regions", "3"]},
+             {"name": "det-a", "args": ["--regions", "3", "--set", "runtime.deterministic=true"]},
+             {"name": "det-b", "args": ["--regions", "3", "--set", "runtime.deterministic=true"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE}

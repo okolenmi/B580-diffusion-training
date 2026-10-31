@@ -141,6 +141,11 @@ class Optimizer(DeviceResident):
     def _has_grad(self, p: nn.Parameter) -> bool:
         return p.grad is not None and (not self._holds_grads or id(p) in self._touched)
 
+    def grad_norm(self) -> float:
+        """Total norm of the gradients the next ``step`` would apply."""
+        grads = [p.grad.detach().float() for p in self.params if self._has_grad(p)]
+        return float(torch.linalg.vector_norm(torch.stack([torch.linalg.vector_norm(g) for g in grads]))) if grads else 0.0
+
     def _clip(self) -> None:
         grads = [p.grad for p in self.params if self._has_grad(p)]
         if not grads:

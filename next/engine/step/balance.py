@@ -16,7 +16,7 @@ from torch import Tensor
 
 from .loss import T_THIRDS
 
-MODES = ("off", "normalize", "speed", "dro")
+MODES = ("off", "normalize", "speed", "dro", "gradnorm")
 
 
 class TimeBalance:
@@ -41,6 +41,23 @@ class TimeBalance:
         self._slow: dict[str, float] = {}
         self._fast: dict[str, float] = {}
         self._weights: dict[str, float] = {}
+        self._grad: dict[str, float] = {}  # gradient norm per third (what the step's gradient would be without this balance's weight)
+        self._grad_seen: dict[str, int] = {}
+
+    @property
+    def wants_gradient_norm(self) -> bool:
+        return self.mode == "gradnorm"
+
+    def observe_gradient(self, thirds: dict[str, float], norm: float) -> None:
+        """The gradient norm of a step whose samples all came from one third (a step that mixes thirds says nothing about either).
+        ``gradnorm`` weights each third by the inverse of its typical norm, so every third moves the adapter equally far."""
+        if self.mode != "gradnorm" or len(thirds) != 1 or not math.isfinite(norm) or norm <= 0.0:
+            return
+        name = next(iter(thirds))
+        plain = norm / self._weights.get(name, 1.0)
+        self._grad[name] = plain if name not in self._grad else self.ema_alpha * plain + (1 - self.ema_alpha) * self._grad[name]
+        self._grad_seen[name] = self._grad_seen.get(name, 0) + 1
+        self._reweigh()
 
     def observe(self, thirds: dict[str, float]) -> None:
         """One optimizer step's mean loss per third. Thirds the step did not sample are left as they were."""
@@ -56,10 +73,17 @@ class TimeBalance:
                 if len(seen) >= self.warmup_reports:
                     self._baseline[name] = sum(seen) / len(seen)
                     del self._warmup[name]
-        if self.mode != "off" and self._baseline:
+        if self.mode not in ("off", "gradnorm") and self._baseline:
             self._reweigh()
 
     def _reweigh(self) -> None:
+        if self.mode == "gradnorm":
+            known = [k for k in T_THIRDS if self._grad_seen.get(k, 0) >= self.warmup_reports]
+            if known:
+                raw = {k: 1.0 / self._grad[k] for k in known}
+                mean = sum(raw.values()) / len(raw)
+                self._weights = {k: min(self.clip_max, max(self.clip_min, v / mean)) for k, v in raw.items()}
+            return
         ready = [name for name in T_THIRDS if name in self._baseline]
         if self.mode == "normalize":
             raw = {k: 1.0 / self._baseline[k] for k in ready}

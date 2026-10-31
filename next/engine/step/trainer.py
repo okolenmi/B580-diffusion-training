@@ -229,6 +229,8 @@ class Trainer:
             losses.append(loss)
             thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
         if not self._fused:
+            if self._balance is not None and self._balance.wants_gradient_norm and len(thirds) == 1:
+                self._balance.observe_gradient(thirds[0], self.optimizer.grad_norm())
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing

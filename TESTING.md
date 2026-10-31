@@ -107,6 +107,20 @@ python -m next.lab template regions-perturb > perturb.json
 ```
 Edit (`images`), `python -m next.lab run perturb.json`, send the zip. Pass: `equal` and the `perturb-low*` arms keep the same structure (the t=850-950 ratios in the per-t table stay at about 0.80-0.91) while the detail columns (finest octave, fine / coarse) and your eyes say whether details improved. `--regions 3` is the short form of `noiser.regions=3 noiser.layout=strata trainer.gradient_policy=equal`; the step line also prints the mean gradient norm of every region (`grad norm`), which I need for the next idea (weights that equalise regions without three forwards per step).
 
+## 46. Noise floor: how different are two runs that should be the same (about 1 hour; do this first)
+In item 45 the `equal` arm trained to the same numbers as the `equal` arm of item 44 (mean loss, per-t table and probe identical to 3 digits, last step lines identical), yet its images scored differently (finest octave 2.57 against 3.03, coarse change 0.0868 against 0.0924) and looked worse to you. Either the kernels are not bit-exact and small differences grow, or the renders differ. This runs the same training twice, and twice with deterministic kernels (slower).
+```
+python -m next.lab template noise-floor > floor.json
+```
+Edit (`images`), `python -m next.lab run floor.json`, send the zip. Reading: `det-a` against `det-b` (identical pictures: the training is exact and the rest is rendering; different: something in our pipeline is not deterministic), `equal-a` against `equal-b` (the size of the normal run-to-run difference in the detail columns; any arm difference below it is noise).
+
+## 47. Weights instead of three forwards (about 1 hour)
+The gradient norms you sent: region 0 and region 1 about 0.0095 on average, region 2 (noisy end) about 0.0023, so `equal` mostly boosts the noisy end by about 4. `--time-balance gradnorm` measures the same norms on ordinary one-timestep steps (batch 1, no accumulation) and weights each third by the inverse; the step line prints the weights (`weights a/b/c`), expect about 0.5 / 0.5 / 2 once all thirds have 10 steps.
+```
+python -m next.lab template cheap-equal > cheap.json
+```
+Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `gradnorm-900` (the same compute as `equal`), `single-900` (same compute, no weights). Send the zip. If `gradnorm-900` looks like `equal`, per-step cost drops by three at the same quality, and `gradnorm-300` shows whether it is that or the step count.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

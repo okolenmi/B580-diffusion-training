@@ -40,7 +40,8 @@ class TimeBalanceNode(Node):
     INPUTS = {
         "mode": Port("mode", str, required=False, default="speed", choices=MODES, group="weights",
                      doc="off: only track. normalize: equal loss scale per third. speed: thirds that improve slower gain weight. "
-                         "dro: the third furthest above its own baseline dominates."),
+                         "dro: the third furthest above its own baseline dominates. gradnorm: weight = 1 / the typical gradient norm of the third, "
+                         "measured on steps whose samples all come from it (batch 1, no accumulation; plain optimizer), so every third moves the adapter equally far."),
         "eta": Port("eta", float, required=False, default=0.5, minimum=0.0, group="weights", visible_when=("mode", "speed")),
         "leak": Port("leak", float, required=False, default=0.05, minimum=0.0, maximum=0.99, group="weights", visible_when=("mode", "speed"),
                      doc="Share of the accumulated weight forgotten at every report, so a lasting weight needs a lasting difference in speed."),

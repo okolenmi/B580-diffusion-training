@@ -172,8 +172,8 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--pack", type=float, default=0.3,
                            help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding; 0 = off")
             p.add_argument("--graph", action="store_true", help="replay forward and backward from captured device graphs (XPU; needs no dropout, no fused optimizer)")
-            p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro"),
-                           help="weight the loss by how each third of the timestep range is improving")
+            p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro", "gradnorm"),
+                           help="weight the loss by how each third of the timestep range is improving; gradnorm: by the inverse of the typical gradient norm of the third (batch 1, one timestep per step)")
             p.add_argument("--balance-sampling", type=float, default=0.0,
                            help="draw timesteps more often from the thirds that are behind (power of loss/baseline; needs tracking, 1 is a start)")
             p.add_argument("--dump", help="write the graph here instead of running it")

@@ -61,6 +61,20 @@ def policy_checks() -> None:
     check(abs(float(big[0]) / float(big[1]) - 1.0) < 0.05, f"normalising stops a large gradient from deciding the direction ({big.tolist()})")
 
 
+def gradnorm_check() -> None:
+    from ..engine.step.balance import TimeBalance
+    balance = TimeBalance("gradnorm", warmup_reports=3)
+    for _ in range(3):
+        balance.observe_gradient({"loss_t_low": 0.2}, 0.01)
+        balance.observe_gradient({"loss_t_mid": 0.1}, 0.01)
+        balance.observe_gradient({"loss_t_high": 0.01}, 0.0025)
+    weights = balance.weights
+    check(len(weights) == 3 and abs(weights["loss_t_high"] / weights["loss_t_low"] - 4.0) < 0.2 and abs(sum(weights.values()) / 3 - 1.0) < 0.2,
+          f"gradnorm gives the third with a quarter of the gradient four times the weight ({weights})")
+    balance.observe_gradient({"loss_t_low": 0.2, "loss_t_mid": 0.1}, 5.0)
+    check(balance.weights == weights, "a step that mixes thirds changes nothing")
+
+
 def window_check() -> None:
     """The policy sees each region's gradient over the whole accumulation window."""
     with tempfile.TemporaryDirectory() as raw:
@@ -80,6 +94,19 @@ def window_check() -> None:
         _, outcome, trace = execute(store, doc)
         metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
         check(outcome.ok and len(metrics) == 2 and "region_shared" in metrics[-1], f"two batches per step with two regions each still make one update per step ({outcome.error})")
+
+
+def balance_run_check() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        _, outcome, trace = execute(store, graph(tmp, steps=6, save_every=1000, time_balance="gradnorm"))
+        check(outcome.ok and trace.steps() == 6, f"a run with the gradnorm balance finishes ({outcome.error})")
 
 
 def trainer_checks() -> None:
@@ -106,4 +133,4 @@ def trainer_checks() -> None:
 
 
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, trainer_checks, window_check)
+    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check)

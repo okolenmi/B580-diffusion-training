@@ -66,47 +66,6 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-
-## 40. Lab: is our renderer ComfyUI's? (no training, about 15 minutes)
-Before trusting images from the lab, check them against ComfyUI on the same settings:
-```
-python -m next.lab engines --models /home/okolenmi/comfy/ComfyUI/models/ --file divA.safetensors --comfy /home/okolenmi/comfy --comfy-python /home/okolenmi/comfy/venv/bin/python --lora <your lora> --out lab-engines
-```
-(`--comfy` is the folder that holds `comfy/` and `main.py`; without `--lora` it compares the base model.) Add `--comfy-dtype bf16` for a second run: ComfyUI picks fp16, we run bf16. Send `lab-engines/engines.md` and `lab-engines/engines-sheet.png` (left ours, right ComfyUI).
-Pass: the same pictures up to small differences (mean PSNR above about 30 dB; fine and coarse change small and similar); a clearly different composition or a washed-out or noisy result is a bug in the renderer.
-
-## 41. Lab: the first experiment (range ablation)
-`python -m next.lab template > range.json`, then edit: put **your own usual training command** (the whole `python -m next.run sdxl-lora ...` line, with the resolution, batch and memory settings you really train with) into `train_command` (the lab takes the paths out, drops `--output` and `--name` and keeps the rest for every arm), set `images.train` (a folder with some of your training images) and `images.holdout` (ten images that are not in the dataset), and run `python -m next.lab run range.json`. The template's `--resolution 512 --batch 2` are placeholders: the first attempt used the trainer's defaults (1024 px) and ran out of memory before step 1. Four arms train on all timesteps, t 0-250, 250-600 and 600-999 (t=0 is a clean image, t=999 pure noise; σ 0.03-0.70, 0.70-2.29, 2.29-14.6). The report now warns when the training resolution differs from the render size; if the first arm fails the lab stops and shows the end of its log. The first run prints seconds per image; lower `grid.steps`, `seeds` or the prompt list if it is too slow (finished arms are kept). Send `lab-out/range-ablation/range-ablation-share.zip`.
-
-## 42. Memory at the defaults: 1024 px, batch 1
-First round (done): defaults fit (step peak 6.4 GB), batch 4 fits through chunking, no checkpointing does not fit (expected), and `--set runtime.deterministic=true` ran out of memory in the first measuring pass (2.5 GiB allocation: the deterministic form of the stock attention materialises the score matrix). Deterministic mode now runs blockwise bf16 attention. Repeat only this one and send the console output:
-```
-python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 --set runtime.deterministic=true --output t42b
-```
-Pass: it runs, the step peak is close to the default run's (about 6.4 GB), and the first lines warn that attention runs blockwise. Check also that the loss is of the same size as without the flag.
-
-## 43. Several timesteps per image and gradient policies
-First round (done): A single < batch 1 loses to everything; project and common came out equal; the floor run (0.45) barely moved. Reading: with regions 3 and unrelated gradients `region_shared` is about 0.33, so a floor of 0.45 skipped most steps (my mistake); and project/common on near-orthogonal gradients both end up as the average of the three unit-length gradients, so what C and D share is the per-region normalisation, not conflict handling. Second round, one lab experiment that separates these (about 1.5 hours):
-```
-python -m next.lab template regions > regions.json
-```
-Edit as in item 41 (your command is already in it, 1024 px batch 1, 300 steps, no deterministic flag; set `images`), `python -m next.lab run regions.json`, send the zip and the console of the `strata-*` arms (step lines now print `regions r0:.. r1:.. r2:.. cos_min .. shared ..`). Arms: single; `batch3` (fair control, three images per step); `regions3-mean` (old B); `strata-equal` (unit-length region gradients, averaged); `strata-project`; `strata-common`.
-Reading: if equal looks like project/common, the conflict handling does nothing at this batch size and normalisation is the lever; if batch3 beats regions3-mean, three images beat three timesteps of one image; `cos_min` near 0 and `shared` near 0.33 confirm the gradients are unrelated.
-
-## 44. Input perturbation, and regions with less noisy gradients (about 2 hours)
-Item 43 showed (step lines of the three policy runs): `cos_min` between -0.08 and 0.06 and `shared` 0.33-0.41, so with one image per region the regions' gradients are unrelated noise and project/common/equal are the same method. The lab now averages each region's gradient over the accumulation window before the policy looks at it, and the noiser can add an input perturbation per region.
-```
-python -m next.lab template regions-signal > signal.json
-```
-Edit as before (`images`), `python -m next.lab run signal.json`, send the zip and the step lines (last 15) of `equal-acc4`, `project-acc4`, `common-acc4`. Reading: if `cos_min` there is clearly below 0, the regions really conflict and project/common can differ from equal; if it stays near 0, the conflict idea is finished at these batch sizes and equal is the method. `equal-perturb*` against `equal`: perturbation is the sampler-diversity idea (the model answers from slightly wrong inputs, as it does while sampling); the per-t table should stay as it is and the pictures are the verdict.
-
-## 45. Input perturbation at the clean end of the range only (about 1.2 hours)
-Item 44: project and common are the same as equal even with 12 images per step (`cos_min` within +-0.13), and the strong perturbation hurt structure. The perturbation list goes to the regions in turn, and region 2 is the noisy end, so `0,0.05,0.1` gave the strongest perturbation exactly where the structure is made. This run puts it at region 0 and none at region 2.
-```
-python -m next.lab template regions-perturb > perturb.json
-```
-Edit (`images`), `python -m next.lab run perturb.json`, send the zip. Pass: `equal` and the `perturb-low*` arms keep the same structure (the t=850-950 ratios in the per-t table stay at about 0.80-0.91) while the detail columns (finest octave, fine / coarse) and your eyes say whether details improved. `--regions 3` is the short form of `noiser.regions=3 noiser.layout=strata trainer.gradient_policy=equal`; the step line also prints the mean gradient norm of every region (`grad norm`), which I need for the next idea (weights that equalise regions without three forwards per step).
-
 ## 46. Noise floor: how different are two runs that should be the same (about 1 hour; do this first)
 In item 45 the `equal` arm trained to the same numbers as the `equal` arm of item 44 (mean loss, per-t table and probe identical to 3 digits, last step lines identical), yet its images scored differently (finest octave 2.57 against 3.03, coarse change 0.0868 against 0.0924) and looked worse to you. Either the kernels are not bit-exact and small differences grow, or the renders differ. This runs the same training twice, and twice with deterministic kernels (slower).
 ```

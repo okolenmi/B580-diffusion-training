@@ -62,11 +62,11 @@ class BucketerNode(Node):
 class NoiserNode(Node):
     DISPLAY_NAME = "Noiser"
     CATEGORY = "Dataset"
-    GROUPS = (Group("timesteps", "Timesteps"),)
+    GROUPS = (Group("objective", "Objective", collapsed=True), Group("timesteps", "Timesteps"),)
     INPUTS = {
         "denoiser": Port("denoiser", DenoiserPart, doc="Tells which family's objective to use."),
-        "parameterization": Port("parameterization", str, required=False, default="eps", choices=("eps", "v")),
-        "zero_terminal_snr": Port("zero_terminal_snr", bool, required=False, default=False,
+        "parameterization": Port("parameterization", str, required=False, default="eps", choices=("eps", "v"), group="objective"),
+        "zero_terminal_snr": Port("zero_terminal_snr", bool, required=False, default=False, group="objective",
                                   doc="Rescale the schedule so the last step is pure noise (v-prediction)."),
         "mode": Port("mode", str, required=False, default="uniform", group="timesteps",
                      choices=("uniform", "low", "mid", "high", "logit")),
@@ -75,6 +75,13 @@ class NoiserNode(Node):
         "balance": Port("balance", TimeBalance, required=False, doc="Steers the draw towards the thirds of the range that are behind."),
         "values": Port("values", str, required=False, default="", group="timesteps", advanced=True,
                        doc="Comma-separated timesteps to choose from instead of a distribution."),
+        "regions": Port("regions", int, required=False, default=1, minimum=1, group="timesteps",
+                        doc="Timesteps per image in one step: every image of a batch appears this many times, each copy at its own timestep "
+                            "(the batch is this many times larger; the loss is the mean over all copies). Replaces the distribution, `values` and the balance. "
+                            "With a gradient policy on the trainer the copies are the regions the policy reconciles."),
+        "layout": Port("layout", str, required=False, default="even", choices=("even", "strata"), group="timesteps",
+                       doc="even: copies equally far apart around the range from a random phase (one step covers the range evenly). "
+                           "strata: copy r always draws from the r-th equal part of the range."),
     }
     OUTPUTS = {"noiser": Port("noiser", Noiser)}
 
@@ -83,7 +90,8 @@ class NoiserNode(Node):
         family = get_family(inputs["denoiser"].family_id)
         objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
-        policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values)
+        policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
+                                  inputs.get("regions") or 1, inputs.get("layout") or "even")
         return {"noiser": Noiser(objective, policy, inputs.get("balance"))}
 
 

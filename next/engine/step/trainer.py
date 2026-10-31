@@ -18,6 +18,7 @@ from ..runtime.planner import chunk_sizes
 from ..runtime.thrash import PrimitiveCacheMonitor
 from .memory_probe import MemoryProbe
 from .loss import LossWeighting, thirds_of_range
+from .regional import RegionalUpdate, RegionGradients
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
 from .state import StepState, split_batch
@@ -51,13 +52,16 @@ class Trainer:
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
-                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None):
+                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
         self.device, self.emit, self.should_stop, self.residency = device, emit, should_stop, residency
         self._balance, self._plan_chunks = balance, plan_chunks
         self._perf = perf  # duck-typed: step(n) context manager, observe(metrics), close(); the engine does not know the profiler
+        if regional is not None and (isinstance(optimizer, FusedOptimizer) or graph is not None):
+            raise ValueError("a gradient policy reads each region's gradient before the update: it needs the plain optimizer (not fused) and no graph replay")
+        self._regional, self._regional_metrics = regional, {}
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._task = task or (lambda title: contextlib.nullcontext())
@@ -171,6 +175,7 @@ class Trainer:
         if self._time_probe is not None and not probe_metrics and self._time_probe.due(step):
             probe_metrics = self._time_probe.run()
         metrics.update(probe_metrics)
+        metrics.update(self._regional_metrics)
         if self._warn is not None:
             message = self._cache_monitor.observe((metrics["batch"], height, width), metrics["step_ms"] / 1000)
             if message:
@@ -194,6 +199,8 @@ class Trainer:
     def _window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
         """The window's micro-steps, each as one or more chunks, and the update. Past the point where an update may
         have been applied, ``_committed`` says a failure cannot be run again."""
+        if self._regional is not None:
+            return self._regional_window(step, fetched, attempt)
         plans = [(batch, self._chunks(batch, attempt)) for batch in fetched]
         passes = sum(len(sizes) for _, sizes in plans)
         if self._fused:
@@ -225,6 +232,53 @@ class Trainer:
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing
+
+    def _regional_window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
+        """Like ``_window``, but each region of a batch (its samples at one part of the timestep range) runs on its own from zero
+        gradients; the policy combines the regions' gradients, the average over the window is written back and applied."""
+        grads, total, used = RegionGradients(self.optimizer), None, 0
+        losses, thirds, timing, per_region = [], [], {}, {}
+        for micro, batch in enumerate(fetched):
+            region = batch.get("region")
+            sizes = [int(n) for n in torch.bincount(region).tolist() if n] if region is not None else [batch["x_t"].shape[0]]
+            matrix, loss, per_sample, fractions = [], 0.0, [], []
+            for index, part in enumerate(split_batch(batch, sizes)):
+                self.optimizer.zero_grad()
+                value, losses_part, fractions_part, spent = self._region_pass(step, micro, part, attempt)
+                matrix.append(grads.read())
+                per_region.setdefault(index, []).append(float(value))
+                loss, per_sample, fractions = loss + value / len(sizes), per_sample + losses_part, fractions + fractions_part
+                for label, ms in spent.items():
+                    timing[label] = timing.get(label, 0.0) + ms
+            direction = self._regional.direction(torch.stack(matrix))
+            if direction is not None:
+                total = direction if total is None else total + direction
+                used += 1
+            losses.append(loss)
+            thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
+        self._regional_metrics = {f"loss_region_{i}": sum(v) / len(v) for i, v in per_region.items()}
+        self._regional_metrics.update(self._regional.policy.last)
+        self._regional_metrics["update_skipped"] = float(total is None)
+        self.optimizer.zero_grad()
+        if total is not None:
+            grads.write(total / used)
+            self._committed = True
+            self.optimizer.step()
+        return losses, thirds, timing
+
+    def _region_pass(self, step: int, micro: int, part: dict, attempt: int) -> tuple[float, list, list, dict]:
+        """One region's forward and backward, as chunks when it is too big; leaves its gradient on the parameters."""
+        sizes = self._chunks(part, attempt)
+        total, loss, per_sample, fractions, timing = sum(sizes), 0.0, [], [], {}
+        for piece, size in zip(split_batch(part, sizes), sizes):
+            state = StepState(step, micro, self.device, batch=piece, scale=size / total)
+            self.pipeline.run(state)
+            loss = loss + state.loss.detach() * state.scale
+            per_sample.append(state.per_sample.detach())
+            fractions.append(state.inputs.t_frac.detach().flatten().float().cpu())
+            for label, ms in state.timing_ms.items():
+                timing[label] = timing.get(label, 0.0) + ms
+        return loss, per_sample, fractions, timing
 
     def _recover(self, step: int, error: BaseException) -> None:
         error.__traceback__ = None  # its frames hold the failed step's tensors

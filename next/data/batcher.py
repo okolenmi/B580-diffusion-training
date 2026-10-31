@@ -67,7 +67,7 @@ class Batcher:
 
     def largest_units(self) -> int:
         """Latent pixels of the largest batch of the run (samples times the padded area)."""
-        return max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+        return self.noiser.regions * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
 
     def clean_item(self, sample: str) -> tuple[torch.Tensor, torch.Tensor | None, tuple[int, int]]:
         """A sample as the model sees it when nothing is random: its latent centred in its bucket shape, the validity
@@ -88,11 +88,12 @@ class Batcher:
         """Batches per epoch of each (samples, height, width): which shapes the run spends its steps on."""
         counts: dict[tuple[int, int, int], int] = {}
         for ids, (height, width) in self.plan_for(self.epoch).batches:
-            counts[(len(ids), height, width)] = counts.get((len(ids), height, width), 0) + 1
+            key = (len(ids) * self.noiser.regions, height, width)
+            counts[key] = counts.get(key, 0) + 1
         return counts
 
     def max_batch_size(self) -> int:
-        return max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
+        return self.noiser.regions * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
 
     def probe_batch(self, like: dict, count: int = 1) -> dict:
         """``count`` samples at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
@@ -120,7 +121,7 @@ class Batcher:
         served = 0
         try:
             for batch in worker:
-                served += len(batch["samples"])
+                served += len(batch["samples"]) // self.noiser.regions
                 yield batch
         finally:
             worker.close()
@@ -144,6 +145,9 @@ class Batcher:
             true_sizes.append((h * self._factor, w * self._factor))
             placed.append((top, left, h, w))
             valid[k, :, top:top + h, left:left + w] = 1.0
+        copies = self.noiser.regions if len(ids) else 1
+        if copies > 1:  # one copy of the images per region, region by region
+            x0, valid, true_sizes, placed, ids = x0.repeat(copies, 1, 1, 1), valid.repeat(copies, 1, 1, 1), true_sizes * copies, placed * copies, ids * copies
         batch = self.noiser(x0, generator)
         if self.fill == "mirror":
             for k, (top, left, h, w) in enumerate(placed):

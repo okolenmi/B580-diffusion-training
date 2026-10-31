@@ -85,6 +85,18 @@ python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 
 ```
 Pass: it runs, the step peak is close to the default run's (about 6.4 GB), and the first lines warn that attention runs blockwise. Check also that the loss is of the same size as without the flag.
 
+## 43. Several timesteps per image and gradient policies (about 40 minutes)
+Five short runs of your usual command (resolution, batch, memory settings as in item 41), `--steps 300`, each with its own `--output`, the same seed. Only the marked settings differ:
+```
+a: (nothing)
+b: --set noiser.regions=3
+c: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=project
+d: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=common
+e: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=common --set trainer.policy_floor=0.45
+```
+(c, d, e need `--set optimizer.fused=false` if your command turns the fused optimizer on, and no `--graph`.) Look at the console lines: `loss_region_0/1/2` are the average losses of t 0-333, 333-666 and 666-999 (strata); `region_cos_min` tells how much the regions disagree (below 0 means a pull against each other); `region_shared` for common. Send the console output of c, d and e (the last 15 step lines of each plus the first lines with memory) and say how much slower a step is than a.
+Pass: all five run; step time of c-e is about three times a (three backward passes of the same size) plus the combine; no new out-of-memory error at your batch size (b is three times the batch; the planner splits it). For quality, put the five LoRAs through the lab: copy item 41's JSON, keep one arm per run (`"args"` = the marked settings) and render at your training resolution.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

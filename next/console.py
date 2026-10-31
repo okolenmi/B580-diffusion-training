@@ -78,8 +78,9 @@ class Console:
                    + "".join(f" {label} {m[k]:.2f}" for k, label in (("region_cos_min", "cos_min"), ("region_shared", "shared")) if k in m)
                    + ("  grad norm " + " ".join(f"{m[k]:.3g}" for k in sorted(m) if k.startswith("grad_norm_region_")) if "grad_norm_region_0" in m else "")
                    + (" SKIPPED" if m.get("update_skipped") else "")) if "loss_region_0" in m else ""
+        perceptual = f"  perceptual {m['loss_perceptual']:.4f}" if "loss_perceptual" in m else ""
         epoch = f"  epoch {m['epoch'] + 1}{' end' if m.get('epoch_end') else ''}" if "epoch" in m else ""
-        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{by_third}{regions}{epoch}{where}{graphs}{weights}{draws}{memory}", flush=True)
+        print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{by_third}{regions}{perceptual}{epoch}{where}{graphs}{weights}{draws}{memory}", flush=True)
         if "probe_worst_rel" in m:
             rel = "/".join(f"{m[k]:.3f}" for k in ("probe_rel_t_low", "probe_rel_t_mid", "probe_rel_t_high") if k in m)
             print(f"  probe: adapter/base loss by third {rel}, worst {m['probe_worst_rel']:.3f} (above 1: worse than the base model)", flush=True)

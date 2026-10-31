@@ -18,6 +18,7 @@ from ..runtime.planner import chunk_sizes
 from ..runtime.thrash import PrimitiveCacheMonitor
 from .memory_probe import MemoryProbe
 from .loss import LossWeighting, thirds_of_range
+from .perceptual import SelfPerceptualLoss
 from .regional import RegionalUpdate, RegionGradients
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
@@ -52,7 +53,8 @@ class Trainer:
                  should_stop: Callable[[], bool] | None = None, synchronize: Callable[[], None] | None = None,
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
-                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None):
+                 warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None,
+                 perceptual: SelfPerceptualLoss | None = None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -68,7 +70,10 @@ class Trainer:
         self._fused = isinstance(optimizer, FusedOptimizer)
         self._batches = batches
         self._fetch = FetchBatch(batches)
-        compute: list[StepPhase] = [Forward(denoiser), Loss(weighting, balance), Backward(accumulation)]
+        if perceptual is not None and graph is not None:
+            raise ValueError("the self-perceptual loss runs a second network pass: it needs no graph replay")
+        self._perceptual = perceptual
+        compute: list[StepPhase] = [Forward(denoiser), Loss(weighting, balance), *([perceptual] if perceptual else []), Backward(accumulation)]
         self.graphed = graph(compute) if graph is not None else None  # replaces the three phases above, which it falls back to
         phases = [PrepareInputs(gate, gate_window), EncodeConditioning(conditioner), *([self.graphed] if self.graphed else compute)]
         fetch = self._fetch
@@ -176,6 +181,8 @@ class Trainer:
             probe_metrics = self._time_probe.run()
         metrics.update(probe_metrics)
         metrics.update(self._regional_metrics)
+        if self._perceptual is not None:
+            metrics.update(self._perceptual.report())
         if self._warn is not None:
             message = self._cache_monitor.observe((metrics["batch"], height, width), metrics["step_ms"] / 1000)
             if message:

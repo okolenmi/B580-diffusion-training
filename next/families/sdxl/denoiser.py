@@ -35,6 +35,11 @@ class SDXLDenoiser:
         """The family-neutral entry point: noisy input, timesteps and an SDXL conditioning in, prediction out."""
         return self(x_t, timestep, conditioning.ctx, conditioning.y)
 
+    def mid_features(self, x_t: Tensor, timestep: Tensor, conditioning) -> Tensor:
+        """The features after the UNet's middle block (the output blocks are not run)."""
+        x = x_t.to(self.dtype)
+        return self.model.encode(x, timestep.to(torch.float32), conditioning.ctx.to(self.dtype), conditioning.y.to(self.dtype))
+
     def parameters(self):
         return self.model.parameters()
 

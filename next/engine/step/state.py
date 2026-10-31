@@ -28,6 +28,7 @@ class StepState:
     conditioning: Any = None
     prediction: Tensor | None = None
     loss: Tensor | None = None
+    penalty: Tensor | None = None  # added to the loss in backward only; the reported loss stays the plain one
     per_sample: Tensor | None = None
     timing_ms: dict[str, float] = field(default_factory=dict)
     phase: str = ""  # the phase running (or that failed)

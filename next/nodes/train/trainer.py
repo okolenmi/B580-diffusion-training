@@ -23,6 +23,7 @@ from ...engine.step.loss import LossWeighting
 from ...engine.step.probe import TimeProbe
 from ...engine.step.schedule import LRSchedule
 from ...engine.step.policy import make_policy
+from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
 from ...graph import Completion, EventIn, EventOut, Group, Node, Port
@@ -93,6 +94,12 @@ class DiffusionTrainerNode(Node):
                              visible_when=("gradient_policy", "common"),
                              doc="Skip the update when the shared direction keeps less than this share of the average squared gradient norm "
                                  "(1 = regions identical, 1 / regions = unrelated, 0 = they cancel). 0 never skips."),
+        "perceptual_weight": Port("perceptual_weight", float, required=False, default=0.0, minimum=0.0, group="loop",
+                                  doc="Self-perceptual loss (0 = off): the prediction is turned into an image estimate, estimate and true image are "
+                                      "noised again at a random timestep, and the frozen base network (the adapter switched off) compares them by its "
+                                      "middle-block features. Added to the loss with this weight; the reported loss stays the plain one and the term is "
+                                      "reported as loss_perceptual. Needs an adapter with eps prediction, no graph; costs about half a forward and "
+                                      "backward more per step."),
         "fused_geglu": Port("fused_geglu", bool, required=False, default=True, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
@@ -129,6 +136,7 @@ class DiffusionTrainerNode(Node):
                           probe=self._time_probe(model, inputs), task=self.context.task, graph=graph,
                           plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
                           perf=self._perf_session(model, accelerator), regional=self._regional(inputs),
+                          perceptual=self._perceptual(model, inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):
@@ -137,6 +145,16 @@ class DiffusionTrainerNode(Node):
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
+
+    @staticmethod
+    def _perceptual(model: TrainableDenoiser, inputs: dict) -> SelfPerceptualLoss | None:
+        weight = inputs.get("perceptual_weight") or 0.0
+        if weight <= 0:
+            return None
+        objective = inputs["batches"].noiser.objective
+        if objective.process.parameterization.name != "eps":
+            raise ValueError("the self-perceptual loss is defined for eps prediction")
+        return SelfPerceptualLoss(SelfPerceptual(model.denoiser, objective, model.gate), weight)
 
     @staticmethod
     def _regional(inputs: dict) -> RegionalUpdate | None:

@@ -87,6 +87,13 @@ python -m next.lab template eps-scale > eps.json
 ```
 Edit `images` and the first arm's `lora` (path of, for example, the `equal` LoRA from item 45: `lab-out/regions-perturb/equal/train/lora_step000300.safetensors`), `python -m next.lab run eps.json`, send the zip. The arms render the same adapter at factors 1, 1.005, 1.01, 1.02, 1.04 (same seeds, so the pictures differ only by the factor). Look at the contact sheets: structure errors and the painted look first; the report's detail columns second (coarse change should move little, the fine columns show whether detail came back or went). Pass: a factor between 1.005 and 1.02 gives visibly better pictures than 1 (then exposure bias is part of the cause and the perturbation placement of item 45 is the training-side fix); no change up to 1.02 and a worse picture at 1.04 means it is not. Also worth one try in ComfyUI if a node for it exists (not checked).
 
+## 49. Self-perceptual loss (about 1.5 hours)
+Adds a term that compares the prediction with the truth through the frozen base network's middle-block features (Lin & Yang, "Diffusion Model with Perceptual Loss"), aimed at the blotchy, detail-free look that per-pixel error does not punish. Costs about half a forward and backward more per step; the first thing to check is that a 1024 px batch still fits.
+```
+python -m next.lab template perceptual > sp.json
+```
+Edit `images`, `python -m next.lab run sp.json`, send the zip. Arms: plain `equal` (regions 3) and the term at weights 0.3, 1, 3. Console: `perceptual` is the raw distance (not multiplied by the weight); the printed loss stays the plain error, so arms compare. Look first at the pictures at full size (brush strokes, overlapping blobs, detail that belongs to the subject), then at the finest-octave column. Also send the first step lines of `sp-1`: if `perceptual` times the weight is under 1% or over 10 times the plain loss, the weights are in the wrong range and the next run needs others. Pass: some weight gives fewer blotches at full size without new structure errors.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

@@ -132,5 +132,65 @@ def trainer_checks() -> None:
             check(ok and extra, f"{policy}: three steps with three regions per image ({outcome.error}, {sorted(metrics[-1]) if metrics else None})")
 
 
+def perceptual_checks() -> None:
+    """The self-perceptual term: zero for a perfect prediction, gradient into the prediction only, the adapter off for both passes."""
+    from ..engine.step.perceptual import SelfPerceptual
+    from ..engine.step.state import Inputs, StepState
+    from ..families.general.adapters.gate import TimestepGate
+
+    class Features:
+        def __init__(self, gate):
+            self.gate, self.seen = gate, []
+            self.weight = torch.nn.Parameter(torch.ones(1))
+
+        def mid_features(self, x, t, conditioning):
+            self.seen.append(None if self.gate.value is None else float(self.gate.value.sum()))
+            return torch.tanh(x * self.weight)
+
+    objective = TinyFamily().objective("eps", False)
+    gate = TimestepGate()
+    net = Features(gate)
+    term = SelfPerceptual(net, objective, gate)
+    torch.manual_seed(0)
+    x0, eps = torch.randn(2, 4, 8, 8), torch.randn(2, 4, 8, 8)
+    t = torch.tensor([100, 700])
+    x_t, target, sigma = objective.noisy(x0, eps, t)
+
+    def state(prediction):
+        s = StepState(0, 0, "cpu")
+        s.inputs = Inputs(x_t=x_t, t=t, sigma=sigma.flatten(), target=target, t_frac=t / 999)
+        s.prediction = prediction
+        return s
+
+    exact = term.distance(state(target.clone()))
+    check(float(exact) < 1e-10, f"a perfect prediction costs nothing ({float(exact):.2e})")
+    guess = (target + 0.5 * torch.randn_like(target)).requires_grad_()
+    distance = term.distance(state(guess))
+    distance.backward()
+    check(float(distance) > 0 and guess.grad is not None and float(guess.grad.abs().sum()) > 0, "a wrong prediction costs, and the cost reaches it")
+    check(net.weight.grad is not None and all(v == 0.0 for v in net.seen) and gate.value is None,
+          f"both feature passes run with the adapter off, and the gate is restored ({net.seen})")
+
+
+def perceptual_trainer_check() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        doc = graph(tmp, steps=2, save_every=1000)
+        for node in doc.nodes:
+            if node.class_name == "DiffusionTrainerNode":
+                node.params["perceptual_weight"] = 0.5
+        _, outcome, trace = execute(store, doc)
+        metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        check(outcome.ok and len(metrics) == 2 and all(m.get("loss_perceptual", -1) >= 0 for m in metrics),
+              f"a run with the term reports it ({outcome.error}, {sorted(metrics[-1]) if metrics else None})")
+
+
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check)
+    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, perceptual_checks,
+        perceptual_trainer_check)

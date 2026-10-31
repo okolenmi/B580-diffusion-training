@@ -211,7 +211,8 @@ class UNetModel(nn.Module):
         for (_, block), on in zip(blocks, flags):
             block.checkpointer = checkpointer if on else None
 
-    def forward(self, x, timesteps, context=None, y=None):
+    def _down(self, x, timesteps, context, y):
+        """The embedding, the input blocks and the middle block: ``(h, emb, skips)``."""
         if (y is not None) != (self.num_classes is not None):
             raise ValueError(f"y must be given exactly when the model is class-conditional (num_classes={self.num_classes!r})")
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels).to(x.dtype))
@@ -224,6 +225,14 @@ class UNetModel(nn.Module):
             skips.append(h)
         if self.middle_block is not None:
             h = self.middle_block(h, emb, context)
+        return h, emb, skips
+
+    def encode(self, x, timesteps, context=None, y=None):
+        """The features after the middle block: what the output blocks start from."""
+        return self._down(x, timesteps, context, y)[0]
+
+    def forward(self, x, timesteps, context=None, y=None):
+        h, emb, skips = self._down(x, timesteps, context, y)
         for module in self.output_blocks:
             h = torch.cat([h, skips.pop()], dim=1)
             h = module(h, emb, context, output_shape=skips[-1].shape if skips else None)

@@ -208,5 +208,15 @@ EPS_TEMPLATE = {
              {"name": "eps1.02", "reuse": "as-trained", "eps_scale": 1.02},
              {"name": "eps1.04", "reuse": "as-trained", "eps_scale": 1.04}],
 }
+PERCEPTUAL_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "perceptual",
+    "note": "Self-perceptual loss: the plain `equal` run against the same run with the feature-distance term at three weights. "
+            "The reported loss stays the plain mean error; the term shows as loss_perceptual in the console.",
+    "arms": [{"name": "equal", "args": ["--regions", "3"]},
+             {"name": "sp-0.3", "args": ["--regions", "3", "--set", "trainer.perceptual_weight=0.3"]},
+             {"name": "sp-1", "args": ["--regions", "3", "--set", "trainer.perceptual_weight=1"]},
+             {"name": "sp-3", "args": ["--regions", "3", "--set", "trainer.perceptual_weight=3"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "perceptual": PERCEPTUAL_TEMPLATE}

@@ -99,7 +99,8 @@ class Backward(StepPhase):
         self._scale = 1.0 / accumulation
 
     def run(self, state: StepState) -> None:
-        (state.loss * (self._scale * state.scale)).backward()
+        total = state.loss if state.penalty is None else state.loss + state.penalty
+        (total * (self._scale * state.scale)).backward()
 
 
 class Timed(StepPhase):

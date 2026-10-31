@@ -100,6 +100,13 @@ python -m next.lab template regions-signal > signal.json
 ```
 Edit as before (`images`), `python -m next.lab run signal.json`, send the zip and the step lines (last 15) of `equal-acc4`, `project-acc4`, `common-acc4`. Reading: if `cos_min` there is clearly below 0, the regions really conflict and project/common can differ from equal; if it stays near 0, the conflict idea is finished at these batch sizes and equal is the method. `equal-perturb*` against `equal`: perturbation is the sampler-diversity idea (the model answers from slightly wrong inputs, as it does while sampling); the per-t table should stay as it is and the pictures are the verdict.
 
+## 45. Input perturbation at the clean end of the range only (about 1.2 hours)
+Item 44: project and common are the same as equal even with 12 images per step (`cos_min` within +-0.13), and the strong perturbation hurt structure. The perturbation list goes to the regions in turn, and region 2 is the noisy end, so `0,0.05,0.1` gave the strongest perturbation exactly where the structure is made. This run puts it at region 0 and none at region 2.
+```
+python -m next.lab template regions-perturb > perturb.json
+```
+Edit (`images`), `python -m next.lab run perturb.json`, send the zip. Pass: `equal` and the `perturb-low*` arms keep the same structure (the t=850-950 ratios in the per-t table stay at about 0.80-0.91) while the detail columns (finest octave, fine / coarse) and your eyes say whether details improved. `--regions 3` is the short form of `noiser.regions=3 noiser.layout=strata trainer.gradient_policy=equal`; the step line also prints the mean gradient norm of every region (`grad norm`), which I need for the next idea (weights that equalise regions without three forwards per step).
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

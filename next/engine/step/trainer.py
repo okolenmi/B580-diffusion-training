@@ -257,8 +257,10 @@ class Trainer:
             pending = matrix if pending is None else pending + matrix  # the policy sees each region's gradient over the whole window
             losses.append(loss)
             thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
-        total = self._regional.direction(pending / len(fetched))
+        window = pending / len(fetched)
+        total = self._regional.direction(window)
         self._regional_metrics = {f"loss_region_{i}": sum(v) / len(v) for i, v in per_region.items()}
+        self._regional_metrics.update({f"grad_norm_region_{i}": float(n) for i, n in enumerate(window.norm(dim=1))})
         self._regional_metrics.update(self._regional.policy.last)
         self._regional_metrics["update_skipped"] = float(total is None)
         self.optimizer.zero_grad()

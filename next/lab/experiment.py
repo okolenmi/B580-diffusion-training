@@ -156,4 +156,14 @@ SIGNAL_TEMPLATE = {
              {"name": "project-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=project", "--accumulation", "4", "--steps", "100"]},
              {"name": "common-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=common", "--accumulation", "4", "--steps", "100"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE}
+PERTURB_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "regions-perturb",
+    "note": "Input perturbation by region. Region 0 is the nearly clean end of the range (t 0-333), region 2 the noisy end (t 666-999). "
+            "Strength 0 at region 2 keeps the structure; the strength at region 0 is what is tried.",
+    "arms": [{"name": "equal", "args": ["--regions", "3"]},
+             {"name": "perturb-low", "args": ["--regions", "3", "--set", "noiser.perturb=0.2,0.1,0"]},
+             {"name": "perturb-low-big", "args": ["--regions", "3", "--set", "noiser.perturb=0.4,0.2,0"]},
+             {"name": "perturb-low-only", "args": ["--regions", "3", "--set", "noiser.perturb=0.3,0,0"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE}

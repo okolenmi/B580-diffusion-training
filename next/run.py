@@ -109,7 +109,12 @@ def _starter(args, settings: list[str], params: list[str]):
         optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
         checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
         time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, tag_swap=args.tag_swap, save_probe=args.save_probe,
-        settings=_settings(settings), overrides=_overrides([*params, *(args.param or [])]))
+        settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
+
+
+def _regions_preset(regions: int) -> list[str]:
+    """``--regions N``: every image at N timesteps spread over the range, each region's gradient scaled to the same length (settings given later win)."""
+    return [f"noiser.regions={regions}", "noiser.layout=strata", "trainer.gradient_policy=equal"] if regions > 1 else []
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -148,6 +153,8 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--schedule", default="constant", choices=("constant", "cosine"), help="learning rate over the run: constant, or a cosine decay to 5%% of --lr over the whole run")
             p.add_argument("--save-probe", action="store_true", help="before each save, run one forward with the live adapter and keep it in <file>.probe.safetensors "
                            "(python -m next.accept save-probe checks the saved file against it)")
+            p.add_argument("--regions", type=int, default=1, help="timesteps per image in one step, one from each equal part of the range, gradients of the parts "
+                           "scaled to equal length before they are averaged (N times the batch per step; see manual/quality.md, 'Timesteps per image')")
             p.add_argument("--tag-swap", action="store_true", help="train each epoch on one random tag of every caption instead of the whole caption (an experiment)")
             p.add_argument("--rank", type=int, default=16)
             p.add_argument("--optimizer", default="AdamWNode", choices=("AdamWNode", "AdafactorNode", "CAMENode"))

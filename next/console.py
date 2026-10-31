@@ -76,6 +76,7 @@ class Console:
         by_third = "  by t " + " ".join(f"{k[7:]} {m[k]:.4f}" for k in ("loss_t_low", "loss_t_mid", "loss_t_high") if k in m) if any(k in m for k in ("loss_t_low", "loss_t_mid", "loss_t_high")) else ""
         regions = ("  regions " + " ".join(f"{k.removeprefix('loss_region_')}:{m[k]:.4f}" for k in sorted(m) if k.startswith("loss_region_"))
                    + "".join(f" {label} {m[k]:.2f}" for k, label in (("region_cos_min", "cos_min"), ("region_shared", "shared")) if k in m)
+                   + ("  grad norm " + " ".join(f"{m[k]:.3g}" for k in sorted(m) if k.startswith("grad_norm_region_")) if "grad_norm_region_0" in m else "")
                    + (" SKIPPED" if m.get("update_skipped") else "")) if "loss_region_0" in m else ""
         epoch = f"  epoch {m['epoch'] + 1}{' end' if m.get('epoch_end') else ''}" if "epoch" in m else ""
         print(f"step {summary['step']}/{summary['total']}  loss {m['loss']:.4f}  {m['step_ms']:.0f} ms{by_third}{regions}{epoch}{where}{graphs}{weights}{draws}{memory}", flush=True)

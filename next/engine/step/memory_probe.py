@@ -36,6 +36,7 @@ class MemoryProbe:
         largest = self.batches.largest_units()
         self._choose(make, largest)
         self.residency.expect(largest)
+        self.residency.give_back("the probe's blocks are the largest the run will use; the steps need only their own peak")
         predicted, budget = self.residency.largest_peak_mb(), self.residency.budget_mb()
         if not self.splits and predicted is not None and budget is not None and predicted > budget:
             self.residency.note("unsplit_over_budget", predicted_mb=round(predicted), budget_mb=round(budget))

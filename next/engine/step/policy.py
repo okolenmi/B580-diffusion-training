@@ -118,11 +118,11 @@ class CommonDescent(GradientPolicy):
         return direction
 
 
-POLICIES = {"mean": Mean, "project": Project, "common": CommonDescent}
+POLICIES = {"mean": Mean, "equal": Mean, "project": Project, "common": CommonDescent}
 
 
 def make_policy(name: str, floor: float = 0.0, seed: int = 0) -> GradientPolicy:
-    if name == "mean":
+    if name in ("mean", "equal"):
         return Mean()
     if name == "project":
         return Project(seed)

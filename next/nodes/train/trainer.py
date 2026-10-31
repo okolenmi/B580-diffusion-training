@@ -81,8 +81,9 @@ class DiffusionTrainerNode(Node):
                                 doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
                                     "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
                                     "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
-        "gradient_policy": Port("gradient_policy", str, required=False, default="mean", choices=("mean", "project", "common"), group="loop",
+        "gradient_policy": Port("gradient_policy", str, required=False, default="mean", choices=("mean", "equal", "project", "common"), group="loop",
                                 doc="How the regions of a batch (see the noiser's `regions`) are reconciled. mean: one batch, one loss. "
+                                    "equal: each region's gradient is scaled to unit length, then averaged, so every region counts the same whatever its loss weight. "
                                     "project: a region's gradient loses the part that points against another region's. "
                                     "common: the shortest vector among the regions' gradients, which lowers every region's loss to first order. "
                                     "The last two run each region's backward alone (more memory-light but slower) and need the plain optimizer, no graph."),
@@ -145,7 +146,7 @@ class DiffusionTrainerNode(Node):
         if inputs["batches"].noiser.regions < 2:
             raise ValueError(f"gradient policy {name!r} reconciles regions: set the noiser's regions to 2 or more")
         policy = make_policy(name, inputs.get("policy_floor") or 0.0, int(getattr(inputs["batches"], "seed", 0)))
-        return RegionalUpdate(policy, bool(inputs.get("policy_normalize", True)))
+        return RegionalUpdate(policy, bool(inputs.get("policy_normalize", True)) or name == "equal")
 
     def _attention_for_determinism(self, model: TrainableDenoiser, inputs: dict):
         """Deterministic kernels leave the stock attention for one that materialises the whole score matrix, which does not

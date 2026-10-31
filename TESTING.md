@@ -85,17 +85,13 @@ python -m next.run sdxl-lora <your paths> --resolution 1024 --batch 1 --steps 5 
 ```
 Pass: it runs, the step peak is close to the default run's (about 6.4 GB), and the first lines warn that attention runs blockwise. Check also that the loss is of the same size as without the flag.
 
-## 43. Several timesteps per image and gradient policies (about 40 minutes)
-Five short runs of your usual command (resolution, batch, memory settings as in item 41), `--steps 300`, each with its own `--output`, the same seed. Only the marked settings differ:
+## 43. Several timesteps per image and gradient policies
+First round (done): A single < batch 1 loses to everything; project and common came out equal; the floor run (0.45) barely moved. Reading: with regions 3 and unrelated gradients `region_shared` is about 0.33, so a floor of 0.45 skipped most steps (my mistake); and project/common on near-orthogonal gradients both end up as the average of the three unit-length gradients, so what C and D share is the per-region normalisation, not conflict handling. Second round, one lab experiment that separates these (about 1.5 hours):
 ```
-a: (nothing)
-b: --set noiser.regions=3
-c: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=project
-d: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=common
-e: --set noiser.regions=3 --set noiser.layout=strata --set trainer.gradient_policy=common --set trainer.policy_floor=0.45
+python -m next.lab template regions > regions.json
 ```
-(c, d, e need `--set optimizer.fused=false` if your command turns the fused optimizer on, and no `--graph`.) Look at the console lines: `loss_region_0/1/2` are the average losses of t 0-333, 333-666 and 666-999 (strata); `region_cos_min` tells how much the regions disagree (below 0 means a pull against each other); `region_shared` for common. Send the console output of c, d and e (the last 15 step lines of each plus the first lines with memory) and say how much slower a step is than a.
-Pass: all five run; step time of c-e is about three times a (three backward passes of the same size) plus the combine; no new out-of-memory error at your batch size (b is three times the batch; the planner splits it). For quality, put the five LoRAs through the lab: copy item 41's JSON, keep one arm per run (`"args"` = the marked settings) and render at your training resolution.
+Edit as in item 41 (your command is already in it, 1024 px batch 1, 300 steps, no deterministic flag; set `images`), `python -m next.lab run regions.json`, send the zip and the console of the `strata-*` arms (step lines now print `regions r0:.. r1:.. r2:.. cos_min .. shared ..`). Arms: single; `batch3` (fair control, three images per step); `regions3-mean` (old B); `strata-equal` (unit-length region gradients, averaged); `strata-project`; `strata-common`.
+Reading: if equal looks like project/common, the conflict handling does nothing at this batch size and normalisation is the lever; if batch3 beats regions3-mean, three images beat three timesteps of one image; `cos_min` near 0 and `shared` near 0.33 confirm the gradients are unrelated.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

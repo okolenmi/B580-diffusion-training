@@ -128,3 +128,19 @@ TEMPLATE = {
              {"name": "t250-600", "args": ["--set", "noiser.low=250", "--set", "noiser.high=600"], "note": "sigma 0.70-2.29"},
              {"name": "t600-999", "args": ["--set", "noiser.low=600", "--set", "noiser.high=999"], "note": "sigma 2.29-14.6 (mostly noise)"}],
 }
+
+
+STRATA = ["--set", "noiser.regions=3", "--set", "noiser.layout=strata"]
+REGIONS_TEMPLATE = {
+    **TEMPLATE,
+    "name": "regions",
+    "note": "Three timesteps per image and how their gradients are combined. `batch3` is the fair control: the same cost with three different images and one timestep each.",
+    "train_command": TEMPLATE["train_command"].replace("--batch 2 --resolution 512", "--batch 1 --resolution 1024").replace("--steps 600", "--steps 300").replace("--save-every 600", "--save-every 300").replace(" --set runtime.deterministic=true", ""),
+    "arms": [{"name": "single"},
+             {"name": "batch3", "args": ["--batch", "3"]},
+             {"name": "regions3-mean", "args": ["--set", "noiser.regions=3"]},
+             {"name": "strata-equal", "args": [*STRATA, "--set", "trainer.gradient_policy=equal"], "note": "each region's gradient scaled to unit length, then averaged"},
+             {"name": "strata-project", "args": [*STRATA, "--set", "trainer.gradient_policy=project"]},
+             {"name": "strata-common", "args": [*STRATA, "--set", "trainer.gradient_policy=common"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE}

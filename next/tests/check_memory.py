@@ -590,7 +590,7 @@ def training():
         trainer, *_ = rig(Path(raw), steps=2, residency=m)
         trainer.emit = lambda e, log=[]: log.append(e)
         trainer.run()
-        check(m.steps_seen == 2 and device.cache_emptied == 0, "the trainer calls the manager around every step; nothing released, so no cache emptying")
+        check(m.steps_seen == 2 and device.cache_emptied == 1, "the trainer calls the manager around every step; the probe hands its cache back once, no step releases anything")
 
 
 class FakeBlock:

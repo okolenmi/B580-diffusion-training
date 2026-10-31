@@ -29,10 +29,12 @@ class Recipe:
     scheduler: str = "normal"
     width: int = 1024
     height: int = 1024
+    eps_scale: float = 1.0
 
     @property
     def stem(self) -> str:
-        return f"p{hashlib.md5(self.prompt.encode()).hexdigest()[:6]}_s{self.seed}_x{self.strength:g}"
+        base = f"p{hashlib.md5(self.prompt.encode()).hexdigest()[:6]}_s{self.seed}_x{self.strength:g}"
+        return base if self.eps_scale == 1.0 else f"{base}_e{self.eps_scale:g}"
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,7 @@ class Renderer:
         x = initial_noise(recipe.seed, (1, 4, recipe.height // 8, recipe.width // 8), float(sigmas[0]), self.table).to(self.device)
         with torch.no_grad():
             cfg = 1.0 if recipe.prompt == recipe.negative else recipe.cfg  # equal prompts predict equal noise: guidance changes nothing, the second pass is wasted
-            return SAMPLERS[recipe.sampler]().run(GuidedDenoiser(network, self.table, cfg), x, sigmas).cpu()  # sigmas stay on the host: 0-dim host tensors combine with device tensors
+            return SAMPLERS[recipe.sampler]().run(GuidedDenoiser(network, self.table, cfg, recipe.eps_scale), x, sigmas).cpu()  # sigmas stay on the host: 0-dim host tensors combine with device tensors
 
     def render(self, recipes: Iterable[Recipe], meta: dict | None = None, on_image=None) -> list[Image]:
         recipes = list(recipes)
@@ -131,7 +133,7 @@ class ImageStore:
         info.add_text("lab", json.dumps(image.meta, sort_keys=True))
         info.add_text("parameters", f"{image.recipe.prompt}\nNegative prompt: {image.recipe.negative}\nSteps: {image.recipe.steps}, Sampler: {image.recipe.sampler}, "
                                     f"Schedule type: {image.recipe.scheduler}, CFG scale: {image.recipe.cfg}, Seed: {image.recipe.seed}, "
-                                    f"Size: {image.recipe.width}x{image.recipe.height}, Lora strength: {image.recipe.strength}")
+                                    f"Size: {image.recipe.width}x{image.recipe.height}, Lora strength: {image.recipe.strength}, Epsilon scale: {image.recipe.eps_scale:g}")
         PILImage.fromarray(image.pixels.permute(1, 2, 0).numpy()).save(path, pnginfo=info)
         self.entries.append({"file": path.name, **image.meta})
         (self.directory / "index.json").write_text(json.dumps(self.entries, indent=1, sort_keys=True), encoding="utf8")

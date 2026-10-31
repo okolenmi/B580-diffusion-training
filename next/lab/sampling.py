@@ -117,8 +117,8 @@ class Network(Protocol):
 class GuidedDenoiser:
     """``denoise(x, sigma)`` for a network that predicts eps for a positive and a negative prompt (classifier-free guidance)."""
 
-    def __init__(self, network: Network, table: NoiseTable, cfg: float):
-        self.network, self.table, self.cfg = network, table, cfg
+    def __init__(self, network: Network, table: NoiseTable, cfg: float, eps_scale: float = 1.0):
+        self.network, self.table, self.cfg, self.eps_scale = network, table, cfg, eps_scale
 
     def __call__(self, x: Tensor, sigma: Tensor) -> Tensor:
         sigma = torch.as_tensor(sigma, dtype=torch.float32)
@@ -128,6 +128,8 @@ class GuidedDenoiser:
         if self.cfg != 1.0:
             eps_negative = self.network(x_in, t, False)
             eps = eps_negative + (eps - eps_negative) * self.cfg
+        if self.eps_scale != 1.0:
+            eps = eps / self.eps_scale  # epsilon scaling: the guided prediction is shrunk a little, as sampling errors make it too large
         return x - eps.to(x.dtype) * float(sigma)
 
 

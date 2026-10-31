@@ -18,6 +18,13 @@ class Arm:
     name: str
     args: tuple[str, ...] = ()
     note: str = ""
+    eps_scale: float = 1.0  # sampling only: the predicted noise is divided by this (1 = unchanged)
+    reuse: str = ""  # the name of an earlier arm whose trained adapter this arm renders instead of training its own
+    lora: str = ""  # an adapter file made earlier: rendered as it is, nothing is trained
+
+    def describe(self) -> str:
+        parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]
+        return " ".join(parts) or "-"
 
 
 @dataclass(frozen=True)
@@ -51,13 +58,16 @@ class Experiment:
     @staticmethod
     def expand(arms: list[dict], product: list[list[dict]]) -> tuple[Arm, ...]:
         """The listed arms, then every combination of one choice from each group of ``product`` (names joined with ``+``, arguments in order)."""
-        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", "")) for a in arms]
+        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", ""), float(a.get("eps_scale", 1.0)), a.get("reuse", ""), a.get("lora", "")) for a in arms]
         if product:
             for combo in itertools.product(*product):
                 out.append(Arm("+".join(c["name"] for c in combo), tuple(x for c in combo for x in c.get("args", ())), " ".join(c.get("note", "") for c in combo).strip()))
         names = [a.name for a in out]
         if len(set(names)) != len(names) or not names:
             raise ValueError("an experiment needs at least one arm and every arm needs its own name")
+        for i, arm in enumerate(out):
+            if arm.eps_scale <= 0 or (arm.reuse and (arm.reuse not in names[:i] or arm.args or arm.lora)) or (arm.lora and arm.args):
+                raise ValueError(f"arm {arm.name!r}: eps_scale must be positive, and `reuse` names an earlier arm and comes without training arguments")
         return tuple(out)
 
     @staticmethod
@@ -106,7 +116,7 @@ class Experiment:
     def to_dict(self) -> dict:
         """What was run, for the report (the arms are already expanded)."""
         return {"name": self.name, "checkpoint": self.checkpoint, "dataset": self.dataset, "train_args": list(self.train_args), "device": self.device,
-                "arms": [{"name": a.name, "args": list(a.args), "note": a.note} for a in self.arms],
+                "arms": [{"name": a.name, "args": list(a.args), "note": a.note, "eps_scale": a.eps_scale, "reuse": a.reuse, "lora": a.lora} for a in self.arms],
                 "grid": {k: list(v) if isinstance(v, tuple) else v for k, v in self.grid.__dict__.items()}, "note": self.note}
 
     def train_command(self, arm: Arm, folder: Path, python: str) -> list[str]:
@@ -187,5 +197,16 @@ NOISE_TEMPLATE = {
              {"name": "det-a", "args": ["--regions", "3", "--set", "runtime.deterministic=true"]},
              {"name": "det-b", "args": ["--regions", "3", "--set", "runtime.deterministic=true"]}],
 }
+EPS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "eps-scale",
+    "note": "Epsilon scaling at sampling time (the predicted noise is divided by the factor): does a small correction remove the painted look or the composition errors "
+            "of an adapter that is already trained? Put the path of a trained adapter in the first arm; nothing is trained.",
+    "arms": [{"name": "as-trained", "lora": "/path/to/lora_step000300.safetensors"},
+             {"name": "eps1.005", "reuse": "as-trained", "eps_scale": 1.005},
+             {"name": "eps1.01", "reuse": "as-trained", "eps_scale": 1.01},
+             {"name": "eps1.02", "reuse": "as-trained", "eps_scale": 1.02},
+             {"name": "eps1.04", "reuse": "as-trained", "eps_scale": 1.04}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE}

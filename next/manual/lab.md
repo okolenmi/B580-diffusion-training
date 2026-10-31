@@ -23,3 +23,8 @@ Every PNG carries a `lab` text chunk (JSON: the recipe, the arm and its argument
 
 ## Rendering
 The sampler follows ComfyUI's (k-diffusion) exactly: the same sigma tables, `normal`/`simple`/`karras` schedules, Euler and DPM++ 2M, the same noise for a seed, the nearest integer timestep given to the network. The UNet runs in bf16 (ComfyUI picks fp16 on its own), text encoding and VAE as in training. Strength scales the adapter's output. The network, the text encoders and the decoder are never on the device together; a decode that does not fit is done in overlapping tiles.
+
+
+## Rendering without training: `lora`, `reuse`, `eps_scale`
+
+An arm can be given an adapter file made earlier (`"lora": "/path/file.safetensors"`: rendered as it is, nothing is trained) or can render the adapter of an earlier arm (`"reuse": "<arm>"`, copies that arm's training record and per-timestep table). `"eps_scale": 1.01` divides the predicted noise (after guidance) by that factor at every sampling step (epsilon scaling, Ning et al. 2024: sampling errors make the prediction too large; a factor slightly above 1 pulls the trajectory back). Images of such an arm carry `_e<factor>` in the file name and the factor in their metadata. `python -m next.lab template eps-scale` starts an experiment of this kind.

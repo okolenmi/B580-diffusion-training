@@ -47,7 +47,7 @@ class ImageMeasurements:
             pixels = read_pixels(folder / "images" / entry["file"])
             row = {"file": entry["file"], "prompt": recipe.prompt, "seed": recipe.seed, "strength": recipe.strength, **Detail.of(pixels).__dict__}
             row.pop("bands")
-            reference = self.root / "reference" / "images" / f"{replace(recipe, strength=0.0).stem}.png"
+            reference = self.root / "reference" / "images" / f"{replace(recipe, strength=0.0, eps_scale=1.0).stem}.png"
             if name != "reference" and reference.exists():
                 row.update(Change.between(pixels, read_pixels(reference)).__dict__)
             rows.append(row)
@@ -78,9 +78,9 @@ class Report:
         for arm in self.experiment.arms:
             train = self._json(arm.name, "train.json")
             recent = train.get("recent") or {}
-            rows.append(f"| {arm.name} | `{' '.join(arm.args) or '-'}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} | {recent.get('loss', float('nan')):.4f} | "
+            rows.append(f"| {arm.name} | `{arm.describe()}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} | {recent.get('loss', float('nan')):.4f} | "
                         f"{recent.get('low', float('nan')):.4f} / {recent.get('mid', float('nan')):.4f} / {recent.get('high', float('nan')):.4f} |" if train
-                        else f"| {arm.name} | `{' '.join(arm.args) or '-'}` | - | - | - | - |")
+                        else f"| {arm.name} | `{arm.describe()}` | - | - | - | - |")
         return rows
 
     def detail_table(self, strength: float) -> list[str]:
@@ -130,6 +130,7 @@ class Report:
         """One overview per prompt, seed and strength (reference first, then the arms) and one native-size crop sheet per prompt and seed."""
         exp, out = self.experiment, self.root / "sheets"
         names = (["reference"] if (self.root / "reference").exists() else []) + [a.name for a in self.trained]
+        scales = {a.name: a.eps_scale for a in self.trained}
         made = []
         for prompt in exp.grid.prompts:
             for seed in exp.grid.seeds:
@@ -137,7 +138,8 @@ class Report:
                 for strength in exp.grid.strengths:
                     sheet = ImageSheet((384, 384), columns=min(4, len(names)), title=f"{prompt[:60] or '(empty prompt)'} - seed {seed} - strength {strength:g}")
                     for name in names:
-                        recipe = Recipe(prompt=prompt, seed=seed, strength=0.0 if name == "reference" else strength, **{k: getattr(exp.grid, k) for k in ("negative", "steps", "cfg", "sampler", "scheduler", "width", "height")})
+                        recipe = Recipe(prompt=prompt, seed=seed, strength=0.0 if name == "reference" else strength, eps_scale=scales.get(name, 1.0),
+                                        **{k: getattr(exp.grid, k) for k in ("negative", "steps", "cfg", "sampler", "scheduler", "width", "height")})
                         path = self.root / name / "images" / f"{recipe.stem}.png"
                         if path.exists():
                             sheet.add(Image.open(path).convert("RGB"), name)

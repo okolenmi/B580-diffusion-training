@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -144,6 +144,12 @@ class Lab:
     def train(self, arms: list[Arm], force: bool = False) -> None:
         for arm in arms:
             record = self.folder(arm) / "train.json"
+            if arm.reuse:
+                self._borrow(arm)
+                continue
+            if arm.lora:
+                self._adopt(arm)
+                continue
             if record.exists() and not force and json.loads(record.read_text())["lora"]:
                 self.say(f"{arm.name}: trained already")
                 continue
@@ -156,6 +162,26 @@ class Lab:
                     raise SystemExit("no arm has trained yet, so the arguments are probably wrong for this machine (memory, paths): fix them and run again")
             else:
                 self.say(f"{arm.name}: {result.steps} steps, {result.seconds / 60:.1f} min, {LossWindows.mean(result.losses[-WINDOW:]):.4f} mean loss of the last {min(WINDOW, len(result.losses))} steps")
+
+    def _adopt(self, arm: Arm) -> None:
+        """An arm with an adapter file of its own is rendered as it is; its training record says where the file is."""
+        if not Path(arm.lora).exists():
+            self.say(f"{arm.name}: the adapter file {arm.lora} does not exist")
+            return
+        self.folder(arm).mkdir(parents=True, exist_ok=True)
+        (self.folder(arm) / "train.json").write_text(json.dumps({"command": [], "lora": str(Path(arm.lora).resolve()), "steps": 0, "seconds": 0.0, "losses": [], "probes": [], "returncode": 0,
+                                                                 "recent": None, "adopted": True}, indent=1), encoding="utf8")
+        self.say(f"{arm.name}: renders {arm.lora}")
+
+    def _borrow(self, arm: Arm) -> None:
+        """An arm that renders another arm's adapter gets a copy of that arm's training record."""
+        source = self.folder(arm.reuse) / "train.json"
+        if not source.exists() or not json.loads(source.read_text())["lora"]:
+            self.say(f"{arm.name}: {arm.reuse} has no adapter yet, so there is nothing to reuse")
+            return
+        self.folder(arm).mkdir(parents=True, exist_ok=True)
+        (self.folder(arm) / "train.json").write_text(json.dumps({**json.loads(source.read_text()), "reused": arm.reuse}, indent=1), encoding="utf8")
+        self.say(f"{arm.name}: uses the adapter of {arm.reuse}")
 
     def meta(self, arm: Arm | None, lora: str | None) -> dict:
         exp = self.experiment
@@ -187,7 +213,7 @@ class Lab:
         folder = self.root / "reference" if arm is None else self.folder(arm)
         backend = self.backend_factory(lora)
         store = ImageStore(folder / "images")
-        recipes = exp.grid.recipes(strengths)
+        recipes = [replace(r, eps_scale=arm.eps_scale) if arm is not None else r for r in exp.grid.recipes(strengths)]
         started = time.monotonic()
         count = 0
 
@@ -199,7 +225,11 @@ class Lab:
 
         Renderer(backend, device=exp.device).render(recipes, self.meta(arm, lora), on_image=keep)
         if arm is not None and (exp.train_images or exp.holdout_images):
-            (folder / "timestep_loss.json").write_text(json.dumps(self._timestep_loss(backend), indent=1), encoding="utf8")
+            source = self.folder(arm.reuse) / "timestep_loss.json" if arm.reuse else None
+            if source is not None and source.exists():
+                (folder / "timestep_loss.json").write_text(source.read_text(), encoding="utf8")  # the same adapter: the same table
+            else:
+                (folder / "timestep_loss.json").write_text(json.dumps(self._timestep_loss(backend), indent=1), encoding="utf8")
         del backend
 
     def _timestep_loss(self, backend) -> dict:

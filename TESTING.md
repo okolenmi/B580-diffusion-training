@@ -121,6 +121,13 @@ python -m next.lab template cheap-equal > cheap.json
 ```
 Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `gradnorm-900` (the same compute as `equal`), `single-900` (same compute, no weights). Send the zip. If `gradnorm-900` looks like `equal`, per-step cost drops by three at the same quality, and `gradnorm-300` shows whether it is that or the step count.
 
+## 48. Epsilon scaling on an adapter you already have (no training, about 30 minutes)
+Tests whether the painted look or the composition errors are partly exposure bias (the model sees its own slightly-wrong inputs while sampling), by shrinking the predicted noise a little at every step. Needs no training and works on any LoRA from the earlier experiments.
+```
+python -m next.lab template eps-scale > eps.json
+```
+Edit `images` and the first arm's `lora` (path of, for example, the `equal` LoRA from item 45: `lab-out/regions-perturb/equal/train/lora_step000300.safetensors`), `python -m next.lab run eps.json`, send the zip. The arms render the same adapter at factors 1, 1.005, 1.01, 1.02, 1.04 (same seeds, so the pictures differ only by the factor). Look at the contact sheets: structure errors and the painted look first; the report's detail columns second (coarse change should move little, the fine columns show whether detail came back or went). Pass: a factor between 1.005 and 1.02 gives visibly better pictures than 1 (then exposure bias is part of the cause and the perturbation placement of item 45 is the training-side fix); no change up to 1.02 and a worse picture at 1.04 means it is not. Also worth one try in ComfyUI if a node for it exists (not checked).
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

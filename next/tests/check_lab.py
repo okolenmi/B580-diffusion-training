@@ -60,6 +60,8 @@ def samplers() -> None:
     check(torch.allclose(denoised, x - eps * 3.0, atol=1e-6), "guidance with equal predictions leaves the prediction alone")
     mixed = GuidedDenoiser(lambda x_in, t, positive: eps if positive else torch.zeros_like(eps), table, 2.0)(x, sigma)
     check(torch.allclose(mixed, x - 2.0 * eps * 3.0, atol=1e-6), "guidance scales the difference between the prompts")
+    shrunk = GuidedDenoiser(lambda x_in, t, positive: eps, table, 1.0, eps_scale=1.25)(x, sigma)
+    check(torch.allclose(shrunk, x - eps / 1.25 * 3.0, atol=1e-6), "epsilon scaling divides the predicted noise")
 
 
 def rendering() -> None:
@@ -203,5 +205,41 @@ def experiment_run() -> None:
         check(archive.exists() and archive.stat().st_size < 25e6, "the share archive is made and small")
 
 
+def adapter_reuse() -> None:
+    """An arm can render an adapter file made earlier, and other arms can render the same adapter with another epsilon scale without training."""
+    import json
+
+    from safetensors.torch import save_file
+
+    from ..lab.experiment import Experiment
+    from ..lab.report import Report
+    from ..lab.runner import Lab
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = root / "given.safetensors"
+        save_file({"x": torch.zeros(1)}, str(path), metadata={"step": "7", "rank": "4", "alpha": "4", "scheme": "kohya"})
+        spec = {"name": "eps", "models": "m", "datasets": "d", "dataset": "set", "checkpoint": "c", "output": str(root / "out"), "device": "cpu",
+                "grid": {"prompts": ["a fox"], "seeds": [1], "strengths": [1.0], "steps": 4, "width": 64, "height": 64},
+                "arms": [{"name": "given", "lora": str(path)}, {"name": "scaled", "reuse": "given", "eps_scale": 1.5}]}
+        experiment = Experiment.from_dict(spec)
+        trained = []
+        lab = Lab(experiment, lambda lora: ToyBackend(), lambda text: None, lambda exp, arm, folder: trained.append(arm.name))
+        lab.train(list(experiment.arms))
+        lab.render(list(experiment.arms))
+        names = sorted(p.name for p in (experiment.root / "scaled" / "images").glob("*.png"))
+        meta = ImageStore.read_meta(next((experiment.root / "scaled" / "images").glob("*.png")))
+        check(not trained and len(names) == 1 and names[0].endswith("_e1.5.png") and meta["recipe"]["eps_scale"] == 1.5 and meta["adapter"]["step"] == "7",
+              f"adopted and reused adapters are rendered without training, the scale is in the name and the metadata ({names})")
+        text = Report(experiment).write().read_text()
+        check("eps_scale 1.5" in text and "reuse given" in text, "the report names the scale and where the adapter came from")
+        try:
+            Experiment.from_dict({**spec, "arms": [{"name": "a", "reuse": "b"}, {"name": "b"}]})
+            bad = False
+        except ValueError:
+            bad = True
+        check(bad, "an arm cannot reuse an arm that comes after it")
+
+
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, adapter_reuse)

@@ -20,6 +20,7 @@ class TimestepPolicy:
     high: float | None = None
     values: tuple[float, ...] = ()
     regions: int = 1  # timesteps per image in one step (see ``Noiser``)
+    perturb: tuple[float, ...] = ()  # extra noise in the network input only, by region (the list repeats when there are more regions)
     layout: str = "even"  # "even": equally spaced around the range from a random phase; "strata": one random draw in each equal part of it
 
 
@@ -39,6 +40,8 @@ class Noiser:
         bad = [v for v in policy.values if not low <= v <= high]
         if bad:
             raise ValueError(f"timestep values {bad} lie outside [{low}, {high}]")
+        if any(v < 0 for v in policy.perturb):
+            raise ValueError("input perturbation strengths must not be negative")
         if policy.regions < 1 or policy.layout not in ("even", "strata"):
             raise ValueError("regions must be at least 1 and the layout 'even' or 'strata'")
         self.regions = policy.regions
@@ -81,5 +84,8 @@ class Noiser:
             t = self.objective.sample_t(n, self.policy.mode, self.low, self.high, generator)
         noise = torch.randn(x0.shape, generator=generator, dtype=x0.dtype)
         x_t, target, sigma = self.objective.noisy(x0, noise, t)
+        if self.policy.perturb and any(self.policy.perturb):
+            strength = torch.tensor(self.policy.perturb, dtype=x0.dtype)[region % len(self.policy.perturb)].view(-1, 1, 1, 1)
+            x_t = self.objective.noisy(x0, noise + strength * torch.randn(x0.shape, generator=generator, dtype=x0.dtype), t)[0]
         t_frac = (t.float() - self.low) / max(float(self.high - self.low), 1e-12)
         return {"x_t": x_t, "t": t, "target": target, "sigma": sigma, "t_frac": t_frac, "region": region}

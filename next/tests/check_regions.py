@@ -30,6 +30,13 @@ def noiser_checks() -> None:
     drawn = strata(torch.zeros(8, 1, 2, 2), torch.Generator().manual_seed(2))
     parts = ((drawn["t"].float() - low) / (high - low) * 4).floor().clamp(max=3).long().view(4, 2)
     check(parts.tolist() == [[0, 0], [1, 1], [2, 2], [3, 3]], f"strata: copy r draws from the r-th part of the range ({parts.tolist()})")
+    perturbed = Noiser(objective, TimestepPolicy(regions=3, perturb=(0.0, 0.5)))
+    base = Noiser(objective, TimestepPolicy(regions=3))
+    clean = torch.zeros(6, 1, 4, 4)
+    a, b = perturbed(clean, torch.Generator().manual_seed(5)), base(clean, torch.Generator().manual_seed(5))
+    check(torch.equal(a["target"], b["target"]) and torch.equal(a["t"], b["t"]), "input perturbation leaves the target and the timesteps alone")
+    off = (a["x_t"] != b["x_t"]).flatten(1).any(dim=1).tolist()
+    check(off == [False, False, True, True, False, False], f"copies at strength 0 are unchanged, the others differ (regions 0 and 2 use 0, region 1 uses 0.5: {off})")
     odd = even(torch.zeros(4, 1, 2, 2), torch.Generator().manual_seed(1))
     check(odd["region"].tolist() == [0, 0, 0, 0], "a batch that cannot be split into copies is drawn as usual")
 
@@ -52,6 +59,27 @@ def policy_checks() -> None:
     update = RegionalUpdate(make_policy("common"), normalize=True)
     big = update.direction(torch.tensor([[100.0, 0.0], [0.0, 1.0]]))
     check(abs(float(big[0]) / float(big[1]) - 1.0) < 0.05, f"normalising stops a large gradient from deciding the direction ({big.tolist()})")
+
+
+def window_check() -> None:
+    """The policy sees each region's gradient over the whole accumulation window."""
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        doc = graph(tmp, steps=2, save_every=1000)
+        for node in doc.nodes:
+            if node.class_name == "NoiserNode":
+                node.params.update({"regions": 2, "perturb": "0,0.1"})
+            if node.class_name == "DiffusionTrainerNode":
+                node.params.update({"gradient_policy": "common", "accumulation": 2})
+        _, outcome, trace = execute(store, doc)
+        metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        check(outcome.ok and len(metrics) == 2 and "region_shared" in metrics[-1], f"two batches per step with two regions each still make one update per step ({outcome.error})")
 
 
 def trainer_checks() -> None:
@@ -78,4 +106,4 @@ def trainer_checks() -> None:
 
 
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, trainer_checks)
+    run(noiser_checks, policy_checks, trainer_checks, window_check)

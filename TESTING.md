@@ -93,6 +93,13 @@ python -m next.lab template regions > regions.json
 Edit as in item 41 (your command is already in it, 1024 px batch 1, 300 steps, no deterministic flag; set `images`), `python -m next.lab run regions.json`, send the zip and the console of the `strata-*` arms (step lines now print `regions r0:.. r1:.. r2:.. cos_min .. shared ..`). Arms: single; `batch3` (fair control, three images per step); `regions3-mean` (old B); `strata-equal` (unit-length region gradients, averaged); `strata-project`; `strata-common`.
 Reading: if equal looks like project/common, the conflict handling does nothing at this batch size and normalisation is the lever; if batch3 beats regions3-mean, three images beat three timesteps of one image; `cos_min` near 0 and `shared` near 0.33 confirm the gradients are unrelated.
 
+## 44. Input perturbation, and regions with less noisy gradients (about 2 hours)
+Item 43 showed (step lines of the three policy runs): `cos_min` between -0.08 and 0.06 and `shared` 0.33-0.41, so with one image per region the regions' gradients are unrelated noise and project/common/equal are the same method. The lab now averages each region's gradient over the accumulation window before the policy looks at it, and the noiser can add an input perturbation per region.
+```
+python -m next.lab template regions-signal > signal.json
+```
+Edit as before (`images`), `python -m next.lab run signal.json`, send the zip and the step lines (last 15) of `equal-acc4`, `project-acc4`, `common-acc4`. Reading: if `cos_min` there is clearly below 0, the regions really conflict and project/common can differ from equal; if it stays near 0, the conflict idea is finished at these batch sizes and equal is the method. `equal-perturb*` against `equal`: perturbation is the sampler-diversity idea (the model answers from slightly wrong inputs, as it does while sampling); the per-t table should stay as it is and the pictures are the verdict.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

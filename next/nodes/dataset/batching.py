@@ -79,6 +79,10 @@ class NoiserNode(Node):
                         doc="Timesteps per image in one step: every image of a batch appears this many times, each copy at its own timestep "
                             "(the batch is this many times larger; the loss is the mean over all copies). Replaces the distribution, `values` and the balance. "
                             "With a gradient policy on the trainer the copies are the regions the policy reconciles."),
+        "perturb": Port("perturb", str, required=False, default="", group="timesteps", advanced=True,
+                        doc="Input perturbation: extra noise of this strength (a multiple of the noise at that timestep) in the network input only, "
+                            "the target stays the real noise, so the model learns to answer from inputs that are slightly off, as a sampler's are. "
+                            "Comma-separated strengths go to the regions in turn (a shorter list repeats), e.g. `0,0.05,0.1`; empty = off."),
         "layout": Port("layout", str, required=False, default="even", choices=("even", "strata"), group="timesteps",
                        doc="even: copies equally far apart around the range from a random phase (one step covers the range evenly). "
                            "strata: copy r always draws from the r-th equal part of the range."),
@@ -91,7 +95,8 @@ class NoiserNode(Node):
         objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
-                                  inputs.get("regions") or 1, inputs.get("layout") or "even")
+                                regions=inputs.get("regions") or 1, layout=inputs.get("layout") or "even",
+                                perturb=tuple(float(v) for v in (inputs.get("perturb") or "").split(",") if v.strip()))
         return {"noiser": Noiser(objective, policy, inputs.get("balance"))}
 
 

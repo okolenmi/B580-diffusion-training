@@ -74,11 +74,13 @@ class Report:
         return json.loads(path.read_text()) if path.exists() else {}
 
     def arms_table(self) -> list[str]:
-        rows = ["| arm | arguments | steps | minutes |", "|---|---|---|---|"]
+        rows = ["| arm | arguments | steps | minutes | mean loss, last 100 steps | low / mid / high third |", "|---|---|---|---|---|---|"]
         for arm in self.experiment.arms:
             train = self._json(arm.name, "train.json")
-            rows.append(f"| {arm.name} | `{' '.join(arm.args) or '-'}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} |" if train
-                        else f"| {arm.name} | `{' '.join(arm.args) or '-'}` | - | - |")
+            recent = train.get("recent") or {}
+            rows.append(f"| {arm.name} | `{' '.join(arm.args) or '-'}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} | {recent.get('loss', float('nan')):.4f} | "
+                        f"{recent.get('low', float('nan')):.4f} / {recent.get('mid', float('nan')):.4f} / {recent.get('high', float('nan')):.4f} |" if train
+                        else f"| {arm.name} | `{' '.join(arm.args) or '-'}` | - | - | - | - |")
         return rows
 
     def detail_table(self, strength: float) -> list[str]:

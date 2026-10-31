@@ -143,4 +143,17 @@ REGIONS_TEMPLATE = {
              {"name": "strata-project", "args": [*STRATA, "--set", "trainer.gradient_policy=project"]},
              {"name": "strata-common", "args": [*STRATA, "--set", "trainer.gradient_policy=common"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE}
+EQUAL = [*STRATA, "--set", "trainer.gradient_policy=equal"]
+SIGNAL_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "regions-signal",
+    "note": "Two questions. Does input perturbation (extra noise in the network input only, a different strength per region) help? "
+            "And once each region's gradient is averaged over 4 batches (less noise), do the regions conflict, so that project or common differ from equal?",
+    "arms": [{"name": "equal", "args": EQUAL},
+             {"name": "equal-perturb", "args": [*EQUAL, "--set", "noiser.perturb=0,0.05,0.1"]},
+             {"name": "equal-perturb-big", "args": [*EQUAL, "--set", "noiser.perturb=0,0.1,0.2"]},
+             {"name": "equal-acc4", "args": [*EQUAL, "--accumulation", "4", "--steps", "100"], "note": "100 steps of 4 batches"},
+             {"name": "project-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=project", "--accumulation", "4", "--steps", "100"]},
+             {"name": "common-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=common", "--accumulation", "4", "--steps", "100"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE}

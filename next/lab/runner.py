@@ -27,9 +27,39 @@ from .experiment import Arm, Experiment
 from .render import ImageStore, Renderer
 
 LOSS_LINE = re.compile(r"^step (\d+)/(\d+)\s+loss ([0-9.eE+-]+)")
+THIRDS_LINE = re.compile(r"by t((?: (?:low|mid|high) [0-9.eE+-]+)+)")
+WINDOW = 100  # steps one reported loss averages over
 PROBE_LINE = re.compile(r"^\s+probe: adapter/base loss by third ([0-9./]+), worst ([0-9.]+)")
 LORA_FILE = re.compile(r"^lora_step(\d+)\.safetensors$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class LossWindows:
+    """Losses of single steps mean little (each is one random timestep); what is reported is the mean over a window of steps,
+    overall and by third of the timestep range."""
+
+    def __init__(self) -> None:
+        self.all: list[float] = []
+        self.thirds: dict[str, list[tuple[int, float]]] = {"low": [], "mid": [], "high": []}  # (step index, loss) of the steps that drew from the third
+
+    def add(self, loss: float, line: str) -> None:
+        self.all.append(loss)
+        if found := THIRDS_LINE.search(line):
+            parts = found.group(1).split()
+            for name, value in zip(parts[::2], parts[1::2]):
+                self.thirds[name].append((len(self.all), float(value)))
+
+    @staticmethod
+    def mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else float("nan")
+
+    def last(self, count: int = WINDOW) -> dict[str, float]:
+        """Mean over the last ``count`` steps; a third counts only the steps that drew from it."""
+        return {"loss": self.mean(self.all[-count:]), **{k: self.mean([x for i, x in v if i > len(self.all) - count]) for k, v in self.thirds.items()}}
+
+    def describe(self, first: int, last: int) -> str:
+        window = self.all[first - 1:last]
+        return f"mean loss of steps {first}-{last} {self.mean(window):.4f}"
 
 
 @dataclass
@@ -40,6 +70,7 @@ class Training:
     losses: list[float]
     probes: list[dict]
     returncode: int
+    recent: dict | None = None  # mean loss over the last WINDOW steps, overall and by third of the range
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -61,7 +92,8 @@ class ArmTraining:
         self.folder.mkdir(parents=True, exist_ok=True)
         output = (self.folder / "train").resolve()
         command = self._command(self.arm, output, self.python)
-        losses: list[float] = []
+        windows = LossWindows()
+        losses = windows.all
         probes: list[dict] = []
         step = 0
         started = time.monotonic()
@@ -72,15 +104,15 @@ class ArmTraining:
                 log.write(line)
                 if match := LOSS_LINE.match(line):
                     step = int(match.group(1))
-                    losses.append(float(match.group(3)))
-                    if step % 100 == 0:
-                        say(f"  {self.arm.name}: step {step}/{match.group(2)} loss {losses[-1]:.4f}")
+                    windows.add(float(match.group(3)), line)
+                    if step % WINDOW == 0:
+                        say(f"  {self.arm.name}: {windows.describe(step - WINDOW + 1, step)} (of {match.group(2)} steps)")
                 elif match := PROBE_LINE.match(line):
                     thirds = [float(v) for v in match.group(1).split("/")]
                     probes.append({"step": step, "low": thirds[0], "mid": thirds[1], "high": thirds[2], "worst": float(match.group(2))})
             process.wait()
         lora = newest_adapter(output)
-        result = Training(str(lora) if lora else "", step, time.monotonic() - started, losses, probes, process.returncode)
+        result = Training(str(lora) if lora else "", step, time.monotonic() - started, losses, probes, process.returncode, windows.last())
         (self.folder / "train.json").write_text(json.dumps({"command": command, **result.to_dict()}, indent=1), encoding="utf8")
         return result
 
@@ -123,7 +155,7 @@ class Lab:
                 if not any((self.folder(a) / "train.json").exists() and json.loads((self.folder(a) / "train.json").read_text())["lora"] for a in self.experiment.arms):
                     raise SystemExit("no arm has trained yet, so the arguments are probably wrong for this machine (memory, paths): fix them and run again")
             else:
-                self.say(f"{arm.name}: {result.steps} steps, {result.seconds / 60:.1f} min, final loss {result.losses[-1] if result.losses else float('nan'):.4f}")
+                self.say(f"{arm.name}: {result.steps} steps, {result.seconds / 60:.1f} min, {LossWindows.mean(result.losses[-WINDOW:]):.4f} mean loss of the last {min(WINDOW, len(result.losses))} steps")
 
     def meta(self, arm: Arm | None, lora: str | None) -> dict:
         exp = self.experiment

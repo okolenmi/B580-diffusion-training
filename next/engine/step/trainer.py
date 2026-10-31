@@ -235,8 +235,9 @@ class Trainer:
 
     def _regional_window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
         """Like ``_window``, but each region of a batch (its samples at one part of the timestep range) runs on its own from zero
-        gradients; the policy combines the regions' gradients, the average over the window is written back and applied."""
-        grads, total, used = RegionGradients(self.optimizer), None, 0
+        gradients; each region's gradients are averaged over the window's batches, the policy combines them, and the result is
+        written back and applied."""
+        grads, pending = RegionGradients(self.optimizer), None
         losses, thirds, timing, per_region = [], [], {}, {}
         for micro, batch in enumerate(fetched):
             region = batch.get("region")
@@ -250,18 +251,19 @@ class Trainer:
                 loss, per_sample, fractions = loss + value / len(sizes), per_sample + losses_part, fractions + fractions_part
                 for label, ms in spent.items():
                     timing[label] = timing.get(label, 0.0) + ms
-            direction = self._regional.direction(torch.stack(matrix))
-            if direction is not None:
-                total = direction if total is None else total + direction
-                used += 1
+            matrix = torch.stack(matrix)
+            if pending is not None and pending.shape != matrix.shape:
+                raise ValueError("the batches of one window hold different numbers of regions")
+            pending = matrix if pending is None else pending + matrix  # the policy sees each region's gradient over the whole window
             losses.append(loss)
             thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
+        total = self._regional.direction(pending / len(fetched))
         self._regional_metrics = {f"loss_region_{i}": sum(v) / len(v) for i, v in per_region.items()}
         self._regional_metrics.update(self._regional.policy.last)
         self._regional_metrics["update_skipped"] = float(total is None)
         self.optimizer.zero_grad()
         if total is not None:
-            grads.write(total / used)
+            grads.write(total)
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing

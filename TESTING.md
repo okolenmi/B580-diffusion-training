@@ -66,14 +66,7 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 47. Weights instead of three forwards (about 1 hour)
-The gradient norms you sent: region 0 and region 1 about 0.0095 on average, region 2 (noisy end) about 0.0023, so `equal` mostly boosts the noisy end by about 4. `--time-balance gradnorm` measures the same norms on ordinary one-timestep steps (batch 1, no accumulation) and weights each third by the inverse; the step line prints the weights (`weights a/b/c`), expect about 0.5 / 0.5 / 2 once all thirds have 10 steps.
-```
-python -m next.lab template cheap-equal > cheap.json
-```
-Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `gradnorm-900` (the same compute as `equal`), `single-900` (same compute, no weights). Send the zip. If `gradnorm-900` looks like `equal`, per-step cost drops by three at the same quality, and `gradnorm-300` shows whether it is that or the step count.
-
-## 49. The first steps (about 1.5 hours; after item 48)
+## 49. The first steps (about 1.5 hours)
 The first updates set the direction the adapter takes (the second `equal` run of an earlier test ended differently with the same settings). Three ways to make them less random, on top of `equal` with 3 regions: `--warmup 50` ramps the learning rate up linearly over 50 steps; `noiser.regions_from=9` starts with 9 timesteps per image and falls to 3 over the first 100 batches (every region is a full pass, so the first 100 steps take about twice as long); both together with 6.
 ```
 python -m next.lab template first-steps > first.json

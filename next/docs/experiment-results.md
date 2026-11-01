@@ -2,6 +2,21 @@
 
 Newest last. What was tried, what came out, what it means. Hardware runs are the owner's; numbers come from the lab reports.
 
+## Summary of the runs so far (what is settled and what is not)
+| Question | Answer | Confidence |
+|---|---|---|
+| Several timesteps per image (3 regions) vs one | Better composition, less damage to other fields; 3 passes per step cost about 2.5x the time | Seen by eye on 3 rounds |
+| Which gradient route | `equal` (unit-length region gradients) best for structure; `project` and `common` give the same, since region gradients are nearly orthogonal; `strata-common` was liked early | Good |
+| Gradient accumulation 4 | Same results as 1 route-wise, but 3x fewer optimizer steps | Not comparable at equal lr |
+| Input perturbation | Clean end only: more detail; with more noise or at the noisy end: composition breaks | Weak (within noise) |
+| Epsilon scaling | More detail everywhere, much of it out of place | Clear: not a fix |
+| Self-perceptual loss at 0.3 | Destroyed the model; diverged | Clear for this weight only |
+| Learning rate 3e-5 / 1e-4 / 3e-4 | 3e-5 undertrained; 1e-4 and 3e-4 equal within noise | Good |
+| Per-timestep loss vs base | About 0.96 at low and mid t, 0.91 at t=850, 0.78-0.80 at t=950 in every arm: it does not tell the arms apart | Good |
+| Run-to-run noise | Same settings give the same loss to four digits but image metrics differ by about 10% | Good |
+| Memory | 1024 px batch 1 fits (deterministic mode now uses blockwise attention); 3 regions about 10.5 GB | Measured |
+| Not yet run | Noise floor with deterministic kernels (46), weights instead of three forwards (47), one-pass calibration (48) | |
+
 ## Timesteps per image (regions)
 - Several timesteps per image in one step (3 regions) beat one timestep per image on composition. The `strata` layout with per-region gradient normalisation (`equal`) is the best plain route so far: fewest structural errors.
 - Gradients of timestep regions are nearly orthogonal (cosine within +-0.13), so `project` and `common` (MGDA) behave like `equal`. Normalising each region's gradient to unit length is the lever; region losses differ 20-70x.

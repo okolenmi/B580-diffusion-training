@@ -66,13 +66,6 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 46. Do deterministic kernels remove the run-to-run difference (optional, about 40 minutes)
-Two identical normal runs end with the same loss to four digits but image metrics about 10% apart (item 48 learning-rate run: finest octave 1.77 against 1.60), so that is the noise floor for judging arms. This asks where it comes from: the same training twice with deterministic kernels (slower).
-```
-python -m next.lab template noise-floor > floor.json
-```
-Edit `images`, delete the `equal-a` and `equal-b` arms, run, send the zip. `det-a` and `det-b` giving identical pictures means the training is exact and the difference is in the kernels; different pictures mean something in our pipeline is not deterministic. Only worth running if you want to cut the noise; it changes no decision above.
-
 ## 47. Weights instead of three forwards (about 1 hour)
 The gradient norms you sent: region 0 and region 1 about 0.0095 on average, region 2 (noisy end) about 0.0023, so `equal` mostly boosts the noisy end by about 4. `--time-balance gradnorm` measures the same norms on ordinary one-timestep steps (batch 1, no accumulation) and weights each third by the inverse; the step line prints the weights (`weights a/b/c`), expect about 0.5 / 0.5 / 2 once all thirds have 10 steps.
 ```
@@ -86,6 +79,13 @@ Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `g
 python -m next.lab template one-pass > onepass.json
 ```
 Edit `images`, `python -m next.lab run onepass.json`, send the zip. Arms: `equal`, `mean`, `calibrated-10`, `calibrated-50`. Compare minutes first (the calibrated arms should be near `mean`), then the full-size pictures: does `calibrated-10` look like `equal` (fewer structure errors) rather than like `mean`? The step lines of the calibrated arms show `weights a/b/c` (expect about 0.5/0.5/2) and print the regions line only on the steps that ran alone. 1e-4 stays: the learning-rate run showed 1e-4 and 3e-4 within the noise of each other and 3e-5 clearly less trained.
+
+## 49. The first steps (about 1.5 hours; after item 48)
+The first updates set the direction the adapter takes (the second `equal` run of an earlier test ended differently with the same settings). Three ways to make them less random, on top of `equal` with 3 regions: `--warmup 50` ramps the learning rate up linearly over 50 steps; `noiser.regions_from=9` starts with 9 timesteps per image and falls to 3 over the first 100 batches (every region is a full pass, so the first 100 steps take about twice as long); both together with 6.
+```
+python -m next.lab template first-steps > first.json
+```
+Edit `images`, `python -m next.lab run first.json`, send the zip. Arms: `equal`, `warmup-50`, `ladder-9`, `ladder-6-warmup`. Compare the full-size pictures against `equal` (structure first). The console of the ladder arms shows the regions line with more entries at the start.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

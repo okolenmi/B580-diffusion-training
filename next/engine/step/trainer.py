@@ -232,7 +232,7 @@ class Trainer:
                 except BaseException:
                     self._committed = self._fused and done + 1 == passes and state.phase == "backward"
                     raise
-                loss = loss + state.loss.detach() * state.scale
+                loss = loss + (state.loss if state.reported is None else state.reported).detach() * state.scale
                 per_sample.append(state.per_sample.detach())
                 fractions.append(state.inputs.t_frac.detach().flatten().float().cpu())
                 for label, ms in state.timing_ms.items():
@@ -306,7 +306,7 @@ class Trainer:
         for piece, size in zip(split_batch(part, sizes), sizes):
             state = StepState(step, micro, self.device, batch=piece, scale=size / total)
             self.pipeline.run(state)
-            loss = loss + state.loss.detach() * state.scale
+            loss = loss + (state.loss if state.reported is None else state.reported).detach() * state.scale
             per_sample.append(state.per_sample.detach())
             fractions.append(state.inputs.t_frac.detach().flatten().float().cpu())
             for label, ms in state.timing_ms.items():

@@ -228,5 +228,15 @@ ONE_PASS_TEMPLATE = {
              {"name": "calibrated-10", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=10"]},
              {"name": "calibrated-50", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=50"]}],
 }
+FIRST_STEPS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "first-steps",
+    "note": "The first updates set the direction the adapter takes. Three ways to make them less random: a learning-rate warmup, and more timesteps per image at the "
+            "start that fall to 3 over the first 100 steps (every region is a full pass, so the start is slow).",
+    "arms": [{"name": "equal", "args": ["--regions", "3"]},
+             {"name": "warmup-50", "args": ["--regions", "3", "--warmup", "50"]},
+             {"name": "ladder-9", "args": ["--regions", "3", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100"]},
+             {"name": "ladder-6-warmup", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=6", "--set", "noiser.regions_span=100"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE}

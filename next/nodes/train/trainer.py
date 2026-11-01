@@ -166,7 +166,7 @@ class DiffusionTrainerNode(Node):
     def _calibrate_every(inputs: dict) -> int:
         every = inputs.get("policy_calibrate_every") or 0
         noiser = inputs["batches"].noiser
-        if every and (inputs.get("gradient_policy") != "equal" or noiser.regions != 3 or noiser.policy.layout != "strata"):
+        if every and (inputs.get("gradient_policy") != "equal" or noiser.max_regions != 3 or noiser.policy.layout != "strata"):
             raise ValueError("calibrating needs gradient_policy equal and the noiser's regions 3 with the strata layout")
         return every
 
@@ -175,7 +175,7 @@ class DiffusionTrainerNode(Node):
         name = inputs.get("gradient_policy") or "mean"
         if name == "mean":
             return None
-        if inputs["batches"].noiser.regions < 2:
+        if inputs["batches"].noiser.max_regions < 2:
             raise ValueError(f"gradient policy {name!r} reconciles regions: set the noiser's regions to 2 or more")
         policy = make_policy(name, inputs.get("policy_floor") or 0.0, int(getattr(inputs["batches"], "seed", 0)))
         return RegionalUpdate(policy, bool(inputs.get("policy_normalize", True)) or name == "equal")

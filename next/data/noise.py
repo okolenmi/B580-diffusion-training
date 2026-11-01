@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import math
+
 import torch
 from torch import Tensor
 
@@ -21,6 +23,8 @@ class TimestepPolicy:
     values: tuple[float, ...] = ()
     regions: int = 1  # timesteps per image in one step (see ``Noiser``)
     perturb: tuple[float, ...] = ()  # extra noise in the network input only, by region (the list repeats when there are more regions)
+    regions_from: int = 0  # more regions at the start (0 = off): the count falls linearly to ``regions`` over ``regions_span`` batches
+    regions_span: int = 100
     layout: str = "even"  # "even": equally spaced around the range from a random phase; "strata": one random draw in each equal part of it
 
 
@@ -44,39 +48,51 @@ class Noiser:
             raise ValueError("input perturbation strengths must not be negative")
         if policy.regions < 1 or policy.layout not in ("even", "strata"):
             raise ValueError("regions must be at least 1 and the layout 'even' or 'strata'")
+        if policy.regions_from < 0 or policy.regions_span < 1:
+            raise ValueError("regions_from must not be negative and regions_span must be at least 1")
         self.regions = policy.regions
+        self.max_regions = max(policy.regions, policy.regions_from)
         self.objective, self.policy, self.balance = objective, policy, balance  # balance: steers the draw towards lagging thirds
+
+    def regions_at(self, batch: int) -> int:
+        """Regions of the ``batch``-th batch of the run: ``regions_from`` at the start, falling in equal parts to ``regions``."""
+        start, end = self.policy.regions_from, self.regions
+        if start <= end or batch >= self.policy.regions_span:
+            return end
+        return end + math.ceil((start - end) * (1 - batch / self.policy.regions_span))
 
     def t_at(self, fraction: Tensor) -> Tensor:
         """Timesteps at the given fractions of this noiser's range (rounded when the objective counts in integers)."""
         t = self.low + fraction * (self.high - self.low)
         return t.round().long() if self._integer else t.float()
 
-    def spread(self, n: int, generator: torch.Generator) -> Tensor:
+    def spread(self, n: int, generator: torch.Generator, regions: int | None = None) -> Tensor:
         """Fractions of the range for ``n`` samples laid out region by region (``n / regions`` images, each repeated once per
         region): every image gets one fraction per region. "even": ``1 / regions`` apart around the range from a random common
         phase, so one step covers the range evenly instead of one random spot. "strata": region r is always the r-th equal part
         of the range, so a region means the same part of the range in every step."""
-        images = n // self.regions
+        regions = regions or self.regions
+        images = n // regions
         draw = torch.rand(images, generator=generator)
         if self.policy.layout == "strata":
-            return torch.cat([(draw + r) / self.regions for r in range(self.regions)])
-        return torch.cat([(draw + r / self.regions) % 1.0 for r in range(self.regions)])
+            return torch.cat([(draw + r) / regions for r in range(regions)])
+        return torch.cat([(draw + r / regions) % 1.0 for r in range(regions)])
 
     def _steered(self) -> bool:
         """Whether the balance is biasing which timesteps are drawn (a balance that only weights the loss leaves the draw alone)."""
         return self.balance is not None and self.balance.third_probabilities() is not None
 
-    def __call__(self, x0: Tensor, generator: torch.Generator) -> dict[str, Tensor]:
+    def __call__(self, x0: Tensor, generator: torch.Generator, regions: int | None = None) -> dict[str, Tensor]:
         """``x_t`` (network input), ``t``, ``target``, ``sigma`` and ``t_frac`` (t as a fraction of the objective's range).
 
         With ``regions`` above 1 a batch is ``regions`` copies of its images laid out region by region (the batcher makes the
         copies); ``region`` tells which one each sample belongs to. A batch that cannot be split that way is drawn as usual."""
         n = x0.shape[0]
-        regional = self.regions > 1 and n % self.regions == 0 and not self.policy.values and not self._steered()
-        region = torch.arange(self.regions).repeat_interleave(n // self.regions) if regional else torch.zeros(n, dtype=torch.long)
+        regions = regions or self.regions
+        regional = regions > 1 and n % regions == 0 and not self.policy.values and not self._steered()
+        region = torch.arange(regions).repeat_interleave(n // regions) if regional else torch.zeros(n, dtype=torch.long)
         if regional:
-            t = self.t_at(self.spread(n, generator))
+            t = self.t_at(self.spread(n, generator, regions))
         elif self.policy.values:
             pick = torch.randint(0, len(self.policy.values), (n,), generator=generator)
             t = torch.tensor(self.policy.values)[pick]

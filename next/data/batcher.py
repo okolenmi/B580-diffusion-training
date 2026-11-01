@@ -67,7 +67,7 @@ class Batcher:
 
     def largest_units(self) -> int:
         """Latent pixels of the largest batch of the run (samples times the padded area)."""
-        return self.noiser.regions * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+        return self.noiser.max_regions * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
 
     def clean_item(self, sample: str) -> tuple[torch.Tensor, torch.Tensor | None, tuple[int, int]]:
         """A sample as the model sees it when nothing is random: its latent centred in its bucket shape, the validity
@@ -88,12 +88,12 @@ class Batcher:
         """Batches per epoch of each (samples, height, width): which shapes the run spends its steps on."""
         counts: dict[tuple[int, int, int], int] = {}
         for ids, (height, width) in self.plan_for(self.epoch).batches:
-            key = (len(ids) * self.noiser.regions, height, width)
+            key = (len(ids) * self.noiser.max_regions, height, width)
             counts[key] = counts.get(key, 0) + 1
         return counts
 
     def max_batch_size(self) -> int:
-        return self.noiser.regions * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
+        return self.noiser.max_regions * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
 
     def probe_batch(self, like: dict, count: int = 1) -> dict:
         """``count`` samples at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
@@ -116,12 +116,12 @@ class Batcher:
         plan = self.plan_for(epoch)
         version, texts = self.prompts.snapshot()
         last = len(plan.batches) - 1
-        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last)
+        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last, epoch * len(plan.batches))
                                    for i, (ids, shape) in enumerate(plan.batches)), self.depth)
         served = 0
         try:
             for batch in worker:
-                served += len(batch["samples"]) // self.noiser.regions
+                served += len(batch["samples"]) // (int(batch["region"].max()) + 1)
                 yield batch
         finally:
             worker.close()
@@ -129,7 +129,7 @@ class Batcher:
         self.epoch = epoch + 1
 
     def _make(self, index: int, ids: tuple[str, ...], shape: tuple[int, int], epoch: int, version: int,
-              texts: dict[str, str], last: bool = False) -> dict:
+              texts: dict[str, str], last: bool = False, first: int = 0) -> dict:
         rng = random.Random(f"{self.seed}:batch:{epoch}:{index}")
         generator = torch.Generator().manual_seed(rng.getrandbits(62))
         height, width = shape
@@ -145,10 +145,10 @@ class Batcher:
             true_sizes.append((h * self._factor, w * self._factor))
             placed.append((top, left, h, w))
             valid[k, :, top:top + h, left:left + w] = 1.0
-        copies = self.noiser.regions if len(ids) else 1
+        copies = self.noiser.regions_at(first + index) if len(ids) else 1
         if copies > 1:  # one copy of the images per region, region by region
             x0, valid, true_sizes, placed, ids = x0.repeat(copies, 1, 1, 1), valid.repeat(copies, 1, 1, 1), true_sizes * copies, placed * copies, ids * copies
-        batch = self.noiser(x0, generator)
+        batch = self.noiser(x0, generator, copies)
         if self.fill == "mirror":
             for k, (top, left, h, w) in enumerate(placed):
                 if (h, w) != (height, width):

@@ -79,6 +79,12 @@ class NoiserNode(Node):
                         doc="Timesteps per image in one step: every image of a batch appears this many times, each copy at its own timestep "
                             "(the batch is this many times larger; the loss is the mean over all copies). Replaces the distribution, `values` and the balance. "
                             "With a gradient policy on the trainer the copies are the regions the policy reconciles."),
+        "regions_from": Port("regions_from", int, required=False, default=0, minimum=0, group="timesteps", advanced=True,
+                             doc="Start with this many timesteps per image and fall in equal parts to `regions` over `regions_span` batches "
+                                 "(0 = off). More timesteps per image make the first updates, which set the direction the adapter takes, "
+                                 "less dependent on one random draw; every region still costs a pass with a gradient policy."),
+        "regions_span": Port("regions_span", int, required=False, default=100, minimum=1, group="timesteps", advanced=True,
+                             doc="Batches over which `regions_from` falls to `regions`."),
         "perturb": Port("perturb", str, required=False, default="", group="timesteps", advanced=True,
                         doc="Input perturbation: extra noise of this strength (a multiple of the noise at that timestep) in the network input only, "
                             "the target stays the real noise, so the model learns to answer from inputs that are slightly off, as a sampler's are. "
@@ -95,7 +101,8 @@ class NoiserNode(Node):
         objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
-                                regions=inputs.get("regions") or 1, layout=inputs.get("layout") or "even",
+                                regions=inputs.get("regions") or 1, regions_from=inputs.get("regions_from") or 0,
+                                regions_span=inputs.get("regions_span") or 100, layout=inputs.get("layout") or "even",
                                 perturb=tuple(float(v) for v in (inputs.get("perturb") or "").split(",") if v.strip()))
         return {"noiser": Noiser(objective, policy, inputs.get("balance"))}
 

@@ -109,6 +109,42 @@ def balance_run_check() -> None:
         check(outcome.ok and trace.steps() == 6, f"a run with the gradnorm balance finishes ({outcome.error})")
 
 
+def ladder_check() -> None:
+    """The regions ladder: the count falls from the start value to the normal one over the span, and batches follow it."""
+    from ..data.noise import Noiser, TimestepPolicy
+    objective = TinyFamily().objective("eps", False)
+    noiser = Noiser(objective, TimestepPolicy(regions=3, regions_from=9, regions_span=10, layout="strata"))
+    counts = [noiser.regions_at(k) for k in (0, 1, 5, 9, 10, 50)]
+    check(counts[0] == 9 and counts[-1] == 3 and counts[-2] == 3 and counts == sorted(counts, reverse=True) and noiser.max_regions == 9,
+          f"ladder counts {counts}")
+    out = noiser(torch.zeros(18, 4, 8, 8), torch.Generator().manual_seed(0), 9)
+    check(int(out["region"].max()) == 8 and out["t"].shape[0] == 18, "a batch drawn with the ladder's count has that many regions")
+
+
+def ladder_run_check() -> None:
+    """A run whose regions fall from 4 to 2, with a learning-rate warmup: every step finishes and the batch size shrinks."""
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        doc = graph(tmp, steps=6, save_every=1000, warmup=3)
+        for node in doc.nodes:
+            if node.class_name == "NoiserNode":
+                node.params.update({"regions": 2, "regions_from": 4, "regions_span": 4, "layout": "strata"})
+            if node.class_name == "DiffusionTrainerNode":
+                node.params["gradient_policy"] = "equal"
+        _, outcome, trace = execute(store, doc)
+        metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        sizes = [m["batch"] for m in metrics]
+        lrs = [m["lr"] for m in metrics]
+        check(outcome.ok and len(metrics) == 6 and sizes[0] > sizes[-1] and lrs[0] < lrs[3] and "loss_region_3" in metrics[0] and "loss_region_3" not in metrics[-1],
+              f"batch sizes {sizes}, lr {[round(v, 6) for v in lrs]} ({outcome.error})")
+
+
 def calibration_check() -> None:
     """Regions with calibrate_every: some steps run each region alone and measure norms, the others are one batch with weights."""
     with tempfile.TemporaryDirectory() as raw:
@@ -218,5 +254,5 @@ def perceptual_trainer_check() -> None:
 
 
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, calibration_check, perceptual_checks,
+    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
         perceptual_trainer_check)

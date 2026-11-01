@@ -108,7 +108,7 @@ def _starter(args, settings: list[str], params: list[str]):
         batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
         optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
         checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
-        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, tag_swap=args.tag_swap, save_probe=args.save_probe,
+        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, warmup=args.warmup, tag_swap=args.tag_swap, save_probe=args.save_probe,
         settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
 
 
@@ -153,6 +153,7 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--schedule", default="constant", choices=("constant", "cosine"), help="learning rate over the run: constant, or a cosine decay to 5%% of --lr over the whole run")
             p.add_argument("--save-probe", action="store_true", help="before each save, run one forward with the live adapter and keep it in <file>.probe.safetensors "
                            "(python -m next.accept save-probe checks the saved file against it)")
+            p.add_argument("--warmup", type=int, default=0, help="optimizer steps over which the learning rate ramps up linearly from 0 (0 = off)")
             p.add_argument("--regions", type=int, default=1, help="timesteps per image in one step, one from each equal part of the range, gradients of the parts "
                            "scaled to equal length before they are averaged (N times the batch per step; see manual/quality.md, 'Timesteps per image')")
             p.add_argument("--tag-swap", action="store_true", help="train each epoch on one random tag of every caption instead of the whole caption (an experiment)")

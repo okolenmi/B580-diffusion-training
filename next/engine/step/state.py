@@ -28,6 +28,7 @@ class StepState:
     conditioning: Any = None
     prediction: Tensor | None = None
     loss: Tensor | None = None
+    reported: Tensor | None = None  # the loss without the time balance's weights: what the logs show, so arms with and without them compare
     penalty: Tensor | None = None  # added to the loss in backward only; the reported loss stays the plain one
     per_sample: Tensor | None = None
     timing_ms: dict[str, float] = field(default_factory=dict)

@@ -90,6 +90,7 @@ class Loss(StepPhase):
         state.per_sample = per_sample_mse(state.prediction, i.target, i.mask)
         extra = None if self._balance is None else self._balance.weights_for(i.t_frac)
         state.loss = self._weighting.apply(state.per_sample, i.sigma, extra)
+        state.reported = state.loss.detach() if extra is None else self._weighting.apply(state.per_sample, i.sigma).detach()
 
 
 class Backward(StepPhase):

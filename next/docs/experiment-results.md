@@ -54,3 +54,4 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - Metrics: coarse change 0.0839 / 0.0797 / 0.0801, finest octave 1.80 / 1.78 / 1.57. The warmup arms change slightly less at the coarse level and are less detailed at the finest; the owner prefers `ladder-6-warmup` by eye for the small details of the composition.
 - `ladder-9` ran out of memory at step 1: the gradient of every region (162 MB each) was kept on the card, nine of them plus the stacked matrix. Fixed by keeping them in host memory.
 - Owner's idea for later: 2 and 4 regions. His merge experience: with 2 examples progress is faster than with 3-4, since more examples show more errors to reject.
+- Owner's reading: for `ladder-6-warmup` the improvement is in composition, almost with no trade-off; details can be fixed later, fixing them at the start of training is useless.

@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager
 from collections.abc import Callable, Iterable
 
 import torch
+from torch import Tensor
 
 from ...graph.events import StepFinished
 from ..optim.handle import FusedOptimizer, Optimizer
@@ -286,10 +287,9 @@ class Trainer:
             pending = matrix if pending is None else pending + matrix  # the policy sees each region's gradient over the whole window
             losses.append(loss)
             thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
-        window = pending / len(fetched)
-        total = self._regional.direction(window)
+        norms, total = self._combine(pending, len(fetched))
         self._regional_metrics = {f"loss_region_{i}": sum(v) / len(v) for i, v in per_region.items()}
-        self._regional_metrics.update({f"grad_norm_region_{i}": float(n) for i, n in enumerate(window.norm(dim=1))})
+        self._regional_metrics.update({f"grad_norm_region_{i}": float(n) for i, n in enumerate(norms)})
         self._regional_metrics.update(self._regional.policy.last)
         self._regional_metrics["update_skipped"] = float(total is None)
         self.optimizer.zero_grad()
@@ -298,6 +298,23 @@ class Trainer:
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing
+
+    def _combine(self, pending: Tensor, count: int) -> tuple[Tensor, Tensor | None]:
+        """The regions' norms and the update direction from their gradients summed over ``count`` batches. The vectors wait in
+        host memory while the passes run; here, with the activations gone, they go to the device for the arithmetic (the host
+        does the same work many times slower) unless the card cannot hold them."""
+        try:
+            return self._combine_on(pending.to(self.device), count)
+        except BaseException as error:
+            if not is_out_of_memory(error):
+                raise
+            error.__traceback__ = None
+            gc.collect()
+            return self._combine_on(pending, count)
+
+    def _combine_on(self, matrix: Tensor, count: int) -> tuple[Tensor, Tensor | None]:
+        window = matrix / count if count > 1 else matrix
+        return window.norm(dim=1).cpu(), self._regional.direction(window)
 
     def _region_pass(self, step: int, micro: int, part: dict, attempt: int) -> tuple[float, list, list, dict]:
         """One region's forward and backward, as chunks when it is too big; leaves its gradient on the parameters."""

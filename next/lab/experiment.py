@@ -238,5 +238,14 @@ FIRST_STEPS_TEMPLATE = {
              {"name": "ladder-9", "args": ["--regions", "3", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100"]},
              {"name": "ladder-6-warmup", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=6", "--set", "noiser.regions_span=100"]}],
 }
+REGION_COUNT_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "region-count",
+    "note": "How many timesteps per image: 2 and 4 against 3, and the ladder from 9. Every arm has the 50-step warmup; `ladder-6` is the best arm of the first-steps test, run again as the control.",
+    "arms": [{"name": "ladder-6", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=6", "--set", "noiser.regions_span=100"]},
+             {"name": "ladder-9", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100"]},
+             {"name": "regions-2", "args": ["--regions", "2", "--warmup", "50"]},
+             {"name": "regions-4", "args": ["--regions", "4", "--warmup", "50"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE}

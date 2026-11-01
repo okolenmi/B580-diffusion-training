@@ -17,6 +17,7 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 | Memory | 1024 px batch 1 fits (deterministic mode now uses blockwise attention); 3 regions about 10.5 GB | Measured |
 | Cheap `equal` (weights instead of three passes, item 47) | `gradnorm` single-timestep steps with weights do not reach `equal`'s structure, even with 3x the steps; `equal` preferred by eye | Seen by eye |
 | One pass instead of three (item 48) | `equal` still wins by eye. `mean` 11.4 min, `calibrated-10` 13.1, `calibrated-50` 12.1, `equal` 18.4: one batch of three costs 62% of three passes, not a third. `calibrated-50` is closest to `equal` in structure but softer; `calibrated-10` is good in small details | Seen by eye, 2 rounds |
+| First steps (item 49) | Warmup 50 steps and a ladder from 6 regions to 3 over 100 steps: `ladder-6-warmup` judged best by eye (small details of the composition more alive); coarse change 0.080 against 0.084 for plain `equal` (the metrics barely separate them). `ladder-9` ran out of memory | Seen by eye, 1 round |
 | Not yet run | Weights instead of three forwards (47), one-pass calibration (48) | |
 
 ## Timesteps per image (regions)
@@ -47,3 +48,9 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - Coarse change (the least noisy image metric; the two identical 1e-4 controls differed by 1.5%): equal 0.0853, calibrated-10 0.0801, calibrated-50 0.0792, mean 0.0652 (about what the undertrained 3e-5 run gave, 0.0662). It follows the order the owner judged by eye: `equal` learns the most structure, `mean` the least. Fine/coarse is the reverse: equal 0.24, calibrated 0.27, mean 0.34, since in `mean` the clean-end region, with a loss 20x larger, dominates the gradient.
 - Calibrated weights are fixed ratios measured every 10 or 50 steps; `equal` normalises each step's own gradient, and the norms vary several-fold from step to step, so a fixed weight cannot follow them.
 - Conclusion: `equal` stays the base. The calibrated option stays in the code (`policy_calibrate_every`) but costs quality for a third less time. The logged loss of the calibrated arms (0.0497, 0.0424) was the balance-weighted loss, which the code no longer reports.
+
+## First steps (resolution 768, rendered at 1024)
+- `equal` 16.7 min, `warmup-50` 17.7, `ladder-6-warmup` 19.6 (the ladder's early steps run up to 6 passes). The logged losses and per-t tables are the same to the digit in all three.
+- Metrics: coarse change 0.0839 / 0.0797 / 0.0801, finest octave 1.80 / 1.78 / 1.57. The warmup arms change slightly less at the coarse level and are less detailed at the finest; the owner prefers `ladder-6-warmup` by eye for the small details of the composition.
+- `ladder-9` ran out of memory at step 1: the gradient of every region (162 MB each) was kept on the card, nine of them plus the stacked matrix. Fixed by keeping them in host memory.
+- Owner's idea for later: 2 and 4 regions. His merge experience: with 2 examples progress is faster than with 3-4, since more examples show more errors to reject.

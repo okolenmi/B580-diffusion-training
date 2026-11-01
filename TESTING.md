@@ -66,12 +66,12 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 49. The first steps (about 1.5 hours)
-The first updates set the direction the adapter takes (the second `equal` run of an earlier test ended differently with the same settings). Three ways to make them less random, on top of `equal` with 3 regions: `--warmup 50` ramps the learning rate up linearly over 50 steps; `noiser.regions_from=9` starts with 9 timesteps per image and falls to 3 over the first 100 batches (every region is a full pass, so the first 100 steps take about twice as long); both together with 6.
+## 50. How many timesteps per image (about 1.7 hours)
+2 and 4 regions against 3, and the ladder from 9 (it ran out of memory in the first-steps test; each region's gradient copy now lives in host memory, and the memory plan counts one region per pass instead of all of them, which may also make `equal` steps faster). All arms use the 50-step warmup; `ladder-6` is the first-steps winner run again as the control.
 ```
-python -m next.lab template first-steps > first.json
+python -m next.lab template region-count > count.json
 ```
-Edit `images`, `python -m next.lab run first.json`, send the zip. Arms: `equal`, `warmup-50`, `ladder-9`, `ladder-6-warmup`. Compare the full-size pictures against `equal` (structure first). The console of the ladder arms shows the regions line with more entries at the start.
+Edit `images`, `python -m next.lab run count.json`, send the zip. Look at structure first; the console shows how the minutes grow with the count. If `ladder-9` still runs out of memory, send the log.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

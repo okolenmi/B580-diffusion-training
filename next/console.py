@@ -75,7 +75,7 @@ class Console:
             if "weight_t_low" in m or "weight_t_mid" in m or "weight_t_high" in m else ""
         by_third = "  by t " + " ".join(f"{k[7:]} {m[k]:.4f}" for k in ("loss_t_low", "loss_t_mid", "loss_t_high") if k in m) if any(k in m for k in ("loss_t_low", "loss_t_mid", "loss_t_high")) else ""
         regions = ("  regions " + " ".join(f"{k.removeprefix('loss_region_')}:{m[k]:.4f}" for k in sorted(m) if k.startswith("loss_region_"))
-                   + "".join(f" {label} {m[k]:.2f}" for k, label in (("region_cos_min", "cos_min"), ("region_shared", "shared")) if k in m)
+                   + "".join(f" {label} {m[k]:.2f}" for k, label in (("region_cos_min", "cos_min"), ("region_cos_mean", "cos_mean"), ("region_shared", "shared")) if k in m)
                    + ("  grad norm " + " ".join(f"{m[k]:.3g}" for k in sorted(m) if k.startswith("grad_norm_region_")) if "grad_norm_region_0" in m else "")
                    + (" SKIPPED" if m.get("update_skipped") else "")) if "loss_region_0" in m else ""
         perceptual = f"  perceptual {m['loss_perceptual']:.4f}" if "loss_perceptual" in m else ""

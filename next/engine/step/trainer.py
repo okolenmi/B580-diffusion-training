@@ -20,7 +20,7 @@ from ..runtime.thrash import PrimitiveCacheMonitor
 from .memory_probe import MemoryProbe
 from .loss import T_THIRDS, LossWeighting, thirds_of_range
 from .perceptual import SelfPerceptualLoss
-from .regional import RegionalUpdate, RegionGradients
+from .regional import RegionalUpdate, RegionGradients, RegionStream
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
 from .schedule import LRSchedule
 from .state import StepState, split_batch
@@ -64,7 +64,7 @@ class Trainer:
         self._perf = perf  # duck-typed: step(n) context manager, observe(metrics), close(); the engine does not know the profiler
         if regional is not None and (isinstance(optimizer, FusedOptimizer) or graph is not None):
             raise ValueError("a gradient policy reads each region's gradient before the update: it needs the plain optimizer (not fused) and no graph replay")
-        self._regional, self._regional_metrics = regional, {}
+        self._regional, self._regional_metrics, self._stream = regional, {}, None
         if calibrate_every and (regional is None or balance is None or not balance.wants_gradient_norm):
             raise ValueError("calibrating the regions' weights needs a gradient policy and the gradnorm time balance")
         self._calibrate_every = calibrate_every
@@ -266,8 +266,13 @@ class Trainer:
     def _regional_window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
         """Like ``_window``, but each region of a batch (its samples at one part of the timestep range) runs on its own from zero
         gradients; each region's gradients are averaged over the window's batches, the policy combines them, and the result is
-        written back and applied."""
+        written back and applied. A plain average of normalised regions over one batch is summed on the device as the passes finish
+        (``RegionStream``); any other policy needs every region's vector, which waits in host memory until the passes are done."""
         grads, pending = RegionGradients(self.optimizer), None
+        stream = None
+        if self._regional.streams(len(fetched)):
+            stream = self._stream = self._stream or RegionStream(self.optimizer)
+            stream.begin()
         losses, thirds, timing, per_region = [], [], {}, {}
         for micro, batch in enumerate(fetched):
             region = batch.get("region")
@@ -276,25 +281,36 @@ class Trainer:
             for index, part in enumerate(split_batch(batch, sizes)):
                 self.optimizer.zero_grad()
                 value, losses_part, fractions_part, spent = self._region_pass(step, micro, part, attempt)
-                matrix.append(grads.read())
+                if stream is not None:
+                    stream.add()
+                else:
+                    matrix.append(grads.read())
                 per_region.setdefault(index, []).append(float(value))
                 loss, per_sample, fractions = loss + value / len(sizes), per_sample + losses_part, fractions + fractions_part
                 for label, ms in spent.items():
                     timing[label] = timing.get(label, 0.0) + ms
-            matrix = torch.stack(matrix)
-            if pending is not None and pending.shape != matrix.shape:
-                raise ValueError("the batches of one window hold different numbers of regions")
-            pending = matrix if pending is None else pending + matrix  # the policy sees each region's gradient over the whole window
+            if stream is None:
+                matrix = torch.stack(matrix)
+                if pending is not None and pending.shape != matrix.shape:
+                    raise ValueError("the batches of one window hold different numbers of regions")
+                pending = matrix if pending is None else pending + matrix  # the policy sees each region's gradient over the whole window
             losses.append(loss)
             thirds.append(thirds_of_range(torch.cat([p.flatten() for p in per_sample]), torch.cat(fractions)))
-        norms, total = self._combine(pending, len(fetched))
+        if stream is not None:
+            norms, extra = stream.finish()
+            total = True
+        else:
+            norms, total = self._combine(pending, len(fetched))
+            extra = self._regional.policy.last
         self._regional_metrics = {f"loss_region_{i}": sum(v) / len(v) for i, v in per_region.items()}
         self._regional_metrics.update({f"grad_norm_region_{i}": float(n) for i, n in enumerate(norms)})
-        self._regional_metrics.update(self._regional.policy.last)
+        self._regional_metrics.update(extra)
         self._regional_metrics["update_skipped"] = float(total is None)
-        self.optimizer.zero_grad()
+        if stream is None:
+            self.optimizer.zero_grad()
+            if total is not None:
+                grads.write(total)
         if total is not None:
-            grads.write(total)
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing

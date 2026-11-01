@@ -109,6 +109,40 @@ def balance_run_check() -> None:
         check(outcome.ok and trace.steps() == 6, f"a run with the gradnorm balance finishes ({outcome.error})")
 
 
+def stream_check() -> None:
+    """RegionStream gives the update of the stored-vectors route and the exact mean pairwise cosine."""
+    from ..engine.step.regional import RegionGradients, RegionStream
+
+    class Holder:
+        def __init__(self, params):
+            self.params, self._t = params, set()
+
+        def touched(self):
+            return frozenset(self._t)
+
+        def touch(self, ids):
+            self._t.update(ids)
+
+    torch.manual_seed(0)
+    params = [torch.nn.Parameter(torch.zeros(5, 3)), torch.nn.Parameter(torch.zeros(7))]
+    holder = Holder(params)
+    stream = RegionStream(holder)
+    vectors = [torch.randn(22) * k for k in (1.0, 0.1, 5.0)]
+    stream.begin()
+    for v in vectors:
+        params[0].grad, params[1].grad = v[:15].view(5, 3).clone(), v[15:].clone()
+        stream.add()
+    norms, metrics = stream.finish()
+    got = torch.cat([p.grad.flatten() for p in params])
+    want = RegionalUpdate(make_policy("equal"), True).direction(torch.stack(vectors))
+    unit = torch.stack([v / v.norm() for v in vectors])
+    cos = unit @ unit.T
+    mean_cos = float((cos.sum() - 3) / 6)
+    check(torch.allclose(got, want, atol=1e-5) and abs(metrics["region_cos_mean"] - mean_cos) < 1e-5
+          and all(abs(n - float(v.norm())) < 1e-4 for n, v in zip(norms, vectors)),
+          f"streamed update equals the stored-vectors update (max diff {float((got - want).abs().max()):.2e}, cos {metrics['region_cos_mean']:.4f} vs {mean_cos:.4f})")
+
+
 def ladder_check() -> None:
     """The regions ladder: the count falls from the start value to the normal one over the span, and batches follow it."""
     from ..data.noise import Noiser, TimestepPolicy
@@ -254,5 +288,5 @@ def perceptual_trainer_check() -> None:
 
 
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
+    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
         perceptual_trainer_check)

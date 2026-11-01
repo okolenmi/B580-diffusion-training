@@ -73,13 +73,6 @@ python -m next.lab template cheap-equal > cheap.json
 ```
 Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `gradnorm-900` (the same compute as `equal`), `single-900` (same compute, no weights). Send the zip. If `gradnorm-900` looks like `equal`, per-step cost drops by three at the same quality, and `gradnorm-300` shows whether it is that or the step count.
 
-## 48. Three timesteps per image in one forward and backward (about 1.2 hours)
-`equal` runs each timestep of an image as its own forward and backward, so a step costs three passes (at batch 1 those are probably bound by kernel launches, which is why a smaller resolution barely sped it up). `mean` is one pass but does not scale the regions. The new `policy_calibrate_every=N` runs the three-pass step only every Nth step, to measure each region's gradient norm; the steps between are one batch with each region's loss weighted by the inverse of that norm, which gives the same direction as `equal`.
-```
-python -m next.lab template one-pass > onepass.json
-```
-Edit `images`, `python -m next.lab run onepass.json`, send the zip. Arms: `equal`, `mean`, `calibrated-10`, `calibrated-50`. Compare minutes first (the calibrated arms should be near `mean`), then the full-size pictures: does `calibrated-10` look like `equal` (fewer structure errors) rather than like `mean`? The step lines of the calibrated arms show `weights a/b/c` (expect about 0.5/0.5/2) and print the regions line only on the steps that ran alone. 1e-4 stays: the learning-rate run showed 1e-4 and 3e-4 within the noise of each other and 3e-5 clearly less trained.
-
 ## 49. The first steps (about 1.5 hours; after item 48)
 The first updates set the direction the adapter takes (the second `equal` run of an earlier test ended differently with the same settings). Three ways to make them less random, on top of `equal` with 3 regions: `--warmup 50` ramps the learning rate up linearly over 50 steps; `noiser.regions_from=9` starts with 9 timesteps per image and falls to 3 over the first 100 batches (every region is a full pass, so the first 100 steps take about twice as long); both together with 6.
 ```

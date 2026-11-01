@@ -16,6 +16,7 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 | Run-to-run noise | Same settings give the same loss to four digits but image metrics differ by about 10% | Good |
 | Memory | 1024 px batch 1 fits (deterministic mode now uses blockwise attention); 3 regions about 10.5 GB | Measured |
 | Cheap `equal` (weights instead of three passes, item 47) | `gradnorm` single-timestep steps with weights do not reach `equal`'s structure, even with 3x the steps; `equal` preferred by eye | Seen by eye |
+| One pass instead of three (item 48) | `equal` still wins by eye. `mean` 11.4 min, `calibrated-10` 13.1, `calibrated-50` 12.1, `equal` 18.4: one batch of three costs 62% of three passes, not a third. `calibrated-50` is closest to `equal` in structure but softer; `calibrated-10` is good in small details | Seen by eye, 2 rounds |
 | Not yet run | Weights instead of three forwards (47), one-pass calibration (48) | |
 
 ## Timesteps per image (regions)
@@ -40,3 +41,9 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - The two 1e-4 controls match to four digits in loss but differ in image metrics: finest octave 1.77 vs 1.60, spectral slope -2.56 vs -2.60, fine-power share 0.115 vs 0.103. So image-metric differences under about 10-15% are not results, even when the training loss is identical (a sampler amplifies tiny weight differences).
 - 3e-5: less coarse change (0.066 vs 0.086), more fine detail (3.26), judged worse by eye: undertrained. 1e-4 and 3e-4: each better on different images, within the noise. The learning rate is not the cause of the painted look in this range.
 - Speed: 768 px gave about 3.2 s per step against about 3.5 s at 1024 (0.6x the pixels): batch-1 passes are probably launch-bound, not compute-bound (not measured).
+
+## One pass instead of three (resolution 768, rendered at 1024)
+- Minutes for 300 steps: equal 18.4, mean 11.4, calibrated-10 13.1, calibrated-50 12.1. One batch of three timesteps costs about 62% of three separate passes: the saving is a third at most, not two thirds.
+- Coarse change (the least noisy image metric; the two identical 1e-4 controls differed by 1.5%): equal 0.0853, calibrated-10 0.0801, calibrated-50 0.0792, mean 0.0652 (about what the undertrained 3e-5 run gave, 0.0662). It follows the order the owner judged by eye: `equal` learns the most structure, `mean` the least. Fine/coarse is the reverse: equal 0.24, calibrated 0.27, mean 0.34, since in `mean` the clean-end region, with a loss 20x larger, dominates the gradient.
+- Calibrated weights are fixed ratios measured every 10 or 50 steps; `equal` normalises each step's own gradient, and the norms vary several-fold from step to step, so a fixed weight cannot follow them.
+- Conclusion: `equal` stays the base. The calibrated option stays in the code (`policy_calibrate_every`) but costs quality for a third less time. The logged loss of the calibrated arms (0.0497, 0.0424) was the balance-weighted loss, which the code no longer reports.

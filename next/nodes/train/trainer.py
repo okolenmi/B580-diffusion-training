@@ -88,6 +88,12 @@ class DiffusionTrainerNode(Node):
                                     "project: a region's gradient loses the part that points against another region's. "
                                     "common: the shortest vector among the regions' gradients, which lowers every region's loss to first order. "
                                     "The last two run each region's backward alone (more memory-light but slower) and need the plain optimizer, no graph."),
+        "policy_calibrate_every": Port("policy_calibrate_every", int, required=False, default=0, minimum=0, group="loop",
+                                       visible_when=("gradient_policy", "equal"),
+                                       doc="0: every step runs each region alone (one forward and backward per region). N: only every Nth step does, "
+                                           "and measures each region's gradient norm; the steps between run the regions as one batch (one forward and "
+                                           "backward), each region's loss weighted by the inverse of its measured norm. Needs `--time-balance gradnorm`, "
+                                           "3 regions with the `strata` layout (region i is the i-th third of the range)."),
         "policy_normalize": Port("policy_normalize", bool, required=False, default=True, group="loop",
                                  doc="Scale each region's gradient to unit length before combining, so heavily down-weighted regions count as much as the rest."),
         "policy_floor": Port("policy_floor", float, required=False, default=0.0, minimum=0.0, maximum=1.0, group="loop",
@@ -136,7 +142,7 @@ class DiffusionTrainerNode(Node):
                           probe=self._time_probe(model, inputs), task=self.context.task, graph=graph,
                           plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
                           perf=self._perf_session(model, accelerator), regional=self._regional(inputs),
-                          perceptual=self._perceptual(model, inputs),
+                          perceptual=self._perceptual(model, inputs), calibrate_every=self._calibrate_every(inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):
@@ -155,6 +161,14 @@ class DiffusionTrainerNode(Node):
         if objective.process.parameterization.name != "eps":
             raise ValueError("the self-perceptual loss is defined for eps prediction")
         return SelfPerceptualLoss(SelfPerceptual(model.denoiser, objective, model.gate), weight)
+
+    @staticmethod
+    def _calibrate_every(inputs: dict) -> int:
+        every = inputs.get("policy_calibrate_every") or 0
+        noiser = inputs["batches"].noiser
+        if every and (inputs.get("gradient_policy") != "equal" or noiser.regions != 3 or noiser.policy.layout != "strata"):
+            raise ValueError("calibrating needs gradient_policy equal and the noiser's regions 3 with the strata layout")
+        return every
 
     @staticmethod
     def _regional(inputs: dict) -> RegionalUpdate | None:

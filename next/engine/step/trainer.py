@@ -17,7 +17,7 @@ from ..runtime.memory import MemoryBudgetExceeded, is_out_of_memory
 from ..runtime.planner import chunk_sizes
 from ..runtime.thrash import PrimitiveCacheMonitor
 from .memory_probe import MemoryProbe
-from .loss import LossWeighting, thirds_of_range
+from .loss import T_THIRDS, LossWeighting, thirds_of_range
 from .perceptual import SelfPerceptualLoss
 from .regional import RegionalUpdate, RegionGradients
 from .phases import (Backward, EncodeConditioning, FetchBatch, Forward, Loss, Pipeline, PrepareInputs, StepPhase, Timed)
@@ -54,7 +54,7 @@ class Trainer:
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
                  warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None,
-                 perceptual: SelfPerceptualLoss | None = None):
+                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -64,6 +64,9 @@ class Trainer:
         if regional is not None and (isinstance(optimizer, FusedOptimizer) or graph is not None):
             raise ValueError("a gradient policy reads each region's gradient before the update: it needs the plain optimizer (not fused) and no graph replay")
         self._regional, self._regional_metrics = regional, {}
+        if calibrate_every and (regional is None or balance is None or not balance.wants_gradient_norm):
+            raise ValueError("calibrating the regions' weights needs a gradient policy and the gradnorm time balance")
+        self._calibrate_every = calibrate_every
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._task = task or (lambda title: contextlib.nullcontext())
@@ -206,8 +209,12 @@ class Trainer:
     def _window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
         """The window's micro-steps, each as one or more chunks, and the update. Past the point where an update may
         have been applied, ``_committed`` says a failure cannot be run again."""
-        if self._regional is not None:
-            return self._regional_window(step, fetched, attempt)
+        if self._regional is not None and self._calibrating(step):
+            result = self._regional_window(step, fetched, attempt)
+            if self._calibrate_every:
+                self._learn_region_norms()
+            return result
+        self._regional_metrics = {}
         plans = [(batch, self._chunks(batch, attempt)) for batch in fetched]
         passes = sum(len(sizes) for _, sizes in plans)
         if self._fused:
@@ -241,6 +248,19 @@ class Trainer:
             self._committed = True
             self.optimizer.step()
         return losses, thirds, timing
+
+    def _calibrating(self, step: int) -> bool:
+        """Whether this step runs each region on its own. With ``calibrate_every`` the other steps run the regions as one batch,
+        each region's loss weighted by the inverse of the gradient norm the calibrating steps measured."""
+        if not self._calibrate_every:
+            return True
+        return step % self._calibrate_every == 0 or len(self._balance.weights) < len(T_THIRDS)
+
+    def _learn_region_norms(self) -> None:
+        for i, name in enumerate(T_THIRDS):
+            norm = self._regional_metrics.get(f"grad_norm_region_{i}")
+            if norm is not None:
+                self._balance.observe_gradient({name: 0.0}, norm)
 
     def _regional_window(self, step: int, fetched: list[dict], attempt: int) -> tuple[list, list, dict]:
         """Like ``_window``, but each region of a batch (its samples at one part of the timestep range) runs on its own from zero

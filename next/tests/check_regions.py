@@ -109,6 +109,32 @@ def balance_run_check() -> None:
         check(outcome.ok and trace.steps() == 6, f"a run with the gradnorm balance finishes ({outcome.error})")
 
 
+def calibration_check() -> None:
+    """Regions with calibrate_every: some steps run each region alone and measure norms, the others are one batch with weights."""
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        doc = graph(tmp, steps=40, save_every=1000, time_balance="gradnorm")
+        for node in doc.nodes:
+            if node.class_name == "NoiserNode":
+                node.params.update({"regions": 3, "layout": "strata"})
+            if node.class_name == "DiffusionTrainerNode":
+                node.params.update({"gradient_policy": "equal", "policy_calibrate_every": 10})
+            if node.class_name == "TimeBalanceNode":
+                node.params["warmup_reports"] = 3
+        _, outcome, trace = execute(store, doc)
+        metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        alone = [i for i, m in enumerate(metrics) if "loss_region_0" in m]
+        check(outcome.ok and len(metrics) == 40 and 0 < len(alone) < 40 and all(i in alone for i in (0, 1, 2)) and 30 in alone and "weight_t_high" in metrics[-1]
+              and all(m["batch"] % 3 == 0 for m in metrics),
+              f"calibration steps {alone} ({outcome.error})")
+
+
 def trainer_checks() -> None:
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
@@ -192,5 +218,5 @@ def perceptual_trainer_check() -> None:
 
 
 if __name__ == "__main__":
-    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, perceptual_checks,
+    run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, calibration_check, perceptual_checks,
         perceptual_trainer_check)

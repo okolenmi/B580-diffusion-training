@@ -80,12 +80,12 @@ python -m next.lab template cheap-equal > cheap.json
 ```
 Arms: `equal` (3 forwards per step), `gradnorm-300` (a third of the compute), `gradnorm-900` (the same compute as `equal`), `single-900` (same compute, no weights). Send the zip. If `gradnorm-900` looks like `equal`, per-step cost drops by three at the same quality, and `gradnorm-300` shows whether it is that or the step count.
 
-## 48. Learning rate, with the control run twice (about 1.2 hours)
-Every comparison so far used 1e-4 constant. The research found the learning rate matters more than any LoRA variant, and a painted look can come from a rate that is too high (blotches the data does not contain) as well as too low (only the coarsest change gets learned). The control appears twice: the gap between the two is the noise floor, so this also answers item 46 for the real setting.
+## 48. Three timesteps per image in one forward and backward (about 1.2 hours)
+`equal` runs each timestep of an image as its own forward and backward, so a step costs three passes (at batch 1 those are probably bound by kernel launches, which is why a smaller resolution barely sped it up). `mean` is one pass but does not scale the regions. The new `policy_calibrate_every=N` runs the three-pass step only every Nth step, to measure each region's gradient norm; the steps between are one batch with each region's loss weighted by the inverse of that norm, which gives the same direction as `equal`.
 ```
-python -m next.lab template lr > lr.json
+python -m next.lab template one-pass > onepass.json
 ```
-Edit `images`, `python -m next.lab run lr.json`, send the zip. Arms: 1e-4 (twice), 3e-5, 3e-4, all with 3 timesteps per image. Look at the two controls first (if they differ as much as the other arms, nothing below is a result), then at which direction of the learning rate moves the full-size pictures away from the painted look. The probe lines (adapter/base loss per third) show whether 3e-4 starts to damage the model.
+Edit `images`, `python -m next.lab run onepass.json`, send the zip. Arms: `equal`, `mean`, `calibrated-10`, `calibrated-50`. Compare minutes first (the calibrated arms should be near `mean`), then the full-size pictures: does `calibrated-10` look like `equal` (fewer structure errors) rather than like `mean`? The step lines of the calibrated arms show `weights a/b/c` (expect about 0.5/0.5/2) and print the regions line only on the steps that ran alone. 1e-4 stays: the learning-rate run showed 1e-4 and 3e-4 within the noise of each other and 3e-5 clearly less trained.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

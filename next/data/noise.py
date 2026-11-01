@@ -63,13 +63,17 @@ class Noiser:
             return torch.cat([(draw + r) / self.regions for r in range(self.regions)])
         return torch.cat([(draw + r / self.regions) % 1.0 for r in range(self.regions)])
 
+    def _steered(self) -> bool:
+        """Whether the balance is biasing which timesteps are drawn (a balance that only weights the loss leaves the draw alone)."""
+        return self.balance is not None and self.balance.third_probabilities() is not None
+
     def __call__(self, x0: Tensor, generator: torch.Generator) -> dict[str, Tensor]:
         """``x_t`` (network input), ``t``, ``target``, ``sigma`` and ``t_frac`` (t as a fraction of the objective's range).
 
         With ``regions`` above 1 a batch is ``regions`` copies of its images laid out region by region (the batcher makes the
         copies); ``region`` tells which one each sample belongs to. A batch that cannot be split that way is drawn as usual."""
         n = x0.shape[0]
-        regional = self.regions > 1 and n % self.regions == 0 and not self.policy.values and self.balance is None
+        regional = self.regions > 1 and n % self.regions == 0 and not self.policy.values and not self._steered()
         region = torch.arange(self.regions).repeat_interleave(n // self.regions) if regional else torch.zeros(n, dtype=torch.long)
         if regional:
             t = self.t_at(self.spread(n, generator))

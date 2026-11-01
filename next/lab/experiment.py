@@ -218,5 +218,15 @@ LR_TEMPLATE = {
              {"name": "lr-3e-5", "args": ["--regions", "3", "--lr", "3e-5"]},
              {"name": "lr-3e-4", "args": ["--regions", "3", "--lr", "3e-4"]}],
 }
+ONE_PASS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "one-pass",
+    "note": "Three timesteps per image with one forward and backward per step instead of three. `equal` runs each timestep alone; `mean` puts them in one batch "
+            "without scaling; the calibrated arms run the regions alone only every Nth step (to measure each one's gradient norm) and as one weighted batch in between.",
+    "arms": [{"name": "equal", "args": ["--regions", "3"]},
+             {"name": "mean", "args": ["--regions", "3", "--set", "trainer.gradient_policy=mean"]},
+             {"name": "calibrated-10", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=10"]},
+             {"name": "calibrated-50", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=50"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE}

@@ -66,12 +66,12 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 46. Noise floor: how different are two runs that should be the same (about 1 hour; do this first)
-In item 45 the `equal` arm trained to the same numbers as the `equal` arm of item 44 (mean loss, per-t table and probe identical to 3 digits, last step lines identical), yet its images scored differently (finest octave 2.57 against 3.03, coarse change 0.0868 against 0.0924) and looked worse to you. Either the kernels are not bit-exact and small differences grow, or the renders differ. This runs the same training twice, and twice with deterministic kernels (slower).
+## 46. Do deterministic kernels remove the run-to-run difference (optional, about 40 minutes)
+Two identical normal runs end with the same loss to four digits but image metrics about 10% apart (item 48 learning-rate run: finest octave 1.77 against 1.60), so that is the noise floor for judging arms. This asks where it comes from: the same training twice with deterministic kernels (slower).
 ```
 python -m next.lab template noise-floor > floor.json
 ```
-Edit (`images`), `python -m next.lab run floor.json`, send the zip. Reading: `det-a` against `det-b` (identical pictures: the training is exact and the rest is rendering; different: something in our pipeline is not deterministic), `equal-a` against `equal-b` (the size of the normal run-to-run difference in the detail columns; any arm difference below it is noise).
+Edit `images`, delete the `equal-a` and `equal-b` arms, run, send the zip. `det-a` and `det-b` giving identical pictures means the training is exact and the difference is in the kernels; different pictures mean something in our pipeline is not deterministic. Only worth running if you want to cut the noise; it changes no decision above.
 
 ## 47. Weights instead of three forwards (about 1 hour)
 The gradient norms you sent: region 0 and region 1 about 0.0095 on average, region 2 (noisy end) about 0.0023, so `equal` mostly boosts the noisy end by about 4. `--time-balance gradnorm` measures the same norms on ordinary one-timestep steps (batch 1, no accumulation) and weights each third by the inverse; the step line prints the weights (`weights a/b/c`), expect about 0.5 / 0.5 / 2 once all thirds have 10 steps.

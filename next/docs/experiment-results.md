@@ -15,7 +15,7 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 | Per-timestep loss vs base | About 0.96 at low and mid t, 0.91 at t=850, 0.78-0.80 at t=950 in every arm: it does not tell the arms apart | Good |
 | Run-to-run noise | Same settings give the same loss to four digits but image metrics differ by about 10% | Good |
 | Memory | 1024 px batch 1 fits (deterministic mode now uses blockwise attention); 3 regions about 10.5 GB | Measured |
-| Not yet run | Noise floor with deterministic kernels (46), weights instead of three forwards (47), one-pass calibration (48) | |
+| Not yet run | Weights instead of three forwards (47), one-pass calibration (48); optional: whether deterministic kernels remove the run-to-run difference (46) | |
 
 ## Timesteps per image (regions)
 - Several timesteps per image in one step (3 regions) beat one timestep per image on composition. The `strata` layout with per-region gradient normalisation (`equal`) is the best plain route so far: fewest structural errors.

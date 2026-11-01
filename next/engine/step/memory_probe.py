@@ -22,9 +22,10 @@ class MemoryProbe:
 
     def __init__(self, residency: ResidencyManager | None, optimizer, pipeline: Pipeline, batches: Iterable[dict],
                  fetch: FetchBatch, device, task: Callable[[str], AbstractContextManager],
-                 density: tuple | None = None, placement: tuple | None = None, splits: bool = True) -> None:
+                 density: tuple | None = None, placement: tuple | None = None, splits: bool = True, per_region: bool = False) -> None:
         self.residency, self.optimizer, self.pipeline = residency, optimizer, pipeline
         self.batches, self.fetch, self.device, self.task = batches, fetch, device, task
+        self._copies = 1 if per_region else None  # regions that go through the network on their own never share a batch
         self.density = density  # (CheckpointDensity, TrainableDenoiser) or None
         self.placement = placement  # (BlockPlacement, TrainableDenoiser) or None
         self.splits = splits  # whether a step too big for the budget can run as chunks
@@ -33,7 +34,7 @@ class MemoryProbe:
         make = getattr(self.batches, "probe_batch", None)
         if self.residency is None or make is None:
             return
-        largest = self.batches.largest_units()
+        largest = self.batches.largest_units(self._copies)
         self._choose(make, largest)
         self.residency.expect(largest)
         self.residency.give_back("the probe's blocks are the largest the run will use; the steps need only their own peak")
@@ -43,7 +44,8 @@ class MemoryProbe:
 
     def _choose(self, make: Callable, largest: Any) -> None:
         like = self.fetch.peek()
-        sizes = [1] + ([min(self.batches.max_batch_size(), self.SAMPLES)] if self.batches.max_batch_size() > 1 else [])
+        biggest = self.batches.max_batch_size(self._copies)
+        sizes = [1] + ([min(biggest, self.SAMPLES)] if biggest > 1 else [])
         probes = [make(like, count) for count in sizes]  # two sizes of the same shape: the slope is what a sample costs, the rest is fixed
         units = probes[-1]["x_t"].shape[0] * probes[-1]["x_t"].shape[-2] * probes[-1]["x_t"].shape[-1]
         budget = self.residency.budget_mb()

@@ -10,7 +10,9 @@ from .policy import GradientPolicy
 
 
 class RegionGradients:
-    """The trainable parameters' gradients as one flat float32 vector, and back."""
+    """The trainable parameters' gradients as one flat float32 vector, and back. The vectors live in host memory: one per
+    region, they would otherwise take a copy of the adapter's gradients each from the card's memory (and the matrix a second
+    copy), which grows with the number of regions."""
 
     def __init__(self, optimizer) -> None:
         self.optimizer = optimizer
@@ -19,12 +21,13 @@ class RegionGradients:
 
     def read(self) -> Tensor:
         self.reached |= self.optimizer.touched()
-        return torch.cat([(torch.zeros(p.numel(), device=p.device) if p.grad is None else p.grad.detach().float().flatten()) for p in self.params])
+        flat = torch.cat([(torch.zeros(p.numel(), device=p.device) if p.grad is None else p.grad.detach().float().flatten()) for p in self.params])
+        return flat.cpu()
 
     def write(self, vector: Tensor) -> None:
         offset = 0
         for p in self.params:
-            piece = vector[offset:offset + p.numel()].view_as(p).to(p.dtype)
+            piece = vector[offset:offset + p.numel()].view_as(p).to(device=p.device, dtype=p.dtype)
             offset += p.numel()
             if p.grad is None:
                 p.grad = piece.clone()

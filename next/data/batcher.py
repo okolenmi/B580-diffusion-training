@@ -65,9 +65,10 @@ class Batcher:
             return self.batch_size
         return max(1, min(self.batch_size, self.batch_size * self.full_batch_area // (shape[0] * shape[1])))
 
-    def largest_units(self) -> int:
-        """Latent pixels of the largest batch of the run (samples times the padded area)."""
-        return self.noiser.max_regions * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+    def largest_units(self, regions: int | None = None) -> int:
+        """Latent pixels of the largest batch of the run (samples times the padded area). ``regions`` replaces the copies per
+        image: 1 for a run that puts each region through the network on its own."""
+        return (regions or self.noiser.max_regions) * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
 
     def clean_item(self, sample: str) -> tuple[torch.Tensor, torch.Tensor | None, tuple[int, int]]:
         """A sample as the model sees it when nothing is random: its latent centred in its bucket shape, the validity
@@ -92,8 +93,8 @@ class Batcher:
             counts[key] = counts.get(key, 0) + 1
         return counts
 
-    def max_batch_size(self) -> int:
-        return self.noiser.max_regions * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
+    def max_batch_size(self, regions: int | None = None) -> int:
+        return (regions or self.noiser.max_regions) * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
 
     def probe_batch(self, like: dict, count: int = 1) -> dict:
         """``count`` samples at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s

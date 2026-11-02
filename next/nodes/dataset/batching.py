@@ -6,6 +6,7 @@ from typing import Any
 
 from ...data.batcher import Batcher
 from ...data.bucketing import BucketPolicy, padding_stats
+from ...data.ladder import RegionLadder
 from ...data.noise import Noiser, TimestepPolicy
 from ...data.padding import FILLS
 from ...engine.step.balance import TimeBalance
@@ -73,18 +74,13 @@ class NoiserNode(Node):
         "low": Port("low", float, required=False, default=None, group="timesteps", doc="Smallest timestep; empty = objective's."),
         "high": Port("high", float, required=False, default=None, group="timesteps", doc="Largest timestep; empty = objective's."),
         "balance": Port("balance", TimeBalance, required=False, doc="Steers the draw towards the thirds of the range that are behind."),
+        "ladder": Port("ladder", RegionLadder, required=False, doc="More timesteps per image in the first batches (see the Region Ladder node)."),
         "values": Port("values", str, required=False, default="", group="timesteps", advanced=True,
                        doc="Comma-separated timesteps to choose from instead of a distribution."),
         "regions": Port("regions", int, required=False, default=1, minimum=1, group="timesteps",
                         doc="Timesteps per image in one step: every image of a batch appears this many times, each copy at its own timestep "
                             "(the batch is this many times larger; the loss is the mean over all copies). Replaces the distribution, `values` and the balance. "
                             "With a gradient policy on the trainer the copies are the regions the policy reconciles."),
-        "regions_from": Port("regions_from", int, required=False, default=0, minimum=0, group="timesteps", advanced=True,
-                             doc="Start with this many timesteps per image and fall in equal parts to `regions` over `regions_span` batches "
-                                 "(0 = off). More timesteps per image make the first updates, which set the direction the adapter takes, "
-                                 "less dependent on one random draw; every region still costs a pass with a gradient policy."),
-        "regions_span": Port("regions_span", int, required=False, default=100, minimum=1, group="timesteps", advanced=True,
-                             doc="Batches over which `regions_from` falls to `regions`."),
         "perturb": Port("perturb", str, required=False, default="", group="timesteps", advanced=True,
                         doc="Input perturbation: extra noise of this strength (a multiple of the noise at that timestep) in the network input only, "
                             "the target stays the real noise, so the model learns to answer from inputs that are slightly off, as a sampler's are. "
@@ -101,10 +97,26 @@ class NoiserNode(Node):
         objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
-                                regions=inputs.get("regions") or 1, regions_from=inputs.get("regions_from") or 0,
-                                regions_span=inputs.get("regions_span") or 100, layout=inputs.get("layout") or "even",
+                                regions=inputs.get("regions") or 1, layout=inputs.get("layout") or "even",
                                 perturb=tuple(float(v) for v in (inputs.get("perturb") or "").split(",") if v.strip()))
-        return {"noiser": Noiser(objective, policy, inputs.get("balance"))}
+        return {"noiser": Noiser(objective, policy, inputs.get("balance"), inputs.get("ladder"))}
+
+
+class RegionLadderNode(Node):
+    DISPLAY_NAME = "Region Ladder"
+    CATEGORY = "Dataset"
+    INPUTS = {"start": Port("start", int, default=9, minimum=1, doc="Timesteps per image in the first batch."),
+              "span": Port("span", int, required=False, default=120, minimum=1, unit="batches",
+                           doc="Batches over which the count falls in equal parts to the Noiser's `regions`."),
+              "skip": Port("skip", int, required=False, default=0, minimum=0, unit="batches",
+                           doc="Batches already trained, when training is continued: the ladder then starts that far in (past its span: no extra timesteps).")}
+    OUTPUTS = {"ladder": Port("ladder", RegionLadder,
+                              doc="Wire to the Noiser. More timesteps per image make the first updates, which set the direction the adapter takes, "
+                                  "less dependent on one random draw; with a gradient policy every extra region costs a full pass.")}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        return {"ladder": RegionLadder(inputs["start"], inputs.get("span") or 120, inputs.get("skip") or 0)}
 
 
 class BatcherNode(Node):

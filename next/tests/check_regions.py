@@ -145,14 +145,18 @@ def stream_check() -> None:
 
 def ladder_check() -> None:
     """The regions ladder: the count falls from the start value to the normal one over the span, and batches follow it."""
+    from ..data.ladder import RegionLadder
     from ..data.noise import Noiser, TimestepPolicy
     objective = TinyFamily().objective("eps", False)
-    noiser = Noiser(objective, TimestepPolicy(regions=3, regions_from=9, regions_span=10, layout="strata"))
+    noiser = Noiser(objective, TimestepPolicy(regions=3, layout="strata"), ladder=RegionLadder(9, 10))
     counts = [noiser.regions_at(k) for k in (0, 1, 5, 9, 10, 50)]
     check(counts[0] == 9 and counts[-1] == 3 and counts[-2] == 3 and counts == sorted(counts, reverse=True) and noiser.max_regions == 9,
           f"ladder counts {counts}")
     out = noiser(torch.zeros(18, 4, 8, 8), torch.Generator().manual_seed(0), 9)
     check(int(out["region"].max()) == 8 and out["t"].shape[0] == 18, "a batch drawn with the ladder's count has that many regions")
+    resumed = RegionLadder(9, 10, skip=5)
+    check(resumed.at(0, 3) == RegionLadder(9, 10).at(5, 3) and resumed.at(5, 3) == 3 and RegionLadder(9, 10, skip=10).peak(3) == 3,
+          "a continued run starts part-way up the ladder, or not at all once past its span")
 
 
 def ladder_run_check() -> None:
@@ -165,10 +169,10 @@ def ladder_run_check() -> None:
         library = store.library("toy", create=True)
         library.ingest(tmp / "images")
         library.close()
-        doc = graph(tmp, steps=6, save_every=1000, warmup=3)
+        doc = graph(tmp, steps=6, save_every=1000, warmup=3, regions_from=4, regions_span=4)
         for node in doc.nodes:
             if node.class_name == "NoiserNode":
-                node.params.update({"regions": 2, "regions_from": 4, "regions_span": 4, "layout": "strata"})
+                node.params.update({"regions": 2, "layout": "strata"})
             if node.class_name == "DiffusionTrainerNode":
                 node.params["gradient_policy"] = "equal"
         _, outcome, trace = execute(store, doc)

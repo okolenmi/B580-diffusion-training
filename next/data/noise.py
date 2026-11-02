@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import math
-
 import torch
 from torch import Tensor
+
+from .ladder import RegionLadder
 
 from ..families.api.objective import Objective
 
@@ -23,13 +23,11 @@ class TimestepPolicy:
     values: tuple[float, ...] = ()
     regions: int = 1  # timesteps per image in one step (see ``Noiser``)
     perturb: tuple[float, ...] = ()  # extra noise in the network input only, by region (the list repeats when there are more regions)
-    regions_from: int = 0  # more regions at the start (0 = off): the count falls linearly to ``regions`` over ``regions_span`` batches
-    regions_span: int = 100
     layout: str = "even"  # "even": equally spaced around the range from a random phase; "strata": one random draw in each equal part of it
 
 
 class Noiser:
-    def __init__(self, objective: Objective, policy: TimestepPolicy | None = None, balance=None):
+    def __init__(self, objective: Objective, policy: TimestepPolicy | None = None, balance=None, ladder: RegionLadder | None = None):
         policy = policy or TimestepPolicy()
         if policy.mode not in objective.timestep_modes:
             raise ValueError(f"timestep mode {policy.mode!r} is not offered by this objective; "
@@ -48,18 +46,14 @@ class Noiser:
             raise ValueError("input perturbation strengths must not be negative")
         if policy.regions < 1 or policy.layout not in ("even", "strata"):
             raise ValueError("regions must be at least 1 and the layout 'even' or 'strata'")
-        if policy.regions_from < 0 or policy.regions_span < 1:
-            raise ValueError("regions_from must not be negative and regions_span must be at least 1")
         self.regions = policy.regions
-        self.max_regions = max(policy.regions, policy.regions_from)
+        self.ladder = ladder  # more regions in the first batches
+        self.max_regions = ladder.peak(self.regions) if ladder else self.regions
         self.objective, self.policy, self.balance = objective, policy, balance  # balance: steers the draw towards lagging thirds
 
     def regions_at(self, batch: int) -> int:
-        """Regions of the ``batch``-th batch of the run: ``regions_from`` at the start, falling in equal parts to ``regions``."""
-        start, end = self.policy.regions_from, self.regions
-        if start <= end or batch >= self.policy.regions_span:
-            return end
-        return end + math.ceil((start - end) * (1 - batch / self.policy.regions_span))
+        """Regions of the ``batch``-th batch of the run."""
+        return self.ladder.at(batch, self.regions) if self.ladder else self.regions
 
     def t_at(self, fraction: Tensor) -> Tensor:
         """Timesteps at the given fractions of this noiser's range (rounded when the objective counts in integers)."""

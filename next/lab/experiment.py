@@ -235,15 +235,15 @@ FIRST_STEPS_TEMPLATE = {
             "start that fall to 3 over the first 100 steps (every region is a full pass, so the start is slow).",
     "arms": [{"name": "equal", "args": ["--regions", "3"]},
              {"name": "warmup-50", "args": ["--regions", "3", "--warmup", "50"]},
-             {"name": "ladder-9", "args": ["--regions", "3", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100"]},
-             {"name": "ladder-6-warmup", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=6", "--set", "noiser.regions_span=100"]}],
+             {"name": "ladder-9", "args": ["--regions", "3", "--regions-from", "9", "--regions-span", "100"]},
+             {"name": "ladder-6-warmup", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "6", "--regions-span", "100"]}],
 }
 REGION_COUNT_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "region-count",
     "note": "How many timesteps per image: 2 and 4 against 3, and the ladder from 9. Every arm has the 50-step warmup; `ladder-6` is the best arm of the first-steps test, run again as the control.",
-    "arms": [{"name": "ladder-6", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=6", "--set", "noiser.regions_span=100"]},
-             {"name": "ladder-9", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100"]},
+    "arms": [{"name": "ladder-6", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "6", "--regions-span", "100"]},
+             {"name": "ladder-9", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"]},
              {"name": "regions-2", "args": ["--regions", "2", "--warmup", "50"]},
              {"name": "regions-4", "args": ["--regions", "4", "--warmup", "50"]}],
 }
@@ -253,9 +253,9 @@ LADDER_SPAN_TEMPLATE = {
     "note": "How long the extra timesteps per image should last, and whether ladder 9 beating ladder 6 survives another data order. "
             "The control is `ladder-9` of the region-count test (600 steps, warmup 50, span 100, 3 regions): same settings, so its pictures are the reference.",
     "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 600").replace("--save-every 300", "--save-every 600"),
-    "arms": [{"name": "ladder-9-span-50", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=50"]},
-             {"name": "ladder-9-span-200", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=200"]},
-             {"name": "ladder-9-seed-2", "args": ["--regions", "3", "--warmup", "50", "--set", "noiser.regions_from=9", "--set", "noiser.regions_span=100", "--set", "batcher.seed=7"]}],
+    "arms": [{"name": "ladder-9-span-50", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "50"]},
+             {"name": "ladder-9-span-200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "200"]},
+             {"name": "ladder-9-seed-2", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100", "--set", "batcher.seed=7"]}],
 }
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE}

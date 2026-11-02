@@ -66,12 +66,12 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 50. How many timesteps per image (about 1.7 hours)
-2 and 4 regions against 3, and the ladder from 9 (it ran out of memory in the first-steps test; each region's gradient copy now lives in host memory, and the memory plan counts one region per pass instead of all of them, which may also make `equal` steps faster). All arms use the 50-step warmup; `ladder-6` is the first-steps winner run again as the control.
+## 51. How long the extra timesteps should last (about 1.8 hours)
+Ladder 9 looked better than ladder 6 at 600 steps, and 4 regions worse than 3. This keeps 3 as the final count and varies the ladder: a span of 50 and of 200 batches (your idea that nine close timesteps should be only the start), and ladder 9 with another data order (`batcher.seed=7`), to see whether ladder 9 over ladder 6 is a property of the ladder or of one run. The control is `ladder-9` from the region-count test, same settings.
 ```
-python -m next.lab template region-count > count.json
+python -m next.lab template ladder-span > span.json
 ```
-Edit `images`, `python -m next.lab run count.json`, send the zip. Look at structure first; the console shows how the minutes grow with the count. If `ladder-9` still runs out of memory, send the log.
+Edit `images`, `python -m next.lab run span.json`, send the zip. Compare with the pictures of `ladder-9` and `ladder-6` you already have.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

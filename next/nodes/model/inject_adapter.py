@@ -97,6 +97,9 @@ class InjectAdapterNode(Node):
         "nf4_double_quant": Port("nf4_double_quant", bool, required=False, default=False, group="memory",
                                  visible_when=("base_precision", "nf4"),
                                  doc="Store the per-block scales in 8 bits as well: about 100 MB less on an SDXL UNet, two more kernels per layer call."),
+        "lora_plus": Port("lora_plus", float, required=False, default=1.0, minimum=1.0, group="targets", advanced=True,
+                          doc="LoRA+: multiplier of the learning rate of the up-projection factor (B) over the down-projection (A); 1 = the same rate "
+                              "for both. With B starting at zero it can move faster; 16 is the value usually suggested."),
         "nf4_min_params": Port("nf4_min_params", int, required=False, default=1 << 20, minimum=0, group="memory",
                                visible_when=("base_precision", "nf4"),
                                doc="Layers with fewer weights stay native: they save little."),
@@ -136,6 +139,7 @@ class InjectAdapterNode(Node):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=kind,
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
                                              compute=compute)
+        adapted.up_ratio = float(inputs.get("lora_plus") or 1.0)
         precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):
             with self.context.task(f"Converting the frozen weights to {precision}"):

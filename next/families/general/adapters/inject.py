@@ -34,19 +34,23 @@ class AdaptedPart:
     kind: str
     policy: str
     _lr_mult: dict[str, float] = field(default_factory=dict)
+    up_ratio: float = 1.0  # learning-rate multiplier of the up-projection factor (LoRA+); 1 = the same rate for both factors
 
     def trainable_parameters(self) -> list[nn.Parameter]:
         return [p for layer in self.layers.values() for p in layer.trainable_parameters()]
 
     def param_groups(self, lr: float | None = None) -> list[dict]:
-        """One optimizer group per (module group, learning-rate multiplier). ``lr`` is scaled by the multiplier."""
-        buckets: dict[tuple[str, float], list[nn.Parameter]] = {}
+        """One optimizer group per (module group, learning-rate multiplier, factor kind). ``lr`` is scaled by the multiplier;
+        with ``up_ratio`` above 1 the up-projection factors (``lora_B``) get their own groups with the rate multiplied again."""
+        buckets: dict[tuple[str, float, bool], list[nn.Parameter]] = {}
         for planned in self.plan.modules:
-            key = (planned.group, planned.lr_mult)
-            buckets.setdefault(key, []).extend(self.layers[planned.path].trainable_parameters())
+            for factor, param in self.layers[planned.path].adapter_state().items():
+                up = self.up_ratio != 1.0 and factor == "lora_B"
+                buckets.setdefault((planned.group, planned.lr_mult * (self.up_ratio if up else 1.0), up), []).append(param)
         groups = []
-        for (name, mult), params in buckets.items():
-            entry = {"name": f"{name}" if mult == 1.0 else f"{name}@{mult:g}", "group": name, "lr_mult": mult, "params": params}
+        for (name, mult, up), params in buckets.items():
+            entry = {"name": f"{name}{'.up' if up else ''}" if mult == 1.0 else f"{name}{'.up' if up else ''}@{mult:g}",
+                     "group": name, "lr_mult": mult, "params": params}
             if lr is not None:
                 entry["lr"] = lr * mult
             groups.append(entry)

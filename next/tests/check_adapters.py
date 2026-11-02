@@ -160,6 +160,13 @@ def sdxl_plan_and_injection():
     groups = part.param_groups(lr=1e-4)
     check({g["name"] for g in groups} == {"attn_self", "attn_cross", "ff@0.1", "transformer_proj"}
           and next(g for g in groups if g["group"] == "ff")["lr"] == 1e-5, "optimizer groups follow group and lr multiplier")
+    part.up_ratio = 4.0
+    plus = part.param_groups(lr=1e-4)
+    up = [g for g in plus if g["name"].endswith("@4") or ".up@" in g["name"]]
+    check(all(abs(g["lr"] - 1e-4 * g["lr_mult"]) < 1e-12 for g in plus) and {g["name"] for g in up} >= {"attn_self.up@4", "ff.up@0.4"}
+          and all(id(p) == id(layer.lora_B) for g in plus if ".up" in g["name"] for p in g["params"][:1] for layer in [next(l for l in part.layers.values() if l.lora_B is p)])
+          and sum(len(g["params"]) for g in plus) == 2 * len(part.plan.modules), "LoRA+ puts the B factors in groups with the rate multiplied")
+    part.up_ratio = 1.0
     with torch.no_grad():
         for layer in part.layers.values():
             layer.lora_B.normal_(std=0.1)

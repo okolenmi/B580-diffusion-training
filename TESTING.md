@@ -66,12 +66,19 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 51. How long the extra timesteps should last (about 1.8 hours)
-Ladder 9 looked better than ladder 6 at 600 steps, and 4 regions worse than 3. This keeps 3 as the final count and varies the ladder: a span of 50 and of 200 batches (your idea that nine close timesteps should be only the start), and ladder 9 with another data order (`batcher.seed=7`), to see whether ladder 9 over ladder 6 is a property of the ladder or of one run. The control is `ladder-9` from the region-count test, same settings.
+## 52. Several images per pass (about 2.5 hours)
+Every pass so far was one image at one timestep. With 3 timesteps per image each region is a batch-1 pass, which is probably bound by kernel launches, so 2 or 4 images per pass may cost much less than 2 or 4 times as long. For LoRA the best learning rate and the batch size depend on each other (a recent study found batch size alone moving accuracy by more than 10%). The control is `ladder-9` of the region-count test.
 ```
-python -m next.lab template ladder-span > span.json
+python -m next.lab template batch > batch.json
 ```
-Edit `images`, `python -m next.lab run span.json`, send the zip. Compare with the pictures of `ladder-9` and `ladder-6` you already have.
+Edit `images`, `python -m next.lab run batch.json`, send the zip. Look at the minutes first (how much slower than the control), then the pictures at equal steps. `batch-4-lr-2e-4` shows whether the learning rate should follow the batch.
+
+## 53. A long run with and without learning-rate decay (about 2.4 hours)
+Your finding is that more steps now improve the pictures. A constant learning rate leaves the final weights noisy at the end of a long run; a decay to a low rate usually cleans that up. 1200 steps with the best recipe, constant against cosine to 5%.
+```
+python -m next.lab template long-run > long.json
+```
+Edit `images`, `python -m next.lab run long.json`, send the zip. Compare the final pictures, and with the 600-step ones you have: does 1200 keep improving, and does the decay add anything?
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

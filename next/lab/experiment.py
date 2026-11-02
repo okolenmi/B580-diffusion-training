@@ -257,5 +257,24 @@ LADDER_SPAN_TEMPLATE = {
              {"name": "ladder-9-span-200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "200"]},
              {"name": "ladder-9-seed-2", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100", "--set", "batcher.seed=7"]}],
 }
+BATCH_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "batch",
+    "note": "Different images in one pass. Every pass so far had one image; with 3 timesteps per image each region is a batch-1 pass, bound by kernel launches, so 2 or 4 images may cost much less than 2 or 4 times as long. "
+            "The control is `ladder-9` of the region-count test (one image, same settings, 600 steps).",
+    "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 600").replace("--save-every 300", "--save-every 600"),
+    "arms": [{"name": "batch-2", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"] + ["--batch", "2"]},
+             {"name": "batch-4", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"] + ["--batch", "4"]},
+             {"name": "batch-4-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"] + ["--batch", "4", "--lr", "2e-4"]}],
+}
+LONG_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "long-run",
+    "note": "A long run with the best recipe so far, with a constant learning rate and with a cosine decay to 5% of it. Schedule-free optimizers match the loss but gave worse samples "
+            "in a diffusion benchmark, which the authors put down to the missing learning-rate decay, so the decay is what is tried here.",
+    "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 1200").replace("--save-every 300", "--save-every 1200"),
+    "arms": [{"name": "constant-1200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"]},
+             {"name": "cosine-1200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"] + ["--schedule", "cosine"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE}

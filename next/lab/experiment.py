@@ -278,3 +278,23 @@ LONG_TEMPLATE = {
 }
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE}
+
+
+TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")
+
+
+def like(template: dict, earlier: dict) -> dict:
+    """``template`` with the setup of an experiment file already filled in: images, grid, output folder, device, and the model,
+    dataset and resolution arguments of its training command. Everything that defines the experiment (arms, steps, note) stays."""
+    import re
+    out = dict(template)
+    for key in ("images", "grid", "output", "device"):
+        if key in earlier:
+            out[key] = earlier[key]
+    command = out.get("train_command", "")
+    for flag in TAKEN_FLAGS:
+        match = re.search(rf"(?<=\s){re.escape(flag)}\s+(\S+)", earlier.get("train_command", ""))
+        if match:
+            command = re.sub(rf"(?<=\s){re.escape(flag)}\s+\S+", lambda _: f"{flag} {match.group(1)}", command, count=1)
+    out["train_command"] = command
+    return out

@@ -28,3 +28,6 @@ The sampler follows ComfyUI's (k-diffusion) exactly: the same sigma tables, `nor
 ## Rendering without training: `lora`, `reuse`, `eps_scale`
 
 An arm can be given an adapter file made earlier (`"lora": "/path/file.safetensors"`: rendered as it is, nothing is trained) or can render the adapter of an earlier arm (`"reuse": "<arm>"`, copies that arm's training record and per-timestep table). `"eps_scale": 1.01` divides the predicted noise (after guidance) by that factor at every sampling step (epsilon scaling, Ning et al. 2024: sampling errors make the prediction too large; a factor slightly above 1 pulls the trajectory back). Images of such an arm carry `_e<factor>` in the file name and the factor in their metadata. `python -m next.lab template eps-scale` starts an experiment of this kind.
+
+## Starting from an experiment you already filled in
+`python -m next.lab template KIND --like earlier.json > new.json` copies the images, grid, output folder, device, and the model, dataset, file and resolution arguments of the earlier file's training command into the new template; the arms, steps and note stay the template's.

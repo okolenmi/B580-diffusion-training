@@ -241,5 +241,15 @@ def adapter_reuse() -> None:
         check(bad, "an arm cannot reuse an arm that comes after it")
 
 
+def template_like() -> None:
+    """A template started `--like` an earlier file keeps its own arms and steps but takes the earlier setup."""
+    from ..lab.experiment import TEMPLATES, like
+    earlier = {"images": {"train": "/a"}, "output": "o", "train_command": "python -m x --models /m --dataset d --file f.safetensors --resolution 768 --steps 5"}
+    got = like(TEMPLATES["long-run"], earlier)
+    check(got["images"] == {"train": "/a"} and got["output"] == "o" and got["arms"] == TEMPLATES["long-run"]["arms"]
+          and "--resolution 768" in got["train_command"] and "--file f.safetensors" in got["train_command"] and "--steps 1200" in got["train_command"],
+          "a template started like an earlier file takes its setup and keeps its own arms and steps")
+
+
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, adapter_reuse)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, adapter_reuse, template_like)

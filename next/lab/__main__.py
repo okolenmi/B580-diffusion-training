@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from .experiment import TEMPLATES, Experiment
+from .experiment import TEMPLATES, Experiment, like
 from .render import Grid, ImageStore, Renderer
 from .report import Report
 from .runner import Lab
@@ -76,7 +76,9 @@ def engines(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m next.lab")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("template", help="print an experiment file to start from").add_argument("kind", nargs="?", default="ranges", choices=tuple(TEMPLATES))
+    t = sub.add_parser("template", help="print an experiment file to start from")
+    t.add_argument("kind", nargs="?", default="ranges", choices=tuple(TEMPLATES))
+    t.add_argument("--like", help="an experiment file you already filled in: its images, grid, output, device, models, dataset and resolution are copied")
     p = sub.add_parser("run", help="train the arms, render and measure them, write the report")
     p.add_argument("experiment")
     p.add_argument("--phase", nargs="*", choices=PHASES)
@@ -107,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--prompt", action="append")
     args = parser.parse_args(argv)
     if args.command == "template":
-        print(json.dumps(TEMPLATES[args.kind], indent=1))
+        template = TEMPLATES[args.kind]
+        if args.like:
+            template = like(template, json.loads(Path(args.like).read_text(encoding="utf8")))
+        print(json.dumps(template, indent=1))
         return 0
     return {"run": run, "render": render, "engines": engines}[args.command](args)
 

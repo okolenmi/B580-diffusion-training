@@ -276,8 +276,19 @@ LONG_TEMPLATE = {
     "arms": [{"name": "constant-1200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"]},
              {"name": "cosine-1200", "args": ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "100"] + ["--schedule", "cosine"]}],
 }
+RECIPE = ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "120"]
+LORA_PLUS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "lora-plus",
+    "note": "LoRA+: the up-projection matrix (B) learns faster than the down-projection (A). B starts at zero, so with one rate it lags behind; a ratio of 4 to 16 is the range "
+            "the method's authors found to speed learning up. The baseline is the recipe of the long-run test (600 steps), the arms change only the ratio.",
+    "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 600").replace("--save-every 300", "--save-every 600"),
+    "arms": [{"name": "baseline", "args": RECIPE},
+             {"name": "lora-plus-4", "args": RECIPE + ["--lora-plus", "4"]},
+             {"name": "lora-plus-16", "args": RECIPE + ["--lora-plus", "16"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE}
 
 
 TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")

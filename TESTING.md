@@ -80,6 +80,13 @@ python -m next.lab template long-run > long.json
 ```
 Edit `images`, `python -m next.lab run long.json`, send the zip. Compare the final pictures, and with the 600-step ones you have: does 1200 keep improving, and does the decay add anything?
 
+## 54. LoRA+ learning-rate ratio (about 2.5 hours)
+B starts at zero and has to grow from nothing while A is already random, so one shared rate under-trains B. LoRA+ gives B a higher rate (`--lora-plus 4` means 4 times). Baseline, 4 and 16 on the current recipe, 600 steps.
+```
+python -m next.lab template lora-plus --like batch.json > loraplus.json
+```
+Run it, send the zip. Look at the pictures at equal steps and at how fast the loss falls early; a ratio that makes the images painted or unstable is too high.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

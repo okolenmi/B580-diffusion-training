@@ -55,3 +55,9 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - `ladder-9` ran out of memory at step 1: the gradient of every region (162 MB each) was kept on the card, nine of them plus the stacked matrix. Fixed by keeping them in host memory.
 - Owner's idea for later: 2 and 4 regions. His merge experience: with 2 examples progress is faster than with 3-4, since more examples show more errors to reject.
 - Owner's reading: for `ladder-6-warmup` the improvement is in composition, almost with no trade-off; details can be fixed later, fixing them at the start of training is useless.
+
+## Region count (resolution 768; run before the streaming change, so the minutes include the copy and pause costs)
+- Minutes for 300 steps: regions-2 11.7, ladder-6 21.3, regions-4 21.6, ladder-9 22.3. Time follows the number of passes: about 5.5 min per region per 300 steps.
+- Coarse change: regions-2 0.0738, ladder-9 0.0776, ladder-6 0.0800, regions-4 0.0815 (noise about 2%): more regions change the structure more, saturating at 3-4; 2 changes it about 8% less. Regions-2 also keeps the spectrum nearest the base model (slope -2.33, fine-power share 0.289 against 0.287 for the base).
+- Logged losses are the same to the digit across arms with the same region count because the noise and timestep stream is seeded the same way; they differ between region counts because the stream differs, so loss columns compare only arms with equal region counts.
+- The owner could not name a clear winner by eye; he is running 600 steps and a heavier ladder (warmup 100, ladder 9, 4 regions).

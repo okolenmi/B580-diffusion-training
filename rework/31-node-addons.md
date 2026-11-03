@@ -20,10 +20,12 @@ events). Nothing here is implemented; section 11 says what could be built before
   Wires belonging to a tab that is not open all point into the same hub dot (section 7).
 * **DECIDED** No strict specification of "addon or node": what targets a specific internal process of a node should rather be an
   addon (section 4). It is a guideline, not a rule the code enforces.
+* **DECIDED** (2026-11-03, later) Events are not tied to one scope: they bubble up (addon, host, frame, graph) and each element on the way
+  may catch them, as in the HTML DOM (section 6c). Graph settings stay a separate window for technical things.
 * **DECIDED** (third message) No copyable "preset" feature inside the node. Addons must be **easy to enable and configure from outside**
   (section 6b); an outside loader reads a specific JSON and applies a configuration, so presets are files, not UI state.
 * **DECIDED** Event triggers such as Every N Steps become addons: things with a simple interface that only need an event to exist to
-  act. Where they attach (the trainer, or the graph as a whole) is open; section 6c proposes both scopes.
+  act. Where they attach is answered by event bubbling (section 6c).
 * Goal: workflows with fewer nodes and far fewer wires.
 
 ## 2. The problem in the present code
@@ -167,24 +169,37 @@ possible without it:
   loader refuses an unknown kind, a slot the node lacks, or a double-filled slot with the validator's messages.
 * The command-line flags of today (`--warmup`, `--regions-from`, `--ema`) are shorthand that produces the same entries.
 
-## 6c. Event addons: two scopes
+## 6c. Event addons: events bubble like in the DOM
 
-An event trigger needs nothing but the existence of an event to act, and it emits one back (`CheckpointDue`). Two places fit it:
+An event trigger needs nothing but the existence of an event to act, and it emits one back (`CheckpointDue`). The owner's model
+(2026-11-03): events travel **up** a chain of scopes, as in the browser's DOM, and every element on the way may catch them.
 
-| Scope | Host | Fits | Weak point |
-|---|---|---|---|
-| Node | the trainer (the source of the step event) | "every N steps of this trainer" | the savers that listen still need a connection to it |
-| **Graph** | the graph itself, next to graph settings (plan 20) | events in general: triggers, stop conditions, notifications | the graph-wide event plane must be addressable without wires |
+```
+addon  ->  host node  ->  frame (if the node sits in one; plan 30 frames)  ->  graph
+```
 
-Proposal: **both scopes use the same Addon class**; the host is either a node or the graph. The graph's slot list is small
-(`event_source`: an addon that listens for events and may emit others). A graph-scope addon listens for an event *type* (`StepFinished`,
-`EpochEnding`) from every node that emits it, or from one node named in a `source` parameter, and emits its own event (`CheckpointDue`)
-to every node that accepts it, or to the one named in `target`. The `source` and `target` parameters are node pickers (and wireable
-like any port, section 5), so with a single trainer and a single saver nothing has to be set.
+* An event is emitted by its source (a node or an addon) and is offered first to the handlers at the source, then to each enclosing
+  scope in turn, up to the graph. A handler may act and let it pass, or **stop** it (like `stopPropagation`).
+* A trigger such as Every N Steps is an addon placed where its scope is meant: on the **trainer** (it sees the trainer's own
+  `StepFinished`, and the `CheckpointDue` it emits rises through the trainer's frame to the graph), in a **frame** (it serves
+  only the nodes inside that frame: two trainers or two savers in one graph can each get their own trigger), or on the **graph**
+  (it serves everything). The question "trainer or graph" becomes "where do I put it", with no separate mechanism.
+* A consumer (Save Adapter) declares the event types it accepts. It receives an emitted event when one of its enclosing scopes is
+  an ancestor of the emitter's scope chain, or when a wire joins them explicitly: a wired event is an explicit source and target, as
+  today. With one trainer and one saver in one graph, nothing has to be configured.
+* Defaults for a consumer without a wire: it listens to events that reach its own scope chain (itself, its frame, the graph). The
+  saver therefore hears a graph-scope trigger, and a trigger on a trainer reaches it only through a shared frame or the graph, which
+  keeps "which saver is triggered by which trainer" a visible decision (a frame, or a wire), never an accident.
+* Ordering follows the rank rule of the event plane (10-events): handlers deeper in the chain first (addon, host, frame, graph), so an
+  addon sees the host's state when it is ready and the graph sees it last.
+* Loops are refused as today (an event type may not re-enter a handler that is already running).
 
-Why graph scope is the better default: a saver and an average both depend on the same trigger (they listen to the same
-`CheckpointDue`), which a node-scope addon would have to publish through a wire again. The cost is a small addition to the event hub
-(delivery by type, section 11, step 1). The existing wire-based events stay; a wired event is an explicit `source`/`target`.
+This needs the event hub to know scopes (a node's frame, the graph) and to deliver by event type along the chain, in addition to
+today's wire edges, which remain.
+
+**Graph settings stay separate** (plan 20): they are the technical things (VRAM budget, device, seed base). Graph-scope addons are
+behaviour attached to the graph; where the editor shows them (a tab beside the settings window or a frame on the canvas) is a UI
+question for the editor phase.
 
 ## 7. Interface on the canvas
 
@@ -227,7 +242,7 @@ Candidates, host first (all are candidates until each is reviewed against the ru
 | Noiser | Region Ladder |
 | Trainer / schedule | Warmup; Self-perceptual loss; Calibrated one-pass; Aligned init (it has its own pass over batches) |
 | Inject Adapter | Adapter EMA (it only reads the adapter), LoRA+ ratio (a number; stays a native port unless it grows) |
-| Graph (global scope, section 6c) | Every N Steps, Every Epoch (and other event-only things: stop after N steps, notify) |
+| Trainer, a frame or the graph (section 6c) | Every N Steps, Every Epoch (and other event-only things: stop after N steps, notify) |
 | Conditioner | Blend, Persistent conditioning cache |
 | Captions / prompt chain | Tag Swap, Auto Caption |
 | Stays a node | The dataset and model nodes; Time Balance as long as two hosts share one instance (it can still be wired into their slots) |
@@ -277,6 +292,6 @@ mechanical: the collaborator is a class with a small interface, built from plain
 * Answered by the owner: an addon is defined by its interface and may fit several host classes; a slot or an addon input may be filled by
   a wire; "addon or node" is a guideline, not a strict rule.
 * Also answered: no preset feature in the node (outside loaders and JSON files instead); event triggers become addons.
-* Still open: (1) Event triggers at graph scope (proposed) or on the trainer? (2) When two nodes accept the same event and no `target` is set,
-  do both get it (proposed: yes, as with today's one-trigger-many-listeners) or must the user choose? (3) Should the editor show graph-scope
-  addons in the graph settings window or as a node-like frame on the canvas?
+* Also answered: events bubble through scopes (section 6c); graph settings stay separate from graph addons.
+* Still open: (1) Does a handler stop an event by default or let it pass (proposed: pass, stop is explicit)? (2) Is a frame an event scope
+  only (no other meaning), as proposed? (3) Where the editor shows graph-scope addons (UI phase).

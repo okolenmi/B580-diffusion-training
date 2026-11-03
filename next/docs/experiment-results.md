@@ -21,7 +21,8 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 | Number of timesteps per image (region count) | 3 is best by eye; 2 changes the structure about 8% less and keeps the spectrum nearest the base, 4 changes it most, loses detail and gave more issues; each region costs about 0.93 s per step at 768 px | Seen by eye, 2 rounds (300 and 600 steps) |
 | Ladder (more regions at the start, falling to the final count) | Ladder 9 at least as good as ladder 6, better on the long run; span 50 worse than 100, 200 changes more and has structure issues; 120 recommended; the gain held on another data order | Seen by eye, 2 rounds |
 | More steps | With 3 regions plus ladder and warmup, 600 steps look better than 300 (composition first, details later); plain training gave no progress beyond a few hundred steps. This is the main finding so far | Seen by eye |
-| Not yet run | Several images per pass (TESTING 52), 1200 steps with and without learning-rate decay (53), LoRA+ (54), averaged weights (55), gradient-aligned start (56) | |
+| Several images per pass (batch 2 and 4, item 52) | Batch 2 costs the same time as batch 1 (36.3 against 35.9 min for 600 steps): a batch-1 pass is bound by kernel launches, the second image is free. Batch 4 costs 1.7x (62.6 min). Owner: lr 2e-4 with batch 4 is good; a bigger batch is not worth it for creativity (less of it) but is worth it when details are the goal; idea: batch 1 first, a bigger batch near the end | Seen by eye, 1 round |
+| Not yet run | 1200 steps with and without learning-rate decay (53), LoRA+ (54), averaged weights (55), gradient-aligned start (56), batch 1 then bigger (57) | |
 
 ## Timesteps per image (regions)
 - Several timesteps per image in one step (3 regions) beat one timestep per image on composition. The `strata` layout with per-region gradient normalisation (`equal`) is the best plain route so far: fewest structural errors.
@@ -76,3 +77,10 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - Span 50, 100 (control, the region-count run) and 200: coarse change 0.0940 / 0.0940 / 0.0997, finest octave 2.93 / 3.03 / 3.43, sharpness against the base 4.07 / 3.97 / 4.97. A longer ladder changes more at every level.
 - Owner by eye: 50 worse than 100; 200 has some structure issues but sometimes better results; would move towards 120. Ladder 9 on another data order (`batcher.seed=7`) did a good enough job, better in some respects and worse in others than the first order, so the ladder's gain does not depend on one order. Different data order gives different logged losses (0.1003 against 0.1028) and a different probe sample, so those are not comparable across orders.
 - Recommended setting so far: `--regions 3 --regions-from 9 --regions-span 120 --warmup 50`.
+
+## Several images per pass (600 steps, 3 final regions, ladder 9 over 100 batches, warmup 50)
+- Minutes: batch-2 36.3, batch-4 62.6, batch-4 with lr 2e-4 61.4; the control (batch 1, region-count test) 35.9. Two images per pass are free, four cost 1.7 times: the gain from the second image is hidden launch time, not compute.
+- Logged loss over the last 100 steps 0.1014 / 0.1025 / 0.1021 (same noise stream, so comparable only roughly across batch sizes).
+- Coarse change: 0.0901 / 0.0997 / 0.1052 (control 0.0940); finest octave against the base 1.38 / 2.30 / 2.44 (control 3.03); sharpness against the base 1.91 / 2.86 / 2.68 (control 3.97). The finest octave has about 10% noise, so batch-2's low value alone is not a finding.
+- Probe at the end, adapter/base loss by third on the training images: batch-2 0.956 / 0.958 / 0.889, batch-4 0.945 / 0.943 / 0.875, batch-4 lr 2e-4 0.942 / 0.941 / 0.873: a bigger batch fits the training images better; the higher rate a little more. Held-out loss by timestep is the same in all three (the table in the report).
+- Owner by eye: lr 2e-4 is good. A bigger batch gives less creativity but, when details are the goal, is clearly worth its cost; the two can be combined, batch 1 at the start and a bigger batch near the end (TESTING 57).

@@ -54,6 +54,20 @@ class PowerEma:
             torch._foreach_lerp_(shadow, current, 1.0 - self.decay(index))
         self.updates += 1
 
+    def state(self) -> tuple[dict[str, Tensor], dict]:
+        """Everything a resumed run needs: the averages as host tensors and the counters."""
+        tensors = {f"{i}.{j}": t.detach().to("cpu", copy=True).contiguous() for i, shadow in enumerate(self._shadows) for j, t in enumerate(shadow)}
+        return tensors, {"updates": self.updates, "synced": self._synced, "sigma_rels": list(self.sigma_rels)}
+
+    @torch.no_grad()
+    def restore(self, tensors: dict[str, Tensor], meta: dict) -> None:
+        if list(meta["sigma_rels"]) != list(self.sigma_rels):
+            raise ValueError(f"the saved averages have the widths {meta['sigma_rels']}, this run asks for {list(self.sigma_rels)}")
+        for i, shadow in enumerate(self._shadows):
+            for j, t in enumerate(shadow):
+                t.copy_(tensors[f"{i}.{j}"].to(device=t.device, dtype=t.dtype))
+        self.updates, self._synced = int(meta["updates"]), int(meta["synced"])
+
     def values(self, index: int) -> list[Tensor]:
         """Average ``index`` as one tensor per parameter (the live buffers, not copies)."""
         return self._shadows[index]

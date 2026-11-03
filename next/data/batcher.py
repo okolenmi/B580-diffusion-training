@@ -26,7 +26,7 @@ from .ids import image_of
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
                  shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, pack: float = 0.0, fill: str = "zero", seed: int = 0,
-                 depth: int = 2, pin: bool = False, start_epoch: int = 0, ramp: BatchRamp | None = None,
+                 depth: int = 2, pin: bool = False, start_epoch: int = 0, skip: int = 0, ramp: BatchRamp | None = None,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
         if orphans:
@@ -38,13 +38,21 @@ class Batcher:
         if fill not in FILLS:
             raise ValueError(f"fill must be one of {FILLS}, got {fill!r}")
         self.batch_area, self.pack, self.fill = batch_area, pack, fill
+        if skip and start_epoch:
+            raise ValueError("start at an epoch or after a number of batches, not both")
         self.epoch, self.ramp = start_epoch, ramp
         self._plans: dict[int, Plan] = {}
         self._before: dict[int, int] = {0: 0}
+        self.position, self._offset = skip, 0  # batches handed out since the start of the run; those of a first, partly done epoch to pass over
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
         self.full_batch_area = int(batch_area * (latents.policy.base // self._factor) ** 2)
         self.plan_for(start_epoch)  # an impossible configuration fails now, not on the first step
+        if skip:
+            self.epoch = 0
+            while self.batches_before(self.epoch + 1) <= skip:
+                self.epoch += 1
+            self._offset = skip - self.batches_before(self.epoch)
 
     def base_plan(self, epoch: int) -> Plan:
         """The epoch's batches at the full batch size (what the memory planning sizes for)."""
@@ -139,12 +147,14 @@ class Batcher:
         plan = self.plan_for(epoch)
         version, texts = self.prompts.snapshot()
         last = len(plan.batches) - 1
+        offset, self._offset = self._offset, 0
         worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last, self.batches_before(epoch))
-                                   for i, (ids, shape) in enumerate(plan.batches)), self.depth)
+                                   for i, (ids, shape) in enumerate(plan.batches) if i >= offset), self.depth)
         served = 0
         try:
             for batch in worker:
                 served += len(batch["samples"]) // (int(batch["region"].max()) + 1)
+                self.position += 1
                 yield batch
         finally:
             worker.close()

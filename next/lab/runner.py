@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -26,7 +27,7 @@ from ..families.general.adapters.schemes import read_adapter
 from .experiment import Arm, Experiment
 from .render import ImageStore, Renderer
 
-LOSS_LINE = re.compile(r"^step (\d+)/(\d+)\s+loss ([0-9.eE+-]+)")
+LOSS_LINE = re.compile(r"^step (\d+)/(\d+)\s+loss ([0-9.eE+-]+)(?:\s+(\d+) ms)?")
 THIRDS_LINE = re.compile(r"by t((?: (?:low|mid|high) [0-9.eE+-]+)+)")
 WINDOW = 100  # steps one reported loss averages over
 PROBE_LINE = re.compile(r"^\s+probe: adapter/base loss by third ([0-9./]+), worst ([0-9.]+)")
@@ -89,32 +90,55 @@ class ArmTraining:
         self._command = command or experiment.train_command
 
     def run(self, say: Callable[[str], None]) -> Training:
+        """Trains the arm. An earlier session of the same arm (a power cut, a stop) left its console in ``train.log`` and its training states
+        in ``train/resume``: the process continues from the newest state, the console is appended to, and the steps a cut made it repeat
+        count once (the last line of a step wins)."""
         self.folder.mkdir(parents=True, exist_ok=True)
         output = (self.folder / "train").resolve()
         command = self._command(self.arm, output, self.python)
-        windows = LossWindows()
-        losses = windows.all
-        probes: list[dict] = []
-        step = 0
+        log_path = self.folder / "train.log"
+        resumed = log_path.exists()
+        steps: dict[int, tuple[float, str, int]] = {}  # step -> (loss, console line, milliseconds)
+        probes: dict[int, dict] = {}
+        if resumed:
+            self._read(log_path.read_text(encoding="utf8", errors="replace").splitlines(), steps, probes)
+            say(f"  {self.arm.name}: continuing an earlier session ({len(steps)} steps in its log)")
         started = time.monotonic()
-        with (self.folder / "train.log").open("w", encoding="utf8") as log:
-            log.write("$ " + " ".join(command) + "\n")
+        with log_path.open("a" if resumed else "w", encoding="utf8") as log:
+            log.write(("\n--- resumed ---\n" if resumed else "") + "$ " + " ".join(command) + "\n")
             process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf8", errors="replace")
             for line in process.stdout:
                 log.write(line)
-                if match := LOSS_LINE.match(line):
-                    step = int(match.group(1))
-                    windows.add(float(match.group(3)), line)
-                    if step % WINDOW == 0:
-                        say(f"  {self.arm.name}: {windows.describe(step - WINDOW + 1, step)} (of {match.group(2)} steps)")
-                elif match := PROBE_LINE.match(line):
-                    thirds = [float(v) for v in match.group(1).split("/")]
-                    probes.append({"step": step, "low": thirds[0], "mid": thirds[1], "high": thirds[2], "worst": float(match.group(2))})
+                log.flush()
+                found = self._read([line.rstrip("\n")], steps, probes)
+                if found is not None and found % WINDOW == 0:
+                    window = [steps[i][0] for i in range(found - WINDOW + 1, found + 1) if i in steps]
+                    say(f"  {self.arm.name}: mean loss of steps {found - WINDOW + 1}-{found} {LossWindows.mean(window):.4f}")
             process.wait()
+        windows = LossWindows()
+        for step in sorted(steps):
+            windows.add(steps[step][0], steps[step][1])
         lora = newest_adapter(output)
-        result = Training(str(lora) if lora else "", step, time.monotonic() - started, losses, probes, process.returncode, windows.last())
-        (self.folder / "train.json").write_text(json.dumps({"command": command, **result.to_dict()}, indent=1), encoding="utf8")
+        seconds = sum(ms for _, _, ms in steps.values()) / 1000 if resumed else time.monotonic() - started  # a resumed arm's wall time includes the gaps
+        result = Training(str(lora) if lora else "", max(steps, default=0), seconds, windows.all, [probes[k] for k in sorted(probes)], process.returncode, windows.last())
+        (self.folder / "train.json").write_text(json.dumps({"command": command, **result.to_dict(), "resumed": resumed}, indent=1), encoding="utf8")
+        if process.returncode == 0 and lora:
+            shutil.rmtree(output / "resume", ignore_errors=True)  # the result is safe; the states were only for a cut
         return result
+
+    @staticmethod
+    def _read(lines: list[str], steps: dict, probes: dict) -> int | None:
+        """Folds console lines into the per-step records; returns the step of the last loss line among them."""
+        latest = max(steps, default=0)
+        found = None
+        for line in lines:
+            if match := LOSS_LINE.match(line):
+                found = latest = int(match.group(1))
+                steps[latest] = (float(match.group(3)), line, int(match.group(4) or 0))
+            elif match := PROBE_LINE.match(line):
+                thirds = [float(v) for v in match.group(1).split("/")]
+                probes[latest] = {"step": latest, "low": thirds[0], "mid": thirds[1], "high": thirds[2], "worst": float(match.group(2))}
+        return found
 
 
 def adapter_facts(path: str) -> dict:
@@ -153,6 +177,9 @@ class Lab:
             if record.exists() and not force and json.loads(record.read_text())["lora"]:
                 self.say(f"{arm.name}: trained already")
                 continue
+            if force:  # not a continuation: forget the earlier session
+                shutil.rmtree(self.folder(arm) / "train" / "resume", ignore_errors=True)
+                (self.folder(arm) / "train.log").unlink(missing_ok=True)
             self.say(f"{arm.name}: training ({' '.join(arm.args) or 'no extra arguments'})")
             result = self._train(self.experiment, arm, self.folder(arm))
             if result.returncode or not result.lora:

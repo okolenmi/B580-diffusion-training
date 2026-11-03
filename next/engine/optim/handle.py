@@ -194,6 +194,25 @@ class Optimizer(DeviceResident):
             self.algorithm.reset_state(state)
             self.store.commit(stack.state, state)
 
+    def state_tensors(self) -> dict[str, Tensor]:
+        """The update rule's state as plain host tensors named ``<stack>.<name>`` (what a resumed run needs besides the weights)."""
+        out: dict[str, Tensor] = {}
+        for i, stack in enumerate(self.stacks):
+            for name, tensor in self.store.checkout(stack.state).items():
+                out[f"s{i}.{name}"] = tensor.detach().to("cpu", copy=True).contiguous()
+        return out
+
+    def load_state_tensors(self, tensors: dict[str, Tensor]) -> None:
+        """Put back what ``state_tensors`` returned; a different layout (another model, rank or optimizer) is refused."""
+        for i, stack in enumerate(self.stacks):
+            state = self.store.checkout(stack.state)
+            for name, tensor in state.items():
+                saved = tensors.get(f"s{i}.{name}")
+                if saved is None or tuple(saved.shape) != tuple(tensor.shape):
+                    raise ValueError(f"the saved optimizer state does not fit this optimizer (stack {i}, {name!r}); it was written for another model, rank or update rule")
+                tensor.copy_(saved.to(device=tensor.device, dtype=tensor.dtype))
+            self.store.commit(stack.state, state)
+
     def footprint_bytes(self) -> int:
         return 0 if self._offloaded else sum(self.store.footprint_bytes(s.state) for s in self.stacks)
 

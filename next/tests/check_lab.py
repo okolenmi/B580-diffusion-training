@@ -205,6 +205,53 @@ def experiment_run() -> None:
         check(archive.exists() and archive.stat().st_size < 25e6, "the share archive is made and small")
 
 
+def interrupted_arm() -> None:
+    """An arm whose first session was cut continues in a second one: the console is appended to, repeated steps count once, the states are removed when it succeeds."""
+    import json
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    from ..lab.experiment import Arm, Experiment
+    from ..lab.runner import ArmTraining
+
+    script = (
+        "import sys, pathlib\n"
+        "out, first, last, code = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])\n"
+        "(out / 'resume').mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'resume' / 'resume_00000020.json').write_text('{}')\n"
+        "for s in range(first, last + 1):\n"
+        "    print(f'step {s}/40  loss {1.0 / s:.4f}  100 ms  by t low 0.5 mid 0.4 high 0.3', flush=True)\n"
+        "if code == 0:\n"
+        "    (out / 'lora_step000040.safetensors').write_bytes(b'x')\n"
+        "sys.exit(code)\n")
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "fake.py").write_text(script)
+        sessions = iter([(1, 30, 1), (21, 40, 0)])  # cut after step 30 with the state of step 20 saved; the second session redoes 21-30
+
+        def command(arm, output, python):
+            first, last, code = next(sessions)
+            return [python, str(tmp / "fake.py"), str(output), str(first), str(last), str(code)]
+
+        arm = Arm("a")
+        said: list[str] = []
+        cut = ArmTraining(None, arm, tmp / "arm", command=command).run(said.append)
+        check(cut.returncode == 1 and not cut.lora and cut.steps == 30, "a cut session reports no adapter and the steps it reached")
+        done = ArmTraining(None, arm, tmp / "arm", command=command).run(said.append)
+        log = (tmp / "arm" / "train.log").read_text()
+        check(done.returncode == 0 and done.lora.endswith("lora_step000040.safetensors") and done.steps == 40 and len(done.losses) == 40,
+              f"the second session finishes and the 10 repeated steps count once ({done.steps} steps, {len(done.losses)} losses)")
+        check(abs(done.seconds - 4.0) < 1e-9 and "--- resumed ---" in log and log.count("$ ") == 2 and any("continuing" in line for line in said),
+              "the console is appended to, and the time is the sum of the steps, not the wall clock between sessions")
+        check(not (tmp / "arm" / "train" / "resume").exists() and json.loads((tmp / "arm" / "train.json").read_text())["resumed"] is True,
+              "the states are removed once the result is safe, and the record says the arm was resumed")
+    experiment = Experiment.from_dict({"name": "e", "models": "/m", "datasets": "/d", "dataset": "s", "checkpoint": "c.safetensors", "output": "o", "arms": [{"name": "x"}], "grid": {}})
+    check(experiment.train_command(experiment.arm("x"), Path("/o"), "py")[-2:] == ["--resume-every", "200"] and "--resume-every" not in
+          Experiment.from_dict({"name": "e", "models": "/m", "datasets": "/d", "dataset": "s", "checkpoint": "c", "output": "o", "arms": [{"name": "x"}], "grid": {}, "resume_every": 0})
+          .train_command(Arm("x"), Path("/o"), "py"), "every arm trains with a resume state every 200 steps unless the experiment turns it off")
+
+
 def adapter_reuse() -> None:
     """An arm can render an adapter file made earlier, and other arms can render the same adapter with another epsilon scale without training."""
     import json
@@ -252,4 +299,4 @@ def template_like() -> None:
 
 
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, adapter_reuse, template_like)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, adapter_reuse, template_like)

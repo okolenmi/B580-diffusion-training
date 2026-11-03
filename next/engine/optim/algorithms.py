@@ -33,6 +33,17 @@ class Algorithm(ABC):
     def begin_step(self, n: int = 1) -> None:
         """Called once per optimizer step, before any update."""
 
+    def counter(self) -> int:
+        """Optimizer steps taken so far (0 for a rule that does not count)."""
+        return getattr(self, "t", 0)
+
+    def set_counter(self, steps: int) -> None:
+        """Continue counting from ``steps`` (a restored run); rules that derive values from the count recompute them."""
+        if hasattr(self, "t"):
+            self.t = steps
+            if steps:
+                self.begin_step(0)
+
     @abstractmethod
     def state_shapes(self, shape: tuple[int, ...]) -> dict[str, tuple[int, ...]]:
         """State tensors for one parameter of ``shape`` (without the member axis)."""

@@ -130,7 +130,7 @@ class Trainer:
         if self._perf is not None:
             self._perf.observe(metrics)
         if self.emit is not None:
-            self.emit(StepFinished(step + 1, self.steps, metrics))
+            self.emit(StepFinished(step + 1, self.steps, metrics, getattr(self._batches, "position", 0)))
         return loss
 
     def _next_batch(self) -> dict:

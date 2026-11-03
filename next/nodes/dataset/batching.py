@@ -154,6 +154,8 @@ class BatcherNode(Node):
                      doc="One number for data order, padding offsets, timesteps and noise; empty derives it from the graph's base seed."),
         "start_epoch": Port("start_epoch", int, required=False, default=0, minimum=0, group="batching",
                             doc="Epoch to start from when resuming; prompts and data order follow from it."),
+        "skip": Port("skip", int, required=False, default=0, minimum=0, group="batching",
+                     doc="Batches already handed out, when a run is resumed (wire it from Resume): the data continues from there, in the middle of an epoch if need be."),
         "prefetch": Port("prefetch", int, required=False, default=2, minimum=1, group="worker",
                          doc="Batches prepared ahead of the training step."),
     }
@@ -174,6 +176,6 @@ class BatcherNode(Node):
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
                           multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, pack=buckets.pack, fill=buckets.fill, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
-                          start_epoch=inputs.get("start_epoch") or 0, ramp=inputs.get("ramp"), emit=emit)
+                          start_epoch=inputs.get("start_epoch") or 0, skip=inputs.get("skip") or 0, ramp=inputs.get("ramp"), emit=emit)
         self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

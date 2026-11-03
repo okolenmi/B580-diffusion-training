@@ -101,6 +101,12 @@ python -m next.lab template batch-ramp --like batch.json > ramp.json
 ```
 Run it, send the zip. Look at the minutes (a ramp should land between batch 1 and batch 4), the composition, and the details at the end. Note: the batch size changes mid-run, so the first big batch is a new shape for the card (one more compile), and the logged loss is noisier while the batch is small.
 
+## 58. Resumable training: cut and continue (about 15 minutes)
+```
+python -m next.run sdxl-lora ... --steps 60 --resume-every 20 --output /tmp/r
+```
+Kill it (the process, or the power cord if you like) after step 30. Run the same command again: it should print `resuming from step 20 (N batches already used)`, continue with step 21 and finish at 60, and `/tmp/r/resume` holds `resume_00000040`/`resume_00000060` (`.json` + `.safetensors`). Compare the final picture or loss with an uninterrupted 60-step run (equal on a deterministic setup, close otherwise). Then a lab run: start any experiment, pull the plug mid-arm, run `python -m next.lab run exp.json` again; the arm should say "continuing an earlier session" and the report should list it as resumed. If a state is damaged (copy a resume file and flip a byte), the log says `resume state ... is not usable` and the run continues from the one before.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

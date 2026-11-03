@@ -269,6 +269,31 @@ def batch_ramp():
         check(max(later) == 2 and batcher.batches_in(2) == len(full) * 2, f"after the small batches the full size returns ({later[:6]})")
 
 
+def resumed_stream():
+    """A Batcher told how many batches were already handed out continues the very same stream, in the middle of an epoch if need be."""
+    from ..data.ramp import BatchRamp
+
+    def take(tmp: Path, count: int, **kwargs) -> tuple[list, int]:
+        *_, batcher, _events, _result, _stats = build(tmp, batch_size=2, **kwargs)
+        out = []
+        while len(out) < count:
+            for batch in batcher:
+                out.append((tuple(batch["samples"]), batch["t"].tolist(), batch["x_t"].sum().item()))
+                if len(out) == count:
+                    break
+        return out, batcher.position
+
+    for label, ramp in (("plain", None), ("with a ramp", BatchRamp(1, 4))):
+        with tempfile.TemporaryDirectory() as raw:
+            whole, position = take(Path(raw) / "a", 9, ramp=ramp)
+            for skip in (2, 4, 7):  # inside the first epoch, at a ramp edge, inside the second epoch
+                tail, start = take(Path(raw) / f"b{skip}", 9 - skip, skip=skip, ramp=ramp)
+                check(tail == whole[skip:] and start == 9, f"{label}: after {skip} batches the stream continues exactly where it was ({len(tail)} batches compared)")
+    check(position == 9, "the position counts the batches handed out")
+    with tempfile.TemporaryDirectory() as raw:
+        raises(ValueError, lambda: build(Path(raw), skip=3, start_epoch=1), "an epoch and a batch count cannot both say where to start", "not both")
+
+
 def padding_fill():
     """Mirror padding reflects the noisy valid block into the padding, changes nothing inside it, and adds no information."""
     from ..data.padding import mirror_fill, mirror_index
@@ -410,4 +435,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, batch_ramp, packing, padding_fill, captioning, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, batch_ramp, resumed_stream, packing, padding_fill, captioning, prompt_lifetimes_and_store)

@@ -471,6 +471,83 @@ def power_average():
     check(float(first.values(0)[0][0]) == 100.0, "the first update takes the weights as they are")
 
 
+def resumable_state():
+    """The files of a training state survive a cut at any moment; what is in them goes back exactly."""
+    from ..engine.optim.algorithms import AdamW
+    from ..engine.optim.handle import Optimizer, ParamGroup
+    from ..engine.optim.state import Int8BlockStore
+    from ..engine.step.ema import PowerEma
+    from ..engine.step.resume import ResumeStore
+
+    tensors = lambda v: {"adapter/a/lora_A": torch.full((4, 3), float(v))}  # noqa: E731
+    with tempfile.TemporaryDirectory() as raw:
+        store = ResumeStore(raw)
+        check(store.latest() is None, "a folder with no state gives none")
+        for step in (200, 400, 600):
+            store.save(step, step * 2, "id", tensors(step), {"optimizer_steps": step})
+        names = sorted(p.name for p in Path(raw).iterdir())
+        state = store.latest()
+        check(names == ["resume_00000400.json", "resume_00000400.safetensors", "resume_00000600.json", "resume_00000600.safetensors"]
+              and state.step == 600 and state.position == 1200 and float(state.tensors["adapter/a/lora_A"][0, 0]) == 600.0 and state.meta["optimizer_steps"] == 600,
+              f"the newest two states stay and the newest loads with its position ({names})")
+        newest = Path(raw) / "resume_00000600.safetensors"
+        data = bytearray(newest.read_bytes())
+        data[-1] ^= 0xFF
+        newest.write_bytes(bytes(data))
+        said: list[str] = []
+        check(store.latest(said.append).step == 400 and said and "resume_00000600.json" in said[0], "a state whose bytes changed is skipped for the one before it, and said so")
+        newest.write_bytes(bytes(data[:100]))
+        check(store.latest().step == 400, "a truncated state file is skipped too")
+        (Path(raw) / "resume_00000600.json").unlink()
+        (Path(raw) / "resume_00000800.safetensors.tmp").write_bytes(b"half a write")
+        check(store.latest().step == 400, "a state without its json (the cut came between the two files) never counts")
+        store.save(800, 1600, "id", tensors(800), {"optimizer_steps": 800})
+        check(sorted(p.name for p in Path(raw).iterdir()) == ["resume_00000400.json", "resume_00000400.safetensors", "resume_00000800.json", "resume_00000800.safetensors"],
+              "leftovers of a cut write are removed once a newer state is complete")
+        store.clear()
+        check(not list(Path(raw).iterdir()), "clearing removes every state")
+
+    torch.manual_seed(0)
+    for store_cls in (None, Int8BlockStore):
+        params = [torch.nn.Parameter(torch.randn(4, 3)) for _ in range(3)]
+        make = lambda ps: Optimizer(AdamW(), [ParamGroup(ps)], 1e-2, **({"store": store_cls()} if store_cls else {}))  # noqa: E731
+        first = make(params)
+        for _ in range(3):
+            for p in params:
+                p.grad = torch.randn_like(p)
+            first.step()
+        saved, steps = first.state_tensors(), first.algorithm.counter()
+        copy = [torch.nn.Parameter(p.detach().clone()) for p in params]
+        second = make(copy)
+        second.load_state_tensors(saved)
+        second.algorithm.set_counter(steps)
+        grads = [torch.randn_like(p) for p in params]
+        for ps, opt in ((params, first), (copy, second)):
+            for p, g in zip(ps, grads):
+                p.grad = g.clone()
+            opt.step()
+        check(steps == 3 and all(torch.equal(a, b) for a, b in zip(params, copy)),
+              f"an optimizer given back its state and step count takes the same next step ({store_cls.__name__ if store_cls else 'float32'} state)")
+    raises(ValueError, lambda: make([torch.nn.Parameter(torch.randn(2, 2))]).load_state_tensors(saved), "state from another layout is refused", "does not fit")
+
+    weight = torch.nn.Parameter(torch.zeros(3))
+    kept = PowerEma([weight], [0.1])
+    for step in range(1, 11):
+        with torch.no_grad():
+            weight.fill_(float(step))
+        kept.update(step)
+    tensors_, meta = kept.state()
+    again = PowerEma([weight], [0.1])
+    again.restore(tensors_, meta)
+    for step in (11, 12):
+        with torch.no_grad():
+            weight.fill_(float(step))
+        kept.update(step)
+        again.update(step)
+    check(torch.equal(kept.values(0)[0], again.values(0)[0]) and again.updates == 12, "a restored weight average goes on as if it had never stopped")
+    raises(ValueError, lambda: PowerEma([weight], [0.05]).restore(tensors_, meta), "averages of other widths are refused", "widths")
+
+
 def time_probe():
     from ..engine.step.alignment import GradientAlignment
     from ..engine.step.probe import TimeProbe
@@ -501,4 +578,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, step_summary_keeps_every_metric, gradient_alignment, power_average, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)
+    run(main, time_balance, step_summary_keeps_every_metric, gradient_alignment, power_average, resumable_state, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)

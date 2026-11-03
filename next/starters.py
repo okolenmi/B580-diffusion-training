@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 
 from .graph import Edge, GraphDoc, NodeSpec
 
@@ -59,6 +61,7 @@ class SdxlLoraOptions:
     balance_sampling: float = 0.0
     regions_from: int = 0
     regions_span: int = 120
+    resume_every: int = 0
     batch_first: int = 0
     batch_first_steps: int = 200
     ema: str = ""
@@ -80,6 +83,7 @@ class _SdxlLora:
         self._model_and_optimizer()
         self._training_and_saving()
         self._extras()
+        self._resume(settings, overrides)
         self._override(overrides or {})
         return self.b.doc(settings or {})
 
@@ -154,6 +158,21 @@ class _SdxlLora:
         if o.time_balance != "off" or o.balance_sampling > 0:
             b.add("balance", "TimeBalanceNode", mode=o.time_balance, sample_bias=o.balance_sampling)
             b.wires += [("balance", "balance", "trainer", "balance"), ("balance", "balance", "noiser", "balance")]
+
+    def _resume(self, settings: dict | None, overrides: dict[str, dict] | None) -> None:
+        """Periodic training states and continuing from the newest. The run's identity is a hash of everything that shapes it except how long it
+        runs and when it saves, so a longer run may continue a shorter one and a different run never picks up this one's state."""
+        o, b = self.o, self.b
+        if not o.resume_every:
+            return
+        shaping = {k: v for k, v in asdict(o).items() if k not in ("steps", "epochs", "save_every", "save_every_epoch", "resume_every", "name")}
+        identity = hashlib.sha256(json.dumps([shaping, self.model, self.dataset, settings, overrides, self.source], sort_keys=True, default=str).encode()).hexdigest()[:16]
+        b.add("resume", "ResumeNode", directory=f"{self.output}/resume", every=o.resume_every, identity=identity)
+        b.wires += [("adapter", "model", "resume", "model"), ("optimizer", "optimizer", "resume", "optimizer"),
+                    ("resume", "start_step", "trainer", "start_step"), ("resume", "skip", "batcher", "skip")]
+        if o.ema:
+            b.wires.append(("ema", "ema", "resume", "ema"))
+        b.events += [("trainer", "step_finished", "resume", "step"), ("trainer", "ended", "resume", "checkpoint")]
 
     def _override(self, overrides: dict[str, dict]) -> None:
         names = [n for n, _, _ in self.b.nodes]

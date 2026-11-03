@@ -40,7 +40,7 @@ SETTINGS = {"device.default": "cpu", "precision.denoiser": "fp32", "precision.en
 
 def graph(tmp: Path, steps: int, captured: bool = False, **extra) -> GraphDoc:
     return starters.sdxl_lora(model="", dataset="toy", output=str(tmp / "out"), name="toy", resolution=64, batch_size=2, steps=steps,
-                              lr=1e-3, rank=4, save_every=extra.pop("save_every", 2), settings=SETTINGS, graph=captured, **extra,
+                              lr=extra.pop("lr", 1e-3), rank=4, save_every=extra.pop("save_every", 2), settings=SETTINGS, graph=captured, **extra,
                               source=("TinyModelSource", {"file": str(tmp / "model.safetensors")}),
                               overrides={"latents": {"batch_size": 2}, "buckets": {"multiple": 1}, "batcher": {"seed": 3}})
 
@@ -136,6 +136,24 @@ def full_run():
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
         check(aligned.ok and saved == ["toy_step000002.safetensors", "toy_step000003.safetensors"],
               f"a run with the gradient-aligned initialisation trains and saves as usual ({aligned.error}, {saved})")
+
+        shutil.rmtree(tmp / "out")
+        _, whole, _ = execute(store, graph(tmp, steps=6, resume_every=2))
+        straight, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000006.safetensors"))
+        shutil.rmtree(tmp / "out" / "resume")  # the state of a finished run is not what a cut leaves; start the interrupted pair from nothing
+        shutil.move(str(tmp / "out"), str(tmp / "straight"))
+        _, first_half, _ = execute(store, graph(tmp, steps=4, resume_every=2))
+        saved = sorted(p.name for p in (tmp / "out" / "resume").glob("*.json"))
+        for lora in (tmp / "out").glob("toy_step*.safetensors"):
+            lora.unlink()  # the cut came before any result was kept; only the resume states are left
+        _, second_half, trace = execute(store, graph(tmp, steps=6, resume_every=2))
+        resumed, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000006.safetensors"))
+        check(whole.ok and first_half.ok and second_half.ok and saved == ["resume_00000002.json", "resume_00000004.json"] and trace.steps() == 2,
+              f"a run that stops at step 4 and is started again with more steps trains only the last two ({first_half.error}, {second_half.error}, {saved}, {trace.steps()} steps)")
+        check(resumed.keys() == straight.keys() and all(torch.allclose(resumed[k], straight[k], atol=1e-6) for k in straight),
+              "the resumed run ends with the same adapter as the run that was never interrupted")
+        _, other, _ = execute(store, graph(tmp, steps=6, resume_every=2, lr=2e-3))
+        check(not other.ok and "different run" in str(other.error), f"a state of another run (different learning rate) is refused ({other.error})")
 
 
 if __name__ == "__main__":

@@ -78,6 +78,7 @@ class StepFinished(EventType):
     step: int
     total: int
     metrics: dict
+    position: int = 0  # batches the data stream has handed out so far (what a resumed run skips)
 
 
 @dataclass(frozen=True)

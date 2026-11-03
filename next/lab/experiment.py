@@ -45,6 +45,7 @@ class Experiment:
     loss_size: int = 768
     timesteps: tuple[int, ...] = ()
     reference: bool = True
+    resume_every: int = 200  # steps between the training states that let an interrupted arm continue (0 = off)
     note: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -102,12 +103,12 @@ class Experiment:
             if key in grid:
                 grid[key] = tuple(grid[key])
         images = spec.get("images", {})
-        known = {"train_command", "name", "models", "datasets", "dataset", "checkpoint", "output", "arms", "product", "grid", "train_args", "device", "images", "timesteps", "reference", "note"}
+        known = {"train_command", "name", "models", "datasets", "dataset", "checkpoint", "output", "arms", "product", "grid", "train_args", "device", "images", "timesteps", "reference", "resume_every", "note"}
         return Experiment(name=spec["name"], models=spec["models"], datasets=spec["datasets"], dataset=spec["dataset"], checkpoint=spec["checkpoint"],
                           output=spec.get("output", "lab-out"), arms=Experiment.expand(spec.get("arms", []), spec.get("product", [])), grid=Grid(**grid),
                           train_args=tuple(spec.get("train_args", ())), device=spec.get("device", "xpu"), train_images=images.get("train", ""), holdout_images=images.get("holdout", ""),
                           loss_images=images.get("count", 6), loss_size=images.get("size", 768), timesteps=tuple(spec.get("timesteps", ())),
-                          reference=spec.get("reference", True), note=spec.get("note", ""), extra={k: v for k, v in spec.items() if k not in known})
+                          reference=spec.get("reference", True), resume_every=spec.get("resume_every", 200), note=spec.get("note", ""), extra={k: v for k, v in spec.items() if k not in known})
 
     @staticmethod
     def load(path: str | Path) -> Experiment:
@@ -117,8 +118,8 @@ class Experiment:
         """What was run, for the report (the arms are already expanded)."""
         return {"name": self.name, "checkpoint": self.checkpoint, "dataset": self.dataset, "train_args": list(self.train_args), "device": self.device,
                 "arms": [{"name": a.name, "args": list(a.args), "note": a.note, "eps_scale": a.eps_scale, "reuse": a.reuse, "lora": a.lora} for a in self.arms],
-                "grid": {k: list(v) if isinstance(v, tuple) else v for k, v in self.grid.__dict__.items()}, "note": self.note}
+                "grid": {k: list(v) if isinstance(v, tuple) else v for k, v in self.grid.__dict__.items()}, "resume_every": self.resume_every, "note": self.note}
 
     def train_command(self, arm: Arm, folder: Path, python: str) -> list[str]:
         return [python, "-m", "next.run", "sdxl-lora", "--models", self.models, "--datasets", self.datasets, "--file", self.checkpoint, "--dataset", self.dataset,
-                "--output", str(folder), "--name", "lora", *self.train_args, *arm.args]
+                "--output", str(folder), "--name", "lora", *(["--resume-every", str(self.resume_every)] if self.resume_every else []), *self.train_args, *arm.args]

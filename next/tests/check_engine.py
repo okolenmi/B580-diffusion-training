@@ -235,8 +235,9 @@ def epochs():
         check([d.step for d in due] == [ends[1]] and "epoch 2" in due[0].reason, "Every Epoch fires on the last step of every second epoch")
     total = DiffusionTrainerNode._total_steps
     fake = SimpleNamespace
-    check(total({"steps": 1000, "epochs": 2, "batches": [0] * 7, "accumulation": 2}) == 7 and total({"steps": 5, "epochs": 2, "batches": [0] * 7}) == 5
-          and total({"steps": 0, "epochs": 3, "batches": [0] * 4}) == 12 and total({"batches": [0] * 4}) == 1000,
+    each = lambda n: fake(batches_in=lambda epochs: n * epochs)  # noqa: E731 -- a batcher with n batches in every epoch
+    check(total({"steps": 1000, "epochs": 2, "batches": each(7), "accumulation": 2}) == 7 and total({"steps": 5, "epochs": 2, "batches": each(7)}) == 5
+          and total({"steps": 0, "epochs": 3, "batches": each(4)}) == 12 and total({"batches": each(4)}) == 1000,
           "the run ends at whichever of the step and epoch limits comes first (0 turns one off)")
     raises(ValueError, lambda: total({"steps": 0, "batches": [0]}), "no limit at all is refused", "steps or epochs")
     node = CosineLRNode(fake(uid="c", settings=None))

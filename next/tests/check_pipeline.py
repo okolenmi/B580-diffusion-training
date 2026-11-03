@@ -30,6 +30,8 @@ from ..nodes.dataset import batching, latents
 from ..nodes.model import inject_adapter
 from .check_data import make_images
 from .pipeline_nodes import TinyFamily
+import torch
+
 from .support import check, run
 
 REGISTRY = NodeRegistry(packages=("next.nodes", "next.tests.pipeline_nodes"))
@@ -118,6 +120,16 @@ def full_run():
         saved = sorted(int(p.stem[-6:]) for p in (tmp / "out").glob("*.safetensors"))
         check(byepoch.ok and len(ends) == 2 and len(steps) == ends[-1] and saved == ends,
               f"epochs=2 ends the run after the second epoch and Every Epoch saves at each epoch's last step ({len(steps)} steps, epoch ends {ends}, saved {saved})")
+
+        shutil.rmtree(tmp / "out")
+        _, averaged, _ = execute(store, graph(tmp, steps=4, ema="0.1"))
+        saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
+        plain, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000004.safetensors"))
+        mean, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000004_ema0.1.safetensors"))
+        key = next(k for k in plain if "lora" in k.lower() or "up" in k.lower())
+        check(averaged.ok and saved == ["toy_step000002.safetensors", "toy_step000002_ema0.1.safetensors", "toy_step000004.safetensors", "toy_step000004_ema0.1.safetensors"]
+              and plain.keys() == mean.keys() and any(not torch.equal(plain[k], mean[k]) for k in plain),
+              f"Adapter EMA writes an averaged file beside each saved one, different from the trained weights ({averaged.error}, {saved})")
 
 
 if __name__ == "__main__":

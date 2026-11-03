@@ -87,6 +87,13 @@ python -m next.lab template lora-plus --like batch.json > loraplus.json
 ```
 Run it, send the zip. Look at the pictures at equal steps and at how fast the loss falls early; a ratio that makes the images painted or unstable is too high.
 
+## 55. Averaged adapter weights (EMA) (about 1 hour)
+The weights jump around between steps; an average over the last few percent of the run is usually cleaner and costs nothing at sampling time. Train once with the best recipe and `--ema 0.05,0.1` (600 steps, the same command as the other tests plus that flag: one extra copy of the adapter on the card per width), then compare the three files.
+```
+python -m next.lab template ema --like batch.json > ema.json
+```
+Put the paths of `lora_step000600.safetensors`, `..._ema0.05.safetensors` and `..._ema0.1.safetensors` into the arms, `python -m next.lab run ema.json`, send the zip. Look for cleaner details and fewer blotches with the same composition.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

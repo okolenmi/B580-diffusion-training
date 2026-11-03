@@ -8,6 +8,7 @@ from typing import Any
 
 from ...engine.conditioner import Conditioner
 from ...engine.handles import TrainableDenoiser
+from ...engine.step.ema import PowerEma
 from ...engine.step.save_probe import SaveProbe
 from ...families.api.parts import AdapterMerge, DenoiserPart
 from ...graph import EventIn, Group, Node, Port
@@ -28,6 +29,7 @@ class SaveAdapterNode(Node):
                        doc="File format (key naming scheme). auto: kohya where it can hold the adapter, native for DoRA. "
                            "Choices depend on the model's family: kohya, native."),
         "conditioner": Port("conditioner", Conditioner, required=False, doc="Needed by the probe: the conditioner the trainer uses."),
+        "ema": Port("ema", PowerEma, required=False, doc="Averages from Adapter EMA: every file is also written once per average, with `_emaW` in its name."),
         "probe": Port("probe", bool, required=False, default=False, group="diagnostics",
                       doc="Before each file is written, run a forward pass with the adapter as it is now and keep its inputs and outputs in "
                           "<file>.probe.safetensors; `accept save-probe` then checks that the saved file reproduces it."),
@@ -52,7 +54,7 @@ class SaveAdapterNode(Node):
             raise ValueError(f"Save Adapter: the {scheme.name} format cannot hold {self.model.kind} weights; pick another format")
         self.scheme, self.directory = scheme, inputs.get("directory") or "output/adapters"
         self.stem, self.written = inputs.get("name") or "adapter", []
-        self.probe = None
+        self.probe, self.ema = None, inputs.get("ema")
         if inputs.get("probe"):
             conditioner = inputs.get("conditioner")
             if conditioner is None:
@@ -63,14 +65,22 @@ class SaveAdapterNode(Node):
     def _write(self, label: str, step: int) -> str:
         os.makedirs(self.directory, exist_ok=True)
         path = os.path.join(self.directory, f"{self.stem}_{label}.safetensors")
-        model = self.model
         if self.probe is not None:  # first: nothing has been exported or written yet, the adapter is exactly what training used
             self.probe.record(path.replace(".safetensors", ".probe.safetensors"), step, os.path.basename(path))
+        self._export(path, step)
+        if self.ema is not None:
+            self.ema.update(step)  # idempotent: the average may not have seen this step yet
+            for index in range(len(self.ema.sigma_rels)):
+                with self.ema.applied(index):
+                    self._export(path.replace(".safetensors", f"_{self.ema.label(index)}.safetensors"), step)
+        return path
+
+    def _export(self, path: str, step: int) -> None:
+        model = self.model
         model.family.save_adapter(path, self.scheme.export(model.adapted), {
             "family": model.family.id, "kind": model.kind, "rank": model.rank, "alpha": model.alpha, "step": step,
             "scheme": self.scheme.name, "base": os.path.basename(model.part.source.path)})
         self.written.append(path)
-        return path
 
     def on_checkpoint(self, event: CheckpointDue, ctx) -> None:
         self._write(f"step{event.step:06d}", event.step)

@@ -448,6 +448,28 @@ def gradient_alignment():
     check(module.p.grad is None and module.training, "no gradient is left behind and the mode is restored")
 
 
+def power_average():
+    """The power-function average of weights: window width, swap in and out, one update per step."""
+    from ..engine.step.ema import PowerEma, gamma_for
+    check(abs(gamma_for(0.05) - 16.97) < 0.01 and abs(gamma_for(0.1) - 6.94) < 0.01, "the exponent for a window width matches the published values")
+    raises(ValueError, lambda: gamma_for(0.5), "a window wider than the run is refused", "sigma_rel")
+    weight = torch.nn.Parameter(torch.zeros(3))
+    ema = PowerEma([weight], [0.1, 0.05])
+    for step in range(1, 101):
+        with torch.no_grad():
+            weight.fill_(float(step))
+        ema.update(step)
+        ema.update(step)  # a second ask for the same step is ignored
+    wide, narrow = (float(ema._shadows[i][0][0]) for i in (0, 1))
+    check(ema.updates == 100 and 87 < wide < 91 and narrow > wide, f"on a rising weight the average trails it, the narrower window less ({wide:.1f}, {narrow:.1f})")
+    with ema.applied(0):
+        inside = float(weight[0])
+    check(abs(inside - wide) < 1e-5 and float(weight[0]) == 100.0, "the parameter holds the average inside the block and its own value after")
+    first = PowerEma([weight], [0.1])
+    first.update(1)
+    check(float(first._shadows[0][0][0]) == 100.0, "the first update takes the weights as they are")
+
+
 def time_probe():
     from ..engine.step.alignment import GradientAlignment
     from ..engine.step.probe import TimeProbe
@@ -478,4 +500,4 @@ def time_probe():
 
 
 if __name__ == "__main__":
-    run(main, time_balance, step_summary_keeps_every_metric, gradient_alignment, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)
+    run(main, time_balance, step_summary_keeps_every_metric, gradient_alignment, power_average, time_probe, blended_conditioning, epochs, graphed, graph_must_pay)

@@ -287,8 +287,17 @@ LORA_PLUS_TEMPLATE = {
              {"name": "lora-plus-4", "args": RECIPE + ["--lora-plus", "4"]},
              {"name": "lora-plus-16", "args": RECIPE + ["--lora-plus", "16"]}],
 }
+EMA_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "ema",
+    "note": "Averaged adapter weights against the trained ones, from one run: train with `--ema 0.05,0.1` added to the recipe (it saves `lora_stepN_ema0.05.safetensors` and `_ema0.1` beside each file) "
+            "and put the three paths below. Nothing is trained here.",
+    "arms": [{"name": "as-trained", "lora": "/path/to/lora_step000600.safetensors"},
+             {"name": "ema-0.05", "lora": "/path/to/lora_step000600_ema0.05.safetensors"},
+             {"name": "ema-0.1", "lora": "/path/to/lora_step000600_ema0.1.safetensors"}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE}
 
 
 TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")

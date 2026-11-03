@@ -55,7 +55,7 @@ class Trainer:
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
                  warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None,
-                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0):
+                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0, initializer=None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -68,6 +68,9 @@ class Trainer:
         if calibrate_every and (regional is None or balance is None or not balance.wants_gradient_norm):
             raise ValueError("calibrating the regions' weights needs a gradient policy and the gradnorm time balance")
         self._calibrate_every = calibrate_every
+        if initializer is not None and (graph is not None or isinstance(optimizer, FusedOptimizer)):
+            raise ValueError("the gradient-aligned initialisation measures gradients before the first update: it needs the plain optimizer (not fused) and no graph replay")
+        self._initializer, self.init_summary = initializer, {}
         self._warn, self._cache_monitor = warn, PrimitiveCacheMonitor()
         self._time_probe = probe
         self._task = task or (lambda title: contextlib.nullcontext())
@@ -91,6 +94,9 @@ class Trainer:
     def run(self, start: int = 0) -> RunResult:
         if self.steps:
             self._memory_probe.run()
+            if self._initializer is not None and start == 0:
+                with self._task("Gradient-aligned initialisation"):
+                    self.init_summary = self._initializer.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
         attach = getattr(self._perf, "attach_graph", None)
         if attach is not None and self.graphed is not None:
             attach(self.graphed)
@@ -127,6 +133,17 @@ class Trainer:
         if self.emit is not None:
             self.emit(StepFinished(step + 1, self.steps, metrics))
         return loss
+
+    def _next_batch(self) -> dict:
+        state = StepState(0, 0, self.device)
+        self._fetch.run(state)
+        return state.batch
+
+    def _gradient_pass(self, batch: dict) -> None:
+        """Forward and backward of one batch, its gradients added to what the adapter holds; no update."""
+        sizes = self._chunks(batch, 0)
+        for part, size in zip(split_batch(batch, sizes), sizes):
+            self.pipeline.run(StepState(0, 0, self.device, batch=part, scale=size / sum(sizes)))
 
     def _fetch_window(self, step: int) -> tuple[list[dict], dict[str, float]]:
         """The ``accumulation`` batches of one optimizer step and what fetching them cost, by phase."""

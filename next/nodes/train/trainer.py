@@ -23,6 +23,7 @@ from ...engine.step.loss import LossWeighting
 from ...engine.step.probe import TimeProbe
 from ...engine.step.schedule import LRSchedule
 from ...engine.step.policy import make_policy
+from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
@@ -34,7 +35,7 @@ class DiffusionTrainerNode(Node):
     DISPLAY_NAME = "Diffusion Trainer"
     CATEGORY = "Training"
     READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.ceilings", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace", "perf.provenance")
-    GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
+    GROUPS = (Group("loop", "Loop"), Group("start", "Start of training", collapsed=True), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     INPUTS = {
         "batches": Port("batches", Batcher),
         "model": Port("model", TrainableDenoiser),
@@ -106,6 +107,11 @@ class DiffusionTrainerNode(Node):
                                       "middle-block features. Added to the loss with this weight; the reported loss stays the plain one and the term is "
                                       "reported as loss_perceptual. Needs an adapter with eps prediction, no graph; costs about half a forward and "
                                       "backward more per step."),
+        "aligned_init_batches": Port("aligned_init_batches", int, required=False, default=0, minimum=0, group="start",
+                                     doc="0 = off. N: before the first step the adapter's down-projection factors (A) are set to the main directions of the "
+                                         "loss gradient measured on the first N batches (two passes over them, no update; B stays zero, so the model is "
+                                         "unchanged). These batches are consumed from the data stream, so training starts N batches in (the region ladder too). "
+                                         "LoRA only, a fresh adapter, plain optimizer, no graph."),
         "fused_geglu": Port("fused_geglu", bool, required=False, default=True, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
@@ -143,10 +149,13 @@ class DiffusionTrainerNode(Node):
                           plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
                           perf=self._perf_session(model, accelerator), regional=self._regional(inputs),
                           perceptual=self._perceptual(model, inputs), calibrate_every=self._calibrate_every(inputs),
+                          initializer=self._initializer(model, inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):
             result = trainer.run(start)
+        if trainer.init_summary:
+            model.info = {**model.info, "aligned_init": trainer.init_summary}
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
@@ -161,6 +170,11 @@ class DiffusionTrainerNode(Node):
         if objective.process.parameterization.name != "eps":
             raise ValueError("the self-perceptual loss is defined for eps prediction")
         return SelfPerceptualLoss(SelfPerceptual(model.denoiser, objective, model.gate), weight)
+
+    @staticmethod
+    def _initializer(model: TrainableDenoiser, inputs: dict) -> AlignedInit | None:
+        count = inputs.get("aligned_init_batches") or 0
+        return AlignedInit(model.adapted.layers, count) if count else None
 
     @staticmethod
     def _calibrate_every(inputs: dict) -> int:

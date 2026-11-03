@@ -296,8 +296,18 @@ EMA_TEMPLATE = {
              {"name": "ema-0.05", "lora": "/path/to/lora_step000600_ema0.05.safetensors"},
              {"name": "ema-0.1", "lora": "/path/to/lora_step000600_ema0.1.safetensors"}],
 }
+ALIGNED_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "aligned-init",
+    "note": "Gradient-aligned start of the adapter: before the first step the A factors are set to the main directions of the loss gradient measured on the first N batches (B stays zero, "
+            "the model is unchanged). The baseline is the recipe of the lora-plus test; the arms differ in how many batches are measured (they are consumed, so training starts that far into the data and the region ladder).",
+    "train_command": REGIONS_TEMPLATE["train_command"].replace("--steps 300", "--steps 600").replace("--save-every 300", "--save-every 600"),
+    "arms": [{"name": "baseline", "args": RECIPE},
+             {"name": "aligned-4", "args": RECIPE + ["--aligned-init", "4"]},
+             {"name": "aligned-16", "args": RECIPE + ["--aligned-init", "16"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE}
 
 
 TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")

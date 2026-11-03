@@ -108,7 +108,7 @@ def _starter(args, settings: list[str], params: list[str]):
         batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
         optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
         checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
-        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, warmup=args.warmup, regions_from=args.regions_from, regions_span=args.regions_span, lora_plus=args.lora_plus, ema=args.ema, tag_swap=args.tag_swap, save_probe=args.save_probe,
+        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, warmup=args.warmup, regions_from=args.regions_from, regions_span=args.regions_span, lora_plus=args.lora_plus, ema=args.ema, aligned_init=args.aligned_init, tag_swap=args.tag_swap, save_probe=args.save_probe,
         settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
 
 
@@ -161,6 +161,7 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--regions-span", type=int, default=120, help="batches over which --regions-from falls to --regions")
             p.add_argument("--lora-plus", type=float, default=1.0, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
             p.add_argument("--ema", default="", help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
+            p.add_argument("--aligned-init", type=int, default=0, help="Set the adapter's A factors from the loss gradient of the first N batches before training (LoRA-GA style; those batches are consumed); 0 = off")
             p.add_argument("--tag-swap", action="store_true", help="train each epoch on one random tag of every caption instead of the whole caption (an experiment)")
             p.add_argument("--rank", type=int, default=16)
             p.add_argument("--optimizer", default="AdamWNode", choices=("AdamWNode", "AdafactorNode", "CAMENode"))

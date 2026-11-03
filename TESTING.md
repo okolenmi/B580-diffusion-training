@@ -94,6 +94,13 @@ python -m next.lab template ema --like batch.json > ema.json
 ```
 Put the paths of `lora_step000600.safetensors`, `..._ema0.05.safetensors` and `..._ema0.1.safetensors` into the arms, `python -m next.lab run ema.json`, send the zip. Look for cleaner details and fewer blotches with the same composition.
 
+## 56. Gradient-aligned adapter start (about 2.5 hours)
+A fresh LoRA starts with random A rows, and B first moves along whatever the loss gradient has in common with them. This sets A to the gradient's main directions, measured on the first N batches before step 1 (two passes over them with no update, so a little slower to start; the model itself is unchanged). The baseline is the lora-plus recipe; 4 and 16 batches. Check first that the run does not run out of memory in the measuring step (it holds the same gradients as a normal step).
+```
+python -m next.lab template aligned-init --like batch.json > aligned.json
+```
+Run it, send the zip. Look at the early pictures (do they show the subject sooner?) and at the final ones at 600 steps; if they look the same, the start does not matter at this length.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

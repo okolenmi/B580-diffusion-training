@@ -186,6 +186,42 @@ def sdxl_plan_and_injection():
     raises(ValueError, lambda: load_checked(SCHEMES["kohya"], part, {"other.weight": torch.zeros(1)}), "a file matching nothing is refused", "no layer matched")
 
 
+def aligned_start():
+    """The gradient-aligned initialisation finds the gradient's main directions and leaves the function unchanged."""
+    from ..engine.step.aligned_init import AlignedInit
+    torch.manual_seed(0)
+    out, inn, rank = 20, 30, 4
+    layer = AdaptedLinear(nn.Linear(inn, out), kind="lora", rank=rank, alpha=float(rank))
+    left, right = torch.linalg.qr(torch.randn(out, rank)).Q, torch.linalg.qr(torch.randn(inn, rank)).Q
+    target = (left * torch.tensor([5.0, 4.0, 3.0, 2.0])) @ right.T + 0.05 * torch.randn(out, inn)  # dL/dW: rank 4 plus noise
+    eye = torch.eye(inn)
+
+    def backward(_batch):
+        (layer(eye) * target.T).sum().backward()  # y = x W^T, so dL/dW = target
+
+    def zero():
+        for p in (layer.lora_A, layer.lora_B):
+            p.grad = None
+
+    before = layer(eye).detach()
+    old_norm = layer.lora_A.detach().norm(dim=1).mean()
+    summary = AlignedInit({"layer": layer}, batches=2).run(lambda: {}, backward, zero)
+    rows = layer.lora_A.detach()
+    kept = ((rows @ right).pow(2).sum() / rows.pow(2).sum()).item()
+    check(summary["layers"] == 1 and kept > 0.97 and float(layer.lora_B.abs().max()) == 0.0 and torch.equal(layer(eye).detach(), before),
+          f"A's rows lie in the gradient's main subspace ({kept:.3f} of their energy), B is zero, the function is unchanged")
+    check(abs(float(rows.norm(dim=1).mean()) - float(old_norm)) < 1e-5, "the new rows keep the old rows' average length")
+    gain = lambda a: float((target @ a.T).norm())  # how strongly the first update of B (target A^T) moves
+    fresh = AdaptedLinear(nn.Linear(inn, out), kind="lora", rank=rank, alpha=float(rank))
+    check(gain(rows) > 1.5 * gain(fresh.lora_A.detach()), "the first update of B is larger than with a random A")
+    raises(ValueError, lambda: AlignedInit({"layer": layer}, batches=0), "at least one batch is needed", "at least one")
+    with torch.no_grad():
+        layer.lora_B.fill_(0.1)
+    raises(ValueError, lambda: AlignedInit({"layer": layer}, batches=1).run(lambda: {}, backward, zero), "a loaded adapter is refused", "fresh adapter")
+    dora = make("dora", nn.Linear(inn, out))
+    raises(ValueError, lambda: AlignedInit({"layer": dora}, batches=1), "DoRA is refused", "LoRA")
+
+
 def int8_base_weights():
     import warnings
     from types import SimpleNamespace
@@ -371,4 +407,4 @@ def stored_bytes(*tensors):
 
 
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, int8_base_weights, nf4_base_weights, activation_compute, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, sdxl_plan_and_injection)

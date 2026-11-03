@@ -29,7 +29,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
               accumulation: int = 1, steps: int = 1000, epochs: int = 0, save_every_epoch: int = 0, lr: float = 1e-4, rank: int = 16, alpha: float | None = None,
               optimizer: str = "AdamWNode", fused: bool = False, save_every: int = 250, checkpointing: bool = True,
               persist_conditioning: bool = False, max_shapes: int = 16, batch_area: float = 0.0, pack: float = 0.3, fill: str = "zero", time_balance: str = "off", balance_sampling: float = 0.0,
-              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", warmup: int = 0, regions_from: int = 0, regions_span: int = 120, lora_plus: float = 1.0, ema: str = "", tag_swap: bool = False, save_probe: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
+              graph: bool = False, auto_caption: bool = False, schedule: str = "constant", warmup: int = 0, regions_from: int = 0, regions_span: int = 120, lora_plus: float = 1.0, ema: str = "", aligned_init: int = 0, tag_swap: bool = False, save_probe: bool = False, settings: dict | None = None, source: tuple[str, dict] | None = None, overrides: dict[str, dict] | None = None) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
 
     ``source`` replaces Load Model (tests hand in a stand-in); ``overrides`` sets extra parameters by node name.
@@ -56,7 +56,7 @@ def sdxl_lora(*, model: str, dataset: str, output: str, name: str = "lora", reso
     if warmup:
         b.add("warmup", "WarmupLRNode", steps=warmup)
     b.add("weighting", "LossWeightingNode", kind="min_snr")
-    b.add("trainer", "DiffusionTrainerNode", steps=steps, epochs=epochs, accumulation=accumulation, graph=graph)
+    b.add("trainer", "DiffusionTrainerNode", steps=steps, epochs=epochs, accumulation=accumulation, graph=graph, aligned_init_batches=aligned_init)
     b.add("trigger", "EveryNStepsNode", every=save_every)
     if save_every_epoch:
         b.add("epoch_trigger", "EveryEpochNode", every=save_every_epoch)

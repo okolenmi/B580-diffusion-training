@@ -131,6 +131,12 @@ def full_run():
               and plain.keys() == mean.keys() and any(not torch.equal(plain[k], mean[k]) for k in plain),
               f"Adapter EMA writes an averaged file beside each saved one, different from the trained weights ({averaged.error}, {saved})")
 
+        shutil.rmtree(tmp / "out")
+        _, aligned, _ = execute(store, graph(tmp, steps=3, aligned_init=2))
+        saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
+        check(aligned.ok and saved == ["toy_step000002.safetensors", "toy_step000003.safetensors"],
+              f"a run with the gradient-aligned initialisation trains and saves as usual ({aligned.error}, {saved})")
+
 
 if __name__ == "__main__":
     run(full_run)

@@ -12,7 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-from .experiment import TEMPLATES, Experiment, like
+from .experiment import Experiment
+from .templates import TEMPLATES, like
 from .render import Grid, ImageStore, Renderer
 from .report import Report
 from .runner import Lab

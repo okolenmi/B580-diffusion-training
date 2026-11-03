@@ -243,7 +243,7 @@ def adapter_reuse() -> None:
 
 def template_like() -> None:
     """A template started `--like` an earlier file keeps its own arms and steps but takes the earlier setup."""
-    from ..lab.experiment import TEMPLATES, like
+    from ..lab.templates import TEMPLATES, like
     earlier = {"images": {"train": "/a"}, "output": "o", "train_command": "python -m x --models /m --dataset d --file f.safetensors --resolution 768 --steps 5"}
     got = like(TEMPLATES["long-run"], earlier)
     check(got["images"] == {"train": "/a"} and got["output"] == "o" and got["arms"] == TEMPLATES["long-run"]["arms"]

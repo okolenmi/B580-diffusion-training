@@ -82,6 +82,8 @@ the effect before the trainer itself is redesigned (plan 70):
 
 ## 5. Collapse without losing wires
 
+> Update 2026-11-03: the owner proposed node addons with one "other connections" hub per node (`31-node-addons.md`). The hub replaces the per-group pin strips described here; the rest of this section (spring-loaded expand, whole-node minimize) stands until that plan is refined.
+
 A collapsed group is not a hidden group of ports; it is **the same ports drawn
 smaller**.
 

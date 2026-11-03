@@ -90,6 +90,7 @@ User-facing manual: `next/MANUAL.md` (how to set things, what to run for what) a
 | 24 | Phase 5: training engine (optimizers with stacked state, fused updates, loss weighting, schedules, step loop, activation checkpointing, device handles, residency) and trainer-graph nodes (Inject Adapter, Save/Load Adapter, Conditioner, optimizers, schedules, loss weighting, Diffusion Trainer, Every N Steps) | `next/engine`, `next/nodes/{model,conditioning,optimizer,train}` | CPU-verified end to end through the graph runner (`check_pipeline`); unverified on XPU. Residency manager with budget, calibration and levers (`engine/runtime/memory.py`; the allocator cap in `cap.py`, the card arithmetic and ledger in `card.py`, the settings in `policy.py`). Graph capture is built (`engine/step/graphed.py`, unverified on XPU). Not ported: NF4, block swap, profiler, conditioning blend node |
 | 25 | Performance lab (`next/perf/`): per-run reports rating every piece of a step against measured ceilings, scenario matrix, micro-benchmarks, hardware bundle | `74-perf-lab.md` | P1 to P4 built, CPU-tested |
 | 26 | Acceptance lab (`next/accept/`): regions, probes (per-region quantization error), automatic verdicts for the hardware runs, visual aids | `75-acceptance-lab.md` | T1 to T3 built, CPU-tested |
+| 27 | Plan: node addons (optional parts attached to a node, tabs, one "other connections" hub) | `31-node-addons.md` | owner's idea 2026-11-03; proposal, nothing built |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.
@@ -110,6 +111,7 @@ Earlier map of parts and misplaced logic: the "Node graph component map" doc
 | `EventType`, `EventHub`, `EVENTS_IN/OUT`, `event_edges` | event plane | 10 |
 | `SettingSpec`, `settings`, `READS_SETTINGS`, `[graph_defaults]` | graph settings | 20 |
 | `Group`, `Port.ui`, `multi`, `DYNAMIC`, pins | node UI metadata | 30 |
+| `Addon`, `AddonSlot`, hub, optional inputs | optional parts attached to a node, the one "other connections" circle, native inputs off the canvas | 31 |
 | `PromptTable`, `LatentSet`, `ImageSet`, `BatchPlan`, `Noiser`, `PromptsChanged`, `EpochEnding` | data chain | 50, 10 |
 | `ObjectiveNode` (outputs `objective`, `noiser`), `DiffusionTrainerNode`, `engine/{step,runtime}` | training | 70 |
 | `uid`, `views`, Graph / View / Starter / App | templates split | 60 |

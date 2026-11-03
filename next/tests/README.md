@@ -11,6 +11,7 @@ Plain scripts (`python -m next.tests.<name>`), grouped by what they protect. Eac
 | performance lab | `check_perf` | kernel categories, cost and rating arithmetic, findings rules, a profiling window over the tiny trainer |
 | acceptance lab | `check_accept` | regions, block recorder, quantization probe (a planted fault is found in its block), artifact parsing, every check passing and failing, suites and verdicts, the runner with a fake command, visual aids |
 | node surface | `check_node_surface` | field groups: nodes with many fields group them all, small groups, few fields visible before opening anything |
+| regions and lab | `check_regions`, `check_lab` | timesteps per image (draws, copies, policies, ladder, streaming, calibration, self-perceptual loss); the experiment lab (samplers, grid, templates, reports) |
 | whole pipeline | `check_pipeline` | a full graph (dataset to saved adapter) through the graph runner; `pipeline_nodes.py` holds its tiny stand-ins |
 
 Hardware checks live in `scripts/xpu_smoke.py` (real weights, real device) and are run by the owner.

@@ -18,7 +18,10 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 | Cheap `equal` (weights instead of three passes, item 47) | `gradnorm` single-timestep steps with weights do not reach `equal`'s structure, even with 3x the steps; `equal` preferred by eye | Seen by eye |
 | One pass instead of three (item 48) | `equal` still wins by eye. `mean` 11.4 min, `calibrated-10` 13.1, `calibrated-50` 12.1, `equal` 18.4: one batch of three costs 62% of three passes, not a third. `calibrated-50` is closest to `equal` in structure but softer; `calibrated-10` is good in small details | Seen by eye, 2 rounds |
 | First steps (item 49) | Warmup 50 steps and a ladder from 6 regions to 3 over 100 steps: `ladder-6-warmup` judged best by eye (small details of the composition more alive); coarse change 0.080 against 0.084 for plain `equal` (the metrics barely separate them). `ladder-9` ran out of memory | Seen by eye, 1 round |
-| Not yet run | Weights instead of three forwards (47), one-pass calibration (48) | |
+| Number of timesteps per image (region count) | 3 is best by eye; 2 changes the structure about 8% less and keeps the spectrum nearest the base, 4 changes it most, loses detail and gave more issues; each region costs about 0.93 s per step at 768 px | Seen by eye, 2 rounds (300 and 600 steps) |
+| Ladder (more regions at the start, falling to the final count) | Ladder 9 at least as good as ladder 6, better on the long run; span 50 worse than 100, 200 changes more and has structure issues; 120 recommended; the gain held on another data order | Seen by eye, 2 rounds |
+| More steps | With 3 regions plus ladder and warmup, 600 steps look better than 300 (composition first, details later); plain training gave no progress beyond a few hundred steps. This is the main finding so far | Seen by eye |
+| Not yet run | Several images per pass (TESTING 52), 1200 steps with and without learning-rate decay (53), LoRA+ (54), averaged weights (55), gradient-aligned start (56) | |
 
 ## Timesteps per image (regions)
 - Several timesteps per image in one step (3 regions) beat one timestep per image on composition. The `strata` layout with per-region gradient normalisation (`equal`) is the best plain route so far: fewest structural errors.

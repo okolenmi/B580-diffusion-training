@@ -34,7 +34,7 @@ from ..accept.suites import SuiteBook
 from ..accept.visual import ImageSheet, PaddingSheet, to_pil
 from ..accept.verdict import Judge, write_verdict
 from .check_perf import synthetic
-from .support import check, run
+from .support import check, raises, run
 
 
 def tiny_denoiser() -> SDXLDenoiser:
@@ -416,6 +416,7 @@ def training_signal_instruments() -> None:
         return {n.class_name for n in sdxl_lora(model="m.safetensors", dataset="d", output="o", **kw).nodes}
 
     check("TagSwapNode" not in nodes() and "TagSwapNode" in nodes(tag_swap=True), "the starter has Tag Swap only when asked")
+    raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 
 
 def save_probe_instrument() -> None:

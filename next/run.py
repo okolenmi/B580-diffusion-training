@@ -17,10 +17,11 @@ import argparse
 import contextlib
 import json
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 from . import starters
+from .starters import SdxlLoraOptions
 from .console import Console, NodeTrace
 from .data.store import DatasetStore
 from .engine.devices import Accelerator, resolve_device
@@ -103,13 +104,15 @@ def _run(doc, args) -> int:
     return 0 if outcome.ok else 1
 
 
+DEFAULTS = SdxlLoraOptions()
+
+
 def _starter(args, settings: list[str], params: list[str]):
-    return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, name=args.name, resolution=args.resolution,
-        batch_size=args.batch, accumulation=args.accumulation, steps=args.steps if args.steps is not None else (0 if args.epochs else 1000), epochs=args.epochs, save_every_epoch=args.save_every_epoch, auto_caption=args.auto_caption, lr=args.lr, rank=args.rank,
-        optimizer=args.optimizer, fused=args.fused, save_every=args.save_every,
-        checkpointing=not args.no_checkpointing, persist_conditioning=args.persist_conditioning, max_shapes=args.max_shapes, batch_area=args.batch_area, pack=args.pack, fill=args.pad_fill,
-        time_balance=args.time_balance, balance_sampling=args.balance_sampling, graph=args.graph, schedule=args.schedule, warmup=args.warmup, regions_from=args.regions_from, regions_span=args.regions_span, lora_plus=args.lora_plus, ema=args.ema, aligned_init=args.aligned_init, tag_swap=args.tag_swap, save_probe=args.save_probe,
-        settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
+    """The starter graph from the command line: every argument whose destination is a field of ``SdxlLoraOptions`` is passed on."""
+    options = {k: v for k, v in vars(args).items() if k in {f.name for f in fields(SdxlLoraOptions)}}
+    options["steps"] = args.steps if args.steps is not None else (0 if args.epochs else DEFAULTS.steps)
+    return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, **options,
+                              settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
 
 
 def _regions_preset(regions: int) -> list[str]:
@@ -141,47 +144,47 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--file", required=True, help="checkpoint file, relative to the checkpoints folder (or to --models when it has no checkpoints subfolder)")
             p.add_argument("--dataset", required=True)
             p.add_argument("--output", required=True)
-            p.add_argument("--name", default="lora")
-            p.add_argument("--resolution", type=int, default=1024)
-            p.add_argument("--batch", type=int, default=1)
-            p.add_argument("--accumulation", type=int, default=1)
+            p.add_argument("--name", default=DEFAULTS.name)
+            p.add_argument("--resolution", type=int, default=DEFAULTS.resolution)
+            p.add_argument("--batch", dest="batch_size", type=int, default=DEFAULTS.batch_size)
+            p.add_argument("--accumulation", type=int, default=DEFAULTS.accumulation)
             p.add_argument("--steps", type=int, default=None, help="optimizer steps (default 1000, or no limit when --epochs is given)")
-            p.add_argument("--epochs", type=int, default=0, help="passes over the data; with --steps the run ends at whichever limit comes first")
+            p.add_argument("--epochs", type=int, default=DEFAULTS.epochs, help="passes over the data; with --steps the run ends at whichever limit comes first")
             p.add_argument("--auto-caption", action="store_true", help="caption images that have no caption first (settings: --param autocaption.model_id=...)")
-            p.add_argument("--save-every-epoch", type=int, default=0, help="also save after every this many epochs (0 = off)")
-            p.add_argument("--lr", type=float, default=1e-4)
-            p.add_argument("--schedule", default="constant", choices=("constant", "cosine"), help="learning rate over the run: constant, or a cosine decay to 5%% of --lr over the whole run")
+            p.add_argument("--save-every-epoch", type=int, default=DEFAULTS.save_every_epoch, help="also save after every this many epochs (0 = off)")
+            p.add_argument("--lr", type=float, default=DEFAULTS.lr)
+            p.add_argument("--schedule", default=DEFAULTS.schedule, choices=("constant", "cosine"), help="learning rate over the run: constant, or a cosine decay to 5%% of --lr over the whole run")
             p.add_argument("--save-probe", action="store_true", help="before each save, run one forward with the live adapter and keep it in <file>.probe.safetensors "
                            "(python -m next.accept save-probe checks the saved file against it)")
-            p.add_argument("--warmup", type=int, default=0, help="optimizer steps over which the learning rate ramps up linearly from 0 (0 = off)")
+            p.add_argument("--warmup", type=int, default=DEFAULTS.warmup, help="optimizer steps over which the learning rate ramps up linearly from 0 (0 = off)")
             p.add_argument("--regions", type=int, default=1, help="timesteps per image in one step, one from each equal part of the range, gradients of the parts "
                            "scaled to equal length before they are averaged (N times the batch per step; see manual/quality.md, 'Timesteps per image')")
-            p.add_argument("--regions-from", type=int, default=0, help="with --regions: start with this many timesteps per image and fall to --regions over --regions-span batches "
+            p.add_argument("--regions-from", type=int, default=DEFAULTS.regions_from, help="with --regions: start with this many timesteps per image and fall to --regions over --regions-span batches "
                            "(the first updates set the direction; see manual/quality.md)")
-            p.add_argument("--regions-span", type=int, default=120, help="batches over which --regions-from falls to --regions")
-            p.add_argument("--lora-plus", type=float, default=1.0, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
-            p.add_argument("--ema", default="", help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
-            p.add_argument("--aligned-init", type=int, default=0, help="Set the adapter's A factors from the loss gradient of the first N batches before training (LoRA-GA style; those batches are consumed); 0 = off")
+            p.add_argument("--regions-span", type=int, default=DEFAULTS.regions_span, help="batches over which --regions-from falls to --regions")
+            p.add_argument("--lora-plus", type=float, default=DEFAULTS.lora_plus, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
+            p.add_argument("--ema", default=DEFAULTS.ema, help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
+            p.add_argument("--aligned-init", type=int, default=DEFAULTS.aligned_init, help="Set the adapter's A factors from the loss gradient of the first N batches before training (LoRA-GA style; those batches are consumed); 0 = off")
             p.add_argument("--tag-swap", action="store_true", help="train each epoch on one random tag of every caption instead of the whole caption (an experiment)")
-            p.add_argument("--rank", type=int, default=16)
-            p.add_argument("--optimizer", default="AdamWNode", choices=("AdamWNode", "AdafactorNode", "CAMENode"))
+            p.add_argument("--rank", type=int, default=DEFAULTS.rank)
+            p.add_argument("--optimizer", default=DEFAULTS.optimizer, choices=("AdamWNode", "AdafactorNode", "CAMENode"))
             p.add_argument("--fused", action="store_true")
-            p.add_argument("--save-every", type=int, default=250)
-            p.add_argument("--no-checkpointing", action="store_true")
+            p.add_argument("--save-every", type=int, default=DEFAULTS.save_every)
+            p.add_argument("--no-checkpointing", dest="checkpointing", action="store_false")
             p.add_argument("--persist-conditioning", action="store_true",
                            help="keep text encodings of stable prompts on disk next to the dataset's latents")
-            p.add_argument("--max-shapes", type=int, default=16,
+            p.add_argument("--max-shapes", type=int, default=DEFAULTS.max_shapes,
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
-            p.add_argument("--batch-area", type=float, default=0.0,
+            p.add_argument("--batch-area", type=float, default=DEFAULTS.batch_area,
                            help="a batch holds at most batch size times this many base-resolution areas in total (e.g. 1.5), so bigger samples run in smaller batches; 0 = no limit")
-            p.add_argument("--pad-fill", default="zero", choices=("zero", "mirror"),
+            p.add_argument("--pad-fill", dest="fill", default=DEFAULTS.fill, choices=("zero", "mirror"),
                            help="what the padded part of the network input holds: a blank strip, or a reflection of the sample's own noisy input")
-            p.add_argument("--pack", type=float, default=0.3,
+            p.add_argument("--pack", type=float, default=DEFAULTS.pack,
                            help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding; 0 = off")
             p.add_argument("--graph", action="store_true", help="replay forward and backward from captured device graphs (XPU; needs no dropout, no fused optimizer)")
-            p.add_argument("--time-balance", default="off", choices=("off", "normalize", "speed", "dro", "gradnorm"),
+            p.add_argument("--time-balance", default=DEFAULTS.time_balance, choices=("off", "normalize", "speed", "dro", "gradnorm"),
                            help="weight the loss by how each third of the timestep range is improving; gradnorm: by the inverse of the typical gradient norm of the third (batch 1, one timestep per step)")
-            p.add_argument("--balance-sampling", type=float, default=0.0,
+            p.add_argument("--balance-sampling", type=float, default=DEFAULTS.balance_sampling,
                            help="draw timesteps more often from the thirds that are behind (power of loss/baseline; needs tracking, 1 is a start)")
             p.add_argument("--dump", help="write the graph here instead of running it")
     return parser

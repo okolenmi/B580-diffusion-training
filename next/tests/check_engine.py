@@ -460,14 +460,14 @@ def power_average():
             weight.fill_(float(step))
         ema.update(step)
         ema.update(step)  # a second ask for the same step is ignored
-    wide, narrow = (float(ema._shadows[i][0][0]) for i in (0, 1))
+    wide, narrow = (float(ema.values(i)[0][0]) for i in (0, 1))
     check(ema.updates == 100 and 87 < wide < 91 and narrow > wide, f"on a rising weight the average trails it, the narrower window less ({wide:.1f}, {narrow:.1f})")
     with ema.applied(0):
         inside = float(weight[0])
     check(abs(inside - wide) < 1e-5 and float(weight[0]) == 100.0, "the parameter holds the average inside the block and its own value after")
     first = PowerEma([weight], [0.1])
     first.update(1)
-    check(float(first._shadows[0][0][0]) == 100.0, "the first update takes the weights as they are")
+    check(float(first.values(0)[0][0]) == 100.0, "the first update takes the weights as they are")
 
 
 def time_probe():

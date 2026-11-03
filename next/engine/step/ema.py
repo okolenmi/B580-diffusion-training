@@ -54,6 +54,10 @@ class PowerEma:
             torch._foreach_lerp_(shadow, current, 1.0 - self.decay(index))
         self.updates += 1
 
+    def values(self, index: int) -> list[Tensor]:
+        """Average ``index`` as one tensor per parameter (the live buffers, not copies)."""
+        return self._shadows[index]
+
     @contextmanager
     def applied(self, index: int) -> Iterator[None]:
         """Inside the block the parameters hold average ``index`` (swapped, not copied), afterwards their own values."""

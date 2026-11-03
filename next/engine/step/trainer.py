@@ -140,9 +140,7 @@ class Trainer:
 
     def _gradient_pass(self, batch: dict) -> None:
         """Forward and backward of one batch, its gradients added to what the adapter holds; no update."""
-        sizes = self._chunks(batch, 0)
-        for part, size in zip(split_batch(batch, sizes), sizes):
-            self.pipeline.run(StepState(0, 0, self.device, batch=part, scale=size / sum(sizes)))
+        self._region_pass(0, 0, batch, 0)
 
     def _fetch_window(self, step: int) -> tuple[list[dict], dict[str, float]]:
         """The ``accumulation`` batches of one optimizer step and what fetching them cost, by phase."""
@@ -270,7 +268,7 @@ class Trainer:
         return losses, thirds, timing
 
     def _region_pass(self, step: int, micro: int, part: dict, attempt: int) -> tuple[float, list, list, dict]:
-        """One region's forward and backward, as chunks when it is too big; leaves its gradient on the parameters."""
+        """A batch's (or one region's) forward and backward, as chunks when it is too big; adds its gradient to the parameters'."""
         sizes = self._chunks(part, attempt)
         total, loss, per_sample, fractions, timing = sum(sizes), 0.0, [], [], {}
         for piece, size in zip(split_batch(part, sizes), sizes):

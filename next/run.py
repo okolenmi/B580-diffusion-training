@@ -162,6 +162,8 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--regions-from", type=int, default=DEFAULTS.regions_from, help="with --regions: start with this many timesteps per image and fall to --regions over --regions-span batches "
                            "(the first updates set the direction; see manual/quality.md)")
             p.add_argument("--regions-span", type=int, default=DEFAULTS.regions_span, help="batches over which --regions-from falls to --regions")
+            p.add_argument("--batch-first", type=int, default=DEFAULTS.batch_first, help="a smaller batch size for the first --batch-first-steps batches (e.g. 1 with --batch 4: one picture per update at the start, four at the end); 0 = off")
+            p.add_argument("--batch-first-steps", type=int, default=DEFAULTS.batch_first_steps, help="batches that use the --batch-first size")
             p.add_argument("--lora-plus", type=float, default=DEFAULTS.lora_plus, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
             p.add_argument("--ema", default=DEFAULTS.ema, help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
             p.add_argument("--aligned-init", type=int, default=DEFAULTS.aligned_init, help="Set the adapter's A factors from the loss gradient of the first N batches before training (LoRA-GA style; those batches are consumed); 0 = off")

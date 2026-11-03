@@ -197,8 +197,19 @@ ALIGNED_TEMPLATE = {
              {"name": "aligned-4", "args": RECIPE + ["--aligned-init", "4"]},
              {"name": "aligned-16", "args": RECIPE + ["--aligned-init", "16"]}],
 }
+BATCH_RAMP_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "batch-ramp",
+    "note": "Batch 1 at the start and a bigger batch at the end. Batch 2 costs the same time as batch 1, batch 4 about 1.7 times (batch test). Every arm has batch size 4 at the end and the learning rate 2e-4 "
+            "that suited it; the controls are `batch-4-lr-2e-4` of the batch test (4 from the start) and the same recipe with batch 1 all the way. 600 steps.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "batch-1-lr-2e-4", "args": LADDER_100 + ["--batch", "1", "--lr", "2e-4"]},
+             {"name": "ramp-1-to-4-at-400", "args": LADDER_100 + ["--batch", "4", "--lr", "2e-4", "--batch-first", "1", "--batch-first-steps", "400"]},
+             {"name": "ramp-1-to-4-at-250", "args": LADDER_100 + ["--batch", "4", "--lr", "2e-4", "--batch-first", "1", "--batch-first-steps", "250"]},
+             {"name": "ramp-2-to-4-at-400", "args": LADDER_100 + ["--batch", "4", "--lr", "2e-4", "--batch-first", "2", "--batch-first-steps", "400"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE}
 
 
 TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")

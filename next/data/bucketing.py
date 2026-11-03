@@ -69,6 +69,19 @@ class Plan:
     def __len__(self) -> int:
         return len(self.batches)
 
+    def split_front(self, size: int, count: int) -> Plan:
+        """The first planned batches cut into batches of at most ``size`` samples (same shape, same order of samples) until ``count``
+        batches exist; the rest are kept whole. The last cut may give a few more than ``count``."""
+        if size < 1:
+            raise ValueError("size must be at least 1")
+        out: list[tuple[tuple[str, ...], tuple[int, int]]] = []
+        for ids, shape in self.batches:
+            if len(out) >= count or len(ids) <= size:
+                out.append((ids, shape))
+            else:
+                out += [(ids[start:start + size], shape) for start in range(0, len(ids), size)]
+        return Plan(tuple(out), self.dropped, self.packed)
+
 
 def _packed(left: dict[tuple[int, int], list[str]], own: Mapping[str, tuple[int, int]], hosts: Sequence[tuple[int, int]], size_of,
             limit: float, rng: random.Random) -> list[tuple[list[str], tuple[int, int]]]:

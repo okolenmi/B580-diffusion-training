@@ -94,6 +94,13 @@ python -m next.lab template aligned-init --like batch.json > aligned.json
 ```
 Run it, send the zip. Look at the early pictures (do they show the subject sooner?) and at the final ones at 600 steps; if they look the same, the start does not matter at this length.
 
+## 57. Batch 1 first, a bigger batch at the end (about 2 hours)
+Your batch test: 2 images per pass cost no extra time, 4 cost 1.7 times, a bigger batch gives more detail and less variety, lr 2e-4 suits it. The ramp trains the first batches with a small batch and the rest with the full one (`--batch 4 --batch-first 1 --batch-first-steps 400`). The control with batch 4 from the start is `batch-4-lr-2e-4` of the batch test.
+```
+python -m next.lab template batch-ramp --like batch.json > ramp.json
+```
+Run it, send the zip. Look at the minutes (a ramp should land between batch 1 and batch 4), the composition, and the details at the end. Note: the batch size changes mid-run, so the first big batch is a new shape for the card (one more compile), and the logged loss is noisier while the batch is small.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

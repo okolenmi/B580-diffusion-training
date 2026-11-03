@@ -270,7 +270,7 @@ class DiffusionTrainerNode(Node):
         if inputs.get("steps", 1000):
             limits.append(int(inputs.get("steps", 1000)))
         if inputs.get("epochs"):
-            limits.append(max(1, int(inputs["epochs"]) * len(inputs["batches"]) // (inputs.get("accumulation") or 1)))
+            limits.append(max(1, inputs["batches"].batches_in(int(inputs["epochs"])) // (inputs.get("accumulation") or 1)))
         if not limits:
             raise ValueError("DiffusionTrainer: set steps or epochs")
         return min(limits)

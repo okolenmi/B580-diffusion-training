@@ -242,6 +242,33 @@ def batch_area_limit():
     check(len(plain.batches[0][0]) == 4, "without a limit batches stay full")
 
 
+def batch_ramp():
+    """A smaller batch at the start of a run: the plan is cut, every sample still appears once per epoch, sizing stays at the full batch."""
+    import random
+
+    from ..data.bucketing import make_plan
+    from ..data.ramp import BatchRamp
+
+    plan = make_plan({f"a{i}": (8, 8) for i in range(8)}, batch_size=4, shuffle=False, keep_incomplete=True, rng=random.Random(0))
+    cut = plan.split_front(1, 4)
+    check([len(ids) for ids, _ in cut.batches] == [1, 1, 1, 1, 4] and [i for ids, _ in cut.batches for i in ids] == [i for ids, _ in plan.batches for i in ids],
+          "the first planned batch is cut into singles, the rest stay whole, and the samples keep their order")
+    check([len(ids) for ids, _ in plan.split_front(2, 0).batches] == [4, 4] and [len(ids) for ids, _ in plan.split_front(3, 5).batches] == [3, 1, 3, 1],
+          "no count cuts nothing; a size that does not divide the batch leaves a short piece")
+    raises(ValueError, lambda: BatchRamp(0, 5), "a ramp needs a size of at least 1", "at least 1")
+    check(BatchRamp(1, 10).left(4) == 6 and BatchRamp(1, 10).left(12) == 0 and BatchRamp(1, 10, skip=7).left(1) == 2, "the batches left small count down from the run's start, and a continued run skips ahead")
+    with tempfile.TemporaryDirectory() as raw:
+        *_, batcher, _events, _result, _stats = build(Path(raw), batch_size=2, shuffle=False, ramp=BatchRamp(1, 4))
+        sizes = [len(b["samples"]) // (int(b["region"].max()) + 1) for b in batcher]
+        full = batcher.base_plan(0)
+        check(sizes[:4] == [1, 1, 1, 1] and sum(sizes) == sum(len(i) for i, _ in full.batches) and len(sizes) > len(full),
+              f"the first four batches of the run hold one sample, the epoch still covers every sample once ({sizes})")
+        check(batcher.max_batch_size() == 2 * 1 and batcher.largest_units() >= 2 * 8 * 8 * 1 and batcher.batches_before(1) == len(sizes),
+              "memory planning sizes for the full batch, and the batches handed out are counted")
+        later = [len(b["samples"]) // (int(b["region"].max()) + 1) for b in batcher]
+        check(max(later) == 2 and batcher.batches_in(2) == len(full) * 2, f"after the small batches the full size returns ({later[:6]})")
+
+
 def padding_fill():
     """Mirror padding reflects the noisy valid block into the padding, changes nothing inside it, and adds no information."""
     from ..data.padding import mirror_fill, mirror_index
@@ -383,4 +410,4 @@ def prompt_lifetimes_and_store() -> None:
 
 
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, packing, padding_fill, captioning, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, batch_ramp, packing, padding_fill, captioning, prompt_lifetimes_and_store)

@@ -18,6 +18,7 @@ from .latent_cache import LatentSet
 from .noise import Noiser
 from .padding import FILLS, mirror_fill
 from .prefetch import Prefetch
+from .ramp import BatchRamp
 from .prompts import PromptTable
 from .ids import image_of
 
@@ -25,7 +26,7 @@ from .ids import image_of
 class Batcher:
     def __init__(self, latents: LatentSet, prompts: PromptTable, noiser: Noiser, *, batch_size: int = 1,
                  shuffle: bool = True, keep_incomplete: bool = False, multiple: int = 1, max_shapes: int = 0, batch_area: float = 0.0, pack: float = 0.0, fill: str = "zero", seed: int = 0,
-                 depth: int = 2, pin: bool = False, start_epoch: int = 0,
+                 depth: int = 2, pin: bool = False, start_epoch: int = 0, ramp: BatchRamp | None = None,
                  emit: Callable[[EventType], None] | None = None):
         orphans = [s for s in latents.samples if not prompts.knows(image_of(s))]
         if orphans:
@@ -37,16 +38,37 @@ class Batcher:
         if fill not in FILLS:
             raise ValueError(f"fill must be one of {FILLS}, got {fill!r}")
         self.batch_area, self.pack, self.fill = batch_area, pack, fill
-        self.epoch = start_epoch
+        self.epoch, self.ramp = start_epoch, ramp
+        self._plans: dict[int, Plan] = {}
+        self._before: dict[int, int] = {0: 0}
         self.emit = emit or (lambda event: None)
         self._factor = int(latents.spec["spatial_factor"])
         self.full_batch_area = int(batch_area * (latents.policy.base // self._factor) ** 2)
         self.plan_for(start_epoch)  # an impossible configuration fails now, not on the first step
 
+    def base_plan(self, epoch: int) -> Plan:
+        """The epoch's batches at the full batch size (what the memory planning sizes for)."""
+        if epoch not in self._plans:
+            self._plans[epoch] = make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes,
+                                           full_batch_area=self.full_batch_area, pack=self.pack, shuffle=self.shuffle, keep_incomplete=self.keep_incomplete,
+                                           rng=random.Random(f"{self.seed}:plan:{epoch}"))
+        return self._plans[epoch]
+
     def plan_for(self, epoch: int) -> Plan:
-        return make_plan(self.latents.shapes, batch_size=self.batch_size, multiple=self.multiple, max_shapes=self.max_shapes, full_batch_area=self.full_batch_area, pack=self.pack,
-                         shuffle=self.shuffle, keep_incomplete=self.keep_incomplete,
-                         rng=random.Random(f"{self.seed}:plan:{epoch}"))
+        """The epoch's batches; with a ramp the first ones of the run are cut smaller."""
+        plan = self.base_plan(epoch)
+        return plan if self.ramp is None else plan.split_front(self.ramp.size, self.ramp.left(self.batches_before(epoch)))
+
+    def batches_before(self, epoch: int) -> int:
+        """Batches handed out in the epochs before ``epoch``."""
+        done = max(e for e in self._before if e <= epoch)
+        for e in range(done, epoch):
+            self._before[e + 1] = self._before[e] + len(self.plan_for(e))
+        return self._before[epoch]
+
+    def batches_in(self, epochs: int) -> int:
+        """Batches of ``epochs`` epochs from the current one."""
+        return self.batches_before(self.epoch + epochs) - self.batches_before(self.epoch)
 
     def shape_summary(self) -> dict:
         """What the model will see: distinct input shapes (batch size included, as a short batch is a shape of its own)
@@ -68,7 +90,7 @@ class Batcher:
     def largest_units(self, regions: int | None = None) -> int:
         """Latent pixels of the largest batch of the run (samples times the padded area). ``regions`` replaces the copies per
         image: 1 for a run that puts each region through the network on its own."""
-        return (regions or self.noiser.max_regions) * max(len(ids) * shape[0] * shape[1] for ids, shape in self.plan_for(self.epoch).batches)
+        return (regions or self.noiser.max_regions) * max(len(ids) * shape[0] * shape[1] for ids, shape in self.base_plan(self.epoch).batches)
 
     def clean_item(self, sample: str) -> tuple[torch.Tensor, torch.Tensor | None, tuple[int, int]]:
         """A sample as the model sees it when nothing is random: its latent centred in its bucket shape, the validity
@@ -88,18 +110,18 @@ class Batcher:
     def shape_counts(self) -> dict[tuple[int, int, int], int]:
         """Batches per epoch of each (samples, height, width): which shapes the run spends its steps on."""
         counts: dict[tuple[int, int, int], int] = {}
-        for ids, (height, width) in self.plan_for(self.epoch).batches:
+        for ids, (height, width) in self.base_plan(self.epoch).batches:
             key = (len(ids) * self.noiser.max_regions, height, width)
             counts[key] = counts.get(key, 0) + 1
         return counts
 
     def max_batch_size(self, regions: int | None = None) -> int:
-        return (regions or self.noiser.max_regions) * max(len(ids) for ids, _ in self.plan_for(self.epoch).batches)
+        return (regions or self.noiser.max_regions) * max(len(ids) for ids, _ in self.base_plan(self.epoch).batches)
 
     def probe_batch(self, like: dict, count: int = 1) -> dict:
         """``count`` samples at the largest shape of the data, noised like a real batch, wearing the prompt of ``like``'s
         first sample: what a memory probe runs through the model."""
-        ids, (height, width) = max(self.plan_for(self.epoch).batches, key=lambda b: b[1][0] * b[1][1])
+        ids, (height, width) = max(self.base_plan(self.epoch).batches, key=lambda b: b[1][0] * b[1][1])
         x0 = torch.zeros(count, int(self.latents.spec["channels"]), height, width)
         batch = self.noiser(x0, torch.Generator().manual_seed(self.seed))
         batch.update({"samples": [ids[i % len(ids)] for i in range(count)], "prompts": list(like["prompts"][:1]) * count, "epoch": self.epoch,
@@ -107,7 +129,7 @@ class Batcher:
         return batch
 
     def __len__(self) -> int:
-        """Batches per epoch (the same for every epoch)."""
+        """Batches of the current epoch (the same for every epoch unless a ramp starts the run with smaller batches)."""
         return len(self.plan_for(self.epoch))
 
     def __iter__(self) -> Iterator[dict]:
@@ -117,7 +139,7 @@ class Batcher:
         plan = self.plan_for(epoch)
         version, texts = self.prompts.snapshot()
         last = len(plan.batches) - 1
-        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last, epoch * len(plan.batches))
+        worker = Prefetch(lambda: (self._make(i, ids, shape, epoch, version, texts, i == last, self.batches_before(epoch))
                                    for i, (ids, shape) in enumerate(plan.batches)), self.depth)
         served = 0
         try:

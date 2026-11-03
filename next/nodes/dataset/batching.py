@@ -7,6 +7,7 @@ from typing import Any
 from ...data.batcher import Batcher
 from ...data.bucketing import BucketPolicy, padding_stats
 from ...data.ladder import RegionLadder
+from ...data.ramp import BatchRamp
 from ...data.noise import Noiser, TimestepPolicy
 from ...data.padding import FILLS
 from ...engine.step.balance import TimeBalance
@@ -119,6 +120,23 @@ class RegionLadderNode(Node):
         return {"ladder": RegionLadder(inputs["start"], inputs.get("span") or 120, inputs.get("skip") or 0)}
 
 
+class BatchRampNode(Node):
+    DISPLAY_NAME = "Batch Ramp"
+    CATEGORY = "Dataset"
+    INPUTS = {"size": Port("size", int, default=1, minimum=1, doc="Samples per batch in the first batches."),
+              "batches": Port("batches", int, required=False, default=200, minimum=1, unit="batches",
+                              doc="How many batches of the run use the smaller size; after them the Batcher's own batch size applies."),
+              "skip": Port("skip", int, required=False, default=0, minimum=0, unit="batches",
+                           doc="Batches already trained, when training is continued: the small batches then end that much sooner.")}
+    OUTPUTS = {"ramp": Port("ramp", BatchRamp,
+                            doc="Wire to the Batcher. A small batch at the start gives each update one picture's direction (more variety), "
+                                "a large one at the end averages several pictures (steadier, more detail).")}
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        return {"ramp": BatchRamp(inputs["size"], inputs.get("batches") or 200, inputs.get("skip") or 0)}
+
+
 class BatcherNode(Node):
     DISPLAY_NAME = "Batcher"
     CATEGORY = "Dataset"
@@ -129,6 +147,7 @@ class BatcherNode(Node):
         "prompts": Port("prompts", PromptTable),
         "noiser": Port("noiser", Noiser),
         "buckets": Port("buckets", BucketPolicy, required=False),
+        "ramp": Port("ramp", BatchRamp, required=False, doc="A smaller batch for the first batches of the run (see the Batch Ramp node)."),
         "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="batching"),
         "shuffle": Port("shuffle", bool, required=False, default=True, group="batching"),
         "seed": Port("seed", int, required=False, minimum=0, group="batching",
@@ -155,6 +174,6 @@ class BatcherNode(Node):
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
                           multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, pack=buckets.pack, fill=buckets.fill, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
-                          start_epoch=inputs.get("start_epoch") or 0, emit=emit)
+                          start_epoch=inputs.get("start_epoch") or 0, ramp=inputs.get("ramp"), emit=emit)
         self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

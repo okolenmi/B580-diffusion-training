@@ -59,6 +59,8 @@ class SdxlLoraOptions:
     balance_sampling: float = 0.0
     regions_from: int = 0
     regions_span: int = 120
+    batch_first: int = 0
+    batch_first_steps: int = 200
     ema: str = ""
     aligned_init: int = 0
 
@@ -146,6 +148,9 @@ class _SdxlLora:
         if o.regions_from:
             b.add("ladder", "RegionLadderNode", start=o.regions_from, span=o.regions_span)
             b.wires.append(("ladder", "ladder", "noiser", "ladder"))
+        if o.batch_first:
+            b.add("ramp", "BatchRampNode", size=o.batch_first, batches=o.batch_first_steps)
+            b.wires.append(("ramp", "ramp", "batcher", "ramp"))
         if o.time_balance != "off" or o.balance_sampling > 0:
             b.add("balance", "TimeBalanceNode", mode=o.time_balance, sample_bias=o.balance_sampling)
             b.wires += [("balance", "balance", "trainer", "balance"), ("balance", "balance", "noiser", "balance")]

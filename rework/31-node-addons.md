@@ -20,6 +20,10 @@ events). Nothing here is implemented; section 11 says what could be built before
   Wires belonging to a tab that is not open all point into the same hub dot (section 7).
 * **DECIDED** No strict specification of "addon or node": what targets a specific internal process of a node should rather be an
   addon (section 4). It is a guideline, not a rule the code enforces.
+* **DECIDED** (third message) No copyable "preset" feature inside the node. Addons must be **easy to enable and configure from outside**
+  (section 6b); an outside loader reads a specific JSON and applies a configuration, so presets are files, not UI state.
+* **DECIDED** Event triggers such as Every N Steps become addons: things with a simple interface that only need an event to exist to
+  act. Where they attach (the trainer, or the graph as a whole) is open; section 6c proposes both scopes.
 * Goal: workflows with fewer nodes and far fewer wires.
 
 ## 2. The problem in the present code
@@ -33,7 +37,7 @@ events). Nothing here is implemented; section 11 says what could be built before
 | Adapter EMA | averages of the adapter weights, subscribes to step events | Save Adapter |
 | Blend Conditioning | wraps a conditioner | Trainer |
 | Tag Swap, Auto Caption | stages in the prompt chain | Batcher / Captions |
-| Every N Steps, Every Epoch | emit "checkpoint due" | Save Adapter |
+| Every N Steps, Every Epoch | emit "checkpoint due" (they only need the trainer's step event) | Save Adapter (and EMA's saver) |
 | Time Balance | weights and draws by timestep | Trainer **and** Noiser |
 
 The other failure is the opposite one: options that are only ports. The trainer node carries 9 fields in its `loop` group
@@ -143,6 +147,45 @@ A node spec gains one list; edges can target an addon's port.
 * Compatibility with graphs written before addons is not a goal (rework rule), so there is no automatic "wire to addon" migration;
   the starters are simply written with addons.
 
+## 6b. Configuring addons from outside
+
+Addons are data first: a node's `addons` list in the graph file is the whole configuration. So everything the editor does is also
+possible without it:
+
+* **API** (`graph` package): `enable(doc, node, kind, **params)`, `configure(doc, node, addon_id, **params)`, `disable(doc, node, addon_id)`,
+  `remove(...)`, each returning a new `GraphDoc`, validated; `available(doc, node)` lists the addons the node's slots accept.
+* **Addon set file**: plain JSON mapping nodes (by title or class) to addon entries, the same entries as in the graph file:
+
+  ```json
+  { "noiser": [ {"kind": "RegionLadder", "params": {"start": 9, "span": 120}} ],
+    "trainer": [ {"kind": "Warmup", "params": {"steps": 50}} ],
+    "graph":   [ {"kind": "EveryNSteps", "params": {"every": 250}} ] }
+  ```
+
+* An outside loader (the command line `--addons file.json`, a starter, a test, a script, later the editor's import) merges such a
+  file into a graph. A configuration someone wants to reuse is such a file; no preset feature is needed in the node itself. The
+  loader refuses an unknown kind, a slot the node lacks, or a double-filled slot with the validator's messages.
+* The command-line flags of today (`--warmup`, `--regions-from`, `--ema`) are shorthand that produces the same entries.
+
+## 6c. Event addons: two scopes
+
+An event trigger needs nothing but the existence of an event to act, and it emits one back (`CheckpointDue`). Two places fit it:
+
+| Scope | Host | Fits | Weak point |
+|---|---|---|---|
+| Node | the trainer (the source of the step event) | "every N steps of this trainer" | the savers that listen still need a connection to it |
+| **Graph** | the graph itself, next to graph settings (plan 20) | events in general: triggers, stop conditions, notifications | the graph-wide event plane must be addressable without wires |
+
+Proposal: **both scopes use the same Addon class**; the host is either a node or the graph. The graph's slot list is small
+(`event_source`: an addon that listens for events and may emit others). A graph-scope addon listens for an event *type* (`StepFinished`,
+`EpochEnding`) from every node that emits it, or from one node named in a `source` parameter, and emits its own event (`CheckpointDue`)
+to every node that accepts it, or to the one named in `target`. The `source` and `target` parameters are node pickers (and wireable
+like any port, section 5), so with a single trainer and a single saver nothing has to be set.
+
+Why graph scope is the better default: a saver and an average both depend on the same trigger (they listen to the same
+`CheckpointDue`), which a node-scope addon would have to publish through a wire again. The cost is a small addition to the event hub
+(delivery by type, section 11, step 1). The existing wire-based events stay; a wired event is an explicit `source`/`target`.
+
 ## 7. Interface on the canvas
 
 ```
@@ -184,7 +227,7 @@ Candidates, host first (all are candidates until each is reviewed against the ru
 | Noiser | Region Ladder |
 | Trainer / schedule | Warmup; Self-perceptual loss; Calibrated one-pass; Aligned init (it has its own pass over batches) |
 | Inject Adapter | Adapter EMA (it only reads the adapter), LoRA+ ratio (a number; stays a native port unless it grows) |
-| Save Adapter | Save schedule (Every N Steps / Every Epoch) when only this saver listens |
+| Graph (global scope, section 6c) | Every N Steps, Every Epoch (and other event-only things: stop after N steps, notify) |
 | Conditioner | Blend, Persistent conditioning cache |
 | Captions / prompt chain | Tag Swap, Auto Caption |
 | Stays a node | The dataset and model nodes; Time Balance as long as two hosts share one instance (it can still be wired into their slots) |
@@ -213,7 +256,8 @@ new class, not an edit of a 350-line node.
 ## 11. Build order
 
 1. **Backend, no editor needed** (`next/graph`): `Addon`, `AddonSlot`, registry listing, `addons` in `NodeSpec`/`GraphDoc`,
-   validator rules, `host.addons` accessor, event delivery by `host.addon`. CPU-testable with the toy nodes.
+   validator rules, `host.addons` accessor, event delivery by `host.addon`, the outside API and addon-set loader (section 6b), the
+   graph as a host and event delivery by type (section 6c). CPU-testable with the toy nodes.
 2. Convert the first candidates one at a time, behaviour unchanged, each checked by the existing tests: Region Ladder (Noiser),
    Warmup, Adapter EMA, then Self-perceptual and the others. The starter and the command line follow.
 3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
@@ -232,5 +276,7 @@ mechanical: the collaborator is a class with a small interface, built from plain
   not hidden priorities.
 * Answered by the owner: an addon is defined by its interface and may fit several host classes; a slot or an addon input may be filled by
   a wire; "addon or node" is a guideline, not a strict rule.
-* Still open: (1) Should a node's addon set be copyable as a preset ("my training extras")? (2) Are the event triggers (Every N Steps)
-  addons of the saver, or do they stay nodes because several consumers listen (slot sockets make either form work)?
+* Also answered: no preset feature in the node (outside loaders and JSON files instead); event triggers become addons.
+* Still open: (1) Event triggers at graph scope (proposed) or on the trainer? (2) When two nodes accept the same event and no `target` is set,
+  do both get it (proposed: yes, as with today's one-trigger-many-listeners) or must the user choose? (3) Should the editor show graph-scope
+  addons in the graph settings window or as a node-like frame on the canvas?

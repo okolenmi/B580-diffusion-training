@@ -27,8 +27,8 @@ def backend_factory(experiment: Experiment):
     return lambda lora: SDXLBackend(experiment.models, experiment.checkpoint, experiment.device, lora)
 
 
-def run(args) -> int:
-    experiment = Experiment.load(args.experiment)
+def run_one(path: str, args) -> None:
+    experiment = Experiment.load(path)
     lab = Lab(experiment, backend_factory(experiment))
     arms = [experiment.arm(n) for n in args.arms] if args.arms else list(experiment.arms)
     phases = args.phase or list(PHASES)
@@ -40,7 +40,26 @@ def run(args) -> int:
         report = Report(experiment)
         path = report.write()
         print(f"report: {path}\nshare:  {report.pack()}")
-    return 0
+
+
+def run(args) -> int:
+    """One experiment file, or a queue of them: each runs to its report, a failed one is reported and the queue goes on. Running the same
+    command again after an interruption skips what is done and continues the arm that was cut."""
+    if args.arms and len(args.experiment) > 1:
+        raise SystemExit("--arms names arms of one experiment; give one file with it")
+    failed = []
+    for path in args.experiment:
+        print(f"=== {path}", flush=True)
+        try:
+            run_one(path, args)
+        except (Exception, SystemExit) as error:  # noqa: BLE001 -- the queue goes on; the error is said
+            if len(args.experiment) == 1:
+                raise
+            print(f"{path}: failed: {error}", flush=True)
+            failed.append(path)
+    if failed:
+        print(f"failed: {', '.join(failed)}")
+    return 1 if failed else 0
 
 
 def render(args) -> int:
@@ -81,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("kind", nargs="?", default="ranges", choices=tuple(TEMPLATES))
     t.add_argument("--like", help="an experiment file you already filled in: its images, grid, output, device, models, dataset and resolution are copied")
     p = sub.add_parser("run", help="train the arms, render and measure them, write the report")
-    p.add_argument("experiment")
+    p.add_argument("experiment", nargs="+", help="one experiment file, or several to run one after the other (the command can be run again after an interruption: it continues)")
     p.add_argument("--phase", nargs="*", choices=PHASES)
     p.add_argument("--arms", nargs="*")
     p.add_argument("--force", action="store_true", help="redo what is already there")

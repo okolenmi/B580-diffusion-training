@@ -4,7 +4,7 @@
 
 ## Commands
 - `python -m next.lab template > experiment.json` prints an experiment file to edit.
-- `python -m next.lab run experiment.json [--phase train render report] [--arms a b] [--force]` runs it. Finished work is kept and skipped on the next run (`--force` redoes it), so a stopped run continues where it was.
+- `python -m next.lab run experiment.json [more.json ...] [--phase train render report] [--arms a b] [--force]` runs it; several files run one after the other (a failed one is reported and the queue goes on). Finished work is kept and skipped on the next run (`--force` redoes it), so a stopped run continues where it was.
 - `python -m next.lab render --models M --file CKPT --lora a.safetensors b.safetensors --prompt "..." --seeds 1 2 --strengths 0.5 1 --out DIR` renders a grid with adapter files, without training.
 - `python -m next.lab engines --models M --file CKPT --comfy <ComfyUI folder> [--comfy-python PY] [--lora L]` renders the same recipes with this project and with ComfyUI and compares the images (is the renderer the same as ComfyUI's?).
 

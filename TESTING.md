@@ -27,6 +27,8 @@ For speed numbers with power and a kernel profile (not pass/fail): `python -m ne
 
 ## Still manual
 
+Experiments of the lab can be queued: `python -m next.lab run long.json loraplus.json aligned.json ema.json ramp.json` runs them one after the other. Training states are written every 200 steps, so after a power cut the same command skips what is finished and continues the arm that was cut (TESTING 58 checks this once).
+
 ## 6b. Merge Adapter
 Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA you have, `strength` 1 (the CLI starters have no switch for it; edit the graph).
 - Task line "Merging <file>"; training starts and the step-1 loss differs from the unmerged run; a LoRA of another family or a wrong key format stops with "nothing ... matches".

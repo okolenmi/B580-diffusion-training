@@ -14,6 +14,12 @@ events). Nothing here is implemented; section 11 says what could be built before
 * **DECIDED** Every connection that is not visible on the canvas goes to **one circle on the node, "other connections"**,
   instead of many sockets.
 * **DECIDED** A further tab for **optional inputs** the node supports natively (kept apart from addons and from the main fields).
+* **DECIDED** (2026-11-03, second message) An addon is defined by an **interface**, not by one host: any node that implements
+  the interface for a slot makes that addon available. Several node classes with similar mechanics share the same addons.
+* **DECIDED** An addon's inputs (and a slot itself) can be filled by a **wire from another node**, not only by typing values.
+  Wires belonging to a tab that is not open all point into the same hub dot (section 7).
+* **DECIDED** No strict specification of "addon or node": what targets a specific internal process of a node should rather be an
+  addon (section 4). It is a guideline, not a rule the code enforces.
 * Goal: workflows with fewer nodes and far fewer wires.
 
 ## 2. The problem in the present code
@@ -45,23 +51,29 @@ micro node's `build` becomes the addon's.
 |---|---|
 | **Native port** | A field or socket the node always has (today's `Port`, with groups). Main tab. |
 | **Optional input** | A native port that is off the canvas until the user enables it (a rarely used input the node supports itself). Optional tab. |
-| **Addon** | A small separate class attached to one node (its **host**). Own parameters, own optional wires, own events. Addons tab. |
+| **Addon** | A small separate class that plugs into a node (its **host**) through an interface. Own parameters, own optional wires, own events. Addons tab. One instance sits on one host; the class is usable by every host class that offers its slot. |
 | **Slot** | A place in the host where addons of one interface fit (`ladder`, `lr_modifier`, `step_observer`, `loss_term`). |
 | **Interface** | The type a slot demands (a Python `Protocol` in `engine/` or `families/api`), the same kind of type ports use today. |
 | **Hub** | The single "other connections" circle on a node. |
 
-## 4. Rule of thumb: node, addon or port
+## 4. Guideline: node, addon or port
 
-| It is... | Use |
+No formal definition (the owner cannot give a stricter one, and none is needed). The principle:
+
+> When a piece targets a **specific internal process of a node**, implement it as an addon. When it is a stage of the data flow,
+> or a thing in its own right, it is a node.
+
+Examples, not rules:
+
+| It is... | Usually |
 |---|---|
 | One number or switch that host code reads | a native port in a group |
 | A rarely used input the host supports | an optional input |
-| Optional, has its own code and parameters, modifies or observes **one** host | an **addon** |
-| Produces a value that **several** nodes consume, or is a stage in the data flow | a node (Time Balance stays one; so do the event triggers when several consumers listen) |
-| Is the thing being trained or loaded | a node |
+| A change to one process inside a node (how the learning rate ramps, which timesteps a batch gets, an extra loss term, a weight average, a caption transform) | an **addon** |
+| A stage in the data flow, or the thing loaded or trained | a node |
+| One object that several nodes use at the same time (Time Balance) | a node wired into the slots of each host (section 5), or an addon of one of them; either works |
 
-Test used when reviewing: if removing the wire and putting the object inside its only consumer changes nothing else in the
-graph, it should have been an addon.
+Because a slot can also be filled by a wire (section 5), a wrong guess is cheap: the same class works in both forms.
 
 ## 5. What the host and the addon declare
 
@@ -69,7 +81,7 @@ Python shape (names are proposals):
 
 ```python
 class Addon:
-    """Base of every addon: parameters and groups like a Node, one host, one slot."""
+    """Base of every addon: parameters and groups like a Node; fills one slot, in any host class that declares that slot."""
     DISPLAY_NAME: ClassVar[str]
     SLOT: ClassVar[str]                       # which slot of the host it fills
     INPUTS: ClassVar[dict[str, Port]] = {}    # its parameters; they may be wireable like a node's
@@ -104,6 +116,14 @@ class NoiserNode(Node):
 * Addons subscribe to events like nodes (`EVENTS_IN`). The event hub addresses them as `host_uid.addon_id`, and they are
   delivered right after the host in rank order, so an addon never sees an event before its host's state is ready.
 * Disabled addon: not built, not validated, its parameters kept in the file.
+* **Reuse across host classes.** The interface is the contract: a second node (say another trainer, or the Anima family's) that
+  declares `AddonSlot("ladder", RegionSchedule)` gets the Region Ladder addon in its Addons tab without any change to the addon.
+  An addon may add a narrower requirement (`FITS`, a capability of the family or of the host) and is then offered only where it holds.
+* **Slots can be filled by a wire.** Every slot also has a socket of its interface type in the Addons tab. A node wired there
+  (the ladder node today) fills the slot like an addon would; a slot filled twice (addon and wire) is a validation error, except
+  `many=True` slots, where wired objects and addons are applied in the saved order. This is how one object serves two hosts, and
+  how every micro node that exists now keeps working as a node. An addon's own parameters are wireable ports as well
+  (a number from an Int node, a path from a Text node).
 
 ## 6. Graph file
 
@@ -139,7 +159,7 @@ A node spec gains one list; edges can target an addon's port.
 * **Addons**: a list of attached addons, each its own section with an enable switch, its parameters in its own groups, and a
   remove button; a "+ Add addon" menu filtered by the host's slots. Addons are drawn apart from native fields, so what is native
   and what is added is never mixed, and a disabled addon is visibly off.
-* **Hub**: every wire that ends on a port which is not on the canvas (a parameter of an addon, an optional input not enabled,
+* **Hub**: every wire that ends on a port which is not shown at the moment (a parameter of an addon, an optional input not enabled,
   a port inside a collapsed group) is drawn to the one hub circle. The circle shows how many wires end there. Hover lists them
   (port, source node); click opens the tab that holds the port. Dropping a dragged wire on the hub opens a chooser of the
   compatible hidden ports of that node (the same chooser as the "+n" pin of `30-node-ui.md` section 5).
@@ -147,6 +167,8 @@ A node spec gains one list; edges can target an addon's port.
   one hub is simpler to draw, to route and to read than a strip of pins per group. A fully minimized node shows the title and
   the hub, plus its native input and output sockets only if wired.
 * Wires out of an addon (event outputs) leave through the same hub.
+* **Switching tabs moves wires.** With a tab open, the wires of its ports run to those ports; the wires of the tabs that are not open all
+  point into the one hub dot. A wire dragged from another node can be dropped on any visible port, on a slot socket, or on the hub.
 
 ## 8. What changes for the starters and the trainer
 
@@ -165,9 +187,11 @@ Candidates, host first (all are candidates until each is reviewed against the ru
 | Save Adapter | Save schedule (Every N Steps / Every Epoch) when only this saver listens |
 | Conditioner | Blend, Persistent conditioning cache |
 | Captions / prompt chain | Tag Swap, Auto Caption |
-| Stays a node | Time Balance (Trainer and Noiser both consume it), the dataset and model nodes |
+| Stays a node | The dataset and model nodes; Time Balance as long as two hosts share one instance (it can still be wired into their slots) |
 
-Cooperation between two hosts goes through a node (the Time Balance case), not through an addon reaching into another node.
+One object serving two hosts (Time Balance: Trainer and Noiser) is either a node wired into the slot of each, or an addon on one host
+that the other host does not need to know about; the slot sockets (section 5) make both forms equal. An addon never reaches into
+another node on its own.
 
 ## 9. Why not "just groups"
 
@@ -180,7 +204,8 @@ new class, not an edit of a 350-line node.
 
 * Every `AddonSlot.interface` is a Protocol; `Addon.build` is checked against it with a stand-in host.
 * Every addon names a `SLOT` that at least one registered node declares.
-* Validation: unknown kind, slot not on the host, `many=False` slot filled twice, `REQUIRES` missing, `CONFLICTS` present.
+* Validation: unknown kind, slot not on the host, `many=False` slot filled twice (by addon and wire, or by two addons), `REQUIRES` missing, `CONFLICTS` present.
+* A second stand-in host class that declares the same slot offers the same addon without any change to the addon.
 * Surface test (`check_node_surface`) counts only Main ports for the "fields visible" limit; addon parameters count per addon.
 * Round trip: a graph with addons parses, validates, runs and serialises to the same JSON.
 * A disabled addon leaves the run identical to a graph without it.
@@ -205,6 +230,7 @@ mechanical: the collaborator is a class with a small interface, built from plain
   a sign that a native port was enough.
 * **Order of addons.** Only `many=True` slots have one; if a second kind of ordering appears (between slots), `REQUIRES` is the tool,
   not hidden priorities.
-* Open for the owner: (1) may an addon also be filled by a wire from a node, so a power user can still share one object between
-  two hosts, or is "addon or node" strict? (2) Should a node's addon set be copyable as a preset ("my training extras")?
-  (3) Are the event triggers (Every N Steps) addons of the saver, or do they stay nodes because the saver and the EMA both listen?
+* Answered by the owner: an addon is defined by its interface and may fit several host classes; a slot or an addon input may be filled by
+  a wire; "addon or node" is a guideline, not a strict rule.
+* Still open: (1) Should a node's addon set be copyable as a preset ("my training extras")? (2) Are the event triggers (Every N Steps)
+  addons of the saver, or do they stay nodes because several consumers listen (slot sockets make either form work)?

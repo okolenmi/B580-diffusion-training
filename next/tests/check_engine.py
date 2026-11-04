@@ -217,7 +217,9 @@ def blended_conditioning():
 def epochs():
     print("epochs")
     from ..nodes.train.schedules import CosineLRNode
-    from ..nodes.train.trainer import DiffusionTrainerNode, EveryEpochNode
+    from ..graph import HostContext
+    from ..nodes.train.trainer import DiffusionTrainerNode
+    from ..nodes.train.triggers import EveryEpoch
 
     with tempfile.TemporaryDirectory() as raw:
         trainer, _, _, _, events, _ = rig(Path(raw), steps=7)
@@ -227,11 +229,12 @@ def epochs():
         ends = [i + 1 for i, (_, end) in enumerate(seen) if end]
         check(ends == list(range(batches, 8, batches)) and [e for e, _ in seen][:batches + 1] == [0] * batches + [1],
               f"steps report their epoch and mark the last step of each epoch ({batches} batches per epoch: {ends})")
-        node = EveryEpochNode(SimpleNamespace(uid="e", settings=None))
-        node.every, due = 2, []
-        ctx = SimpleNamespace(emit=lambda name, event: due.append(event))
+        due = []
+        hub = SimpleNamespace(emit=lambda address, name, event: due.append(event))
+        node = EveryEpoch(HostContext("graph", SimpleNamespace(events=hub), "graph"), "e")
+        node.build(every=2)
         for step, (epoch, end) in enumerate(seen, 1):
-            node.on_step(StepFinished(step, 7, {"epoch": epoch, "epoch_end": end}), ctx)
+            node.on_step(StepFinished(step, 7, {"epoch": epoch, "epoch_end": end}), None)
         check([d.step for d in due] == [ends[1]] and "epoch 2" in due[0].reason, "Every Epoch fires on the last step of every second epoch")
     total = DiffusionTrainerNode._total_steps
     fake = SimpleNamespace

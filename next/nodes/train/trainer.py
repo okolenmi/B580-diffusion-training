@@ -27,7 +27,7 @@ from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
-from ...graph import Completion, EventIn, EventOut, Group, Node, Port
+from ...graph import Completion, EventOut, Group, Node, Port
 from ...graph.events import CheckpointDue, StepFinished
 
 
@@ -303,44 +303,3 @@ class DiffusionTrainerNode(Node):
                                             fits=residency.graph_fits if residency is not None else None,
                                             used=lambda: accelerator.memory().get("device_used", 0.0),
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))
-
-
-class EveryEpochNode(Node):
-    """Turns the end of an epoch into a checkpoint-due event (in addition to Every N Steps; wire either or both)."""
-
-    DISPLAY_NAME = "Every Epoch"
-    CATEGORY = "Training"
-    INPUTS = {"every": Port("every", int, default=1, minimum=1, doc="Emit after every this many epochs.")}
-    OUTPUTS = {"interval": Port("interval", int)}
-    EVENTS_IN = {"step": EventIn(StepFinished, handler="on_step")}
-    EVENTS_OUT = {"due": EventOut(CheckpointDue)}
-
-    def build(self, **inputs) -> dict[str, Any]:
-        self.validate_inputs(inputs)
-        self.every = inputs["every"]
-        return {"interval": self.every}
-
-    def on_step(self, event: StepFinished, ctx) -> None:
-        epoch = event.metrics.get("epoch", 0)
-        if event.metrics.get("epoch_end") and (epoch + 1) % self.every == 0:
-            ctx.emit("due", CheckpointDue(event.step, f"epoch {epoch + 1}"))
-
-
-class EveryNStepsNode(Node):
-    """Turns step events into checkpoint-due events."""
-
-    DISPLAY_NAME = "Every N Steps"
-    CATEGORY = "Training"
-    INPUTS = {"every": Port("every", int, default=250, minimum=1, doc="Emit after every this many optimizer steps.")}
-    OUTPUTS = {"interval": Port("interval", int)}
-    EVENTS_IN = {"step": EventIn(StepFinished, handler="on_step")}
-    EVENTS_OUT = {"due": EventOut(CheckpointDue)}
-
-    def build(self, **inputs) -> dict[str, Any]:
-        self.validate_inputs(inputs)
-        self.every = inputs["every"]
-        return {"interval": self.every}
-
-    def on_step(self, event: StepFinished, ctx) -> None:
-        if event.step % self.every == 0:
-            ctx.emit("due", CheckpointDue(event.step, f"every {self.every} steps"))

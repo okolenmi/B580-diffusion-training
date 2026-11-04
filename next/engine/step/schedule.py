@@ -58,3 +58,18 @@ class Warmup(LRSchedule):
         if self.steps <= 0 or step >= self.steps:
             return target
         return self.start + (target - self.start) * (step + 1) / self.steps
+
+
+class LRModifier:
+    """What a schedule node's ``lr_modifier`` slot holds: something that wraps a schedule into another."""
+
+    def wrap(self, schedule: LRSchedule) -> LRSchedule:
+        raise NotImplementedError
+
+
+class WarmupModifier(LRModifier):
+    def __init__(self, steps: int, start: float = 0.0):
+        self.steps, self.start = steps, start
+
+    def wrap(self, schedule: LRSchedule) -> LRSchedule:
+        return Warmup(schedule, self.steps, self.start)

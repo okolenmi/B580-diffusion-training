@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-from .graph import Edge, GraphDoc, NodeSpec
+from .graph import AddonSpec, Edge, GraphDoc, NodeSpec
 
 
 @dataclass
@@ -14,17 +14,22 @@ class _Builder:
     nodes: list[tuple[str, str, dict]] = field(default_factory=list)
     wires: list[tuple[str, str, str, str]] = field(default_factory=list)
     events: list[tuple[str, str, str, str]] = field(default_factory=list)
+    addons: list[tuple[str, str, str, dict]] = field(default_factory=list)  # (host label or "graph", id, kind, params)
 
     def add(self, label: str, class_name: str, **params) -> None:
         self.nodes.append((label, class_name, params))
+
+    def addon(self, host: str, addon_id: str, kind: str, **params) -> None:
+        self.addons.append((host, addon_id, kind, params))
 
     def uid(self, name: str) -> str:
         return "n_" + "abcdefghijklmnopqrstuvwxyz"[[n for n, _, _ in self.nodes].index(name)] * 6
 
     def doc(self, settings: dict) -> GraphDoc:
         edge = lambda w: Edge(self.uid(w[0]), w[1], self.uid(w[2]), w[3])  # noqa: E731
-        specs = tuple(NodeSpec(self.uid(n), cls, params, title=n) for n, cls, params in self.nodes)
-        return GraphDoc(specs, tuple(map(edge, self.wires)), tuple(map(edge, self.events)), settings)
+        on = lambda host: tuple(AddonSpec(i, kind, True, params) for h, i, kind, params in self.addons if h == host)  # noqa: E731
+        specs = tuple(NodeSpec(self.uid(n), cls, params, title=n, addons=on(n)) for n, cls, params in self.nodes)
+        return GraphDoc(specs, tuple(map(edge, self.wires)), tuple(map(edge, self.events)), settings, addons=on("graph"))
 
 
 @dataclass(frozen=True)
@@ -121,27 +126,23 @@ class _SdxlLora:
         b.add("optimizer", o.optimizer, lr=o.lr, fused=o.fused)
         b.add("schedule", self.SCHEDULES[o.schedule], lr=o.lr)
         if o.warmup:
-            b.add("warmup", "WarmupLRNode", steps=o.warmup)
+            b.addon("schedule", "warmup", "WarmupAddon", steps=o.warmup)
         b.add("weighting", "LossWeightingNode", kind="min_snr")
         b.wires += [("model", "denoiser", "adapter", "denoiser"), ("adapter", "model", "optimizer", "model")]
 
     def _training_and_saving(self) -> None:
         o, b = self.o, self.b
         b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph, aligned_init_batches=o.aligned_init)
-        b.add("trigger", "EveryNStepsNode", every=o.save_every)
+        b.addon("graph", "save_steps", "EveryNSteps", every=o.save_every)
         if o.save_every_epoch:
-            b.add("epoch_trigger", "EveryEpochNode", every=o.save_every_epoch)
+            b.addon("graph", "save_epochs", "EveryEpoch", every=o.save_every_epoch)
         b.add("saver", "SaveAdapterNode", directory=self.output, name=o.name, probe=o.save_probe)
-        schedule = (("schedule", "schedule", "warmup", "schedule"), ("warmup", "schedule", "trainer", "schedule")) if o.warmup \
-            else (("schedule", "schedule", "trainer", "schedule"),)
         b.wires += [("batcher", "batches", "trainer", "batches"), ("adapter", "model", "trainer", "model"),
                     ("conditioner", "conditioner", "blend", "conditioner"), ("blend", "conditioner", "trainer", "conditioner"), ("optimizer", "optimizer", "trainer", "optimizer"),
-                    *schedule, ("weighting", "weighting", "trainer", "weighting"), ("adapter", "model", "saver", "model")]
-        b.events += [("trainer", "step_finished", "trigger", "step"), ("trigger", "due", "saver", "checkpoint"), ("trainer", "ended", "saver", "checkpoint")]
+                    ("schedule", "schedule", "trainer", "schedule"), ("weighting", "weighting", "trainer", "weighting"), ("adapter", "model", "saver", "model")]
+        b.events.append(("trainer", "ended", "saver", "checkpoint"))
         if o.save_probe:
             b.wires.append(("blend", "conditioner", "saver", "conditioner"))
-        if o.save_every_epoch:
-            b.events += [("trainer", "step_finished", "epoch_trigger", "step"), ("epoch_trigger", "due", "saver", "checkpoint")]
 
     def _extras(self) -> None:
         o, b = self.o, self.b
@@ -150,11 +151,9 @@ class _SdxlLora:
             b.wires += [("adapter", "model", "ema", "model"), ("ema", "ema", "saver", "ema")]
             b.events.append(("trainer", "step_finished", "ema", "step"))
         if o.regions_from:
-            b.add("ladder", "RegionLadderNode", start=o.regions_from, span=o.regions_span)
-            b.wires.append(("ladder", "ladder", "noiser", "ladder"))
+            b.addon("noiser", "ladder", "RegionLadderAddon", start=o.regions_from, span=o.regions_span)
         if o.batch_first:
-            b.add("ramp", "BatchRampNode", size=o.batch_first, batches=o.batch_first_steps)
-            b.wires.append(("ramp", "ramp", "batcher", "ramp"))
+            b.addon("batcher", "ramp", "BatchRampAddon", size=o.batch_first, batches=o.batch_first_steps)
         if o.time_balance != "off" or o.balance_sampling > 0:
             b.add("balance", "TimeBalanceNode", mode=o.time_balance, sample_bias=o.balance_sampling)
             b.wires += [("balance", "balance", "trainer", "balance"), ("balance", "balance", "noiser", "balance")]
@@ -176,10 +175,15 @@ class _SdxlLora:
 
     def _override(self, overrides: dict[str, dict]) -> None:
         names = [n for n, _, _ in self.b.nodes]
+        addons = [i for _, i, _, _ in self.b.addons]
         for node, params in overrides.items():
-            if node not in names:
-                raise ValueError(f"no node called {node!r} in this graph (nodes: {', '.join(names)}); settings such as memory.vram_max_mb are not node parameters")
-            next(p for n, _, p in self.b.nodes if n == node).update(params)
+            if node in names:
+                next(p for n, _, p in self.b.nodes if n == node).update(params)
+            elif node in addons:
+                next(p for _, i, _, p in self.b.addons if i == node).update(params)
+            else:
+                raise ValueError(f"no node or addon called {node!r} in this graph (nodes: {', '.join(names)}; addons: {', '.join(addons)}); "
+                                 f"settings such as memory.vram_max_mb are not node parameters")
 
 
 def sdxl_lora(*, model: str, dataset: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,

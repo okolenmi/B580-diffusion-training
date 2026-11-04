@@ -13,7 +13,7 @@ from ...data.padding import FILLS
 from ...engine.step.balance import TimeBalance
 from ...families.api.parts import DenoiserPart
 from ...families.registry import get_family
-from ...graph import EventOut, Group, Node, Port
+from ...graph import AddonSlot, EventOut, Group, Node, Port
 from ...graph.events import EpochEnding, EpochStarted, PromptsChanged
 from .handles import LatentSet, PromptTable
 
@@ -63,6 +63,7 @@ class BucketerNode(Node):
 
 class NoiserNode(Node):
     DISPLAY_NAME = "Noiser"
+    ADDON_SLOTS = (AddonSlot("ladder", RegionLadder, doc="More timesteps per image in the first batches."),)
     CATEGORY = "Dataset"
     GROUPS = (Group("objective", "Objective", collapsed=True), Group("timesteps", "Timesteps"),)
     INPUTS = {
@@ -75,7 +76,6 @@ class NoiserNode(Node):
         "low": Port("low", float, required=False, default=None, group="timesteps", doc="Smallest timestep; empty = objective's."),
         "high": Port("high", float, required=False, default=None, group="timesteps", doc="Largest timestep; empty = objective's."),
         "balance": Port("balance", TimeBalance, required=False, doc="Steers the draw towards the thirds of the range that are behind."),
-        "ladder": Port("ladder", RegionLadder, required=False, doc="More timesteps per image in the first batches (see the Region Ladder node)."),
         "values": Port("values", str, required=False, default="", group="timesteps", advanced=True,
                        doc="Comma-separated timesteps to choose from instead of a distribution."),
         "regions": Port("regions", int, required=False, default=1, minimum=1, group="timesteps",
@@ -100,45 +100,12 @@ class NoiserNode(Node):
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
                                 regions=inputs.get("regions") or 1, layout=inputs.get("layout") or "even",
                                 perturb=tuple(float(v) for v in (inputs.get("perturb") or "").split(",") if v.strip()))
-        return {"noiser": Noiser(objective, policy, inputs.get("balance"), inputs.get("ladder"))}
-
-
-class RegionLadderNode(Node):
-    DISPLAY_NAME = "Region Ladder"
-    CATEGORY = "Dataset"
-    INPUTS = {"start": Port("start", int, default=9, minimum=1, doc="Timesteps per image in the first batch."),
-              "span": Port("span", int, required=False, default=120, minimum=1, unit="batches",
-                           doc="Batches over which the count falls in equal parts to the Noiser's `regions`."),
-              "skip": Port("skip", int, required=False, default=0, minimum=0, unit="batches",
-                           doc="Batches already trained, when training is continued: the ladder then starts that far in (past its span: no extra timesteps).")}
-    OUTPUTS = {"ladder": Port("ladder", RegionLadder,
-                              doc="Wire to the Noiser. More timesteps per image make the first updates, which set the direction the adapter takes, "
-                                  "less dependent on one random draw; with a gradient policy every extra region costs a full pass.")}
-
-    def build(self, **inputs) -> dict[str, Any]:
-        self.validate_inputs(inputs)
-        return {"ladder": RegionLadder(inputs["start"], inputs.get("span") or 120, inputs.get("skip") or 0)}
-
-
-class BatchRampNode(Node):
-    DISPLAY_NAME = "Batch Ramp"
-    CATEGORY = "Dataset"
-    INPUTS = {"size": Port("size", int, default=1, minimum=1, doc="Samples per batch in the first batches."),
-              "batches": Port("batches", int, required=False, default=200, minimum=1, unit="batches",
-                              doc="How many batches of the run use the smaller size; after them the Batcher's own batch size applies."),
-              "skip": Port("skip", int, required=False, default=0, minimum=0, unit="batches",
-                           doc="Batches already trained, when training is continued: the small batches then end that much sooner.")}
-    OUTPUTS = {"ramp": Port("ramp", BatchRamp,
-                            doc="Wire to the Batcher. A small batch at the start gives each update one picture's direction (more variety), "
-                                "a large one at the end averages several pictures (steadier, more detail).")}
-
-    def build(self, **inputs) -> dict[str, Any]:
-        self.validate_inputs(inputs)
-        return {"ramp": BatchRamp(inputs["size"], inputs.get("batches") or 200, inputs.get("skip") or 0)}
+        return {"noiser": Noiser(objective, policy, inputs.get("balance"), self.addons.one("ladder"))}
 
 
 class BatcherNode(Node):
     DISPLAY_NAME = "Batcher"
+    ADDON_SLOTS = (AddonSlot("ramp", BatchRamp, doc="A smaller batch for the first batches of the run."),)
     CATEGORY = "Dataset"
     READS_SETTINGS = ("seed.base",)
     GROUPS = (Group("batching", "Batching"), Group("worker", "Worker", collapsed=True))
@@ -147,7 +114,6 @@ class BatcherNode(Node):
         "prompts": Port("prompts", PromptTable),
         "noiser": Port("noiser", Noiser),
         "buckets": Port("buckets", BucketPolicy, required=False),
-        "ramp": Port("ramp", BatchRamp, required=False, doc="A smaller batch for the first batches of the run (see the Batch Ramp node)."),
         "batch_size": Port("batch_size", int, required=False, default=1, minimum=1, group="batching"),
         "shuffle": Port("shuffle", bool, required=False, default=True, group="batching"),
         "seed": Port("seed", int, required=False, minimum=0, group="batching",
@@ -176,6 +142,6 @@ class BatcherNode(Node):
         batcher = Batcher(inputs["latents"], prompts, inputs["noiser"], batch_size=inputs.get("batch_size") or 1,
                           shuffle=inputs.get("shuffle", True), keep_incomplete=buckets.keep_incomplete,
                           multiple=buckets.multiple, max_shapes=buckets.max_shapes, batch_area=buckets.batch_area, pack=buckets.pack, fill=buckets.fill, seed=self.derived_seed(inputs.get("seed")), depth=inputs.get("prefetch") or 2,
-                          start_epoch=inputs.get("start_epoch") or 0, skip=inputs.get("skip") or 0, ramp=inputs.get("ramp"), emit=emit)
+                          start_epoch=inputs.get("start_epoch") or 0, skip=inputs.get("skip") or 0, ramp=self.addons.one("ramp"), emit=emit)
         self.context.report("buckets", {"node": self.uid, **batcher.shape_summary()})
         return {"batches": batcher}

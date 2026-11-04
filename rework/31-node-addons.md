@@ -284,8 +284,12 @@ new class, not an edit of a 350-line node.
      ready at the same time (data wires still decide).
    * Outside: `enable / configure / disable / remove / available / apply_set / load_set` (`graph/addon_edit.py`), and
      `--addons FILE.json` on the command line. Nothing is registered yet, so the flag has nothing to switch on until step 2.
-2. Convert the first candidates one at a time, behaviour unchanged, each checked by the existing tests: Region Ladder (Noiser),
-   Warmup, Adapter EMA, then Self-perceptual and the others. The starter and the command line follow.
+2. Convert the first candidates one at a time, behaviour unchanged, each checked by the existing tests. **Done:** Region Ladder (on the
+   Noiser, slot `ladder`), Batch Ramp (Batcher, slot `ramp`), Warmup (schedule nodes, slot `lr_modifier`, many), and the Every N Steps and
+   Every Epoch triggers (event addons on the graph; Save Adapter's `checkpoint` input is `scoped`, so it hears them without a wire). The
+   starter writes them as addons and `--param ladder.start=6` reaches an addon by its id. **Kept as nodes:** Adapter EMA (Save Adapter and
+   Resume both use the object it makes), Time Balance (Noiser and Trainer share one). Still to convert: Self-perceptual loss and the
+   Trainer's gradient-aligned start (`aligned_init_batches`), then the others. The starter and the command line follow.
 3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
    `addon_slots`, `addons` and `optional` fields so the editor needs no per-node code.
 

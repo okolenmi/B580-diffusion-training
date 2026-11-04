@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...engine.step.schedule import Constant, Cosine, LRSchedule, Warmup
-from ...graph import Node, Port
+from ...engine.step.schedule import Constant, Cosine, LRModifier, LRSchedule, WarmupModifier
+from ...graph import Addon, AddonSlot, Node, Port
+
+MODIFIERS = AddonSlot("lr_modifier", LRModifier, many=True, doc="Changes the schedule in saved order (a warmup, for example).")
+
+
+def modified(schedule: LRSchedule, modifiers: list[LRModifier]) -> LRSchedule:
+    for modifier in modifiers:
+        schedule = modifier.wrap(schedule)
+    return schedule
 
 
 class ConstantLRNode(Node):
@@ -13,10 +21,11 @@ class ConstantLRNode(Node):
     CATEGORY = "Schedule"
     INPUTS = {"lr": Port("lr", float, default=1e-4, minimum=0.0)}
     OUTPUTS = {"schedule": Port("schedule", LRSchedule)}
+    ADDON_SLOTS = (MODIFIERS,)
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        return {"schedule": Constant(inputs["lr"])}
+        return {"schedule": modified(Constant(inputs["lr"]), self.addons.all("lr_modifier"))}
 
 
 class CosineLRNode(Node):
@@ -27,20 +36,18 @@ class CosineLRNode(Node):
                                 doc="Optimizer steps over which the rate decays; empty follows the length of the run (steps or epochs)."),
               "min_fraction": Port("min_fraction", float, required=False, default=0.05, minimum=0.0, maximum=1.0, step=0.01)}
     OUTPUTS = {"schedule": Port("schedule", LRSchedule)}
+    ADDON_SLOTS = (MODIFIERS,)
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        return {"schedule": Cosine(inputs["lr"], inputs.get("total_steps"), inputs.get("min_fraction", 0.05))}
+        return {"schedule": modified(Cosine(inputs["lr"], inputs.get("total_steps"), inputs.get("min_fraction", 0.05)), self.addons.all("lr_modifier"))}
 
 
-class WarmupLRNode(Node):
-    DISPLAY_NAME = "Warmup LR"
-    CATEGORY = "Schedule"
-    INPUTS = {"schedule": Port("schedule", LRSchedule, doc="Ramps into this schedule's own value at each step."),
-              "steps": Port("steps", int, default=100, minimum=0, doc="Optimizer steps (accumulation windows) spent ramping."),
+class WarmupAddon(Addon):
+    DISPLAY_NAME = "Warmup"
+    SLOT = "lr_modifier"
+    INPUTS = {"steps": Port("steps", int, default=100, minimum=0, doc="Optimizer steps (accumulation windows) spent ramping."),
               "start": Port("start", float, required=False, default=0.0, minimum=0.0, doc="Rate at the very start.")}
-    OUTPUTS = {"schedule": Port("schedule", LRSchedule)}
 
-    def build(self, **inputs) -> dict[str, Any]:
-        self.validate_inputs(inputs)
-        return {"schedule": Warmup(inputs["schedule"], inputs["steps"], inputs.get("start", 0.0))}
+    def build(self, **inputs) -> Any:
+        return WarmupModifier(inputs["steps"], inputs.get("start", 0.0))

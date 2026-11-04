@@ -38,7 +38,7 @@ class SaveAdapterNode(Node):
     }
     GROUPS = (Group("diagnostics", "Diagnostics", collapsed=True, advanced=True),)
     OUTPUTS = {"saved": Port("saved", int, doc="Files written so far (0 at build time).")}
-    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint")}
+    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint", scoped=True)}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)

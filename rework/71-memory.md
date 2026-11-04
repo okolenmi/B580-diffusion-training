@@ -37,7 +37,9 @@ primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
 * A new latent shape costs about 3.85 s the first time it reaches the GPU (kernel and primitive creation). With
   oneDNN's default primitive cache (1024 entries) a shape that comes back also costs that much again; with 2048 it
   costs the normal step time. The requirement is about 29-35 primitives per distinct latent shape, the cache is a
-  ceiling that costs no memory, so `size_cache_for_shapes` sizes it from the dataset. First sightings cannot be cached
+  ceiling that costs no memory, so `size_cache_for_shapes` sizes it from the dataset. Each shape is also built once per batch
+  size (batch ramp, region ladder, a short last batch): the sizing assumes up to 4 batch sizes per shape and the floor is 4096
+  (a 600-step batch-ramp run printed the eviction warning with the old 2048 floor). First sightings cannot be cached
   across runs; fewer distinct shapes (bucketing with a multiple above 1) is the only lever. A short test run on a
   mixed-aspect dataset is therefore dominated by first sightings and looks much slower than a long run.
 * The SYCL variables in `engine/xpu_env.py` keep the kernel cache in memory and avoid stalls; the entry points

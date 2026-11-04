@@ -9,8 +9,9 @@ import logging
 import os
 
 CACHE_VAR = "ONEDNN_PRIMITIVE_CACHE_CAPACITY"
-DEFAULT_CACHE_CAPACITY = 2048
+DEFAULT_CACHE_CAPACITY = 4096  # a ceiling, not an allocation: measured memory is identical from 1024 to 262144 entries
 PRIMITIVES_PER_SHAPE = 35  # upper end of the measured 29-35 range, so a dataset is never sized to the optimistic end
+BATCH_VARIANTS = 4  # one latent shape is also built per batch size (batch ramp, region ladder, a short last batch)
 SHAPES_WHERE_GROUPING_WINS = 512
 
 _log = logging.getLogger(__name__)
@@ -30,10 +31,11 @@ def set_perf_env(capacity: int | None = None) -> None:
 
 
 def capacity_for_shapes(distinct_shapes: int | None) -> int | None:
-    """Capacity that holds the primitives of ``distinct_shapes`` latent shapes; None when the count is unknown."""
+    """Capacity that holds the primitives of ``distinct_shapes`` latent shapes at up to ``BATCH_VARIANTS`` batch sizes each;
+    None when the count is unknown."""
     if not isinstance(distinct_shapes, int) or isinstance(distinct_shapes, bool) or distinct_shapes <= 0:
         return None
-    return max(DEFAULT_CACHE_CAPACITY, distinct_shapes * PRIMITIVES_PER_SHAPE)
+    return max(DEFAULT_CACHE_CAPACITY, distinct_shapes * PRIMITIVES_PER_SHAPE * BATCH_VARIANTS)
 
 
 def size_cache_for_shapes(distinct_shapes: int | None) -> int | None:

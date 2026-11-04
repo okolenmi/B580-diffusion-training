@@ -498,14 +498,14 @@ def xpu_environment():
 
     from ..engine import xpu_env
 
-    check(xpu_env.capacity_for_shapes(44) == 2048 and xpu_env.capacity_for_shapes(100) == 3500
+    check(xpu_env.capacity_for_shapes(20) == 4096 and xpu_env.capacity_for_shapes(100) == 14000
           and xpu_env.capacity_for_shapes(None) is None and xpu_env.capacity_for_shapes(0) is None,
           "the primitive cache is sized to the shape count, never below the default, and unknown counts get no number")
     saved = {k: os.environ.pop(k, None) for k in (xpu_env.CACHE_VAR, "PYTORCH_ALLOC_CONF", "PYTORCH_XPU_ALLOC_CONF")}
     try:
         xpu_env._explicit = False
         xpu_env.set_perf_env()
-        check(os.environ[xpu_env.CACHE_VAR] == "2048" and xpu_env.size_cache_for_shapes(100) == 3500 and os.environ[xpu_env.CACHE_VAR] == "3500",
+        check(os.environ[xpu_env.CACHE_VAR] == "4096" and xpu_env.size_cache_for_shapes(100) == 14000 and os.environ[xpu_env.CACHE_VAR] == "14000",
               "the default capacity grows to fit a dataset's shapes")
         check(os.environ["PYTORCH_ALLOC_CONF"] == "expandable_segments:True", "the allocator uses expandable segments unless told otherwise")
         os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:False"
@@ -518,7 +518,7 @@ def xpu_environment():
         os.environ[xpu_env.CACHE_VAR] = "0"
         xpu_env._explicit = False
         xpu_env.set_perf_env()
-        check(os.environ[xpu_env.CACHE_VAR] == "2048", "an unusable exported capacity falls back to the default")
+        check(os.environ[xpu_env.CACHE_VAR] == "4096", "an unusable exported capacity falls back to the default")
     finally:
         xpu_env._explicit = False
         for key, value in saved.items():

@@ -71,6 +71,9 @@ class SdxlLoraOptions:
     batch_first_steps: int = 200
     ema: str = ""
     aligned_init: int = 0
+    trend_boost: float = 0.0
+    trend_mode: str = "trend"
+    trend_penalty: float = 0.0
 
 
 class _SdxlLora:
@@ -133,6 +136,8 @@ class _SdxlLora:
     def _training_and_saving(self) -> None:
         o, b = self.o, self.b
         b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph)
+        if o.trend_boost:
+            b.addon("trainer", "trend", "TrendWeightingAddon", boost=o.trend_boost, mode=o.trend_mode, penalty=o.trend_penalty)
         if o.aligned_init:
             b.addon("trainer", "aligned_init", "AlignedInitAddon", batches=o.aligned_init)
         b.addon("graph", "save_steps", "EveryNSteps", every=o.save_every)

@@ -36,7 +36,8 @@ class DiffusionTrainerNode(Node):
     READS_SETTINGS = ("device.default", "runtime.profile", "perf.dir", "perf.ceilings", "perf.warmup_steps", "perf.steps", "perf.modules", "perf.trace", "perf.provenance")
     GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     ADDON_SLOTS = (AddonSlot("perceptual", ModelBound, doc="An extra loss term from the base network's features."),
-                   AddonSlot("initializer", ModelBound, doc="Sets the adapter's starting point from the first batches."))
+                   AddonSlot("initializer", ModelBound, doc="Sets the adapter's starting point from the first batches."),
+                   AddonSlot("region_weights", ModelBound, doc="Weights the regions of a step by how their part of the timestep range is doing."))
     INPUTS = {
         "batches": Port("batches", Batcher),
         "model": Port("model", TrainableDenoiser),
@@ -139,7 +140,7 @@ class DiffusionTrainerNode(Node):
                           plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
                           perf=self._perf_session(model, accelerator), regional=self._regional(inputs),
                           perceptual=self._attached("perceptual", model, inputs), calibrate_every=self._calibrate_every(inputs),
-                          initializer=self._attached("initializer", model, inputs),
+                          initializer=self._attached("initializer", model, inputs), trend=self._attached("region_weights", model, inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):

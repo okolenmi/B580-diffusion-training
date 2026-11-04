@@ -48,17 +48,24 @@ class RegionalUpdate:
         """Whether ``RegionStream`` gives the same update: the plain average of normalised regions over a window of one batch."""
         return isinstance(self.policy, Mean) and self.normalize and batches == 1
 
-    def direction(self, grads: Tensor) -> Tensor | None:
+    def direction(self, grads: Tensor, weights: Tensor | None = None) -> Tensor | None:
+        """``weights`` (one per region, plain average only) are applied to the normalised gradients: they change the direction, and
+        the update's length becomes the regions' average length times the average weight."""
         norms = grads.norm(dim=1, keepdim=True)
         if grads.shape[0] == 1:
             return grads[0]
         matrix = grads / norms.clamp(min=1e-12) if self.normalize else grads
-        out = self.policy.combine(matrix)
+        if weights is None:
+            out = self.policy.combine(matrix)
+        else:
+            weights = weights.to(matrix.device, matrix.dtype)
+            self.policy.combine(matrix)  # reports the agreement of the unweighted regions
+            out = (matrix * weights[:, None]).mean(dim=0)
         if out is None:
             return None
         length = out.norm()
         if self.normalize and length > 0:
-            out = out * (norms.mean() / length)
+            out = out * (norms.mean() / length) * (1.0 if weights is None else weights.mean())
         return out
 
 
@@ -75,15 +82,16 @@ class RegionStream:
         self.optimizer = optimizer
         self._sum: list[Tensor] | None = None
         self._norms: list[Tensor] = []
+        self._weights: list[float] = []
         self._reached: set[int] = set()
 
     def begin(self) -> None:
         if self._sum is not None:
             torch._foreach_zero_(self._sum)
-        self._norms, self._reached = [], set()
+        self._norms, self._weights, self._reached = [], [], set()
 
-    def add(self) -> None:
-        """Fold in the gradients the last backward left on the parameters."""
+    def add(self, weight: float = 1.0) -> None:
+        """Fold in the gradients the last backward left on the parameters, counted ``weight`` times."""
         self._reached |= self.optimizer.touched()
         params = self.optimizer.params
         grads = [torch.zeros_like(p, dtype=torch.float32) if p.grad is None else p.grad.detach().float() for p in params]
@@ -91,14 +99,16 @@ class RegionStream:
             self._sum = [torch.zeros_like(g) for g in grads]
         norm = torch.stack(torch._foreach_norm(grads)).norm()
         self._norms.append(norm)
-        torch._foreach_add_(self._sum, torch._foreach_mul(grads, 1.0 / norm.clamp(min=1e-12)))
+        self._weights.append(weight)
+        torch._foreach_add_(self._sum, torch._foreach_mul(grads, weight / norm.clamp(min=1e-12)))
 
     def finish(self) -> tuple[list[float], dict[str, float]]:
         """Write the update direction onto the parameters; the regions' gradient norms and the metrics of the combination."""
         count = len(self._norms)
         norms = torch.stack(self._norms)
         length = torch.stack(torch._foreach_norm(self._sum)).norm()
-        scale = torch.where(length > 0, norms.mean() / length.clamp(min=1e-30), torch.zeros_like(length))
+        weights = torch.tensor(self._weights, dtype=length.dtype, device=length.device)
+        scale = torch.where(length > 0, norms.mean() * weights.mean() / length.clamp(min=1e-30), torch.zeros_like(length))
         for p, piece in zip(self.optimizer.params, torch._foreach_mul(self._sum, scale)):
             piece = piece.to(p.dtype)
             if p.grad is None:
@@ -108,5 +118,6 @@ class RegionStream:
         self.optimizer.touch(frozenset(self._reached))
         metrics = {}
         if count > 1:
-            metrics["region_cos_mean"] = float((length ** 2 - count) / (count * (count - 1)))
+            squares = float((weights ** 2).sum())
+            metrics["region_cos_mean"] = float((length ** 2 - squares) / (float(weights.sum()) ** 2 - squares))
         return [float(n) for n in norms.cpu()], metrics

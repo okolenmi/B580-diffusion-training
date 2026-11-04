@@ -144,6 +144,87 @@ def stream_check() -> None:
           f"streamed update equals the stored-vectors update (max diff {float((got - want).abs().max()):.2e}, cos {metrics['region_cos_mean']:.4f} vs {mean_cos:.4f})")
 
 
+def trend_checks() -> None:
+    """Trend weights: interpolation between bins, neutral until there is history, success read from a falling or a lucky loss,
+    the weighted update (equal to the plain one at weight 1, longer and tilted otherwise, the same through the stream), and a run."""
+    from ..engine.step.regional import RegionStream
+    from ..engine.step.trend import TrendTracker
+
+    t = TrendTracker(bins=12)
+    check(t._spread(0.0) == [(0, 1.0), (1, 0.0)] and t._spread(1.0) == [(10, 0.0), (11, 1.0)], "the ends of the range feed their own bin")
+    middle = t._spread(6 / 12)  # exactly between the centres of bins 5 and 6
+    check([k for k, _ in middle] == [5, 6] and all(abs(share - 0.5) < 1e-9 for _, share in middle), "a place between two bins feeds both, half each")
+
+    def run(mode, losses_at, steps=120, **kw):
+        tr = TrendTracker(bins=4, window=60, recent=10, mode=mode, **kw)
+        weights = []
+        for step in range(steps):
+            tr.begin()
+            weights.append([tr.weight(i, torch.tensor([losses_at(step, place)]), torch.tensor([place])) for i, place in enumerate((0.1, 0.4, 0.7, 0.95))])
+            tr.commit()
+        return weights
+
+    check(run("trend", lambda s, p: 1.0)[0] == [1.0] * 4, "no history, no weight")
+    falling = run("trend", lambda s, p: 1.0 - 0.004 * s if p < 0.5 else 1.0)
+    check(falling[-1][0] > 1.05 and falling[-1][1] > 1.05 and falling[-1][3] == 1.0, f"trend: the parts whose loss falls gain weight, flat ones do not ({falling[-1]})")
+    check(run("trend", lambda s, p: 1.0 - 0.004 * s if p < 0.5 else 1.0, boost=0.0)[-1] == [1.0] * 4, "boost 0 changes nothing")
+    rising = run("trend", lambda s, p: 1.0 + 0.004 * s if p < 0.5 else 1.0)
+    check(rising[-1][0] == 1.0 and run("trend", lambda s, p: 1.0 + 0.004 * s if p < 0.5 else 1.0, penalty=0.5)[-1][0] < 1.0,
+          "a rising loss gets no boost, and a penalty lowers its weight only when asked")
+    lucky = run("current", lambda s, p: 0.5 if (s == 119 and p < 0.2) else 1.0 + (0.1 if s % 2 else -0.1))
+    check(lucky[-1][0] > 1.0 and lucky[-1][3] <= 1.5, f"current: a loss well under its bins' average gets weight ({lucky[-1]})")
+
+    torch.manual_seed(1)
+    grads = torch.randn(3, 20)
+    update = RegionalUpdate(make_policy("equal"), True)
+    plain = update.direction(grads)
+    check(torch.allclose(update.direction(grads, torch.ones(3)), plain, atol=1e-6), "weights of 1 give the plain update")
+    heavy = update.direction(grads, torch.tensor([3.0, 1.0, 1.0]))
+    unit = grads / grads.norm(dim=1, keepdim=True)
+    check(float(heavy @ unit[0] / heavy.norm()) > float(plain @ unit[0] / plain.norm())
+          and abs(float(heavy.norm() / plain.norm()) - 5 / 3) < 1e-5, "a heavier region pulls the update its way, and the length follows the average weight")
+
+    class Holder:
+        def __init__(self, params):
+            self.params, self._t = params, set()
+
+        def touched(self):
+            return frozenset(self._t)
+
+        def touch(self, ids):
+            self._t.update(ids)
+
+    params = [torch.nn.Parameter(torch.zeros(20))]
+    stream = RegionStream(Holder(params))
+    stream.begin()
+    for v, w in zip(grads, (3.0, 1.0, 1.0)):
+        params[0].grad = v.clone()
+        stream.add(w)
+    stream.finish()
+    check(torch.allclose(params[0].grad, heavy, atol=1e-5), "the streamed weighted update equals the stored-vectors one")
+
+
+def trend_run_check() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        doc = graph(tmp, steps=6, save_every=1000, trend_boost=0.5)
+        for node in doc.nodes:
+            if node.class_name == "NoiserNode":
+                node.params.update({"regions": 3, "layout": "strata"})
+            if node.class_name == "DiffusionTrainerNode":
+                node.params["gradient_policy"] = "equal"
+        _, outcome, trace = execute(store, doc)
+        metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+        check(outcome.ok and len(metrics) == 6 and "trend_w_region_2" in metrics[-1],
+              f"a run with trend weights reports each region's weight ({outcome.error}, {sorted(k for k in metrics[-1] if k.startswith('trend')) if metrics else None})")
+
+
 def ladder_check() -> None:
     """The regions ladder: the count falls from the start value to the normal one over the span, and batches follow it."""
     from ..data.ladder import RegionLadder
@@ -292,4 +373,4 @@ def perceptual_trainer_check() -> None:
 
 if __name__ == "__main__":
     run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
-        perceptual_trainer_check)
+        perceptual_trainer_check, trend_checks, trend_run_check)

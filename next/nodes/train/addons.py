@@ -7,6 +7,7 @@ from typing import Any
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
+from ...engine.step.trend import MODES, TrendTracker
 from ...graph import Addon, Port
 
 
@@ -60,3 +61,35 @@ class AlignedInitAddon(Addon):
 
     def build(self, **inputs) -> ModelBound:
         return _AlignedStart(inputs["batches"])
+
+
+class _Trend(ModelBound):
+    def __init__(self, **options: Any):
+        self.options = options
+
+    def attach(self, model: TrainableDenoiser, batches: Any) -> TrendTracker:
+        return TrendTracker(**self.options)
+
+
+class TrendWeightingAddon(Addon):
+    DISPLAY_NAME = "Trend weighting"
+    SLOT = "region_weights"
+    INPUTS = {
+        "boost": Port("boost", float, default=0.5, minimum=0.0,
+                      doc="A region whose part of the timestep range is doing better than usual gets weight 1 + boost * (how much better, in typical successes). "
+                          "0 changes nothing. Applied after each region's gradient is scaled to unit length (the `equal` policy), so it changes the direction "
+                          "and, by the average weight, the length of the update."),
+        "mode": Port("mode", str, required=False, default="trend", choices=MODES,
+                     doc="trend: the loss of the region's bins has recently been falling (fast average below slow). current: the region's own loss is "
+                         "below the slow average of its bins (noisier: a loss is mostly the draw of image and noise)."),
+        "penalty": Port("penalty", float, required=False, default=0.0, minimum=0.0,
+                        doc="Lowers the weight (to at least 0.25) of a region doing worse than usual the same way. 0: nothing is taken away."),
+        "bins": Port("bins", int, required=False, default=12, minimum=2, advanced=True,
+                     doc="Parts the timestep range is cut into; a sample counts for the two nearest in proportion to its closeness."),
+        "window": Port("window", int, required=False, default=300, minimum=2, unit="steps", advanced=True, doc="Memory of the slow average."),
+        "recent": Port("recent", int, required=False, default=60, minimum=1, unit="steps", advanced=True, doc="Memory of the fast average."),
+        "limit": Port("limit", float, required=False, default=3.0, minimum=0.1, advanced=True, doc="Most typical successes that count."),
+    }
+
+    def build(self, **inputs) -> ModelBound:
+        return _Trend(**{k: inputs[k] for k in ("boost", "mode", "penalty", "bins", "window", "recent", "limit") if k in inputs})

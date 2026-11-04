@@ -55,7 +55,7 @@ class Trainer:
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
                  warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None,
-                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0, initializer=None):
+                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0, initializer=None, trend=None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -66,7 +66,9 @@ class Trainer:
             raise ValueError("a gradient policy reads each region's gradient before the update: it needs the plain optimizer (not fused) and no graph replay")
         if calibrate_every and (regional is None or balance is None or not balance.wants_gradient_norm):
             raise ValueError("calibrating the regions' weights needs a gradient policy and the gradnorm time balance")
-        self._regional = None if regional is None else RegionalWindow(regional, optimizer, device, self._region_pass, balance, calibrate_every)
+        if trend is not None and (regional is None or not regional.streams(1)):
+            raise ValueError("trend weights are applied to the normalised regions of the plain average: they need the `equal` gradient policy")
+        self._regional = None if regional is None else RegionalWindow(regional, optimizer, device, self._region_pass, balance, calibrate_every, trend)
         if initializer is not None and (graph is not None or isinstance(optimizer, FusedOptimizer)):
             raise ValueError("the gradient-aligned initialisation measures gradients before the first update: it needs the plain optimizer (not fused) and no graph replay")
         self._initializer, self.init_summary = initializer, {}

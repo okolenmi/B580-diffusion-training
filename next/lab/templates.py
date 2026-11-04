@@ -208,8 +208,22 @@ BATCH_RAMP_TEMPLATE = {
              {"name": "ramp-1-to-4-at-250", "args": LADDER_100 + ["--batch", "4", "--lr", "2e-4", "--batch-first", "1", "--batch-first-steps", "250"]},
              {"name": "ramp-2-to-4-at-400", "args": LADDER_100 + ["--batch", "4", "--lr", "2e-4", "--batch-first", "2", "--batch-first-steps", "400"]}],
 }
+TREND_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "trend",
+    "note": "Trend weighting: each region of a step gets a weight from how its part of the timestep range is doing (12 smooth bins, a fast average of the loss against a slow one). "
+            "A region doing better than usual counts more; nothing is taken away unless a penalty is set. `trend` reads the loss of the bins over the recent steps, `current` the region's own loss "
+            "against its bins' average (noisier). The weights are applied after each region's gradient is scaled to unit length, so they change the direction and the length of the update. "
+            "Step lines show `trend w` per region. 600 steps; `baseline` is the recipe of the long-run test.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "baseline", "args": RECIPE},
+             {"name": "trend-1", "args": RECIPE + ["--trend-boost", "1"]},
+             {"name": "trend-3", "args": RECIPE + ["--trend-boost", "3"]},
+             {"name": "current-1", "args": RECIPE + ["--trend-boost", "1", "--trend-mode", "current"]},
+             {"name": "trend-1-penalty", "args": RECIPE + ["--trend-boost", "1", "--trend-penalty", "0.5"]}],
+}
 TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}
 
 
 TAKEN_FLAGS = ("--models", "--datasets", "--dataset", "--file", "--resolution")

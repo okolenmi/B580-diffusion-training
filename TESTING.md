@@ -109,6 +109,13 @@ python -m next.run sdxl-lora ... --steps 60 --resume-every 20 --output /tmp/r
 ```
 Kill it (the process, or the power cord if you like) after step 30. Run the same command again: it should print `resuming from step 20 (N batches already used)`, continue with step 21 and finish at 60, and `/tmp/r/resume` holds `resume_00000040`/`resume_00000060` (`.json` + `.safetensors`). Compare the final picture or loss with an uninterrupted 60-step run (equal on a deterministic setup, close otherwise). Then a lab run: start any experiment, pull the plug mid-arm, run `python -m next.lab run exp.json` again; the arm should say "continuing an earlier session" and the report should list it as resumed. If a state is damaged (copy a resume file and flip a byte), the log says `resume state ... is not usable` and the run continues from the one before.
 
+## 59. Trend weighting of the timestep regions (about 3 hours for five arms; pick with `--arms`)
+Your idea, in code: each region of a step gets a weight from how the loss of its part of the timestep range is doing (12 smooth bins, a fast average against a slow one), and a region doing better than usual counts more. `trend` reads the bins' recent trend, `current` the region's own loss against the bins' average (noisier), `trend-1-penalty` also lowers a region doing worse. The weights act after each region's gradient is scaled to unit length, so they change the direction and, by the average weight, the length of the update.
+```
+python -m next.lab template trend --like long.json > trend.json
+```
+Run it (`--arms baseline trend-1 current-1` if the time is short), send the zip. Step lines show `trend w a b c` per region: check that the weights move (a column stuck at 1.00 means no history yet or no success) and are not wild (above about 3 for many steps in a row). Then the usual: composition, details, and above all whether the individual styles of the dataset survive better than in the baseline at the same step. The loss itself will not tell the arms apart.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

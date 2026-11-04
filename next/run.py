@@ -110,6 +110,8 @@ DEFAULTS = SdxlLoraOptions()
 def _starter(args, settings: list[str], params: list[str]):
     """The starter graph from the command line: every argument whose destination is a field of ``SdxlLoraOptions`` is passed on."""
     options = {k: v for k, v in vars(args).items() if k in {f.name for f in fields(SdxlLoraOptions)}}
+    if options.get("gradient_policy") is None:
+        options["gradient_policy"] = "equal" if args.regions > 1 else "mean"
     options["steps"] = args.steps if args.steps is not None else (0 if args.epochs else DEFAULTS.steps)
     return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, **options,
                               settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
@@ -117,7 +119,7 @@ def _starter(args, settings: list[str], params: list[str]):
 
 def _regions_preset(regions: int) -> list[str]:
     """``--regions N``: every image at N timesteps spread over the range, each region's gradient scaled to the same length (settings given later win)."""
-    return [f"noiser.regions={regions}", "noiser.layout=strata", "trainer.gradient_policy=equal"] if regions > 1 else []
+    return [f"noiser.regions={regions}", "noiser.layout=strata"] if regions > 1 else []
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -170,6 +172,12 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--batch-first-steps", type=int, default=DEFAULTS.batch_first_steps, help="batches that use the --batch-first size")
             p.add_argument("--lora-plus", type=float, default=DEFAULTS.lora_plus, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
             p.add_argument("--ema", default=DEFAULTS.ema, help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
+            p.add_argument("--gradient-policy", choices=("mean", "equal", "project", "common"), default=None,
+                           help="how the regions of a batch are reconciled: mean (one loss), equal (unit-length gradients, the default with --regions >= 2), project, common")
+            p.add_argument("--policy-floor", type=float, default=DEFAULTS.policy_floor, help="with common: skip the update when the regions' shared direction keeps less than this share (0 = never)")
+            p.add_argument("--policy-calibrate-every", type=int, default=DEFAULTS.policy_calibrate_every,
+                           help="with equal, --time-balance gradnorm and 3 regions: run the regions alone only every Nth step (0 = every step)")
+            p.add_argument("--policy-no-normalize", dest="policy_normalize", action="store_false", help="do not scale each region's gradient to unit length first")
             p.add_argument("--trend-boost", type=float, default=DEFAULTS.trend_boost, help="Weight 1 + B * z on a region whose part of the timestep range is doing better than usual (needs --regions >= 2; 0 = off)")
             p.add_argument("--trend-mode", choices=("trend", "current"), default=DEFAULTS.trend_mode, help="trend: the loss of the region's bins has recently been falling; current: the region's own loss is below the slow average")
             p.add_argument("--trend-penalty", type=float, default=DEFAULTS.trend_penalty, help="Also lower the weight of a region doing worse than usual (0 = nothing is taken away)")

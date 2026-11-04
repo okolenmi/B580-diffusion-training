@@ -52,7 +52,7 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - Minutes for 300 steps: equal 18.4, mean 11.4, calibrated-10 13.1, calibrated-50 12.1. One batch of three timesteps costs about 62% of three separate passes: the saving is a third at most, not two thirds.
 - Coarse change (the least noisy image metric; the two identical 1e-4 controls differed by 1.5%): equal 0.0853, calibrated-10 0.0801, calibrated-50 0.0792, mean 0.0652 (about what the undertrained 3e-5 run gave, 0.0662). It follows the order the owner judged by eye: `equal` learns the most structure, `mean` the least. Fine/coarse is the reverse: equal 0.24, calibrated 0.27, mean 0.34, since in `mean` the clean-end region, with a loss 20x larger, dominates the gradient.
 - Calibrated weights are fixed ratios measured every 10 or 50 steps; `equal` normalises each step's own gradient, and the norms vary several-fold from step to step, so a fixed weight cannot follow them.
-- Conclusion: `equal` stays the base. The calibrated option stays in the code (`policy_calibrate_every`) but costs quality for a third less time. The logged loss of the calibrated arms (0.0497, 0.0424) was the balance-weighted loss, which the code no longer reports.
+- Conclusion: `equal` stays the base. The calibrated option stays in the code (`--policy-calibrate-every`) but costs quality for a third less time. The logged loss of the calibrated arms (0.0497, 0.0424) was the balance-weighted loss, which the code no longer reports.
 
 ## First steps (resolution 768, rendered at 1024)
 - `equal` 16.7 min, `warmup-50` 17.7, `ladder-6-warmup` 19.6 (the ladder's early steps run up to 6 passes). The logged losses and per-t tables are the same to the digit in all three.

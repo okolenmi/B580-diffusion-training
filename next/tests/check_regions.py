@@ -86,12 +86,10 @@ def window_check() -> None:
         library = store.library("toy", create=True)
         library.ingest(tmp / "images")
         library.close()
-        doc = graph(tmp, steps=2, save_every=1000)
+        doc = graph(tmp, steps=2, save_every=1000, gradient_policy="common", accumulation=2)
         for node in doc.nodes:
             if node.class_name == "NoiserNode":
                 node.params.update({"regions": 2, "perturb": "0,0.1"})
-            if node.class_name == "DiffusionTrainerNode":
-                node.params.update({"gradient_policy": "common", "accumulation": 2})
         _, outcome, trace = execute(store, doc)
         metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
         check(outcome.ok and len(metrics) == 2 and "region_shared" in metrics[-1], f"two batches per step with two regions each still make one update per step ({outcome.error})")
@@ -213,12 +211,10 @@ def trend_run_check() -> None:
         library = store.library("toy", create=True)
         library.ingest(tmp / "images")
         library.close()
-        doc = graph(tmp, steps=6, save_every=1000, trend_boost=0.5)
+        doc = graph(tmp, steps=6, save_every=1000, trend_boost=0.5, gradient_policy="equal")
         for node in doc.nodes:
             if node.class_name == "NoiserNode":
                 node.params.update({"regions": 3, "layout": "strata"})
-            if node.class_name == "DiffusionTrainerNode":
-                node.params["gradient_policy"] = "equal"
         _, outcome, trace = execute(store, doc)
         metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
         check(outcome.ok and len(metrics) == 6 and "trend_w_region_2" in metrics[-1],
@@ -251,12 +247,10 @@ def ladder_run_check() -> None:
         library = store.library("toy", create=True)
         library.ingest(tmp / "images")
         library.close()
-        doc = graph(tmp, steps=6, save_every=1000, warmup=3, regions_from=4, regions_span=4)
+        doc = graph(tmp, steps=6, save_every=1000, warmup=3, regions_from=4, regions_span=4, gradient_policy="equal")
         for node in doc.nodes:
             if node.class_name == "NoiserNode":
                 node.params.update({"regions": 2, "layout": "strata"})
-            if node.class_name == "DiffusionTrainerNode":
-                node.params["gradient_policy"] = "equal"
         _, outcome, trace = execute(store, doc)
         metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
         sizes = [m["batch"] for m in metrics]
@@ -275,12 +269,10 @@ def calibration_check() -> None:
         library = store.library("toy", create=True)
         library.ingest(tmp / "images")
         library.close()
-        doc = graph(tmp, steps=40, save_every=1000, time_balance="gradnorm")
+        doc = graph(tmp, steps=40, save_every=1000, time_balance="gradnorm", gradient_policy="equal", policy_calibrate_every=10)
         for node in doc.nodes:
             if node.class_name == "NoiserNode":
                 node.params.update({"regions": 3, "layout": "strata"})
-            if node.class_name == "DiffusionTrainerNode":
-                node.params.update({"gradient_policy": "equal", "policy_calibrate_every": 10})
             if node.class_name == "TimeBalanceNode":
                 node.params["warmup_reports"] = 3
         _, outcome, trace = execute(store, doc)
@@ -301,12 +293,10 @@ def trainer_checks() -> None:
         library.ingest(tmp / "images")
         library.close()
         for policy in ("mean", "project", "common"):
-            overrides = {"noiser": {"regions": 3}, "trainer": {"gradient_policy": policy}}
-            doc = graph(tmp, steps=3, save_every=1000)
+            doc = graph(tmp, steps=3, save_every=1000, gradient_policy=policy)
             for node in doc.nodes:
-                key = {"NoiserNode": "noiser", "DiffusionTrainerNode": "trainer"}.get(node.class_name)
-                if key:
-                    node.params.update(overrides[key])
+                if node.class_name == "NoiserNode":
+                    node.params.update({"regions": 3})
             _, outcome, trace = execute(store, doc)
             metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
             ok = outcome.ok and len(metrics) == 3 and all(m["batch"] % 3 == 0 and m["batch"] >= 3 for m in metrics)

@@ -7,6 +7,8 @@ from typing import Any
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
+from ...engine.step.policy import make_policy
+from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trend import MODES, TrendTracker
 from ...graph import Addon, Port
 
@@ -93,3 +95,52 @@ class TrendWeightingAddon(Addon):
 
     def build(self, **inputs) -> ModelBound:
         return _Trend(**{k: inputs[k] for k in ("boost", "mode", "penalty", "bins", "window", "recent", "limit") if k in inputs})
+
+
+class RegionPolicy(ModelBound):
+    """What the trainer's ``gradient_policy`` slot holds: how the regions of a batch are reconciled, and how often they run alone."""
+
+    def calibrate_every(self, batches: Any) -> int:
+        raise NotImplementedError
+
+
+class _Policy(RegionPolicy):
+    def __init__(self, kind: str, normalize: bool, floor: float, calibrate_every: int):
+        self.kind, self.normalize, self.floor, self._calibrate_every = kind, normalize, floor, calibrate_every
+
+    def attach(self, model: TrainableDenoiser, batches: Any) -> RegionalUpdate:
+        if batches.noiser.max_regions < 2:
+            raise ValueError(f"gradient policy {self.kind!r} reconciles regions: set the noiser's regions to 2 or more")
+        policy = make_policy(self.kind, self.floor, int(getattr(batches, "seed", 0)))
+        return RegionalUpdate(policy, self.normalize or self.kind == "equal")
+
+    def calibrate_every(self, batches: Any) -> int:
+        noiser = batches.noiser
+        if self._calibrate_every and (self.kind != "equal" or noiser.max_regions != 3 or noiser.policy.layout != "strata"):
+            raise ValueError("calibrating needs gradient policy equal and the noiser's regions 3 with the strata layout")
+        return self._calibrate_every
+
+
+class GradientPolicyAddon(Addon):
+    DISPLAY_NAME = "Gradient policy"
+    SLOT = "gradient_policy"
+    INPUTS = {
+        "policy": Port("policy", str, default="equal", choices=("equal", "project", "common"),
+                     doc="How the regions of a batch (see the noiser's `regions`) are reconciled. equal: each region's gradient is scaled to unit length, "
+                         "then averaged, so every region counts the same whatever its loss weight. project: a region's gradient loses the part that points "
+                         "against another region's. common: the shortest vector among the regions' gradients, which lowers every region's loss to first order. "
+                         "The last two run each region's backward alone (more memory-light but slower) and need the plain optimizer, no graph. "
+                         "Without this addon the batch is one loss (the plain mean)."),
+        "normalize": Port("normalize", bool, required=False, default=True,
+                          doc="Scale each region's gradient to unit length before combining, so heavily down-weighted regions count as much as the rest."),
+        "floor": Port("floor", float, required=False, default=0.0, minimum=0.0, maximum=1.0, visible_when=("policy", "common"),
+                      doc="Skip the update when the shared direction keeps less than this share of the average squared gradient norm "
+                          "(1 = regions identical, 1 / regions = unrelated, 0 = they cancel). 0 never skips."),
+        "calibrate_every": Port("calibrate_every", int, required=False, default=0, minimum=0, visible_when=("policy", "equal"),
+                                doc="0: every step runs each region alone (one forward and backward per region). N: only every Nth step does, and measures each "
+                                    "region's gradient norm; the steps between run the regions as one batch (one forward and backward), each region's loss weighted "
+                                    "by the inverse of its measured norm. Needs `--time-balance gradnorm`, 3 regions with the `strata` layout."),
+    }
+
+    def build(self, **inputs) -> RegionPolicy:
+        return _Policy(inputs["policy"], bool(inputs.get("normalize", True)), float(inputs.get("floor") or 0.0), int(inputs.get("calibrate_every") or 0))

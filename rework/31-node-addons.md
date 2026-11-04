@@ -290,7 +290,7 @@ new class, not an edit of a 350-line node.
    starter writes them as addons and `--param ladder.start=6` reaches an addon by its id. **Kept as nodes:** Adapter EMA (Save Adapter and
    Resume both use the object it makes), Time Balance (Noiser and Trainer share one). Also done: Self-perceptual loss and the gradient-aligned start
    (Trainer slots `perceptual` and `initializer`; their addons return a part that the trainer attaches to its model and batches, since both exist only when
-   it is built). Still to convert: the others. The starter and the command line follow.
+   it is built). Also done: the gradient policy (Trainer slot `gradient_policy`; its four settings `gradient_policy`, `policy_normalize`, `policy_floor`, `policy_calibrate_every` are now the addon's parameters, and the command line has `--gradient-policy` and the `--policy-*` flags). Still to convert: the others. The starter and the command line follow.
 3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
    `addon_slots`, `addons` and `optional` fields so the editor needs no per-node code.
 

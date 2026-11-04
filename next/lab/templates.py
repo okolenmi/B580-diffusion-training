@@ -40,11 +40,11 @@ REGIONS_TEMPLATE = {
     "arms": [{"name": "single"},
              {"name": "batch3", "args": ["--batch", "3"]},
              {"name": "regions3-mean", "args": ["--set", "noiser.regions=3"]},
-             {"name": "strata-equal", "args": [*STRATA, "--set", "trainer.gradient_policy=equal"], "note": "each region's gradient scaled to unit length, then averaged"},
-             {"name": "strata-project", "args": [*STRATA, "--set", "trainer.gradient_policy=project"]},
-             {"name": "strata-common", "args": [*STRATA, "--set", "trainer.gradient_policy=common"]}],
+             {"name": "strata-equal", "args": [*STRATA, "--gradient-policy", "equal"], "note": "each region's gradient scaled to unit length, then averaged"},
+             {"name": "strata-project", "args": [*STRATA, "--gradient-policy", "project"]},
+             {"name": "strata-common", "args": [*STRATA, "--gradient-policy", "common"]}],
 }
-EQUAL = [*STRATA, "--set", "trainer.gradient_policy=equal"]
+EQUAL = [*STRATA, "--gradient-policy", "equal"]
 SIGNAL_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "regions-signal",
@@ -54,8 +54,8 @@ SIGNAL_TEMPLATE = {
              {"name": "equal-perturb", "args": [*EQUAL, "--set", "noiser.perturb=0,0.05,0.1"]},
              {"name": "equal-perturb-big", "args": [*EQUAL, "--set", "noiser.perturb=0,0.1,0.2"]},
              {"name": "equal-acc4", "args": [*EQUAL, "--accumulation", "4", "--steps", "100"], "note": "100 steps of 4 batches"},
-             {"name": "project-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=project", "--accumulation", "4", "--steps", "100"]},
-             {"name": "common-acc4", "args": [*STRATA, "--set", "trainer.gradient_policy=common", "--accumulation", "4", "--steps", "100"]}],
+             {"name": "project-acc4", "args": [*STRATA, "--gradient-policy", "project", "--accumulation", "4", "--steps", "100"]},
+             {"name": "common-acc4", "args": [*STRATA, "--gradient-policy", "common", "--accumulation", "4", "--steps", "100"]}],
 }
 PERTURB_TEMPLATE = {
     **REGIONS_TEMPLATE,
@@ -115,9 +115,9 @@ ONE_PASS_TEMPLATE = {
     "note": "Three timesteps per image with one forward and backward per step instead of three. `equal` runs each timestep alone; `mean` puts them in one batch "
             "without scaling; the calibrated arms run the regions alone only every Nth step (to measure each one's gradient norm) and as one weighted batch in between.",
     "arms": [{"name": "equal", "args": ["--regions", "3"]},
-             {"name": "mean", "args": ["--regions", "3", "--set", "trainer.gradient_policy=mean"]},
-             {"name": "calibrated-10", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=10"]},
-             {"name": "calibrated-50", "args": ["--regions", "3", "--time-balance", "gradnorm", "--set", "trainer.policy_calibrate_every=50"]}],
+             {"name": "mean", "args": ["--regions", "3", "--gradient-policy", "mean"]},
+             {"name": "calibrated-10", "args": ["--regions", "3", "--time-balance", "gradnorm", "--policy-calibrate-every", "10"]},
+             {"name": "calibrated-50", "args": ["--regions", "3", "--time-balance", "gradnorm", "--policy-calibrate-every", "50"]}],
 }
 FIRST_STEPS_TEMPLATE = {
     **REGIONS_TEMPLATE,

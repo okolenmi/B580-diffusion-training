@@ -71,6 +71,10 @@ class SdxlLoraOptions:
     batch_first_steps: int = 200
     ema: str = ""
     aligned_init: int = 0
+    gradient_policy: str = "mean"
+    policy_normalize: bool = True
+    policy_floor: float = 0.0
+    policy_calibrate_every: int = 0
     trend_boost: float = 0.0
     trend_mode: str = "trend"
     trend_penalty: float = 0.0
@@ -136,6 +140,9 @@ class _SdxlLora:
     def _training_and_saving(self) -> None:
         o, b = self.o, self.b
         b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph)
+        if o.gradient_policy != "mean":
+            b.addon("trainer", "policy", "GradientPolicyAddon", policy=o.gradient_policy, normalize=o.policy_normalize, floor=o.policy_floor,
+                    calibrate_every=o.policy_calibrate_every)
         if o.trend_boost:
             b.addon("trainer", "trend", "TrendWeightingAddon", boost=o.trend_boost, mode=o.trend_mode, penalty=o.trend_penalty)
         if o.aligned_init:

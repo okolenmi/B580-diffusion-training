@@ -22,12 +22,11 @@ from ...engine.step.graphed import GraphedCompute
 from ...engine.step.loss import LossWeighting
 from ...engine.step.probe import TimeProbe
 from ...engine.step.schedule import LRSchedule
-from ...engine.step.policy import make_policy
 from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
 from ...graph import AddonSlot, Completion, EventOut, Group, Node, Port
 from ...graph.events import CheckpointDue, StepFinished
-from .addons import ModelBound
+from .addons import ModelBound, RegionPolicy
 
 
 class DiffusionTrainerNode(Node):
@@ -37,6 +36,7 @@ class DiffusionTrainerNode(Node):
     GROUPS = (Group("loop", "Loop"), Group("speed", "Speed", collapsed=True), Group("diagnostics", "Diagnostics", collapsed=True, advanced=True))
     ADDON_SLOTS = (AddonSlot("perceptual", ModelBound, doc="An extra loss term from the base network's features."),
                    AddonSlot("initializer", ModelBound, doc="Sets the adapter's starting point from the first batches."),
+                   AddonSlot("gradient_policy", RegionPolicy, doc="How the regions of a batch are reconciled (the plain mean without it)."),
                    AddonSlot("region_weights", ModelBound, doc="Weights the regions of a step by how their part of the timestep range is doing."))
     INPUTS = {
         "batches": Port("batches", Batcher),
@@ -85,24 +85,6 @@ class DiffusionTrainerNode(Node):
                                 doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
                                     "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
                                     "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
-        "gradient_policy": Port("gradient_policy", str, required=False, default="mean", choices=("mean", "equal", "project", "common"), group="loop",
-                                doc="How the regions of a batch (see the noiser's `regions`) are reconciled. mean: one batch, one loss. "
-                                    "equal: each region's gradient is scaled to unit length, then averaged, so every region counts the same whatever its loss weight. "
-                                    "project: a region's gradient loses the part that points against another region's. "
-                                    "common: the shortest vector among the regions' gradients, which lowers every region's loss to first order. "
-                                    "The last two run each region's backward alone (more memory-light but slower) and need the plain optimizer, no graph."),
-        "policy_calibrate_every": Port("policy_calibrate_every", int, required=False, default=0, minimum=0, group="loop",
-                                       visible_when=("gradient_policy", "equal"),
-                                       doc="0: every step runs each region alone (one forward and backward per region). N: only every Nth step does, "
-                                           "and measures each region's gradient norm; the steps between run the regions as one batch (one forward and "
-                                           "backward), each region's loss weighted by the inverse of its measured norm. Needs `--time-balance gradnorm`, "
-                                           "3 regions with the `strata` layout (region i is the i-th third of the range)."),
-        "policy_normalize": Port("policy_normalize", bool, required=False, default=True, group="loop",
-                                 doc="Scale each region's gradient to unit length before combining, so heavily down-weighted regions count as much as the rest."),
-        "policy_floor": Port("policy_floor", float, required=False, default=0.0, minimum=0.0, maximum=1.0, group="loop",
-                             visible_when=("gradient_policy", "common"),
-                             doc="Skip the update when the shared direction keeps less than this share of the average squared gradient norm "
-                                 "(1 = regions identical, 1 / regions = unrelated, 0 = they cancel). 0 never skips."),
         "fused_geglu": Port("fused_geglu", bool, required=False, default=True, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
@@ -138,7 +120,7 @@ class DiffusionTrainerNode(Node):
                           residency=residency, density=density, placement=placement, balance=inputs.get("balance"),
                           probe=self._time_probe(model, inputs), task=self.context.task, graph=graph,
                           plan_chunks=getattr(getattr(self.context.runtime, "determinism", None), "plans_chunks", True),
-                          perf=self._perf_session(model, accelerator), regional=self._regional(inputs),
+                          perf=self._perf_session(model, accelerator), regional=self._regional(model, inputs),
                           perceptual=self._attached("perceptual", model, inputs), calibrate_every=self._calibrate_every(inputs),
                           initializer=self._attached("initializer", model, inputs), trend=self._attached("region_weights", model, inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
@@ -156,23 +138,12 @@ class DiffusionTrainerNode(Node):
         part = self.addons.one(slot)
         return part.attach(model, inputs["batches"]) if part is not None else None
 
-    @staticmethod
-    def _calibrate_every(inputs: dict) -> int:
-        every = inputs.get("policy_calibrate_every") or 0
-        noiser = inputs["batches"].noiser
-        if every and (inputs.get("gradient_policy") != "equal" or noiser.max_regions != 3 or noiser.policy.layout != "strata"):
-            raise ValueError("calibrating needs gradient_policy equal and the noiser's regions 3 with the strata layout")
-        return every
+    def _regional(self, model: TrainableDenoiser, inputs: dict) -> RegionalUpdate | None:
+        return self._attached("gradient_policy", model, inputs)
 
-    @staticmethod
-    def _regional(inputs: dict) -> RegionalUpdate | None:
-        name = inputs.get("gradient_policy") or "mean"
-        if name == "mean":
-            return None
-        if inputs["batches"].noiser.max_regions < 2:
-            raise ValueError(f"gradient policy {name!r} reconciles regions: set the noiser's regions to 2 or more")
-        policy = make_policy(name, inputs.get("policy_floor") or 0.0, int(getattr(inputs["batches"], "seed", 0)))
-        return RegionalUpdate(policy, bool(inputs.get("policy_normalize", True)) or name == "equal")
+    def _calibrate_every(self, inputs: dict) -> int:
+        part = self.addons.one("gradient_policy")
+        return part.calibrate_every(inputs["batches"]) if part is not None else 0
 
     def _attention_for_determinism(self, model: TrainableDenoiser, inputs: dict):
         """Deterministic kernels leave the stock attention for one that materialises the whole score matrix, which does not

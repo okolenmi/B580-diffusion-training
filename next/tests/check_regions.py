@@ -11,6 +11,7 @@ from ..data.noise import Noiser, TimestepPolicy
 from ..data.store import DatasetStore
 from ..engine.step.policy import CommonDescent, Mean, Project, make_policy
 from ..engine.step.regional import RegionalUpdate
+from ..graph import NodeRegistry, enable
 from .check_data import make_images
 from .check_pipeline import execute, graph
 from .pipeline_nodes import TinyFamily
@@ -282,9 +283,7 @@ def perceptual_trainer_check() -> None:
         library.ingest(tmp / "images")
         library.close()
         doc = graph(tmp, steps=2, save_every=1000)
-        for node in doc.nodes:
-            if node.class_name == "DiffusionTrainerNode":
-                node.params["perceptual_weight"] = 0.5
+        doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "SelfPerceptualAddon", {"weight": 0.5})
         _, outcome, trace = execute(store, doc)
         metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
         check(outcome.ok and len(metrics) == 2 and all(m.get("loss_perceptual", -1) >= 0 for m in metrics),

@@ -416,8 +416,12 @@ def training_signal_instruments() -> None:
         return {n.class_name for n in sdxl_lora(model="m.safetensors", dataset="d", output="o", **kw).nodes}
 
     check("TagSwapNode" not in nodes() and "TagSwapNode" in nodes(tag_swap=True), "the starter has Tag Swap only when asked")
-    kinds = lambda **kw: {a.kind for n in sdxl_lora(model="m.safetensors", dataset="d", output="o", **kw).nodes for a in n.addons}  # noqa: E731
+    def kinds(**kw):
+        doc = sdxl_lora(model="m.safetensors", dataset="d", output="o", **kw)
+        return {a.kind for a in doc.addons} | {a.kind for n in doc.nodes for a in n.addons}
     check("BatchRampAddon" not in kinds() and "BatchRampAddon" in kinds(batch_first=1), "the starter has a Batch Ramp only when asked")
+    check({"AlignedInitAddon", "WarmupAddon", "RegionLadderAddon"} <= kinds(aligned_init=4, warmup=5, regions_from=6) and kinds() == {"EveryNSteps"},
+          "the starter's optional parts are addons, and a plain run has only the save trigger")
     raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 
 

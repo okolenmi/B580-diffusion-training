@@ -132,7 +132,9 @@ class _SdxlLora:
 
     def _training_and_saving(self) -> None:
         o, b = self.o, self.b
-        b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph, aligned_init_batches=o.aligned_init)
+        b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph)
+        if o.aligned_init:
+            b.addon("trainer", "aligned_init", "AlignedInitAddon", batches=o.aligned_init)
         b.addon("graph", "save_steps", "EveryNSteps", every=o.save_every)
         if o.save_every_epoch:
             b.addon("graph", "save_epochs", "EveryEpoch", every=o.save_every_epoch)

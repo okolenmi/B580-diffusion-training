@@ -37,7 +37,7 @@ Newest last. What was tried, what came out, what it means. Hardware runs are the
 - Dividing the predicted noise by 1.005-1.04 raises the finest-octave detail 3.0x -> 22.6x, but the coarse change grows too (0.092 -> 0.140). Details look out of place. Not a fix; "the model under-predicts the noise magnitude" is not the cause.
 
 ## Self-perceptual loss (Lin and Yang, arXiv 2401.00110)
-- Optional extra term `trainer.perceptual_weight`: frozen base network (adapter off), mid-block features of the re-noised image estimate against the true image.
+- Optional extra term, the Self-perceptual loss addon of the Trainer (`weight`): frozen base network (adapter off), mid-block features of the re-noised image estimate against the true image.
 - Weight 0.3 destroyed the result (adapter/base loss 2-14 at every t, finest octave 31x, coarse change 0.41). Its gradient was about 15x the plain loss's at step 1 and, after per-region normalisation, decided the direction; gradient norms then diverged (1e5 to 1e10). Weights 1 and 3 were not run.
 - Likely causes: weight far too large for a LoRA; the estimate `x - sigma*eps_hat` is far outside what the network sees at high noise. The paper trains full weights, v prediction, batch 896, after MSE pretraining. Untried: weight 0.003-0.03, a bounded estimate, gradient-norm-matched weighting.
 

@@ -288,8 +288,9 @@ new class, not an edit of a 350-line node.
    Noiser, slot `ladder`), Batch Ramp (Batcher, slot `ramp`), Warmup (schedule nodes, slot `lr_modifier`, many), and the Every N Steps and
    Every Epoch triggers (event addons on the graph; Save Adapter's `checkpoint` input is `scoped`, so it hears them without a wire). The
    starter writes them as addons and `--param ladder.start=6` reaches an addon by its id. **Kept as nodes:** Adapter EMA (Save Adapter and
-   Resume both use the object it makes), Time Balance (Noiser and Trainer share one). Still to convert: Self-perceptual loss and the
-   Trainer's gradient-aligned start (`aligned_init_batches`), then the others. The starter and the command line follow.
+   Resume both use the object it makes), Time Balance (Noiser and Trainer share one). Also done: Self-perceptual loss and the gradient-aligned start
+   (Trainer slots `perceptual` and `initializer`; their addons return a part that the trainer attaches to its model and batches, since both exist only when
+   it is built). Still to convert: the others. The starter and the command line follow.
 3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
    `addon_slots`, `addons` and `optional` fields so the editor needs no per-node code.
 

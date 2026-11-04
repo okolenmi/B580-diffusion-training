@@ -4,7 +4,7 @@ Plain scripts (`python -m next.tests.<name>`), grouped by what they protect. Eac
 
 | group | files | protects |
 |---|---|---|
-| graph | `check_graph_core` | declarations, validation, runner, events, settings |
+| graph | `check_graph_core`, `check_addons` | declarations, validation, runner, events, settings; addons (slots, wires, reuse, event scopes, the outside API) |
 | files and families | `check_detection`, `check_families_torch`, `check_sdxl`, `check_adapters` | recognizing model files, SDXL building blocks, adapter plans and file formats |
 | data | `check_data` | epoch barrier and event order, per-VAE cache refusal, prompt determinism and resume, bucketing, dataset nodes |
 | engine | `check_engine`, `check_memory` | training steps on a tiny UNet: only adapters train, accumulation, stopping, fused equals plain, checkpointing equals plain; budget, pressure levers, eviction order and refusals on a scripted fake device |

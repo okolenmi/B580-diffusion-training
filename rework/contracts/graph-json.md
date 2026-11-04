@@ -14,7 +14,10 @@ format is read (plan 90 section 0). Python: `next/graph/document.py`.
       "class_name": "LoadModelNode",  // node class
       "params": { "scope": "checkpoints", "file": "x.safetensors" },
       "layout": { "x": 80, "y": 120, "w": 280, "h": null,
-                  "collapsed": false, "groups": { "advanced": true } }
+                  "collapsed": false, "groups": { "advanced": true } },
+      "addons": [                     // optional; omitted when empty (plan 31)
+        { "id": "a1", "kind": "RegionLadder", "enabled": true, "params": { "start": 9 } }
+      ]
     }
   ],
   "edges": [
@@ -25,7 +28,10 @@ format is read (plan 90 section 0). Python: `next/graph/document.py`.
     { "from_node": "n_a", "from_port": "epoch_ending",
       "to_node": "n_b",   "to_port": "epoch_ending" }
   ],
-  "views": []                          // plan 60; opaque to graph/ (kept verbatim)
+  "views": [],                         // plan 60; opaque to graph/ (kept verbatim)
+  "addons": [                          // optional; addons of the graph itself (event addons only)
+    { "id": "g1", "kind": "EveryNSteps", "enabled": true, "params": { "every": 250 } }
+  ]
 }
 ```
 
@@ -48,3 +54,7 @@ Rules:
    them verbatim. `layout.groups` maps a group id to its collapsed/expanded override.
 8. Unknown top-level keys are preserved on a round trip.
 9. A run payload strips `views` and `layout`.
+10. `addons` (on a node, and at the top level for the graph): ordered; `id` is stable inside its host (`[a-z][a-z0-9_]*`),
+    `kind` an addon class name. A disabled addon is neither built nor checked; its params stay. An addon's parameter that is
+    wired is the port `<id>.<param>` of its host, and a slot filled by a wire is the port `slot:<slot>`. An event wire may end at
+    `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `rework/31-node-addons.md`.

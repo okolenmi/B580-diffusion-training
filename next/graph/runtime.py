@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from collections.abc import Callable
 
+from .addons import GRAPH, SLOT_PREFIX, Addon, AddonBuilder, HostContext, end_of, split_port
 from .document import GraphDoc
 from .events import EventError, EventHub, RunStopped, Reporter, Wire
 from .node import COMPLETE, Completion, Environment, ExecutionContext, Node
@@ -94,7 +95,8 @@ class GraphRunner:
         execution = _Execution(self, doc, validation, cancel)
         execution.announce("run_started")
         try:
-            for uid in validation.order or []:
+            order = (validation.order or []) if execution.start() else []
+            for uid in order:
                 if not execution.execute(uid):
                     break
             return execution.finish()
@@ -104,20 +106,32 @@ class GraphRunner:
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
-    def _wire_events(doc: GraphDoc, classes: dict, hub: EventHub) -> None:
+    def _wire_events(doc: GraphDoc, classes: dict, addon_classes: dict, hub: EventHub) -> None:
         for edge in doc.event_edges:
-            target_cls = classes[doc.node(edge.to_node).class_name]
+            _, target_cls, _ = end_of(doc, edge.to_node, classes, addon_classes)
             handler = target_cls.EVENTS_IN[edge.to_port].handler
             hub.connect(Wire(edge.from_node, edge.from_port, edge.to_node, edge.to_port), handler)
 
     @staticmethod
-    def _gather(doc: GraphDoc, uid: str, validation: Validation, outputs_by: dict) -> dict:
+    def _gather(doc: GraphDoc, uid: str, validation: Validation, outputs_by: dict,
+                addon_ports: dict | None = None) -> tuple[dict, dict[str, dict], dict[str, list]]:
+        """What a node is built with, split three ways: its own inputs, the wired parameters of its addons by addon id,
+        and the objects wired into its addon slots."""
         spec = doc.node(uid)
         resolution = validation.resolutions[uid]
         inputs = dict(spec.params)
         wired: dict[str, list] = {}
+        addon_wired: dict[str, dict] = {}
+        slot_wired: dict[str, list] = {}
         for edge in doc.edges_to(uid):
-            wired.setdefault(edge.to_port, []).append(outputs_by[edge.from_node][edge.from_port])
+            value = outputs_by[edge.from_node][edge.from_port]
+            if edge.to_port.startswith(SLOT_PREFIX):
+                slot_wired.setdefault(edge.to_port, []).append(value)
+            elif split_port(edge.to_port):
+                addon_id, param = split_port(edge.to_port)
+                addon_wired.setdefault(addon_id, {})[param] = value
+            else:
+                wired.setdefault(edge.to_port, []).append(value)
         for name, values in wired.items():
             inputs[name] = values if resolution.inputs[name].multi else values[0]
         for name, port in resolution.inputs.items():
@@ -127,7 +141,9 @@ class GraphRunner:
                 inputs[name] = []
             elif port.default is not None:
                 inputs[name] = port.default
-        return inputs
+        for socket in [n for n in inputs if n.startswith(SLOT_PREFIX)]:
+            del inputs[socket]
+        return inputs, addon_wired, slot_wired
 
     @staticmethod
     def _check_outputs(uid: str, validation: Validation, outputs: dict) -> None:
@@ -181,7 +197,8 @@ class _Execution:
         order = validation.order or []
         self.hub = EventHub(runner.reporter, ranks={uid: i for i, uid in enumerate(order)})
         self.hub.set_stop_callback(lambda ev: cancel.set())
-        runner._wire_events(doc, self.classes, self.hub)
+        self.addon_classes = runner.registry.addons()
+        runner._wire_events(doc, self.classes, self.addon_classes, self.hub)
         settings = runner._settings().snapshot(doc.settings, runner.app_defaults)
         self.context = ExecutionContext(cancel_event=cancel, reporter=runner.reporter, settings=settings,
                                         events=self.hub, env=runner.env)
@@ -190,8 +207,20 @@ class _Execution:
         self.outputs_by: dict[str, dict] = {}
         self.completion_by: dict[str, Completion] = {}
         self.retained: dict[str, Node] = {}  # nodes that listen to events stay alive until the run ends
+        self.addons = AddonBuilder(self.addon_classes, self.hub)
+        self.addons_built: list[Addon] = []
         self.results: list[NodeResult] = []
         self.error: str | None = None
+
+    def start(self) -> bool:
+        """Build the graph's own addons before any node; False when one fails."""
+        try:
+            _, made = self.addons.build(HostContext(GRAPH, self.context, GRAPH), None, self.doc.addons, {}, {})
+        except Exception as exc:  # noqa: BLE001 -- a failing addon is a normal outcome
+            self.error = f"{type(exc).__name__}: {exc}"
+            return False
+        self.addons_built.extend(made)
+        return True
 
     def announce(self, state: str) -> None:
         self.runner._run_frame(state, self.error, self.t0)
@@ -208,12 +237,15 @@ class _Execution:
                 runner._state(uid, "skipped", self.t0, {})
                 self.results.append(NodeResult(uid, True, {}, None, 0.0, "skipped"))
                 return True
-        inputs = runner._gather(self.doc, uid, self.validation, self.outputs_by)
+        inputs, addon_wired, slot_wired = runner._gather(self.doc, uid, self.validation, self.outputs_by)
         node_context = self.context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream)
         runner._state(uid, "running", self.t0, {})
         started = time.monotonic()
         try:
             node = cls(node_context)
+            node.addons, made = self.addons.build(HostContext(uid, node_context, cls.__name__), cls,
+                                                  self.doc.node(uid).addons, addon_wired, slot_wired)
+            self.addons_built.extend(made)
             outputs = node.build(**inputs)
             runner._check_outputs(uid, self.validation, outputs)
             if cls.EVENTS_IN:
@@ -250,6 +282,11 @@ class _Execution:
 
     def close(self) -> None:
         """Close the retained nodes, last built first, then let the process give back what the run held."""
+        for addon in reversed(self.addons_built):
+            try:
+                addon.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("closing addon %s failed", addon.address)
         for uid in reversed(list(self.retained)):
             try:
                 self.retained[uid].close()

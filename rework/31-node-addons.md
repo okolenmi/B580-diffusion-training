@@ -270,9 +270,20 @@ new class, not an edit of a 350-line node.
 
 ## 11. Build order
 
-1. **Backend, no editor needed** (`next/graph`): `Addon`, `AddonSlot`, registry listing, `addons` in `NodeSpec`/`GraphDoc`,
-   validator rules, `host.addons` accessor, event delivery by `host.addon`, the outside API and addon-set loader (section 6b), the
-   graph as a host and event delivery by type (section 6c). CPU-testable with the toy nodes.
+1. **Backend, no editor needed** (`next/graph`): **built** (`addons.py`, `addon_edit.py`, hub scopes in `events.py`; `check_addons`).
+   What the code settled, so the proposals above read as decisions:
+   * Names on the wire and in the file: an addon's parameter is the port `a1.start` of its host; a slot's socket is `slot:ladder`
+     (`many` sockets are multi ports). Event wires may end at `uid.id` or `graph.id`.
+   * Every host has the implicit `events` slot (addons that only act on events, no collaborator); the graph is a host that has only that slot.
+   * The scope tree is graph > node > addon. An event is offered to the source's own addons, then to each enclosing scope: that scope's
+     catchers (its addons, or the node's own handlers for events of its addons), then the consumers inside it that declared
+     `EventIn(..., scoped=True)`. A handler may call `context.stop()`: the scopes above are skipped, the rest of that scope still hears it
+     (pass by default, stop explicit). Wired delivery is unchanged and a target reached by a wire is not delivered the same event again.
+   * Frames are not in the tree yet; a frame adds one level between node and graph when plan 30 builds them.
+   * A scoped consumer must exist before its emitter runs, so the validator builds nodes with scoped inputs first among the nodes that are
+     ready at the same time (data wires still decide).
+   * Outside: `enable / configure / disable / remove / available / apply_set / load_set` (`graph/addon_edit.py`), and
+     `--addons FILE.json` on the command line. Nothing is registered yet, so the flag has nothing to switch on until step 2.
 2. Convert the first candidates one at a time, behaviour unchanged, each checked by the existing tests: Region Ladder (Noiser),
    Warmup, Adapter EMA, then Self-perceptual and the others. The starter and the command line follow.
 3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
@@ -293,5 +304,5 @@ mechanical: the collaborator is a class with a small interface, built from plain
   a wire; "addon or node" is a guideline, not a strict rule.
 * Also answered: no preset feature in the node (outside loaders and JSON files instead); event triggers become addons.
 * Also answered: events bubble through scopes (section 6c); graph settings stay separate from graph addons.
-* Still open: (1) Does a handler stop an event by default or let it pass (proposed: pass, stop is explicit)? (2) Is a frame an event scope
-  only (no other meaning), as proposed? (3) Where the editor shows graph-scope addons (UI phase).
+* Built with the proposal for (1) a handler passes by default and stops explicitly. Still open: (2) is a frame an event scope
+  only (no other meaning), as proposed? (3) where the editor shows graph-scope addons (UI phase).

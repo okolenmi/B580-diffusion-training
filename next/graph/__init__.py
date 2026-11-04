@@ -3,6 +3,8 @@
 Pure Python; no torch. The server imports this package, so it must stay light.
 """
 
+from .addon_edit import apply_set, available, configure, disable, enable, load_set, remove
+from .addons import EVENTS_SLOT, Addon, AddonError, AddonSet, AddonSlot, AddonSpec, HostContext
 from .catalog import CATALOG_FORMAT, build_catalog, node_info
 from .document import FORMAT, Edge, GraphDoc, GraphFormatError, NodeSpec, new_uid, parse
 from .events import (CheckpointDue, EpochEnding, EpochStarted, EventContext, EventHub, EventType, MemoryPressure,

@@ -93,10 +93,14 @@ class DynamicShape:
 
 @dataclass(frozen=True)
 class EventIn:
+    """``scoped`` lets the event reach this node without a wire: when an emitter's scope chain (its host, a frame, the
+    graph) contains this node's scope, the node hears the event (rework/31-node-addons.md, 6c)."""
+
     payload: type
     handler: str
     doc: str = ""
     label: str = ""
+    scoped: bool = False
 
 
 @dataclass(frozen=True)

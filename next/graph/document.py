@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Iterable
 
+from .addons import AddonSpec
+
 FORMAT = 3
 UID_PATTERN = re.compile(r"^n_[a-z2-7]{6}$")
 
@@ -32,10 +34,14 @@ class NodeSpec:
     params: dict = field(default_factory=dict)
     title: str = ""
     layout: dict = field(default_factory=dict)
+    addons: tuple[AddonSpec, ...] = ()
 
     def as_dict(self) -> dict:
-        return {"uid": self.uid, "title": self.title, "class_name": self.class_name,
-                "params": self.params, "layout": self.layout}
+        out = {"uid": self.uid, "title": self.title, "class_name": self.class_name,
+               "params": self.params, "layout": self.layout}
+        if self.addons:
+            out["addons"] = [a.as_dict() for a in self.addons]
+        return out
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,7 @@ class GraphDoc:
     settings: dict = field(default_factory=dict)
     views: tuple = ()
     extras: dict = field(default_factory=dict)
+    addons: tuple[AddonSpec, ...] = ()  # the graph as a host: addons that serve the whole run
 
     def node(self, uid: str) -> NodeSpec | None:
         for spec in self.nodes:
@@ -77,8 +84,8 @@ class GraphDoc:
 
     def for_run(self) -> GraphDoc:
         """The document without presentation: layouts and views never reach a run."""
-        nodes = tuple(NodeSpec(n.uid, n.class_name, n.params, n.title, {}) for n in self.nodes)
-        return GraphDoc(nodes, self.edges, self.event_edges, self.settings, (), self.extras)
+        nodes = tuple(NodeSpec(n.uid, n.class_name, n.params, n.title, {}, n.addons) for n in self.nodes)
+        return GraphDoc(nodes, self.edges, self.event_edges, self.settings, (), self.extras, self.addons)
 
     def as_dict(self) -> dict:
         out = dict(self.extras)
@@ -90,10 +97,12 @@ class GraphDoc:
             "event_edges": [e.as_dict() for e in self.event_edges],
             "views": list(self.views),
         })
+        if self.addons:
+            out["addons"] = [a.as_dict() for a in self.addons]
         return out
 
 
-_KNOWN_KEYS = {"format", "settings", "nodes", "edges", "event_edges", "views"}
+_KNOWN_KEYS = {"format", "settings", "nodes", "edges", "event_edges", "views", "addons"}
 
 
 def _require(value: Any, kind: type, where: str):
@@ -108,6 +117,19 @@ def _edge(raw: Any, where: str) -> Edge:
     for key in ("from_node", "from_port", "to_node", "to_port"):
         values.append(_require(raw.get(key), str, f"{where}.{key}"))
     return Edge(*values)
+
+
+def parse_addons(raw: Any, where: str) -> tuple[AddonSpec, ...]:
+    out = []
+    for i, item in enumerate(_require(raw, list, where)):
+        at = f"{where}[{i}]"
+        _require(item, dict, at)
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise GraphFormatError(f"{at}.enabled must be a bool")
+        out.append(AddonSpec(_require(item.get("id"), str, f"{at}.id"), _require(item.get("kind"), str, f"{at}.kind"),
+                             enabled, dict(_require(item.get("params", {}), dict, f"{at}.params"))))
+    return tuple(out)
 
 
 def parse(raw: Any) -> GraphDoc:
@@ -128,6 +150,7 @@ def parse(raw: Any) -> GraphDoc:
             params=dict(_require(params, dict, f"{where}.params")),
             title=_require(item.get("title", ""), str, f"{where}.title"),
             layout=dict(_require(layout, dict, f"{where}.layout")),
+            addons=parse_addons(item.get("addons", []), f"{where}.addons"),
         ))
     edges = tuple(_edge(e, f"edges[{i}]") for i, e in enumerate(_require(raw.get("edges", []), list, "edges")))
     event_edges = tuple(
@@ -135,4 +158,4 @@ def parse(raw: Any) -> GraphDoc:
     settings = dict(_require(raw.get("settings", {}), dict, "settings"))
     views = tuple(_require(raw.get("views", []), list, "views"))
     extras = {k: v for k, v in raw.items() if k not in _KNOWN_KEYS}
-    return GraphDoc(tuple(nodes), edges, event_edges, settings, views, extras)
+    return GraphDoc(tuple(nodes), edges, event_edges, settings, views, extras, parse_addons(raw.get("addons", []), "addons"))

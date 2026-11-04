@@ -8,6 +8,7 @@ import pkgutil
 from dataclasses import dataclass, field
 from collections.abc import Iterable
 
+from .addons import Addon
 from .node import Node
 from .settings import SettingSpec, SettingsRegistry
 
@@ -28,6 +29,7 @@ class NodeRegistry:
 
     packages: tuple[str, ...] = ()
     classes: dict[str, type[Node]] = field(default_factory=dict)
+    addon_classes: dict[str, type[Addon]] = field(default_factory=dict)
     errors: list[dict] = field(default_factory=list)
     _loaded: bool = False
 
@@ -49,8 +51,12 @@ class NodeRegistry:
             self.reload()
         return self.classes, self.errors
 
+    def addons(self) -> dict[str, type[Addon]]:
+        self.load()
+        return self.addon_classes
+
     def reload(self) -> None:
-        self.classes, self.errors = {}, []
+        self.classes, self.addon_classes, self.errors = {}, {}, []
         for package_name in self.packages:
             try:
                 package = importlib.import_module(package_name)
@@ -79,6 +85,14 @@ class NodeRegistry:
                                                 "error": f"duplicate node class name {obj.__name__!r}"})
                             continue
                         self.classes[obj.__name__] = obj
+                    elif (issubclass(obj, Addon) and obj is not Addon and obj.__module__ == module.__name__
+                            and not inspect.isabstract(obj) and not obj.__name__.startswith("_")):
+                        known = self.addon_classes.get(obj.__name__)
+                        if (known is not None and known is not obj) or obj.__name__ in self.classes:
+                            self.errors.append({"module": module.__name__,
+                                                "error": f"duplicate addon class name {obj.__name__!r}"})
+                            continue
+                        self.addon_classes[obj.__name__] = obj
         self._loaded = True
 
     def settings_registry(self, extra: Iterable[SettingSpec] = ()) -> SettingsRegistry:

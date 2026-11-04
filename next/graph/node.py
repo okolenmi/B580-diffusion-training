@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from .addons import AddonSet, AddonSlot
 from .events import EventHub, EventType, Reporter
 from .modules import DisplayModule
 from .ports import DynamicShape, EventIn, EventOut, Group, Port
@@ -200,6 +201,7 @@ class Node(ABC):
     GROUPS: ClassVar[tuple[Group, ...]] = ()
     EVENTS_IN: ClassVar[dict[str, EventIn]] = {}
     EVENTS_OUT: ClassVar[dict[str, EventOut]] = {}
+    ADDON_SLOTS: ClassVar[tuple[AddonSlot, ...]] = ()
     MODULES: ClassVar[tuple[DisplayModule, ...]] = ()
     READS_SETTINGS: ClassVar[tuple[str, ...]] = ()
     SETTINGS: ClassVar[tuple[SettingSpec, ...]] = ()
@@ -210,6 +212,7 @@ class Node(ABC):
 
     def __init__(self, context: ExecutionContext | None = None):
         self.context = context or ExecutionContext()
+        self.addons = AddonSet(self.ADDON_SLOTS)
 
     @property
     def uid(self) -> str:
@@ -314,6 +317,10 @@ def _check_declarations(cls: type[Node]) -> None:
     for key, ev in cls.EVENTS_OUT.items():
         if not isinstance(ev, EventOut) or not (isinstance(ev.payload, type) and issubclass(ev.payload, EventType)):
             raise TypeError(f"{name}.EVENTS_OUT[{key!r}] needs an EventOut with an EventType payload")
+    slot_names = [s.name for s in cls.ADDON_SLOTS]
+    if not all(isinstance(s, AddonSlot) for s in cls.ADDON_SLOTS) or len(set(slot_names)) != len(slot_names) \
+            or "events" in slot_names:
+        raise TypeError(f"{name}.ADDON_SLOTS must be unique AddonSlot objects ('events' is every host's own)")
     if not isinstance(cls.MODULES, tuple) or not all(isinstance(m, DisplayModule) for m in cls.MODULES):
         raise TypeError(f"{name}.MODULES must be a tuple of DisplayModule")
     if len({m.name for m in cls.MODULES}) != len(cls.MODULES):

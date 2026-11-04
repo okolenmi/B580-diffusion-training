@@ -15,6 +15,7 @@ from typing import Any, Protocol
 from collections.abc import Callable
 
 MAX_DEPTH = 8
+GRAPH = "graph"  # the graph as a host and the outermost event scope; node and addon addresses are ``uid`` and ``uid.id``
 
 
 class EventError(RuntimeError):
@@ -135,12 +136,27 @@ class _Subscriber:
     handler_name: str
 
 
+@dataclass(frozen=True)
+class _Catcher:
+    """A handler that hears events by type: its owner's address, what it accepts, and whether scope alone reaches it."""
+
+    address: str
+    payload: type
+    handler: str
+    scoped: bool
+
+
 class EventContext:
-    """What a handler gets besides the event: a way to emit from its own node."""
+    """What a handler gets besides the event: a way to emit from its own node, and to stop the event rising further."""
 
     def __init__(self, hub: EventHub, uid: str):
         self._hub = hub
         self.uid = uid
+        self.propagation_stopped = False
+
+    def stop(self) -> None:
+        """Keep a rising event from reaching the scopes above this one (handlers of this scope still run)."""
+        self.propagation_stopped = True
 
     def emit(self, port: str, event: EventType) -> None:
         self._hub.emit(self.uid, port, event)
@@ -166,6 +182,9 @@ class EventHub:
         self._thread = threading.get_ident()
         self._subs: dict[tuple[str, str], list[_Subscriber]] = {}
         self._nodes: dict[str, Any] = {}
+        self._parent: dict[str, str] = {}
+        self._catchers: dict[str, list[_Catcher]] = {}
+        self._routes: dict[str, list[list[_Catcher]]] = {}
         self._posted: queue.SimpleQueue = queue.SimpleQueue()
         self._stack: list[Wire] = []
         self._on_stop: Callable[[StopRequested], None] | None = None
@@ -177,7 +196,14 @@ class EventHub:
         subs.sort(key=lambda s: (self._ranks.get(s.wire.target, 0), s.wire.target, s.wire.handler_port))
 
     def attach(self, uid: str, node: Any) -> None:
-        self._nodes[uid] = node
+        self.place(uid, GRAPH, node, getattr(node, "EVENTS_IN", {}))
+
+    def place(self, address: str, parent: str, obj: Any, events_in: dict) -> None:
+        """Register an element of the scope tree (graph > node > addon) and the events it hears."""
+        self._nodes[address] = obj
+        self._parent[address] = parent
+        self._catchers[address] = [_Catcher(address, ev.payload, ev.handler, ev.scoped) for ev in events_in.values()]
+        self._routes.clear()
 
     def set_stop_callback(self, callback: Callable[[StopRequested], None]) -> None:
         self._on_stop = callback
@@ -191,12 +217,24 @@ class EventHub:
         if self.stopped and not event.always_delivered:
             return
         subs = self._subs.get((uid, port))
-        if not subs and self._reporter is None and not isinstance(event, StopRequested):
+        route = self._route(uid)
+        if not subs and not route and self._reporter is None and not isinstance(event, StopRequested):
             return
         self._mirror(uid, port, event)
-        if subs:
-            for sub in list(subs):
-                self._deliver(sub, event)
+        reached: set[tuple[str, str]] = set()
+        for sub in list(subs or ()):
+            reached.add((sub.wire.target, sub.handler_name))
+            self._deliver(sub, event)
+        for level in route:
+            stopped = False
+            for catcher in level:
+                if not isinstance(event, catcher.payload) or (catcher.address, catcher.handler) in reached:
+                    continue
+                reached.add((catcher.address, catcher.handler))
+                wire = Wire(uid, port, catcher.address, catcher.handler)
+                stopped |= self._deliver(_Subscriber(wire, catcher.handler), event)
+            if stopped:
+                break
         if isinstance(event, StopRequested) and self._on_stop is not None:
             self._on_stop(event)
 
@@ -214,7 +252,37 @@ class EventHub:
             self.emit(uid, port, event)
             count += 1
 
-    def _deliver(self, sub: _Subscriber, event: EventType) -> None:
+    def _route(self, source: str) -> list[list[_Catcher]]:
+        """Who hears an event from ``source`` without a wire, level by level: its own addons, then each enclosing scope
+        (its catchers, then the scoped consumers inside that scope), up to the graph."""
+        cached = self._routes.get(source)
+        if cached is not None:
+            return cached
+        order = lambda c: (self._ranks.get(c.address.partition(".")[0], 0), c.address)  # noqa: E731
+        levels = [sorted(self._addon_catchers(source), key=order)]
+        seen = {source}
+        scope = self._parent.get(source, GRAPH) if source != GRAPH else None
+        while scope is not None:
+            seen.add(scope)
+            here = [*self._catchers.get(scope, ()), *(c for c in self._addon_catchers(scope) if c.address not in seen)]
+            inside = [c for a, cs in self._catchers.items() if a not in seen and self._within(a, scope) for c in cs if c.scoped]
+            levels.append(sorted(here, key=order) + sorted(inside, key=order))
+            scope = self._parent.get(scope, GRAPH) if scope != GRAPH else None
+        route = [level for level in levels if level]
+        self._routes[source] = route
+        return route
+
+    def _addon_catchers(self, host: str) -> list[_Catcher]:
+        return [c for a, cs in self._catchers.items() if "." in a and self._parent.get(a) == host for c in cs]
+
+    def _within(self, address: str, scope: str) -> bool:
+        while address != GRAPH:
+            if address == scope:
+                return True
+            address = self._parent.get(address, GRAPH)
+        return scope == GRAPH
+
+    def _deliver(self, sub: _Subscriber, event: EventType) -> bool:
         wire = sub.wire
         if wire in self._stack:
             raise EventLoopError(f"event loop through {wire.source}.{wire.port} -> {wire.target}.{wire.handler_port}")
@@ -225,9 +293,10 @@ class EventHub:
             raise EventDeliveryError(
                 f"{wire.source}.{wire.port} emitted before {wire.target} was built (wire to {wire.handler_port})")
         handler = getattr(node, sub.handler_name)
+        context = EventContext(self, wire.target)
         self._stack.append(wire)
         try:
-            handler(event, EventContext(self, wire.target))
+            handler(event, context)
         except EventError:
             raise
         except Exception as exc:  # noqa: BLE001 -- attribute the failure to the node
@@ -236,6 +305,7 @@ class EventHub:
             ) from exc
         finally:
             self._stack.pop()
+        return context.propagation_stopped
 
     def _mirror(self, uid: str, port: str, event: EventType) -> None:
         if self._reporter is None:

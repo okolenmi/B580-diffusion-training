@@ -30,7 +30,7 @@ from .graph.settings import SettingsRegistry
 from .engine.runtime.factory import make_runtime
 from .engine.runtime.sampler import MemorySampler
 from .families.api.library import ModelLibrary
-from .graph import GraphRunner, NodeRegistry, parse
+from .graph import AddonError, GraphRunner, NodeRegistry, load_set, parse
 from .graph.node import Environment
 
 
@@ -134,6 +134,8 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--set", action="append", metavar="KEY=VALUE", help="a graph setting (memory.vram_max_mb=9000) or a node parameter of the starter graph (trainer.graph=true)")
         p.add_argument("--param", action="append", metavar="NODE.PORT=VALUE",
                        help="a node's parameter by the node's name in the starter (for example adapter.attention_fraction=0.5)")
+        p.add_argument("--addons", metavar="FILE.json",
+                       help="an addon set: JSON mapping a node (title, class or uid) or 'graph' to addons to switch on (rework/31-node-addons.md)")
         p.add_argument("--verbose", action="store_true")
         p.add_argument("--perf", nargs="?", const="perf-report", metavar="DIR",
                        help="profile a few steps of the trainer (after a warm-up) and write a rated performance report to DIR (default perf-report)")
@@ -214,18 +216,28 @@ def _graph_file(args):
     return replace(doc, settings={**doc.settings, **_settings(settings)})
 
 
+def _with_addons(doc, args):
+    if not getattr(args, "addons", None):
+        return doc
+    try:
+        return load_set(doc, NodeRegistry.default(), args.addons)
+    except (AddonError, OSError, ValueError) as error:
+        raise SystemExit(f"--addons {args.addons}: {error}") from error
+
+
 def main(argv: list[str] | None = None) -> int:
     set_perf_env()
     args = _parser().parse_args(argv)
     if args.command == "ingest":
         return _ingest(args)
     if args.command == "graph":
-        return _run(_graph_file(args), args)
+        return _run(_with_addons(_graph_file(args), args), args)
     settings, params = _split_settings(args.set)
     try:
         doc = _starter(args, settings, params)
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    doc = _with_addons(doc, args)
     if args.dump:
         Path(args.dump).write_text(json.dumps(doc.as_dict(), indent=2), encoding="utf8")
         return 0

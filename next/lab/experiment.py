@@ -21,9 +21,10 @@ class Arm:
     eps_scale: float = 1.0  # sampling only: the predicted noise is divided by this (1 = unchanged)
     reuse: str = ""  # the name of an earlier arm whose trained adapter this arm renders instead of training its own
     lora: str = ""  # an adapter file made earlier: rendered as it is, nothing is trained
+    ema: float = 0.0  # with `reuse`: render the averaged copy of that arm's adapter (the trainer's `--ema` width) instead of the adapter itself
 
     def describe(self) -> str:
-        parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]
+        parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"ema {self.ema:g}"] if self.ema else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]
         return " ".join(parts) or "-"
 
 
@@ -59,7 +60,7 @@ class Experiment:
     @staticmethod
     def expand(arms: list[dict], product: list[list[dict]]) -> tuple[Arm, ...]:
         """The listed arms, then every combination of one choice from each group of ``product`` (names joined with ``+``, arguments in order)."""
-        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", ""), float(a.get("eps_scale", 1.0)), a.get("reuse", ""), a.get("lora", "")) for a in arms]
+        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", ""), float(a.get("eps_scale", 1.0)), a.get("reuse", ""), a.get("lora", ""), float(a.get("ema", 0.0))) for a in arms]
         if product:
             for combo in itertools.product(*product):
                 out.append(Arm("+".join(c["name"] for c in combo), tuple(x for c in combo for x in c.get("args", ())), " ".join(c.get("note", "") for c in combo).strip()))
@@ -67,8 +68,8 @@ class Experiment:
         if len(set(names)) != len(names) or not names:
             raise ValueError("an experiment needs at least one arm and every arm needs its own name")
         for i, arm in enumerate(out):
-            if arm.eps_scale <= 0 or (arm.reuse and (arm.reuse not in names[:i] or arm.args or arm.lora)) or (arm.lora and arm.args):
-                raise ValueError(f"arm {arm.name!r}: eps_scale must be positive, and `reuse` names an earlier arm and comes without training arguments")
+            if arm.eps_scale <= 0 or (arm.reuse and (arm.reuse not in names[:i] or arm.args or arm.lora)) or (arm.lora and arm.args) or arm.ema < 0 or (arm.ema and not arm.reuse):
+                raise ValueError(f"arm {arm.name!r}: eps_scale must be positive, `reuse` names an earlier arm and comes without training arguments, and `ema` needs `reuse`")
         return tuple(out)
 
     @staticmethod
@@ -117,7 +118,7 @@ class Experiment:
     def to_dict(self) -> dict:
         """What was run, for the report (the arms are already expanded)."""
         return {"name": self.name, "checkpoint": self.checkpoint, "dataset": self.dataset, "train_args": list(self.train_args), "device": self.device,
-                "arms": [{"name": a.name, "args": list(a.args), "note": a.note, "eps_scale": a.eps_scale, "reuse": a.reuse, "lora": a.lora} for a in self.arms],
+                "arms": [{"name": a.name, "args": list(a.args), "note": a.note, "eps_scale": a.eps_scale, "reuse": a.reuse, "lora": a.lora, "ema": a.ema} for a in self.arms],
                 "grid": {k: list(v) if isinstance(v, tuple) else v for k, v in self.grid.__dict__.items()}, "resume_every": self.resume_every, "note": self.note}
 
     def train_command(self, arm: Arm, folder: Path, python: str) -> list[str]:

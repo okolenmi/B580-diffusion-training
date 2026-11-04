@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 from .experiment import Experiment
-from .templates import TEMPLATES, like
+from . import setup as lab_setup
+from .templates import TEMPLATES
 from .render import Grid, ImageStore, Renderer
 from .report import Report
-from .runner import Lab
+from .runner import REPO_ROOT, Lab
 
 PHASES = ("train", "render", "report")
 
@@ -42,20 +45,41 @@ def run_one(path: str, args) -> None:
         print(f"report: {path}\nshare:  {report.pack()}")
 
 
+def refuse_unusable(paths: list[str]) -> None:
+    """Every file is checked before the first one starts, so a placeholder path or a missing adapter costs nothing."""
+    problems = []
+    for path in paths:
+        try:
+            found = lab_setup.check_experiment(Experiment.load(path))
+        except (OSError, ValueError, KeyError) as error:
+            found = [f"cannot be read: {error}"]
+        problems += [f"{path}: {line}" for line in found]
+    if problems:
+        raise SystemExit("not started:\n  " + "\n  ".join(problems))
+
+
+def run_in_process(path: str, args) -> int:
+    """One file in a process of its own: whatever the render phase left on the card (allocator cache, driver state) goes away with the process,
+    so the next file's training starts on an empty card."""
+    command = [sys.executable, "-m", "next.lab", "run", path, *(["--phase", *args.phase] if args.phase else []), *(["--force"] if args.force else [])]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(REPO_ROOT), *filter(None, [os.environ.get("PYTHONPATH")])])}
+    return subprocess.run(command, env=env).returncode
+
+
 def run(args) -> int:
-    """One experiment file, or a queue of them: each runs to its report, a failed one is reported and the queue goes on. Running the same
-    command again after an interruption skips what is done and continues the arm that was cut."""
+    """One experiment file, or a queue of them: each runs to its report in its own process, a failed one is reported and the queue goes on.
+    Running the same command again after an interruption skips what is done and continues the arm that was cut."""
     if args.arms and len(args.experiment) > 1:
         raise SystemExit("--arms names arms of one experiment; give one file with it")
+    refuse_unusable(args.experiment)
+    if len(args.experiment) == 1:
+        run_one(args.experiment[0], args)
+        return 0
     failed = []
     for path in args.experiment:
         print(f"=== {path}", flush=True)
-        try:
-            run_one(path, args)
-        except (Exception, SystemExit) as error:  # noqa: BLE001 -- the queue goes on; the error is said
-            if len(args.experiment) == 1:
-                raise
-            print(f"{path}: failed: {error}", flush=True)
+        if run_in_process(path, args):
+            print(f"{path}: failed", flush=True)
             failed.append(path)
     if failed:
         print(f"failed: {', '.join(failed)}")
@@ -98,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     t = sub.add_parser("template", help="print an experiment file to start from")
     t.add_argument("kind", nargs="?", default="ranges", choices=tuple(TEMPLATES))
-    t.add_argument("--like", help="an experiment file you already filled in: its images, grid, output, device, models, dataset and resolution are copied")
+    t.add_argument("--setup", help=f"your setup file (default ./{lab_setup.DEFAULT_FILE}): models, datasets, checkpoint, images, output, device and saved adapters")
+    sub.add_parser("setup", help="print a setup file to fill in once; every template reads it")
     p = sub.add_parser("run", help="train the arms, render and measure them, write the report")
     p.add_argument("experiment", nargs="+", help="one experiment file, or several to run one after the other (the command can be run again after an interruption: it continues)")
     p.add_argument("--phase", nargs="*", choices=PHASES)
@@ -128,10 +153,14 @@ def main(argv: list[str] | None = None) -> int:
         e.add_argument(flag, **kwargs)
     e.add_argument("--prompt", action="append")
     args = parser.parse_args(argv)
+    if args.command == "setup":
+        print(json.dumps(lab_setup.skeleton(), indent=1))
+        return 0
     if args.command == "template":
-        template = TEMPLATES[args.kind]
-        if args.like:
-            template = like(template, json.loads(Path(args.like).read_text(encoding="utf8")))
+        try:
+            template = lab_setup.apply(TEMPLATES[args.kind], lab_setup.load(args.setup))
+        except lab_setup.SetupError as error:
+            raise SystemExit(str(error)) from error
         print(json.dumps(template, indent=1))
         return 0
     return {"run": run, "render": render, "engines": engines}[args.command](args)

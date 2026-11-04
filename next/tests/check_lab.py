@@ -288,15 +288,88 @@ def adapter_reuse() -> None:
         check(bad, "an arm cannot reuse an arm that comes after it")
 
 
-def template_like() -> None:
-    """A template started `--like` an earlier file keeps its own arms and steps but takes the earlier setup."""
-    from ..lab.templates import TEMPLATES, like
-    earlier = {"images": {"train": "/a"}, "output": "o", "train_command": "python -m x --models /m --dataset d --file f.safetensors --resolution 768 --steps 5"}
-    got = like(TEMPLATES["long-run"], earlier)
-    check(got["images"] == {"train": "/a"} and got["output"] == "o" and got["arms"] == TEMPLATES["long-run"]["arms"]
-          and "--resolution 768" in got["train_command"] and "--file f.safetensors" in got["train_command"] and "--steps 1200" in got["train_command"],
-          "a template started like an earlier file takes its setup and keeps its own arms and steps")
+def setup_file() -> None:
+    """The setup file fills every template (paths, images, resolution, saved adapters); placeholders and unknown names stop the command; unusable experiments are refused before a run."""
+    import json
+
+    from ..lab import setup as lab_setup
+    from ..lab.experiment import Experiment
+    from ..lab.templates import TEMPLATES
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "m").mkdir()
+        (root / "d").mkdir()
+        (root / "best.safetensors").write_bytes(b"x")
+        setup = {"models": str(root / "m"), "datasets": str(root / "d"), "dataset": "set", "file": "f.safetensors", "resolution": 640, "output": "o",
+                 "images": {"train": str(root / "m")}, "loras": {"best": str(root / "best.safetensors")}}
+        got = lab_setup.apply(TEMPLATES["long-run"], setup)
+        check(got["images"] == setup["images"] and got["output"] == "o" and got["arms"] == TEMPLATES["long-run"]["arms"] and "--resolution 640" in got["train_command"]
+              and "--file f.safetensors" in got["train_command"] and "--steps 1200" in got["train_command"],
+              "a template takes the setup and keeps its own arms and steps")
+        filled = lab_setup.apply({"arms": [{"name": "a", "lora": "{lora:best}"}], "train_command": "x"}, setup)
+        check(filled["arms"][0]["lora"] == setup["loras"]["best"], "a saved adapter name is replaced by its file")
+        for bad, why in (({**setup, "loras": {}}, "an unknown adapter name"), ({**setup, "loras": {"best": "/path/to/x.safetensors"}}, "a placeholder adapter"),
+                         ({**setup, "models": "/path/to/models"}, "a placeholder path"), ({k: v for k, v in setup.items() if k != "dataset"}, "a missing field")):
+            try:
+                lab_setup.apply({"arms": [{"name": "a", "lora": "{lora:best}"}], "train_command": "x"}, bad)
+                refused = False
+            except lab_setup.SetupError:
+                refused = True
+            check(refused, f"the setup is refused with {why}")
+        spec = {"name": "e", "models": setup["models"], "datasets": setup["datasets"], "dataset": "set", "checkpoint": "c", "grid": {"prompts": ["a"], "seeds": [1], "strengths": [1.0]},
+                "arms": [{"name": "given", "lora": str(root / "best.safetensors")}]}
+        check(lab_setup.check_experiment(Experiment.from_dict(spec)) == [], "a usable experiment has no problems")
+        found = lab_setup.check_experiment(Experiment.from_dict({**spec, "arms": [{"name": "given", "lora": "/path/to/lora_step000600.safetensors"}]}))
+        check(len(found) == 1 and "placeholder" in found[0], "a placeholder adapter path is named before anything runs")
+        bad_file = root / "bad.json"
+        bad_file.write_text(json.dumps({**spec, "arms": [{"name": "given", "lora": str(root / "gone.safetensors")}]}))
+        from ..lab.__main__ import refuse_unusable
+        try:
+            refuse_unusable([str(bad_file)])
+            refused = False
+        except SystemExit as error:
+            refused = "gone.safetensors" in str(error)
+        check(refused, "a run with a missing adapter file does not start")
+
+
+def ema_arms() -> None:
+    """An arm with `ema` renders the averaged file beside the adapter of the arm it reuses, and says so when the trainer did not write it."""
+    import json
+
+    from safetensors.torch import save_file
+
+    from ..lab.experiment import Experiment
+    from ..lab.runner import Lab
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        spec = {"name": "e", "models": "m", "datasets": "d", "dataset": "set", "checkpoint": "c", "output": str(root / "out"), "device": "cpu",
+                "grid": {"prompts": ["a"], "seeds": [1], "strengths": [1.0], "steps": 2, "width": 64, "height": 64},
+                "arms": [{"name": "trained", "args": ["--ema", "0.05"]}, {"name": "ema-0.05", "reuse": "trained", "ema": 0.05}, {"name": "ema-0.1", "reuse": "trained", "ema": 0.1}]}
+        experiment = Experiment.from_dict(spec)
+        said = []
+
+        def train(exp, arm, folder):
+            folder.mkdir(parents=True)
+            for name in ("lora_step000005.safetensors", "lora_step000005_ema0.05.safetensors"):
+                save_file({"x": torch.zeros(1)}, str(folder / name), metadata={"step": "5", "rank": "4", "alpha": "4", "scheme": "kohya"})
+            (folder / "train.json").write_text(json.dumps({"lora": str(folder / "lora_step000005.safetensors")}))
+            from ..lab.runner import Training
+            return Training(str(folder / "lora_step000005.safetensors"), 5, 1.0, [], [], 0)
+
+        lab = Lab(experiment, lambda lora: ToyBackend(), said.append, train)
+        lab.train(list(experiment.arms))
+        record = json.loads((lab.folder("ema-0.05") / "train.json").read_text())
+        check(record["lora"].endswith("lora_step000005_ema0.05.safetensors") and record["ema"] == 0.05, "an ema arm points at the averaged file")
+        check(not (lab.folder("ema-0.1") / "train.json").exists() and any("trained without" in line for line in said), "a width the trainer did not write is reported, not silently skipped")
+        try:
+            Experiment.from_dict({**spec, "arms": [{"name": "a", "ema": 0.05}]})
+            bad = False
+        except ValueError:
+            bad = True
+        check(bad, "`ema` needs `reuse`")
 
 
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, adapter_reuse, template_like)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, adapter_reuse, setup_file, ema_arms)

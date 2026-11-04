@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import re
@@ -23,6 +24,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
+from ..engine.devices import Accelerator
 from ..families.general.adapters.schemes import read_adapter
 from .experiment import Arm, Experiment
 from .render import ImageStore, Renderer
@@ -201,14 +203,22 @@ class Lab:
         self.say(f"{arm.name}: renders {arm.lora}")
 
     def _borrow(self, arm: Arm) -> None:
-        """An arm that renders another arm's adapter gets a copy of that arm's training record."""
+        """An arm that renders another arm's adapter gets a copy of that arm's training record; with ``ema`` the record points at the averaged file beside it."""
         source = self.folder(arm.reuse) / "train.json"
-        if not source.exists() or not json.loads(source.read_text())["lora"]:
+        record = json.loads(source.read_text()) if source.exists() else {}
+        if not record.get("lora"):
             self.say(f"{arm.name}: {arm.reuse} has no adapter yet, so there is nothing to reuse")
             return
+        if arm.ema:
+            lora = Path(record["lora"])
+            averaged = lora.with_name(f"{lora.stem}_ema{arm.ema:g}{lora.suffix}")
+            if not averaged.exists():
+                self.say(f"{arm.name}: {averaged.name} is not next to the adapter of {arm.reuse}: that arm was trained without `--ema {arm.ema:g}`")
+                return
+            record = {**record, "lora": str(averaged), "ema": arm.ema}
         self.folder(arm).mkdir(parents=True, exist_ok=True)
-        (self.folder(arm) / "train.json").write_text(json.dumps({**json.loads(source.read_text()), "reused": arm.reuse}, indent=1), encoding="utf8")
-        self.say(f"{arm.name}: uses the adapter of {arm.reuse}")
+        (self.folder(arm) / "train.json").write_text(json.dumps({**record, "reused": arm.reuse}, indent=1), encoding="utf8")
+        self.say(f"{arm.name}: uses the {'averaged ' if arm.ema else ''}adapter of {arm.reuse}")
 
     def meta(self, arm: Arm | None, lora: str | None) -> dict:
         exp = self.experiment
@@ -252,12 +262,14 @@ class Lab:
 
         Renderer(backend, device=exp.device).render(recipes, self.meta(arm, lora), on_image=keep)
         if arm is not None and (exp.train_images or exp.holdout_images):
-            source = self.folder(arm.reuse) / "timestep_loss.json" if arm.reuse else None
+            source = self.folder(arm.reuse) / "timestep_loss.json" if arm.reuse and not arm.ema else None
             if source is not None and source.exists():
                 (folder / "timestep_loss.json").write_text(source.read_text(), encoding="utf8")  # the same adapter: the same table
             else:
                 (folder / "timestep_loss.json").write_text(json.dumps(self._timestep_loss(backend), indent=1), encoding="utf8")
         del backend
+        gc.collect()
+        Accelerator(exp.device).empty_cache()
 
     def _timestep_loss(self, backend) -> dict:
         from .timestep_loss import DEFAULT_T, TimestepLoss, load_images

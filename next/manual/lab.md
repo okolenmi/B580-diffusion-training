@@ -3,8 +3,9 @@
 `python -m next.lab` compares variants of a training on the same footing: it trains each variant (an *arm*) in its own process, renders the same images with each result, measures what changed, and writes one report.
 
 ## Commands
-- `python -m next.lab template > experiment.json` prints an experiment file to edit.
-- `python -m next.lab run experiment.json [more.json ...] [--phase train render report] [--arms a b] [--force]` runs it; several files run one after the other (a failed one is reported and the queue goes on). Finished work is kept and skipped on the next run (`--force` redoes it), so a stopped run continues where it was.
+- `python -m next.lab setup > lab-setup.json` prints the setup file to fill in once (paths, images, saved adapters).
+- `python -m next.lab template KIND [--setup FILE] > experiment.json` prints an experiment file with the setup already written into it.
+- `python -m next.lab run experiment.json [more.json ...] [--phase train render report] [--arms a b] [--force]` runs it; several files run one after the other, each in its own process (a failed one is reported and the queue goes on); every file is checked first and nothing starts when a path is a placeholder or an adapter file is missing. Finished work is kept and skipped on the next run (`--force` redoes it), so a stopped run continues where it was.
 - `python -m next.lab render --models M --file CKPT --lora a.safetensors b.safetensors --prompt "..." --seeds 1 2 --strengths 0.5 1 --out DIR` renders a grid with adapter files, without training.
 - `python -m next.lab engines --models M --file CKPT --comfy <ComfyUI folder> [--comfy-python PY] [--lora L]` renders the same recipes with this project and with ComfyUI and compares the images (is the renderer the same as ComfyUI's?).
 
@@ -32,5 +33,6 @@ The sampler follows ComfyUI's (k-diffusion) exactly: the same sigma tables, `nor
 
 An arm can be given an adapter file made earlier (`"lora": "/path/file.safetensors"`: rendered as it is, nothing is trained) or can render the adapter of an earlier arm (`"reuse": "<arm>"`, copies that arm's training record and per-timestep table). `"eps_scale": 1.01` divides the predicted noise (after guidance) by that factor at every sampling step (epsilon scaling, Ning et al. 2024: sampling errors make the prediction too large; a factor slightly above 1 pulls the trajectory back). Images of such an arm carry `_e<factor>` in the file name and the factor in their metadata. `python -m next.lab template eps-scale` starts an experiment of this kind.
 
-## Starting from an experiment you already filled in
-`python -m next.lab template KIND --like earlier.json > new.json` copies the images, grid, output folder, device, and the model, dataset, file and resolution arguments of the earlier file's training command into the new template; the arms, steps and note stay the template's.
+## The setup file
+`python -m next.lab setup` prints `lab-setup.json`: `models`, `datasets`, `dataset`, `file` (checkpoint), `resolution`, `output`, `device`, `images` (train, holdout, count, size), optional `grid`, and `loras` (names of adapters you saved). `template KIND` writes these into the template's training command and fields; arms, steps and note stay the template's. A template can use a saved adapter as `{lora:NAME}`; an unknown name or a value still starting with `/path/to` stops the command.
+An arm with `"ema": 0.05` next to `"reuse"` renders the averaged copy `lora_stepN_ema0.05.safetensors` that the reused arm's training wrote (it was trained with `--ema 0.05`).

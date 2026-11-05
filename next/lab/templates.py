@@ -345,5 +345,18 @@ CLEAN_PARTS_TEMPLATE = {
                                    ("input-blocks", "input_blocks"), ("middle-block", "middle_block"), ("output-blocks", "output_blocks"))
                )],
 }
-TEMPLATES = {"ranges": TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+TARGETS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "targets",
+    "note": "Train without the parts that did nothing for the loss and made the pictures worse when the saved best adapter was cut (item 69). The recipe is your best one (batch 1, lr 2e-4, 600 steps); `best` is "
+            "your saved adapter for the same sheet. `no-attn2`: no cross-attention (the captions are empty, so it only learns to misread one constant vector). `no-middle`: no adapter in the middle block. "
+            "`no-attn2-no-middle`: both. `no-tier-2`: both plus input blocks 6-8 and output blocks 0-2 (the second most sensitive tier by your estimate) left out.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "no-attn2", "args": BEST + ["--param", "adapter.groups=attn_self,ff,transformer_proj"]},
+             {"name": "no-middle", "args": BEST + ["--param", "adapter.exclude=middle_block\\..*"]},
+             {"name": "no-attn2-no-middle", "args": BEST + ["--param", "adapter.groups=attn_self,ff,transformer_proj", "--param", "adapter.exclude=middle_block\\..*"]},
+             {"name": "no-tier-2", "args": BEST + ["--param", "adapter.groups=attn_self,ff,transformer_proj", "--param", "adapter.exclude=middle_block\\..*|input_blocks\\.[678]\\..*|output_blocks\\.[012]\\..*"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

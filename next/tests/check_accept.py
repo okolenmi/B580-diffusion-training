@@ -425,6 +425,20 @@ def training_signal_instruments() -> None:
     doc = sdxl_lora(model="m.safetensors", dataset="d", output="o", init_adapter="/x/best.safetensors")
     check(next(n for n in doc.nodes if n.class_name == "InjectAdapterNode").params["init_adapter"] == "/x/best.safetensors", "the starter hands the adapter to continue to Inject Adapter")
     check("AnchorAddon" in kinds(anchor=2.0) and "AnchorAddon" not in kinds(), "the starter has the anchor loss only when asked")
+    from ..starters import Stage, parse_stages
+    check(parse_stages(["600:0.08", "400@5e-5:0.15/product", "300@2e-5"]) == (Stage(600, None, 0.08, "magnitude"), Stage(400, 5e-5, 0.15, "product"), Stage(300, 2e-5, 0.0, "magnitude")),
+          "a stage reads steps, rate, kept share and mode")
+    for bad, why in ((["600:0.3", "400:0.1"], "grow"), (["0:0.1"], "at least 1"), (["x"], "STEPS"), (["10:1.5"], "between 0 and 1")):
+        raises(ValueError, lambda bad=bad: parse_stages(bad), f"stage {bad} is refused", why)
+    staged = sdxl_lora(model="m.safetensors", dataset="d", output="o", lr=1e-4, stages=("600:0.08", "400@5e-5:0.15", "300@2e-5"))
+    trainer = next(n for n in staged.nodes if n.class_name == "DiffusionTrainerNode")
+    addons = {a.kind: a.params for n in staged.nodes for a in n.addons}
+    check(trainer.params["steps"] == 1300 and addons["CleanerAddon"]["events"] == "600:0.08:magnitude,1000:0.15:magnitude"
+          and addons["StagedRateAddon"]["boundaries"] == "600,1000" and addons["StagedRateAddon"]["ratios"] == "1,0.5,0.2",
+          "stages become the run's steps, the cleaner's events and the schedule's boundaries and rate ratios")
+    raises(ValueError, lambda: nodes(stages=("100:0.1",), clean=0.2), "stages and a single cleaning cannot be combined", "--stage")
+    check("StagedRateAddon" not in kinds(stages=()) and "CleanerAddon" not in kinds(stages=("100", "100@1e-5")) and "StagedRateAddon" in kinds(stages=("100", "100@1e-5")),
+          "stages without a kept share only change the rate")
     raises(ValueError, lambda: nodes(init_adapter="/x/a.safetensors", aligned_init=4), "continuing an adapter and a gradient-aligned start cannot be combined", "fresh adapter")
     raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 

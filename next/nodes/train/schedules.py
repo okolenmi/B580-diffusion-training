@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...engine.step.schedule import Constant, Cosine, LRModifier, LRSchedule, WarmupModifier
+from ...engine.step.schedule import Constant, Cosine, LRModifier, LRSchedule, StagedModifier, WarmupModifier
 from ...graph import Addon, AddonSlot, Node, Port
 
 MODIFIERS = AddonSlot("lr_modifier", LRModifier, many=True, doc="Changes the schedule in saved order (a warmup, for example).")
@@ -51,3 +51,16 @@ class WarmupAddon(Addon):
 
     def build(self, **inputs) -> Any:
         return WarmupModifier(inputs["steps"], inputs.get("start", 0.0))
+
+
+class StagedRateAddon(Addon):
+    DISPLAY_NAME = "Staged rate"
+    SLOT = "lr_modifier"
+    INPUTS = {"boundaries": Port("boundaries", str, default="", doc="Comma-separated steps where a stage ends, for example `600,1000`."),
+              "ratios": Port("ratios", str, default="", doc="Comma-separated factors of the schedule's rate, one more than there are boundaries, for example `1,0.25,0.05`."),
+              "warmup": Port("warmup", int, required=False, default=20, minimum=0, doc="Steps each stage after the first spends ramping up from zero.")}
+
+    def build(self, **inputs) -> Any:
+        boundaries = tuple(int(x) for x in inputs["boundaries"].split(",") if x.strip())
+        ratios = tuple(float(x) for x in inputs["ratios"].split(",") if x.strip())
+        return StagedModifier(boundaries, ratios, inputs.get("warmup", 20))

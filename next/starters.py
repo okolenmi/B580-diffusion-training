@@ -64,6 +64,8 @@ class SdxlLoraOptions:
     clean_scope: str = "global"
     clean_drop: str = ""
     clean_rescale: bool = False
+    stages: tuple[str, ...] = ()
+    stage_warmup: int = 20
     anchor: float = 0.0
     anchor_every: int = 2
     anchor_prompts: str = ""
@@ -94,6 +96,36 @@ class SdxlLoraOptions:
     trend_penalty: float = 0.0
 
 
+@dataclass(frozen=True)
+class Stage:
+    """One stretch of a staged run: ``steps`` at ``lr`` (None: the run's rate), ended by a cleaning to ``keep`` of the adapter (0: none)."""
+
+    steps: int
+    lr: float | None = None
+    keep: float = 0.0
+    mode: str = "magnitude"
+
+
+def parse_stages(specs: tuple[str, ...] | list[str]) -> tuple[Stage, ...]:
+    """Reads ``STEPS[@LR][:KEEP[/MODE]]`` (for example ``600:0.08``, ``400@5e-5:0.15/product``)."""
+    stages = []
+    for spec in specs:
+        head, _, tail = spec.partition(":")
+        count, _, rate = head.partition("@")
+        keep, _, mode = tail.partition("/")
+        try:
+            stage = Stage(int(count), float(rate) if rate else None, float(keep) if keep else 0.0, mode or "magnitude")
+        except ValueError as error:
+            raise ValueError(f"a stage is STEPS[@LR][:KEEP[/MODE]], for example 600:0.08 or 400@5e-5:0.15; got {spec!r}") from error
+        if stage.steps < 1 or not 0.0 <= stage.keep < 1.0 or (stage.lr is not None and stage.lr <= 0) or (tail and not keep):
+            raise ValueError(f"stage {spec!r}: steps must be at least 1, the learning rate above 0 and the kept share between 0 and 1 (exclusive)")
+        stages.append(stage)
+    kept = [stage.keep for stage in stages if stage.keep]
+    if kept != sorted(kept):
+        raise ValueError("stages: the kept share is the share of the whole adapter that is frozen in total, so it can only grow from stage to stage")
+    return tuple(stages)
+
+
 class _SdxlLora:
     """Builds the SDXL LoRA graph in groups: data, model and optimizer, trainer and saver, then the optional extras."""
 
@@ -103,6 +135,9 @@ class _SdxlLora:
         self.o, self.dataset, self.output, self.source, self.model = options, dataset, output, source, model
         self.b = _Builder()
         self.prompts = "tag_swap" if options.tag_swap else "captions"
+        self.stages = parse_stages(options.stages)
+        if self.stages and options.clean:
+            raise ValueError("--stage describes the cleanings of the run; it cannot be combined with --clean")
 
     def build(self, settings: dict | None, overrides: dict[str, dict] | None) -> GraphDoc:
         self._data()
@@ -149,12 +184,16 @@ class _SdxlLora:
         b.add("schedule", self.SCHEDULES[o.schedule], lr=o.lr)
         if o.warmup:
             b.addon("schedule", "warmup", "WarmupAddon", steps=o.warmup)
+        if self.stages:
+            ends = [sum(stage.steps for stage in self.stages[:i + 1]) for i in range(len(self.stages))]
+            b.addon("schedule", "stages", "StagedRateAddon", boundaries=",".join(map(str, ends[:-1])), warmup=o.stage_warmup,
+                    ratios=",".join(f"{(stage.lr or o.lr) / o.lr:g}" for stage in self.stages))
         b.add("weighting", "LossWeightingNode", kind="min_snr")
         b.wires += [("model", "denoiser", "adapter", "denoiser"), ("adapter", "model", "optimizer", "model")]
 
     def _training_and_saving(self) -> None:
         o, b = self.o, self.b
-        b.add("trainer", "DiffusionTrainerNode", steps=o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph)
+        b.add("trainer", "DiffusionTrainerNode", steps=sum(stage.steps for stage in self.stages) if self.stages else o.steps, epochs=o.epochs, accumulation=o.accumulation, graph=o.graph)
         if o.gradient_policy != "mean":
             b.addon("trainer", "policy", "GradientPolicyAddon", policy=o.gradient_policy, normalize=o.policy_normalize, floor=o.policy_floor,
                     calibrate_every=o.policy_calibrate_every)
@@ -164,6 +203,11 @@ class _SdxlLora:
             b.addon("trainer", "cleaner", "CleanerAddon", keep=o.clean, at=o.clean_at, steps=o.clean_steps, mode=o.clean_mode, lr=o.clean_lr,
                     sparsity=o.clean_sparsity, freeze=o.clean_freeze, directory=f"{self.output}/clean", scope=o.clean_scope, drop=o.clean_drop,
                     rescale=o.clean_rescale)
+        if any(stage.keep for stage in self.stages):
+            ends = [sum(stage.steps for stage in self.stages[:i + 1]) for i in range(len(self.stages))]
+            events = ",".join(f"{end}:{stage.keep:g}:{stage.mode}" for end, stage in zip(ends, self.stages) if stage.keep)
+            b.addon("trainer", "cleaner", "CleanerAddon", keep=next(s.keep for s in self.stages if s.keep), events=events, steps=o.clean_steps, lr=o.clean_lr,
+                    sparsity=o.clean_sparsity, freeze=o.clean_freeze, directory=f"{self.output}/clean", scope=o.clean_scope, drop=o.clean_drop, rescale=o.clean_rescale)
         if o.anchor:
             b.addon("trainer", "anchor", "AnchorAddon", weight=o.anchor, every=o.anchor_every, prompts=o.anchor_prompts)
         if o.aligned_init and o.init_adapter:

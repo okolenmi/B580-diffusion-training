@@ -448,7 +448,7 @@ def _change(layer) -> float:
 
 def lora_cleaner():
     """The cleaner: the singular rewrite keeps the change, gates reach the logits through the layers' own forward and give the parameters back, the kept share is exact, and the frozen part survives an update."""
-    from ..engine.step.cleaner import Gates, LoraCleaner, to_singular_directions
+    from ..engine.step.cleaner import Event, Gates, LoraCleaner, to_singular_directions
 
     torch.manual_seed(0)
     x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
@@ -509,7 +509,7 @@ def lora_cleaner():
             loss.backward()
             return float(loss.detach())
 
-        summary = cleaner.run(lambda: {}, backward, lambda: None)
+        summary = cleaner.run(None, lambda: {}, backward, lambda: None)
         kept = {k: sum(int(cleaner._kept[p][k].sum()) for p in layers) / sum(cleaner._kept[p][k].numel() for p in layers) for k in cleaner._kept[next(iter(layers))]}
         check(all(abs(v - expected) < 0.02 for v in kept.values()) and summary["steps"] == 3, f"{mode}: about the asked share is kept ({kept})")
         before_update = {p: (l.lora_A.detach().clone(), l.lora_B.detach().clone()) for p, l in layers.items()}
@@ -527,7 +527,7 @@ def lora_cleaner():
             layer.lora_B.normal_(std=0.1)
     control = LoraCleaner(fresh, keep=0.3, mode="magnitude", freeze=False)
     biggest = max(float(l.lora_B.detach().abs().max()) for l in fresh.values())
-    summary = control.run(lambda: {}, lambda batch: 0.0, lambda: None)
+    summary = control.run(None, lambda: {}, lambda batch: 0.0, lambda: None)
     survivors = torch.cat([l.lora_B.detach().abs().flatten() for l in fresh.values()])
     check(summary["steps"] == 0 and abs(float((survivors > 0).float().mean()) - 0.3) < 0.02 and float(survivors.max()) == biggest,
           "the magnitude control keeps the largest weights without any gate steps")
@@ -537,7 +537,7 @@ def lora_cleaner():
             for layer in fresh2.layers.values():
                 layer.lora_B.normal_(std=0.1)
         cleaner = LoraCleaner(fresh2.layers, keep=0.25, mode=mode, freeze=False)
-        summary = cleaner.run(lambda: {}, lambda batch: 0.0, lambda: None)
+        summary = cleaner.run(None, lambda: {}, lambda batch: 0.0, lambda: None)
         shares = {k: sum(int(cleaner._kept[p][k].sum()) for p in fresh2.layers) / sum(cleaner._kept[p][k].numel() for p in fresh2.layers) for k in cleaner._kept[next(iter(fresh2.layers))]}
         check(summary["steps"] == 0 and all(abs(v - 0.25) < 0.03 for v in shares.values()), f"{mode}: the asked share is kept without any training ({shares})")
     plain = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0)
@@ -545,7 +545,7 @@ def lora_cleaner():
         for layer in plain.layers.values():
             layer.lora_B.normal_(std=0.1)
     originals = {p: _change(l) for p, l in plain.layers.items()}
-    LoraCleaner(plain.layers, keep=0.2, mode="magnitude", scope="layer", rescale=True, freeze=False).run(lambda: {}, lambda batch: 0.0, lambda: None)
+    LoraCleaner(plain.layers, keep=0.2, mode="magnitude", scope="layer", rescale=True, freeze=False).run(None, lambda: {}, lambda batch: 0.0, lambda: None)
     check(all(abs(_change(l) - originals[p]) / originals[p] < 1e-4 for p, l in plain.layers.items()), "rescale keeps each layer's change at its size")
     part = next(p for p in plain.layers if "ff" in p)
     victim = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0).layers
@@ -553,15 +553,32 @@ def lora_cleaner():
         for layer in victim.values():
             layer.lora_B.normal_(std=0.1)
     dropper = LoraCleaner(victim, keep=0.5, mode="magnitude", scope="part", drop=("ff",), freeze=False)
-    dropper.run(lambda: {}, lambda batch: 0.0, lambda: None)
+    dropper.run(None, lambda: {}, lambda batch: 0.0, lambda: None)
     ff = [l for p, l in victim.items() if ".ff" in p or p.endswith("ff")]
     others = [l for p, l in victim.items() if not ("ff" in p)]
     check(ff and all(float(l.lora_B.abs().sum()) == 0.0 for l in ff) and any(float(l.lora_B.abs().sum()) > 0.0 for l in others), "a dropped part is removed completely and the rest stays")
+    staged = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0).layers
+    with torch.no_grad():
+        for layer in staged.values():
+            layer.lora_B.normal_(std=0.1)
+    cleaner = LoraCleaner(staged, steps=1, freeze=True, events=(Event(2, 0.1, "magnitude"), Event(5, 0.3, "magnitude")))
+    check(cleaner.due(2) == cleaner.events[0] and cleaner.due(5) == cleaner.events[1] and cleaner.due(3) is None and cleaner.passed(3) and not cleaner.passed(2) and cleaner.passed(6),
+          "events are found by step, and a resumed run knows which cleanings it has passed")
+    first = cleaner.run(cleaner.events[0], lambda: {}, lambda batch: 0.0, lambda: None)
+    held = {p: (l.lora_B.detach().clone(), cleaner._frozen[p]["lora_B"][0].clone()) for p, l in staged.items() if "lora_B" in cleaner._frozen[p]}
+    with torch.no_grad():
+        for layer in staged.values():
+            layer.lora_B.add_(0.05 * torch.randn_like(layer.lora_B))
+    second = cleaner.run(cleaner.events[1], lambda: {}, lambda batch: 0.0, lambda: None)
+    check(abs(first["frozen"] - 0.1) < 0.03 and abs(second["frozen"] - 0.3) < 0.03 and first["at"] == 2 and second["at"] == 5,
+          f"the second cleaning freezes the share of the whole adapter, not of what was left ({first['frozen']:.3f}, {second['frozen']:.3f})")
+    check(held and all(bool(cleaner._frozen[p]["lora_B"][0][m].all()) for p, (_, m) in held.items()),
+          "what the first cleaning froze stays frozen in the second")
     raises(ValueError, lambda: LoraCleaner(victim, keep=0.5, drop=("nope",)), "an unknown part to drop is refused with the valid names", "attn1")
     with tempfile.TemporaryDirectory() as tmp:
         saved = []
         cleaner = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp, save=saved.append)
-        cleaner.run(lambda: {}, lambda batch: float((den(x, t, c, y).pow(2).mean().backward() or 0.0)), lambda: None)
+        cleaner.run(None, lambda: {}, lambda batch: float((den(x, t, c, y).pow(2).mean().backward() or 0.0)), lambda: None)
         again = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp)
         again.restore()
         check(saved and saved[0].endswith("lora_cleaned.safetensors") and all(torch.equal(again._frozen[p][n][0], cleaner._frozen[p][n][0]) for p in layers for n in ("lora_A", "lora_B")),

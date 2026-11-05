@@ -358,5 +358,25 @@ TARGETS_TEMPLATE = {
              {"name": "no-attn2-no-middle", "args": BEST + ["--param", "adapter.groups=attn_self,ff,transformer_proj", "--param", "adapter.exclude=middle_block\\..*"]},
              {"name": "no-tier-2", "args": BEST + ["--param", "adapter.groups=attn_self,ff,transformer_proj", "--param", "adapter.exclude=middle_block\\..*|input_blocks\\.[678]\\..*|output_blocks\\.[012]\\..*"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+def stages(*specs: str) -> list[str]:
+    """The arguments of a staged run; the total steps are given too so that the report counts them."""
+    total = sum(int(spec.partition(":")[0].partition("@")[0]) for spec in specs)
+    return [*BEST, "--steps", str(total), *(arg for spec in specs for arg in ("--stage", spec))]
+
+
+STAGES_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "stages",
+    "note": "Staged training in one run: train, clean to a small share of the largest weights, freeze them, train the rest at a lower rate, clean to a larger share, and so on (`--stage STEPS[@LR][:KEEP]`; "
+            "KEEP is the frozen share of the whole adapter in total, the rate of a stage after the first ramps up over 20 steps). The first stage is your best recipe (lr 2e-4). `best` is your saved 600-step "
+            "adapter for the same sheet. `8-15-30`: 600 steps, cleaning to 8%; 300 steps at 5e-5, to 15%; 300 steps at 2e-5, to 30%. `8-15`: the first two stages only. `8-slow`: cleaning to 8% then 600 steps at 2e-5. "
+            "`15-30`: the same idea starting from 15%. Every arm trains, so each takes 1-1.5 hours; pick with `--arms`. The cleaned adapter of every stage is in the arm's `clean` folder.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "8-15-30", "args": stages("600:0.08", "300@5e-5:0.15", "300@2e-5:0.30")},
+             {"name": "8-15", "args": stages("600:0.08", "400@5e-5:0.15")},
+             {"name": "8-slow", "args": stages("600:0.08", "600@2e-5")},
+             {"name": "15-30", "args": stages("600:0.15", "400@5e-5:0.30")}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "stages": STAGES_TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

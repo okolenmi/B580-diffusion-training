@@ -457,6 +457,30 @@ def cleaner_trainer_check() -> None:
                   f"{mode}: the run cleans, writes its files and finishes ({outcome.error}, {files})")
 
 
+def staged_trainer_check() -> None:
+    """A run with two cleanings (the second at the end of the run) and a lower rate in the second stage: both cleanings are written, the second keeps what the first froze, and the rate drops."""
+    import json
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        out = tmp / "out" / "clean"
+        doc = graph(tmp, steps=4, save_every=1000, stages=("2:0.2", "2@1e-4:0.5"), stage_warmup=0)
+        _, outcome, _ = execute(store, doc)
+        files = sorted(p.name for p in out.glob("*")) if out.exists() else []
+        check(outcome.ok and "lora_cleaned_step000002.safetensors" in files and "lora_cleaned_step000004.safetensors" in files,
+              f"both cleanings are written and the run finishes ({outcome.error}, {files})")
+        if outcome.ok and "summary_step000004.json" in files:
+            first, last = (json.loads((out / f"summary_step{n:06d}.json").read_text()) for n in (2, 4))
+            check(first["at"] == 2 and last["at"] == 4 and last["frozen"] >= first["frozen"] - 1e-9 and last["frozen"] >= 0.45,
+                  f"the second cleaning counts the first's frozen share ({first['frozen']:.3f}, {last['frozen']:.3f})")
+
+
 if __name__ == "__main__":
     run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
-        perceptual_trainer_check, anchor_checks, anchor_trainer_check, cleaner_trainer_check, trend_checks, trend_run_check)
+        perceptual_trainer_check, anchor_checks, anchor_trainer_check, cleaner_trainer_check, staged_trainer_check, trend_checks, trend_run_check)

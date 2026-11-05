@@ -60,6 +60,9 @@ class Algorithm(ABC):
         for tensor in state.values():
             tensor.zero_()
 
+    def restart(self) -> None:
+        """Forget the step count of the update rule too, after its state was reset."""
+
 
 class AdamW(Algorithm):
     name = "adamw"
@@ -69,6 +72,9 @@ class AdamW(Algorithm):
         self.eps, self.weight_decay = eps, weight_decay
         self.t = 0
         self._correction = 1.0
+
+    def restart(self) -> None:
+        self.t = 0
 
     def begin_step(self, n: int = 1) -> None:
         self.t += n

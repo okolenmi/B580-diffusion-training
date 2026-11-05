@@ -60,6 +60,24 @@ class Warmup(LRSchedule):
         return self.start + (target - self.start) * (step + 1) / self.steps
 
 
+class Staged(LRSchedule):
+    """The wrapped schedule times a factor per stage (stages end at ``boundaries``); each stage after the first ramps up over ``warmup`` steps."""
+
+    def __init__(self, inner: LRSchedule, boundaries: tuple[int, ...], ratios: tuple[float, ...], warmup: int = 0):
+        if len(ratios) != len(boundaries) + 1 or any(r <= 0 for r in ratios) or list(boundaries) != sorted(set(boundaries)) or warmup < 0:
+            raise ValueError("staged rates need one ratio above 0 per stage and increasing boundaries between them")
+        self.inner, self.boundaries, self.ratios, self.warmup = inner, tuple(boundaries), tuple(ratios), warmup
+
+    def fit(self, total_steps: int) -> None:
+        self.inner.fit(total_steps)
+
+    def value(self, step: int) -> float:
+        stage = sum(1 for b in self.boundaries if b <= step)
+        value = self.inner.value(step) * self.ratios[stage]
+        since = step - self.boundaries[stage - 1] if stage else step
+        return value * (since + 1) / self.warmup if stage and since < self.warmup else value
+
+
 class LRModifier:
     """What a schedule node's ``lr_modifier`` slot holds: something that wraps a schedule into another."""
 
@@ -73,3 +91,11 @@ class WarmupModifier(LRModifier):
 
     def wrap(self, schedule: LRSchedule) -> LRSchedule:
         return Warmup(schedule, self.steps, self.start)
+
+
+class StagedModifier(LRModifier):
+    def __init__(self, boundaries: tuple[int, ...], ratios: tuple[float, ...], warmup: int = 0):
+        self.boundaries, self.ratios, self.warmup = boundaries, ratios, warmup
+
+    def wrap(self, schedule: LRSchedule) -> LRSchedule:
+        return Staged(schedule, self.boundaries, self.ratios, self.warmup)

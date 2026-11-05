@@ -105,7 +105,7 @@ class Trainer:
             if self._initializer is not None and start == 0:
                 with self._task("Gradient-aligned initialisation"):
                     self.init_summary = self._initializer.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
-        if self._cleaner is not None and start > self._cleaner.at:
+        if self._cleaner is not None and self._cleaner.passed(start):
             self._cleaner.restore()
         attach = getattr(self._perf, "attach_graph", None)
         if attach is not None and self.graphed is not None:
@@ -117,16 +117,24 @@ class Trainer:
                 if self._perf is not None:
                     self._perf.close()
                 return RunResult(step - start, self.steps, last, stopped=True)
-            if self._cleaner is not None and step == self._cleaner.at:
-                with self._task("Cleaning the adapter"):
-                    self.clean_summary = self._cleaner.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
-                if self._say is not None:
-                    self._say(self._cleaner.describe())
+            self._clean_if_due(step)
             with self._perf.step(step) if self._perf is not None else contextlib.nullcontext():
                 last = self._step(step)
+        self._clean_if_due(self.steps)  # a cleaning at the end of the run
         if self._perf is not None:
             self._perf.close()
         return RunResult(max(self.steps - start, 0), self.steps, last)
+
+    def _clean_if_due(self, step: int) -> None:
+        event = self._cleaner.due(step) if self._cleaner is not None else None
+        if event is None:
+            return
+        with self._task("Cleaning the adapter"):
+            self.clean_summary = self._cleaner.run(event, self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
+        if step > 0:
+            self.optimizer.reset_states()  # the cleared weights start from zero: no momentum of the weights that were there
+        if self._say is not None:
+            self._say(self._cleaner.describe())
 
     def _step(self, step: int) -> float:
         started = time.perf_counter()

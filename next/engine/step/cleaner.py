@@ -15,7 +15,8 @@ import json
 import math
 import os
 import statistics
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -28,6 +29,19 @@ SCOPES = ("global", "layer", "part")  # what the keep share is counted over: the
 START_LOGIT = 3.0  # a gate of 0.95: the cleaning starts almost where the adapter is
 MAX_RESCALE = 20.0
 TIE_BREAK = 1e-3  # gates that never moved are ranked by the size of their weight
+
+
+ELEMENT_MODES = ("element", "magnitude", "product")
+DIRECTION_MODES = ("component", "singular")
+
+
+@dataclass(frozen=True)
+class Event:
+    """One cleaning: before step ``at`` (a run of N steps can end in one at step N), keep ``keep`` of the whole adapter, ranked by ``mode``."""
+
+    at: int
+    keep: float
+    mode: str
 
 
 class Gates:
@@ -129,13 +143,19 @@ def fresh_direction(row: Tensor) -> None:
 class LoraCleaner:
     """Cleans the adapter of ``layers`` at step ``at`` and, with ``freeze``, keeps what it kept fixed from then on."""
 
-    def __init__(self, layers: Mapping[str, Any], *, keep: float, at: int = 0, steps: int = 200, mode: str = "element", lr: float = 0.1,
+    def __init__(self, layers: Mapping[str, Any], *, keep: float = 0.15, at: int = 0, steps: int = 200, mode: str = "element", lr: float = 0.1,
                  sparsity: float = 0.0, freeze: bool = True, directory: str = "", save: Callable[[str], None] | None = None,
-                 scope: str = "global", drop: tuple[str, ...] = (), rescale: bool = False):
-        if not 0.0 < keep < 1.0 or steps < 1 or lr <= 0 or at < 0 or sparsity < 0:
-            raise ValueError("cleaning needs a keep fraction between 0 and 1, at least one step, a positive learning rate and a start step of 0 or more")
-        if mode not in MODES:
-            raise ValueError(f"unknown cleaning mode {mode!r}; choose from {MODES}")
+                 scope: str = "global", drop: tuple[str, ...] = (), rescale: bool = False, events: Sequence[Event] = ()):
+        events = tuple(events) or (Event(at, keep, mode),)
+        if steps < 1 or lr <= 0 or sparsity < 0 or any(not 0.0 < e.keep < 1.0 or e.at < 0 for e in events):
+            raise ValueError("cleaning needs keep fractions between 0 and 1, at least one gate step, a positive learning rate and start steps of 0 or more")
+        for e in events:
+            if e.mode not in MODES:
+                raise ValueError(f"unknown cleaning mode {e.mode!r}; choose from {MODES}")
+        if any(b.at <= a.at for a, b in zip(events, events[1:])):
+            raise ValueError("the cleanings must be at increasing steps")
+        if len({e.mode in DIRECTION_MODES for e in events}) > 1:
+            raise ValueError("one run cannot mix cleaning of single weights (element, magnitude, product) with cleaning of directions (component, singular)")
         if scope not in SCOPES:
             raise ValueError(f"unknown cleaning scope {scope!r}; choose from {SCOPES}")
         known = {_part(p) for p in layers} | {p.split(".")[0] for p in layers}
@@ -145,31 +165,41 @@ class LoraCleaner:
         for path, layer in layers.items():
             if layer.kind != "lora":
                 raise ValueError(f"the cleaner is defined for LoRA, not {layer.kind} ({path})")
-        self.layers, self.keep, self.at, self.steps, self.mode = dict(layers), keep, at, steps, mode
+        self.events = events
+        self.layers, self.steps = dict(layers), steps
+        self.keep, self.at, self.mode = events[0].keep, events[0].at, events[0].mode
         self.lr, self.sparsity, self.freeze, self.directory, self._save = lr, sparsity, freeze, directory, save
         self.scope, self.drop, self.rescale = scope, tuple(drop), rescale
         self._frozen: dict[str, dict[str, tuple[Tensor, Tensor]]] = {}  # layer -> factor -> (kept mask, kept values)
         self.summary: dict[str, Any] = {}
+        self.history: list[dict[str, Any]] = []
+
+    def due(self, step: int) -> Event | None:
+        return next((e for e in self.events if e.at == step), None)
+
+    def passed(self, step: int) -> bool:
+        """Whether a cleaning happened before ``step`` (a resumed run then has to freeze again what that one kept)."""
+        return any(e.at < step for e in self.events)
 
     @property
     def by_direction(self) -> bool:
         """Whether the parts are rank directions (rows of A with their columns of B) rather than single weights."""
         return self.mode in ("component", "singular")
 
-    def run(self, fetch: Callable[[], dict], backward: Callable[[dict], float], zero: Callable[[], None]) -> dict[str, Any]:
-        """``fetch`` gives a batch, ``backward`` adds its gradients (and returns its loss), ``zero`` clears the adapter's gradients."""
+    def run(self, event: Event | None, fetch: Callable[[], dict], backward: Callable[[dict], float], zero: Callable[[], None]) -> dict[str, Any]:
+        """One cleaning (``event`` None: the first). ``fetch`` gives a batch, ``backward`` adds its gradients (and returns its loss), ``zero`` clears the adapter's gradients."""
+        event = event or self.events[0]
+        self.keep, self.at, self.mode = event.keep, event.at, event.mode
+        first = not self.history
         if not any(bool(layer.lora_B.detach().ne(0).any()) for layer in self.layers.values()):
             raise ValueError("the adapter has nothing to clean (every B is zero): give --init-adapter, or clean at a later step")
+        if self.by_direction and first:  # later cleanings keep the directions as they are: the frozen ones are among them
+            to_singular_directions(self.layers)
         if self.mode not in LEARNED:
-            if self.by_direction:
-                to_singular_directions(self.layers)
             scores = self._static_scores()
             self._apply(scores)
-            self.summary = self._summarise(scores, [])
-            self._write()
+            self._finish(scores, [])
             return self.summary
-        if self.by_direction:
-            to_singular_directions(self.layers)
         gates = Gates(self.layers, self.mode)
         gates.engage()
         optimizer = torch.optim.Adam(gates.leaves(), lr=self.lr)
@@ -187,9 +217,13 @@ class LoraCleaner:
             gates.release()
             zero()
         self._apply(scores)
-        self.summary = self._summarise(scores, losses)
-        self._write()
+        self._finish(scores, losses)
         return self.summary
+
+    def _finish(self, scores: dict[str, dict[str, Tensor]], losses: list[float]) -> None:
+        self.summary = self._summarise(scores, losses)
+        self.history.append(self.summary)
+        self._write()
 
     def _static_scores(self) -> dict[str, dict[str, Tensor]]:
         """Scores without training. magnitude: |weight|. product: |weight| times the size of the other factor's row or column it multiplies, which is what the weight contributes
@@ -231,6 +265,14 @@ class LoraCleaner:
                 out[path][key] = (logit.detach() + TIE_BREAK * size / size.max().clamp(min=1e-12)).cpu()
         return out
 
+    def _frozen_scores(self, path: str, key: str, shape: torch.Size) -> Tensor:
+        """The mask of parts that are already frozen, at the shape of the scores (a direction is frozen when its row of A is)."""
+        parts = self._frozen.get(path)
+        if not parts:
+            return torch.zeros(shape, dtype=torch.bool)
+        mask = parts["lora_A" if key == "a" else "lora_B"][0].cpu()
+        return mask.reshape(mask.shape[0], -1)[:, 0] if self.by_direction else mask
+
     def _dropped(self, path: str) -> bool:
         return _part(path) in self.drop or path.split(".")[0] in self.drop
 
@@ -251,10 +293,17 @@ class LoraCleaner:
                     pools.setdefault(self._pool(path), []).append(path)
             for paths in pools.values():
                 flat = torch.cat([scores[p][key].flatten() for p in paths])
-                count = max(1, int(round(self.keep * flat.numel())))
-                threshold = flat.kthvalue(flat.numel() - count + 1).values if count < flat.numel() else flat.min()
+                frozen = torch.cat([self._frozen_scores(p, key, scores[p][key].shape).flatten() for p in paths])
+                need = min(max(0, int(round(self.keep * flat.numel())) - int(frozen.sum())), int((~frozen).sum()))  # the frozen part counts toward the share
+                chosen = torch.zeros_like(frozen)
+                if need:  # by position, not by a threshold: equal scores (untrained zeros) must not all pass
+                    chosen[flat.masked_fill(frozen, float("-inf")).topk(need).indices] = True
+                taken = chosen | frozen
+                start = 0
                 for path in paths:
-                    masks[path][key] = scores[path][key] >= threshold
+                    size = scores[path][key].numel()
+                    masks[path][key] = taken[start:start + size].view(scores[path][key].shape)
+                    start += size
         return masks
 
     @torch.no_grad()
@@ -326,7 +375,9 @@ class LoraCleaner:
             return {name: round(share(paths, "a"), 3) for name, paths in sorted(groups.items())}
 
         window = max(1, len(losses) // 5)
-        return {"mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window if losses else float("nan"),
+        total = sum(m.numel() for parts in self._frozen.values() for _, (m, _) in parts.items())
+        frozen = sum(int(m.sum()) for parts in self._frozen.values() for _, (m, _) in parts.items())
+        return {"at": self.at, "frozen": frozen / total if total else 0.0, "mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window if losses else float("nan"),
                 "loss_last": sum(losses[-window:]) / window if losses else float("nan"),
                 "scope": self.scope, "drop": list(self.drop), "rescale": self.rescale,
                 **({"rescale_factor_median": statistics.median(self._factors), "rescale_factor_min": min(self._factors), "rescale_factor_max": max(self._factors)} if self._factors else {}),
@@ -337,7 +388,7 @@ class LoraCleaner:
         s = self.summary
         trained = f", gate loss {s['loss_first']:.4f} -> {s['loss_last']:.4f}" if s["steps"] else ""
         frozen = "; the kept part is frozen" if self.freeze else ""
-        return f"cleaning ({s['mode']}): kept {s['keep']:.0%} after {s['steps']} gate steps{trained}{frozen}\n  kept by region {s['kept_by_region']}\n  kept by part {s['kept_by_part']}"
+        return f"cleaning before step {s['at']} ({s['mode']}): kept {s['keep']:.0%} after {s['steps']} gate steps{trained}{frozen}, {s['frozen']:.1%} of the adapter frozen\n  kept by region {s['kept_by_region']}\n  kept by part {s['kept_by_part']}"
 
     def _write(self) -> None:
         """The cleaned adapter (before any further training), the mask and a summary, for looking at what was kept."""
@@ -347,10 +398,11 @@ class LoraCleaner:
         masks = {f"{path}.{name}": mask.to(torch.uint8).cpu().contiguous()
                  for path, layer in self.layers.items() for name, mask in self._factor_masks(path, layer.lora_A, layer.lora_B).items()}
         save_file(masks, os.path.join(self.directory, "mask.safetensors"))
-        with open(os.path.join(self.directory, "summary.json"), "w", encoding="utf8") as handle:
+        suffix = f"_step{self.at:06d}" if len(self.events) > 1 else ""
+        with open(os.path.join(self.directory, f"summary{suffix}.json"), "w", encoding="utf8") as handle:
             json.dump(self.summary, handle, indent=1)
         if self._save is not None:
-            self._save(os.path.join(self.directory, "lora_cleaned.safetensors"))
+            self._save(os.path.join(self.directory, f"lora_cleaned{suffix}.safetensors"))
 
 
 def _part(path: str) -> str:

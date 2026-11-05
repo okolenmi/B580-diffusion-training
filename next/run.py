@@ -112,6 +112,7 @@ def _starter(args, settings: list[str], params: list[str]):
     options = {k: v for k, v in vars(args).items() if k in {f.name for f in fields(SdxlLoraOptions)}}
     if options.get("gradient_policy") is None:
         options["gradient_policy"] = "equal" if args.regions > 1 else "mean"
+    options["stages"] = tuple(args.stages or ())
     options["steps"] = args.steps if args.steps is not None else (0 if args.epochs else DEFAULTS.steps)
     return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, **options,
                               settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
@@ -181,6 +182,11 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--clean-scope", choices=("global", "layer", "part"), default=DEFAULTS.clean_scope, help="what --clean counts over: the whole adapter, each layer, or each kind of layer")
             p.add_argument("--clean-drop", default=DEFAULTS.clean_drop, help="comma-separated parts (attn1, attn2, ff, proj_in, proj_out, ...) or regions (input_blocks, middle_block, output_blocks) removed completely")
             p.add_argument("--clean-rescale", action="store_true", default=DEFAULTS.clean_rescale, help="scale each layer after the cut so its change keeps its size")
+            p.add_argument("--stage", dest="stages", action="append", metavar="STEPS[@LR][:KEEP[/MODE]]",
+                           help="one stage of a staged run, repeated: STEPS at learning rate LR (default --lr), then cleaned to KEEP of the adapter (MODE magnitude unless given) "
+                                "and what is kept stays frozen. KEEP is the frozen share of the whole adapter in total. The run's steps are the sum "
+                                "(e.g. --stage 600:0.08 --stage 400@5e-5:0.15 --stage 300@2e-5:0.3)")
+            p.add_argument("--stage-warmup", type=int, default=DEFAULTS.stage_warmup, help="steps each stage after the first ramps its rate up from zero")
             p.add_argument("--clean-lr", type=float, default=DEFAULTS.clean_lr, help="learning rate of the gates")
             p.add_argument("--clean-sparsity", type=float, default=DEFAULTS.clean_sparsity, help="pull toward closed gates (0 = only the loss)")
             p.add_argument("--clean-no-freeze", dest="clean_freeze", action="store_false", default=DEFAULTS.clean_freeze, help="train everything after cleaning instead of freezing the kept part")

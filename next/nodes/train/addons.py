@@ -7,7 +7,7 @@ from typing import Any
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.anchor import PROMPTS, AnchorLoss
-from ...engine.step.cleaner import MODES as CLEAN_MODES, SCOPES as CLEAN_SCOPES, LoraCleaner
+from ...engine.step.cleaner import MODES as CLEAN_MODES, SCOPES as CLEAN_SCOPES, Event, LoraCleaner
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.policy import make_policy
 from ...engine.step.regional import RegionalUpdate
@@ -72,6 +72,13 @@ class _Clean(ModelBound):
         return LoraCleaner(model.adapted.layers, save=save, **self.options)
 
 
+def _events(text: str) -> tuple[Event, ...]:
+    try:
+        return tuple(Event(int(step), float(keep), mode) for step, keep, mode in (item.split(":") for item in text.split(",") if item.strip()))
+    except ValueError as error:
+        raise ValueError(f"cleaner events are `step:keep:mode`, comma-separated; got {text!r}") from error
+
+
 class CleanerAddon(Addon):
     DISPLAY_NAME = "LoRA cleaner"
     SLOT = "cleaner"
@@ -85,6 +92,10 @@ class CleanerAddon(Addon):
                      doc="element: a gate per weight of A and of B. component: each layer is first rewritten into its singular directions (the same adapter), then one gate per direction. "
                          "Without training (steps are ignored): magnitude keeps the largest weights; product the weights that contribute most to the change (|weight| times the size of the "
                          "factor row or column it multiplies); singular the largest singular directions of each layer's change."),
+        "events": Port("events", str, required=False, default="", advanced=True,
+                       doc="Several cleanings in one run, comma-separated `step:keep:mode` (for example `600:0.08:magnitude,1000:0.15:magnitude`); empty uses `at`, `keep` and `mode` as one cleaning. "
+                           "After the first, `keep` is the share of the whole adapter that is frozen in total: what is frozen stays, and the largest weights trained since fill the share up. "
+                           "A cleaning at step N, the number of steps, runs at the end of the run."),
         "scope": Port("scope", str, required=False, default="global", choices=CLEAN_SCOPES,
                       doc="What `keep` is counted over: the whole adapter (layers with larger weights keep more), each layer (every layer keeps the same share), or each kind of layer (attn1, attn2, ff, ...)."),
         "drop": Port("drop", str, required=False, default="",
@@ -103,7 +114,7 @@ class CleanerAddon(Addon):
     def build(self, **inputs) -> ModelBound:
         return _Clean(keep=inputs["keep"], at=inputs.get("at") or 0, steps=inputs.get("steps") or 200, mode=inputs.get("mode") or "element", lr=inputs.get("lr") or 0.1,
                       sparsity=inputs.get("sparsity") or 0.0, freeze=inputs.get("freeze", True), directory=inputs.get("directory") or "",
-                      scope=inputs.get("scope") or "global", drop=tuple(p.strip() for p in (inputs.get("drop") or "").split(",") if p.strip()), rescale=bool(inputs.get("rescale")))
+                      events=_events(inputs.get("events") or ""), scope=inputs.get("scope") or "global", drop=tuple(p.strip() for p in (inputs.get("drop") or "").split(",") if p.strip()), rescale=bool(inputs.get("rescale")))
 
 
 class _Perceptual(ModelBound):

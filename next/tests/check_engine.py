@@ -30,7 +30,7 @@ from ..engine.optim.state import Int8BlockStore
 from ..engine.step.graphed import GraphedCompute, GraphRefused
 from ..engine.step.loss import MinSNR, Uniform, per_sample_mse
 from ..engine.runtime.checkpointing import ActivationCheckpointer
-from ..engine.step.schedule import Constant, Cosine, Warmup
+from ..engine.step.schedule import Constant, Cosine, Staged, Warmup
 from ..engine.step.state import StepState
 from ..engine.step.trainer import Trainer
 from ..families.api.adapters import TrainableSelection
@@ -359,6 +359,15 @@ def main() -> None:
     check(torch.allclose(per_sample_mse(pred, target, mask), torch.ones(2)), "masked MSE averages over valid positions only")
     warm = Warmup(Cosine(1.0, 100), 10)
     check(warm.value(0) < warm.value(5) < warm.value(10) and abs(Cosine(1.0, 100).value(99) - 0.05) < 1e-9, "warmup ramps into the cosine schedule")
+    staged = Staged(Constant(1.0), (10, 30), (1.0, 0.25, 0.05), warmup=4)
+    check([staged.value(s) for s in (0, 9)] == [1.0, 1.0] and [staged.value(s) for s in (10, 11, 13, 14, 29)] == [0.0625, 0.125, 0.25, 0.25, 0.25]
+          and abs(staged.value(30) - 0.0125) < 1e-12 and staged.value(60) == 0.05,
+          "staged rates switch at the boundaries and ramp up over the warmup from the second stage on")
+    try:
+        Staged(Constant(1.0), (10,), (1.0,))
+        check(False, "staged rates need a ratio for every stage")
+    except ValueError:
+        check(True, "staged rates need a ratio for every stage")
     ps = [torch.nn.Parameter(torch.randn(8, 8)) for _ in range(3)]
     opt = Optimizer(AdamW(), [ParamGroup(ps)], 1e-2, store=Int8BlockStore())
     for p in ps:

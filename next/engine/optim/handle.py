@@ -193,6 +193,7 @@ class Optimizer(DeviceResident):
             state = self.store.checkout(stack.state)
             self.algorithm.reset_state(state)
             self.store.commit(stack.state, state)
+        self.algorithm.restart()
 
     def state_tensors(self) -> dict[str, Tensor]:
         """The update rule's state as plain host tensors named ``<stack>.<name>`` (what a resumed run needs besides the weights)."""

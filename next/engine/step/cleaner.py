@@ -21,8 +21,11 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-MODES = ("element", "component", "magnitude")  # magnitude: no gates, the largest weights stay (the control the learned gates must beat)
+LEARNED = ("element", "component")  # gates trained with the loss
+MODES = (*LEARNED, "magnitude", "product", "singular")  # the rest need no training: the largest weights, the largest effective weights, the largest singular directions stay
+SCOPES = ("global", "layer", "part")  # what the keep share is counted over: the whole adapter, each layer, or each kind of layer (attn1, attn2, ff, ...)
 START_LOGIT = 3.0  # a gate of 0.95: the cleaning starts almost where the adapter is
+MAX_RESCALE = 20.0
 TIE_BREAK = 1e-3  # gates that never moved are ranked by the size of their weight
 
 
@@ -109,6 +112,13 @@ def to_singular_directions(layers: Mapping[str, Any]) -> None:
             b.copy_(new_b.reshape(b.shape).to(b.device, b.dtype))
 
 
+def _change_norm(a: Tensor, b: Tensor) -> float:
+    """The size (Frobenius norm) of a layer's change B A, from the small products of the factors."""
+    rank = a.shape[0]
+    am, bm = a.detach().reshape(rank, -1).float(), b.detach().reshape(-1, rank).float()
+    return float(((bm.T @ bm) * (am @ am.T)).sum().clamp(min=0.0).sqrt())
+
+
 def fresh_direction(row: Tensor) -> None:
     """A random starting row for a removed direction, at the usual size of a down-projection row."""
     bound = 1.0 / math.sqrt(row.numel())
@@ -119,30 +129,45 @@ class LoraCleaner:
     """Cleans the adapter of ``layers`` at step ``at`` and, with ``freeze``, keeps what it kept fixed from then on."""
 
     def __init__(self, layers: Mapping[str, Any], *, keep: float, at: int = 0, steps: int = 200, mode: str = "element", lr: float = 0.1,
-                 sparsity: float = 0.0, freeze: bool = True, directory: str = "", save: Callable[[str], None] | None = None):
+                 sparsity: float = 0.0, freeze: bool = True, directory: str = "", save: Callable[[str], None] | None = None,
+                 scope: str = "global", drop: tuple[str, ...] = (), rescale: bool = False):
         if not 0.0 < keep < 1.0 or steps < 1 or lr <= 0 or at < 0 or sparsity < 0:
             raise ValueError("cleaning needs a keep fraction between 0 and 1, at least one step, a positive learning rate and a start step of 0 or more")
         if mode not in MODES:
             raise ValueError(f"unknown cleaning mode {mode!r}; choose from {MODES}")
+        if scope not in SCOPES:
+            raise ValueError(f"unknown cleaning scope {scope!r}; choose from {SCOPES}")
+        known = {_part(p) for p in layers} | {p.split(".")[0] for p in layers}
+        unknown = sorted(set(drop) - known)
+        if unknown:
+            raise ValueError(f"cannot drop {unknown}: this adapter has the parts and regions {sorted(known)}")
         for path, layer in layers.items():
             if layer.kind != "lora":
                 raise ValueError(f"the cleaner is defined for LoRA, not {layer.kind} ({path})")
         self.layers, self.keep, self.at, self.steps, self.mode = dict(layers), keep, at, steps, mode
         self.lr, self.sparsity, self.freeze, self.directory, self._save = lr, sparsity, freeze, directory, save
+        self.scope, self.drop, self.rescale = scope, tuple(drop), rescale
         self._frozen: dict[str, dict[str, tuple[Tensor, Tensor]]] = {}  # layer -> factor -> (kept mask, kept values)
         self.summary: dict[str, Any] = {}
+
+    @property
+    def by_direction(self) -> bool:
+        """Whether the parts are rank directions (rows of A with their columns of B) rather than single weights."""
+        return self.mode in ("component", "singular")
 
     def run(self, fetch: Callable[[], dict], backward: Callable[[dict], float], zero: Callable[[], None]) -> dict[str, Any]:
         """``fetch`` gives a batch, ``backward`` adds its gradients (and returns its loss), ``zero`` clears the adapter's gradients."""
         if not any(bool(layer.lora_B.detach().ne(0).any()) for layer in self.layers.values()):
             raise ValueError("the adapter has nothing to clean (every B is zero): give --init-adapter, or clean at a later step")
-        if self.mode == "magnitude":
-            scores = {path: {"a": layer.lora_A.detach().abs().cpu(), "b": layer.lora_B.detach().abs().cpu()} for path, layer in self.layers.items()}
+        if self.mode not in LEARNED:
+            if self.by_direction:
+                to_singular_directions(self.layers)
+            scores = self._static_scores()
             self._apply(scores)
             self.summary = self._summarise(scores, [])
             self._write()
             return self.summary
-        if self.mode == "component":
+        if self.by_direction:
             to_singular_directions(self.layers)
         gates = Gates(self.layers, self.mode)
         gates.engage()
@@ -165,6 +190,23 @@ class LoraCleaner:
         self._write()
         return self.summary
 
+    def _static_scores(self) -> dict[str, dict[str, Tensor]]:
+        """Scores without training. magnitude: |weight|. product: |weight| times the size of the other factor's row or column it multiplies, which is what the weight contributes
+        to the change (a rescaling between A and B moves size from one factor to the other and should not decide what stays). singular: the size of each direction."""
+        out: dict[str, dict[str, Tensor]] = {}
+        for path, layer in self.layers.items():
+            a, b = layer.lora_A.detach().cpu(), layer.lora_B.detach().cpu()
+            rank = a.shape[0]
+            row = a.reshape(rank, -1).norm(dim=1)
+            column = b.reshape(-1, rank).norm(dim=0)
+            if self.mode == "magnitude":
+                out[path] = {"a": a.abs(), "b": b.abs()}
+            elif self.mode == "product":
+                out[path] = {"a": a.abs() * column.view(-1, *([1] * (a.ndim - 1))), "b": b.abs() * row.view(1, -1, *([1] * (b.ndim - 2)))}
+            else:
+                out[path] = {"a": row * column}
+        return out
+
     def _pull_closed(self, gates: Gates) -> None:
         """Optionally adds a pull toward closed, in units of the typical gradient of that tensor so that the weight means the same everywhere."""
         if not self.sparsity:
@@ -181,23 +223,37 @@ class LoraCleaner:
             out[path] = {}
             for key, logit in per.items():
                 weight = params["lora_A" if key == "a" else "lora_B"].detach()
-                if self.mode == "component":
+                if self.by_direction:
                     size = weight.reshape(weight.shape[0], -1).abs().amax(dim=1) if key == "a" else weight.reshape(-1, weight.shape[1]).abs().amax(dim=0)
                 else:
                     size = weight.abs()
                 out[path][key] = (logit.detach() + TIE_BREAK * size / size.max().clamp(min=1e-12)).cpu()
         return out
 
+    def _dropped(self, path: str) -> bool:
+        return _part(path) in self.drop or path.split(".")[0] in self.drop
+
+    def _pool(self, path: str) -> str:
+        return {"global": "all", "layer": path, "part": _part(path)}[self.scope]
+
     def _masks(self, scores: dict[str, dict[str, Tensor]]) -> dict[str, dict[str, Tensor]]:
-        """Keep the top ``keep`` share of each kind of part (A weights, B weights, or directions) over the whole adapter."""
+        """Keep the top ``keep`` share of each kind of part (A weights, B weights, or directions) within each pool of the scope; dropped layers keep nothing and are not counted."""
         masks: dict[str, dict[str, Tensor]] = {path: {} for path in scores}
         for key in {k for per in scores.values() for k in per}:
-            flat = torch.cat([per[key].flatten() for per in scores.values() if key in per])
-            count = max(1, int(round(self.keep * flat.numel())))
-            threshold = flat.kthvalue(flat.numel() - count + 1).values if count < flat.numel() else flat.min()
+            pools: dict[str, list[str]] = {}
             for path, per in scores.items():
-                if key in per:
-                    masks[path][key] = per[key] >= threshold
+                if key not in per:
+                    continue
+                if self._dropped(path):
+                    masks[path][key] = torch.zeros_like(per[key], dtype=torch.bool)
+                else:
+                    pools.setdefault(self._pool(path), []).append(path)
+            for paths in pools.values():
+                flat = torch.cat([scores[p][key].flatten() for p in paths])
+                count = max(1, int(round(self.keep * flat.numel())))
+                threshold = flat.kthvalue(flat.numel() - count + 1).values if count < flat.numel() else flat.min()
+                for path in paths:
+                    masks[path][key] = scores[path][key] >= threshold
         return masks
 
     @torch.no_grad()
@@ -206,19 +262,24 @@ class LoraCleaner:
         for path, layer in self.layers.items():
             a, b = layer.lora_A, layer.lora_B
             masks = self._factor_masks(path, a, b)
-            if self.mode == "component":
+            before = _change_norm(a, b) if self.rescale else 0.0
+            if self.by_direction:
                 for index in (~self._kept[path]["a"].to(a.device)).nonzero().flatten().tolist():  # a removed direction starts over: a new row, a zero column
                     fresh_direction(a[index])
                     b[:, index].zero_()
             else:
                 a.mul_(masks["lora_A"])
                 b.mul_(masks["lora_B"])
+            if self.rescale and before > 0.0:
+                after = _change_norm(a, b)
+                if after > 0.0:
+                    b.mul_(min(before / after, MAX_RESCALE))  # what was cut is made up by what stays: the layer's change keeps its size
             self._freeze_layer(path, {"lora_A": (masks["lora_A"], a), "lora_B": (masks["lora_B"], b)})
 
     def _factor_masks(self, path: str, a: Tensor, b: Tensor) -> dict[str, Tensor]:
         """The kept masks at the shape of the factors (a direction's mask spans its whole row of A and column of B), on their device."""
         kept = self._kept[path]
-        if self.mode == "component":
+        if self.by_direction:
             keep = kept["a"].to(a.device)
             return {"lora_A": keep.view(-1, *([1] * (a.ndim - 1))).expand(a.shape), "lora_B": keep.view(1, -1, *([1] * (b.ndim - 2))).expand(b.shape)}
         return {"lora_A": kept["a"].to(a.device), "lora_B": kept["b"].to(b.device)}
@@ -263,6 +324,7 @@ class LoraCleaner:
         window = max(1, len(losses) // 5)
         return {"mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window if losses else float("nan"),
                 "loss_last": sum(losses[-window:]) / window if losses else float("nan"),
+                "scope": self.scope, "drop": list(self.drop), "rescale": self.rescale,
                 "kept_by_region": by(lambda p: p.split(".")[0]), "kept_by_part": by(_part)}
 
     def describe(self) -> str:

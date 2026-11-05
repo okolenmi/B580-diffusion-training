@@ -315,5 +315,35 @@ CLEAN_ANCHOR_TEMPLATE = {
              {"name": "element-anchor-2-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "2"]},
              {"name": "component-anchor-1-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "component", "--anchor", "1"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+CLEAN_MAGNITUDE_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "clean-magnitude",
+    "note": "Variants of the cleaning that won the first test: keep the largest weights, no training (each arm is quick; the rendering is the cost). `magnitude-15` is the control of the first test for "
+            "one sheet; 8 and 30 show how much stays at other shares; `layer` counts the 15% inside every layer instead of over the whole adapter (large layers no longer keep more); `product` ranks a "
+            "weight by what it contributes to the layer's change (|weight| times the size of the other factor's row or column) instead of by itself; `rescale` scales every layer's change back to its "
+            "old size after the cut (the lost power made up); `singular` keeps the largest singular directions of each layer's change (about 2 of 16) instead of single weights.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 300),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "magnitude-15", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "magnitude"]},
+             {"name": "magnitude-8", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.08", "--clean-mode", "magnitude"]},
+             {"name": "magnitude-30", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.30", "--clean-mode", "magnitude"]},
+             {"name": "magnitude-15-layer", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "magnitude", "--clean-scope", "layer"]},
+             {"name": "product-15", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "product"]},
+             {"name": "magnitude-15-rescale", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "magnitude", "--clean-rescale"]},
+             {"name": "singular-15", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "singular"]}],
+}
+CLEAN_PARTS_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "clean-parts",
+    "note": "Which parts of the adapter matter for what you see? Each arm is `best` with one part or region removed completely (99% of the rest stays): feed-forward, self-attention (attn1), cross-attention "
+            "(attn2), the projections in and out of the transformer blocks, and the input, middle and output blocks. Nothing is trained; the pictures show what each part contributes and what the "
+            "adapter does without it.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 300),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             *({"name": f"without-{label}", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.99", "--clean-mode", "magnitude", "--clean-drop", drop]}
+               for label, drop in (("ff", "ff"), ("attn1", "attn1"), ("attn2", "attn2"), ("proj", "proj_in,proj_out"),
+                                   ("input-blocks", "input_blocks"), ("middle-block", "middle_block"), ("output-blocks", "output_blocks"))
+               )],
+}
+TEMPLATES = {"ranges": TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

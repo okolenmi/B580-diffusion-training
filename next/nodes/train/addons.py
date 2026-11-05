@@ -7,7 +7,7 @@ from typing import Any
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.anchor import PROMPTS, AnchorLoss
-from ...engine.step.cleaner import MODES as CLEAN_MODES, LoraCleaner
+from ...engine.step.cleaner import MODES as CLEAN_MODES, SCOPES as CLEAN_SCOPES, LoraCleaner
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.policy import make_policy
 from ...engine.step.regional import RegionalUpdate
@@ -82,7 +82,16 @@ class CleanerAddon(Addon):
         "at": Port("at", int, required=False, default=0, minimum=0, unit="step", doc="The step the cleaning happens before: 0 for an adapter given with --init-adapter, later for one trained in this run."),
         "steps": Port("steps", int, required=False, default=200, minimum=1, doc="Steps of gate training (one batch each)."),
         "mode": Port("mode", str, required=False, default="element", choices=CLEAN_MODES,
-                     doc="element: a gate per weight of A and of B. component: each layer is first rewritten into its singular directions (the same adapter), then one gate per direction."),
+                     doc="element: a gate per weight of A and of B. component: each layer is first rewritten into its singular directions (the same adapter), then one gate per direction. "
+                         "Without training (steps are ignored): magnitude keeps the largest weights; product the weights that contribute most to the change (|weight| times the size of the "
+                         "factor row or column it multiplies); singular the largest singular directions of each layer's change."),
+        "scope": Port("scope", str, required=False, default="global", choices=CLEAN_SCOPES,
+                      doc="What `keep` is counted over: the whole adapter (layers with larger weights keep more), each layer (every layer keeps the same share), or each kind of layer (attn1, attn2, ff, ...)."),
+        "drop": Port("drop", str, required=False, default="",
+                     doc="Comma-separated parts or regions that are removed completely (attn1, attn2, ff, proj_in, proj_out, emb_layers, in_layers, out_layers, skip, input_blocks, middle_block, output_blocks); "
+                         "`keep` is counted over the rest."),
+        "rescale": Port("rescale", bool, required=False, default=False,
+                        doc="After the cut, scale each layer's up-projection so that the size of its change (Frobenius norm of B A) is what it was before, up to 20 times."),
         "lr": Port("lr", float, required=False, default=0.1, minimum=0.0, doc="Learning rate of the gate logits (they start at 3, a gate of 0.95)."),
         "sparsity": Port("sparsity", float, required=False, default=0.0, minimum=0.0, advanced=True,
                          doc="A pull toward closed gates, in units of the typical gradient of the gate tensor. 0: only the loss moves the gates; the kept share is set by `keep` anyway."),
@@ -93,7 +102,8 @@ class CleanerAddon(Addon):
 
     def build(self, **inputs) -> ModelBound:
         return _Clean(keep=inputs["keep"], at=inputs.get("at") or 0, steps=inputs.get("steps") or 200, mode=inputs.get("mode") or "element", lr=inputs.get("lr") or 0.1,
-                      sparsity=inputs.get("sparsity") or 0.0, freeze=inputs.get("freeze", True), directory=inputs.get("directory") or "")
+                      sparsity=inputs.get("sparsity") or 0.0, freeze=inputs.get("freeze", True), directory=inputs.get("directory") or "",
+                      scope=inputs.get("scope") or "global", drop=tuple(p.strip() for p in (inputs.get("drop") or "").split(",") if p.strip()), rescale=bool(inputs.get("rescale")))
 
 
 class _Perceptual(ModelBound):

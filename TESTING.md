@@ -182,6 +182,22 @@ python -m next.lab run cleananchor.json
 ```
 Send the zip. Look at the portrait and red house pictures against `best` (how much of the base model's look comes back) and at the empty prompt (how much of the dataset's look stays).
 
+## 68. Magnitude cleaning variants (about 1.5 hours; no training in the arms)
+Your verdict on 64: magnitude (the largest 15% of the weights) is the best of the cleaners. Variants: 8% and 30%; 15% counted per layer instead of over the whole adapter (`--clean-scope layer`); ranking by what a weight contributes to the layer's change (`--clean-mode product`); scaling every layer's change back to its old size after the cut (`--clean-rescale`); and the largest singular directions per layer (`--clean-mode singular`).
+```
+python -m next.lab template clean-magnitude > cleanmag.json
+python -m next.lab run cleanmag.json
+```
+Send the zip. Which keeps the effect of `best` with the fewest issues? Does `rescale` give back the power without bringing the problems back?
+
+## 69. Which parts of the adapter matter (about 1.5 hours; no training)
+`best` with one part or region removed completely (feed-forward, attn1, attn2, projections, input, middle or output blocks) with 99% of the rest kept.
+```
+python -m next.lab template clean-parts > cleanparts.json
+python -m next.lab run cleanparts.json
+```
+Send the zip. Which removal changes the pictures most, and which one removes an issue without losing the effect? That tells which parts to protect or to train less.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

@@ -175,8 +175,12 @@ def _parser() -> argparse.ArgumentParser:
                            "(and --anchor when on); the highest gates stay and, unless --clean-no-freeze, are frozen while the rest trains from zero. Writes <output>/clean/lora_cleaned.safetensors")
             p.add_argument("--clean-at", type=int, default=DEFAULTS.clean_at, help="step the cleaning happens before (0 with --init-adapter)")
             p.add_argument("--clean-steps", type=int, default=DEFAULTS.clean_steps, help="gate training steps")
-            p.add_argument("--clean-mode", choices=("element", "component", "magnitude"), default=DEFAULTS.clean_mode,
-                           help="a gate per weight, or per singular direction of each layer; magnitude: no gates, the largest weights stay (the control)")
+            p.add_argument("--clean-mode", choices=("element", "component", "magnitude", "product", "singular"), default=DEFAULTS.clean_mode,
+                           help="element / component: gates per weight / per singular direction, trained with the loss. Without training: magnitude (the largest weights stay), product (the weights "
+                                "contributing most to the change), singular (the largest singular directions of each layer)")
+            p.add_argument("--clean-scope", choices=("global", "layer", "part"), default=DEFAULTS.clean_scope, help="what --clean counts over: the whole adapter, each layer, or each kind of layer")
+            p.add_argument("--clean-drop", default=DEFAULTS.clean_drop, help="comma-separated parts (attn1, attn2, ff, proj_in, proj_out, ...) or regions (input_blocks, middle_block, output_blocks) removed completely")
+            p.add_argument("--clean-rescale", action="store_true", default=DEFAULTS.clean_rescale, help="scale each layer after the cut so its change keeps its size")
             p.add_argument("--clean-lr", type=float, default=DEFAULTS.clean_lr, help="learning rate of the gates")
             p.add_argument("--clean-sparsity", type=float, default=DEFAULTS.clean_sparsity, help="pull toward closed gates (0 = only the loss)")
             p.add_argument("--clean-no-freeze", dest="clean_freeze", action="store_false", default=DEFAULTS.clean_freeze, help="train everything after cleaning instead of freezing the kept part")

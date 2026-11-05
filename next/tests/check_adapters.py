@@ -440,6 +440,12 @@ def continue_from_file():
         raises(ValueError, lambda: node._start_from(family, fresh, f"{tmp}/gone.safetensors"), "a missing file is refused", "does not exist")
 
 
+def _change(layer) -> float:
+    from ..engine.step.cleaner import _change_norm
+
+    return _change_norm(layer.lora_A, layer.lora_B)
+
+
 def lora_cleaner():
     """The cleaner: the singular rewrite keeps the change, gates reach the logits through the layers' own forward and give the parameters back, the kept share is exact, and the frozen part survives an update."""
     from ..engine.step.cleaner import Gates, LoraCleaner, to_singular_directions
@@ -525,6 +531,33 @@ def lora_cleaner():
     survivors = torch.cat([l.lora_B.detach().abs().flatten() for l in fresh.values()])
     check(summary["steps"] == 0 and abs(float((survivors > 0).float().mean()) - 0.3) < 0.02 and float(survivors.max()) == biggest,
           "the magnitude control keeps the largest weights without any gate steps")
+    for mode in ("product", "singular"):
+        fresh2 = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0)
+        with torch.no_grad():
+            for layer in fresh2.layers.values():
+                layer.lora_B.normal_(std=0.1)
+        cleaner = LoraCleaner(fresh2.layers, keep=0.25, mode=mode, freeze=False)
+        summary = cleaner.run(lambda: {}, lambda batch: 0.0, lambda: None)
+        shares = {k: sum(int(cleaner._kept[p][k].sum()) for p in fresh2.layers) / sum(cleaner._kept[p][k].numel() for p in fresh2.layers) for k in cleaner._kept[next(iter(fresh2.layers))]}
+        check(summary["steps"] == 0 and all(abs(v - 0.25) < 0.03 for v in shares.values()), f"{mode}: the asked share is kept without any training ({shares})")
+    plain = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0)
+    with torch.no_grad():
+        for layer in plain.layers.values():
+            layer.lora_B.normal_(std=0.1)
+    originals = {p: _change(l) for p, l in plain.layers.items()}
+    LoraCleaner(plain.layers, keep=0.2, mode="magnitude", scope="layer", rescale=True, freeze=False).run(lambda: {}, lambda batch: 0.0, lambda: None)
+    check(all(abs(_change(l) - originals[p]) / originals[p] < 1e-4 for p, l in plain.layers.items()), "rescale keeps each layer's change at its size")
+    part = next(p for p in plain.layers if "ff" in p)
+    victim = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0).layers
+    with torch.no_grad():
+        for layer in victim.values():
+            layer.lora_B.normal_(std=0.1)
+    dropper = LoraCleaner(victim, keep=0.5, mode="magnitude", scope="part", drop=("ff",), freeze=False)
+    dropper.run(lambda: {}, lambda batch: 0.0, lambda: None)
+    ff = [l for p, l in victim.items() if ".ff" in p or p.endswith("ff")]
+    others = [l for p, l in victim.items() if not ("ff" in p)]
+    check(ff and all(float(l.lora_B.abs().sum()) == 0.0 for l in ff) and any(float(l.lora_B.abs().sum()) > 0.0 for l in others), "a dropped part is removed completely and the rest stays")
+    raises(ValueError, lambda: LoraCleaner(victim, keep=0.5, drop=("nope",)), "an unknown part to drop is refused with the valid names", "attn1")
     with tempfile.TemporaryDirectory() as tmp:
         saved = []
         cleaner = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp, save=saved.append)

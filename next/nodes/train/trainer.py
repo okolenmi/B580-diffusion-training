@@ -37,6 +37,7 @@ class DiffusionTrainerNode(Node):
     ADDON_SLOTS = (AddonSlot("perceptual", ModelBound, doc="An extra loss term from the base network's features."),
                    AddonSlot("initializer", ModelBound, doc="Sets the adapter's starting point from the first batches."),
                    AddonSlot("gradient_policy", RegionPolicy, doc="How the regions of a batch are reconciled (the plain mean without it)."),
+                   AddonSlot("cleaner", ModelBound, doc="Finds the useful part of a trained adapter, keeps it and clears the rest."),
                    AddonSlot("anchor", ConditionerBound, doc="Keeps the adapter from changing the model's predictions under prompts unrelated to the dataset."),
                    AddonSlot("region_weights", ModelBound, doc="Weights the regions of a step by how their part of the timestep range is doing."))
     INPUTS = {
@@ -124,11 +125,14 @@ class DiffusionTrainerNode(Node):
                           perf=self._perf_session(model, accelerator), regional=self._regional(model, inputs),
                           perceptual=self._attached("perceptual", model, inputs), calibrate_every=self._calibrate_every(inputs),
                           initializer=self._attached("initializer", model, inputs), trend=self._attached("region_weights", model, inputs),
-                          anchor=self._anchored(model, inputs),
+                          anchor=self._anchored(model, inputs), cleaner=self._attached("cleaner", model, inputs),
+                          say=lambda message: self.context.report("cleaning", {"node": self.uid, "message": message}),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):
             result = trainer.run(start)
+        if trainer.clean_summary:
+            model.info = {**model.info, "cleaner": trainer.clean_summary}
         if trainer.init_summary:
             model.info = {**model.info, "aligned_init": trainer.init_summary}
         self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))

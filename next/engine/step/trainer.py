@@ -19,6 +19,7 @@ from ..runtime.thrash import PrimitiveCacheMonitor
 from .memory_probe import MemoryProbe
 from .loss import LossWeighting, thirds_of_range
 from .anchor import AnchorLoss
+from .cleaner import LoraCleaner
 from .perceptual import SelfPerceptualLoss
 from .regional import RegionalUpdate
 from .regional_window import RegionalWindow
@@ -56,7 +57,7 @@ class Trainer:
                  timed: bool = False, residency=None, density=None, placement=None, balance=None, probe=None, task: Callable[[str], AbstractContextManager] | None = None,
                  graph: Callable[[list[StepPhase]], StepPhase] | None = None,
                  warn: Callable[[str], None] | None = None, plan_chunks: bool = True, perf=None, regional: RegionalUpdate | None = None,
-                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0, initializer=None, trend=None, anchor: AnchorLoss | None = None):
+                 perceptual: SelfPerceptualLoss | None = None, calibrate_every: int = 0, initializer=None, trend=None, anchor: AnchorLoss | None = None, cleaner: LoraCleaner | None = None, say=None):
         if accumulation < 1 or steps < 0:
             raise ValueError("steps must not be negative and accumulation must be at least 1")
         self.optimizer, self.schedule, self.steps, self.accumulation = optimizer, schedule, steps, accumulation
@@ -83,6 +84,9 @@ class Trainer:
             raise ValueError("the self-perceptual loss runs a second network pass: it needs no graph replay")
         if anchor is not None and (graph is not None or isinstance(optimizer, FusedOptimizer)):
             raise ValueError("the anchor loss runs a second network pass and backward after the main one: it needs the plain optimizer (not fused) and no graph replay")
+        if cleaner is not None and (graph is not None or isinstance(optimizer, FusedOptimizer)):
+            raise ValueError("the LoRA cleaner trains gates through the normal step and keeps weights fixed after each update: it needs the plain optimizer (not fused) and no graph replay")
+        self._cleaner, self.clean_summary, self._say = cleaner, {}, say
         self._perceptual, self._anchor = perceptual, anchor
         compute: list[StepPhase] = [Forward(denoiser), Loss(weighting, balance), *([perceptual] if perceptual else []), Backward(accumulation), *([anchor] if anchor else [])]
         self.graphed = graph(compute) if graph is not None else None  # replaces the three phases above, which it falls back to
@@ -101,6 +105,8 @@ class Trainer:
             if self._initializer is not None and start == 0:
                 with self._task("Gradient-aligned initialisation"):
                     self.init_summary = self._initializer.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
+        if self._cleaner is not None and start > self._cleaner.at:
+            self._cleaner.restore()
         attach = getattr(self._perf, "attach_graph", None)
         if attach is not None and self.graphed is not None:
             attach(self.graphed)
@@ -111,6 +117,11 @@ class Trainer:
                 if self._perf is not None:
                     self._perf.close()
                 return RunResult(step - start, self.steps, last, stopped=True)
+            if self._cleaner is not None and step == self._cleaner.at:
+                with self._task("Cleaning the adapter"):
+                    self.clean_summary = self._cleaner.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
+                if self._say is not None:
+                    self._say(self._cleaner.describe())
             with self._perf.step(step) if self._perf is not None else contextlib.nullcontext():
                 last = self._step(step)
         if self._perf is not None:
@@ -126,6 +137,8 @@ class Trainer:
         fetched, timing = self._fetch_window(step)
         probe_metrics = self._reference_probe(fetched)
         losses, thirds, spent = self._update(step, fetched)
+        if self._cleaner is not None:
+            self._cleaner.after_update()
         for label, ms in spent.items():
             timing[label] = timing.get(label, 0.0) + ms
         loss = float(sum(losses) / len(losses))
@@ -143,9 +156,9 @@ class Trainer:
         self._fetch.run(state)
         return state.batch
 
-    def _gradient_pass(self, batch: dict) -> None:
-        """Forward and backward of one batch, its gradients added to what the adapter holds; no update."""
-        self._region_pass(0, 0, batch, 0)
+    def _gradient_pass(self, batch: dict) -> float:
+        """Forward and backward of one batch, its gradients added to what the adapter holds; no update. The batch's loss."""
+        return float(self._region_pass(0, 0, batch, 0)[0])
 
     def _fetch_window(self, step: int) -> tuple[list[dict], dict[str, float]]:
         """The ``accumulation`` batches of one optimizer step and what fetching them cost, by phase."""

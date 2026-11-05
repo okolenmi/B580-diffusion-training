@@ -440,5 +440,92 @@ def continue_from_file():
         raises(ValueError, lambda: node._start_from(family, fresh, f"{tmp}/gone.safetensors"), "a missing file is refused", "does not exist")
 
 
+def lora_cleaner():
+    """The cleaner: the singular rewrite keeps the change, gates reach the logits through the layers' own forward and give the parameters back, the kept share is exact, and the frozen part survives an update."""
+    from ..engine.step.cleaner import Gates, LoraCleaner, to_singular_directions
+
+    torch.manual_seed(0)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    den = SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32)
+    part = inject_denoiser(den, TrainableSelection(), rank=4, alpha=4.0)
+    with torch.no_grad():
+        for layer in part.layers.values():
+            layer.lora_B.normal_(std=0.1)
+        trained = den(x, t, c, y)
+    layers = part.layers
+    first = next(iter(layers.values()))
+    delta = (first.lora_B.detach().reshape(first.out_features, -1) @ first.lora_A.detach().reshape(first.rank, -1)).clone() if hasattr(first, "out_features") else None
+    to_singular_directions(layers)
+    with torch.no_grad():
+        check(torch.allclose(den(x, t, c, y), trained, atol=1e-5), "the singular rewrite leaves the network's output unchanged")
+        if delta is not None:
+            check(torch.allclose(first.lora_B.reshape(first.out_features, -1) @ first.lora_A.reshape(first.rank, -1), delta, atol=1e-5), "and each layer's change B A")
+    for mode in ("element", "component"):
+        gates = Gates(layers, mode)
+        before = {p: (l.lora_A.detach().clone(), l.lora_B.detach().clone()) for p, l in layers.items()}
+        gates.engage()
+        out = den(x, t, c, y)
+        out.pow(2).mean().backward()
+        gates.collect()
+        got = [g.grad is not None and float(g.grad.abs().sum()) > 0 for g in gates.leaves()]
+        check(sum(got) > len(got) // 2 and not any(p.requires_grad for per in gates.params.values() for p in per.values()),
+              f"{mode}: the loss reaches the gates and the adapter itself stays frozen ({sum(got)}/{len(got)})")
+        gates.release()
+        check(all(torch.equal(l.lora_A, before[p][0]) and torch.equal(l.lora_B, before[p][1]) and l.lora_A.requires_grad and isinstance(l.lora_A, torch.nn.Parameter)
+                  for p, l in layers.items()), f"{mode}: the parameters come back unchanged")
+
+    for mode in ("element", "component"):
+        gates = Gates(layers, mode)
+        gates.engage()
+        den(x, t, c, y).pow(2).mean().backward()
+        gates.collect()
+        mine = {p: {k: v.grad.clone() for k, v in per.items()} for p, per in gates.logits.items()}
+        for per in gates.logits.values():  # the same gradient through an ordinary autograd graph
+            for v in per.values():
+                v.grad = None
+        for p, layer in layers.items():
+            a, b = gates.params[p]["lora_A"], gates.params[p]["lora_B"]
+            g = {k: torch.sigmoid(v) for k, v in gates.logits[p].items()}
+            layer.lora_A = a * (g["a"].view(-1, *([1] * (a.ndim - 1))) if mode == "component" else g["a"])
+            layer.lora_B = b if mode == "component" else b * g["b"]
+        den(x, t, c, y).pow(2).mean().backward()
+        gates.release()
+        scale = max(float(v.abs().max()) for per in mine.values() for v in per.values())
+        check(all(torch.allclose(mine[p][k], gates.logits[p][k].grad, atol=1e-4 * scale) for p in mine for k in mine[p]) and scale > 0,
+              f"{mode}: the hand-applied chain rule equals the gradient through an autograd graph")
+    for mode, expected in (("element", 0.2), ("component", 0.25)):
+        for layer in layers.values():
+            layer.lora_A.grad = None
+        cleaner = LoraCleaner(layers, keep=expected, steps=3, mode=mode, lr=0.5, freeze=True)
+
+        def backward(batch):
+            loss = den(x, t, c, y).pow(2).mean()
+            loss.backward()
+            return float(loss.detach())
+
+        summary = cleaner.run(lambda: {}, backward, lambda: None)
+        kept = {k: sum(int(cleaner._kept[p][k].sum()) for p in layers) / sum(cleaner._kept[p][k].numel() for p in layers) for k in cleaner._kept[next(iter(layers))]}
+        check(all(abs(v - expected) < 0.02 for v in kept.values()) and summary["steps"] == 3, f"{mode}: about the asked share is kept ({kept})")
+        before_update = {p: (l.lora_A.detach().clone(), l.lora_B.detach().clone()) for p, l in layers.items()}
+        with torch.no_grad():
+            for layer in layers.values():
+                layer.lora_A.add_(1.0)
+                layer.lora_B.add_(1.0)
+        cleaner.after_update()
+        same = [bool((mask_equal := torch.equal(torch.where(m, l.lora_A, before_update[p][0]), before_update[p][0])))
+                for p, l in layers.items() for m in [cleaner._frozen[p]["lora_A"][0]]]
+        check(all(same) and any(not torch.equal(l.lora_A, before_update[p][0]) for p, l in layers.items()), f"{mode}: after an update the kept weights are put back and the others stay free")
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = []
+        cleaner = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp, save=saved.append)
+        cleaner.run(lambda: {}, lambda batch: float((den(x, t, c, y).pow(2).mean().backward() or 0.0)), lambda: None)
+        again = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp)
+        again.restore()
+        check(saved and saved[0].endswith("lora_cleaned.safetensors") and all(torch.equal(again._frozen[p][n][0], cleaner._frozen[p][n][0]) for p in layers for n in ("lora_A", "lora_B")),
+              "the kept mask is written and read back for a resumed run, and the cleaned adapter is saved")
+        raises(ValueError, lambda: LoraCleaner(layers, keep=0.3, freeze=True, directory=tmp + "/missing").restore(), "a resume without the mask is refused", "missing")
+    raises(ValueError, lambda: LoraCleaner(layers, keep=1.5), "a keep share outside 0..1 is refused", "keep fraction")
+
+
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, continue_from_file, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, continue_from_file, lora_cleaner, sdxl_plan_and_injection)

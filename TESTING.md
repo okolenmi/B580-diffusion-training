@@ -150,6 +150,14 @@ python -m next.lab run anchor.json
 ```
 Send the zip. Look at the `portrait` and `red house` pictures first (the dataset is not in them): do they stay closer to the base model's rendering as the weight grows (1, 5, 25 against baseline)? Then the empty prompt: is the dataset's look still learned? If 25 changes nothing and 1 changes nothing, the weight range is too low and I will raise it; if even 1 flattens the dataset look, it is too strong.
 
+## 64. LoRA cleaner (about 1.5 hours; the cleaning is 200 gate steps per arm)
+Your idea, built: every weight of a trained adapter (`element`) or every singular direction of each layer (`component`) gets a gate between 0 and 1. The adapter is frozen and only the gates train, with the training loss and, with `--anchor`, the damage to other prompts; the 15% with the highest gates stay and, unless `--clean-no-freeze`, are frozen while the cleared rest trains from zero (a removed direction from a fresh start). In one command: `--init-adapter best.safetensors --clean 0.15 --anchor 5 [--clean-mode component] [--clean-steps 200] [--clean-at N]` (`--clean-at N` cleans an adapter trained in the same run, before step N). It needs the plain optimizer and no graph.
+```
+python -m next.lab template clean > clean.json
+python -m next.lab run clean.json
+```
+Needs `best` in `lab-setup.json` (rank 16 default targets as in the template). Send the zip. Look first at the `-only` arms against `best` (is the dataset's look still there with 15%?), then at the portrait and red house pictures (closer to the base model than `best`?), then at `element-15-more`. In each arm's `train/clean/` folder, `summary.json` says what share was kept per part of the network (input, middle, output blocks; attention, feed-forward): send it too. The console prints the gate loss at the start and the end of the cleaning; if the cleaning step is slow or runs out of memory, tell me (the gates are one float per weight).
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

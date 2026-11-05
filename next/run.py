@@ -171,6 +171,14 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--batch-first", type=int, default=DEFAULTS.batch_first, help="a smaller batch size for the first --batch-first-steps batches (e.g. 1 with --batch 4: one picture per update at the start, four at the end); 0 = off")
             p.add_argument("--batch-first-steps", type=int, default=DEFAULTS.batch_first_steps, help="batches that use the --batch-first size")
             p.add_argument("--lora-plus", type=float, default=DEFAULTS.lora_plus, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
+            p.add_argument("--clean", type=float, default=DEFAULTS.clean, help="LoRA cleaner (0 = off): the share of the adapter to keep (e.g. 0.15). Gates on the adapter's weights train with the loss "
+                           "(and --anchor when on); the highest gates stay and, unless --clean-no-freeze, are frozen while the rest trains from zero. Writes <output>/clean/lora_cleaned.safetensors")
+            p.add_argument("--clean-at", type=int, default=DEFAULTS.clean_at, help="step the cleaning happens before (0 with --init-adapter)")
+            p.add_argument("--clean-steps", type=int, default=DEFAULTS.clean_steps, help="gate training steps")
+            p.add_argument("--clean-mode", choices=("element", "component"), default=DEFAULTS.clean_mode, help="a gate per weight, or per singular direction of each layer")
+            p.add_argument("--clean-lr", type=float, default=DEFAULTS.clean_lr, help="learning rate of the gates")
+            p.add_argument("--clean-sparsity", type=float, default=DEFAULTS.clean_sparsity, help="pull toward closed gates (0 = only the loss)")
+            p.add_argument("--clean-no-freeze", dest="clean_freeze", action="store_false", default=DEFAULTS.clean_freeze, help="train everything after cleaning instead of freezing the kept part")
             p.add_argument("--anchor", type=float, default=DEFAULTS.anchor, help="anchor loss weight (0 = off): the adapter is penalised for changing the base model's prediction under prompts "
                            "unrelated to the dataset (needs the plain optimizer and no graph; about one more forward and backward per anchor step)")
             p.add_argument("--anchor-every", type=int, default=DEFAULTS.anchor_every, help="steps between anchor passes")

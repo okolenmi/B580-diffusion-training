@@ -435,6 +435,28 @@ def anchor_trainer_check() -> None:
                   f"a run with the anchor reports it, {regions} region(s) ({outcome.error}, {sorted(metrics[-1]) if metrics else None})")
 
 
+def cleaner_trainer_check() -> None:
+    """A run that cleans its adapter after one step (both modes): it reports the cleaning, writes the cleaned adapter, the mask and the summary, and keeps the kept weights fixed to the end."""
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        for mode in ("element", "component"):
+            out = tmp / f"clean-{mode}"
+            doc = graph(tmp, steps=4, save_every=1000)
+            doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "CleanerAddon", {"keep": 0.3, "at": 1, "steps": 2, "mode": mode, "directory": str(out)})
+            doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "AnchorAddon", {"weight": 0.5, "every": 1})
+            _, outcome, trace = execute(store, doc)
+            reports = [f for s, f in trace.frames if s == "cleaning"] if hasattr(trace, "frames") else []
+            files = sorted(p.name for p in out.glob("*")) if out.exists() else []
+            check(outcome.ok and files == ["lora_cleaned.safetensors", "mask.safetensors", "summary.json"],
+                  f"{mode}: the run cleans, writes its files and finishes ({outcome.error}, {files})")
+
+
 if __name__ == "__main__":
     run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
-        perceptual_trainer_check, anchor_checks, anchor_trainer_check, trend_checks, trend_run_check)
+        perceptual_trainer_check, anchor_checks, anchor_trainer_check, cleaner_trainer_check, trend_checks, trend_run_check)

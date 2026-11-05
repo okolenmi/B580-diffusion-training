@@ -54,6 +54,13 @@ class SdxlLoraOptions:
     alpha: float | None = None
     lora_plus: float = 1.0
     init_adapter: str = ""
+    clean: float = 0.0
+    clean_at: int = 0
+    clean_steps: int = 200
+    clean_mode: str = "element"
+    clean_lr: float = 0.1
+    clean_sparsity: float = 0.0
+    clean_freeze: bool = True
     anchor: float = 0.0
     anchor_every: int = 2
     anchor_prompts: str = ""
@@ -150,6 +157,9 @@ class _SdxlLora:
                     calibrate_every=o.policy_calibrate_every)
         if o.trend_boost:
             b.addon("trainer", "trend", "TrendWeightingAddon", boost=o.trend_boost, mode=o.trend_mode, penalty=o.trend_penalty)
+        if o.clean:
+            b.addon("trainer", "cleaner", "CleanerAddon", keep=o.clean, at=o.clean_at, steps=o.clean_steps, mode=o.clean_mode, lr=o.clean_lr,
+                    sparsity=o.clean_sparsity, freeze=o.clean_freeze, directory=f"{self.output}/clean")
         if o.anchor:
             b.addon("trainer", "anchor", "AnchorAddon", weight=o.anchor, every=o.anchor_every, prompts=o.anchor_prompts)
         if o.aligned_init and o.init_adapter:

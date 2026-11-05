@@ -7,6 +7,7 @@ from typing import Any
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
 from ...engine.step.anchor import PROMPTS, AnchorLoss
+from ...engine.step.cleaner import MODES as CLEAN_MODES, LoraCleaner
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.policy import make_policy
 from ...engine.step.regional import RegionalUpdate
@@ -54,6 +55,45 @@ class AnchorAddon(Addon):
         text = (inputs.get("prompts") or "").strip()
         prompts = tuple(p.strip() for p in text.split("|") if p.strip()) if text else PROMPTS
         return _Anchor(inputs["weight"], inputs.get("every") or 2, prompts)
+
+
+class _Clean(ModelBound):
+    def __init__(self, **options: Any):
+        self.options = options
+
+    def attach(self, model: TrainableDenoiser, batches: Any) -> LoraCleaner:
+        family, at = model.family, self.options["at"]
+        scheme = family.schemes["kohya"] if family.schemes["kohya"].can_write(model.kind) else family.schemes["native"]
+
+        def save(path: str) -> None:
+            family.save_adapter(path, scheme.export(model.adapted), {"family": family.id, "kind": model.kind, "rank": model.rank, "alpha": model.alpha,
+                                                                     "step": at, "scheme": scheme.name, "cleaned": "1"})
+
+        return LoraCleaner(model.adapted.layers, save=save, **self.options)
+
+
+class CleanerAddon(Addon):
+    DISPLAY_NAME = "LoRA cleaner"
+    SLOT = "cleaner"
+    INPUTS = {
+        "keep": Port("keep", float, default=0.15, minimum=0.001, maximum=0.999,
+                     doc="The share of the adapter that stays. Every weight (element) or every rank direction (component) gets a gate; the adapter is frozen and only the gates "
+                         "train for `steps` steps with the training loss (and the anchor loss when it is on). The highest gates stay, the rest are removed."),
+        "at": Port("at", int, required=False, default=0, minimum=0, unit="step", doc="The step the cleaning happens before: 0 for an adapter given with --init-adapter, later for one trained in this run."),
+        "steps": Port("steps", int, required=False, default=200, minimum=1, doc="Steps of gate training (one batch each)."),
+        "mode": Port("mode", str, required=False, default="element", choices=CLEAN_MODES,
+                     doc="element: a gate per weight of A and of B. component: each layer is first rewritten into its singular directions (the same adapter), then one gate per direction."),
+        "lr": Port("lr", float, required=False, default=0.1, minimum=0.0, doc="Learning rate of the gate logits (they start at 3, a gate of 0.95)."),
+        "sparsity": Port("sparsity", float, required=False, default=0.0, minimum=0.0, advanced=True,
+                         doc="A pull toward closed gates, in units of the typical gradient of the gate tensor. 0: only the loss moves the gates; the kept share is set by `keep` anyway."),
+        "freeze": Port("freeze", bool, required=False, default=True,
+                       doc="Keep what was kept fixed for the rest of the run; the removed part starts from zero (a removed direction from a fresh row) and trains. Off: everything trains on."),
+        "directory": Port("directory", str, required=False, default="", doc="Where the cleaned adapter (`lora_cleaned.safetensors`), the kept mask and a summary are written; the mask is needed to resume."),
+    }
+
+    def build(self, **inputs) -> ModelBound:
+        return _Clean(keep=inputs["keep"], at=inputs.get("at") or 0, steps=inputs.get("steps") or 200, mode=inputs.get("mode") or "element", lr=inputs.get("lr") or 0.1,
+                      sparsity=inputs.get("sparsity") or 0.0, freeze=inputs.get("freeze", True), directory=inputs.get("directory") or "")
 
 
 class _Perceptual(ModelBound):

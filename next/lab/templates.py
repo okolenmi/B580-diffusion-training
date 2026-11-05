@@ -303,5 +303,17 @@ CLEAN_LR_TEMPLATE = {
              {"name": "more-lr-2e-5", "args": CLEAN_START + ["--lr", "2e-5", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]},
              {"name": "more-lr-4e-6", "args": CLEAN_START + ["--lr", "4e-6", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+CLEAN_ANCHOR_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "clean-anchor",
+    "note": "The cleaner with other anchor weights. In the first test anchor 5 removed nearly all of the dataset's effect with 15% of the weights, and no anchor kept most of it (about as much as the magnitude "
+            "control). These arms are in between, all stopping right after the cleaning: element with anchor 0.5, 1 and 2, and component with 1. `best` is for the same sheet.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 300),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "element-anchor-0.5-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "0.5"]},
+             {"name": "element-anchor-1-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "1"]},
+             {"name": "element-anchor-2-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "2"]},
+             {"name": "component-anchor-1-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "component", "--anchor", "1"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

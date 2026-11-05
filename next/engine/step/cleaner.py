@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import statistics
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -259,6 +260,7 @@ class LoraCleaner:
     @torch.no_grad()
     def _apply(self, scores: dict[str, dict[str, Tensor]]) -> None:
         self._kept = self._masks(scores)
+        self._factors: list[float] = []
         for path, layer in self.layers.items():
             a, b = layer.lora_A, layer.lora_B
             masks = self._factor_masks(path, a, b)
@@ -273,7 +275,9 @@ class LoraCleaner:
             if self.rescale and before > 0.0:
                 after = _change_norm(a, b)
                 if after > 0.0:
-                    b.mul_(min(before / after, MAX_RESCALE))  # what was cut is made up by what stays: the layer's change keeps its size
+                    factor = min(before / after, MAX_RESCALE)
+                    b.mul_(factor)  # what was cut is made up by what stays: the layer's change keeps its size
+                    self._factors.append(factor)
             self._freeze_layer(path, {"lora_A": (masks["lora_A"], a), "lora_B": (masks["lora_B"], b)})
 
     def _factor_masks(self, path: str, a: Tensor, b: Tensor) -> dict[str, Tensor]:
@@ -325,6 +329,7 @@ class LoraCleaner:
         return {"mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window if losses else float("nan"),
                 "loss_last": sum(losses[-window:]) / window if losses else float("nan"),
                 "scope": self.scope, "drop": list(self.drop), "rescale": self.rescale,
+                **({"rescale_factor_median": statistics.median(self._factors), "rescale_factor_min": min(self._factors), "rescale_factor_max": max(self._factors)} if self._factors else {}),
                 "kept_by_region": by(lambda p: p.split(".")[0]), "kept_by_part": by(_part)}
 
     def describe(self) -> str:

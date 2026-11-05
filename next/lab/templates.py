@@ -227,13 +227,13 @@ TREND_TEMPLATE = {
 ALIGNED_VALUES_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "aligned-values",
-    "note": "Gradient-aligned start, other values. In the first test 4 batches gave the best textures and 16 was a clear fail, so the arms bracket 4 (2 and 8), and 4 is combined with LoRA+ "
+    "note": "Gradient-aligned start, other values. In the first test 4 batches gave the best textures and 16 was a clear fail, so the arms bracket 4 (2 and 6), and 4 is combined with LoRA+ "
             "(a faster B suited the aligned A in theory: A is already a good direction, B has to grow from zero). `aligned-4` is the control from the first test, run again so every picture "
             "is on one sheet. Recipe and 600 steps as before.",
     "train_command": with_steps(REGIONS_TEMPLATE, 600),
     "arms": [{"name": "aligned-4", "args": RECIPE + ["--aligned-init", "4"]},
              {"name": "aligned-2", "args": RECIPE + ["--aligned-init", "2"]},
-             {"name": "aligned-8", "args": RECIPE + ["--aligned-init", "8"]},
+             {"name": "aligned-6", "args": RECIPE + ["--aligned-init", "6"]},
              {"name": "aligned-4-lora-plus-4", "args": RECIPE + ["--aligned-init", "4", "--lora-plus", "4"]},
              {"name": "aligned-4-lora-plus-8", "args": RECIPE + ["--aligned-init", "4", "--lora-plus", "8"]}],
 }
@@ -280,5 +280,17 @@ CLEAN_TEMPLATE = {
              {"name": "component-15-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "component", "--anchor", "5"]},
              {"name": "element-15-more", "args": CLEAN_START + ["--lr", "2e-4", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+LORA_PLUS_VALUES_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "lora-plus-values",
+    "note": "LoRA+ ratios closer together. Both 4 and 16 looked good in the first test, so the arms are 2, 4, 8 and 12 on the same recipe and 600 steps; `baseline` (no LoRA+) is run again so every "
+            "picture is on one sheet.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "baseline", "args": RECIPE},
+             {"name": "lora-plus-2", "args": RECIPE + ["--lora-plus", "2"]},
+             {"name": "lora-plus-4", "args": RECIPE + ["--lora-plus", "4"]},
+             {"name": "lora-plus-8", "args": RECIPE + ["--lora-plus", "8"]},
+             {"name": "lora-plus-12", "args": RECIPE + ["--lora-plus", "12"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

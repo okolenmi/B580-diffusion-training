@@ -175,7 +175,8 @@ def _parser() -> argparse.ArgumentParser:
                            "(and --anchor when on); the highest gates stay and, unless --clean-no-freeze, are frozen while the rest trains from zero. Writes <output>/clean/lora_cleaned.safetensors")
             p.add_argument("--clean-at", type=int, default=DEFAULTS.clean_at, help="step the cleaning happens before (0 with --init-adapter)")
             p.add_argument("--clean-steps", type=int, default=DEFAULTS.clean_steps, help="gate training steps")
-            p.add_argument("--clean-mode", choices=("element", "component"), default=DEFAULTS.clean_mode, help="a gate per weight, or per singular direction of each layer")
+            p.add_argument("--clean-mode", choices=("element", "component", "magnitude"), default=DEFAULTS.clean_mode,
+                           help="a gate per weight, or per singular direction of each layer; magnitude: no gates, the largest weights stay (the control)")
             p.add_argument("--clean-lr", type=float, default=DEFAULTS.clean_lr, help="learning rate of the gates")
             p.add_argument("--clean-sparsity", type=float, default=DEFAULTS.clean_sparsity, help="pull toward closed gates (0 = only the loss)")
             p.add_argument("--clean-no-freeze", dest="clean_freeze", action="store_false", default=DEFAULTS.clean_freeze, help="train everything after cleaning instead of freezing the kept part")

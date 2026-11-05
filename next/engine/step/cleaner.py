@@ -21,7 +21,7 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-MODES = ("element", "component")
+MODES = ("element", "component", "magnitude")  # magnitude: no gates, the largest weights stay (the control the learned gates must beat)
 START_LOGIT = 3.0  # a gate of 0.95: the cleaning starts almost where the adapter is
 TIE_BREAK = 1e-3  # gates that never moved are ranked by the size of their weight
 
@@ -136,6 +136,12 @@ class LoraCleaner:
         """``fetch`` gives a batch, ``backward`` adds its gradients (and returns its loss), ``zero`` clears the adapter's gradients."""
         if not any(bool(layer.lora_B.detach().ne(0).any()) for layer in self.layers.values()):
             raise ValueError("the adapter has nothing to clean (every B is zero): give --init-adapter, or clean at a later step")
+        if self.mode == "magnitude":
+            scores = {path: {"a": layer.lora_A.detach().abs().cpu(), "b": layer.lora_B.detach().abs().cpu()} for path, layer in self.layers.items()}
+            self._apply(scores)
+            self.summary = self._summarise(scores, [])
+            self._write()
+            return self.summary
         if self.mode == "component":
             to_singular_directions(self.layers)
         gates = Gates(self.layers, self.mode)
@@ -255,14 +261,16 @@ class LoraCleaner:
             return {name: round(share(paths, "a"), 3) for name, paths in sorted(groups.items())}
 
         window = max(1, len(losses) // 5)
-        return {"mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window, "loss_last": sum(losses[-window:]) / window,
+        return {"mode": self.mode, "keep": self.keep, "steps": len(losses), "loss_first": sum(losses[:window]) / window if losses else float("nan"),
+                "loss_last": sum(losses[-window:]) / window if losses else float("nan"),
                 "kept_by_region": by(lambda p: p.split(".")[0]), "kept_by_part": by(_part)}
 
     def describe(self) -> str:
         """The cleaning in a few lines for the console."""
         s = self.summary
-        return (f"cleaning ({s['mode']}): kept {s['keep']:.0%} after {s['steps']} gate steps, loss {s['loss_first']:.4f} -> {s['loss_last']:.4f}"
-                f"{'; the kept part is frozen' if self.freeze else ''}\n  kept by region {s['kept_by_region']}\n  kept by part {s['kept_by_part']}")
+        trained = f", gate loss {s['loss_first']:.4f} -> {s['loss_last']:.4f}" if s["steps"] else ""
+        frozen = "; the kept part is frozen" if self.freeze else ""
+        return f"cleaning ({s['mode']}): kept {s['keep']:.0%} after {s['steps']} gate steps{trained}{frozen}\n  kept by region {s['kept_by_region']}\n  kept by part {s['kept_by_part']}"
 
     def _write(self) -> None:
         """The cleaned adapter (before any further training), the mask and a summary, for looking at what was kept."""

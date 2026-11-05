@@ -270,12 +270,13 @@ CLEAN_TEMPLATE = {
     "note": "LoRA cleaner on your saved best adapter. Every weight (`element`) or every singular direction of each layer (`component`) gets a gate; the adapter is frozen and only the gates train for 200 "
             "steps with the training loss, and with `--anchor` also the damage to other prompts; then the highest 15% stay. The `-only` arms stop right after the cleaning (one step at a tiny rate), "
             "so their pictures are the cleaned adapter itself: does the dataset's look survive in 15% of the weights, and do the unrelated-prompt pictures (portrait, red house) come closer to the base "
-            "model than in `best`? `no-anchor` shows what the second signal adds. `more` continues for 300 steps with the kept part frozen, the cleared room training from zero. "
+            "model than in `best`? `no-anchor` shows what the second signal adds, and `magnitude` is the control without any learning (the largest 15% of the weights stay): the gates are worth it only if they beat it. `more` continues for 300 steps with the kept part frozen, the cleared room training from zero. "
             "The cleaned adapters, the kept masks and a summary of what was kept per part of the network are in each arm's `train/clean/` folder.",
     "train_command": with_steps(REGIONS_TEMPLATE, 300),
     "arms": [{"name": "best", "lora": "{lora:best}"},
              {"name": "element-15-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "5"]},
              {"name": "element-15-no-anchor-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15"]},
+             {"name": "magnitude-15-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "magnitude"], "note": "control: no gates, the largest 15% of the weights stay"},
              {"name": "component-15-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--clean-mode", "component", "--anchor", "5"]},
              {"name": "element-15-more", "args": CLEAN_START + ["--lr", "2e-4", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]}],
 }

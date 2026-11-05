@@ -515,6 +515,16 @@ def lora_cleaner():
         same = [bool((mask_equal := torch.equal(torch.where(m, l.lora_A, before_update[p][0]), before_update[p][0])))
                 for p, l in layers.items() for m in [cleaner._frozen[p]["lora_A"][0]]]
         check(all(same) and any(not torch.equal(l.lora_A, before_update[p][0]) for p, l in layers.items()), f"{mode}: after an update the kept weights are put back and the others stay free")
+    fresh = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0).layers
+    with torch.no_grad():
+        for layer in fresh.values():
+            layer.lora_B.normal_(std=0.1)
+    control = LoraCleaner(fresh, keep=0.3, mode="magnitude", freeze=False)
+    biggest = max(float(l.lora_B.detach().abs().max()) for l in fresh.values())
+    summary = control.run(lambda: {}, lambda batch: 0.0, lambda: None)
+    survivors = torch.cat([l.lora_B.detach().abs().flatten() for l in fresh.values()])
+    check(summary["steps"] == 0 and abs(float((survivors > 0).float().mean()) - 0.3) < 0.02 and float(survivors.max()) == biggest,
+          "the magnitude control keeps the largest weights without any gate steps")
     with tempfile.TemporaryDirectory() as tmp:
         saved = []
         cleaner = LoraCleaner(layers, keep=0.3, steps=2, mode="element", freeze=True, directory=tmp, save=saved.append)

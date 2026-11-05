@@ -424,6 +424,7 @@ def training_signal_instruments() -> None:
           "the starter's optional parts are addons, and a plain run has only the save trigger")
     doc = sdxl_lora(model="m.safetensors", dataset="d", output="o", init_adapter="/x/best.safetensors")
     check(next(n for n in doc.nodes if n.class_name == "InjectAdapterNode").params["init_adapter"] == "/x/best.safetensors", "the starter hands the adapter to continue to Inject Adapter")
+    check("AnchorAddon" in kinds(anchor=2.0) and "AnchorAddon" not in kinds(), "the starter has the anchor loss only when asked")
     raises(ValueError, lambda: nodes(init_adapter="/x/a.safetensors", aligned_init=4), "continuing an adapter and a gradient-aligned start cannot be combined", "fresh adapter")
     raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 

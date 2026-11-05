@@ -26,7 +26,7 @@ from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
 from ...graph import AddonSlot, Completion, EventOut, Group, Node, Port
 from ...graph.events import CheckpointDue, StepFinished
-from .addons import ModelBound, RegionPolicy
+from .addons import ConditionerBound, ModelBound, RegionPolicy
 
 
 class DiffusionTrainerNode(Node):
@@ -37,6 +37,7 @@ class DiffusionTrainerNode(Node):
     ADDON_SLOTS = (AddonSlot("perceptual", ModelBound, doc="An extra loss term from the base network's features."),
                    AddonSlot("initializer", ModelBound, doc="Sets the adapter's starting point from the first batches."),
                    AddonSlot("gradient_policy", RegionPolicy, doc="How the regions of a batch are reconciled (the plain mean without it)."),
+                   AddonSlot("anchor", ConditionerBound, doc="Keeps the adapter from changing the model's predictions under prompts unrelated to the dataset."),
                    AddonSlot("region_weights", ModelBound, doc="Weights the regions of a step by how their part of the timestep range is doing."))
     INPUTS = {
         "batches": Port("batches", Batcher),
@@ -123,6 +124,7 @@ class DiffusionTrainerNode(Node):
                           perf=self._perf_session(model, accelerator), regional=self._regional(model, inputs),
                           perceptual=self._attached("perceptual", model, inputs), calibrate_every=self._calibrate_every(inputs),
                           initializer=self._attached("initializer", model, inputs), trend=self._attached("region_weights", model, inputs),
+                          anchor=self._anchored(model, inputs),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
         with self._attention_for_determinism(model, inputs):
@@ -133,6 +135,10 @@ class DiffusionTrainerNode(Node):
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}
+
+    def _anchored(self, model: TrainableDenoiser, inputs: dict) -> Any:
+        part = self.addons.one("anchor")
+        return part.attach(model, inputs["conditioner"], inputs.get("accumulation", 1)) if part is not None else None
 
     def _attached(self, slot: str, model: TrainableDenoiser, inputs: dict) -> Any:
         part = self.addons.one(slot)

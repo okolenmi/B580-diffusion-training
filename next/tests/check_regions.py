@@ -361,6 +361,80 @@ def perceptual_trainer_check() -> None:
               f"a run with the term reports it ({outcome.error}, {sorted(metrics[-1]) if metrics else None})")
 
 
+def anchor_checks() -> None:
+    """The anchor term: the base pass runs with the adapter off and without a gradient, the adapter pass gets the gradient, steps off the interval do nothing, and a zero adapter costs nothing."""
+    from types import SimpleNamespace
+
+    from ..engine.step.anchor import AnchorLoss
+    from ..engine.step.state import Inputs, StepState
+    from ..families.general.adapters.gate import TimestepGate
+
+    class Net:
+        def __init__(self, gate):
+            self.gate, self.seen, self.scale = gate, [], torch.nn.Parameter(torch.ones(1))
+
+        def predict(self, x, t, conditioning):
+            self.seen.append(None if self.gate.value is None else float(self.gate.value.sum()))
+            adapter = 0.0 if self.gate.value is not None and float(self.gate.value.sum()) == 0.0 else self.scale
+            return x * (1.0 + 0.1 * adapter)
+
+    class Cond:
+        extra: set = set()
+
+        def encode(self, prompts, sizes):
+            self.asked = list(prompts)
+            return None
+
+    gate, net, cond = TimestepGate(), Net(None), Cond()
+    net.gate = gate
+    anchor = AnchorLoss(net, cond, gate, ("a", "b"), weight=2.0, every=2, accumulation=2)
+    x = torch.randn(3, 4, 8, 8)
+    inputs = Inputs(x_t=x, t=torch.tensor([1, 2, 3]), sigma=torch.ones(3), target=x, t_frac=torch.zeros(3))
+
+    def step(n):
+        s = StepState(n, 0, "cpu", batch={"sizes_px": None}, scale=1.0)
+        s.inputs = inputs
+        anchor.run(s)
+
+    step(1)
+    check(not net.seen and not anchor.report(), "a step off the interval does nothing")
+    step(2)
+    check(net.seen[0] == 0.0 and net.seen[1] is None and gate.value is None and set(cond.asked) <= {"a", "b"} and len(cond.asked) == 3,
+          f"base pass with the adapter off, adapter pass as trained, one prompt per sample ({net.seen})")
+    expected = float(((x * 0.1) ** 2).mean())
+    check(net.scale.grad is not None and float(net.scale.grad) != 0.0 and abs(anchor.report()["loss_anchor"] - expected) < 1e-6,
+          "the penalty reaches the adapter and is reported before the weight")
+    check(cond.extra >= {"a", "b"}, "the anchor prompts are kept encoded")
+    for bad in (dict(weight=0.0), dict(every=0), dict(prompts=())):
+        try:
+            AnchorLoss(net, cond, gate, **{"prompts": ("a",), "weight": 1.0, "every": 1, **bad})
+            refused = False
+        except ValueError:
+            refused = True
+        check(refused, f"the anchor refuses {bad}")
+
+
+def anchor_trainer_check() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "images").mkdir()
+        make_images(tmp / "images")
+        store = DatasetStore(tmp / "datasets")
+        library = store.library("toy", create=True)
+        library.ingest(tmp / "images")
+        library.close()
+        for regions in (1, 3):
+            doc = graph(tmp, steps=2, save_every=1000, **({"gradient_policy": "equal"} if regions > 1 else {}))
+            for node in doc.nodes:
+                if node.class_name == "NoiserNode" and regions > 1:
+                    node.params.update({"regions": regions})
+            doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "AnchorAddon", {"weight": 0.5, "every": 1, "prompts": "a cat|a ship"})
+            _, outcome, trace = execute(store, doc)
+            metrics = [f["summary"]["metrics"] for s, f in trace.frames if f.get("name") == "step_finished"]
+            check(outcome.ok and len(metrics) == 2 and all(m.get("loss_anchor", -1) >= 0 for m in metrics),
+                  f"a run with the anchor reports it, {regions} region(s) ({outcome.error}, {sorted(metrics[-1]) if metrics else None})")
+
+
 if __name__ == "__main__":
     run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
-        perceptual_trainer_check, trend_checks, trend_run_check)
+        perceptual_trainer_check, anchor_checks, anchor_trainer_check, trend_checks, trend_run_check)

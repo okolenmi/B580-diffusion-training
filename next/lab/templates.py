@@ -168,6 +168,7 @@ LONG_TEMPLATE = {
              {"name": "cosine-1200", "args": LADDER_100 + ["--schedule", "cosine"]}],
 }
 RECIPE = ["--regions", "3", "--warmup", "50", "--regions-from", "9", "--regions-span", "120"]
+BEST = LADDER_100 + ["--batch", "1", "--lr", "2e-4"]
 LORA_PLUS_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "lora-plus",
@@ -248,5 +249,18 @@ CONTINUE_TEMPLATE = {
              {"name": "more-300-lr-5e-5", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "5e-5", "--init-adapter", "{lora:best}"]},
              {"name": "more-600-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "2e-4", "--steps", "600", "--save-every", "600", "--init-adapter", "{lora:best}"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+ANCHOR_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "anchor",
+    "note": "Anchor loss: every second step the network is also asked about the batch's noisy images under a random prompt unrelated to the dataset (a built-in list of eight scenes and portraits), "
+            "with and without the adapter, and the difference between the two predictions is penalised. The adapter keeps what it learns from the dataset but is held back from changing how "
+            "the model answers other prompts. Look at the `portrait` and `red house` pictures (the dataset is not in them): do they keep the base model's look better with a stronger "
+            "weight, and what is lost on the empty prompt? The baseline is your best recipe (batch 1, lr 2e-4, 600 steps); an anchor step costs about one more pass, so the arms take longer.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "baseline", "args": BEST},
+             {"name": "anchor-1", "args": BEST + ["--anchor", "1"]},
+             {"name": "anchor-5", "args": BEST + ["--anchor", "5"]},
+             {"name": "anchor-25", "args": BEST + ["--anchor", "25"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

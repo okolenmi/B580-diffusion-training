@@ -6,6 +6,7 @@ from typing import Any
 
 from ...engine.handles import TrainableDenoiser
 from ...engine.step.aligned_init import AlignedInit
+from ...engine.step.anchor import PROMPTS, AnchorLoss
 from ...engine.step.perceptual import SelfPerceptual, SelfPerceptualLoss
 from ...engine.step.policy import make_policy
 from ...engine.step.regional import RegionalUpdate
@@ -18,6 +19,41 @@ class ModelBound:
 
     def attach(self, model: TrainableDenoiser, batches: Any) -> Any:
         raise NotImplementedError
+
+
+class ConditionerBound:
+    """What the trainer's ``anchor`` slot holds: a part that is made once the model and the conditioner are known."""
+
+    def attach(self, model: TrainableDenoiser, conditioner: Any, accumulation: int) -> Any:
+        raise NotImplementedError
+
+
+class _Anchor(ConditionerBound):
+    def __init__(self, weight: float, every: int, prompts: tuple[str, ...]):
+        self.weight, self.every, self.prompts = weight, every, prompts
+
+    def attach(self, model: TrainableDenoiser, conditioner: Any, accumulation: int) -> AnchorLoss:
+        return AnchorLoss(model.denoiser, conditioner, model.gate, self.prompts, self.weight, self.every, accumulation)
+
+
+class AnchorAddon(Addon):
+    DISPLAY_NAME = "Anchor loss"
+    SLOT = "anchor"
+    INPUTS = {
+        "weight": Port("weight", float, default=1.0, minimum=0.0,
+                       doc="Every few steps the network is also asked about the batch's noisy images under a random prompt unrelated to the dataset, with and "
+                           "without the adapter; the squared difference of the two predictions, times this weight, is added to the gradient. It keeps the adapter "
+                           "from changing the model's behaviour for other prompts. Reported as loss_anchor (before the weight). Plain optimizer, no graph; "
+                           "an anchor step costs about one more forward and backward."),
+        "every": Port("every", int, required=False, default=2, minimum=1, unit="steps", doc="Steps between anchor passes (with regions, every region's pass of that step runs one)."),
+        "prompts": Port("prompts", str, required=False, default="",
+                        doc="The anchor prompts separated by `|`; empty uses a built-in list of eight unrelated scenes and portraits."),
+    }
+
+    def build(self, **inputs) -> ConditionerBound:
+        text = (inputs.get("prompts") or "").strip()
+        prompts = tuple(p.strip() for p in text.split("|") if p.strip()) if text else PROMPTS
+        return _Anchor(inputs["weight"], inputs.get("every") or 2, prompts)
 
 
 class _Perceptual(ModelBound):

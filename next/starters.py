@@ -54,6 +54,9 @@ class SdxlLoraOptions:
     alpha: float | None = None
     lora_plus: float = 1.0
     init_adapter: str = ""
+    anchor: float = 0.0
+    anchor_every: int = 2
+    anchor_prompts: str = ""
     checkpointing: bool = True
     graph: bool = False
     persist_conditioning: bool = False
@@ -147,6 +150,8 @@ class _SdxlLora:
                     calibrate_every=o.policy_calibrate_every)
         if o.trend_boost:
             b.addon("trainer", "trend", "TrendWeightingAddon", boost=o.trend_boost, mode=o.trend_mode, penalty=o.trend_penalty)
+        if o.anchor:
+            b.addon("trainer", "anchor", "AnchorAddon", weight=o.anchor, every=o.anchor_every, prompts=o.anchor_prompts)
         if o.aligned_init and o.init_adapter:
             raise ValueError("--aligned-init sets the starting point of a fresh adapter; it cannot be combined with --init-adapter")
         if o.aligned_init:

@@ -142,6 +142,14 @@ Send the zip. Does more training improve it or damage it? Compare each arm with 
 ## 62. Queue run and the cache warning (check while running the above)
 Run two files in one command (for example `python -m next.lab run aligned2.json more.json`). Each file now runs in its own process; the second file's training should start without the out-of-memory error that chained runs gave. Send the console of any failure. Also: the `oneDNN primitive cache is evicting shapes` warning should no longer appear (the cache floor is 4096 and counts four batch sizes per shape); tell me if it does.
 
+## 63. Anchor loss: protect what the model already does (about 3 hours for four arms; pick with `--arms`)
+New: `--anchor W` (with `--anchor-every N`, default 2, and `--anchor-prompts "a|b"`). Every Nth step the network is also asked about the batch's noisy images under a random prompt unrelated to the dataset, with and without the adapter; the squared difference of the two predictions times W is added to the gradient. The step line shows `loss_anchor` (the difference before the weight: it should stay small and not climb steadily). Costs about one more forward and backward on those steps; plain optimizer, no graph.
+```
+python -m next.lab template anchor > anchor.json
+python -m next.lab run anchor.json
+```
+Send the zip. Look at the `portrait` and `red house` pictures first (the dataset is not in them): do they stay closer to the base model's rendering as the weight grows (1, 5, 25 against baseline)? Then the empty prompt: is the dataset's look still learned? If 25 changes nothing and 1 changes nothing, the weight range is too low and I will raise it; if even 1 flattens the dataset look, it is too strong.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

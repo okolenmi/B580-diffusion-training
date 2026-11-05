@@ -292,5 +292,16 @@ LORA_PLUS_VALUES_TEMPLATE = {
              {"name": "lora-plus-8", "args": RECIPE + ["--lora-plus", "8"]},
              {"name": "lora-plus-12", "args": RECIPE + ["--lora-plus", "12"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+CLEAN_LR_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "clean-lr",
+    "note": "After the cleaning, how fast should the cleared room train? The kept 15% is frozen; the rest trains at a much lower rate than 2e-4 (which is the rate that produced the adapter and may overshoot in "
+            "sensitive places). `best` and `element-15-only` are for the same sheet; the other arms clean (200 gate steps, the same as before) and then train 300 steps at the rate in the name.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 300),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "element-15-only", "args": CLEAN_START + CLEAN_ONLY + ["--clean", "0.15", "--anchor", "5"]},
+             {"name": "more-lr-2e-5", "args": CLEAN_START + ["--lr", "2e-5", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]},
+             {"name": "more-lr-4e-6", "args": CLEAN_START + ["--lr", "4e-6", "--warmup", "20", "--clean", "0.15", "--anchor", "5"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

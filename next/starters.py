@@ -53,6 +53,7 @@ class SdxlLoraOptions:
     rank: int = 16
     alpha: float | None = None
     lora_plus: float = 1.0
+    init_adapter: str = ""
     checkpointing: bool = True
     graph: bool = False
     persist_conditioning: bool = False
@@ -129,7 +130,8 @@ class _SdxlLora:
 
     def _model_and_optimizer(self) -> None:
         o, b = self.o, self.b
-        b.add("adapter", "InjectAdapterNode", rank=o.rank, alpha=float(o.alpha if o.alpha is not None else o.rank), checkpointing=o.checkpointing, lora_plus=o.lora_plus)
+        b.add("adapter", "InjectAdapterNode", rank=o.rank, alpha=float(o.alpha if o.alpha is not None else o.rank), checkpointing=o.checkpointing, lora_plus=o.lora_plus,
+              **({"init_adapter": o.init_adapter} if o.init_adapter else {}))
         b.add("optimizer", o.optimizer, lr=o.lr, fused=o.fused)
         b.add("schedule", self.SCHEDULES[o.schedule], lr=o.lr)
         if o.warmup:
@@ -145,6 +147,8 @@ class _SdxlLora:
                     calibrate_every=o.policy_calibrate_every)
         if o.trend_boost:
             b.addon("trainer", "trend", "TrendWeightingAddon", boost=o.trend_boost, mode=o.trend_mode, penalty=o.trend_penalty)
+        if o.aligned_init and o.init_adapter:
+            raise ValueError("--aligned-init sets the starting point of a fresh adapter; it cannot be combined with --init-adapter")
         if o.aligned_init:
             b.addon("trainer", "aligned_init", "AlignedInitAddon", batches=o.aligned_init)
         b.addon("graph", "save_steps", "EveryNSteps", every=o.save_every)

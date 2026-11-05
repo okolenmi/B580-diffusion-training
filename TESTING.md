@@ -27,7 +27,7 @@ For speed numbers with power and a kernel profile (not pass/fail): `python -m ne
 
 ## Still manual
 
-Experiments of the lab can be queued: `python -m next.lab run long.json loraplus.json aligned.json ema.json ramp.json` runs them one after the other. Training states are written every 200 steps, so after a power cut the same command skips what is finished and continues the arm that was cut (TESTING 58 checks this once).
+Experiments of the lab can be queued: `python -m next.lab run long.json loraplus.json aligned2.json ema.json more.json` runs them one after the other. Training states are written every 200 steps, so after a power cut the same command skips what is finished and continues the arm that was cut (TESTING 58 checks this once).
 
 ## 6b. Merge Adapter
 Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA you have, `strength` 1 (the CLI starters have no switch for it; edit the graph).
@@ -122,6 +122,25 @@ Your idea, in code: each region of a step gets a weight from how the loss of its
 python -m next.lab template trend > trend.json
 ```
 Run it (`--arms baseline trend-1 current-1` if the time is short), send the zip. Step lines show `trend w a b c` per region: check that the weights move (a column stuck at 1.00 means no history yet or no success) and are not wild (above about 3 for many steps in a row). Then the usual: composition, details, and above all whether the individual styles of the dataset survive better than in the baseline at the same step. The loss itself will not tell the arms apart.
+
+## 60. Gradient-aligned start: other values, and with LoRA+ (about 3 hours for five arms; pick with `--arms`)
+Your result: 4 batches gave very good textures, 16 failed. This brackets 4 with 2 and 8, and puts 4 together with LoRA+ 4 and 8 (A is already a good direction, B has to grow from zero). `aligned-4` is run again so all pictures are on one sheet.
+```
+python -m next.lab template aligned-values > aligned2.json
+python -m next.lab run aligned2.json
+```
+Send the zip. Look at textures first, then whether LoRA+ adds to the aligned start or fights it.
+
+## 61. Continue your best adapter (about 1.5 hours)
+Put your saved adapter (batch 1, lr 2e-4, 600 steps) into `lab-setup.json` under `loras` as `best`. The template renders it as it is and continues it three ways with a new `--init-adapter` option: 300 more steps at 2e-4, 300 at 5e-5, 600 at 2e-4 (fresh optimizer, 50 step warmup, no region ladder).
+```
+python -m next.lab template continue-best > more.json
+python -m next.lab run more.json
+```
+Send the zip. Does more training improve it or damage it? Compare each arm with `best` on the same sheet and check the holdout column of the per-timestep table (above 1 = worse than the base model). If the continuation fails to start with a message about rank or targets, the adapter was trained with other settings than the template's (rank 16 default, all default targets); tell me which.
+
+## 62. Queue run and the cache warning (check while running the above)
+Run two files in one command (for example `python -m next.lab run aligned2.json more.json`). Each file now runs in its own process; the second file's training should start without the out-of-memory error that chained runs gave. Send the console of any failure. Also: the `oneDNN primitive cache is evicting shapes` warning should no longer appear (the cache floor is 4096 and counts four batch sizes per shape); tell me if it does.
 
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).

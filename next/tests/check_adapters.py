@@ -406,5 +406,39 @@ def stored_bytes(*tensors):
     return sum(t.numel() * t.element_size() for t in tensors if t is not None)
 
 
+def continue_from_file():
+    """Inject Adapter's `init_adapter` loads a saved adapter into a fresh one (same output as the saved one) and refuses files that do not fit or do not exist."""
+    from types import SimpleNamespace
+
+    from ..nodes.model.inject_adapter import InjectAdapterNode
+
+    torch.manual_seed(0)
+    x, t, c, y = torch.randn(2, 4, 16, 16), torch.tensor([10.0, 500.0]), torch.randn(2, 5, 48), torch.randn(2, 40)
+    family = SimpleNamespace(id="sdxl", read_adapter=read_adapter, schemes=SCHEMES, load_checked=load_checked)
+    node = object.__new__(InjectAdapterNode)
+    import copy
+
+    base = UNetModel(**TINY_UNET)
+    first = SDXLDenoiser(copy.deepcopy(base), dtype=torch.float32)
+    part = inject_denoiser(first, TrainableSelection(), rank=4, alpha=4.0)
+    with torch.no_grad():
+        for layer in part.layers.values():
+            layer.lora_B.normal_(std=0.1)
+        trained = first(x, t, c, y)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/a.safetensors"
+        save_adapter(path, SCHEMES["kohya"].export(part), {"family": "sdxl", "scheme": "kohya", "step": "600"})
+        second = SDXLDenoiser(copy.deepcopy(base), dtype=torch.float32)
+        fresh = inject_denoiser(second, TrainableSelection(), rank=4, alpha=4.0)
+        node._start_from(family, fresh, "") is None or check(False, "no file, no loading")
+        info = node._start_from(family, fresh, path)
+        with torch.no_grad():
+            check(info["step"] == "600" and info["matched"] == len(fresh.layers) and torch.allclose(second(x, t, c, y), trained, atol=1e-5),
+                  "a fresh adapter that starts from a file gives the saved output")
+        other = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=2, alpha=2.0)
+        raises(ValueError, lambda: node._start_from(family, other, path), "a file of another rank is refused with a hint", "same rank")
+        raises(ValueError, lambda: node._start_from(family, fresh, f"{tmp}/gone.safetensors"), "a missing file is refused", "does not exist")
+
+
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, continue_from_file, sdxl_plan_and_injection)

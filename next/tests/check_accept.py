@@ -422,6 +422,9 @@ def training_signal_instruments() -> None:
     check("BatchRampAddon" not in kinds() and "BatchRampAddon" in kinds(batch_first=1), "the starter has a Batch Ramp only when asked")
     check({"AlignedInitAddon", "WarmupAddon", "RegionLadderAddon"} <= kinds(aligned_init=4, warmup=5, regions_from=6) and kinds() == {"EveryNSteps"},
           "the starter's optional parts are addons, and a plain run has only the save trigger")
+    doc = sdxl_lora(model="m.safetensors", dataset="d", output="o", init_adapter="/x/best.safetensors")
+    check(next(n for n in doc.nodes if n.class_name == "InjectAdapterNode").params["init_adapter"] == "/x/best.safetensors", "the starter hands the adapter to continue to Inject Adapter")
+    raises(ValueError, lambda: nodes(init_adapter="/x/a.safetensors", aligned_init=4), "continuing an adapter and a gradient-aligned start cannot be combined", "fresh adapter")
     raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 
 

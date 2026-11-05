@@ -171,6 +171,8 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--batch-first", type=int, default=DEFAULTS.batch_first, help="a smaller batch size for the first --batch-first-steps batches (e.g. 1 with --batch 4: one picture per update at the start, four at the end); 0 = off")
             p.add_argument("--batch-first-steps", type=int, default=DEFAULTS.batch_first_steps, help="batches that use the --batch-first size")
             p.add_argument("--lora-plus", type=float, default=DEFAULTS.lora_plus, help="LoRA+: the up-projection factor (B) learns this many times faster than the down-projection (A); 1 = off, 16 is the usual suggestion")
+            p.add_argument("--init-adapter", default=DEFAULTS.init_adapter, help="continue an adapter made earlier (an absolute path, or a name under the loras folder): same rank, targets and kind; the "
+                           "optimizer, schedule and step count start fresh")
             p.add_argument("--ema", default=DEFAULTS.ema, help="Adapter EMA window widths, comma-separated (e.g. 0.05,0.1): besides each saved file, one more per width with _emaW in the name")
             p.add_argument("--gradient-policy", choices=("mean", "equal", "project", "common"), default=None,
                            help="how the regions of a batch are reconciled: mean (one loss), equal (unit-length gradients, the default with --regions >= 2), project, common")

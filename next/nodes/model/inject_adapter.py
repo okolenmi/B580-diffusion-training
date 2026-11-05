@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -97,6 +98,9 @@ class InjectAdapterNode(Node):
         "nf4_double_quant": Port("nf4_double_quant", bool, required=False, default=False, group="memory",
                                  visible_when=("base_precision", "nf4"),
                                  doc="Store the per-block scales in 8 bits as well: about 100 MB less on an SDXL UNet, two more kernels per layer call."),
+        "init_adapter": Port("init_adapter", str, required=False, default="", group="targets", advanced=True,
+                             doc="Start from an adapter made earlier (a name under the loras folder, or an absolute path) instead of from a fresh one: training "
+                                 "continues it with a new optimizer and schedule. The file must have the same rank, targets and kind as set here."),
         "lora_plus": Port("lora_plus", float, required=False, default=1.0, minimum=1.0, group="targets", advanced=True,
                           doc="LoRA+: multiplier of the learning rate of the up-projection factor (B) over the down-projection (A); 1 = the same rate "
                               "for both. With B starting at zero it can move faster; 16 is the value usually suggested."),
@@ -115,6 +119,25 @@ class InjectAdapterNode(Node):
         report = family.merge_adapter(denoiser.module(), scheme, state, merge.strength)
         if report.merged == 0:
             raise ValueError(f"Merge Adapter: nothing in {merge.file} matches this network (wrong family or key format?)")
+
+    def _start_from(self, family, adapted, name: str) -> dict | None:
+        """Loads the adapter file the run continues from; None when it starts fresh."""
+        if not name:
+            return None
+        path = Path(name) if Path(name).is_absolute() else self.context.env.service("models").resolve("loras", name)
+        if not path.is_file():
+            raise ValueError(f"Inject Adapter: the adapter to continue from does not exist: {path}")
+        state, header = family.read_adapter(str(path))
+        scheme = family.schemes.get((header or {}).get("scheme") or "kohya")
+        if scheme is None:
+            raise ValueError(f"Inject Adapter: {family.id} has no {(header or {}).get('scheme')!r} format")
+        try:
+            report = family.load_checked(scheme, adapted, state)
+        except (RuntimeError, ValueError) as error:
+            raise ValueError(f"Inject Adapter: {path.name} does not fit this adapter ({error}); was it trained with the same rank, targets and kind?") from error
+        if report.missing:
+            raise ValueError(f"Inject Adapter: {path.name} has no weights for {len(report.missing)} of this adapter's layers (first: {report.missing[0]}); it was trained on other targets")
+        return {"file": path.name, "step": (header or {}).get("step"), "matched": report.matched, "unexpected": len(report.unexpected)}
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
@@ -140,6 +163,7 @@ class InjectAdapterNode(Node):
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
                                              compute=compute)
         adapted.up_ratio = float(inputs.get("lora_plus") or 1.0)
+        loaded = self._start_from(family, adapted, inputs.get("init_adapter") or "")
         precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):
             with self.context.task(f"Converting the frozen weights to {precision}"):
@@ -164,5 +188,5 @@ class InjectAdapterNode(Node):
             window = GateWindow(inputs.get("gate_low", 0.0), inputs.get("gate_high", 999.0), inputs.get("gate_width", 100.0))
         plan = {**adapted.plan.to_json(), "base_precision": precision}
         return {"model": TrainableDenoiser(family, part, denoiser, adapted, device, rank, alpha, inputs.get("kind") or "lora",
-                                           selection, window, info=plan,
+                                           selection, window, info={**plan, **({"init_adapter": loaded} if loaded else {})},
                                            checkpointer=checkpointer, checkpoint_share=share, deterministic=deterministic)}

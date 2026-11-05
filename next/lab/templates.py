@@ -223,5 +223,30 @@ TREND_TEMPLATE = {
              {"name": "current-1", "args": RECIPE + ["--trend-boost", "1", "--trend-mode", "current"]},
              {"name": "trend-1-penalty", "args": RECIPE + ["--trend-boost", "1", "--trend-penalty", "0.5"]}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+ALIGNED_VALUES_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "aligned-values",
+    "note": "Gradient-aligned start, other values. In the first test 4 batches gave the best textures and 16 was a clear fail, so the arms bracket 4 (2 and 8), and 4 is combined with LoRA+ "
+            "(a faster B suited the aligned A in theory: A is already a good direction, B has to grow from zero). `aligned-4` is the control from the first test, run again so every picture "
+            "is on one sheet. Recipe and 600 steps as before.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "aligned-4", "args": RECIPE + ["--aligned-init", "4"]},
+             {"name": "aligned-2", "args": RECIPE + ["--aligned-init", "2"]},
+             {"name": "aligned-8", "args": RECIPE + ["--aligned-init", "8"]},
+             {"name": "aligned-4-lora-plus-4", "args": RECIPE + ["--aligned-init", "4", "--lora-plus", "4"]},
+             {"name": "aligned-4-lora-plus-8", "args": RECIPE + ["--aligned-init", "4", "--lora-plus", "8"]}],
+}
+CONTINUE_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "continue-best",
+    "note": "Does more training improve a good adapter or damage it? `best` is your saved adapter (batch 1, lr 2e-4, 600 steps) rendered as it is; the other arms continue it (`--init-adapter`) "
+            "with a fresh optimizer and a 50 step warmup, no region ladder (3 regions from the start). The same data order as the first run starts again, so the first images seen are the "
+            "same ones. Compare each arm with `best` on the same sheet, and the per-timestep table (holdout above 1 means it got worse than the base model there).",
+    "train_command": with_steps(REGIONS_TEMPLATE, 300),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "more-300-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "2e-4", "--init-adapter", "{lora:best}"]},
+             {"name": "more-300-lr-5e-5", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "5e-5", "--init-adapter", "{lora:best}"]},
+             {"name": "more-600-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "2e-4", "--steps", "600", "--save-every", "600", "--init-adapter", "{lora:best}"]}],
+}
+TEMPLATES = {"ranges": TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

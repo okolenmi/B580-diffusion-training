@@ -151,6 +151,20 @@ def full_run():
               f"a run that stops at step 4 and is started again with more steps trains only the last two ({first_half.error}, {second_half.error}, {saved}, {trace.steps()} steps)")
         check(resumed.keys() == straight.keys() and all(torch.allclose(resumed[k], straight[k], atol=1e-6) for k in straight),
               "the resumed run ends with the same adapter as the run that was never interrupted")
+        staged = dict(stages=("2:0.3", "2@1e-3:0.5", "2@5e-4"), stage_warmup=0, resume_every=2)
+        shutil.rmtree(tmp / "out")
+        _, whole, _ = execute(store, graph(tmp, steps=6, **staged))
+        straight, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000006.safetensors"))
+        shutil.rmtree(tmp / "out" / "resume")
+        shutil.move(str(tmp / "out"), str(tmp / "straight_staged"))
+        shutil.rmtree(tmp / "straight_staged")
+        _, first_part, _ = execute(store, graph(tmp, steps=6, **staged), stop_after=5)
+        for lora in (tmp / "out").glob("toy_step*.safetensors"):
+            lora.unlink()
+        _, rest, trace = execute(store, graph(tmp, steps=6, **staged))
+        resumed, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000006.safetensors"))
+        check(whole.ok and first_part.stopped and rest.ok and 0 < trace.steps() < 6 and all(torch.allclose(resumed[k], straight[k], atol=1e-6) for k in straight),
+              f"a staged run stopped after its second cleaning and resumed ends with the adapter of the uninterrupted run, frozen weights included ({first_part.error}, {rest.error}, {trace.steps()} steps)")
         _, other, _ = execute(store, graph(tmp, steps=6, resume_every=2, lr=2e-3))
         check(not other.ok and "different run" in str(other.error), f"a state of another run (different learning rate) is refused ({other.error})")
 

@@ -68,60 +68,11 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## Lab setup (once, before the lab items below)
-```
-python -m next.lab setup > lab-setup.json
-```
-Fill in `lab-setup.json` once: models, datasets, dataset, checkpoint file, training resolution, output folder, device, the image folders for the per-timestep loss, and under `loras` the adapters you saved (name: path). Every `python -m next.lab template KIND > file.json` reads it (or `--setup FILE`) and writes it into the file; a template that needs a saved adapter (`{lora:best}`) stops with a message when the name is missing or the path is still `/path/to/...`. `python -m next.lab run a.json b.json` checks all files before it starts (placeholder paths, missing adapter files) and runs each file in its own process.
-
-## 53. A long run with and without learning-rate decay (about 2.4 hours)
-Your finding is that more steps now improve the pictures. A constant learning rate leaves the final weights noisy at the end of a long run; a decay to a low rate usually cleans that up. 1200 steps with the best recipe, constant against cosine to 5%.
-```
-python -m next.lab template long-run > long.json
-```
-`python -m next.lab run long.json`, send the zip. Compare the final pictures, and with the 600-step ones you have: does 1200 keep improving, and does the decay add anything?
-
-## 54. LoRA+ learning-rate ratio (about 2.5 hours)
-B starts at zero and has to grow from nothing while A is already random, so one shared rate under-trains B. LoRA+ gives B a higher rate (`--lora-plus 4` means 4 times). Baseline, 4 and 16 on the current recipe, 600 steps.
-```
-python -m next.lab template lora-plus > loraplus.json
-```
-Run it, send the zip. Look at the pictures at equal steps and at how fast the loss falls early; a ratio that makes the images painted or unstable is too high.
-
-## 55. Averaged adapter weights (EMA) (about 1 hour)
-The weights jump around between steps; an average over the last few percent of the run is usually cleaner and costs nothing at sampling time. The template trains one run with the best recipe and `--ema 0.05,0.1` (one extra copy of the adapter on the card per width), then renders the trained adapter and both averages from that same run.
-```
-python -m next.lab template ema > ema.json
-python -m next.lab run ema.json
-```
-Send the zip. Look for cleaner details and fewer blotches with the same composition. (The earlier version had placeholder paths and rendered nothing; that report does not count.)
-
-## 56. Gradient-aligned adapter start (about 2.5 hours)
-A fresh LoRA starts with random A rows, and B first moves along whatever the loss gradient has in common with them. This sets A to the gradient's main directions, measured on the first N batches before step 1 (two passes over them with no update, so a little slower to start; the model itself is unchanged). The baseline is the lora-plus recipe; 4 and 16 batches. Check first that the run does not run out of memory in the measuring step (it holds the same gradients as a normal step).
-```
-python -m next.lab template aligned-init > aligned.json
-```
-Run it, send the zip. Look at the early pictures (do they show the subject sooner?) and at the final ones at 600 steps; if they look the same, the start does not matter at this length.
-
-## 57. Batch 1 first, a bigger batch at the end (about 2 hours)
-Your batch test: 2 images per pass cost no extra time, 4 cost 1.7 times, a bigger batch gives more detail and less variety, lr 2e-4 suits it. The ramp trains the first batches with a small batch and the rest with the full one (`--batch 4 --batch-first 1 --batch-first-steps 400`). The control with batch 4 from the start is `batch-4-lr-2e-4` of the batch test.
-```
-python -m next.lab template batch-ramp > ramp.json
-```
-Run it, send the zip. Look at the minutes (a ramp should land between batch 1 and batch 4), the composition, and the details at the end. Note: the batch size changes mid-run, so the first big batch is a new shape for the card (one more compile), and the logged loss is noisier while the batch is small.
-
 ## 58. Resumable training: cut and continue (about 15 minutes)
 ```
 python -m next.run sdxl-lora ... --steps 60 --resume-every 20 --output /tmp/r
 ```
 Kill it (the process, or the power cord if you like) after step 30. Run the same command again: it should print `resuming from step 20 (N batches already used)`, continue with step 21 and finish at 60, and `/tmp/r/resume` holds `resume_00000040`/`resume_00000060` (`.json` + `.safetensors`). Compare the final picture or loss with an uninterrupted 60-step run (equal on a deterministic setup, close otherwise). Then a lab run: start any experiment, pull the plug mid-arm, run `python -m next.lab run exp.json` again; the arm should say "continuing an earlier session" and the report should list it as resumed. If a state is damaged (copy a resume file and flip a byte), the log says `resume state ... is not usable` and the run continues from the one before.
-
-## 59. Trend weighting of the timestep regions (about 3 hours for five arms; pick with `--arms`)
-Your idea, in code: each region of a step gets a weight from how the loss of its part of the timestep range is doing (12 smooth bins, a fast average against a slow one), and a region doing better than usual counts more. `trend` reads the bins' recent trend, `current` the region's own loss against the bins' average (noisier), `trend-1-penalty` also lowers a region doing worse. The weights act after each region's gradient is scaled to unit length, so they change the direction and, by the average weight, the length of the update.
-```
-python -m next.lab template trend > trend.json
-```
-Run it (`--arms baseline trend-1 current-1` if the time is short), send the zip. Step lines show `trend w a b c` per region: check that the weights move (a column stuck at 1.00 means no history yet or no success) and are not wild (above about 3 for many steps in a row). Then the usual: composition, details, and above all whether the individual styles of the dataset survive better than in the baseline at the same step. The loss itself will not tell the arms apart.
 
 ## 60. Gradient-aligned start: other values, and with LoRA+ (about 3 hours for five arms; pick with `--arms`)
 Your result: 4 batches gave very good textures, 16 failed. This brackets 4 with 2 and 6, and puts 4 together with LoRA+ 4 and 8 (A is already a good direction, B has to grow from zero). `aligned-4` is run again so all pictures are on one sheet.

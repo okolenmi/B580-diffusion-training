@@ -439,6 +439,13 @@ def training_signal_instruments() -> None:
     raises(ValueError, lambda: nodes(stages=("100:0.1",), clean=0.2), "stages and a single cleaning cannot be combined", "--stage")
     check("StagedRateAddon" not in kinds(stages=()) and "CleanerAddon" not in kinds(stages=("100", "100@1e-5")) and "StagedRateAddon" in kinds(stages=("100", "100@1e-5")),
           "stages without a kept share only change the rate")
+    from ..nodes.model.inject_adapter import parse_lr_regions
+    check(parse_lr_regions("middle_block=0.3,\noutput_blocks.0=0.5") == {"middle_block": 0.3, "output_blocks.0": 0.5}, "learning-rate regions are read as prefix=multiplier")
+    raises(ValueError, lambda: parse_lr_regions("middle_block=off"), "a learning-rate region cannot be switched off there", "regions=prefix=off")
+    adapter = next(n for n in sdxl_lora(model="m.safetensors", dataset="d", output="o", lr_regions="middle_block=0.3").nodes if n.class_name == "InjectAdapterNode")
+    check(adapter.params["lr_regions"] == "middle_block=0.3" and "lr_regions" not in next(n for n in sdxl_lora(model="m.safetensors", dataset="d", output="o").nodes
+                                                                                         if n.class_name == "InjectAdapterNode").params,
+          "the starter passes the learning-rate regions on only when given")
     raises(ValueError, lambda: nodes(init_adapter="/x/a.safetensors", aligned_init=4), "continuing an adapter and a gradient-aligned start cannot be combined", "fresh adapter")
     raises(TypeError, lambda: nodes(tag_swapp=True), "a misspelt starter option is refused instead of ignored", "tag_swapp")
 

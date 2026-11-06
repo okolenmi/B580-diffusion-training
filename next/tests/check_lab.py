@@ -208,7 +208,6 @@ def experiment_run() -> None:
 def interrupted_arm() -> None:
     """An arm whose first session was cut continues in a second one: the console is appended to, repeated steps count once, the states are removed when it succeeds."""
     import json
-    import sys
     import tempfile
     from pathlib import Path
 
@@ -254,8 +253,6 @@ def interrupted_arm() -> None:
 
 def adapter_reuse() -> None:
     """An arm can render an adapter file made earlier, and other arms can render the same adapter with another epsilon scale without training."""
-    import json
-
     from safetensors.torch import save_file
 
     from ..lab.experiment import Experiment

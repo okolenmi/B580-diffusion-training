@@ -54,6 +54,7 @@ class SdxlLoraOptions:
     alpha: float | None = None
     lora_plus: float = 1.0
     init_adapter: str = ""
+    lr_regions: str = ""
     clean: float = 0.0
     clean_at: int = 0
     clean_steps: int = 200
@@ -179,7 +180,7 @@ class _SdxlLora:
     def _model_and_optimizer(self) -> None:
         o, b = self.o, self.b
         b.add("adapter", "InjectAdapterNode", rank=o.rank, alpha=float(o.alpha if o.alpha is not None else o.rank), checkpointing=o.checkpointing, lora_plus=o.lora_plus,
-              **({"init_adapter": o.init_adapter} if o.init_adapter else {}))
+              **({"init_adapter": o.init_adapter} if o.init_adapter else {}), **({"lr_regions": o.lr_regions} if o.lr_regions else {}))
         b.add("optimizer", o.optimizer, lr=o.lr, fused=o.fused)
         b.add("schedule", self.SCHEDULES[o.schedule], lr=o.lr)
         if o.warmup:

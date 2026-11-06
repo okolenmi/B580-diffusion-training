@@ -145,6 +145,13 @@ def sdxl_plan_and_injection():
     tuned = plan_adapter(LAYOUT, descriptors, TrainableSelection(per_group={"ff": GroupOverride(rank=2, lr_mult=0.5)}), 8, 8)
     check({m.rank for m in tuned.modules if m.group == "ff"} == {2} and {m.rank for m in tuned.modules if m.group == "attn_self"} == {8},
           "per-group rank override")
+    rates = plan_adapter(LAYOUT, descriptors, TrainableSelection(per_group={"ff": GroupOverride(lr_mult=0.5)},
+                                                                 lr_regions={"middle_block": 0.3, "output_blocks": 0.8, "output_blocks.1": 0.6}), 8, 8)
+    rate = lambda prefix, group=None: {round(m.lr_mult, 6) for m in rates.modules if m.path.startswith(prefix) and (group is None or m.group == group)}  # noqa: E731
+    check(rate("middle_block") >= {0.3, 0.15} and rate("output_blocks.0.") == {0.8, 0.4} and rate("output_blocks.1.") == {0.6, 0.3} and rate("input_blocks") == {1.0, 0.5},
+          "a learning-rate region multiplies the group's multiplier, the longest prefix decides")
+    check("learning-rate region 'nope'" in " ".join(plan_adapter(LAYOUT, descriptors, TrainableSelection(lr_regions={"nope": 2.0}), 8, 8).warnings), "an unmatched learning-rate region is reported")
+    raises(ValueError, lambda: plan_adapter(LAYOUT, descriptors, TrainableSelection(lr_regions={"middle_block": 0.0}), 8, 8), "a learning-rate multiplier of zero is refused", "above 0")
 
     torch.manual_seed(0)
     den = SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32)
@@ -257,7 +264,6 @@ def int8_base_weights():
     x = torch.randn(40, 512, requires_grad=True)
     out = wrapped(x)
     out.float().square().sum().backward()
-    reference = torch.randn(64, 512)
     check(x.grad is not None and wrapped.lora_B.grad is not None and wrapped.lora_A.grad is not None and wrapped.base_weight.grad is None,
           "gradients reach the input and the adapter factors but not the frozen weight")
     x2 = x.detach().clone().requires_grad_(True)
@@ -518,7 +524,7 @@ def lora_cleaner():
                 layer.lora_A.add_(1.0)
                 layer.lora_B.add_(1.0)
         cleaner.after_update()
-        same = [bool((mask_equal := torch.equal(torch.where(m, l.lora_A, before_update[p][0]), before_update[p][0])))
+        same = [torch.equal(torch.where(m, l.lora_A, before_update[p][0]), before_update[p][0])
                 for p, l in layers.items() for m in [cleaner._frozen[p]["lora_A"][0]]]
         check(all(same) and any(not torch.equal(l.lora_A, before_update[p][0]) for p, l in layers.items()), f"{mode}: after an update the kept weights are put back and the others stay free")
     fresh = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=4, alpha=4.0).layers

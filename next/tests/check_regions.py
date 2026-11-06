@@ -110,7 +110,7 @@ def balance_run_check() -> None:
 
 def stream_check() -> None:
     """RegionStream gives the update of the stored-vectors route and the exact mean pairwise cosine."""
-    from ..engine.step.regional import RegionGradients, RegionStream
+    from ..engine.step.regional import RegionStream
 
     class Holder:
         def __init__(self, params):
@@ -363,8 +363,6 @@ def perceptual_trainer_check() -> None:
 
 def anchor_checks() -> None:
     """The anchor term: the base pass runs with the adapter off and without a gradient, the adapter pass gets the gradient, steps off the interval do nothing, and a zero adapter costs nothing."""
-    from types import SimpleNamespace
-
     from ..engine.step.anchor import AnchorLoss
     from ..engine.step.state import Inputs, StepState
     from ..families.general.adapters.gate import TimestepGate
@@ -451,14 +449,13 @@ def cleaner_trainer_check() -> None:
             doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "CleanerAddon", {"keep": 0.3, "at": 1, "steps": 2, "mode": mode, "directory": str(out)})
             doc = enable(doc, NodeRegistry.default(), "DiffusionTrainerNode", "AnchorAddon", {"weight": 0.5, "every": 1})
             _, outcome, trace = execute(store, doc)
-            reports = [f for s, f in trace.frames if s == "cleaning"] if hasattr(trace, "frames") else []
             files = sorted(p.name for p in out.glob("*")) if out.exists() else []
             check(outcome.ok and files == ["lora_cleaned.safetensors", "mask.safetensors", "summary.json"],
                   f"{mode}: the run cleans, writes its files and finishes ({outcome.error}, {files})")
 
 
 def staged_trainer_check() -> None:
-    """A run with two cleanings (the second at the end of the run) and a lower rate in the second stage: both cleanings are written, the second keeps what the first froze, and the rate drops."""
+    """A run with two cleanings (the second at the end of the run), a lower rate in the second stage and a different rate for two regions of the network: both cleanings are written, the second keeps what the first froze, and the rate drops."""
     import json
 
     with tempfile.TemporaryDirectory() as raw:
@@ -470,7 +467,7 @@ def staged_trainer_check() -> None:
         library.ingest(tmp / "images")
         library.close()
         out = tmp / "out" / "clean"
-        doc = graph(tmp, steps=4, save_every=1000, stages=("2:0.2", "2@1e-4:0.5"), stage_warmup=0)
+        doc = graph(tmp, steps=4, save_every=1000, stages=("2:0.2", "2@1e-4:0.5"), stage_warmup=0, lr_regions="input_blocks=0.5,output_blocks.0=2")
         _, outcome, _ = execute(store, doc)
         files = sorted(p.name for p in out.glob("*")) if out.exists() else []
         check(outcome.ok and "lora_cleaned_step000002.safetensors" in files and "lora_cleaned_step000004.safetensors" in files,

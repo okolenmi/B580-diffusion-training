@@ -126,7 +126,6 @@ def full_run():
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
         plain, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000004.safetensors"))
         mean, _ = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000004_ema0.1.safetensors"))
-        key = next(k for k in plain if "lora" in k.lower() or "up" in k.lower())
         check(averaged.ok and saved == ["toy_step000002.safetensors", "toy_step000002_ema0.1.safetensors", "toy_step000004.safetensors", "toy_step000004_ema0.1.safetensors"]
               and plain.keys() == mean.keys() and any(not torch.equal(plain[k], mean[k]) for k in plain),
               f"Adapter EMA writes an averaged file beside each saved one, different from the trained weights ({averaged.error}, {saved})")

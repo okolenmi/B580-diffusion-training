@@ -35,6 +35,14 @@ def parse_regions(text: str) -> dict[str, float | None]:
     return out
 
 
+def parse_lr_regions(text: str) -> dict[str, float]:
+    """``prefix=multiplier`` per line or comma."""
+    parsed = parse_regions(text)
+    if any(v is None for v in parsed.values()):
+        raise ValueError("Inject Adapter: lr_regions takes multipliers; to leave a region out use regions=prefix=off")
+    return parsed  # type: ignore[return-value]
+
+
 def parse_list(text: str) -> tuple[str, ...]:
     return tuple(p.strip() for p in re.split(r"[\n,]", text or "") if p.strip())
 
@@ -62,6 +70,9 @@ class InjectAdapterNode(Node):
                        doc="Comma-separated module groups to train; empty uses the family's defaults."),
         "regions": Port("regions", str, required=False, default="", group="targets",
                         doc="prefix=weight or prefix=off, one per line: scale or switch off parts of the network."),
+        "lr_regions": Port("lr_regions", str, required=False, default="", group="targets", advanced=True,
+                           doc="prefix=multiplier, one per line: the learning rate of the modules under a prefix is the run's rate times the multiplier (the longest prefix decides), "
+                               "for example middle_block=0.3 or output_blocks.0=0.5. Times LoRA+ and the per-group multipliers."),
         "include": Port("include", str, required=False, default="", group="targets",
                         doc="Regular expressions (full match on the module path) for extra modules to train."),
         "exclude": Port("exclude", str, required=False, default="", group="targets",
@@ -146,7 +157,7 @@ class InjectAdapterNode(Node):
         device = resolve_device(self.context.settings.get("device.default"))
         precision = part.dtype if part.dtype != "auto" else self.context.settings.get("precision.denoiser")
         dtype = resolve_dtype(precision, torch.bfloat16)
-        selection = TrainableSelection(groups=parse_list(inputs.get("groups", "")) or None,
+        selection = TrainableSelection(groups=parse_list(inputs.get("groups", "")) or None, lr_regions=parse_lr_regions(inputs.get("lr_regions", "")),
                                        regions=parse_regions(inputs.get("regions", "")),
                                        include=parse_list(inputs.get("include", "")),
                                        exclude=parse_list(inputs.get("exclude", "")))
@@ -163,6 +174,8 @@ class InjectAdapterNode(Node):
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
                                              compute=compute)
         adapted.up_ratio = float(inputs.get("lora_plus") or 1.0)
+        for warning in adapted.plan.warnings:
+            self.context.report("warning", {"node": self.uid, "message": warning})
         loaded = self._start_from(family, adapted, inputs.get("init_adapter") or "")
         precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):

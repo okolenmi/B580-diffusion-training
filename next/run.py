@@ -113,6 +113,7 @@ def _starter(args, settings: list[str], params: list[str]):
     if options.get("gradient_policy") is None:
         options["gradient_policy"] = "equal" if args.regions > 1 else "mean"
     options["stages"] = tuple(args.stages or ())
+    options["lr_regions"] = ",".join(args.lr_regions or ())
     options["steps"] = args.steps if args.steps is not None else (0 if args.epochs else DEFAULTS.steps)
     return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, **options,
                               settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
@@ -182,6 +183,9 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--clean-scope", choices=("global", "layer", "part"), default=DEFAULTS.clean_scope, help="what --clean counts over: the whole adapter, each layer, or each kind of layer")
             p.add_argument("--clean-drop", default=DEFAULTS.clean_drop, help="comma-separated parts (attn1, attn2, ff, proj_in, proj_out, ...) or regions (input_blocks, middle_block, output_blocks) removed completely")
             p.add_argument("--clean-rescale", action="store_true", default=DEFAULTS.clean_rescale, help="scale each layer after the cut so its change keeps its size")
+            p.add_argument("--lr-region", dest="lr_regions", action="append", metavar="PREFIX=MULTIPLIER",
+                           help="the learning rate of the adapter modules under a network prefix times a factor, repeated (e.g. --lr-region middle_block=0.3 --lr-region output_blocks.0=0.5); "
+                                "the longest prefix decides, LoRA+ multiplies on top")
             p.add_argument("--stage", dest="stages", action="append", metavar="STEPS[@LR][:KEEP[/MODE]]",
                            help="one stage of a staged run, repeated: STEPS at learning rate LR (default --lr), then cleaned to KEEP of the adapter (MODE magnitude unless given) "
                                 "and what is kept stays frozen. KEEP is the frozen share of the whole adapter in total. The run's steps are the sum "

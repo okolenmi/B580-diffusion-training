@@ -364,6 +364,27 @@ def stages(*specs: str) -> list[str]:
     return [*BEST, "--steps", str(total), *(arg for spec in specs for arg in ("--stage", spec))]
 
 
+TIER_2 = ("input_blocks.6", "input_blocks.7", "input_blocks.8", "output_blocks.0", "output_blocks.1", "output_blocks.2")
+
+
+def block_rates(middle: float, second: float) -> list[str]:
+    """Your sensitivity tiers as rate factors: the middle block, then input blocks 6-8 and output blocks 0-2."""
+    return [*BEST, "--lr-region", f"middle_block={middle:g}", *(arg for prefix in TIER_2 for arg in ("--lr-region", f"{prefix}={second:g}"))]
+
+
+BLOCK_RATES_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "block-rates",
+    "note": "A learning rate per part of the network, from your sensitivity estimate: the middle block is the most sensitive, input blocks 6-8 and output blocks 0-2 the second tier, the rest not much. "
+            "The recipe is your best one (batch 1, lr 2e-4, 600 steps); `best` is your saved adapter for the same sheet. `mild`: middle x0.5, second tier x0.75. `tiers`: middle x0.25, second tier x0.5. "
+            "`strong`: middle x0.1, second tier x0.3. `middle-only`: only the middle block at x0.25.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "best", "lora": "{lora:best}"},
+             {"name": "mild", "args": block_rates(0.5, 0.75)},
+             {"name": "tiers", "args": block_rates(0.25, 0.5)},
+             {"name": "strong", "args": block_rates(0.1, 0.3)},
+             {"name": "middle-only", "args": [*BEST, "--lr-region", "middle_block=0.25"]}],
+}
 STAGES_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "stages",
@@ -378,5 +399,5 @@ STAGES_TEMPLATE = {
              {"name": "8-slow", "args": stages("600:0.08", "600@2e-5")},
              {"name": "15-30", "args": stages("600:0.15", "400@5e-5:0.30")}],
 }
-TEMPLATES = {"ranges": TEMPLATE, "stages": STAGES_TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
+TEMPLATES = {"ranges": TEMPLATE, "stages": STAGES_TEMPLATE, "block-rates": BLOCK_RATES_TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
              "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

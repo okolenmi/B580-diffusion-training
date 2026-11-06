@@ -66,7 +66,7 @@ class ProvenanceBuilder:
         shape_cache: dict[int, tuple[str, str, list]] = {}
         for launch in launches:
             total += launch.duration_us
-            op = op_name = chain = shapes = dtypes = ""
+            op_name = chain = shapes = dtypes = ""
             raw_shapes: list = []
             if launch.op >= 0:
                 with_op += launch.duration_us

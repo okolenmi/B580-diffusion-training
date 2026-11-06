@@ -34,12 +34,13 @@ class GroupOverride:
 class TrainableSelection:
     """``groups=None`` means the layout's defaults. ``regions`` maps a module-path prefix to a weight multiplier, or
     ``None`` for off; the longest matching prefix decides. ``include`` and ``exclude`` are ``re.fullmatch`` patterns on
-    the module path; exclusion wins."""
+    the module path; exclusion wins. ``lr_regions`` maps a module-path prefix to a learning-rate multiplier (longest prefix decides)."""
 
     groups: tuple[str, ...] | None = None
     regions: Mapping[str, float | None] = field(default_factory=dict, hash=False)
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    lr_regions: Mapping[str, float] = field(default_factory=dict, hash=False)
     per_group: Mapping[str, GroupOverride] = field(default_factory=dict, hash=False)
 
 
@@ -132,6 +133,8 @@ def plan_adapter(layout: AdapterLayout, modules: Iterable[ModuleDescriptor], sel
     """The modules a selection trains, with per-module rank, alpha, region weight and learning-rate multiplier."""
     known = {g.name: g for g in layout.groups()}
     chosen = set(selection.groups) if selection.groups is not None else {n for n, g in known.items() if g.default_on}
+    if any(v <= 0 for v in selection.lr_regions.values()):
+        raise ValueError("a learning-rate region needs a multiplier above 0 (to leave a region out, switch it off in regions)")
     unknown = (chosen | set(selection.per_group)) - set(known)
     if unknown:
         raise ValueError(f"unknown group(s) {sorted(unknown)}; this family has {sorted(known)}")
@@ -156,12 +159,15 @@ def plan_adapter(layout: AdapterLayout, modules: Iterable[ModuleDescriptor], sel
                 continue
             weight = float(selection.regions[match])
         over = selection.per_group.get(group, GroupOverride())
+        rate = max((r for r in selection.lr_regions if region_matches(m.path, r)), key=len, default=None)
+        lr_mult = over.lr_mult * (selection.lr_regions[rate] if rate is not None else 1.0)
         m_rank = over.rank or rank
         planned.append(PlannedModule(m.path, group, m.kind, m_rank, over.alpha if over.alpha is not None else alpha,
-                                     weight, over.lr_mult, _factor_params(m, m_rank)))
+                                     weight, lr_mult, _factor_params(m, m_rank)))
     unused = [r for r in selection.regions if not any(region_matches(p.path, r) for p in planned)
               and selection.regions[r] is not None]
     warnings = tuple(f"region {r!r} matched no planned module" for r in unused)
+    warnings += tuple(f"learning-rate region {r!r} matched no planned module" for r in selection.lr_regions if not any(region_matches(p.path, r) for p in planned))
     return AdapterPlan(tuple(planned), warnings)
 
 

@@ -251,6 +251,24 @@ def interrupted_arm() -> None:
           .train_command(Arm("x"), Path("/o"), "py"), "every arm trains with a resume state every 200 steps unless the experiment turns it off")
 
 
+def lab_warnings() -> None:
+    """The lab says when two arms are the same run and when the folder holds results of arms that the file no longer lists."""
+    from ..lab.experiment import Experiment
+    from ..lab.runner import Lab
+
+    with tempfile.TemporaryDirectory() as raw:
+        spec = {"name": "demo", "models": "m", "datasets": "d", "dataset": "set", "checkpoint": "c.safetensors", "output": raw, "grid": {}, "arms": [{"name": "a", "args": ["--x", "1"]}, {"name": "b", "args": ["--x", "1"]}, {"name": "c", "args": ["--x", "2"]}]}
+        said: list[str] = []
+        Lab(Experiment.from_dict(spec), lambda lora: ToyBackend(), said.append, lambda exp, arm, folder: None)
+        check(len(said) == 1 and "a, b have the same arguments" in said[0], f"arms with the same arguments are reported ({said})")
+        old = Path(raw) / spec["name"] / "old"
+        old.mkdir(parents=True)
+        (old / "train.json").write_text("{}", encoding="utf8")
+        said.clear()
+        Lab(Experiment.from_dict({**spec, "arms": [{"name": "c", "args": ["--x", "2"]}]}), lambda lora: ToyBackend(), said.append, lambda exp, arm, folder: None)
+        check(len(said) == 1 and "old" in said[0] and "not in this file" in said[0], f"results of arms the file does not list are reported ({said})")
+
+
 def adapter_reuse() -> None:
     """An arm can render an adapter file made earlier, and other arms can render the same adapter with another epsilon scale without training."""
     from safetensors.torch import save_file
@@ -369,4 +387,4 @@ def ema_arms() -> None:
 
 
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, adapter_reuse, setup_file, ema_arms)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, lab_warnings, adapter_reuse, setup_file, ema_arms)

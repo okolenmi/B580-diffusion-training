@@ -454,6 +454,37 @@ def cleaner_trainer_check() -> None:
                   f"{mode}: the run cleans, writes its files and finishes ({outcome.error}, {files})")
 
 
+def side_passes_by_region_check() -> None:
+    """The gradient-aligned initialisation sends a batch of timestep regions through one region at a time, as a step does; all regions at once would need several times the memory."""
+    from ..engine.step.trainer import Trainer
+
+    sizes: list[int] = []
+    original = Trainer._region_pass
+
+    def recording(self, step, micro, part, attempt, share=1.0):
+        sizes.append(int(part["x_t"].shape[0]))
+        return original(self, step, micro, part, attempt, share)
+
+    Trainer._region_pass = recording
+    try:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            (tmp / "images").mkdir()
+            make_images(tmp / "images")
+            store = DatasetStore(tmp / "datasets")
+            library = store.library("toy", create=True)
+            library.ingest(tmp / "images")
+            library.close()
+            doc = graph(tmp, steps=1, aligned_init=2, gradient_policy="equal")
+            for node in doc.nodes:
+                if node.class_name == "NoiserNode":
+                    node.params.update({"regions": 3})
+            _, outcome, _ = execute(store, doc)
+    finally:
+        Trainer._region_pass = original
+    check(outcome.ok and max(sizes) == 2 and sizes.count(2) >= 6, f"no pass holds more than one region's two samples (three regions make six) ({outcome.error}, {sizes})")
+
+
 def staged_trainer_check() -> None:
     """A run with two cleanings (the second at the end of the run), a lower rate in the second stage and a different rate for two regions of the network: both cleanings are written, the second keeps what the first froze, and the rate drops."""
     import json
@@ -480,4 +511,4 @@ def staged_trainer_check() -> None:
 
 if __name__ == "__main__":
     run(noiser_checks, policy_checks, gradnorm_check, trainer_checks, window_check, balance_run_check, stream_check, ladder_check, ladder_run_check, calibration_check, perceptual_checks,
-        perceptual_trainer_check, anchor_checks, anchor_trainer_check, cleaner_trainer_check, staged_trainer_check, trend_checks, trend_run_check)
+        perceptual_trainer_check, anchor_checks, anchor_trainer_check, cleaner_trainer_check, side_passes_by_region_check, staged_trainer_check, trend_checks, trend_run_check)

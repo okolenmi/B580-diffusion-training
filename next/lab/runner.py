@@ -163,6 +163,23 @@ class Lab:
         self.root = experiment.root
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "experiment.json").write_text(json.dumps(experiment.to_dict(), indent=1), encoding="utf8")
+        for warning in self.warnings():
+            self.say(warning)
+
+    def warnings(self) -> list[str]:
+        """Things in the experiment file or the folder that are probably not meant: arms that are the same run, and results of other
+        arms left in this experiment's folder (the report lists only the arms of the file)."""
+        twins: dict[tuple, list[str]] = {}
+        for arm in self.experiment.arms:
+            twins.setdefault((arm.args, arm.lora, arm.reuse, arm.ema, arm.eps_scale), []).append(arm.name)
+        found = [f"arms {', '.join(names)} have the same arguments: they are repeats of one run (fine as a noise control, but is it a copy-paste slip?)"
+                 for names in twins.values() if len(names) > 1]
+        known = {arm.name for arm in self.experiment.arms}
+        others = sorted(p.name for p in self.root.iterdir() if p.is_dir() and p.name not in known and (p / "train.json").exists())
+        if others:
+            found.append(f"{self.root} also holds results of arms that are not in this file: {', '.join(others)}. They are kept but are not in the report; "
+                         f"to compare them, add arms with \"lora\": the adapter file in <arm>/train, or give this file another name")
+        return found
 
     def folder(self, arm: Arm | str) -> Path:
         return self.root / (arm if isinstance(arm, str) else arm.name)

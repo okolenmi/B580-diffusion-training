@@ -121,6 +121,13 @@ class ResidencyManager:
                        ours_outside_mb=None if own_after is None else round(own_after - own_before),
                        other_programs_mb=round(other_after - other_before))
 
+    def after_side_passes(self, why: str) -> None:
+        """Work outside the steps (initialisation, cleaning) is over: its cached blocks go back and its peak is forgotten, so the
+        next step is planned from its own needs."""
+        gc.collect()
+        self.give_back(why)
+        self.accelerator.reset_peak()
+
     def settle(self) -> None:
         """Once every persistent claim is in place: drop the garbage of loading and give back the cache, so what the
         run keeps for good sits together and the steps' transient blocks form the rest."""

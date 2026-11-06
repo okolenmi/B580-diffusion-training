@@ -105,6 +105,7 @@ class Trainer:
             if self._initializer is not None and start == 0:
                 with self._task("Gradient-aligned initialisation"):
                     self.init_summary = self._initializer.run(self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
+                self._after_side_passes("initialisation")
         if self._cleaner is not None and self._cleaner.passed(start):
             self._cleaner.restore()
         attach = getattr(self._perf, "attach_graph", None)
@@ -125,12 +126,18 @@ class Trainer:
             self._perf.close()
         return RunResult(max(self.steps - start, 0), self.steps, last)
 
+    def _after_side_passes(self, why: str) -> None:
+        """Passes outside the steps leave their cache and their peak behind; the first step would be planned from them."""
+        if self.residency is not None:
+            self.residency.after_side_passes(why)
+
     def _clean_if_due(self, step: int) -> None:
         event = self._cleaner.due(step) if self._cleaner is not None else None
         if event is None:
             return
         with self._task("Cleaning the adapter"):
             self.clean_summary = self._cleaner.run(event, self._next_batch, self._gradient_pass, self.optimizer.zero_grad)
+        self._after_side_passes("cleaning")
         if step > 0:
             self.optimizer.reset_states()  # the cleared weights start from zero: no momentum of the weights that were there
         if self._say is not None:
@@ -165,8 +172,12 @@ class Trainer:
         return state.batch
 
     def _gradient_pass(self, batch: dict) -> float:
-        """Forward and backward of one batch, its gradients added to what the adapter holds; no update. The batch's loss."""
-        return float(self._region_pass(0, 0, batch, 0)[0])
+        """Forward and backward of one batch, its gradients added to what the adapter holds; no update. The batch's loss.
+        A batch of timestep regions goes through one region at a time, as in a step: all of them at once would need several times the memory."""
+        region = batch.get("region")
+        sizes = [int(n) for n in torch.bincount(region).tolist() if n] if region is not None else [batch["x_t"].shape[0]]
+        parts = split_batch(batch, sizes)
+        return sum(float(self._region_pass(0, 0, part, 0, 1.0 / len(parts))[0]) for part in parts) / len(parts)
 
     def _fetch_window(self, step: int) -> tuple[list[dict], dict[str, float]]:
         """The ``accumulation`` batches of one optimizer step and what fetching them cost, by phase."""
@@ -295,12 +306,12 @@ class Trainer:
             self.optimizer.step()
         return losses, thirds, timing
 
-    def _region_pass(self, step: int, micro: int, part: dict, attempt: int) -> tuple[float, list, list, dict]:
-        """A batch's (or one region's) forward and backward, as chunks when it is too big; adds its gradient to the parameters'."""
+    def _region_pass(self, step: int, micro: int, part: dict, attempt: int, share: float = 1.0) -> tuple[float, list, list, dict]:
+        """A batch's (or one region's) forward and backward, as chunks when it is too big; adds its gradient (times ``share``) to the parameters'."""
         sizes = self._chunks(part, attempt)
         total, loss, per_sample, fractions, timing = sum(sizes), 0.0, [], [], {}
         for piece, size in zip(split_batch(part, sizes), sizes):
-            state = StepState(step, micro, self.device, batch=piece, scale=size / total)
+            state = StepState(step, micro, self.device, batch=piece, scale=share * size / total)
             self.pipeline.run(state)
             loss = loss + (state.loss if state.reported is None else state.reported).detach() * state.scale
             per_sample.append(state.per_sample.detach())

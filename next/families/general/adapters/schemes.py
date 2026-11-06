@@ -7,6 +7,9 @@ always means ``alpha / rank`` on load.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import shutil
 from dataclasses import dataclass
 from typing import Protocol
 from collections.abc import Mapping
@@ -118,7 +121,16 @@ class NativeScheme:
 
 
 def save_adapter(path: str, tensors: Mapping[str, Tensor], metadata: Mapping[str, str]) -> None:
-    save_file(dict(tensors), path, metadata={k: str(v) for k, v in metadata.items()})
+    """Written beside the target and moved into place, so that a full disk or a crash leaves the earlier file (or none) and never half a file under the final name."""
+    scratch = f"{path}.tmp"
+    try:
+        save_file(dict(tensors), scratch, metadata={k: str(v) for k, v in metadata.items()})
+        os.replace(scratch, path)
+    except OSError as error:
+        with contextlib.suppress(OSError):
+            os.remove(scratch)
+        free = shutil.disk_usage(os.path.dirname(os.path.abspath(path))).free
+        raise OSError(f"could not write {path} ({error}); {free / 2**30:.1f} GB are free on that disk") from error
 
 
 def read_adapter(path: str) -> tuple[dict[str, Tensor], dict[str, str]]:

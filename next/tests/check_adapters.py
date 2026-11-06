@@ -12,6 +12,7 @@ from torch import nn
 from ..families.general.adapters.gate import TimestepGate, compute_gate
 from ..families.general.adapters.layers import AdaptedConv2d, AdaptedLinear
 from ..families.general.adapters.scaling import scaling_factor
+import os
 import tempfile
 
 from ..families.api.adapters import GroupOverride, TrainableSelection, plan_adapter
@@ -185,6 +186,30 @@ def sdxl_plan_and_injection():
         report = load_checked(scheme, part, tensors)
         check(report.matched == len(part.layers) and not report.missing and not report.unexpected and meta_out["scheme"] == name,
               f"{name} file round-trips onto the same layers")
+    from pathlib import Path
+
+    from ..families.general.adapters import schemes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = f"{tmp}/a.safetensors"
+        save_adapter(target, SCHEMES["kohya"].export(part), {"step": "1"})
+        before = Path(target).read_bytes()
+        real = schemes.save_file
+
+        def full_disk(tensors, path, metadata=None):
+            Path(path).write_bytes(b"half")
+            raise OSError(28, "No space left on device")
+
+        schemes.save_file = full_disk
+        try:
+            save_adapter(target, SCHEMES["kohya"].export(part), {"step": "2"})
+            failed = ""
+        except OSError as error:
+            failed = str(error)
+        finally:
+            schemes.save_file = real
+        check(Path(target).read_bytes() == before and sorted(os.listdir(tmp)) == ["a.safetensors"] and "GB are free" in failed and "No space" in failed,
+              f"a write that fails leaves the earlier file whole, no half file, and says how much is free ({failed})")
     with torch.no_grad():
         check(torch.allclose(den(x, t, c, y), trained, atol=1e-5), "loading an exported file restores the trained output")
     dora = inject_denoiser(SDXLDenoiser(UNetModel(**TINY_UNET), dtype=torch.float32), TrainableSelection(), rank=2, alpha=2.0, kind="dora")

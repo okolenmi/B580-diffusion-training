@@ -259,14 +259,23 @@ def lab_warnings() -> None:
     with tempfile.TemporaryDirectory() as raw:
         spec = {"name": "demo", "models": "m", "datasets": "d", "dataset": "set", "checkpoint": "c.safetensors", "output": raw, "grid": {}, "arms": [{"name": "a", "args": ["--x", "1"]}, {"name": "b", "args": ["--x", "1"]}, {"name": "c", "args": ["--x", "2"]}]}
         said: list[str] = []
+        Lab.MIN_FREE_GB = 0
         Lab(Experiment.from_dict(spec), lambda lora: ToyBackend(), said.append, lambda exp, arm, folder: None)
         check(len(said) == 1 and "a, b have the same arguments" in said[0], f"arms with the same arguments are reported ({said})")
+        Lab.MIN_FREE_GB = 1e9
+        try:
+            said.clear()
+            Lab(Experiment.from_dict({**spec, "arms": [{"name": "c", "args": ["--x", "2"]}]}), lambda lora: ToyBackend(), said.append, lambda exp, arm, folder: None)
+        finally:
+            Lab.MIN_FREE_GB = 0
+        check(len(said) == 1 and "GB are free" in said[0], f"a nearly full disk is reported ({said})")
         old = Path(raw) / spec["name"] / "old"
         old.mkdir(parents=True)
         (old / "train.json").write_text("{}", encoding="utf8")
         said.clear()
         Lab(Experiment.from_dict({**spec, "arms": [{"name": "c", "args": ["--x", "2"]}]}), lambda lora: ToyBackend(), said.append, lambda exp, arm, folder: None)
         check(len(said) == 1 and "old" in said[0] and "not in this file" in said[0], f"results of arms the file does not list are reported ({said})")
+        Lab.MIN_FREE_GB = 20
 
 
 def adapter_reuse() -> None:

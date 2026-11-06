@@ -166,6 +166,8 @@ class Lab:
         for warning in self.warnings():
             self.say(warning)
 
+    MIN_FREE_GB = 20
+
     def warnings(self) -> list[str]:
         """Things in the experiment file or the folder that are probably not meant: arms that are the same run, and results of other
         arms left in this experiment's folder (the report lists only the arms of the file)."""
@@ -174,6 +176,9 @@ class Lab:
             twins.setdefault((arm.args, arm.lora, arm.reuse, arm.ema, arm.eps_scale), []).append(arm.name)
         found = [f"arms {', '.join(names)} have the same arguments: they are repeats of one run (fine as a noise control, but is it a copy-paste slip?)"
                  for names in twins.values() if len(names) > 1]
+        free = shutil.disk_usage(self.root).free / 2**30
+        if free < self.MIN_FREE_GB:
+            found.append(f"only {free:.1f} GB are free on the disk of {self.root}; a full disk makes saves and pictures fail half-way (free some space, or ignore this if the run is small)")
         known = {arm.name for arm in self.experiment.arms}
         others = sorted(p.name for p in self.root.iterdir() if p.is_dir() and p.name not in known and (p / "train.json").exists())
         if others:

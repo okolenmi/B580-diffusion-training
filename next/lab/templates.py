@@ -249,6 +249,15 @@ CONTINUE_TEMPLATE = {
              {"name": "more-300-lr-5e-5", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "5e-5", "--init-adapter", "{lora:best}"]},
              {"name": "more-600-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "2e-4", "--steps", "600", "--save-every", "600", "--init-adapter", "{lora:best}"]}],
 }
+REPEAT_TEMPLATE = {
+    **REGIONS_TEMPLATE,
+    "name": "baseline-repeat",
+    "note": "Your best recipe three times with the same arguments, no anchor: how far apart are two runs that should be the same, at 600 steps and in the metrics the reports use? "
+            "The third arm is for a deliberate cut: when `base-c-cut` passes step 450, stop the lab (Ctrl-C) and start it again; the arm continues from step 400. "
+            "If its pictures and numbers fall inside the spread of the first two, a restart changes nothing.",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
+    "arms": [{"name": "base-a", "args": BEST}, {"name": "base-b", "args": BEST}, {"name": "base-c-cut", "args": BEST}],
+}
 ANCHOR_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "anchor",
@@ -400,4 +409,4 @@ STAGES_TEMPLATE = {
              {"name": "15-30", "args": stages("600:0.15", "400@5e-5:0.30")}],
 }
 TEMPLATES = {"ranges": TEMPLATE, "stages": STAGES_TEMPLATE, "block-rates": BLOCK_RATES_TEMPLATE, "targets": TARGETS_TEMPLATE, "clean-magnitude": CLEAN_MAGNITUDE_TEMPLATE, "clean-parts": CLEAN_PARTS_TEMPLATE, "clean-anchor": CLEAN_ANCHOR_TEMPLATE, "clean-lr": CLEAN_LR_TEMPLATE, "lora-plus-values": LORA_PLUS_VALUES_TEMPLATE, "clean": CLEAN_TEMPLATE, "anchor": ANCHOR_TEMPLATE, "aligned-values": ALIGNED_VALUES_TEMPLATE, "continue-best": CONTINUE_TEMPLATE, "regions": REGIONS_TEMPLATE, "regions-signal": SIGNAL_TEMPLATE, "regions-perturb": PERTURB_TEMPLATE,
-             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}
+             "cheap-equal": CHEAP_TEMPLATE, "noise-floor": NOISE_TEMPLATE, "baseline-repeat": REPEAT_TEMPLATE, "eps-scale": EPS_TEMPLATE, "lr": LR_TEMPLATE, "one-pass": ONE_PASS_TEMPLATE, "first-steps": FIRST_STEPS_TEMPLATE, "region-count": REGION_COUNT_TEMPLATE, "ladder-span": LADDER_SPAN_TEMPLATE, "batch": BATCH_TEMPLATE, "long-run": LONG_TEMPLATE, "lora-plus": LORA_PLUS_TEMPLATE, "ema": EMA_TEMPLATE, "aligned-init": ALIGNED_TEMPLATE, "batch-ramp": BATCH_RAMP_TEMPLATE, "trend": TREND_TEMPLATE}

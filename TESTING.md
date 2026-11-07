@@ -168,6 +168,14 @@ python -m next.lab run blockrates.json
 ```
 Send the zip. Does the loss stay the same while the pictures get cleaner? No warning about an unmatched region should appear at the start of a run (a misspelt prefix is reported there).
 
+## 75. Is a baseline run luck, or did the restart help? (about 1.8 hours for three arms)
+The anchor run's baseline was cut twice and continued from step 400, and gave the best pictures yet. The log shows the continued steps behave like uninterrupted ones (same losses, same gradient norms up to kernel noise), so the likely reading is run-to-run spread. This tests it:
+```
+python -m next.lab template baseline-repeat > repeat.json
+python -m next.lab run repeat.json
+```
+Arms `base-a` and `base-b` run straight through. When `base-c-cut` passes step 450, press Ctrl-C and start the same command again; it continues from step 400. Send the zip. Compare the pictures of the three first: if `base-c-cut` is not better than the other two by eye, and its numbers lie between theirs, a restart changes nothing; if a and b differ from each other as much as the old baseline differed from them, that is the spread itself.
+
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

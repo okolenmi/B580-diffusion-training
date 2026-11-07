@@ -115,7 +115,9 @@ from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
+from .application.use_cases.node_shapes import GetNodeCatalog, ResolveNode
 from .infrastructure.graph.catalog import DiscoveredGraphCatalog
+from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_folders
 from .infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from .infrastructure.graph.runtime import ReflectedGraphRuntime
 from .infrastructure.graph_event_stream import ExecutionEventTail
@@ -166,6 +168,17 @@ class Container:
     monitor_bus: MonitorBus
 
 
+def _node_environment(layout):
+    """What a node's resolve may ask for while a person edits: the model folders, as the run will see them."""
+    from .infrastructure.graph.tree import Environment, ModelLibrary  # noqa: PLC0415 -- the tree loads on first use
+
+    try:
+        folders = model_folders(layout.checkpoints_dir, layout.loras_dir)
+    except RuntimeError:  # ComfyUI not found yet (first run): resolve still answers, with no files
+        return Environment()
+    return Environment(services={"models": ModelLibrary(folders)})
+
+
 def build_container(settings: Settings) -> Container:
     """Wire the real implementation graph (idempotent for the DB)."""
     database = SqliteDatabase(settings.db_path)
@@ -213,6 +226,7 @@ def build_container(settings: Settings) -> Container:
     # driver after every run.
     graph_registry = NodeRegistry()
     graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    node_catalog = ContractNodeCatalog(environment=lambda: _node_environment(layout))
     # One bus per process: the runtime hands it to MonitorNode through
     # ExecutionContext, the SSE endpoint reads the same instance (M6).
     monitor_bus = SharedMonitorBus()
@@ -436,6 +450,8 @@ def build_container(settings: Settings) -> Container:
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),
+            node_catalog=GetNodeCatalog(catalog=node_catalog),
+            resolve_node=ResolveNode(catalog=node_catalog),
             diagnostics=NodeDiagnostics(catalog=graph_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
             preview_memory=PreviewGraphMemory(

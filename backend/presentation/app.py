@@ -17,6 +17,7 @@ from .. import __version__
 from ..application.services import ApplicationServices
 from .api import (
     assets,
+    catalog,
     config,
     datasets,
     events,
@@ -57,6 +58,7 @@ def create_app(
     app.include_router(installer.router)
     app.include_router(assets.router)
     app.include_router(datasets.router)
+    app.include_router(catalog.router)
     app.include_router(graphs.router)
     app.include_router(templates.router)
     app.include_router(events.router)

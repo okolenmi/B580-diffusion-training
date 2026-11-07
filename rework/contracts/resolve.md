@@ -9,7 +9,7 @@ the static ports. `resolve` runs in the **server process**, while a person edits
 pure, fast (about 100 ms), imports no torch, reads at most one bounded file header
 through the shared cache, and never raises for bad input: it returns an `error` state.
 
-`POST /graphs/nodes/{class_name}/resolve`, body `{ "params": {...}, "settings": {...} }`:
+`POST /api/v1/graphs/nodes/{class_name}/resolve` (404 `node_class_not_found` for an unknown class), body `{ "params": {...}, "settings": {...} }`:
 
 ```jsonc
 {

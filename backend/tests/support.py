@@ -110,7 +110,9 @@ from backend.application.use_cases import (
     ListGraphs,
     ListNodeCatalog,
     MakeAssetFolder,
+    GetNodeCatalog,
     NodeDiagnostics,
+    ResolveNode,
     PreviewGraphMemory,
     ReadConfigRaw,
     ReadDatasetFile,
@@ -145,6 +147,7 @@ from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
+from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
 from backend.infrastructure.graph_event_stream import ExecutionEventTail
@@ -1049,6 +1052,7 @@ def build_services(
     if graph_registry is None:
         graph_registry = fixture_graph_registry()
     graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    contract_catalog = ContractNodeCatalog()
     # Default to the real adapter (replay/clear semantics under test);
     # the API tests exercise it, the runtime test swaps in a recorder.
     monitor_bus = monitor_bus if monitor_bus is not None else SharedMonitorBus()
@@ -1261,6 +1265,8 @@ def build_services(
         ),
         graphs=GraphServices(
             catalog=ListNodeCatalog(catalog=graph_catalog),
+            node_catalog=GetNodeCatalog(catalog=contract_catalog),
+            resolve_node=ResolveNode(catalog=contract_catalog),
             preview_memory=PreviewGraphMemory(
                 memory_ledger=memory_ledger,
                 peak_source=fixture_peak_source.observed,

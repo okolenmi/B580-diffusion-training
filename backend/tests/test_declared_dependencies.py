@@ -75,7 +75,7 @@ REPO = Path(__file__).resolve().parents[2]
 #: This project's own packages, which are not dependencies of each other in
 #: any way an installer should be told about.
 LOCAL = frozenset({
-    "nodes", "backend", "server", "manager", "runs", "runs_hw_validation",
+    "nodes", "next", "backend", "server", "manager", "runs", "runs_hw_validation",
     "paths", "run_tests", "config_io", "config_model", "compute_update",
     "monitor_bus", "frozen_lora_sd",
     # `scripts` is this project's own measurement harness (hw_validate.py and
@@ -104,6 +104,9 @@ EXCLUDED_PREFIXES = (
     "nodes/smoke_tests",
     "manager/smoke_tests",
     "frontend",
+    # These two run inside ComfyUI's own interpreter, where `comfy` is provided by ComfyUI itself.
+    "next/accept/comfy_forward.py",
+    "next/accept/comfy_render.py",
 )
 
 #: Imported directly, declared only transitively. Each is present because a

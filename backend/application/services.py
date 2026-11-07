@@ -64,6 +64,7 @@ from .use_cases.list_graphs import ListGraphs
 from .use_cases.list_node_catalog import ListNodeCatalog
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
+from .use_cases.node_shapes import GetNodeCatalog, ResolveNode
 from .use_cases.read_config_raw import ReadConfigRaw
 from .use_cases.read_dataset_file import ReadDatasetFile
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
@@ -168,6 +169,9 @@ class GraphServices:
     """Node-graph catalog, validation, execution, history, library (M4)."""
 
     catalog: ListNodeCatalog
+    #: The editor's read side over the new node tree (contracts catalog.md and resolve.md).
+    node_catalog: GetNodeCatalog
+    resolve_node: ResolveNode
     diagnostics: NodeDiagnostics
     validate: ValidateGraph
     #: MEM-07: what a run of this graph would need, before it runs.

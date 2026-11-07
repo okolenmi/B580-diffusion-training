@@ -2,8 +2,7 @@
 
 Status file for the nodes/graph/UI rework. Plans live in this folder, one file per
 domain. **Implemented in `next/`: phases 0 to 5 (graph, families, data, engine, training
-nodes) plus the follow-up ports.** Not started: phase 6 (server and editor, ask the
-owner first), 7 (views and starters), 8 (Anima), 9 (acceptance and swap). A fresh
+nodes) plus the follow-up ports.** Phase 6 (server and editor) is started: the owner gave the go-ahead 2026-11-07 and slice 1 is built (see the step table). Not started: 7 (views and starters), 8 (Anima), 9 (acceptance and swap). A fresh
 agent (or a session after compaction) starts by reading this file, then
 `90-build-plan.md`, then `TESTING.md` (what is verified on hardware) and the plan it
 is assigned.
@@ -91,6 +90,7 @@ User-facing manual: `next/MANUAL.md` (how to set things, what to run for what) a
 | 25 | Performance lab (`next/perf/`): per-run reports rating every piece of a step against measured ceilings, scenario matrix, micro-benchmarks, hardware bundle | `74-perf-lab.md` | P1 to P4 built, CPU-tested |
 | 26 | Acceptance lab (`next/accept/`): regions, probes (per-region quantization error), automatic verdicts for the hardware runs, visual aids | `75-acceptance-lab.md` | T1 to T3 built, CPU-tested |
 | 27 | Plan: node addons (optional parts attached to a node, tabs, one "other connections" hub) | `31-node-addons.md` | owner's idea 2026-11-03; proposal, nothing built |
+| 28 | Phase 6 in slices (owner's go, 2026-11-07). **Slice 1: catalog and resolve** served from `next/graph` beside the old routes: `GET /api/v1/catalog`, `POST /api/v1/graphs/nodes/{class}/resolve`, port `NodeCatalog`, adapter `infrastructure/graph/contract_catalog.py`, the single import seam `infrastructure/graph/tree.py`. **Slice 2** (next): validate and run on the new graph document (`GraphDoc`: uids, addons, event wires, settings) in the child process, replacing `GraphDefinition`. **Slice 3**: library, templates and executions persistence on the new document. **Slice 4**: delete `infrastructure/graph/{catalog,discovery,introspect,runtime}.py` and the old ports. **Slice 5**: `graph2` editor (JS). | `backend/`, `contracts/` | slice 1 done (10 checks in `backend/tests/test_node_catalog.py`); the backend suite has 6 files failing in the sandbox only for Python 3.13 (3.14 is required) and the missing `hypothesis` |
 
 Earlier map of parts and misplaced logic: the "Node graph component map" doc
 (nine parts around one trainer). Its recommendations are inputs, not decisions.

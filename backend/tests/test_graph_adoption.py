@@ -42,7 +42,8 @@ from backend.application.ports.graph_task_gateway import (
     GraphTaskGateway,
     GraphTaskLaunch,
 )
-from backend.domain.graph import GraphDefinition, GraphNodeSpec
+from backend.domain.graph import GraphDefinition, NodeSpec
+from next.graph.document import GraphDoc
 from backend.domain.value_objects import ExecutionId, GraphStatus
 from backend.infrastructure.graph_event_stream import (
     EventKind,
@@ -607,12 +608,9 @@ def _graph_of(node_count: int) -> GraphDefinition:
     has nodes, so a stub whose graph was empty would be asserting against
     a row that cannot exist.
     """
-    return GraphDefinition(
-        nodes=tuple(
-            GraphNodeSpec(id=f"n{i}", class_name="FloatConstantNode", params={})
-            for i in range(node_count)
-        )
-    )
+    return GraphDefinition(GraphDoc(nodes=tuple(
+        NodeSpec(uid=f"n_{i:06d}", class_name="FloatConstantNode") for i in range(node_count)
+    )))
 
 
 class _LateFinishingGateway(RecordingGateway):

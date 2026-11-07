@@ -23,8 +23,8 @@ from ..application.dto import (
 from ..application.ports.asset_store import AssetCatalog, AssetBrowse
 from ..application.ports.graph_catalog import CatalogSnapshot, NodeInfo, PortInfo
 from ..application.ports.graph_runtime import GraphIssue
-from ..domain.graph import GRAPH_FORMAT, GraphDefinition, GraphEdgeSpec, GraphNodeSpec
-from ..domain.memory_settings import AUTO, MemorySettings
+from ..domain.graph import GRAPH_FORMAT, GraphDefinition
+from ..domain.memory_settings import AUTO
 from ..application.ports.dataset_library import (
     DatasetInfo,
     DatasetItem,
@@ -853,117 +853,6 @@ def dataset_tasks_out(result) -> DatasetTasksOut:
 # ---------------------------------------------------------------------------
 
 
-class GraphNodeIn(BaseModel):
-    """One submitted node. ``id``/``class_name`` are *not* constrained
-    here: empty/duplicate ids and unknown classes are graph validation
-    issues (complete, localized, listed together) -- a 422 body rejection
-    would truncate that report to one field error."""
-
-    id: str
-    class_name: str
-    params: dict[str, Any] = Field(default_factory=dict)
-
-
-class GraphEdgeIn(BaseModel):
-    from_node: str
-    from_port: str
-    to_node: str
-    to_port: str
-
-
-class MemorySettingsIn(BaseModel):
-    """Per-graph memory settings on a submission.
-
-    Unlike the storage decoder -- which is tolerant by design because it
-    reads our own snapshots -- this is the caller-facing edge: an unknown
-    setting or a value that is neither a number nor ``"auto"`` is a 422
-    naming the offender, not silently defaulted.
-
-    MEM-03H-01, API layer: a budget must be finite, never a boolean
-    (``True`` is an ``int`` in Python and would be read as 1 MB), never
-    negative, never above zero-less -- and the range must be ordered.
-    ``vram_max_mb: -9000`` used to be accepted with a 201 and made the
-    ledger report 19,592 MB free on an 11,192 MB card.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    vram_min_mb: float = Field(0.0, ge=0, allow_inf_nan=False)
-    vram_max_mb: float | str = AUTO
-    strict: bool = True
-    policy: str = "demand_driven"
-    ram_max_mb: float | str = AUTO
-    #: Which accelerator the graph runs on (MEM-05). Validated at the
-    #: edge for the same reason every budget is: the domain refuses a
-    #: bad name too, and a domain error escaping this layer would be a
-    #: 500 rather than a 422 naming the offender.
-    device: str = "xpu"
-
-    @field_validator("vram_min_mb", "vram_max_mb", "ram_max_mb", mode="before")
-    @classmethod
-    def _no_boolean_budget(cls, value: Any) -> Any:
-        # Before coercion: pydantic's lax float would turn True into 1.0
-        # without complaint, and a budget of "1 MB" is not what the
-        # caller asked for anyway.
-        if isinstance(value, bool):
-            raise ValueError(f"{value!r} is a boolean, not a memory budget")
-        return value
-
-    @field_validator("vram_max_mb", "ram_max_mb", mode="before")
-    @classmethod
-    def _number_or_auto(cls, value: Any) -> Any:
-        # Before coercion, so the check sees exactly what was sent: a
-        # ceiling of 0 says the graph may use nothing ("auto" is how
-        # you ask for everything free), and nan/inf compare as if they
-        # were real sizes.
-        if isinstance(value, str):
-            if value != AUTO:
-                raise ValueError(f"{value!r} is not a number or {AUTO!r}")
-            return value
-        if isinstance(value, (int, float)):
-            try:
-                number = float(value)
-            except OverflowError:
-                # An int past the float range (10**400): pydantic turns
-                # ValueError into the 422, but would let OverflowError
-                # escape as a 500.
-                raise ValueError(
-                    f"{value!r} is too large to be a device size"
-                ) from None
-            if not math.isfinite(number) or number <= 0:
-                raise ValueError(f"{value!r} is not a finite number above zero")
-            return value
-        return value
-
-    @model_validator(mode="after")
-    def _min_within_max(self) -> MemorySettingsIn:
-        if isinstance(self.vram_max_mb, float) and self.vram_min_mb > self.vram_max_mb:
-            raise ValueError(
-                f"vram_min_mb ({self.vram_min_mb}) exceeds vram_max_mb "
-                f"({self.vram_max_mb})"
-            )
-        return self
-
-    @field_validator("device", mode="after")
-    @classmethod
-    def _device_is_a_name(cls, value: str) -> str:
-        # The domain raises on this too; caught here so the caller gets
-        # a 422 with the field named instead of a 500 from below.
-        if not value.strip():
-            raise ValueError(f"{value!r} is not a device name")
-        return value
-
-    def to_domain(self) -> MemorySettings:
-        return MemorySettings(
-            vram_min_mb=self.vram_min_mb,
-            vram_max_mb=self.vram_max_mb,
-            strict=self.strict,
-            policy=self.policy,
-            ram_max_mb=self.ram_max_mb,
-            device=self.device,
-        )
-
-
 class MemoryOverridesIn(BaseModel):
     """Per-execution overrides of the graph's memory settings.
 
@@ -979,7 +868,7 @@ class MemoryOverridesIn(BaseModel):
     refused here and the domain's merge drops it too, rather than
     being accepted into a value nothing could honour.
 
-    MEM-03H-01: the same number checks as ``MemorySettingsIn`` -- an
+    MEM-03H-01: the same number checks as ``MemorySettings`` -- an
     override arrives through the same endpoint and would otherwise be
     the softer way into the ledger with a bad value.
     """
@@ -1049,36 +938,32 @@ class MemoryOverridesIn(BaseModel):
 
 
 class GraphRunIn(BaseModel):
-    """Submission body for ``/validate`` and ``/run``."""
+    """Submission body for ``/validate`` and ``/run``: the graph document (rework/contracts/graph-json.md), whose
+    ``settings`` carry the memory budget, and this run's own overrides of it."""
 
-    nodes: list[GraphNodeIn]
-    edges: list[GraphEdgeIn] = Field(default_factory=list)
-    memory: MemorySettingsIn | None = None
+    graph: dict[str, Any]
     memory_overrides: MemoryOverridesIn | None = None
 
     @model_validator(mode="after")
-    def _override_stays_in_range(self) -> GraphRunIn:
-        """The *merged* request must be ordered, not just each half.
-
-        ``memory`` and ``memory_overrides`` are checked apart, but the
-        domain sees their merge: an override that lifts the floor above
-        the graph's ceiling would otherwise reach the use case and die
-        there as a 500 (domain errors escaping a use case are always a
-        bug), instead of here as a 422 naming both numbers.
-        """
-        if self.memory is None or self.memory_overrides is None:
+    def _graph_reads_and_override_stays_in_range(self) -> GraphRunIn:
+        """The graph must be a document this version reads, and the *merged* memory request must be ordered, not just
+        each half: an override that lifts the floor above the graph's ceiling would otherwise reach the use case and
+        die there as a 500 (domain errors escaping a use case are always a bug), instead of here as a 422 naming
+        both numbers."""
+        memory = self.to_definition().memory
+        if self.memory_overrides is None:
             return self
         minimum = (
             self.memory_overrides.vram_min_mb
             if self.memory_overrides.vram_min_mb is not None
-            else self.memory.vram_min_mb
+            else memory.vram_min_mb
         )
         maximum = (
             self.memory_overrides.vram_max_mb
             if self.memory_overrides.vram_max_mb is not None
-            else self.memory.vram_max_mb
+            else memory.vram_max_mb
         )
-        if isinstance(maximum, float) and minimum > maximum:
+        if not isinstance(maximum, str) and minimum > maximum:
             raise ValueError(
                 f"vram_min_mb ({minimum}) exceeds vram_max_mb ({maximum}) "
                 "with the overrides applied"
@@ -1086,22 +971,7 @@ class GraphRunIn(BaseModel):
         return self
 
     def to_definition(self) -> GraphDefinition:
-        return GraphDefinition(
-            nodes=tuple(
-                GraphNodeSpec(id=n.id, class_name=n.class_name, params=dict(n.params))
-                for n in self.nodes
-            ),
-            edges=tuple(
-                GraphEdgeSpec(
-                    from_node=e.from_node,
-                    from_port=e.from_port,
-                    to_node=e.to_node,
-                    to_port=e.to_port,
-                )
-                for e in self.edges
-            ),
-            memory=self.memory.to_domain() if self.memory else MemorySettings(),
-        )
+        return GraphDefinition.from_dict(self.graph)
 
 
 class DiagnosticsIn(BaseModel):
@@ -1180,6 +1050,7 @@ class GraphIssueOut(BaseModel):
     node_id: str | None = None
     edge_index: int | None = None
     param: str | None = None
+    plane: str = "data"
 
 
 class MemoryPreviewOut(BaseModel):
@@ -1253,15 +1124,15 @@ class LibraryGraphIn(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     format: int | None = None
-    nodes: list[GraphNodeIn] = Field(default_factory=list)
-    edges: list[GraphEdgeIn] = Field(default_factory=list)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
     description: str = ""
 
     def to_payload(self) -> dict:
         payload = dict(self.model_extra or {})
         payload["format"] = self.format if self.format is not None else GRAPH_FORMAT
-        payload["nodes"] = [n.model_dump() for n in self.nodes]
-        payload["edges"] = [e.model_dump() for e in self.edges]
+        payload["nodes"] = list(self.nodes)
+        payload["edges"] = list(self.edges)
         return payload
 
 
@@ -1365,6 +1236,7 @@ def graph_issue_out(issue: GraphIssue) -> GraphIssueOut:
         node_id=issue.node_id,
         edge_index=issue.edge_index,
         param=issue.param,
+        plane=issue.plane,
     )
 
 
@@ -1482,16 +1354,12 @@ class DeleteTemplateOut(BaseModel):
 
 
 class ModulesIn(BaseModel):
-    """``POST /templates/modules``: a graph (the editor's payload shape)."""
+    """``POST /templates/modules``: a graph document (the editor's payload shape)."""
 
-    nodes: list[GraphNodeIn] = Field(default_factory=list)
-    edges: list[GraphEdgeIn] = Field(default_factory=list)
-    memory: MemorySettingsIn | None = None
+    graph: dict[str, Any]
 
     def to_definition(self) -> GraphDefinition:
-        return GraphRunIn(
-            nodes=self.nodes, edges=self.edges, memory=self.memory
-        ).to_definition()
+        return GraphDefinition.from_dict(self.graph)
 
 
 class GraphModulesOut(BaseModel):

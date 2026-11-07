@@ -109,6 +109,7 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         # server does, rather than being told and going stale.
         env["CHECKPOINTS_DIR"] = str(self._layout.checkpoints_dir)
         env["LORAS_DIR"] = str(self._layout.loras_dir)
+        env["DATASETS_DIR"] = str(self._layout.datasets_dir)
         comfy = self._layout.comfy_dir
         if comfy:
             env["COMFY_DIR"] = str(comfy)
@@ -221,8 +222,9 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
     on hardware nobody tested, the default goes back without a revert.
     """
 
-    def __init__(self, graph_registry=None, runtime_factory=None) -> None:
+    def __init__(self, graph_registry=None, runtime_factory=None, environment=None) -> None:
         self._registry = graph_registry
+        self._environment = environment
         # Seam for tests that need to observe the run -- a counting
         # memory releaser, say. Takes the writer so the factory can wire
         # its runtime to the event file exactly as build_runtime does.
@@ -266,7 +268,10 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
                 # ending), and this path runs inside the admission
                 # process, where the ledger's own check just answered.
                 make = self._runtime_factory or (
-                    lambda w: build_runtime(w, self._registry, memory=memory)
+                    lambda w: build_runtime(
+                        w, self._registry, memory=memory,
+                        env=self._environment() if self._environment else None,
+                    )
                 )
                 run_execution(graph, writer, cancel, make(writer))
             except Exception as exc:  # noqa: BLE001 -- the watcher needs to hear

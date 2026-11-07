@@ -148,8 +148,10 @@ from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
-from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
-from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph.discovery import NodeRegistry
+from backend.infrastructure.graph.memory_fields import memory_fields_resolver
+from backend.domain.graph import GraphDefinition
+from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.infrastructure.graph_event_stream import ExecutionEventTail
 from backend.infrastructure.graph_task_gateway import InProcessGraphTaskGateway
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
@@ -893,6 +895,38 @@ FIXTURE_NODES: dict[str, type] = {
 }
 
 
+def fixture_tree_registry():
+    """The registry of the new node tree over ``fixture_nodes`` (what validation and runs use)."""
+    from backend.infrastructure.graph import tree
+
+    return tree.NodeRegistry(packages=("backend.tests.fixture_nodes",))
+
+
+def uid(name: str) -> str:
+    """A valid node uid for a short test name: stable, so a test can name a node by ``"a"`` and read it back."""
+    import base64
+    import hashlib
+
+    return "n_" + base64.b32encode(hashlib.sha1(name.encode()).digest()[:4]).decode().lower()[:6]
+
+
+def gnode(name: str, class_name: str, **params) -> dict:
+    return {"uid": uid(name), "class_name": class_name, "params": params}
+
+
+def gedge(src: str, out: str, dst: str, inp: str) -> dict:
+    return {"from_node": uid(src), "from_port": out, "to_node": uid(dst), "to_port": inp}
+
+
+def gdoc(nodes=(), edges=(), settings: dict | None = None, **rest) -> dict:
+    """A graph document (rework/contracts/graph-json.md) from compact pieces."""
+    return {"format": 3, "settings": dict(settings or {}), "nodes": list(nodes), "edges": list(edges), **rest}
+
+
+def gdef(nodes=(), edges=(), settings: dict | None = None, **rest) -> GraphDefinition:
+    return GraphDefinition.from_dict(gdoc(nodes, edges, settings, **rest))
+
+
 def fixture_graph_registry() -> NodeRegistry:
     """A NodeRegistry over the fixture classes above (no nodes/ walk,
     no import errors, deterministic ordering)."""
@@ -988,7 +1022,8 @@ def build_services(
     dataset_tasks: SqliteDatasetTasks | None = None,
     dataset_previews: SqliteDatasetPreviews | None = None,
     dataset_gateway: DatasetTaskGateway | None = None,
-    graph_registry: NodeRegistry | None = None,
+    graph_registry: Any | None = None,
+    legacy_registry: NodeRegistry | None = None,
     graph_runtime: GraphRuntime | None = None,
     graph_executions: GraphExecutionRepository | None = None,
     graph_library: GraphLibrary | None = None,
@@ -1049,17 +1084,17 @@ def build_services(
         config_files = CoreConfigFiles()
     if config_options is None:
         config_options = PydanticConfigOptions()
+    if legacy_registry is None:
+        legacy_registry = fixture_graph_registry()
+    graph_catalog = DiscoveredGraphCatalog(legacy_registry)
     if graph_registry is None:
-        graph_registry = fixture_graph_registry()
-    graph_catalog = DiscoveredGraphCatalog(graph_registry)
-    contract_catalog = ContractNodeCatalog()
+        graph_registry = fixture_tree_registry()
+    contract_catalog = ContractNodeCatalog(graph_registry)
     # Default to the real adapter (replay/clear semantics under test);
     # the API tests exercise it, the runtime test swaps in a recorder.
     monitor_bus = monitor_bus if monitor_bus is not None else SharedMonitorBus()
     if graph_runtime is None:
-        graph_runtime = ReflectedGraphRuntime(
-            graph_registry, memory_releaser=lambda: None, monitor_bus=monitor_bus
-        )
+        graph_runtime = ContractGraphRuntime(graph_registry, releaser=lambda: None)
     # One directory for the supervisor and the sweep, so a test
     # can assert that clearing the history cleared the disk too.
     # Unconditional: a caller that passes only ``graph_executions``

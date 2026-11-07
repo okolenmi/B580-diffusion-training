@@ -171,5 +171,8 @@ Send the zip. Does the loss stay the same while the pictures get cleaner? No war
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 
+## 74. Backend run on the new graph document
+Take a graph document (format 3) that `python -m next.run graph graph.json` already runs for you and post it to the backend as `{"graph": <the document>}` at `POST /api/v1/graphs/run` (validate first at `/validate`). It should be admitted, the child should start on the XPU, and `GET /api/v1/graphs/executions/{id}` should list the nodes by uid. The admitted budget replaces `memory.vram_max_mb` of the graph. Report anything the child prints about a missing folder or an unknown service: it builds its model and dataset folders from the paths its parent hands down.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

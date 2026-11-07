@@ -15,7 +15,7 @@ reads the document's blocks, ``apply_values`` returns a new
 from __future__ import annotations
 
 
-from ..domain.graph import GraphDefinition, GraphNodeSpec
+from ..domain.graph import GraphDefinition
 from ..domain.memory_settings import MemorySettings
 from ..domain.modules import GRAPH_FIELD_BY_NAME, wired_ports
 
@@ -49,7 +49,7 @@ def _apply_node_values(
     `None` means "no answer for this node" (unknown id, or ports not an
     object) -- the caller then omits it from the new-params map, which is
     what the inlined loop's `continue` did: the node keeps its own
-    `spec.params` downstream via `new_params.get(n.id, n.params)`, and
+    `spec.params` downstream via `new_params.get(n.uid, n.params)`, and
     since `problems` is non-empty the whole graph is returned unchanged
     anyway.
 
@@ -84,6 +84,28 @@ def _apply_node_values(
     return params
 
 
+def _apply_memory_values(
+    graph: GraphDefinition, memory_values: dict, allowed: set[str], problems: list[str]
+) -> dict:
+    """The graph's settings with the exposed memory values written in (``None`` clears one)."""
+    settings = dict(graph.doc.settings)
+    for key in memory_values:
+        if key not in allowed:
+            problems.append(f"values.memory.{key}: this page does not expose that setting")
+    if not memory_values or problems:
+        return settings
+    for key, value in memory_values.items():
+        if value is None:
+            settings.pop(f"memory.{key}", None)
+        else:
+            settings[f"memory.{key}"] = value
+    try:
+        MemorySettings.from_settings(settings)
+    except ValueError as exc:
+        problems.append(f"values.memory: {exc}")
+    return settings
+
+
 def apply_values(
     graph: GraphDefinition, doc: dict, values: dict | None
 ) -> tuple[GraphDefinition, list[str]]:
@@ -113,22 +135,8 @@ def apply_values(
         if applied is not None:
             new_params[node_id] = applied
 
-    memory = graph.memory
-    if memory_values:
-        for key in memory_values:
-            if key not in allowed_memory:
-                problems.append(f"values.memory.{key}: this page does not expose that setting")
-        if not problems:
-            merged = {**memory.as_dict(), **{k: v for k, v in memory_values.items() if v is not None}}
-            try:
-                memory = MemorySettings.from_dict(merged)
-            except ValueError as exc:
-                problems.append(f"values.memory: {exc}")
+    settings = _apply_memory_values(graph, memory_values, allowed_memory, problems)
 
     if problems:
         return graph, problems
-    nodes = tuple(
-        GraphNodeSpec(id=n.id, class_name=n.class_name, params=new_params.get(n.id, n.params))
-        for n in graph.nodes
-    )
-    return GraphDefinition(nodes=nodes, edges=graph.edges, memory=memory), []
+    return graph.with_params(new_params).with_settings(settings), []

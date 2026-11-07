@@ -53,7 +53,7 @@ class GraphIssue:
     """One validation finding; ``severity.blocks`` says whether it stops
     the run.
 
-    ``node_id``/``edge_index``/``param`` localize the finding when they
+    ``node_id`` (the node's uid)/``edge_index``/``param`` (a port) localize the finding when they
     apply (each is None otherwise); ``message`` is human-readable and
     always populated. The stable machine-readable part is ``code`` --
     see doc 05 section 4 for the full table.
@@ -65,6 +65,7 @@ class GraphIssue:
     node_id: str | None = None
     edge_index: int | None = None
     param: str | None = None
+    plane: str = "data"
 
 
 def issue_to_dict(issue: GraphIssue) -> dict:
@@ -77,6 +78,7 @@ def issue_to_dict(issue: GraphIssue) -> dict:
         "node_id": issue.node_id,
         "edge_index": issue.edge_index,
         "param": issue.param,
+        "plane": issue.plane,
     }
 
 

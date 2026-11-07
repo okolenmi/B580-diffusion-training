@@ -19,15 +19,16 @@ from backend.application.memory_fingerprint import (
     UnknownFingerprint,
     graph_fingerprint,
 )
-from backend.domain.graph import GraphDefinition, GraphNodeSpec
+from backend.domain.graph import GraphDefinition, NodeSpec
+from next.graph.document import GraphDoc
 
 
-def _graph(*nodes: GraphNodeSpec) -> GraphDefinition:
-    return GraphDefinition(nodes=nodes, edges=())
+def _graph(*nodes: NodeSpec) -> GraphDefinition:
+    return GraphDefinition(GraphDoc(nodes=nodes))
 
 
-def _node(class_name: str, **params) -> GraphNodeSpec:
-    return GraphNodeSpec(id="n1", class_name=class_name, params=params)
+def _node(class_name: str, **params) -> NodeSpec:
+    return NodeSpec(uid="n_aaaaaa", class_name=class_name, params=params)
 
 
 def _resolver(memory_fields_map: dict[str, tuple[str, ...]]):

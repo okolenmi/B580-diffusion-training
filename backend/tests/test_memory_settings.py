@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.domain.graph import GraphDefinition, GraphNodeSpec
+from backend.domain.graph import GraphDefinition, GraphFormatError, NodeSpec
+from backend.tests.support import gdoc, uid
+from next.graph.document import GraphDoc
 from backend.domain.memory_settings import (
     AUTO,
     EffectiveMemory,
@@ -21,12 +23,21 @@ from backend.domain.memory_settings import (
 )
 
 
-def _graph(*nodes: GraphNodeSpec) -> GraphDefinition:
-    return GraphDefinition(nodes=nodes, edges=())
+def _run_in(memory: dict | None = None, **rest):
+    """A run body whose graph carries ``memory`` as settings (the old memory-block keys, mapped to setting keys)."""
+    from backend.presentation.schemas import GraphRunIn
+
+    keys = {"device": "device.default"}
+    settings = {keys.get(key, f"memory.{key}"): value for key, value in (memory or {}).items()}
+    return GraphRunIn(graph=gdoc(settings=settings), **rest)
 
 
-def _node(class_name: str, **params) -> GraphNodeSpec:
-    return GraphNodeSpec(id="n1", class_name=class_name, params=params)
+def _graph(*nodes: NodeSpec) -> GraphDefinition:
+    return GraphDefinition(GraphDoc(nodes=nodes))
+
+
+def _node(class_name: str, **params) -> NodeSpec:
+    return NodeSpec(uid="n1", class_name=class_name, params=params)
 
 
 # -- MemorySettings ---------------------------------------------------------
@@ -72,7 +83,6 @@ def test_device_is_carried_validated_and_not_overridable():
     from backend.application.errors import InvalidQueryError
     from backend.application.use_cases.save_graph import SaveGraph
     from backend.domain.memory_settings import _with_overrides
-    from backend.presentation.schemas import GraphRunIn
 
     # Default, tolerant decode, round trip: graphs saved before MEM-05
     # have no device key and get the default like every other missing
@@ -96,10 +106,10 @@ def test_device_is_carried_validated_and_not_overridable():
     # The run edge: carried into the definition the endpoint builds,
     # and an empty name is a refusal here so it cannot escape the
     # schema as a domain ValueError (a 500 instead of a 422).
-    body = GraphRunIn(nodes=[], memory={"device": "cuda"})
+    body = _run_in({"device": "cuda"})
     assert body.to_definition().memory.device == "cuda"
     try:
-        GraphRunIn(nodes=[], memory={"device": " "})
+        _run_in({"device": " "})
     except Exception as exc:
         assert "device" in str(exc), str(exc)
     else:
@@ -109,7 +119,7 @@ def test_device_is_carried_validated_and_not_overridable():
     # the request: the child runs the device the graph *file* names,
     # and an override would live only on the row it never sees.
     try:
-        GraphRunIn(nodes=[], memory_overrides={"device": "cpu"})
+        _run_in(memory_overrides={"device": "cpu"})
     except Exception as exc:
         assert "device" in str(exc), str(exc)
     else:
@@ -123,12 +133,12 @@ def test_device_is_carried_validated_and_not_overridable():
     # The save edge: device is a known setting, and its values are
     # checked like every budget before the block is stored verbatim.
     kept = SaveGraph._payload(
-        {"nodes": [], "edges": [], "memory": {"device": "cuda"}}
+        {"nodes": [], "edges": [], "settings": {"device.default": "cuda"}}
     )
-    assert kept["memory"] == {"device": "cuda"}
+    assert kept["settings"] == {"device.default": "cuda"}
     try:
         SaveGraph._payload(
-            {"nodes": [], "edges": [], "memory": {"device": ""}}
+            {"nodes": [], "edges": [], "settings": {"device.default": ""}}
         )
     except InvalidQueryError as exc:
         assert "device" in str(exc), str(exc)
@@ -136,147 +146,110 @@ def test_device_is_carried_validated_and_not_overridable():
         raise AssertionError("an empty device name was saved")
 
 
-# -- Graph format round-trip -------------------------------------------------
+# -- The graph document carries the memory settings ---------------------------
 
 
-def test_graph_format_is_2():
-    """Graph format is now 2."""
-    assert GraphDefinition().as_dict()["format"] == 2
+def test_graph_format_is_3():
+    """The document format is the contract's."""
+    assert GraphDefinition().as_dict()["format"] == 3
 
 
-def test_graph_as_dict_has_memory():
-    """as_dict includes the memory key."""
-    g = _graph(_node("ManagedLoRATrainerNode", model="sdxl", batch_size=2))
-    d = g.as_dict()
-    assert "memory" in d
-    assert d["memory"]["vram_max_mb"] == AUTO
+def test_graph_memory_comes_from_settings():
+    """The graph is the configurable object: its budget is in its own settings."""
+    g = GraphDefinition.from_dict(gdoc(settings={
+        "memory.vram_min_mb": 1024.0, "memory.vram_max_mb": 6144.0, "memory.strict": False,
+        "memory.ram_max_mb": 4096.0, "device.default": "cpu",
+    }))
+    assert g.memory == MemorySettings(
+        vram_min_mb=1024.0, vram_max_mb=6144.0, strict=False, ram_max_mb=4096.0, device="cpu")
+    assert GraphDefinition.from_dict(gdoc()).memory == MemorySettings()
 
 
 def test_graph_from_dict_round_trip():
-    """from_dict -> as_dict preserves nodes and edges."""
-    g = _graph(_node("ManagedLoRATrainerNode", model="sdxl", batch_size=2))
-    d = g.as_dict()
-    g2 = GraphDefinition.from_dict(d)
-    assert len(g2.nodes) == 1
-    assert g2.nodes[0].class_name == "ManagedLoRATrainerNode"
-    assert g2.nodes[0].params["model"] == "sdxl"
-
-
-def test_graph_from_dict_format_1_loads():
-    """A format 1 graph (no memory key) loads with defaults, and
-    re-saves unchanged except for the format number."""
-    payload = {
-        "format": 1,
-        "nodes": [{"id": "n1", "class_name": "SomeNode", "params": {}}],
-        "edges": [],
-    }
+    """from_dict -> as_dict preserves nodes and settings."""
+    payload = gdoc([{"uid": uid("a"), "class_name": "X", "params": {"model": "sdxl"}}],
+                   settings={"memory.vram_max_mb": 8000.0})
     g = GraphDefinition.from_dict(payload)
-    assert len(g.nodes) == 1
-    assert g.nodes[0].class_name == "SomeNode"
-    assert g.memory == MemorySettings()
-    again = g.as_dict()
-    assert again["format"] == 2
-    assert again["nodes"] == payload["nodes"]
-    assert again["edges"] == payload["edges"]
-    assert again["memory"] == MemorySettings().as_dict()
+    again = GraphDefinition.from_dict(g.as_dict())
+    assert again.nodes[0].class_name == "X" and again.nodes[0].params["model"] == "sdxl"
+    assert again.doc.settings == {"memory.vram_max_mb": 8000.0}
 
 
-def test_graph_from_dict_ignores_unknown_keys():
-    """Unknown keys are ignored (tolerant by design)."""
-    payload = {
-        "format": 2,
-        "nodes": [],
-        "edges": [],
-        "unknown_key": "ignored",
-    }
-    g = GraphDefinition.from_dict(payload)
-    assert len(g.nodes) == 0
+def test_graph_from_dict_refuses_other_formats():
+    """No earlier format is read; the message names the number."""
+    for fmt in (1, 2, 4):
+        try:
+            GraphDefinition.from_dict({"format": fmt, "nodes": [], "edges": []})
+        except GraphFormatError as exc:
+            assert str(fmt) in str(exc)
+        else:
+            raise AssertionError(f"format {fmt} was accepted")
 
 
-def test_graph_non_default_memory_round_trips():
-    """Settings the graph was saved with survive storage, not just
-    defaults -- the case every other round-trip test here missed."""
-    g = GraphDefinition(
-        memory=MemorySettings(
-            vram_min_mb=1024.0,
-            vram_max_mb=6144.0,
-            strict=False,
-            ram_max_mb=4096.0,
-        ),
-    )
-    g2 = GraphDefinition.from_dict(g.as_dict())
-    assert g2.memory == g.memory
+def test_stored_older_snapshot_is_listed_as_it_was():
+    """An execution row written by an earlier format cannot be run again, but the history still lists it."""
+    payload = {"format": 2, "nodes": [{"id": "a", "class_name": "X", "params": {}}], "edges": []}
+    g = GraphDefinition.from_stored(payload)
+    assert g.nodes == () and g.as_dict() == payload
 
 
 # -- API submission ---------------------------------------------------------
 
 
 def test_run_in_memory_reaches_definition():
-    """A submitted `memory` block becomes the definition's settings."""
+    """The settings of a submitted graph become the definition's memory."""
     from backend.presentation.schemas import GraphRunIn
 
-    body = GraphRunIn(
-        nodes=[],
-        memory={"vram_min_mb": 512.0, "vram_max_mb": 4096.0, "strict": False},
-    )
+    body = GraphRunIn(graph=gdoc(settings={
+        "memory.vram_min_mb": 512.0, "memory.vram_max_mb": 4096.0, "memory.strict": False}))
     definition = body.to_definition()
     assert definition.memory.vram_min_mb == 512.0
     assert definition.memory.vram_max_mb == 4096.0
     assert definition.memory.strict is False
-    absent = GraphRunIn(nodes=[]).to_definition()
-    assert absent.memory == MemorySettings()
+    assert GraphRunIn(graph=gdoc()).to_definition().memory == MemorySettings()
 
 
-def test_run_in_rejects_unknown_memory_setting():
-    """An unknown setting is a 422 naming it, not silently defaulted."""
+def test_run_in_rejects_other_formats():
+    """A graph this version cannot read is a 422 naming the format."""
     from backend.presentation.schemas import GraphRunIn
 
     try:
-        GraphRunIn(nodes=[], memory={"banana": 1})
-    except Exception as exc:  # the rejection message must carry the key
-        assert "banana" in str(exc), str(exc)
+        GraphRunIn(graph={"format": 2, "nodes": []})
+    except Exception as exc:
+        assert "format" in str(exc), str(exc)
     else:
-        raise AssertionError("an unknown memory setting was accepted")
+        raise AssertionError("a format 2 graph was accepted")
 
 
 def test_run_in_rejects_prose_for_auto():
-    """`vram_max_mb` is a number or "auto" -- nothing else."""
+    """`memory.vram_max_mb` is a number or "auto" -- nothing else."""
     from backend.presentation.schemas import GraphRunIn
 
     try:
-        GraphRunIn(nodes=[], memory={"vram_max_mb": "everything"})
+        GraphRunIn(graph=gdoc(settings={"memory.vram_max_mb": "everything"}))
     except Exception as exc:  # the rejection message must carry the value
         assert "everything" in str(exc), str(exc)
     else:
         raise AssertionError("vram_max_mb='everything' was accepted")
 
 
-def test_save_graph_rejects_unknown_memory_setting():
-    """The library save path rejects an unknown setting by name too.
+def test_save_graph_rejects_bad_memory_setting():
+    """The library save path refuses a bad budget by name.
 
-    Saving stores the payload verbatim (forward compatibility), so this
-    is the only moment a bad memory block can be refused with a clear
-    message instead of being silently defaulted at run time.
+    Saving stores the payload verbatim (forward compatibility), so this is the only moment a bad number can be
+    refused with a clear message instead of failing when the graph is run.
     """
     from backend.application.errors import InvalidQueryError
     from backend.application.use_cases.save_graph import SaveGraph
 
-    kept = SaveGraph._payload({
-        "nodes": [],
-        "edges": [],
-        "memory": {"vram_max_mb": 4096.0},
-    })
-    assert kept["memory"] == {"vram_max_mb": 4096.0}
+    kept = SaveGraph._payload({"nodes": [], "edges": [], "settings": {"memory.vram_max_mb": 4096.0}})
+    assert kept["settings"] == {"memory.vram_max_mb": 4096.0}
     try:
-        SaveGraph._payload({
-            "nodes": [],
-            "edges": [],
-            "memory": {"vram_max_mb": 4096.0, "banana": 1},
-        })
+        SaveGraph._payload({"nodes": [], "edges": [], "settings": {"memory.vram_max_mb": -5}})
     except InvalidQueryError as exc:
-        assert "banana" in str(exc), str(exc)
+        assert "memory.vram_max_mb" in str(exc) or "vram_max_mb" in str(exc), str(exc)
     else:
-        raise AssertionError("an unknown memory setting was saved")
+        raise AssertionError("a negative budget was saved")
 
 
 # -- effective_memory ---------------------------------------------------------
@@ -389,29 +362,25 @@ def test_effective_memory_round_trips_storage():
 
 def test_run_in_overrides_keep_only_the_named_keys():
     """Partial overrides: absent keys mean 'keep the graph's value'."""
-    from backend.presentation.schemas import GraphRunIn
 
-    body = GraphRunIn(
-        nodes=[], memory_overrides={"vram_max_mb": 4096.0, "strict": False}
-    )
+    body = _run_in(memory_overrides={"vram_max_mb": 4096.0, "strict": False})
     assert body.memory_overrides is not None
     assert body.memory_overrides.as_overrides() == {
         "vram_max_mb": 4096.0,
         "strict": False,
     }
-    auto = GraphRunIn(nodes=[], memory_overrides={"ram_max_mb": AUTO})
+    auto = _run_in(memory_overrides={"ram_max_mb": AUTO})
     assert auto.memory_overrides is not None
     assert auto.memory_overrides.as_overrides() == {"ram_max_mb": AUTO}
     # No memory_overrides at all -> the request overrides nothing.
-    assert GraphRunIn(nodes=[]).memory_overrides is None
+    assert _run_in().memory_overrides is None
 
 
 def test_run_in_rejects_unknown_override_key():
     """A typo in an override is refused, not silently 'keep the default'."""
-    from backend.presentation.schemas import GraphRunIn
 
     try:
-        GraphRunIn(nodes=[], memory_overrides={"vram_max": 4096.0})
+        _run_in(memory_overrides={"vram_max": 4096.0})
     except Exception as exc:  # the rejection must name the offending key
         assert "vram_max" in str(exc), str(exc)
     else:
@@ -441,7 +410,7 @@ _MIN_SEEDS = (
 
 def test_run_in_rejects_unusable_budgets():
     """API layer: each unusable value is a 422 naming the field."""
-    from backend.presentation.schemas import GraphRunIn, MemoryOverridesIn
+    from backend.presentation.schemas import MemoryOverridesIn
 
     for field, seeds in (
         ("vram_min_mb", _MIN_SEEDS),
@@ -450,7 +419,7 @@ def test_run_in_rejects_unusable_budgets():
     ):
         for value in seeds:
             try:
-                GraphRunIn(nodes=[], memory={field: value})
+                _run_in({field: value})
             except ValueError as exc:  # pydantic's ValidationError is one
                 assert field in str(exc), (field, value, exc)
             else:
@@ -459,7 +428,7 @@ def test_run_in_rejects_unusable_budgets():
     # a way in.
     for value in _BUDGET_SEEDS:
         try:
-            GraphRunIn(nodes=[], memory_overrides={"vram_max_mb": value})
+            _run_in(memory_overrides={"vram_max_mb": value})
         except ValueError as exc:
             assert "vram_max_mb" in str(exc), (value, exc)
         else:
@@ -471,16 +440,16 @@ def test_run_in_rejects_unusable_budgets():
     else:
         raise AssertionError("overrides vram_min_mb=-1 was accepted")
     # A zero floor is the default and stays valid.
-    body = GraphRunIn(nodes=[], memory={"vram_min_mb": 0})
-    assert body.memory is not None and body.memory.vram_min_mb == 0
+    body = _run_in({"vram_min_mb": 0})
+    assert body.to_definition().memory.vram_min_mb == 0
 
 
 def test_run_in_rejects_inverted_ranges():
     """min > max is refused wherever the two halves meet."""
-    from backend.presentation.schemas import GraphRunIn, MemoryOverridesIn
+    from backend.presentation.schemas import MemoryOverridesIn
 
     try:
-        GraphRunIn(nodes=[], memory={"vram_min_mb": 5000, "vram_max_mb": 4096})
+        _run_in({"vram_min_mb": 5000, "vram_max_mb": 4096})
     except ValueError as exc:
         assert "5000" in str(exc) and "4096" in str(exc), str(exc)
     else:
@@ -494,24 +463,16 @@ def test_run_in_rejects_inverted_ranges():
     # The merged view: an override that lifts the floor above the
     # graph's ceiling would reach the domain and die there as a 500.
     try:
-        GraphRunIn(
-            nodes=[],
-            memory={"vram_max_mb": 4096},
-            memory_overrides={"vram_min_mb": 5000},
-        )
+        _run_in({"vram_max_mb": 4096}, memory_overrides={"vram_min_mb": 5000})
     except ValueError as exc:
         assert "overrides applied" in str(exc), str(exc)
     else:
         raise AssertionError("an override above the graph's ceiling was accepted")
     # Ordered combinations still pass, including equal ends and an
     # "auto" ceiling (nothing numeric to order against).
-    GraphRunIn(nodes=[], memory={"vram_min_mb": 4096, "vram_max_mb": 5000})
-    GraphRunIn(nodes=[], memory={"vram_min_mb": 5000, "vram_max_mb": 5000})
-    GraphRunIn(
-        nodes=[],
-        memory={"vram_max_mb": "auto"},
-        memory_overrides={"vram_min_mb": 9000},
-    )
+    _run_in({"vram_min_mb": 4096, "vram_max_mb": 5000})
+    _run_in({"vram_min_mb": 5000, "vram_max_mb": 5000})
+    _run_in({"vram_max_mb": "auto"}, memory_overrides={"vram_min_mb": 9000})
 
 
 def test_domain_rejects_unusable_budgets():
@@ -569,13 +530,13 @@ def test_save_graph_rejects_unusable_budget_values():
     from backend.application.use_cases.save_graph import SaveGraph
 
     kept = SaveGraph._payload({
-        "nodes": [], "edges": [], "memory": {"vram_max_mb": 4096.0},
+        "nodes": [], "edges": [], "settings": {"memory.vram_max_mb": 4096.0},
     })
-    assert kept["memory"] == {"vram_max_mb": 4096.0}  # still verbatim
+    assert kept["settings"] == {"memory.vram_max_mb": 4096.0}  # still verbatim
     for value in (-9000, 0, float("nan"), True, "lots", 10**400):
         try:
             SaveGraph._payload({
-                "nodes": [], "edges": [], "memory": {"vram_max_mb": value},
+                "nodes": [], "edges": [], "settings": {"memory.vram_max_mb": value},
             })
         except InvalidQueryError as exc:
             assert "vram_max_mb" in str(exc), (value, exc)
@@ -584,7 +545,7 @@ def test_save_graph_rejects_unusable_budget_values():
     try:
         SaveGraph._payload({
             "nodes": [], "edges": [],
-            "memory": {"vram_min_mb": 5000, "vram_max_mb": 4096},
+            "settings": {"memory.vram_min_mb": 5000, "memory.vram_max_mb": 4096},
         })
     except InvalidQueryError as exc:
         assert "exceeds" in str(exc), str(exc)
@@ -608,16 +569,15 @@ def main() -> None:
         test_memory_settings_from_dict,
         test_memory_settings_from_none,
         test_device_is_carried_validated_and_not_overridable,
-        test_graph_format_is_2,
-        test_graph_as_dict_has_memory,
+        test_graph_format_is_3,
+        test_graph_memory_comes_from_settings,
         test_graph_from_dict_round_trip,
-        test_graph_from_dict_format_1_loads,
-        test_graph_from_dict_ignores_unknown_keys,
-        test_graph_non_default_memory_round_trips,
+        test_graph_from_dict_refuses_other_formats,
+        test_stored_older_snapshot_is_listed_as_it_was,
         test_run_in_memory_reaches_definition,
-        test_run_in_rejects_unknown_memory_setting,
+        test_run_in_rejects_other_formats,
         test_run_in_rejects_prose_for_auto,
-        test_save_graph_rejects_unknown_memory_setting,
+        test_save_graph_rejects_bad_memory_setting,
         test_effective_memory_stated_beats_observed,
         test_effective_memory_observed_when_higher,
         test_effective_memory_unknown_uses_capacity,

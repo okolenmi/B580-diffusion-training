@@ -101,6 +101,31 @@ class MemorySettings:
         if not isinstance(self.device, str) or not self.device.strip():
             raise ValueError(f"device: {self.device!r} is not a device name")
 
+    @classmethod
+    def from_settings(cls, settings: dict | None) -> MemorySettings:
+        """Read the graph's own settings (``memory.vram_min_mb``, ``memory.vram_max_mb``, ``memory.strict``,
+        ``memory.ram_max_mb``, ``device.default``); a key that is not there keeps its default."""
+        settings = settings or {}
+        defaults = cls()
+        return cls(
+            vram_min_mb=settings.get("memory.vram_min_mb", defaults.vram_min_mb),
+            vram_max_mb=settings.get("memory.vram_max_mb", defaults.vram_max_mb),
+            strict=bool(settings.get("memory.strict", defaults.strict)),
+            ram_max_mb=settings.get("memory.ram_max_mb", defaults.ram_max_mb),
+            device=settings.get("device.default", defaults.device),
+        )
+
+    def as_settings(self) -> dict:
+        """The graph-settings keys these numbers are read from (the inverse of ``from_settings``; the policy is
+        the server's, not a graph setting)."""
+        return {
+            "memory.vram_min_mb": self.vram_min_mb,
+            "memory.vram_max_mb": self.vram_max_mb,
+            "memory.strict": self.strict,
+            "memory.ram_max_mb": self.ram_max_mb,
+            "device.default": self.device,
+        }
+
     def as_dict(self) -> dict:
         return {
             "vram_min_mb": self.vram_min_mb,

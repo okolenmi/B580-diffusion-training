@@ -7,8 +7,9 @@ a node that reads a file header (Load Model) sees the same files the run will.
 
 from __future__ import annotations
 
+import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...application.errors import NodeClassNotFoundError
@@ -27,6 +28,24 @@ def model_folders(checkpoints: Path, loras: Path) -> dict[str, list[Path]]:
     return folders
 
 
+def model_environment(checkpoints: Path, loras: Path, datasets: Path | None = None) -> tree.Environment:
+    """The machine as a node sees it: the model folders and, when given, the datasets folder."""
+    services: dict = {"models": tree.ModelLibrary(model_folders(checkpoints, loras))}
+    if datasets is not None:
+        services["datasets"] = tree.DatasetStore(datasets)
+    return tree.Environment(services=services)
+
+
+def process_environment(environ: Mapping[str, str] | None = None) -> tree.Environment:
+    """The environment a graph child builds from the folders its parent passed in its own environment variables."""
+    environ = os.environ if environ is None else environ
+    checkpoints, loras = environ.get("CHECKPOINTS_DIR"), environ.get("LORAS_DIR")
+    if not checkpoints or not loras:
+        return tree.Environment()
+    datasets = environ.get("DATASETS_DIR")
+    return model_environment(Path(checkpoints), Path(loras), Path(datasets) if datasets else None)
+
+
 class ContractNodeCatalog(NodeCatalog):
     def __init__(self, registry: object | None = None,
                  environment: Callable[[], tree.Environment] | None = None) -> None:
@@ -34,6 +53,11 @@ class ContractNodeCatalog(NodeCatalog):
         self._environment = environment or tree.Environment
         self._lock = threading.Lock()
         self._document: dict | None = None
+
+    @property
+    def registry(self) -> object:
+        """The one registry the run, the catalog and the fingerprint share: a single discovery cache."""
+        return self._registry
 
     def catalog(self, *, refresh: bool = False) -> dict:
         with self._lock:

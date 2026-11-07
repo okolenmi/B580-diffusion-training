@@ -39,14 +39,14 @@ from backend.application.use_cases import (
 )
 from backend.domain.entities.graph_execution import GraphExecution
 from backend.domain.exceptions import DomainError, InvalidTransitionError
-from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec, NodeResult
+from backend.domain.graph import GraphDefinition, GraphFormatError, NodeResult
 from backend.domain.memory_settings import MemorySettings, effective_memory
 from backend.application.ports.execution_launcher import (
     ExecutionLauncher,
     RecordedOutcome,
 )
 from backend.domain.value_objects import ExecutionId, GraphStatus
-from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
@@ -57,26 +57,27 @@ from backend.tests.support import (
     build_services,
     check,
     finish,
-    fixture_graph_registry,
+    fixture_tree_registry,
+    gdef,
+    gedge,
+    gnode,
+    uid,
     wait_until,
 )
 
 NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 
 
-def node(node_id: str, class_name: str, **params) -> GraphNodeSpec:
-    return GraphNodeSpec(id=node_id, class_name=class_name, params=params)
+def node(name: str, class_name: str, **params) -> dict:
+    return gnode(name, class_name, **params)
 
 
-def edge(from_node, from_port, to_node, to_port) -> GraphEdgeSpec:
-    return GraphEdgeSpec(
-        from_node=from_node, from_port=from_port,
-        to_node=to_node, to_port=to_port,
-    )
+def edge(from_node, from_port, to_node, to_port) -> dict:
+    return gedge(from_node, from_port, to_node, to_port)
 
 
 def make(*nodes, edges=()) -> GraphDefinition:
-    return GraphDefinition(nodes=tuple(nodes), edges=tuple(edges))
+    return gdef(nodes, edges)
 
 
 VALID = make(
@@ -334,10 +335,8 @@ print("-- use cases / supervisor --")
 
 releases = {"n": 0}
 events = RecordingEventBus()
-runtime = ReflectedGraphRuntime(fixture_graph_registry(),
-                                memory_releaser=lambda: releases.__setitem__(
-                                    "n", releases["n"] + 1
-                                ))
+runtime = ContractGraphRuntime(fixture_tree_registry(),
+                               releaser=lambda: releases.__setitem__("n", releases["n"] + 1))
 start_db = SqliteDatabase(Path(tempfile.mkdtemp(prefix="backend-graph-start-")) / "s.db")
 start_db.initialize()
 start_repo = SqliteGraphExecutionRepository(start_db)
@@ -378,7 +377,7 @@ check(
 detail = graphs.get_execution.execute(summary.execution_id)
 check(detail.status is GraphStatus.FINISHED, "clean graph ends finished")
 check(
-    [r.node_id for r in detail.results] == ["v", "s"] and all(r.ok for r in detail.results),
+    [r.node_id for r in detail.results] == [uid("v"), uid("s")] and all(r.ok for r in detail.results),
     "per-node results persisted in execution order",
 )
 check(detail.graph == VALID.as_dict(), "stored snapshot is the submitted graph")
@@ -767,7 +766,7 @@ check(debris_sweep.execute().cleaned == 1
 print("-- library --")
 
 payload = {
-    "nodes": [{"id": "n1", "class_name": "NoSuchNodeYet", "params": {}}],
+    "nodes": [{"uid": uid("n1"), "class_name": "NoSuchNodeYet", "params": {}}],
     "edges": [],
     "palette_note": "keep me",
 }
@@ -775,7 +774,7 @@ saved = graphs.save_graph.execute("  my graph  ", payload, description="demo")
 check(saved.created is True, "first save answers 201")
 check(saved.graph.name == "my graph", "name trimmed")
 check(
-    saved.graph.graph["format"] == 2
+    saved.graph.graph["format"] == 3
     and saved.graph.graph["palette_note"] == "keep me",
     "format stamped; unknown keys preserved verbatim",
 )
@@ -929,53 +928,32 @@ for overrides, fragment, label in (
 # ==========================================================================
 print("-- from_dict --")
 
-# Found by scripts/mutation_report.py graph.py: all 29 survivors there
-# were the same shape -- the default in a str(raw.get(key, "")) mutated to
-# None, "" or junk -- for every field of from_dict. Nothing supplied a
-# payload missing those keys, so the tolerance its own docstring promises
-# ("missing params defaults to {}, unknown keys are ignored") was a claim
-# about code no test had exercised.
-g = GraphDefinition.from_dict({"format": 1})
+g = GraphDefinition.from_dict({"format": 3})
 check(g.nodes == () and g.edges == (),
-      f"an empty payload decodes to an empty graph (got {g.as_dict()})")
+      f"an empty document decodes to an empty graph (got {g.as_dict()})")
 
-g = GraphDefinition.from_dict({"nodes": [{"id": "a"}], "edges": [{}]})
-check(len(g.nodes) == 1 and g.nodes[0].id == "a",
-      "a node with no class_name still decodes")
-check(g.nodes[0].class_name == "",
-      f"and the class name defaults to empty, not None or junk "
-      f"(got {g.nodes[0].class_name!r})")
-check(g.nodes[0].params == {},
-      f"and params defaults to an empty dict (got {g.nodes[0].params!r})")
-check(len(g.edges) == 1 and g.edges[0].from_node == "",
-      "an edge with every field absent decodes to empty strings")
-check(all(getattr(g.edges[0], f) == "" for f in
-          ("from_node", "from_port", "to_node", "to_port")),
-      "all four edge fields, not just the first")
-
-# A node with no id at all is a different case from a node with no
-# class_name, and it is the one that reaches the `str()` call: a payload
-# with no `nodes` key never enters the comprehension at all, so an
-# empty-payload test does not cover it. `validate()` is what refuses an
-# empty id -- the decoder's job is only to decline inventing one.
-g = GraphDefinition.from_dict({"nodes": [{"class_name": "SumNode"}]})
-check(len(g.nodes) == 1 and g.nodes[0].id == "",
-      f"a node with no id decodes to an empty id, not None or junk "
-      f"(got {g.nodes[0].id!r})")
+for payload_in, why in (
+    ({"format": 1, "nodes": []}, "an earlier format"),
+    ({"nodes": []}, "no format"),
+    ({"format": 3, "nodes": [{"class_name": "SumNode"}]}, "a node without a uid"),
+    ({"format": 3, "nodes": [], "edges": [{}]}, "an edge with no fields"),
+):
+    try:
+        GraphDefinition.from_dict(payload_in)
+        check(False, f"{why} must be refused")
+    except GraphFormatError:
+        check(True, f"{why} is refused, not invented into something")
 
 g = GraphDefinition.from_dict({
-    "format": 1,
-    "nodes": [{"id": "a", "class_name": "SumNode", "params": {"b": 2.0},
-               "unknown_key": "ignored"}],
+    "format": 3,
+    "nodes": [{"uid": uid("a"), "class_name": "SumNode", "params": {"b": 2.0}}],
     "unknown_top_level": [1, 2, 3],
 })
-check(g.nodes[0].params == {"b": 2.0},
-      f"unknown keys inside a node are ignored, not folded into params "
-      f"(got {g.nodes[0].params})")
-check(len(g.nodes) == 1,
-      "and an unknown top-level key does not become a node")
+check(g.nodes[0].params == {"b": 2.0} and len(g.nodes) == 1,
+      "an unknown top-level key rides along without becoming a node")
+check(g.as_dict()["unknown_top_level"] == [1, 2, 3], "and is kept verbatim")
 
-check(GraphDefinition.from_dict(VALID.as_dict()) == VALID,
+check(GraphDefinition.from_dict(VALID.as_dict()).as_dict() == VALID.as_dict(),
       "a round trip through as_dict/from_dict is lossless, which is the "
       "contract that actually matters -- it is how saved graphs load")
 
@@ -1022,10 +1000,7 @@ def _retry_case(where: str) -> list[str]:
         events=EventPublisher(events=CallbackEventBus()),
     )
 
-    graph = GraphDefinition(nodes=tuple(
-        GraphNodeSpec(id=f"n{i}", class_name="FloatConstantNode", params={})
-        for i in range(N_RETRY_NODES)
-    ))
+    graph = gdef([gnode(f"n{i}", "FloatConstantNode") for i in range(N_RETRY_NODES)])
     row = GraphExecution.create(graph=graph, created_at=NOW)
     case_repo.add(row)
     row.mark_running(at=NOW)

@@ -803,7 +803,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         """
         if self._monitor_bus is None:
             return
-        for stream in (GRAPH_STREAM, *(node_stream_id(n.id) for n in graph.nodes)):
+        for stream in (GRAPH_STREAM, *(node_stream_id(n.uid) for n in graph.nodes)):
             try:
                 self._monitor_bus.clear(stream)
             except Exception:  # noqa: BLE001 -- a stale chart is not worth a failed launch

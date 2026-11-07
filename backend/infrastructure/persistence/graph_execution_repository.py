@@ -55,7 +55,7 @@ def _row_to_execution(row) -> GraphExecution:
     return GraphExecution.restore(
         id=ExecutionId(row["id"]),
         status=GraphStatus(row["status"]),
-        graph=GraphDefinition.from_dict(json.loads(row["graph"])),
+        graph=GraphDefinition.from_stored(json.loads(row["graph"])),
         results=_decode_results(row["results"]),
         error=row["error"],
         memory=(

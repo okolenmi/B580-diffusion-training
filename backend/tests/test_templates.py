@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -30,12 +29,12 @@ from nodes.ui import DisplayModule, Series
 
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.template_binding import apply_values, exposed_fields
-from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec
+from backend.domain.graph import Edge, GraphDefinition, NodeSpec
 from backend.domain.modules import GRAPH_STREAM, node_stream_id
 from backend.domain.template import normalize_template_doc, validate_template_doc
 from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.discovery import NodeRegistry
-from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.presentation.app import create_app
 from backend.tests.support import (
     FIXTURE_NODES,
@@ -44,10 +43,16 @@ from backend.tests.support import (
     build_services,
     check,
     finish,
+    fixture_tree_registry,
+    uid,
     wait_until,
 )
+from next.graph.document import GraphDoc
 
 API = "/api/v1/templates"
+
+# Node uids: graphs name their nodes by uid, and a short test name maps to a valid one.
+W1, SC, SU, GHOST, ZZ, N1, S, M = (uid(n) for n in ("w1", "sc", "su", "ghost", "zz", "n1", "s", "m"))
 
 
 # --------------------------------------------------------------------------
@@ -190,13 +195,13 @@ check(out.modules[0]["kind"] == "chart" and out.inputs[0].label == "Steps",
 # ==========================================================================
 print("-- C: template document shape --")
 
-def block(i="b1", node="n1", name="steps", kind="field", x=0, y=0, w=6, h=2, scope="node"):
+def block(i="b1", node=N1, name="steps", kind="field", x=0, y=0, w=6, h=2, scope="node"):
     ref = {"scope": scope, "kind": kind, "name": name}
     if scope == "node":
         ref["node"] = node
     return {"id": i, "ref": ref, "x": x, "y": y, "w": w, "h": h}
 
-GRAPH = {"nodes": [{"id": "n1", "class_name": "WidgetNode", "params": {"steps": 2}}], "edges": []}
+GRAPH = {"format": 3, "nodes": [{"uid": N1, "class_name": "WidgetNode", "params": {"steps": 2}}], "edges": []}
 
 def doc(blocks=None, **extra):
     return {"kind": "template", "columns": 12, "graph": GRAPH,
@@ -245,28 +250,28 @@ from backend.application.use_cases.graph_modules import (  # noqa: E402
 )
 describe = DescribeGraphModules(catalog=catalog)
 
-g = GraphDefinition(
+g = GraphDefinition(GraphDoc(
     nodes=(
-        GraphNodeSpec("w1", "WidgetNode", {"steps": 5}),
-        GraphNodeSpec("sc", "ScaleNode", {"value": 2.0}),
-        GraphNodeSpec("su", "SumNode", {"b": 1.0}),
-        GraphNodeSpec("ghost", "NoSuchNode", {}),
+        NodeSpec(W1, "WidgetNode", {"steps": 5}),
+        NodeSpec(SC, "ScaleNode", {"value": 2.0}),
+        NodeSpec(SU, "SumNode", {"b": 1.0}),
+        NodeSpec(GHOST, "NoSuchNode", {}),
     ),
-    edges=(GraphEdgeSpec("sc", "scaled", "su", "a"),),
-)
+    edges=(Edge(SC, "scaled", SU, "a"),),
+))
 m = describe.execute(g)
 by_id = {n["id"]: n for n in m.nodes}
-wfields = {f["name"]: f for f in by_id["w1"]["fields"]}
+wfields = {f["name"]: f for f in by_id[W1]["fields"]}
 check(set(wfields) == {"steps", "tag"}, f"handle-typed 'monitor' is not a field (got {sorted(wfields)})")
 check(wfields["steps"]["value"] == 5 and wfields["steps"]["has_value"], "current value is reported")
 check(wfields["tag"]["has_value"] is False, "an unset param says so")
-sfields = {f["name"]: f for f in by_id["su"]["fields"]}
+sfields = {f["name"]: f for f in by_id[SU]["fields"]}
 check(sfields["a"]["wired"] is True and sfields["b"]["wired"] is False,
       "a port fed by an edge is flagged wired")
-check([d["name"] for d in by_id["w1"]["displays"]] == ["loss", "progress"], "displays listed")
-check(by_id["w1"]["displays"][0]["stream"] == node_stream_id("w1") == "node:w1",
+check([d["name"] for d in by_id[W1]["displays"]] == ["loss", "progress"], "displays listed")
+check(by_id[W1]["displays"][0]["stream"] == node_stream_id(W1) == f"node:{W1}",
       "each display carries its stream")
-check(by_id["ghost"]["known"] is False and by_id["ghost"]["fields"] == [], "an unknown class is kept, marked")
+check(by_id[GHOST]["known"] is False and by_id[GHOST]["fields"] == [], "an unknown class is kept, marked")
 check({f["name"] for f in m.graph_fields} >= {"memory.vram_max_mb", "memory.vram_min_mb"},
       "the graph's own settings are offered")
 check(next(f for f in m.graph_fields if f["name"] == "memory.vram_max_mb")["value"] == "auto",
@@ -278,11 +283,11 @@ check(not is_settable(next(p for p in snap["WidgetNode"].inputs if p.name == "mo
       "a handle type is not settable")
 
 # the old route: a wired monitor node's id is where reports go
-g2 = GraphDefinition(
-    nodes=(GraphNodeSpec("m", "FakeMonitorNode", {"monitor_id": "my-stable-id"}),
-           GraphNodeSpec("w1", "WidgetNode", {})),
-    edges=(GraphEdgeSpec("m", "monitor", "w1", "monitor"),),
-)
+g2 = GraphDefinition(GraphDoc(
+    nodes=(NodeSpec(M, "FakeMonitorNode", {"monitor_id": "my-stable-id"}),
+           NodeSpec(W1, "WidgetNode", {})),
+    edges=(Edge(M, "monitor", W1, "monitor"),),
+))
 check(describe.execute(g2).nodes[1]["stream"] == "my-stable-id",
       "a wired monitor node's id is the stream (old route keeps working)")
 
@@ -290,25 +295,26 @@ check(describe.execute(g2).nodes[1]["stream"] == "my-stable-id",
 # E. ResolveTemplate
 # ==========================================================================
 print("-- E: block statuses --")
-resolver = ResolveTemplate(describe=describe, runtime=ReflectedGraphRuntime(registry(), memory_releaser=lambda: None))
+resolver = ResolveTemplate(describe=describe, runtime=ContractGraphRuntime(fixture_tree_registry(), releaser=lambda: None))
 
 full_graph = {
+    "format": 3,
     "nodes": [
-        {"id": "w1", "class_name": "WidgetNode", "params": {}},
-        {"id": "sc", "class_name": "ScaleNode", "params": {"value": 1.0}},
-        {"id": "su", "class_name": "SumNode", "params": {"b": 1.0}},
-        {"id": "ghost", "class_name": "NoSuchNode", "params": {}},
+        {"uid": W1, "class_name": "WidgetNode", "params": {}},
+        {"uid": SC, "class_name": "ScaleNode", "params": {"value": 1.0}},
+        {"uid": SU, "class_name": "SumNode", "params": {"b": 1.0}},
+        {"uid": GHOST, "class_name": "NoSuchNode", "params": {}},
     ],
-    "edges": [{"from_node": "sc", "from_port": "scaled", "to_node": "su", "to_port": "a"}],
+    "edges": [{"from_node": SC, "from_port": "scaled", "to_node": SU, "to_port": "a"}],
 }
 blocks = [
-    block("ok", "w1", "steps"),
-    block("wired", "su", "a"),
-    block("nonode", "zz", "steps"),
-    block("noclass", "ghost", "x"),
-    block("nofield", "w1", "nope"),
-    block("disp", "w1", "loss", kind="display"),
-    block("nodisp", "w1", "zzz", kind="display"),
+    block("ok", W1, "steps"),
+    block("wired", SU, "a"),
+    block("nonode", ZZ, "steps"),
+    block("noclass", GHOST, "x"),
+    block("nofield", W1, "nope"),
+    block("disp", W1, "loss", kind="display"),
+    block("nodisp", W1, "zzz", kind="display"),
     block("gf", scope="graph", name="memory.vram_max_mb"),
     block("gfbad", scope="graph", name="memory.nope"),
     block("gd", scope="graph", name="memory", kind="display"),
@@ -323,7 +329,7 @@ check(all(b["detail"] for b in res.blocks if b["status"] != "ok"), "every non-ok
 check(any(i["code"] == "unknown_class" for i in res.issues), "graph validation issues ride along")
 check(raises(Exception, lambda: resolver.execute({"kind": "template", "blocks": []})),
       "a malformed draft is refused before resolving")
-mon = resolver.execute({"kind": "monitor", "blocks": [block("d", "w1", "loss", kind="display")]},
+mon = resolver.execute({"kind": "monitor", "blocks": [block("d", W1, "loss", kind="display")]},
                        graph=full_graph)
 check(mon.blocks[0]["status"] == "ok" and mon.issues == (),
       "a monitor window resolves against a graph passed in, and does not validate it")
@@ -333,60 +339,52 @@ check(mon.blocks[0]["status"] == "ok" and mon.issues == (),
 # ==========================================================================
 print("-- F: only exposed fields can be set --")
 d_f = {"kind": "template", "graph": full_graph,
-       "blocks": [block("a", "w1", "steps"), block("s", "su", "a"),
+       "blocks": [block("a", W1, "steps"), block("s", SU, "a"),
                   block("m", scope="graph", name="memory.vram_max_mb")]}
 nf, gf = exposed_fields(d_f)
-check(nf == {("w1", "steps"), ("su", "a")} and gf == {"vram_max_mb"}, "exposed fields read from blocks")
+check(nf == {(W1, "steps"), (SU, "a")} and gf == {"vram_max_mb"}, "exposed fields read from blocks")
 base = GraphDefinition.from_dict(full_graph)
 
-new, probs = apply_values(base, d_f, {"nodes": {"w1": {"steps": 7}}, "memory": {"vram_max_mb": 8000}})
-check(probs == [] and new.node("w1").params["steps"] == 7 and new.memory.vram_max_mb == 8000,
+new, probs = apply_values(base, d_f, {"nodes": {W1: {"steps": 7}}, "memory": {"vram_max_mb": 8000}})
+check(probs == [] and new.node(W1).params["steps"] == 7 and new.memory.vram_max_mb == 8000,
       "an exposed field is applied")
-check(base.node("w1").params == {} and base.memory.vram_max_mb == "auto", "the input graph is untouched")
-_, probs = apply_values(base, d_f, {"nodes": {"w1": {"tag": "hax"}}})
+check(base.node(W1).params == {} and base.memory.vram_max_mb == "auto", "the input graph is untouched")
+_, probs = apply_values(base, d_f, {"nodes": {W1: {"tag": "hax"}}})
 check(len(probs) == 1 and "does not expose" in probs[0], f"a hidden field is refused (got {probs})")
-_, probs = apply_values(base, d_f, {"nodes": {"su": {"a": 1.0}}})
+_, probs = apply_values(base, d_f, {"nodes": {SU: {"a": 1.0}}})
 check(len(probs) == 1 and "fed by another node" in probs[0], "a wired field is refused")
-_, probs = apply_values(base, d_f, {"nodes": {"nope": {"x": 1}}})
+_, probs = apply_values(base, d_f, {"nodes": {uid("nope"): {"x": 1}}})
 check("no such node" in probs[0], "an unknown node is refused")
 _, probs = apply_values(base, d_f, {"memory": {"strict": False}})
 check("does not expose" in probs[0], "a hidden graph setting is refused")
 _, probs = apply_values(base, d_f, {"memory": {"vram_max_mb": -5}})
 check(len(probs) == 1 and "vram_max_mb" in probs[0], f"a bad memory number is refused by name (got {probs})")
-_, probs = apply_values(base, d_f, {"bogus": {}, "nodes": {"w1": {"tag": 1}}})
+_, probs = apply_values(base, d_f, {"bogus": {}, "nodes": {W1: {"tag": 1}}})
 check(len(probs) == 2, "every problem is collected")
 new, _ = apply_values(GraphDefinition.from_dict(GRAPH), d_f | {"graph": GRAPH},
-                      {"nodes": {"n1": {}}})
-cleared, _ = apply_values(new, d_f, {"nodes": {"w1": {"steps": None}}}) if False else (None, None)
-withp = GraphDefinition.from_dict({"nodes": [{"id": "w1", "class_name": "WidgetNode", "params": {"steps": 9}}], "edges": []})
-cleared, probs = apply_values(withp, d_f, {"nodes": {"w1": {"steps": None}}})
-check(probs == [] and "steps" not in cleared.node("w1").params, "None clears the param (default applies)")
+                      {"nodes": {N1: {}}})
+withp = GraphDefinition.from_dict({"format": 3, "nodes": [{"uid": W1, "class_name": "WidgetNode", "params": {"steps": 9}}], "edges": []})
+cleared, probs = apply_values(withp, d_f, {"nodes": {W1: {"steps": None}}})
+check(probs == [] and "steps" not in cleared.node(W1).params, "None clears the param (default applies)")
 
 # ==========================================================================
 # G. runtime + supervisor
 # ==========================================================================
 print("-- G: the runtime wires the stream; the supervisor clears and republishes --")
-rec = RecordingMonitorBus()
-rt = ReflectedGraphRuntime(registry(), memory_releaser=lambda: None, monitor_bus=rec)
-out = rt.execute(GraphDefinition.from_dict({"nodes": [{"id": "w1", "class_name": "WidgetNode", "params": {"steps": 3}}], "edges": []}),
-                 cancel_event=threading.Event())
-check(out.error is None, f"graph ran (got {out.error})")
-check([r[0] for r in rec.reports] == ["node:w1"] * 3, f"no monitor node needed: reports land on node:w1 (got {rec.reports})")
-check(rec.reports[0][1] == {"step": 1, "total_steps": 3, "loss": 1.0}, "the node's own dict is the frame")
+from backend.infrastructure.graph_task_worker import _EventReporter  # noqa: E402
 
-rec2 = RecordingMonitorBus()
-rt2 = ReflectedGraphRuntime(registry(), memory_releaser=lambda: None, monitor_bus=rec2)
-out = rt2.execute(GraphDefinition.from_dict({
-    "nodes": [{"id": "m", "class_name": "FakeMonitorNode", "params": {"monitor_id": "mine"}},
-              {"id": "w1", "class_name": "WidgetNode", "params": {"steps": 2}}],
-    "edges": [{"from_node": "m", "from_port": "monitor", "to_node": "w1", "to_port": "monitor"}]}),
-    cancel_event=threading.Event())
-check({r[0] for r in rec2.reports} == {"mine"}, f"a wired monitor wins (got {[r[0] for r in rec2.reports]})")
 
-rt3 = ReflectedGraphRuntime(registry(), memory_releaser=lambda: None)  # no bus at all
-out = rt3.execute(GraphDefinition.from_dict({"nodes": [{"id": "w1", "class_name": "WidgetNode", "params": {}}], "edges": []}),
-                  cancel_event=threading.Event())
-check(out.error is None and out.results[0].outputs["done"] == 3, "no bus: the node still runs (monitor stays None)")
+class _Writer:
+    def __init__(self) -> None:
+        self.frames: list[tuple[str, dict]] = []
+
+    def monitor(self, stream: str, frame: dict) -> None:
+        self.frames.append((stream, frame))
+
+
+writer = _Writer()
+_EventReporter(writer).report("node:x", {"step": 1})
+check(writer.frames == [("node:x", {"step": 1})], "every stream frame of a run is written to the event file")
 
 sup = GraphExecutionSupervisor.__new__(GraphExecutionSupervisor)
 bus = RecordingMonitorBus()
@@ -397,7 +395,7 @@ check(bus.reports == [(GRAPH_STREAM, {"t": 12.5, "reserved_mb": 100.0, "allocate
                                       "peak_mb": 120.0, "budget_mb": 9000.0, "event": None})],
       f"memory frames are republished on the graph stream, minus noise (got {bus.reports})")
 sup._clear_streams(GraphDefinition.from_dict(full_graph))
-check(bus.cleared[0] == GRAPH_STREAM and "node:w1" in bus.cleared and "node:su" in bus.cleared,
+check(bus.cleared[0] == GRAPH_STREAM and f"node:{W1}" in bus.cleared and f"node:{SU}" in bus.cleared,
       f"a starting run clears the graph stream and every node's (got {bus.cleared})")
 sup._monitor_bus = None
 sup._republish_memory({"t": 1})
@@ -409,7 +407,7 @@ check(True, "no bus: both are no-ops")
 # ==========================================================================
 print("-- H: HTTP API --")
 root = Path(tempfile.mkdtemp(prefix="backend-templates-"))
-services = build_services(project_root=root, graph_registry=registry())
+services = build_services(project_root=root, legacy_registry=registry())
 app = create_app(services)
 
 def put(name, document, description=""):
@@ -419,9 +417,9 @@ def put(name, document, description=""):
 status_, _, body = put("train basic", doc(), "starter")
 check(status_ == 201 and body["name"] == "train basic" and body["kind"] == "template"
       and body["block_count"] == 1 and body["node_count"] == 1, f"first save is 201 (got {status_} {body})")
-check(body["doc"]["format"] == 1 and body["doc"]["graph"]["format"] == 2,
+check(body["doc"]["format"] == 1 and body["doc"]["graph"]["format"] == 3,
       "the document and its graph snapshot are stamped")
-status_, _, body = put("train basic", doc(blocks=[block(), block("b2", "n1", "tag")]))
+status_, _, body = put("train basic", doc(blocks=[block(), block("b2", N1, "tag")]))
 check(status_ == 200 and body["block_count"] == 2, "replace is 200")
 
 status_, _, body = put("broken", {"kind": "template", "graph": GRAPH,
@@ -430,10 +428,10 @@ check(status_ == 422 and body["error"]["code"] == "template_invalid"
       and len(body["error"]["details"]) >= 2, f"every problem is in details (got {status_} {body})")
 status_, _, body = put("   ", doc())
 check(status_ == 422 and body["error"]["code"] == "invalid_query", "an empty name is refused")
-status_, _, body = put("badmem", doc() | {"graph": {**GRAPH, "memory": {"vram_max_mb": -1}}})
-check(status_ == 422, "the graph snapshot's memory block is checked by value, like the library")
+status_, _, body = put("badmem", doc() | {"graph": {**GRAPH, "settings": {"memory.vram_max_mb": -1}}})
+check(status_ == 422, "the graph snapshot's memory settings are checked by value, like the library")
 
-put("watch", {"kind": "monitor", "blocks": [block("d", "n1", "loss", kind="display")]})
+put("watch", {"kind": "monitor", "blocks": [block("d", N1, "loss", kind="display")]})
 status_, _, body = asgi_request(app, API)
 check(status_ == 200 and body["count"] == 2 and {t["name"] for t in body["templates"]} == {"train basic", "watch"},
       "list returns both")
@@ -446,26 +444,26 @@ check(status_ == 200 and len(body["doc"]["blocks"]) == 2, "get returns the store
 status_, _, body = asgi_request(app, f"{API}/nope")
 check(status_ == 404 and body["error"]["code"] == "template_not_found", "unknown name is 404")
 
-status_, _, body = asgi_request(app, f"{API}/modules", method="POST", json_body={
-    "nodes": [{"id": "w1", "class_name": "WidgetNode", "params": {"steps": 4}}], "edges": []})
-check(status_ == 200 and body["nodes"][0]["displays"][0]["stream"] == "node:w1"
+status_, _, body = asgi_request(app, f"{API}/modules", method="POST", json_body={"graph": {
+    "format": 3, "nodes": [{"uid": W1, "class_name": "WidgetNode", "params": {"steps": 4}}], "edges": []}})
+check(status_ == 200 and body["nodes"][0]["displays"][0]["stream"] == f"node:{W1}"
       and body["graph_fields"][0]["name"].startswith("memory."), "modules endpoint")
 
 status_, _, body = asgi_request(app, f"{API}/resolve", method="POST", json_body={"doc": {
-    "kind": "template", "graph": full_graph, "blocks": [block("ok", "w1", "steps"), block("gone", "zz", "steps")]}})
+    "kind": "template", "graph": full_graph, "blocks": [block("ok", W1, "steps"), block("gone", ZZ, "steps")]}})
 check(status_ == 200 and [b["status"] for b in body["blocks"]] == ["ok", "missing_node"],
       f"resolve endpoint (got {status_} {body})")
 status_, _, body = asgi_request(app, f"{API}/resolve", method="POST", json_body={"doc": {"kind": "template", "blocks": []}})
 check(status_ == 422 and body["error"]["code"] == "template_invalid", "resolve refuses a malformed draft")
 
 # run: a sum graph, exposing 'b' only
-SUM_GRAPH = {"nodes": [{"id": "s", "class_name": "SumNode", "params": {"a": 1.0, "b": 2.0}}], "edges": []}
+SUM_GRAPH = {"format": 3, "nodes": [{"uid": S, "class_name": "SumNode", "params": {"a": 1.0, "b": 2.0}}], "edges": []}
 put("sum", {"kind": "template", "graph": SUM_GRAPH,
-            "blocks": [block("fb", "s", "b")]})
-status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {"nodes": {"s": {"a": 99.0}}}})
+            "blocks": [block("fb", S, "b")]})
+status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {"nodes": {S: {"a": 99.0}}}})
 check(status_ == 422 and body["error"]["code"] == "template_invalid"
       and "does not expose" in str(body["error"]["details"]), f"a hidden field cannot be set (got {status_} {body})")
-status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {"nodes": {"s": {"b": 40.0}}}})
+status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {"nodes": {S: {"b": 40.0}}}})
 check(status_ == 201 and body["status"] in ("queued", "running", "finished"), f"run starts (got {status_} {body})")
 eid = body["execution_id"]
 final = {}

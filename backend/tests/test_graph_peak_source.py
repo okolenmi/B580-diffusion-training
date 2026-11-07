@@ -30,7 +30,8 @@ from backend.application.memory_fingerprint import (
     graph_fingerprint,
 )
 from backend.application.ports.dataset_library import LatentBucket
-from backend.domain.graph import GraphDefinition, GraphNodeSpec
+from backend.domain.graph import GraphDefinition, NodeSpec
+from next.graph.document import GraphDoc
 from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
 from backend.tests.support import check, finish
@@ -52,8 +53,8 @@ def _resolver(class_name: str) -> tuple[str, ...] | None:
 
 
 def _graph(*, dataset: str | None = "shapes") -> GraphDefinition:
-    trainer = GraphNodeSpec(
-        id="t",
+    trainer = NodeSpec(
+        uid="n_tttttt",
         class_name="PeakTrainerNode",
         params={
             "model": "sdxl",
@@ -66,13 +67,13 @@ def _graph(*, dataset: str | None = "shapes") -> GraphDefinition:
     nodes = [trainer]
     if dataset is not None:
         nodes.append(
-            GraphNodeSpec(
-                id="d",
+            NodeSpec(
+                uid="n_dddddd",
                 class_name="PeakDatasetNode",
                 params={"dataset_root": dataset},
             )
         )
-    return GraphDefinition(nodes=tuple(nodes), edges=())
+    return GraphDefinition(GraphDoc(nodes=tuple(nodes)))
 
 
 class _Shapes:
@@ -211,14 +212,11 @@ def test_dataset_name_of() -> None:
     print("\n== the dataset name comes from the first node that names one ==")
     check(dataset_name_of(_graph()) == "shapes", "read off dataset_root")
     check(dataset_name_of(_graph(dataset=None)) is None, "absent -> None")
-    odd = GraphDefinition(
-        nodes=(
-            GraphNodeSpec(id="a", class_name="X", params={"dataset_root": 7}),
-            GraphNodeSpec(id="b", class_name="Y", params={"dataset_root": ""}),
-            GraphNodeSpec(id="c", class_name="Z", params={"dataset_root": "late"}),
-        ),
-        edges=(),
-    )
+    odd = GraphDefinition(GraphDoc(nodes=(
+        NodeSpec(uid="n_aaaaaa", class_name="X", params={"dataset_root": 7}),
+        NodeSpec(uid="n_bbbbbb", class_name="Y", params={"dataset_root": ""}),
+        NodeSpec(uid="n_cccccc", class_name="Z", params={"dataset_root": "late"}),
+    )))
     check(
         dataset_name_of(odd) == "late",
         "non-strings and empty names are skipped, not taken",

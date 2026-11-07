@@ -25,6 +25,10 @@ from backend.tests.support import (
     check,
     concrete_node_classes,
     finish,
+    gdoc,
+    gedge,
+    gnode,
+    uid,
     wait_until,
 )
 
@@ -39,17 +43,15 @@ def expect_error(status, body, want_status, want_code, label) -> None:
 
 
 def valid_graph() -> dict:
-    return {
-        "nodes": [
-            {"id": "v", "class_name": "ScaleNode",
-             "params": {"value": 3.0, "factor": 5.0}},
-            {"id": "s", "class_name": "SumNode", "params": {"b": 1.0}},
-        ],
-        "edges": [
-            {"from_node": "v", "from_port": "scaled",
-             "to_node": "s", "to_port": "a"},
-        ],
-    }
+    return gdoc(
+        [gnode("v", "ScaleNode", value=3.0, factor=5.0), gnode("s", "SumNode", b=1.0)],
+        [gedge("v", "scaled", "s", "a")],
+    )
+
+
+def run_body(graph: dict, **rest) -> dict:
+    """The body of validate and run: the graph document, and this run's own overrides."""
+    return {"graph": graph, **rest}
 
 
 def get_exec(app, execution_id):
@@ -127,12 +129,12 @@ expect_error(status, body, 404, "node_class_not_found", "unknown class diagnosti
 
 # -- validate --------------------------------------------------------------
 status, _, body = asgi_request(
-    app, f"{GRAPH}/validate", method="POST", json_body=valid_graph()
+    app, f"{GRAPH}/validate", method="POST", json_body=run_body(valid_graph())
 )
 check(status == 200 and body["ok"] is True and body["issues"] == [],
       "valid graph: 200 ok with no issues")
 
-bad_graph = {"nodes": [{"id": "s", "class_name": "NoSuchNode"}], "edges": []}
+bad_graph = run_body(gdoc([gnode("s", "NoSuchNode")]))
 status, _, body = asgi_request(app, f"{GRAPH}/validate", method="POST",
                                json_body=bad_graph)
 check(status == 200 and body["ok"] is False,
@@ -145,7 +147,7 @@ check(
 status, _, body = asgi_request(
     app, f"{GRAPH}/validate",
     method="POST",
-    json_body={"nodes": [{"id": "s", "class_name": "SumNode"}], "edges": []},
+    json_body=run_body(gdoc([gnode("s", "SumNode")])),
 )
 check(
     [i["code"] for i in body["issues"]]
@@ -166,7 +168,7 @@ check(
 
 # -- run: happy path -------------------------------------------------------
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
-                               json_body=valid_graph())
+                               json_body=run_body(valid_graph()))
 check(status == 201 and body["status"] in ("queued", "running"),
       f"valid run answers 201 queued (got {status}/{body.get('status')})")
 first_id = body["execution_id"]
@@ -178,11 +180,11 @@ check(finished, "execution reaches a terminal state")
 status, _, detail = get_exec(app, first_id)
 check(detail["status"] == "finished", "clean graph ends finished")
 check(
-    [r["node_id"] for r in detail["results"]] == ["v", "s"]
+    [r["node_id"] for r in detail["results"]] == [uid("v"), uid("s")]
     and all(r["ok"] for r in detail["results"]),
     "full detail carries per-node results",
 )
-check(detail["graph"]["format"] == 2 and len(detail["graph"]["nodes"]) == 2,
+check(detail["graph"]["format"] == 3 and len(detail["graph"]["nodes"]) == 2,
       "full detail carries the submission snapshot")
 check(
     all(isinstance(r["duration_ms"], (int, float)) for r in detail["results"]),
@@ -228,8 +230,7 @@ expect_error(
 )
 
 # -- run: per-execution memory overrides (MEM-02 #2) -------------------
-over_body = valid_graph()
-over_body["memory_overrides"] = {"vram_max_mb": 4096, "strict": False}
+over_body = run_body(valid_graph(), memory_overrides={"vram_max_mb": 4096, "strict": False})
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
                                json_body=over_body)
 check(status == 201, "run with memory overrides accepted")
@@ -242,8 +243,7 @@ check(over_done, "override run reaches a terminal state")
 # A typo in an override is a 422 naming the key -- it must not fall
 # back to the graph's value, because the caller asked to change
 # exactly that value.
-typo = valid_graph()
-typo["memory_overrides"] = {"vram_max": 4096}
+typo = run_body(valid_graph(), memory_overrides={"vram_max": 4096})
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST", json_body=typo)
 check(status == 422, "unknown memory override key refused with 422")
 loc = body.get("error", {}).get("details", [{}])[0].get("loc", [])
@@ -256,15 +256,13 @@ check(
 status, _, body = asgi_request(
     app, f"{GRAPH}/run",
     method="POST",
-    json_body={"nodes": [{"id": "slow", "class_name": "SlowNode",
-                          "params": {"seconds": 0.4}}],
-               "edges": []},
+    json_body=run_body(gdoc([gnode("slow", "SlowNode", seconds=0.4)])),
 )
 check(status == 201, "slow run accepted")
 slow_id = body["execution_id"]
 
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
-                               json_body=valid_graph())
+                               json_body=run_body(valid_graph()))
 expect_error(status, body, 409, "graph_execution_active",
              "second run refused while one is active")
 
@@ -300,7 +298,7 @@ status, _, body = asgi_request(
 check(status == 201, "first save answers 201")
 check(body["name"] == "my graph" and body["node_count"] == 2,
       "name trimmed, node_count derived")
-check(body["graph"]["format"] == 2 and body["graph"]["palette_note"] == "keep me",
+check(body["graph"]["format"] == 3 and body["graph"]["palette_note"] == "keep me",
       "format stamped; unknown keys preserved verbatim")
 
 status, _, body = asgi_request(
@@ -314,8 +312,7 @@ check(body["count"] == 1 and "graph" not in body["graphs"][0],
       "library list rows are summaries")
 
 # Saving never validates: an unknown class still stores, then fails at run.
-future = {"nodes": [{"id": "n", "class_name": "ClassNotWrittenYet", "params": {}}],
-          "edges": []}
+future = gdoc([gnode("n", "ClassNotWrittenYet")])
 status, _, body = asgi_request(
     app, f"{GRAPH}/library/future", method="PUT", json_body=future
 )
@@ -323,7 +320,7 @@ check(status == 201, "graph referencing a missing class saves fine")
 status, _, body = asgi_request(app, f"{GRAPH}/library/future")
 saved_payload = body["graph"]
 status, _, body = asgi_request(
-    app, f"{GRAPH}/run", method="POST", json_body=saved_payload
+    app, f"{GRAPH}/run", method="POST", json_body=run_body(saved_payload)
 )
 expect_error(status, body, 422, "graph_invalid",
              "the same graph fails validation at run time")
@@ -354,7 +351,7 @@ check(scratch_dir.is_dir(),
       f"({scratch_dir})")
 
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
-                              json_body=valid_graph())
+                              json_body=run_body(valid_graph()))
 check(status in (200, 201), f"a run to leave scratch behind ({status})")
 # The supervisor writes the graph and the event file before the child is
 # spawned, so they are there whether or not the run gets anywhere.

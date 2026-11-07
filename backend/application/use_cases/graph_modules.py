@@ -104,21 +104,21 @@ class DescribeGraphModules:
                 # Unknown class: kept in the answer so a block pointing at
                 # it can say "unknown class" rather than "no such node".
                 nodes.append({
-                    "id": spec.id, "class_name": spec.class_name,
+                    "id": spec.uid, "class_name": spec.class_name,
                     "display_name": spec.class_name, "known": False,
-                    "fields": [], "displays": [], "stream": node_stream_id(spec.id),
+                    "fields": [], "displays": [], "stream": node_stream_id(spec.uid),
                 })
                 continue
             inputs = self._catalog.resolved_inputs(spec.class_name, spec.params) or info.inputs
-            wired = wired_ports(graph.edges, spec.id)
+            wired = wired_ports(graph.edges, spec.uid)
             fields = [
                 _field_dict(port, spec.params, port.name in wired)
                 for port in inputs
                 if is_settable(port)
             ]
-            stream = self._stream_for(graph, spec.id, by_class)
+            stream = self._stream_for(graph, spec.uid, by_class)
             nodes.append({
-                "id": spec.id,
+                "id": spec.uid,
                 "class_name": spec.class_name,
                 "display_name": info.display_name,
                 "known": True,

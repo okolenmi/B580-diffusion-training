@@ -52,7 +52,7 @@ def normalize_graph_payload(graph: dict) -> dict:
     """Stamp the format version, keep everything else verbatim.
 
     Module-level so a template saving its graph snapshot applies exactly
-    the rules the library does (same memory-block checks, same stamp)."""
+    the rules the library does (same memory-settings checks, same stamp)."""
     if not isinstance(graph, dict):
         raise InvalidQueryError("graph must be an object")
     nodes = graph.get("nodes")
@@ -66,26 +66,16 @@ def normalize_graph_payload(graph: dict) -> dict:
     payload = dict(graph)
     payload["nodes"] = nodes
     payload["edges"] = edges
-    memory = graph.get("memory")
-    if memory is not None:
-        if not isinstance(memory, dict):
-            raise InvalidQueryError("graph.memory must be an object")
-        unknown = set(memory) - set(MemorySettings().as_dict())
-        if unknown:
-            raise InvalidQueryError(
-                "unknown memory setting(s): "
-                + ", ".join(sorted(unknown))
-                + "; known: "
-                + ", ".join(sorted(MemorySettings().as_dict()))
-            )
+    settings = graph.get("settings")
+    if settings is not None:
+        if not isinstance(settings, dict):
+            raise InvalidQueryError("graph.settings must be an object")
         try:
-            # Values, not just keys (MEM-03H-01): saving stores the
-            # block verbatim, so this is the moment a bad budget can
-            # be refused by name -- before it is a graph file that
-            # fails to load later.
-            MemorySettings.from_dict(memory)
+            # Values, not just keys (MEM-03H-01): saving stores the settings verbatim, so this is the moment a bad
+            # budget can be refused by name -- before it is a graph file that fails to load later.
+            MemorySettings.from_settings(settings)
         except ValueError as exc:
-            raise InvalidQueryError(f"graph.memory: {exc}") from exc
+            raise InvalidQueryError(f"graph.settings: {exc}") from exc
     stamp = payload.get("format")
     if not isinstance(stamp, int) or isinstance(stamp, bool):
         payload["format"] = GRAPH_FORMAT

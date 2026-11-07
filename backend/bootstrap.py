@@ -117,9 +117,10 @@ from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .application.use_cases.node_shapes import GetNodeCatalog, ResolveNode
 from .infrastructure.graph.catalog import DiscoveredGraphCatalog
-from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_folders
-from .infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
-from .infrastructure.graph.runtime import ReflectedGraphRuntime
+from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_environment
+from .infrastructure.graph.discovery import NodeRegistry as LegacyNodeRegistry
+from .infrastructure.graph.memory_fields import memory_fields_resolver
+from .infrastructure.graph.runtime import ContractGraphRuntime
 from .infrastructure.graph_event_stream import ExecutionEventTail
 from .infrastructure.graph_task_gateway import (
     InProcessGraphTaskGateway,
@@ -170,13 +171,12 @@ class Container:
 
 def _node_environment(layout):
     """What a node's resolve may ask for while a person edits: the model folders, as the run will see them."""
-    from .infrastructure.graph.tree import Environment, ModelLibrary  # noqa: PLC0415 -- the tree loads on first use
+    from .infrastructure.graph.tree import Environment  # noqa: PLC0415 -- the tree loads on first use
 
     try:
-        folders = model_folders(layout.checkpoints_dir, layout.loras_dir)
+        return model_environment(layout.checkpoints_dir, layout.loras_dir, layout.datasets_dir)
     except RuntimeError:  # ComfyUI not found yet (first run): resolve still answers, with no files
         return Environment()
-    return Environment(services={"models": ModelLibrary(folders)})
 
 
 def build_container(settings: Settings) -> Container:
@@ -224,13 +224,13 @@ def build_container(settings: Settings) -> Container:
     # backend.db; the runtime keeps the default memory releaser (gc,
     # then the XPU caching allocator) so freed VRAM goes back to the
     # driver after every run.
-    graph_registry = NodeRegistry()
-    graph_catalog = DiscoveredGraphCatalog(graph_registry)
+    graph_catalog = DiscoveredGraphCatalog(LegacyNodeRegistry())
     node_catalog = ContractNodeCatalog(environment=lambda: _node_environment(layout))
+    graph_registry = node_catalog.registry
     # One bus per process: the runtime hands it to MonitorNode through
     # ExecutionContext, the SSE endpoint reads the same instance (M6).
     monitor_bus = SharedMonitorBus()
-    graph_runtime = ReflectedGraphRuntime(graph_registry, monitor_bus=monitor_bus)
+    graph_runtime = ContractGraphRuntime(graph_registry, env=lambda: _node_environment(layout))
     graph_executions = SqliteGraphExecutionRepository(database)
 
     # Wrapped, not bare: every device question in the server goes through
@@ -291,7 +291,9 @@ def build_container(settings: Settings) -> Container:
     if settings.graph_execution_mode == GRAPH_EXECUTION_CHILD:
         graph_gateway: GraphTaskGateway = SubprocessGraphTaskGateway(layout)
     else:
-        graph_gateway = InProcessGraphTaskGateway(graph_registry)
+        graph_gateway = InProcessGraphTaskGateway(
+            graph_registry, environment=lambda: _node_environment(layout)
+        )
     # Supervision scratch, next to the database rather than in the runs
     # dir: these are per-execution working files (the graph handed to the
     # child, its event stream, its log), not run artifacts anyone collects.

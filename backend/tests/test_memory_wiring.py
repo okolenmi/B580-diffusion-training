@@ -81,13 +81,14 @@ from backend.application.use_cases import (
     StartGraphExecution,
 )
 from backend.domain.entities.graph_execution import GraphExecution
-from backend.domain.graph import GraphDefinition, GraphEdgeSpec, GraphNodeSpec
+from backend.domain.graph import GraphDefinition
 from backend.domain.memory_settings import MemorySettings, effective_memory
 from backend.domain.value_objects import ExecutionId
 from backend.infrastructure.dataset_library import SqliteDatasetLibrary
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
-from backend.infrastructure.graph.discovery import NodeRegistry, memory_fields_resolver
-from backend.infrastructure.graph.runtime import ReflectedGraphRuntime
+from backend.infrastructure.graph import tree
+from backend.infrastructure.graph.memory_fields import memory_fields_resolver
+from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.infrastructure.graph_event_stream import (
     ExecutionEventTail,
     ExecutionEventWriter,
@@ -100,6 +101,12 @@ from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.workspace import WorkspaceLayout
 from backend.presentation.app import create_app
 from backend.tests.support import (
+    fixture_tree_registry,
+    gdef,
+    gdoc,
+    gedge,
+    gnode,
+
     FakeClock,
     FakeDatasetTaskGateway,
     FakeDeviceProbe,
@@ -108,11 +115,10 @@ from backend.tests.support import (
     build_services,
     check,
     finish,
-    fixture_graph_registry,
     make_v2_dataset,
     wait_until,
 )
-from nodes.core import Node, Port
+from next.graph import Node, Port
 
 NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 
@@ -124,33 +130,15 @@ NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 
 def valid_graph() -> GraphDefinition:
     """The palette graph every other suite runs (Scale -> Sum)."""
-    return GraphDefinition(
-        nodes=(
-            GraphNodeSpec(
-                id="v", class_name="ScaleNode",
-                params={"value": 3.0, "factor": 5.0},
-            ),
-            GraphNodeSpec(id="s", class_name="SumNode", params={"b": 1.0}),
-        ),
-        edges=(
-            GraphEdgeSpec(
-                from_node="v", from_port="scaled",
-                to_node="s", to_port="a",
-            ),
-        ),
+    return gdef(
+        [gnode("v", "ScaleNode", value=3.0, factor=5.0), gnode("s", "SumNode", b=1.0)],
+        [gedge("v", "scaled", "s", "a")],
     )
 
 
 def slow_graph(seconds: float) -> GraphDefinition:
     """A run that stays alive long enough for a second start to race it."""
-    return GraphDefinition(
-        nodes=(
-            GraphNodeSpec(
-                id="w", class_name="SlowNode", params={"seconds": seconds},
-            ),
-        ),
-        edges=(),
-    )
+    return gdef([gnode("w", "SlowNode", seconds=seconds)])
 
 
 class _NoChildren(ExecutionLauncher):
@@ -216,7 +204,7 @@ def _graph_start(repo, ledger_source, *, launcher=None, clock=None,
         executions=repo,
         writer=_writer(repo, clock),
         runtime=(runtime if runtime is not None
-                 else ReflectedGraphRuntime(fixture_graph_registry())),
+                 else ContractGraphRuntime(fixture_tree_registry(), releaser=lambda: None)),
         launcher=launcher if launcher is not None else _NoChildren(),
         clock=clock,
         memory_ledger=ledger_source,
@@ -1064,11 +1052,7 @@ def test_real_http_children_race_for_one_device() -> None:
         # device; the task has no measured default -> exploratory,
         # exclusive. Either fits alone, neither fits with the other.
         graph_payload = {
-            "nodes": [
-                {"id": "w", "class_name": "SlowNode",
-                 "params": {"seconds": 2.0}}
-            ],
-            "edges": [],
+            "graph": gdoc([gnode("w", "SlowNode", seconds=2.0)]),
             "memory_overrides": {"vram_max_mb": 8000.0, "strict": False},
         }
         task_payload = {
@@ -1133,49 +1117,24 @@ class _PeakProbeNode(Node):
     memory_fields = ("model", "batch_size", "rank", "checkpointing", "optimizer")
 
     INPUTS = {
-        "model": Port(name="model", type=str, required=False, default="sdxl"),
-        "batch_size": Port(name="batch_size", type=int, required=False, default=1),
-        "rank": Port(name="rank", type=int, required=False, default=8),
-        "checkpointing": Port(
-            name="checkpointing", type=bool, required=False, default=False
-        ),
-        "optimizer": Port(name="optimizer", type=str, required=False, default="adamw"),
-        "dataset_root": Port(
-            name="dataset_root", type=str, required=False, default=None
-        ),
+        "model": Port("model", str, required=False, default="sdxl"),
+        "batch_size": Port("batch_size", int, required=False, default=1),
+        "rank": Port("rank", int, required=False, default=8),
+        "checkpointing": Port("checkpointing", bool, required=False, default=False),
+        "optimizer": Port("optimizer", str, required=False, default="adamw"),
+        "dataset_root": Port("dataset_root", str, required=False, default=None),
     }
-    OUTPUTS = {"ok": Port(name="ok", type=bool, doc="ran")}
+    OUTPUTS = {"ok": Port("ok", bool)}
 
-    def build(
-        self,
-        model="sdxl",
-        batch_size=1,
-        rank=8,
-        checkpointing=False,
-        optimizer="adamw",
-        dataset_root=None,
-    ):
+    def build(self, **inputs):
         return {"ok": True}
 
 
 def _observed_graph(memory: MemorySettings | None = None) -> GraphDefinition:
-    return GraphDefinition(
-        nodes=(
-            GraphNodeSpec(
-                id="p",
-                class_name="PeakProbeNode",
-                params={
-                    "model": "sdxl",
-                    "batch_size": 2,
-                    "rank": 64,
-                    "checkpointing": True,
-                    "optimizer": "adamw",
-                    "dataset_root": "shapes",
-                },
-            ),
-        ),
-        edges=(),
-        memory=memory if memory is not None else MemorySettings(),
+    return gdef(
+        [gnode("p", "PeakProbeNode", model="sdxl", batch_size=2, rank=64, checkpointing=True,
+               optimizer="adamw", dataset_root="shapes")],
+        settings=(memory if memory is not None else MemorySettings()).as_settings(),
     )
 
 
@@ -1189,7 +1148,7 @@ def _observed_setup(prefix: str, *, seed_peak: float | None):
     """
     root = Path(tempfile.mkdtemp(prefix=prefix))
     make_v2_dataset(root, "shapes", items=3)
-    registry = NodeRegistry(scan=lambda: ({"PeakProbeNode": _PeakProbeNode}, ()))
+    registry = tree.NodeRegistry(classes={"PeakProbeNode": _PeakProbeNode}, _loaded=True)
     store = SqlitePeakStore(root / "memory_peaks.db")
     if seed_peak is not None:
         store.record(_OBSERVED_KEY, seed_peak)
@@ -1205,7 +1164,7 @@ def _observed_setup(prefix: str, *, seed_peak: float | None):
         provider,
         launcher=_AdmittedOnly(),
         clock=FakeClock(),
-        runtime=ReflectedGraphRuntime(registry),
+        runtime=ContractGraphRuntime(registry, releaser=lambda: None),
         peak_source=peak_source,
     )
     return start, repo, provider
@@ -1287,11 +1246,7 @@ def _floor_case(prefix: str, memory: MemorySettings):
     repo = _graph_repo(root)
     provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
     start = _graph_start(repo, provider, launcher=_AdmittedOnly())
-    graph = GraphDefinition(
-        nodes=valid_graph().nodes,
-        edges=valid_graph().edges,
-        memory=memory,
-    )
+    graph = valid_graph().with_settings(memory.as_settings())
     return start, repo, provider(), graph
 
 
@@ -1469,11 +1424,7 @@ def test_a_floor_never_answers_before_the_unknown_device_total() -> None:
     root = Path(tempfile.mkdtemp(prefix="backend-mem-floor-nocard-"))
     repo = _graph_repo(root)
     start = _graph_start(repo, lambda: None)
-    graph = GraphDefinition(
-        nodes=valid_graph().nodes,
-        edges=valid_graph().edges,
-        memory=MemorySettings(vram_min_mb=11000),
-    )
+    graph = valid_graph().with_settings(MemorySettings(vram_min_mb=11000).as_settings())
     exc = _refusal(
         lambda: start.execute(graph),
         "no ledger is refused before any floor question is asked",
@@ -2506,7 +2457,7 @@ def test_bad_budget_numbers_never_reach_the_ledger() -> None:
             app,
             "/api/v1/graphs/run",
             method="POST",
-            json_body={"nodes": [], "memory": memory},
+            json_body={"graph": gdoc(settings={f"memory.{k}": v for k, v in memory.items()})},
         )
         check(
             status == 422 and field in json.dumps(body),
@@ -2518,7 +2469,7 @@ def test_bad_budget_numbers_never_reach_the_ledger() -> None:
         app,
         "/api/v1/graphs/run",
         method="POST",
-        json_body={"nodes": [], "memory_overrides": {"vram_max_mb": -9000}},
+        json_body={"graph": gdoc(), "memory_overrides": {"vram_max_mb": -9000}},
     )
     check(
         status == 422 and "vram_max_mb" in json.dumps(body),

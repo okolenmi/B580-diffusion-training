@@ -25,7 +25,6 @@ from backend.application.use_cases.preview_graph_memory import (
     PreviewGraphMemory,
 )
 from backend.domain.graph import GraphDefinition
-from backend.domain.memory_settings import MemorySettings
 from backend.tests.support import check, finish
 
 #: The card this project's admission numbers were measured on.
@@ -43,7 +42,9 @@ def _ledger() -> MemoryLedger:
 
 
 def _graph(**memory) -> GraphDefinition:
-    return GraphDefinition(memory=MemorySettings(**memory))
+    from next.graph.document import GraphDoc
+
+    return GraphDefinition(GraphDoc(settings={f"memory.{key}": value for key, value in memory.items()}))
 
 
 def _preview(ledger, peak_mb, fingerprint="fp-1"):

@@ -93,48 +93,36 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-class _EventMonitorBus:
-    """Duck-typed MonitorBus that appends instead of dispatching.
-
-    ``nodes/`` only requires ``report``/``clear`` of whatever object
-    ``ExecutionContext`` carries -- that duck-typing is what lets the same
-    runtime work in both processes. Sanitizing happens in the writer, so
-    this does not repeat it.
-    """
+class _EventReporter:
+    """The runner's ``Reporter``: every stream frame (run and node states, monitor frames, memory) is appended to the
+    event file, and the server republishes it onto its own bus. Sanitizing happens in the writer."""
 
     def __init__(self, writer) -> None:
         self._writer = writer
 
-    def report(self, monitor_id: str, data: dict) -> None:
-        self._writer.monitor(monitor_id, data)
-
-    def clear(self, monitor_id: str) -> None:
-        # "Clear" means "stop replaying this history". Across a process
-        # boundary the history is the file, and a monitor the run has
-        # stopped reporting simply produces nothing more -- there is
-        # nothing to clear, and truncating the shared file would delete
-        # every other monitor's records.
-        pass
+    def report(self, stream: str, frame: dict) -> None:
+        self._writer.monitor(stream, frame)
 
 
-def build_runtime(writer, registry=None, memory=None):
+def build_runtime(writer, registry=None, memory=None, env=None):
     """The one runtime both gateways run: the real one, wired to the file.
 
-    Takes the registry so the in-process gateway can reuse the server's
-    already-discovered one instead of paying discovery again; the child
-    passes nothing and discovers its own. ``memory`` is the run's
-    GraphMemory (MEM-05 #1), built by the caller before anything loads
-    and carried to every node through ``ExecutionContext``; None means
-    the spawn carried no memory numbers, which the caller passed along
-    as its explicit unknown rather than resolving to a zero here.
+    ``registry`` lets the in-process gateway reuse the server's already-discovered one; the child passes nothing and
+    discovers its own, with the model and dataset folders its parent handed down. ``memory`` is the run's GraphMemory,
+    built by the caller before anything loads: its budget is what admission granted, so it wins over the graph's own
+    ``memory.vram_max_mb``. None means the spawn carried no numbers.
     """
-    from .graph.discovery import NodeRegistry
-    from .graph.runtime import ReflectedGraphRuntime
+    from .graph import tree
+    from .graph.contract_catalog import process_environment
+    from .graph.runtime import ContractGraphRuntime
 
-    return ReflectedGraphRuntime(
-        registry if registry is not None else NodeRegistry(),
-        monitor_bus=_EventMonitorBus(writer),
-        memory=memory,
+    budget = None if memory is None else memory.budget_mb
+    return ContractGraphRuntime(
+        registry,
+        reporter=_EventReporter(writer),
+        env=env if env is not None else process_environment(),
+        runtime_factory=tree.make_runtime,
+        overrides={} if budget is None else {"memory.vram_max_mb": budget},
     )
 
 

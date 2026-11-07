@@ -68,12 +68,6 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 58. Resumable training: cut and continue (about 15 minutes)
-```
-python -m next.run sdxl-lora ... --steps 60 --resume-every 20 --output /tmp/r
-```
-Kill it (the process, or the power cord if you like) after step 30. Run the same command again: it should print `resuming from step 20 (N batches already used)`, continue with step 21 and finish at 60, and `/tmp/r/resume` holds `resume_00000040`/`resume_00000060` (`.json` + `.safetensors`). Compare the final picture or loss with an uninterrupted 60-step run (equal on a deterministic setup, close otherwise). Then a lab run: start any experiment, pull the plug mid-arm, run `python -m next.lab run exp.json` again; the arm should say "continuing an earlier session" and the report should list it as resumed. If a state is damaged (copy a resume file and flip a byte), the log says `resume state ... is not usable` and the run continues from the one before.
-
 ## 60. Gradient-aligned start: other values, and with LoRA+ (about 3 hours for five arms; pick with `--arms`)
 Your result: 4 batches gave very good textures, 16 failed. This brackets 4 with 2 and 6, and puts 4 together with LoRA+ 4 and 8 (A is already a good direction, B has to grow from zero). `aligned-4` is run again so all pictures are on one sheet.
 ```

@@ -174,13 +174,6 @@ python -m next.lab run blockrates.json
 ```
 Send the zip. Does the loss stay the same while the pictures get cleaner? No warning about an unmatched region should appear at the start of a run (a misspelt prefix is reported there).
 
-## 73. Memory of the gradient-aligned start (about 5 minutes)
-Your log showed the card holding 9.2 GB after the initialisation (6.3 GB without it) and step 1 peaking at 8.7 GB instead of 6.1 GB: the initialisation ran all nine timestep regions of a batch in one pass. It now runs them one at a time, like a step, and gives the cache back and forgets its peak afterwards (the cleaner's passes too).
-```
-python -m next.run sdxl-lora ... --regions 3 --regions-from 9 --aligned-init 4 --lora-plus 4 --steps 20
-```
-Check in the log: the line `memory (MB) at step 1` should now show about the same `peak live` and `allocator free, returnable` as a run without `--aligned-init` (before: 8656 and 3535; without: 6060 and 555). Send the log line or tell me the numbers. If it is fine, aligned 4 with LoRA+ 4 can become the recipe of the next tests.
-
 ## 28. Chunked attention, memory side
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 

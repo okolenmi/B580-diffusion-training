@@ -55,6 +55,7 @@ class LoadModelNode(Node):
     CATEGORY = "Model"
     DYNAMIC = DynamicShape(depends_on=("scope", "file", "family"))
 
+    memory_fields = ("file", "family", "dtype")
     INPUTS = {
         "scope": Port("scope", str, required=False, default="checkpoints", choices=SCOPES,
                       doc="Which folder list to browse. It does not decide what the file contains."),

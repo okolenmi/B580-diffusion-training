@@ -40,6 +40,7 @@ class DiffusionTrainerNode(Node):
                    AddonSlot("cleaner", ModelBound, doc="Finds the useful part of a trained adapter, keeps it and clears the rest."),
                    AddonSlot("anchor", ConditionerBound, doc="Keeps the adapter from changing the model's predictions under prompts unrelated to the dataset."),
                    AddonSlot("region_weights", ModelBound, doc="Weights the regions of a step by how their part of the timestep range is doing."))
+    memory_fields = ("accumulation", "graph", "graph_attention", "fused_geglu", "tune_checkpointing")
     INPUTS = {
         "batches": Port("batches", Batcher),
         "model": Port("model", TrainableDenoiser),

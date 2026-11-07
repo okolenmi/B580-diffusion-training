@@ -1113,7 +1113,6 @@ def build_services(
     # unknown -- exactly what these tests claimed before the read half
     # existed, never a zero peak.
     fixture_peak_source = GraphPeakSource(
-        datasets=dataset_library,
         peaks=peak_store,
         resolve_memory_fields=memory_fields_resolver(graph_registry),
     )
@@ -1198,7 +1197,7 @@ def build_services(
         # these tests claimed before the read half existed, never a zero peak.
         peak_source=fixture_peak_source.observed,
     )
-    describe_modules = DescribeGraphModules(catalog=graph_catalog)
+    describe_modules = DescribeGraphModules(catalog=contract_catalog)
     return ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),

@@ -54,6 +54,7 @@ class InjectAdapterNode(Node):
     GROUPS = (Group("adapter", "Adapter"), Group("targets", "Targets", collapsed=True),
               Group("gate", "Timestep gate", collapsed=True, advanced=True),
               Group("memory", "Memory", collapsed=True, advanced=True))
+    memory_fields = ("kind", "rank", "lora_compute", "checkpointing", "attention_fraction", "base_precision")
     INPUTS = {
         "denoiser": Port("denoiser", DenoiserPart),
         "kind": Port("kind", str, required=False, default="lora", choices=("lora", "dora"), group="adapter"),

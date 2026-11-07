@@ -1,13 +1,13 @@
 """DescribeGraphModules / ResolveTemplate -- what a page can bind to, and
 whether a saved page still binds to it.
 
-Both answer from the *real* node classes through the catalog, never from a
+Both answer from the node tree's own catalog and resolve, never from a
 second description:
 
 * ``DescribeGraphModules`` takes a graph and lists, per node instance, the
   **fields** it could expose (its settable input ports, with their current
   values and whether an edge already feeds them) and the **displays** it can
-  show (its declared live views, each with the stream it reports to), plus
+  show (its declared live views, each on the stream ``node:<uid>``), plus
   the graph's own modules (memory settings, run status, memory chart). It
   is the template editor's "what is available" tray, and the monitor
   composer's "what can I watch".
@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import TemplateInvalidError
-from ..ports.graph_catalog import GraphCatalog, NodeInfo, PortInfo
 from ..ports.graph_runtime import GraphRuntime, issue_to_dict
+from ..ports.node_catalog import NodeCatalog
 from ...domain.graph import GraphDefinition
 from ...domain.modules import (
     GRAPH_DISPLAY_BY_NAME,
@@ -38,45 +38,21 @@ from ...domain.modules import (
     GRAPH_FIELD_BY_NAME,
     GRAPH_FIELDS,
     node_stream_id,
-    wired_ports,
 )
 from ...domain.template import validate_template_doc
 from .save_graph import normalize_graph_payload
 
-#: Port types a person can type a value for. Everything else (a model, a
-#: dataset handle, a callback) only exists as a wire and has no control.
-_SETTABLE_TYPES = frozenset({"str", "int", "float", "bool", "Path"})
 
-
-def is_settable(port: PortInfo) -> bool:
-    """Does this input have a control a form can draw?"""
-    return bool(
-        port.type in _SETTABLE_TYPES or port.choices is not None or port.path_kind
-    )
-
-
-def _field_dict(port: PortInfo, params: dict, wired: bool) -> dict[str, Any]:
+def _field_dict(port: dict, params: dict, wired: bool) -> dict[str, Any]:
+    """A catalog port as the template editor's field: the port's own description plus this node's current state."""
+    name = port["name"]
     return {
-        "name": port.name,
-        "type": port.type,
-        "required": port.required,
-        "doc": port.doc,
-        "default": port.default,
-        "default_repr": port.default_repr,
-        "choices": list(port.choices) if port.choices is not None else None,
-        "path_kind": port.path_kind,
-        "visible_when": list(port.visible_when) if port.visible_when is not None else None,
-        "widget_only": port.widget_only,
-        "label": port.label,
-        "group": port.group,
-        "advanced": port.advanced,
-        "unit": port.unit,
-        "minimum": port.minimum,
-        "maximum": port.maximum,
-        "step": port.step,
+        **{key: port.get(key) for key in (
+            "name", "type", "required", "doc", "default", "choices", "picker", "visible_when", "widget_only",
+            "label", "group", "advanced", "unit", "minimum", "maximum", "step")},
         "wired": wired,
-        "has_value": port.name in params,
-        "value": params.get(port.name),
+        "has_value": name in params,
+        "value": params.get(name),
     }
 
 
@@ -90,15 +66,14 @@ class GraphModules:
 
 
 class DescribeGraphModules:
-    def __init__(self, catalog: GraphCatalog) -> None:
+    def __init__(self, catalog: NodeCatalog) -> None:
         self._catalog = catalog
 
     def execute(self, graph: GraphDefinition) -> GraphModules:
-        by_class: dict[str, NodeInfo] = {
-            n.class_name: n for n in self._catalog.snapshot().nodes
-        }
+        by_class = {n["class_name"]: n for n in self._catalog.catalog()["nodes"]}
         nodes: list[dict] = []
         for spec in graph.nodes:
+            stream = node_stream_id(spec.uid)
             info = by_class.get(spec.class_name)
             if info is None:
                 # Unknown class: kept in the answer so a block pointing at
@@ -106,24 +81,20 @@ class DescribeGraphModules:
                 nodes.append({
                     "id": spec.uid, "class_name": spec.class_name,
                     "display_name": spec.class_name, "known": False,
-                    "fields": [], "displays": [], "stream": node_stream_id(spec.uid),
+                    "fields": [], "displays": [], "stream": stream,
                 })
                 continue
-            inputs = self._catalog.resolved_inputs(spec.class_name, spec.params) or info.inputs
-            wired = wired_ports(graph.edges, spec.uid)
-            fields = [
-                _field_dict(port, spec.params, port.name in wired)
-                for port in inputs
-                if is_settable(port)
-            ]
-            stream = self._stream_for(graph, spec.uid, by_class)
+            wired = {edge.to_port for edge in graph.edges_to(spec.uid)}
             nodes.append({
                 "id": spec.uid,
                 "class_name": spec.class_name,
-                "display_name": info.display_name,
+                "display_name": info["display_name"],
                 "known": True,
-                "fields": fields,
-                "displays": [dict(m, stream=stream) for m in info.modules],
+                "fields": [
+                    _field_dict(port, spec.params, port["name"] in wired)
+                    for port in self._inputs(info, spec, graph) if port.get("field")
+                ],
+                "displays": [dict(module, stream=stream) for module in info["modules"]],
                 "stream": stream,
             })
         memory = graph.memory.as_dict()
@@ -137,26 +108,13 @@ class DescribeGraphModules:
             graph_displays=tuple(dict(d) for d in GRAPH_DISPLAYS),
         )
 
-    @staticmethod
-    def _stream_for(graph: GraphDefinition, node_id: str, by_class: dict[str, NodeInfo]) -> str:
-        """The stream this node's displays arrive on.
-
-        The runtime hands a node with declared modules a handle onto
-        ``node:<id>``. But a graph that still wires a MonitorNode into the
-        node's ``monitor`` input sends its reports to that monitor's id
-        instead (the old route, kept working), so a page must follow the
-        wire to find them."""
-        for edge in graph.edges:
-            if edge.to_node == node_id and edge.to_port == "monitor":
-                source = graph.node(edge.from_node)
-                info = by_class.get(source.class_name) if source else None
-                if source is not None and info is not None and any(
-                    p.name == "monitor_id" for p in info.inputs
-                ):
-                    monitor_id = source.params.get("monitor_id")
-                    if isinstance(monitor_id, str) and monitor_id:
-                        return monitor_id
-        return node_stream_id(node_id)
+    def _inputs(self, info: dict, spec: Any, graph: GraphDefinition) -> list[dict]:
+        """The node's inputs as these params shape them. A dynamic node resolves; when it cannot, the static ports
+        stand, as in the editor (which keeps the last good shape)."""
+        if info.get("dynamic") is None:
+            return info["inputs"]
+        resolved = self._catalog.resolve(spec.class_name, spec.params, graph.doc.settings)
+        return info["inputs"] if resolved["state"] == "error" else resolved["inputs"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +152,7 @@ class ResolveTemplate:
         else:
             try:
                 definition = GraphDefinition.from_dict(normalize_graph_payload(source))
-            except ValueError as exc:  # a bad memory block
+            except ValueError as exc:  # not a document this version reads, or a bad memory setting
                 raise TemplateInvalidError(f"graph: {exc}", details=[str(exc)]) from exc
         modules = self._describe.execute(definition)
         nodes = {n["id"]: n for n in modules.nodes}

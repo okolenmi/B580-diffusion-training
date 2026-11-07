@@ -38,5 +38,16 @@ def surface():
     check(not first, f"at most {FIRST_VIEW} fields are visible before anything is opened ({first})")
 
 
+def memory_fields():
+    """``memory_fields`` is what the server fingerprints a run by: a name that is not a port of its class would be
+    skipped there without a word, so a typo must fail here."""
+    classes, _ = NodeRegistry.default().load()
+    declaring = {name: cls for name, cls in classes.items() if getattr(cls, "memory_fields", None)}
+    check({"LoadModelNode", "InjectAdapterNode", "BatcherNode", "DiffusionTrainerNode"} <= set(declaring),
+          "the nodes that set the memory peak declare it")
+    wrong = {name: [f for f in cls.memory_fields if f not in cls.INPUTS] for name, cls in declaring.items()}
+    check(not any(wrong.values()), f"every declared memory field is a port ({ {k: v for k, v in wrong.items() if v} })")
+
+
 if __name__ == "__main__":
-    run(surface)
+    run(surface, memory_fields)

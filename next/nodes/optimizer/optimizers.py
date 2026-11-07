@@ -15,6 +15,7 @@ from ...graph import Group, Node, Port
 class OptimizerNode(Node):
     CATEGORY = "Optimizer"
     GROUPS = (Group("rule", "Update rule"), Group("execution", "Execution", collapsed=True, advanced=True))
+    memory_fields = ("fused", "group_size", "foreach", "state_precision")
     COMMON = {
         "model": Port("model", TrainableDenoiser),
         "lr": Port("lr", float, required=False, default=1e-4, minimum=0.0, group="rule",

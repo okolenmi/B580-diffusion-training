@@ -328,7 +328,6 @@ def build_container(settings: Settings) -> Container:
     # and the watcher above that files this run's own reported peaks.
     # Three constructions of the same thing is three chances not to.
     graph_peak_source = GraphPeakSource(
-        datasets=dataset_library,
         peaks=peak_store,
         resolve_memory_fields=memory_fields_resolver(graph_registry),
     )
@@ -350,7 +349,7 @@ def build_container(settings: Settings) -> Container:
         # quote a peak belonging to some other configuration.
         peak_source=graph_peak_source.observed,
     )
-    describe_modules = DescribeGraphModules(catalog=graph_catalog)
+    describe_modules = DescribeGraphModules(catalog=node_catalog)
 
     services = ApplicationServices(
         config=ConfigServices(

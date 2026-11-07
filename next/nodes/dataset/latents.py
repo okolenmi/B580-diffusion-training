@@ -25,6 +25,7 @@ class LatentCacheNode(Node):
     CATEGORY = "Dataset"
     GROUPS = (Group("source", "Source"), Group("size", "Size policy"), Group("encode", "Encoding", collapsed=True))
     READS_SETTINGS = ("precision.vae",)
+    memory_fields = ("base", "mode", "max_aspect", "step")
     INPUTS = {
         "images": Port("images", ImageSet),
         "vae": Port("vae", VAEPart),

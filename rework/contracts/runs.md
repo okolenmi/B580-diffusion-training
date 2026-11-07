@@ -45,3 +45,22 @@ unfinished and every source ran.
 `RunObserver` (Protocol in `next/graph/runtime.py`) receives `node_state`, `node_done`,
 `event` and `run` callbacks. The server turns them into stream frames and domain events.
 A failing observer never aborts a run.
+
+## Peak memory fingerprint
+
+The server remembers how much memory a configuration peaked at and admits the next run of it against that number. It
+must know the configuration before the child starts, so it reads **declarations, never values it would have to compute**:
+a node class lists the params that change its memory peak in `memory_fields` (`BatcherNode`: `batch_size`;
+`InjectAdapterNode`: `rank`, `kind`, `checkpointing`, ...; `LatentCacheNode`: the size policy). The key is the dataset
+(the first `dataset` param in the graph) plus, per declaring node, its class and each declared value: the node's param,
+else the port's default. A declared name must be a port of the class (`next/tests/check_node_surface.py`).
+
+The fingerprint is unknown, never defaulted, when no node names a dataset, a declared port is fed by another node, a
+required one is not set, or no node declares anything. An unknown fingerprint is not a zero peak: the run is admitted as
+exploratory.
+
+## Display streams
+
+A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the template editor read them there.
+`graph:run` carries the run's own frames (node states, memory). The child writes every stream frame to the run's event
+file and the server republishes it.

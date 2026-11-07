@@ -1101,14 +1101,14 @@ def test_real_http_children_race_for_one_device() -> None:
 #: What one graph's fingerprint looks like end to end: model, batch,
 #: latent h/w (the largest good bucket of the ``shapes`` fixture, 64x64),
 #: rank, checkpointing, optimizer.
-_OBSERVED_KEY = "sdxl|2|64|64|64|True|adamw"
+_OBSERVED_KEY = "shapes|PeakProbeNode(model=sdxl,batch_size=2,rank=64,checkpointing=True,optimizer=adamw)"
 
 
 class _PeakProbeNode(Node):
     """A node that declares every fingerprint field and names a dataset.
 
     The fixture palette declares no ``memory_fields`` and no
-    ``dataset_root`` input, so a graph that can actually be *fingerprinted*
+    ``dataset`` input, so a graph that can actually be *fingerprinted*
     (MEM-01) needs its own node class: the observed path is only real if
     the start use case computed the key itself, from the registry's
     declarations and the dataset's latent buckets.
@@ -1122,7 +1122,7 @@ class _PeakProbeNode(Node):
         "rank": Port("rank", int, required=False, default=8),
         "checkpointing": Port("checkpointing", bool, required=False, default=False),
         "optimizer": Port("optimizer", str, required=False, default="adamw"),
-        "dataset_root": Port("dataset_root", str, required=False, default=None),
+        "dataset": Port("dataset", str, required=False, default=None),
     }
     OUTPUTS = {"ok": Port("ok", bool)}
 
@@ -1133,7 +1133,7 @@ class _PeakProbeNode(Node):
 def _observed_graph(memory: MemorySettings | None = None) -> GraphDefinition:
     return gdef(
         [gnode("p", "PeakProbeNode", model="sdxl", batch_size=2, rank=64, checkpointing=True,
-               optimizer="adamw", dataset_root="shapes")],
+               optimizer="adamw", dataset="shapes")],
         settings=(memory if memory is not None else MemorySettings()).as_settings(),
     )
 
@@ -1147,7 +1147,6 @@ def _observed_setup(prefix: str, *, seed_peak: float | None):
     that must be refused before a row exists.
     """
     root = Path(tempfile.mkdtemp(prefix=prefix))
-    make_v2_dataset(root, "shapes", items=3)
     registry = tree.NodeRegistry(classes={"PeakProbeNode": _PeakProbeNode}, _loaded=True)
     store = SqlitePeakStore(root / "memory_peaks.db")
     if seed_peak is not None:
@@ -1155,7 +1154,6 @@ def _observed_setup(prefix: str, *, seed_peak: float | None):
     repo = _graph_repo(root)
     provider = _provider(FakeDeviceProbe(), repo, _task_repo(root))
     peak_source = GraphPeakSource(
-        datasets=SqliteDatasetLibrary(WorkspaceLayout(root)),
         peaks=store,
         resolve_memory_fields=memory_fields_resolver(registry),
     ).observed

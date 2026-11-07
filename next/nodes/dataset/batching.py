@@ -22,6 +22,7 @@ class BucketerNode(Node):
     DISPLAY_NAME = "Bucketer"
     CATEGORY = "Dataset"
     GROUPS = (Group("shapes", "Shapes"), Group("batches", "Batches"), Group("padding", "Padding", collapsed=True))
+    memory_fields = ("multiple", "max_shapes", "batch_area", "pack")
     INPUTS = {
         "latents": Port("latents", LatentSet),
         "multiple": Port("multiple", int, required=False, default=1, minimum=1, unit="latent px",
@@ -109,6 +110,7 @@ class BatcherNode(Node):
     CATEGORY = "Dataset"
     READS_SETTINGS = ("seed.base",)
     GROUPS = (Group("batching", "Batching"), Group("worker", "Worker", collapsed=True))
+    memory_fields = ("batch_size",)
     INPUTS = {
         "latents": Port("latents", LatentSet),
         "prompts": Port("prompts", PromptTable),

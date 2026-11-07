@@ -2,7 +2,7 @@
 
 What this covers (all on fixture nodes; nothing here touches a GPU):
 
-  A  nodes/ui.py descriptors and the Port/Node declaration rules
+  A  (the declaration rules of display modules are checked in next/tests)
   B  the catalog carries port hints and a node's modules
   C  domain: template document shape validation (every problem, with a path)
   D  DescribeGraphModules: fields vs wires, streams, the monitor-wire rule
@@ -19,25 +19,20 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from nodes.core import Node, Port
-from nodes.monitor.handle import MonitorHandle
-from nodes.ui import DisplayModule, Series
 
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.template_binding import apply_values, exposed_fields
 from backend.domain.graph import Edge, GraphDefinition, NodeSpec
 from backend.domain.modules import GRAPH_STREAM, node_stream_id
 from backend.domain.template import normalize_template_doc, validate_template_doc
-from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
-from backend.infrastructure.graph.discovery import NodeRegistry
+from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.presentation.app import create_app
 from backend.tests.support import (
-    FIXTURE_NODES,
     RecordingMonitorBus,
     asgi_request,
     build_services,
@@ -55,52 +50,9 @@ API = "/api/v1/templates"
 W1, SC, SU, GHOST, ZZ, N1, S, M = (uid(n) for n in ("w1", "sc", "su", "ghost", "zz", "n1", "s", "m"))
 
 
-# --------------------------------------------------------------------------
-# Fixture nodes of our own (FIXTURE_NODES is shared by many suites)
-# --------------------------------------------------------------------------
-
-class WidgetNode(Node):
-    """Reports three steps of 'loss' through its monitor handle."""
-
-    INPUTS = {
-        "steps": Port(name="steps", type=int, required=False, default=3,
-                      label="Steps", group="Run", unit="steps", minimum=1, maximum=100, step=1),
-        "tag": Port(name="tag", type=str, required=False, default="x", advanced=True),
-        "monitor": Port(name="monitor", type=MonitorHandle, required=False, default=None),
-    }
-    OUTPUTS = {"done": Port(name="done", type=int)}
-    MODULES = (
-        DisplayModule(
-            name="loss", kind="chart", title="Loss", scale="symlog",
-            series=(Series("loss", "loss", "#6c8cff"),),
-        ),
-        DisplayModule(name="progress", kind="progress", title="Progress",
-                      value_key="step", total_key="total_steps"),
-    )
-
-    def build(self, steps=3, tag="x", monitor=None):
-        if monitor is not None:
-            for i in range(steps):
-                monitor.report({"step": i + 1, "total_steps": steps, "loss": 1.0 / (i + 1)})
-        return {"done": steps}
-
-
-class FakeMonitorNode(Node):
-    """Stands in for TrainingProgressMonitorNode: has a monitor_id input."""
-
-    INPUTS = {"monitor_id": Port(name="monitor_id", type=str)}
-    OUTPUTS = {"monitor": Port(name="monitor", type=MonitorHandle)}
-
-    def build(self, monitor_id):
-        from nodes.monitor.handle import LiveMonitorHandle
-        return {"monitor": LiveMonitorHandle(monitor_id, self.context.monitor_bus)}
-
-
-def registry() -> NodeRegistry:
-    classes = dict(FIXTURE_NODES)
-    classes["WidgetNode"] = WidgetNode
-    classes["FakeMonitorNode"] = FakeMonitorNode
-    return NodeRegistry(scan=lambda: (classes, ()))
+def registry():
+    """The new tree's registry over the shared fixture nodes (WidgetNode lives there)."""
+    return fixture_tree_registry()
 
 
 def raises(exc_type, fn) -> bool:
@@ -114,81 +66,19 @@ def raises(exc_type, fn) -> bool:
 
 
 # ==========================================================================
-# A. nodes/ui.py + Port/Node rules
-# ==========================================================================
-print("-- A: descriptors and declaration rules --")
-
-check(raises(ValueError, lambda: DisplayModule(name="a", kind="blink", title="t", series=(Series("k"),))),
-      "an unknown kind is refused at declaration")
-check(raises(ValueError, lambda: DisplayModule(name="a", kind="chart", title="t")),
-      "a chart with nothing to draw is refused")
-check(raises(ValueError, lambda: DisplayModule(name="a:b", kind="chart", title="t", series=(Series("k"),))),
-      "':' in a module name is refused (it separates ids)")
-check(raises(ValueError, lambda: DisplayModule(name="p", kind="progress", title="t")),
-      "progress without value_key/total_key is refused")
-check(raises(ValueError, lambda: DisplayModule(name="a", kind="chart", title="t",
-                                               series=(Series("k"),), size=(0, 3))),
-      "a zero-sized module is refused")
-check(raises(ValueError, lambda: DisplayModule(name="a", kind="chart", title="t",
-                                               series=(Series("k"),), scale="log")),
-      "an unknown scale is refused")
-
-loss = WidgetNode.MODULES[0].as_dict()
-check(loss["series"][0] == {"key": "loss", "label": "loss", "color": "#6c8cff", "unit": ""}
-      and loss["scale"] == "symlog" and loss["size"] == [6, 4],
-      f"as_dict is JSON-shaped (got {loss})")
-
-def _dup():
-    class Dup(Node):
-        OUTPUTS = {"o": Port(name="o", type=int)}
-        MODULES = (
-            DisplayModule(name="a", kind="scalar", title="t", series=(Series("k"),)),
-            DisplayModule(name="a", kind="scalar", title="u", series=(Series("k"),)),
-        )
-        def build(self): return {"o": 1}
-check(raises(TypeError, _dup), "duplicate module names on one node are refused at class creation")
-
-def _not_tuple():
-    class Bad(Node):
-        OUTPUTS = {"o": Port(name="o", type=int)}
-        MODULES = ["nope"]
-        def build(self): return {"o": 1}
-check(raises(TypeError, _not_tuple), "MODULES must be a tuple of DisplayModule")
-
-check(raises(ValueError, lambda: Port(name="p", type=int, minimum=5, maximum=1)),
-      "minimum above maximum is refused")
-check(raises(ValueError, lambda: Port(name="p", type=int, step=0)), "a zero step is refused")
-check(raises(TypeError, lambda: Port(name="p", type=int, minimum="1")), "a non-numeric bound is refused")
-check(Port(name="p", type=int).advanced is False and Port(name="p", type=int).label == "",
-      "hints default to 'not stated'")
-
-from nodes.train.node import TrainerNode  # noqa: E402
-names = [m.name for m in TrainerNode.MODULES]
-check(names == ["progress", "loss", "lr", "grad_norm", "vram", "timing",
-                  "loss_now", "loss_by_t", "vram_peak"],
-      f"the trainer declares its live views (got {names})")
-vram = next(m for m in TrainerNode.MODULES if m.name == "vram")
-check(vram.reference_key == "vram_budget_mb" and "vram_reserved_mb" in [s.key for s in vram.series],
-      "the VRAM view names the budget reference and the reserved series")
-
-# ==========================================================================
-# B. catalog
+# B. the catalog carries a node's hints and live views
 # ==========================================================================
 print("-- B: the catalog carries hints and modules --")
-catalog = DiscoveredGraphCatalog(registry())
-snap = {n.class_name: n for n in catalog.snapshot().nodes}
+catalog = ContractNodeCatalog(registry())
+snap = {n["class_name"]: n for n in catalog.catalog()["nodes"]}
 w = snap["WidgetNode"]
-steps = next(p for p in w.inputs if p.name == "steps")
-check(steps.label == "Steps" and steps.group == "Run" and steps.unit == "steps"
-      and (steps.minimum, steps.maximum, steps.step) == (1, 100, 1),
-      "port hints reach PortInfo")
-check(next(p for p in w.inputs if p.name == "tag").advanced is True, "advanced reaches PortInfo")
-check([m["name"] for m in w.modules] == ["loss", "progress"], "modules reach NodeInfo as dicts")
-check(snap["SumNode"].modules == (), "a node with no live views has none")
-from backend.presentation.schemas import graph_node_out  # noqa: E402
-out = graph_node_out(w)
-check(out.modules[0]["kind"] == "chart" and out.inputs[0].label == "Steps",
-      "the wire schema carries both")
+steps = next(p for p in w["inputs"] if p["name"] == "steps")
+check(steps["label"] == "Steps" and steps["group"] == "run" and steps["unit"] == "steps"
+      and (steps["minimum"], steps["maximum"], steps["step"]) == (1, 100, 1),
+      "port hints reach the catalog")
+check(next(p for p in w["inputs"] if p["name"] == "tag")["advanced"] is True, "advanced reaches the catalog")
+check([m["name"] for m in w["modules"]] == ["loss", "progress"], "modules reach the catalog as dicts")
+check(snap["SumNode"]["modules"] == [], "a node with no live views has none")
 
 # ==========================================================================
 # C. document shape
@@ -246,7 +136,7 @@ check(norm["format"] == 1 and norm["extra_key"] == 1 and norm["blocks"][0]["coll
 # ==========================================================================
 print("-- D: what a graph offers --")
 from backend.application.use_cases.graph_modules import (  # noqa: E402
-    DescribeGraphModules, ResolveTemplate, is_settable,
+    DescribeGraphModules, ResolveTemplate,
 )
 describe = DescribeGraphModules(catalog=catalog)
 
@@ -262,7 +152,7 @@ g = GraphDefinition(GraphDoc(
 m = describe.execute(g)
 by_id = {n["id"]: n for n in m.nodes}
 wfields = {f["name"]: f for f in by_id[W1]["fields"]}
-check(set(wfields) == {"steps", "tag"}, f"handle-typed 'monitor' is not a field (got {sorted(wfields)})")
+check(set(wfields) == {"steps", "tag"}, f"the widget's own ports are its fields (got {sorted(wfields)})")
 check(wfields["steps"]["value"] == 5 and wfields["steps"]["has_value"], "current value is reported")
 check(wfields["tag"]["has_value"] is False, "an unset param says so")
 sfields = {f["name"]: f for f in by_id[SU]["fields"]}
@@ -278,18 +168,8 @@ check(next(f for f in m.graph_fields if f["name"] == "memory.vram_max_mb")["valu
       "graph setting current value comes from the graph")
 check({d["name"] for d in m.graph_displays} >= {"run", "memory"}, "graph-scope live views are offered")
 
-check(is_settable(next(p for p in snap["ScaleNode"].inputs if p.name == "mode")), "choices => settable")
-check(not is_settable(next(p for p in snap["WidgetNode"].inputs if p.name == "monitor")),
-      "a handle type is not settable")
-
-# the old route: a wired monitor node's id is where reports go
-g2 = GraphDefinition(GraphDoc(
-    nodes=(NodeSpec(M, "FakeMonitorNode", {"monitor_id": "my-stable-id"}),
-           NodeSpec(W1, "WidgetNode", {})),
-    edges=(Edge(M, "monitor", W1, "monitor"),),
-))
-check(describe.execute(g2).nodes[1]["stream"] == "my-stable-id",
-      "a wired monitor node's id is the stream (old route keeps working)")
+scale_fields = {f["name"] for f in by_id[SC]["fields"]}
+check({"value", "factor", "mode"} <= scale_fields, "settable ports are fields (choices included)")
 
 # ==========================================================================
 # E. ResolveTemplate
@@ -386,6 +266,15 @@ writer = _Writer()
 _EventReporter(writer).report("node:x", {"step": 1})
 check(writer.frames == [("node:x", {"step": 1})], "every stream frame of a run is written to the event file")
 
+writer = _Writer()
+out = ContractGraphRuntime(registry(), reporter=_EventReporter(writer), releaser=lambda: None).execute(
+    GraphDefinition.from_dict({"format": 3, "nodes": [{"uid": W1, "class_name": "WidgetNode", "params": {"steps": 3}}]}),
+    cancel_event=threading.Event())
+widget_frames = [frame for stream, frame in writer.frames if stream == f"node:{W1}"]
+check(out.error is None and [f["step"] for f in widget_frames] == [1, 2, 3],
+      f"a node with live views reports on node:<uid> (got {out.error}, {widget_frames})")
+check(widget_frames[0] == {"step": 1, "total_steps": 3, "loss": 1.0}, "the node's own dict is the frame")
+
 sup = GraphExecutionSupervisor.__new__(GraphExecutionSupervisor)
 bus = RecordingMonitorBus()
 sup._monitor_bus = bus
@@ -407,7 +296,7 @@ check(True, "no bus: both are no-ops")
 # ==========================================================================
 print("-- H: HTTP API --")
 root = Path(tempfile.mkdtemp(prefix="backend-templates-"))
-services = build_services(project_root=root, legacy_registry=registry())
+services = build_services(project_root=root, graph_registry=registry())
 app = create_app(services)
 
 def put(name, document, description=""):

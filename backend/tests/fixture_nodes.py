@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from next.graph import Node, Port
+from next.graph import DisplayModule, Group, Node, Port, Series
 
 
 class Handle:
@@ -100,3 +100,25 @@ class TakeHandleNode(Node):
 
     def build(self, **inputs):
         return {"ok": isinstance(inputs["handle"], Handle)}
+
+
+class WidgetNode(Node):
+    """A node with live views: reports its loss on its own stream, as a node with MODULES does."""
+
+    GROUPS = (Group("run", "Run"),)
+    INPUTS = {
+        "steps": Port("steps", int, required=False, default=3, label="Steps", group="run", unit="steps",
+                      minimum=1, maximum=100, step=1),
+        "tag": Port("tag", str, required=False, default="x", advanced=True),
+    }
+    OUTPUTS = {"done": Port("done", int)}
+    MODULES = (
+        DisplayModule(name="loss", kind="chart", title="Loss", scale="symlog", series=(Series("loss", "loss", "#6c8cff"),)),
+        DisplayModule(name="progress", kind="progress", title="Progress", value_key="step", total_key="total_steps"),
+    )
+
+    def build(self, **inputs):
+        steps = inputs["steps"]
+        for i in range(steps):
+            self.context.report(f"node:{self.uid}", {"step": i + 1, "total_steps": steps, "loss": 1.0 / (i + 1)})
+        return {"done": steps}

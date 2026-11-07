@@ -81,7 +81,6 @@ from .application.use_cases import (
     ListDatasets,
     ListGraphExecutions,
     ListGraphs,
-    ListNodeCatalog,
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
@@ -116,9 +115,7 @@ from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .application.use_cases.node_shapes import GetNodeCatalog, ResolveNode
-from .infrastructure.graph.catalog import DiscoveredGraphCatalog
 from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_environment
-from .infrastructure.graph.discovery import NodeRegistry as LegacyNodeRegistry
 from .infrastructure.graph.memory_fields import memory_fields_resolver
 from .infrastructure.graph.runtime import ContractGraphRuntime
 from .infrastructure.graph_event_stream import ExecutionEventTail
@@ -224,7 +221,6 @@ def build_container(settings: Settings) -> Container:
     # backend.db; the runtime keeps the default memory releaser (gc,
     # then the XPU caching allocator) so freed VRAM goes back to the
     # driver after every run.
-    graph_catalog = DiscoveredGraphCatalog(LegacyNodeRegistry())
     node_catalog = ContractNodeCatalog(environment=lambda: _node_environment(layout))
     graph_registry = node_catalog.registry
     # One bus per process: the runtime hands it to MonitorNode through
@@ -450,10 +446,9 @@ def build_container(settings: Settings) -> Container:
             ),
         ),
         graphs=GraphServices(
-            catalog=ListNodeCatalog(catalog=graph_catalog),
             node_catalog=GetNodeCatalog(catalog=node_catalog),
             resolve_node=ResolveNode(catalog=node_catalog),
-            diagnostics=NodeDiagnostics(catalog=graph_catalog),
+            diagnostics=NodeDiagnostics(catalog=node_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
             preview_memory=PreviewGraphMemory(
                 memory_ledger=memory_ledger,

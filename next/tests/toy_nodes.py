@@ -183,6 +183,11 @@ class DynamicNode(Node):
         res = type(self).resolve({"file": inputs.get("file", "")})
         return {name: (Table() if name == "denoiser" else OtherHandle()) for name in res.outputs}
 
+    def diagnostics(self, inputs):
+        if inputs.get("file") == "unreadable":
+            raise ValueError("path does not resolve")
+        return {"file": [f"looked at {inputs.get('file')!r}"]}
+
 
 class GroupedNode(Node):
     GROUPS = (Group("main", "Main"), Group("more", "More", collapsed=True, advanced=True))

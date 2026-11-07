@@ -67,6 +67,19 @@ class BoomNode(Node):
         raise RuntimeError("boom")
 
 
+class DiagnosingNode(Node):
+    INPUTS = {"path": Port("path", str, required=False, default="")}
+    OUTPUTS = {"y": Port("y", str)}
+
+    def diagnostics(self, inputs):
+        if inputs.get("path") == "unreadable":
+            raise ValueError("path does not resolve")
+        return {"path": [f"looked at {inputs.get('path')!r}"]}
+
+    def build(self, **inputs):
+        return {"y": inputs["path"]}
+
+
 class SlowNode(Node):
     """Sleeps briefly: gives stop and single-active tests a live window."""
 

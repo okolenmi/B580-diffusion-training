@@ -61,7 +61,6 @@ from .use_cases.list_dataset_tasks import ListDatasetTasks
 from .use_cases.list_datasets import ListDatasets
 from .use_cases.list_graph_executions import ListGraphExecutions
 from .use_cases.list_graphs import ListGraphs
-from .use_cases.list_node_catalog import ListNodeCatalog
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.node_shapes import GetNodeCatalog, ResolveNode
@@ -168,7 +167,6 @@ class DatasetServices:
 class GraphServices:
     """Node-graph catalog, validation, execution, history, library (M4)."""
 
-    catalog: ListNodeCatalog
     #: The editor's read side over the new node tree (contracts catalog.md and resolve.md).
     node_catalog: GetNodeCatalog
     resolve_node: ResolveNode

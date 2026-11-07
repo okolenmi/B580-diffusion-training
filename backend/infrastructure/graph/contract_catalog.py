@@ -73,3 +73,9 @@ class ContractNodeCatalog(NodeCatalog):
         if class_name not in classes:
             raise NodeClassNotFoundError(f"unknown node class {class_name!r}")
         return tree.resolve_node(self._registry, class_name, params, self._environment())
+
+    def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
+        classes, _ = self._registry.load()
+        if class_name not in classes:
+            raise NodeClassNotFoundError(f"unknown node class {class_name!r}")
+        return tree.diagnose_node(self._registry, class_name, params, self._environment())

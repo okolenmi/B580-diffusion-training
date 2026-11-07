@@ -22,3 +22,11 @@ class NodeCatalog(ABC):
         Raises ``NodeClassNotFoundError`` for an unknown class; bad params are an ``error`` state in the answer, never an exception.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
+        """One node's advice about the params being edited, keyed by input name (``Node.diagnostics``).
+
+        Raises ``NodeClassNotFoundError`` for an unknown class; whatever the node itself raises for params that cannot
+        be read yet is passed on for the caller to name."""
+        raise NotImplementedError

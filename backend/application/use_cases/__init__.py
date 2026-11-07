@@ -45,7 +45,6 @@ from .list_dataset_tasks import ListDatasetTasks
 from .list_datasets import ListDatasets
 from .list_graph_executions import ListGraphExecutions
 from .list_graphs import ListGraphs
-from .list_node_catalog import ListNodeCatalog
 from .make_asset_folder import MakeAssetFolder
 from .node_diagnostics import NodeDiagnostics
 from .node_shapes import GetNodeCatalog, ResolveNode
@@ -108,7 +107,6 @@ __all__ = [
     "ListDatasets",
     "ListGraphExecutions",
     "ListGraphs",
-    "ListNodeCatalog",
     "MakeAssetFolder",
     "NodeDiagnostics",
     "GetNodeCatalog",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .catalog import port_info
-from .node import Environment, Resolution
+from .node import Environment, ExecutionContext, Resolution
 from .registry import NodeRegistry
 
 
@@ -30,3 +30,12 @@ def resolve_node(registry: NodeRegistry, class_name: str, params: dict, env: Env
         res = Resolution("error", dict(cls.INPUTS), dict(cls.OUTPUTS),
                          message=f"{type(exc).__name__}: {exc}")
     return resolution_dict(res)
+
+
+def diagnose_node(registry: NodeRegistry, class_name: str, params: dict, env: Environment | None = None) -> dict[str, list[str]]:
+    """A node's advice about the params being edited, keyed by input name (``Node.diagnostics``).
+
+    Raises KeyError for an unknown class. What the node itself raises is its answer for params that cannot be read yet
+    (a path that does not resolve): the caller decides how to show it."""
+    classes, _ = registry.load()
+    return classes[class_name](ExecutionContext(env=env)).diagnostics(dict(params))

@@ -21,7 +21,6 @@ from ..application.dto import (
     TeacherTaskParams,
 )
 from ..application.ports.asset_store import AssetCatalog, AssetBrowse
-from ..application.ports.graph_catalog import CatalogSnapshot, NodeInfo, PortInfo
 from ..application.ports.graph_runtime import GraphIssue
 from ..domain.graph import GRAPH_FORMAT, GraphDefinition
 from ..domain.memory_settings import AUTO
@@ -978,67 +977,6 @@ class DiagnosticsIn(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class PortOut(BaseModel):
-    """One declared port: JSON ``default`` *and* ``default_repr`` so
-    consumers never have to parse reprs (and never lose non-JSON
-    defaults). Outputs carry the identity defaults (no default, no
-    hints)."""
-
-    name: str
-    type: str
-    required: bool
-    doc: str = ""
-    type_mro: list[str] = Field(default_factory=list)
-    default: Any = None
-    default_repr: str | None = None
-    path_kind: str | None = None
-    choices: list[str] | None = None
-    visible_when: list[Any] | None = None
-    widget_only: bool = False
-    label: str = ""
-    group: str = ""
-    advanced: bool = False
-    unit: str = ""
-    minimum: float | None = None
-    maximum: float | None = None
-    step: float | None = None
-
-
-class PresetOut(BaseModel):
-    name: str
-    required_inputs: list[PortOut]
-    required_outputs: list[PortOut]
-
-
-class GraphNodeOut(BaseModel):
-    """One palette entry, reflected from the real class."""
-
-    class_name: str
-    display_name: str
-    domain: str
-    module: str
-    doc: str = ""
-    bases: list[str]
-    inputs: list[PortOut]
-    outputs: list[PortOut]
-    node_kind: str
-    presets: list[PresetOut] | None = None
-    has_diagnostics: bool = False
-    #: Live-view modules this node offers a page (see ``nodes/ui.py``).
-    modules: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class CatalogLoadErrorOut(BaseModel):
-    module: str
-    message: str
-
-
-class GraphCatalogOut(BaseModel):
-    count: int
-    domains: dict[str, list[GraphNodeOut]]
-    load_errors: list[CatalogLoadErrorOut]
-
-
 class DiagnosticsOut(BaseModel):
     messages: dict[str, list[str]]
 
@@ -1160,72 +1098,6 @@ class SavedGraphListOut(BaseModel):
 
 class DeleteGraphOut(BaseModel):
     deleted: bool
-
-
-def port_out(port: PortInfo) -> PortOut:
-    return PortOut(
-        name=port.name,
-        type=port.type,
-        required=port.required,
-        doc=port.doc,
-        type_mro=list(port.type_mro),
-        default=port.default,
-        default_repr=port.default_repr,
-        path_kind=port.path_kind,
-        choices=list(port.choices) if port.choices is not None else None,
-        visible_when=list(port.visible_when) if port.visible_when is not None else None,
-        widget_only=port.widget_only,
-        label=port.label,
-        group=port.group,
-        advanced=port.advanced,
-        unit=port.unit,
-        minimum=port.minimum,
-        maximum=port.maximum,
-        step=port.step,
-    )
-
-
-def graph_node_out(info: NodeInfo) -> GraphNodeOut:
-    presets = (
-        None
-        if info.presets is None
-        else [
-            PresetOut(
-                name=preset.name,
-                required_inputs=[port_out(p) for p in preset.required_inputs],
-                required_outputs=[port_out(p) for p in preset.required_outputs],
-            )
-            for preset in info.presets
-        ]
-    )
-    return GraphNodeOut(
-        class_name=info.class_name,
-        display_name=info.display_name,
-        domain=info.domain,
-        module=info.module,
-        doc=info.doc,
-        bases=list(info.bases),
-        inputs=[port_out(p) for p in info.inputs],
-        outputs=[port_out(p) for p in info.outputs],
-        node_kind=info.node_kind,
-        presets=presets,
-        has_diagnostics=info.has_diagnostics,
-        modules=[dict(m) for m in info.modules],
-    )
-
-
-def graph_catalog_out(snapshot: CatalogSnapshot) -> GraphCatalogOut:
-    return GraphCatalogOut(
-        count=len(snapshot.nodes),
-        domains={
-            domain: [graph_node_out(node) for node in nodes]
-            for domain, nodes in snapshot.domains.items()
-        },
-        load_errors=[
-            CatalogLoadErrorOut(module=e.module, message=e.message)
-            for e in snapshot.load_errors
-        ],
-    )
 
 
 def graph_issue_out(issue: GraphIssue) -> GraphIssueOut:

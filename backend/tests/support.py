@@ -108,7 +108,6 @@ from backend.application.use_cases import (
     ListDatasets,
     ListGraphExecutions,
     ListGraphs,
-    ListNodeCatalog,
     MakeAssetFolder,
     GetNodeCatalog,
     NodeDiagnostics,
@@ -146,9 +145,7 @@ from backend.infrastructure.dataset_previews import SqliteDatasetPreviews
 from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
-from backend.infrastructure.graph.catalog import DiscoveredGraphCatalog
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
-from backend.infrastructure.graph.discovery import NodeRegistry
 from backend.infrastructure.graph.memory_fields import memory_fields_resolver
 from backend.domain.graph import GraphDefinition
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
@@ -173,7 +170,6 @@ from backend.application.use_cases.template_crud import (
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
 from backend.infrastructure.workspace import WorkspaceLayout
-from nodes.core import Node, NodePreset, Port
 
 FAILURES: list[str] = []
 #: Every message passed to `check`, in order. Counted so `finish` can refuse
@@ -186,64 +182,6 @@ def check(condition: bool, message: str) -> None:
     CHECKED.append(message)
     if not condition:
         FAILURES.append(message)
-
-
-def concrete_node_classes() -> set[str]:
-    """Names of the node classes discovery *should* expose, derived from
-    ``nodes/``'s own source rather than hardcoded.
-
-    Discovery itself can't answer this -- it needs an expected value to
-    be checked against, and a hardcoded number is a tripwire that goes
-    off on every legitimate node addition or retirement (it did, twice
-    over the 2026-10 optimizer retirements) while catching nothing that
-    the structural checks around it don't already catch better.
-
-    The rule: a class under ``nodes/`` belongs in the palette if it is a
-    ``Node`` subclass and no *other* class under ``nodes/`` inherits from
-    it. Inheriting-from is how the abstract bases are spelled in this
-    codebase -- ``OptimizerNode``, ``TrainerNode``, ``DataSourceNode``,
-    ``TextEncoderNode``, ``MonitorNode``, ``LRScheduleNode``,
-    ``CheckpointSaverNode``, ``LoRAInjectorNode``, ``ModelProviderNode``,
-    ``LossWeightingNode`` and ``Node`` itself are all bases, never
-    palette entries. Filtering by that (rather than by name suffix or by
-    re-implementing ``inspect.isabstract``) keeps the two in step when a
-    new base or a new leaf is added.
-
-    Uses AST only to learn *inheritance*, and imports nothing it wouldn't
-    otherwise import, so it cannot mask a module that fails to import.
-    """
-    import ast
-    import importlib
-    import pkgutil
-    from pathlib import Path
-
-    import nodes
-    from nodes.core import Node
-
-    root = Path(nodes.__path__[0])
-    inherited_from: set[str] = set()
-    for path in sorted(root.rglob("*.py")):
-        if "smoke_tests" in path.parts:
-            continue
-        for stmt in ast.parse(path.read_text(encoding="utf-8")).body:
-            if isinstance(stmt, ast.ClassDef):
-                for base in stmt.bases:
-                    inherited_from.add(ast.unparse(base).split("(")[0].split(".")[-1])
-
-    discovered: set[str] = set()
-    for module_info in pkgutil.walk_packages(nodes.__path__, prefix="nodes."):
-        if "smoke_tests" in module_info.name:
-            continue
-        module = importlib.import_module(module_info.name)
-        for attribute in dir(module):
-            candidate = getattr(module, attribute, None)
-            if (
-                isinstance(candidate, type)
-                and issubclass(candidate, Node)
-                and candidate.__module__.startswith("nodes.")
-            ):
-                discovered.add(candidate.__name__)
-    return {name for name in discovered if name not in inherited_from}
 
 
 def finish() -> None:
@@ -612,220 +550,6 @@ class FakeConfigInspector(ConfigInspector):
         return self.descriptions.get(key, self.default_description)
 
 
-# --------------------------------------------------------------------------
-# Graph fixture nodes (M4)
-# --------------------------------------------------------------------------
-#
-# Defined here rather than under nodes/ because the catalog/runtime/
-# execution tests want deterministic shapes -- every validation issue
-# code has a class that can trigger it -- without walking all 94 real
-# modules. stdlib-only, same as nodes.core itself, so no test in this
-# file needs torch.
-
-
-class SumNode(Node):
-    """Add two numbers."""
-
-    INPUTS = {
-        "a": Port(name="a", type=float, doc="first addend"),
-        "b": Port(name="b", type=float, doc="second addend"),
-    }
-    OUTPUTS = {"sum": Port(name="sum", type=float, doc="a + b")}
-
-    def build(self, a, b):
-        return {"sum": a + b}
-
-
-class ScaleNode(Node):
-    """Multiply or divide (closed ``choices`` set for invalid_choice)."""
-
-    INPUTS = {
-        "value": Port(name="value", type=float, doc="input value"),
-        "factor": Port(name="factor", type=float, required=False, default=2.0),
-        "mode": Port(
-            name="mode", type=str, required=False, default="mul",
-            choices=("mul", "div"),
-        ),
-    }
-    OUTPUTS = {"scaled": Port(name="scaled", type=float)}
-
-    def build(self, value, factor=2.0, mode="mul"):
-        return {"scaled": value * factor if mode == "mul" else value / factor}
-
-
-class LabelNode(Node):
-    """String output -- str -> float wiring is an incompatible_types issue."""
-
-    INPUTS = {"text": Port(name="text", type=str)}
-    OUTPUTS = {"label": Port(name="label", type=str)}
-
-    def build(self, text):
-        return {"label": text}
-
-
-class ObjectNode(Node):
-    """Non-JSON output: reported as a ``_type``/``_repr`` summary."""
-
-    INPUTS = {"token": Port(name="token", type=str, required=False, default="x")}
-    OUTPUTS = {"obj": Port(name="obj", type=Any)}
-
-    def build(self, token="x"):
-        return {"obj": object()}
-
-
-class BoomNode(Node):
-    """build() always raises -- a node failure is a normal outcome."""
-
-    INPUTS = {"trigger": Port(name="trigger", type=bool, required=False, default=True)}
-    OUTPUTS = {"never": Port(name="never", type=bool)}
-
-    def build(self, trigger=True):
-        raise RuntimeError("boom")
-
-
-class PickyNode(Node):
-    """Shape hook that raises -- reported as shape_resolution_failed."""
-
-    INPUTS = {"x": Port(name="x", type=float)}
-    OUTPUTS = {"y": Port(name="y", type=float)}
-
-    @classmethod
-    def resolve_inputs(cls, params: dict):
-        raise ValueError("shape unavailable")
-
-    def build(self, x):
-        return {"y": x}
-
-
-class DiagnosingNode(Node):
-    """diagnostics() overridden -- has_diagnostics=True."""
-
-    INPUTS = {"path": Port(name="path", type=str, required=False, default="")}
-    OUTPUTS = {"ok": Port(name="ok", type=bool)}
-
-    def build(self, path=""):
-        return {"ok": True}
-
-    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
-        return {"path": [f"looked at {inputs.get('path')!r}"]}
-
-
-class BadDiagnosticsNode(Node):
-    """diagnostics() raises -- 400 node_diagnostics_failed, never 500."""
-
-    INPUTS = {"x": Port(name="x", type=float, required=False, default=0.0)}
-    OUTPUTS = {"y": Port(name="y", type=float)}
-
-    def build(self, x=0.0):
-        return {"y": x}
-
-    def diagnostics(self, inputs: dict) -> dict[str, list[str]]:
-        raise ValueError("cannot resolve mid-edit path")
-
-
-class PresetChoiceNode(Node):
-    """Dynamic kind: presets are its palette payload."""
-
-    NODE_KIND = "dynamic"
-
-    INPUTS = {
-        "source": Port(name="source", type=str),
-        "strength": Port(name="strength", type=float, required=False, default=1.0),
-    }
-    OUTPUTS = {"result": Port(name="result", type=str)}
-
-    @classmethod
-    def list_presets(cls) -> list[NodePreset]:
-        return [
-            NodePreset(
-                name="identity",
-                required_inputs={"source": Port(name="source", type=str)},
-                required_outputs={"result": Port(name="result", type=str)},
-            ),
-        ]
-
-    def build(self, source, strength=1.0):
-        return {"result": source}
-
-
-class PathNode(Node):
-    """Path-typed input: str accepted (editors send strings), int not."""
-
-    INPUTS = {
-        "path": Port(
-            name="path", type=Path, required=False, default=None,
-            path_kind="checkpoint",
-        )
-    }
-    OUTPUTS = {"exists": Port(name="exists", type=bool)}
-
-    def build(self, path=None):
-        return {"exists": True}
-
-
-class SlowNode(Node):
-    """Sleeps briefly -- gives stop/single-active tests a live window."""
-
-    INPUTS = {
-        "seconds": Port(name="seconds", type=float, required=False, default=0.3)
-    }
-    OUTPUTS = {"slept": Port(name="slept", type=float)}
-
-    def build(self, seconds=0.3):
-        time.sleep(seconds)
-        return {"slept": seconds}
-
-
-class Handle:
-    """Marker base classes: edge compatibility is a real issubclass
-    check on real class objects, so SubHandle satisfies a Handle input."""
-
-
-class SubHandle(Handle):
-    pass
-
-
-class EmitHandleNode(Node):
-    """Source node with a class-typed output (Handle)."""
-
-    INPUTS = {}
-    OUTPUTS = {"handle": Port(name="handle", type=Handle)}
-
-    def build(self):
-        return {"handle": Handle()}
-
-
-class EmitSubHandleNode(Node):
-    """Source node whose output is a Handle *subclass*."""
-
-    INPUTS = {}
-    OUTPUTS = {"handle": Port(name="handle", type=SubHandle)}
-
-    def build(self):
-        return {"handle": SubHandle()}
-
-
-class MonitorProbeNode(Node):
-    """Touches the execution context's monitor bus (M6 wiring proof).
-
-    Mirrors what MonitorNode does at build start: clear the id, then
-    hand a handle-like report through. ``seen`` says whether a bus was
-    actually injected (None = the runtime was built without one).
-    """
-
-    INPUTS = {
-        "monitor_id": Port(name="monitor_id", type=str, required=False, default="mon-test")
-    }
-    OUTPUTS = {"seen": Port(name="seen", type=bool)}
-
-    def build(self, monitor_id="mon-test"):
-        bus = self.context.monitor_bus
-        if bus is not None:
-            bus.clear(monitor_id)
-            bus.report(monitor_id, {"step": 1, "loss": 0.5})
-        return {"seen": bus is not None}
-
-
 class RecordingMonitorBus(MonitorBusPort):
     """Port test double: records thread-side calls; no queues/loops."""
 
@@ -844,55 +568,6 @@ class RecordingMonitorBus(MonitorBusPort):
 
     def unsubscribe(self, monitor_id: str, queue) -> None:  # pragma: no cover
         raise NotImplementedError("RecordingMonitorBus has no subscriber side")
-
-
-class TakeHandleNode(Node):
-    """Class-typed input (Handle) -- accepts SubHandle outputs."""
-
-    INPUTS = {"handle": Port(name="handle", type=Handle)}
-    OUTPUTS = {"ok": Port(name="ok", type=bool)}
-
-    def build(self, handle):
-        return {"ok": isinstance(handle, Handle)}
-
-
-class MemoryProbeNode(Node):
-    """Touches the execution context's memory object (MEM-05 #1 proof).
-
-    Reports the injected GraphMemory's grant, or ``None`` when the
-    runtime was built without one (direct calls, spawns that carried no
-    memory numbers) -- the same shape MonitorProbeNode gives the bus.
-    """
-
-    INPUTS = {}
-    OUTPUTS = {"grant_mb": Port(name="grant_mb", type=float, required=False)}
-
-    def build(self):
-        memory = self.context.memory
-        return {"grant_mb": None if memory is None else memory.grant_mb}
-
-
-FIXTURE_NODES: dict[str, type] = {
-    cls.__name__: cls
-    for cls in (
-        SumNode,
-        ScaleNode,
-        LabelNode,
-        ObjectNode,
-        BoomNode,
-        PickyNode,
-        DiagnosingNode,
-        BadDiagnosticsNode,
-        PresetChoiceNode,
-        PathNode,
-        SlowNode,
-        EmitHandleNode,
-        EmitSubHandleNode,
-        TakeHandleNode,
-        MonitorProbeNode,
-        MemoryProbeNode,
-    )
-}
 
 
 def fixture_tree_registry():
@@ -925,12 +600,6 @@ def gdoc(nodes=(), edges=(), settings: dict | None = None, **rest) -> dict:
 
 def gdef(nodes=(), edges=(), settings: dict | None = None, **rest) -> GraphDefinition:
     return GraphDefinition.from_dict(gdoc(nodes, edges, settings, **rest))
-
-
-def fixture_graph_registry() -> NodeRegistry:
-    """A NodeRegistry over the fixture classes above (no nodes/ walk,
-    no import errors, deterministic ordering)."""
-    return NodeRegistry(scan=lambda: (dict(FIXTURE_NODES), ()))
 
 
 class RefusingPackageInstaller(PackageInstaller):
@@ -1023,7 +692,6 @@ def build_services(
     dataset_previews: SqliteDatasetPreviews | None = None,
     dataset_gateway: DatasetTaskGateway | None = None,
     graph_registry: Any | None = None,
-    legacy_registry: NodeRegistry | None = None,
     graph_runtime: GraphRuntime | None = None,
     graph_executions: GraphExecutionRepository | None = None,
     graph_library: GraphLibrary | None = None,
@@ -1084,9 +752,6 @@ def build_services(
         config_files = CoreConfigFiles()
     if config_options is None:
         config_options = PydanticConfigOptions()
-    if legacy_registry is None:
-        legacy_registry = fixture_graph_registry()
-    graph_catalog = DiscoveredGraphCatalog(legacy_registry)
     if graph_registry is None:
         graph_registry = fixture_tree_registry()
     contract_catalog = ContractNodeCatalog(graph_registry)
@@ -1298,14 +963,13 @@ def build_services(
             run=RunTemplate(library=template_library, start=start_execution),
         ),
         graphs=GraphServices(
-            catalog=ListNodeCatalog(catalog=graph_catalog),
             node_catalog=GetNodeCatalog(catalog=contract_catalog),
             resolve_node=ResolveNode(catalog=contract_catalog),
             preview_memory=PreviewGraphMemory(
                 memory_ledger=memory_ledger,
                 peak_source=fixture_peak_source.observed,
             ),
-            diagnostics=NodeDiagnostics(catalog=graph_catalog),
+            diagnostics=NodeDiagnostics(catalog=contract_catalog),
             validate=ValidateGraph(runtime=graph_runtime),
             start_execution=start_execution,
             list_executions=ListGraphExecutions(executions=graph_executions),

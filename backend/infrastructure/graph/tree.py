@@ -12,11 +12,11 @@ from next.families.registry import list_families
 from next.graph.catalog import build_catalog
 from next.graph.node import Environment
 from next.graph.registry import NodeRegistry
-from next.graph.resolve import resolve_node
+from next.graph.resolve import diagnose_node, resolve_node
 from next.graph.runtime import GraphRunner
 
 __all__ = ["DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "build_catalog",
-           "list_families", "make_runtime", "resolve_node"]
+           "diagnose_node", "list_families", "make_runtime", "resolve_node"]
 
 
 def make_runtime(context):

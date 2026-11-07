@@ -23,7 +23,6 @@ from backend.tests.support import (
     asgi_request,
     build_services,
     check,
-    concrete_node_classes,
     finish,
     gdoc,
     gedge,
@@ -59,7 +58,7 @@ def get_exec(app, execution_id):
 
 
 # ==========================================================================
-# Section A: real composition root -- palette over the real scan
+# Section A: real composition root -- the palette is the contract catalog
 # ==========================================================================
 root_a = Path(tempfile.mkdtemp(prefix="backend-api-graph-a-"))
 container = build_container(
@@ -67,15 +66,8 @@ container = build_container(
 )
 app_a = create_app(container.services)
 
-status, _, body = asgi_request(app_a, f"{GRAPH}/nodes")
-check(status == 200, "real container serves the palette")
-check(
-    body["count"] == len(concrete_node_classes()),
-    f"palette serves every concrete Node subclass (got {body['count']})",
-)
-check(body["load_errors"] == [], "no discovery failures reported")
-check("optimizer" in body["domains"] and "dataset" in body["domains"],
-      "domains grouped from module paths")
+status, _, body = asgi_request(app_a, "/api/v1/catalog")
+check(status == 200 and len(body["nodes"]) > 0, "real container serves the node catalog")
 
 status, _, body = asgi_request(app_a, f"{GRAPH}/executions")
 check(status == 200 and body == {"executions": [], "count": 0},
@@ -87,29 +79,6 @@ check(status == 200 and body == {"executions": [], "count": 0},
 services = build_services()
 app = create_app(services)
 
-# -- catalog ---------------------------------------------------------------
-status, _, body = asgi_request(app, f"{GRAPH}/nodes")
-check(status == 200 and body["load_errors"] == [], "fixture palette serves clean")
-by_name = {n["class_name"]: n for ns in body["domains"].values() for n in ns}
-sum_node = by_name["SumNode"]
-check(
-    sum_node["display_name"] == "Sum"
-    and sum_node["inputs"][0]["required"] is True
-    and sum_node["inputs"][0]["default"] is None,
-    "required input: no default on the wire",
-)
-scale = {p["name"]: p for p in by_name["ScaleNode"]["inputs"]}
-check(
-    scale["factor"]["default"] == 2.0 and scale["factor"]["default_repr"] == "2.0",
-    "optional default: JSON value + repr together",
-)
-check(scale["mode"]["choices"] == ["mul", "div"], "choices exposed as a list")
-check(
-    by_name["PresetChoiceNode"]["presets"][0]["name"] == "identity",
-    "dynamic node carries presets",
-)
-check(by_name["SumNode"]["presets"] is None, "static node: presets null")
-
 # -- diagnostics -----------------------------------------------------------
 status, _, body = asgi_request(
     app, f"{GRAPH}/nodes/DiagnosingNode/diagnostics",
@@ -118,7 +87,8 @@ status, _, body = asgi_request(
 check(status == 200 and body["messages"] == {"path": ["looked at 'ckpt.pt'"]},
       "diagnostics returns its lines")
 status, _, body = asgi_request(
-    app, f"{GRAPH}/nodes/BadDiagnosticsNode/diagnostics", method="POST", json_body={}
+    app, f"{GRAPH}/nodes/DiagnosingNode/diagnostics",
+    method="POST", json_body={"params": {"path": "unreadable"}},
 )
 expect_error(status, body, 400, "node_diagnostics_failed",
              "raising diagnostics() is 400, not 500")

@@ -13,7 +13,7 @@ from .modules import DisplayModule, Series
 from .node import COMPLETE, Completion, Environment, ExecutionContext, Node, Resolution, is_field
 from .ports import DynamicShape, EventIn, EventOut, Group, Port
 from .registry import NodeRegistry
-from .resolve import resolve_node
+from .resolve import diagnose_node, resolve_node
 from .runtime import GraphRunner, NodeResult, RunOutcome
 from .settings import CORE_SETTINGS, SettingSpec, Settings, SettingsRegistry
 from .validate import Issue, Validation, validate

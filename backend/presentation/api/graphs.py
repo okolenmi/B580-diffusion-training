@@ -3,9 +3,8 @@
 Resource-oriented contract over ``services.graphs``
 (docs/design/backend/05-graph-runtime.md section 6):
 
-* ``GET /api/v1/graphs/nodes`` -- the palette (auto-discovered classes
-  grouped by domain; ``refresh=true`` re-walks ``nodes/``); ``POST
-  /nodes/{class_name}/diagnostics`` -- live per-input hints;
+* ``POST /api/v1/graphs/nodes/{class_name}/diagnostics`` -- live per-input
+  hints (the palette and shapes are ``/api/v1/catalog``);
 * ``POST /validate`` -- complete issue list, always 200 (``ok=false``
   = the run endpoint would reject);
 * ``POST /run`` -- 201 + summary; 422 ``graph_invalid`` carrying *all*
@@ -37,7 +36,6 @@ from ..schemas import (
     DiagnosticsOut,
     ExecutionListOut,
     ExecutionOut,
-    GraphCatalogOut,
     GraphRunIn,
     ExecutionSummaryOut,
     LibraryGraphIn,
@@ -47,7 +45,6 @@ from ..schemas import (
     execution_list_out,
     execution_out,
     execution_summary_out,
-    graph_catalog_out,
     graph_issue_out,
     saved_graph_list_out,
     saved_graph_out,
@@ -58,15 +55,6 @@ router = APIRouter(prefix="/api/v1/graphs", tags=["graphs"])
 _ERROR_404 = {"description": "execution or saved graph not found"}
 _ERROR_409 = {"description": "an execution is already active / already terminal"}
 _ERROR_422 = {"description": "graph_invalid: every issue, or invalid limit/name"}
-
-
-@router.get("/nodes", response_model=GraphCatalogOut)
-def list_node_catalog(
-    refresh: bool = Query(False),
-    services: ApplicationServices = Depends(get_services),
-):
-    """Full palette: real classes, declared ports, presets, load errors."""
-    return graph_catalog_out(services.graphs.catalog.execute(refresh=refresh))
 
 
 @router.post(

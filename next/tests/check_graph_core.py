@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import threading
 
-from ..graph import (Edge, EpochEnding, EventHub, EventIn, EventOut, GraphDoc, GraphFormatError, GraphRunner,
+from ..graph import (diagnose_node, Edge, EpochEnding, EventHub, EventIn, EventOut, GraphDoc, GraphFormatError, GraphRunner,
                      Node, NodeRegistry, NodeSpec, Port, build_catalog, parse, resolve_node)
 from ..graph.document import FORMAT, new_uid
 from ..graph.events import (EventDeliveryError, EventHandlerError, EventLoopError, EventThreadError, Wire)
@@ -283,10 +283,15 @@ def dynamic_and_catalog():
     check(resolve_node(REGISTRY, "DynamicNode", {"file": "ambiguous"})["choices"] == {"file": ["a", "b"]}, "computed choices")
     check(resolve_node(REGISTRY, "DynamicNode", {"file": "raises"})["state"] == "error", "a raising resolver is an error state")
     raises(KeyError, lambda: resolve_node(REGISTRY, "Nope", {}), "unknown class")
+    check(diagnose_node(REGISTRY, "DynamicNode", {"file": "m.safetensors"}) == {"file": ["looked at 'm.safetensors'"]},
+          "diagnostics are the node's advice by input name")
+    raises(ValueError, lambda: diagnose_node(REGISTRY, "DynamicNode", {"file": "unreadable"}), "a node's own error reaches the caller")
+    raises(KeyError, lambda: diagnose_node(REGISTRY, "Nope", {}), "diagnostics of an unknown class")
     cat = build_catalog(REGISTRY)
     text = json.dumps(cat)
     check(cat["catalog_format"] == 1 and not cat["load_errors"], f"catalog builds ({cat['load_errors']})")
     info = {n["class_name"]: n for n in cat["nodes"]}
+    check(info["DynamicNode"]["has_diagnostics"] is True and info["AddNode"]["has_diagnostics"] is False, "diagnostics are flagged")
     check(info["DynamicNode"]["dynamic"] == {"depends_on": ["file"], "debounce_ms": 300}, "dynamic marker is served")
     check([g["id"] for g in info["GroupedNode"]["groups"]] == ["main", "more"], "groups are served")
     check(info["AddNode"]["inputs"][0]["multi"] is True, "multi flag is served")

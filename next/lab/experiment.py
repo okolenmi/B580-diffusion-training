@@ -22,7 +22,7 @@ class Arm:
     reuse: str = ""  # the name of an earlier arm whose trained adapter this arm renders instead of training its own
     lora: str = ""  # an adapter file made earlier: rendered as it is, nothing is trained
     ema: float = 0.0  # with `reuse`: render the averaged copy of that arm's adapter (the trainer's `--ema` width) instead of the adapter itself
-    cut: int = 0  # the lab stops this arm's training process once that step's state is on disk and starts it again, as a power cut would (a multiple of resume_every)
+    cut: int = 0  # the whole lab stops once that step's state is on disk; starting the same command again continues the arm in a new process, as after a power cut (a multiple of resume_every)
 
     def describe(self) -> str:
         parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"cut after step {self.cut}"] if self.cut else []), *([f"ema {self.ema:g}"] if self.ema else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]

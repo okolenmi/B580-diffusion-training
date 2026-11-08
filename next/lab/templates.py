@@ -249,19 +249,24 @@ CONTINUE_TEMPLATE = {
              {"name": "more-300-lr-5e-5", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "5e-5", "--init-adapter", "{lora:best}"]},
              {"name": "more-600-lr-2e-4", "args": ["--regions", "3", "--warmup", "50", "--batch", "1", "--lr", "2e-4", "--steps", "600", "--save-every", "600", "--init-adapter", "{lora:best}"]}],
 }
+DET = ["--set", "runtime.deterministic=true"]
 RESUME_TEMPLATE = {
     **REGIONS_TEMPLATE,
     "name": "resume-proof",
-    "note": "Is a run that is stopped and started again the same run? Your best recipe for 200 steps, trained straight through (twice, with deterministic kernels, so the two "
-            "must agree exactly), and cut: the lab stops `cut-100` after step 100 once its state is saved, starts the process again and lets it continue. With deterministic "
-            "kernels the three adapters must be identical weight by weight (see the table of adapters in the report) and the pictures too. `full-a` is the same recipe "
-            "without deterministic kernels: how far two normal runs are from each other.",
-    "train_command": with_steps(REGIONS_TEMPLATE, 200),
+    "note": "Is a run that was stopped and started again the same run? The recipe and length are the anchor test's baseline (your best recipe, 600 steps), so `full-a` is a repeat of that baseline and `cut-400` is what "
+            "happened to it: the lab stops itself after step 400 once the state is saved, and you start the same command again later (close everything first; reboot if you want it as hard as the power cut) - "
+            "a new lab, a new training process, a freshly loaded model, nothing of the first half alive. `full-b` is a second uninterrupted run: how far two normal runs are from each other, "
+            "which is the yardstick for `cut-400`. The `-det` arms are the same three with deterministic kernels: there `full-det-a` and `full-det-b` must agree exactly (if they do not, the kernels are not deterministic "
+            "enough to prove anything) and so must `cut-det-400`; the table of adapters in the report shows it weight by weight. Look at the pictures too: deterministic pictures looked better than ordinary ones in "
+            "an earlier test, so compare `full-a`/`full-b` with `full-det-a`/`full-det-b` on every prompt. Six arms of 600 steps take about three hours; the lab stops twice (once per `cut`).",
+    "train_command": with_steps(REGIONS_TEMPLATE, 600),
     "resume_every": 100,
-    "arms": [{"name": "full-det-a", "args": [*BEST, "--set", "runtime.deterministic=true"]},
-             {"name": "full-det-b", "args": [*BEST, "--set", "runtime.deterministic=true"]},
-             {"name": "cut-100", "args": [*BEST, "--set", "runtime.deterministic=true"], "cut": 100},
-             {"name": "full-a", "args": BEST}],
+    "arms": [{"name": "full-a", "args": BEST},
+             {"name": "cut-400", "args": BEST, "cut": 400},
+             {"name": "full-b", "args": BEST},
+             {"name": "full-det-a", "args": [*BEST, *DET]},
+             {"name": "cut-det-400", "args": [*BEST, *DET], "cut": 400},
+             {"name": "full-det-b", "args": [*BEST, *DET]}],
 }
 ANCHOR_TEMPLATE = {
     **REGIONS_TEMPLATE,

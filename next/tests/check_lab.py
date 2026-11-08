@@ -206,7 +206,7 @@ def experiment_run() -> None:
 
 
 def cut_arm() -> None:
-    """An arm with ``cut`` is stopped by the lab once the next step's line appears and started again in a second process; the report's adapter table says whether the weights are the same."""
+    """An arm with ``cut`` ends the lab session once the next step's line appears; starting the same command again continues it in a new process; the report's adapter table says whether the weights are the same."""
     import tempfile
     from pathlib import Path
 
@@ -215,7 +215,7 @@ def cut_arm() -> None:
 
     from ..lab.experiment import Arm, Experiment
     from ..lab.report import Report
-    from ..lab.runner import ArmTraining
+    from ..lab.runner import ArmPaused, ArmTraining
 
     script = (
         "import sys, pathlib\n"
@@ -238,11 +238,34 @@ def cut_arm() -> None:
             return [python, str(tmp / "fake.py"), str(output), str(next(starts))]
 
         said: list[str] = []
+        try:
+            ArmTraining(None, Arm("c", cut=20), tmp / "arm", command=command).run(said.append)
+        except ArmPaused as paused:
+            check(paused.step == 20 and not (tmp / "arm" / "train.json").exists(), "the first session ends at the cut and records no result")
+        else:
+            check(False, "the first session ends at the cut")
         done = ArmTraining(None, Arm("c", cut=20), tmp / "arm", command=command).run(said.append)
         log = (tmp / "arm" / "train.log").read_text()
-        check(done.returncode == 0 and done.steps == 40 and log.count("--- resumed ---") == 1 and any("starting again" in line for line in said),
-              f"the lab stops the arm after step 21's line and starts it again ({done.steps} steps, log {log.count('$ ')} sessions)")
+        check(done.returncode == 0 and done.steps == 40 and log.count("--- resumed ---") == 1 and any("continuing an earlier session" in line for line in said),
+              f"the second start continues the arm in a new process ({done.steps} steps, log {log.count('$ ')} sessions)")
         check(not (tmp / "arm" / "train" / "resume").exists(), "the states are removed when the second session finishes")
+    from ..lab.runner import Lab
+
+    with tempfile.TemporaryDirectory() as raw:
+        spec = {"name": "e", "models": "/m", "datasets": "/d", "dataset": "s", "checkpoint": "c", "output": raw, "arms": [{"name": "a", "cut": 5}, {"name": "b"}], "grid": {}}
+        lines: list[str] = []
+        calls: list[str] = []
+
+        def pausing(exp, arm, folder):
+            calls.append(arm.name)
+            raise ArmPaused(arm.name, 5)
+
+        try:
+            Lab(Experiment.from_dict(spec), lambda lora: ToyBackend(), lines.append, pausing).train(list(Experiment.from_dict(spec).arms))
+        except SystemExit as stop:
+            check(stop.code == 0 and calls == ["a"] and any("start the same command again" in line for line in lines), "the lab ends cleanly at a cut and does not go on to the next arm")
+        else:
+            check(False, "the lab ends at a cut")
     try:
         Experiment.expand([{"name": "x", "reuse": "y", "cut": 5}], [])
     except ValueError:

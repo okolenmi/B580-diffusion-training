@@ -12,7 +12,7 @@ Plain scripts (`python -m next.tests.<name>`), grouped by what they protect. Eac
 | acceptance lab | `check_accept` | regions, block recorder, quantization probe (a planted fault is found in its block), artifact parsing, every check passing and failing, suites and verdicts, the runner with a fake command, visual aids |
 | node surface | `check_node_surface` | field groups: nodes with many fields group them all, small groups, few fields visible before opening anything |
 | regions and lab | `check_regions`, `check_lab` | timesteps per image (draws, copies, policies, ladder, streaming, calibration, self-perceptual loss); the experiment lab (samplers, grid, templates, reports) |
-| restart | `check_resume` | a run cut and continued in a new process against one never cut, for the lab's recipes: adapters and losses must be identical |
+| restart | `check_resume` | a run cut and continued in a new process against one never cut (`check_lab` covers the lab's own stop at a cut), for the lab's recipes: adapters and losses must be identical |
 | whole pipeline | `check_pipeline` | a full graph (dataset to saved adapter) through the graph runner; `pipeline_nodes.py` holds its tiny stand-ins |
 
 Hardware checks live in `scripts/xpu_smoke.py` (real weights, real device) and are run by the owner.

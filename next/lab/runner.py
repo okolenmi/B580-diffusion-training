@@ -84,6 +84,14 @@ def newest_adapter(folder: Path) -> Path | None:
     return max(found)[1] if found else None
 
 
+class ArmPaused(Exception):
+    """The arm's ``cut`` was reached: its state is on disk and the training process is gone."""
+
+    def __init__(self, arm: str, step: int):
+        super().__init__(f"{arm}: stopped on purpose after step {step}")
+        self.arm, self.step = arm, step
+
+
 class ArmTraining:
     """One training process; its console is the arm's ``train.log`` and the loss and probe lines are read from it as they come."""
 
@@ -110,11 +118,8 @@ class ArmTraining:
         with log_path.open("a" if resumed else "w", encoding="utf8") as log:
             log.write(("\n--- resumed ---\n" if resumed else "") + "$ " + " ".join(command) + "\n")
             process = self._launch(command, log, steps, probes, say, stop_at)
-            if stop_at and process.returncode != 0 and max(steps, default=0) >= stop_at:
-                say(f"  {self.arm.name}: stopped after step {stop_at}; starting again from the saved state")
-                log.write("\n--- resumed ---\n$ " + " ".join(command) + "\n")
-                process = self._launch(command, log, steps, probes, say, 0)
-                resumed = True
+        if stop_at and process.returncode != 0 and max(steps, default=0) >= stop_at:
+            raise ArmPaused(self.arm.name, self.arm.cut)
         windows = LossWindows()
         for step in sorted(steps):
             windows.add(steps[step][0], steps[step][1])
@@ -219,7 +224,12 @@ class Lab:
                 shutil.rmtree(self.folder(arm) / "train" / "resume", ignore_errors=True)
                 (self.folder(arm) / "train.log").unlink(missing_ok=True)
             self.say(f"{arm.name}: training ({' '.join(arm.args) or 'no extra arguments'})")
-            result = self._train(self.experiment, arm, self.folder(arm))
+            try:
+                result = self._train(self.experiment, arm, self.folder(arm))
+            except ArmPaused as paused:
+                self.say(f"{paused}. Its state is saved. Nothing else of this lab is running: start the same command again (after closing this window, "
+                         f"or after a reboot if you want the cut to be as hard as a power cut) and {arm.name} continues from there.")
+                raise SystemExit(0) from None
             if result.returncode or not result.lora:
                 tail = (self.folder(arm) / "train.log").read_text(encoding="utf8", errors="replace").splitlines()[-8:]
                 self.say(f"{arm.name}: training failed (code {result.returncode}); the end of {self.folder(arm) / 'train.log'}:\n    " + "\n    ".join(tail))

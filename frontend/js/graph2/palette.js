@@ -1,0 +1,125 @@
+/* ---------------------------------------------------------------------------
+   graph2/palette.js -- adding nodes: the sidebar list (grouped by category,
+   searchable) and the quick-add popup (a double click on empty canvas, or a
+   wire dropped on empty canvas, which lists only classes that can take or
+   give that wire).
+   --------------------------------------------------------------------------- */
+
+import { hasSocket, wireProblem } from "./ports.js";
+
+/** The ports of a class that could be wired to `port` (an output when `fromOutput`, else an input), as `{info, port}`. */
+export function compatibleClasses(nodes, port, fromOutput) {
+  const found = [];
+  for (const info of nodes) {
+    const side = fromOutput ? info.inputs.filter(hasSocket) : info.outputs;
+    const match = side.find((p) => (fromOutput ? wireProblem(port, p) === null : wireProblem(p, port) === null));
+    if (match) found.push({ info, port: match });
+  }
+  return found;
+}
+
+/** Search over display name, class name and category; an empty query keeps everything. */
+export function matches(info, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [info.display_name, info.class_name, info.category].some((s) => (s || "").toLowerCase().includes(q));
+}
+
+export function byCategory(nodes, query = "") {
+  const groups = new Map();
+  for (const info of nodes.filter((n) => matches(n, query))) {
+    const key = info.category || "Other";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(info);
+  }
+  for (const list of groups.values()) list.sort((a, b) => a.display_name.localeCompare(b.display_name));
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+const make = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+/** The sidebar list: a click adds the node at the centre of the view, offset so successive nodes do not stack. */
+export class Palette {
+  constructor(root, search, { shapes, onAdd }) {
+    this.root = root;
+    this.search = search;
+    this.shapes = shapes;
+    this.onAdd = onAdd;
+    this.search.addEventListener("input", () => this.render());
+  }
+
+  render() {
+    this.root.replaceChildren();
+    const catalog = this.shapes.catalog;
+    if (!catalog) return;
+    for (const error of catalog.load_errors || []) {
+      this.root.append(make("div", "console-line error", `${error.module}: ${error.error}`));
+    }
+    const query = this.search.value;
+    for (const [category, list] of byCategory(catalog.nodes, query)) {
+      const details = make("details", "ed-domain");
+      details.open = Boolean(query) || list.length <= 6;
+      details.append(make("summary", "", `${category} (${list.length})`));
+      for (const info of list) {
+        const item = make("div", "ed-item", info.display_name);
+        item.title = info.doc || info.class_name;
+        item.addEventListener("click", () => this.onAdd(info.class_name));
+        details.append(item);
+      }
+      this.root.append(details);
+    }
+  }
+}
+
+/** The floating list shown where a wire was dropped or the canvas was double-clicked. */
+export class QuickAdd {
+  constructor(host, { shapes, onPick }) {
+    this.host = host;
+    this.shapes = shapes;
+    this.onPick = onPick;
+    this.box = make("div", "g2-quick");
+    this.box.hidden = true;
+    this.host.append(this.box);
+    document.addEventListener("pointerdown", (e) => { if (!this.box.contains(e.target)) this.close(); }, true);
+  }
+
+  close() {
+    this.box.hidden = true;
+  }
+
+  /** @param {{x:number,y:number}} client where to show it; @param {Array<{info, port}>|null} choices null lists every class */
+  open(client, choices, title) {
+    const all = choices || this.shapes.catalog.nodes.map((info) => ({ info, port: null }));
+    this.box.replaceChildren(make("div", "g2-quick-title", title));
+    const input = make("input", "cfg-input");
+    input.placeholder = "type to filter…";
+    const list = make("div", "g2-quick-list");
+    const draw = () => {
+      list.replaceChildren();
+      for (const { info, port } of all.filter((c) => matches(c.info, input.value)).slice(0, 40)) {
+        const row = make("div", "ed-item", `${info.display_name}${port ? ` · ${port.label || port.name}` : ""}`);
+        row.title = info.category;
+        row.addEventListener("click", () => { this.close(); this.onPick(info.class_name, port); });
+        list.append(row);
+      }
+      if (!list.children.length) list.append(make("div", "console-line info", "nothing fits"));
+    };
+    input.addEventListener("input", draw);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.close();
+      if (e.key === "Enter") list.firstElementChild?.click();
+    });
+    this.box.append(input, list);
+    const box = this.host.getBoundingClientRect();
+    this.box.style.left = `${Math.max(0, Math.min(client.x - box.left, box.width - 240))}px`;
+    this.box.style.top = `${Math.max(0, Math.min(client.y - box.top, box.height - 280))}px`;
+    this.box.hidden = false;
+    draw();
+    input.focus();
+  }
+}

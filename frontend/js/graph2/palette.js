@@ -57,8 +57,12 @@ export class Palette {
     this.root.replaceChildren();
     const catalog = this.shapes.catalog;
     if (!catalog) return;
-    for (const error of catalog.load_errors || []) {
-      this.root.append(make("div", "console-line error", `${error.module}: ${error.error}`));
+    const errors = catalog.load_errors || [];
+    if (errors.length) {
+      const box = make("details", "ed-domain");
+      box.append(make("summary", "", `Modules that failed to load (${errors.length})`));
+      for (const error of errors) box.append(make("div", "console-line error", `${error.module}: ${error.error}`));
+      this.root.append(box);
     }
     const query = this.search.value;
     for (const [category, list] of byCategory(catalog.nodes, query)) {
@@ -66,7 +70,7 @@ export class Palette {
       details.open = Boolean(query) || list.length <= 6;
       details.append(make("summary", "", `${category} (${list.length})`));
       for (const info of list) {
-        const item = make("div", "ed-item", info.display_name);
+        const item = make("div", "ed-palette-item", info.display_name);
         item.title = info.doc || info.class_name;
         item.addEventListener("click", () => this.onAdd(info.class_name));
         details.append(item);
@@ -102,7 +106,7 @@ export class QuickAdd {
     const draw = () => {
       list.replaceChildren();
       for (const { info, port } of all.filter((c) => matches(c.info, input.value)).slice(0, 40)) {
-        const row = make("div", "ed-item", `${info.display_name}${port ? ` · ${port.label || port.name}` : ""}`);
+        const row = make("div", "ed-palette-item", `${info.display_name}${port ? ` · ${port.label || port.name}` : ""}`);
         row.title = info.category;
         row.addEventListener("click", () => { this.close(); this.onPick(info.class_name, port); });
         list.append(row);

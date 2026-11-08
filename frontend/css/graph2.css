@@ -62,11 +62,9 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-row.focus { outline: 1px solid #f59e0b; border-radius: var(--radius-sm); }
 .g2-row > .g2-socket { margin-left: -0.9rem; }
 .g2-label { flex: 0 0 34%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.g2-row .cfg-input, .g2-row .prow { flex: 1; min-width: 0; }
-.g2-row .cfg-input { padding: 0.15rem 0.3rem; font-size: 0.72rem; }
+.g2-row .cfg-input, .g2-row .g2-row .cfg-input { padding: 0.15rem 0.3rem; font-size: 0.72rem; }
 .g2-wired { color: var(--accent); font-size: 0.68rem; }
 .g2-slider { flex: 1; min-width: 0; }
-.prow { display: flex; align-items: center; gap: 0.35rem; }
 
 .g2-outs { padding: 0.2rem 0.5rem 0.3rem; border-top: 1px solid var(--border); }
 .g2-out { display: flex; justify-content: flex-end; align-items: center; gap: 0.4rem; min-height: 1.5rem; }
@@ -105,11 +103,6 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 /* ---- side panels ---- */
 .g2-setting-group { border-top: 1px solid var(--border); padding: 0.2rem 0.6rem; }
 .g2-setting-group > summary { cursor: pointer; font-weight: 600; font-size: 0.74rem; padding: 0.25rem 0; }
-.gs-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; }
-.gs-label { flex: 0 0 42%; font-size: 0.7rem; color: var(--text-dim); }
-.gs-row .cfg-input, .gs-row .prow { flex: 1; min-width: 0; }
-.gs-adv { margin: 0.4rem 0.6rem; }
-.gs-list { overflow: auto; max-height: 300px; }
 .g2-insp-title { font-weight: 600; padding: 0.4rem 0.6rem 0; }
 .g2-insp-uid { padding: 0 0.6rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
 .g2-insp-doc { padding: 0.3rem 0.6rem; font-size: 0.72rem; color: var(--text-dim); white-space: pre-wrap; }

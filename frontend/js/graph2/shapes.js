@@ -17,7 +17,7 @@ export class ShapeStore {
    * @param {{resolve: (className:string, body:object)=>Promise<object>, settings?: ()=>object,
    *          timers?: {set:Function, clear:Function}}} io  `resolve` posts to /graphs/nodes/{class}/resolve.
    */
-  constructor({ resolve, settings = () => ({}), timers = { set: setTimeout, clear: clearTimeout } }) {
+  constructor({ resolve, settings = () => ({}), timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) } }) {
     this._resolve = resolve;
     this._settings = settings;
     this._timers = timers;

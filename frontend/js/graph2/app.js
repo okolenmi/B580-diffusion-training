@@ -93,7 +93,7 @@ async function boot() {
   const addAtCenter = (className) => {
     const c = canvas.viewCenter();
     const step = cascade++;
-    return addAt(className, { x: c.x - 115 + (step % 3) * 260, y: c.y - 60 + (Math.floor(step / 3) % 3) * 170 });
+    return addAt(className, { x: c.x - 340 + (step % 3) * 320, y: c.y - 120 + (Math.floor(step / 3) % 3) * 200 });
   };
 
   canvas = new Canvas({

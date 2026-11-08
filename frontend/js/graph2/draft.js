@@ -20,7 +20,7 @@ export function readDraft(storage = globalThis.localStorage) {
 }
 
 export class DraftSaver {
-  constructor(doc, { storage = globalThis.localStorage, wait = 800, timers = { set: setTimeout, clear: clearTimeout } } = {}) {
+  constructor(doc, { storage = globalThis.localStorage, wait = 800, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) } } = {}) {
     this.doc = doc;
     this.storage = storage;
     this.wait = wait;

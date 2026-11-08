@@ -283,6 +283,7 @@ class GraphExecution:
             )
         if (
             status is not GraphStatus.RUNNING
+            and not self._graph.is_legacy
             and self._results
             and len(self._results) > len(self._graph.nodes)
         ):

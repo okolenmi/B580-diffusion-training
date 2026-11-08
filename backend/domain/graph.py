@@ -63,6 +63,11 @@ class GraphDefinition:
         """The graph is the configurable object (ADR 0005): its budget is in its own settings."""
         return MemorySettings.from_settings(self.doc.settings)
 
+    @property
+    def is_legacy(self) -> bool:
+        """A snapshot of an earlier format, kept for the history only: it has no nodes to compare results with."""
+        return LEGACY_KEY in self.doc.extras
+
     def node(self, uid: str) -> NodeSpec | None:
         return self.doc.node(uid)
 

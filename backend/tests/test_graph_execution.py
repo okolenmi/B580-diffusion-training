@@ -923,6 +923,16 @@ for overrides, fragment, label in (
     except DomainError as exc:
         check(fragment in str(exc), f"{label} refused (got {exc})")
 
+old_snapshot = GraphDefinition.from_stored({"nodes": [{"id": "a", "type": "Old"}], "edges": []})
+check(
+    old_snapshot.is_legacy
+    and len(GraphExecution.restore(**_row(
+        graph=old_snapshot, status=GraphStatus.ERROR, finished_at=NOW,
+        results=(NodeResult(node_id="a", ok=True), NodeResult(node_id="b", ok=True)),
+    )).results) == 2,
+    "a snapshot of an earlier format loads with its results: it has no nodes to compare them with",
+)
+
 # ==========================================================================
 # Section A2: from_dict's tolerance is load-bearing, so it is pinned
 # ==========================================================================

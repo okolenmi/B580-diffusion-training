@@ -236,9 +236,11 @@ export class Canvas {
     const nodes = [...this.doc.nodes.values()];
     if (!nodes.length) { this.pan = { x: 40, y: 40 }; this.zoom = 1; this._apply(); return; }
     const xs = nodes.map((n) => n.layout.x), ys = nodes.map((n) => n.layout.y);
-    const right = Math.max(...nodes.map((n) => n.layout.x + (n.layout.w || 280))), bottom = Math.max(...ys) + 260;
+    const drawn = (n) => this.views.get(n.uid)?.el;
+    const right = Math.max(...nodes.map((n) => n.layout.x + (drawn(n)?.offsetWidth || n.layout.w || 280)));
+    const bottom = Math.max(...nodes.map((n) => n.layout.y + (drawn(n)?.offsetHeight || 260)));
     const box = this.root.getBoundingClientRect();
-    const zoom = clampZoom(Math.min(box.width / (right - Math.min(...xs) + 80), box.height / (bottom - Math.min(...ys) + 80), 1));
+    const zoom = clampZoom(Math.min((box.width - 80) / (right - Math.min(...xs)), (box.height - 80) / (bottom - Math.min(...ys)), 1));
     this.zoom = zoom;
     this.pan = { x: 40 - Math.min(...xs) * zoom, y: 40 - Math.min(...ys) * zoom };
     this._apply();

@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { arrange, isUnplaced } from "../js/graph2/layout.js";
 
 test("a chain runs left to right and a fan-in lands after its last input", () => {
-  const out = arrange(["a", "b", "c", "d"], [["a", "b"], ["b", "d"], ["c", "d"]]);
-  assert.deepEqual([out.get("a").x, out.get("b").x, out.get("c").x, out.get("d").x], [0, 340, 0, 680]);
+  const out = arrange(["a", "b", "c", "d"], [["a", "b"], ["b", "d"], ["c", "d"]], () => 100, (u) => (u === "b" ? 500 : 200));
+  assert.deepEqual([out.get("a").x, out.get("b").x, out.get("c").x, out.get("d").x], [0, 260, 0, 820]);
 });
 
 test("nodes of one column never overlap", () => {

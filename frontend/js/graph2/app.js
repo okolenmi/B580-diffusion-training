@@ -21,6 +21,7 @@ import { IssuesPanel, MemoryPanel } from "./panels.js";
 import { Runs } from "./runs.js";
 import { SettingsPanel } from "./settings_panel.js";
 import { ShapeStore } from "./shapes.js";
+import { StarterDialog } from "./starters.js";
 
 const LAYOUT_KEY = "g2.layout.v1";
 
@@ -154,7 +155,7 @@ async function boot() {
 
   const arrangeAll = () => {
     const wires = [...doc.edges, ...doc.eventEdges].map((e) => [endpointHost(e.from_node), endpointHost(e.to_node)]);
-    const place = arrange([...doc.nodes.keys()], wires, (uid) => canvas.views.get(uid)?.el.offsetHeight || 240);
+    const place = arrange([...doc.nodes.keys()], wires, (uid) => canvas.views.get(uid)?.el.offsetHeight || 240, (uid) => canvas.views.get(uid)?.el.offsetWidth || 280);
     for (const [uid, at] of place) doc.moveNode(uid, at.x, at.y);
     canvas.fit();
   };
@@ -165,6 +166,8 @@ async function boot() {
     doc,
     { onNote: log, onLoaded: () => canvas.fit() },
   );
+  const starters = new StarterDialog(doc, { options: pickerOptions, note: log, onBuilt: () => canvas.fit() });
+  el("btn-starter").addEventListener("click", () => starters.open());
   el("btn-arrange").addEventListener("click", arrangeAll);
 
   // A class with dynamic ports is asked for its shape when it appears, when the document is replaced,

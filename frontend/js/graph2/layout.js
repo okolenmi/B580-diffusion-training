@@ -6,8 +6,8 @@
    positions and touches nothing.
    --------------------------------------------------------------------------- */
 
-const COLUMN = 340;
 const GAP = 40;
+const COLUMN_GAP = 60;
 
 /** True when a document carries no placement: more than one node and every one at the origin. */
 export function isUnplaced(nodes) {
@@ -18,9 +18,10 @@ export function isUnplaced(nodes) {
  * @param {string[]} uids
  * @param {Array<[string, string]>} wires  [from, to] pairs of node uids (events included)
  * @param {(uid:string)=>number} heightOf  the node's height, as drawn
+ * @param {(uid:string)=>number} widthOf   the node's width, as drawn
  * @returns {Map<string, {x:number, y:number}>}
  */
-export function arrange(uids, wires, heightOf = () => 240) {
+export function arrange(uids, wires, heightOf = () => 240, widthOf = () => 280) {
   const known = new Set(uids);
   const into = new Map(uids.map((u) => [u, []]));
   for (const [from, to] of wires) if (from !== to && known.has(from) && known.has(to)) into.get(to).push(from);
@@ -40,7 +41,8 @@ export function arrange(uids, wires, heightOf = () => 240) {
   for (const uid of uids) (columns[column.get(uid)] ||= []).push(uid);
   const row = new Map();
   const out = new Map();
-  columns.forEach((list, x) => {
+  let left = 0;
+  columns.forEach((list) => {
     if (!list) return;
     const centre = (uid) => {
       const ys = into.get(uid).filter((p) => row.has(p)).map((p) => row.get(p));
@@ -49,10 +51,11 @@ export function arrange(uids, wires, heightOf = () => 240) {
     const ordered = list.map((uid, i) => ({ uid, key: centre(uid), i })).sort((a, b) => (a.key - b.key) || (a.i - b.i));
     let y = 0;
     for (const { uid } of ordered) {
-      out.set(uid, { x: x * COLUMN, y });
+      out.set(uid, { x: left, y });
       row.set(uid, y + heightOf(uid) / 2);
       y += heightOf(uid) + GAP;
     }
+    left += Math.max(...list.map(widthOf)) + COLUMN_GAP;
   });
   return out;
 }

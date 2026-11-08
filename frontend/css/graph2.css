@@ -106,3 +106,11 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-insp-title { font-weight: 600; padding: 0.4rem 0.6rem 0; }
 .g2-insp-uid { padding: 0 0.6rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
 .g2-insp-doc { padding: 0.3rem 0.6rem; font-size: 0.72rem; color: var(--text-dim); white-space: pre-wrap; }
+
+.g2-dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; width: min(480px, 92vw); }
+.g2-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.g2-dialog-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0; }
+.g2-dialog-row > .gs-label { flex: 0 0 34%; }
+.g2-dialog-row .cfg-input, .g2-dialog-row .prow { flex: 1; min-width: 0; }
+.g2-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.8rem; }
+.g2-dialog { margin: auto; }
